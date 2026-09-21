@@ -26,6 +26,7 @@ export const appRpc = {
   appGetPendingInbox: rawRpcMethod('app:get-pending-inbox'),
   appRetryEscalationContinuation: rawRpcMethod('app:retry-escalation-continuation'),
   appConfirmEscalationDeadline: rawRpcMethod('app:confirm-escalation-deadline'),
+  appDismissEscalation: rawRpcMethod('app:dismiss-escalation'),
   appCloseRun: rawRpcMethod('app:close-run'),
   appStopRun: rawRpcMethod('app:stop-run'),
   appGetCapabilityInventory: rawRpcMethod('app:get-capability-inventory'),

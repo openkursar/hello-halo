@@ -51,7 +51,7 @@ export function McpTab() {
     useAppStore.getState().navigate('apps')
     const store = useAppsPageStore.getState()
     store.setCurrentTab(tabForAppType('mcp'))
-    store.selectApp(app.id, 'mcp', app.spaceId ?? undefined)
+    store.selectApp(app.id, 'mcp')
   }, [])
 
   if (loading) {

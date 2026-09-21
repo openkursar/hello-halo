@@ -36,12 +36,14 @@ interface CodexCapableSource {
 }
 
 /**
- * Locate the built app entry. Prefer the dev build (`out/main/index.mjs`) since
- * we want to run against the working tree, not a packaged release.
+ * Locate the built app entry, from package.json's `main`: we want to run
+ * against the working tree's dev build, not a packaged release, and the
+ * bundle's module format is a build setting there.
  */
 function getAppEntryPath(): string {
   const projectRoot = path.resolve(__dirname, '../../..')
-  const appEntryPath = path.join(projectRoot, 'out/main/index.mjs')
+  const main = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf-8')).main as string
+  const appEntryPath = path.resolve(projectRoot, main)
   if (!fs.existsSync(appEntryPath)) {
     throw new Error(
       `Built app not found at ${appEntryPath}. Run "npm run build" first.`

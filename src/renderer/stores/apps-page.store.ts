@@ -27,7 +27,6 @@ import type { AppType } from '../../shared/apps/spec-types'
 
 /** The app types the store accepts a publication for. */
 type PublishableAppType = Extract<AppType, 'automation' | 'skill'>
-import type { ImSessionRecord } from '../../shared/types/im-channel'
 
 let storeListRequestSeq = 0
 let storeDetailRequestSeq = 0
@@ -84,13 +83,12 @@ function reportDetailView(detail: StoreAppDetail, availableUpdates: UpdateInfo[]
 // Types
 // ============================================
 
-export type AppsDetailViewType = 'activity-thread' | 'session-detail' | 'app-chat' | 'app-config' | 'mcp-status' | 'skill-info' | 'uninstalled-detail' | 'app-teams' | 'bot-sessions'
+export type AppsDetailViewType = 'activity-thread' | 'session-detail' | 'app-config' | 'mcp-status' | 'skill-info' | 'uninstalled-detail' | 'app-teams' | 'app-sessions' | 'bot-sessions'
 
 export type AppsDetailView =
-  | { type: 'app-overview'; appId: string }
   | { type: 'activity-thread'; appId: string }
   | { type: 'session-detail'; appId: string; runId: string; sessionKey?: string }
-  | { type: 'app-chat'; appId: string; spaceId: string }
+  | { type: 'app-sessions'; appId: string }
   | { type: 'bot-sessions'; appId: string; instanceId: string }
   | { type: 'app-config'; appId: string }
   | { type: 'app-teams'; appId: string }
@@ -99,7 +97,7 @@ export type AppsDetailView =
   | { type: 'uninstalled-detail'; appId: string }
   | null
 
-export type AppsPageTab = 'my-digital-humans' | 'team' | 'my-skills' | 'my-mcp' | 'store' | 'inbox'
+export type AppsPageTab = 'my-digital-humans' | 'team' | 'my-skills' | 'my-mcp' | 'inbox'
 
 /**
  * Map an app type to its owning AppsPage tab.
@@ -126,7 +124,7 @@ export function tabForAppType(type: AppType): AppsPageTab {
 }
 
 /** Which detail tab was last selected for automation apps (persisted to localStorage) */
-export type AutomationDetailTab = 'activity' | 'chat' | 'config' | 'teams'
+export type AutomationDetailTab = 'activity' | 'config' | 'teams' | 'sessions'
 
 // ============================================
 // State Interface
@@ -146,9 +144,9 @@ interface AppsPageState {
    */
   pendingActivityScrollId: string | null
   /**
-   * Set by the Overview tab's capability-summary chips so the Settings tab
-   * can scroll to and briefly highlight the settings group the chip
-   * summarizes (mirrors pendingActivityScrollId). Consumed once.
+   * Set by a detail surface so the Settings tab can scroll to and briefly
+   * highlight the settings group it summarizes (mirrors
+   * pendingActivityScrollId). Consumed once.
    */
   pendingConfigScrollId: string | null
 
@@ -181,19 +179,13 @@ interface AppsPageState {
   // ── Update Info ────────────────────────────
   availableUpdates: UpdateInfo[]
 
-  // ── IM Session Panel ────────────────────────
-  imPanelOpen: boolean
-  selectedImSession: ImSessionRecord | null
-  imSessions: ImSessionRecord[]
-  imSessionsAppId: string | null
-
   // Actions
-  selectApp: (appId: string, appType?: string, spaceId?: string) => void
+  selectApp: (appId: string, appType?: string) => void
   clearSelection: () => void
-  openAppOverview: (appId: string) => void
   openActivityThread: (appId: string) => void
   openSessionDetail: (appId: string, runId: string, sessionKey?: string) => void
-  openAppChat: (appId: string, spaceId: string) => void
+  /** Open the External sessions tab (instance picker + session browser). */
+  openAppSessions: (appId: string) => void
   /** Open the session browser (list + read-only chat) for one bound bot instance. */
   openBotSessions: (appId: string, instanceId: string) => void
   openAppConfig: (appId: string) => void
@@ -208,9 +200,6 @@ interface AppsPageState {
   /** Consume the pending scroll-to-group intent (returns it once, then clears). */
   consumePendingConfigScrollId: () => string | null
   setShowInstallDialog: (show: boolean) => void
-  toggleImPanel: () => void
-  selectImSession: (session: ImSessionRecord | null) => void
-  fetchImSessions: (appId: string) => Promise<void>
   reset: () => void
 
   // ── Store Actions ──────────────────────────
@@ -284,13 +273,7 @@ export const useAppsPageStore = create<AppsPageState>()(
   // ── Update Info ────────────────────────────
   availableUpdates: [],
 
-  // ── IM Session Panel ────────────────────────
-  imPanelOpen: true,
-  selectedImSession: null,
-  imSessions: [],
-  imSessionsAppId: null,
-
-  selectApp: (appId, appType, spaceId) => {
+  selectApp: (appId, appType) => {
     // Looked up here rather than trusted from the caller: every card wall
     // computes `appType` from `app.spec.type`, which doesn't change on
     // uninstall (only `app.status` does) — so a caller-supplied type can
@@ -299,7 +282,7 @@ export const useAppsPageStore = create<AppsPageState>()(
     const isUninstalled = appType === 'uninstalled'
       || useAppsStore.getState().apps.find(a => a.id === appId)?.status === 'uninstalled'
 
-    let detailView: AppsDetailView = { type: 'app-overview', appId }
+    let detailView: AppsDetailView = { type: 'activity-thread', appId }
     if (isUninstalled) detailView = { type: 'uninstalled-detail', appId }
     else if (appType === 'mcp') detailView = { type: 'mcp-status', appId }
     else if (appType === 'skill') detailView = { type: 'skill-info', appId }
@@ -307,18 +290,15 @@ export const useAppsPageStore = create<AppsPageState>()(
     else {
       // Automation apps: restore last selected tab
       const tab = get().lastAutomationTab
-      if (tab === 'chat' && spaceId) detailView = { type: 'app-chat', appId, spaceId }
-      else if (tab === 'config') detailView = { type: 'app-config', appId }
+      if (tab === 'config') detailView = { type: 'app-config', appId }
       else if (tab === 'teams') detailView = { type: 'app-teams', appId }
+      else if (tab === 'sessions') detailView = { type: 'app-sessions', appId }
       // else default 'activity' → activity-thread (already set)
     }
     set({ selectedAppId: appId, detailView })
   },
 
   clearSelection: () => set({ selectedAppId: null, detailView: null }),
-
-  openAppOverview: (appId) =>
-    set({ selectedAppId: appId, detailView: { type: 'app-overview', appId } }),
 
   openActivityThread: (appId) =>
     set({ selectedAppId: appId, detailView: { type: 'activity-thread', appId } }),
@@ -335,8 +315,8 @@ export const useAppsPageStore = create<AppsPageState>()(
   openSessionDetail: (appId, runId, sessionKey) =>
     set({ selectedAppId: appId, detailView: { type: 'session-detail', appId, runId, sessionKey } }),
 
-  openAppChat: (appId, spaceId) =>
-    set({ selectedAppId: appId, detailView: { type: 'app-chat', appId, spaceId }, lastAutomationTab: 'chat' }),
+  openAppSessions: (appId) =>
+    set({ selectedAppId: appId, detailView: { type: 'app-sessions', appId }, lastAutomationTab: 'sessions' }),
 
   openBotSessions: (appId, instanceId) =>
     set({ selectedAppId: appId, detailView: { type: 'bot-sessions', appId, instanceId } }),
@@ -359,24 +339,6 @@ export const useAppsPageStore = create<AppsPageState>()(
 
   setShowInstallDialog: (show) => set({ showInstallDialog: show }),
 
-  toggleImPanel: () => set(s => ({ imPanelOpen: !s.imPanelOpen })),
-
-  selectImSession: (session) => set({ selectedImSession: session }),
-
-  fetchImSessions: async (appId) => {
-    try {
-      const res = await api.imSessionsList(appId)
-      if (res.success && Array.isArray(res.data)) {
-        const sorted = (res.data as ImSessionRecord[]).sort(
-          (a, b) => b.lastActiveAt - a.lastActiveAt
-        )
-        set({ imSessions: sorted, imSessionsAppId: appId })
-      }
-    } catch (err) {
-      console.error('[AppsPageStore] fetchImSessions error:', err)
-    }
-  },
-
   reset: () => {
     abandonStoreDetail()
     set({
@@ -387,10 +349,6 @@ export const useAppsPageStore = create<AppsPageState>()(
       initialAppId: null,
       showInstallDialog: false,
       currentTab: 'my-digital-humans',
-      imPanelOpen: true,
-      selectedImSession: null,
-      imSessions: [],
-      imSessionsAppId: null,
       storeApps: [],
       storeLoading: false,
       storeError: null,

@@ -9,7 +9,7 @@ export function openPersonTeam(target: TeamNavigationTarget, returnPerson: strin
   usePeopleViewStore.setState({ teamTarget: target, returnPerson, returnInbox: useAppsPageStore.getState().currentTab === 'inbox', returnTeam: null })
   useTeamStore.getState().selectTeam(target.teamId)
   useAppsPageStore.getState().setCurrentTab('team')
-  useAppStore.getState().setView('apps')
+  useAppStore.getState().navigate('apps')
 }
 
 export interface WorkNavigationTarget {
@@ -45,5 +45,5 @@ export async function openWorkNotification(target: WorkNavigationTarget) {
     useAppsPageStore.getState().openActivityThread(target.appId)
   } else if (target.runId) useAppsPageStore.getState().openSessionDetail(target.appId, target.runId)
   else useAppsPageStore.getState().openActivityThread(target.appId)
-  useAppStore.getState().setView('apps')
+  useAppStore.getState().navigate('apps')
 }

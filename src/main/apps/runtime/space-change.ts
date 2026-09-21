@@ -22,7 +22,10 @@ function getTarget(deps: SpaceChangeDependencies, appId: string, newSpaceId: str
   const app = deps.manager.getApp(appId)
   if (!app || app.status === 'uninstalled') throw new Error('Digital human is unavailable')
   if (app.spec.type !== 'automation') throw new Error('Default work space applies to digital humans')
-  if (!app.spaceId || typeof newSpaceId !== 'string' || !getSpace(newSpaceId)) throw new Error('Work space is unavailable')
+  // A space-less digital human is a legal source: it inherits no space skills
+  // and IM binding refuses it, so this is its only way out. Only the
+  // destination has to exist.
+  if (typeof newSpaceId !== 'string' || !getSpace(newSpaceId)) throw new Error('Work space is unavailable')
   return app
 }
 
@@ -77,17 +80,23 @@ export function previewAppSpaceChange(
   newSpaceId: string,
 ): AppSpaceChangePreview {
   const app = getTarget(deps, appId, newSpaceId)
-  const beforeSkills = listAvailableSkills(app.spaceId!)
+  const fromSpaceId = app.spaceId
   const afterSkills = listAvailableSkills(newSpaceId)
+  // A space-less source inherits nothing from a work space, so what it can
+  // reach today is exactly the global-scope subset of the destination's view.
+  const beforeSkills = fromSpaceId ? listAvailableSkills(fromSpaceId) : afterSkills.filter(skill => skill.scope === 'global')
+  const effectiveMcp = (spaceId: string | null) => spaceId
+    ? deps.manager.listEffectiveMcpApps(spaceId)
+    : deps.manager.listEffectiveMcpApps(newSpaceId).filter(resource => !resource.spaceId)
   const declared = new Set((app.spec.requires?.mcps ?? []).filter(dependency => dependency.enabled !== false).map(dependency => dependency.id))
-  const connections = (spaceId: string) => deps.manager.listEffectiveMcpApps(spaceId)
+  const connections = (spaceId: string | null) => effectiveMcp(spaceId)
     .filter(resource => declared.has(resource.specId) && resource.status === 'active')
   const denied = new Set((app.spec.requires?.mcps ?? []).filter(dependency => dependency.enabled === false).map(dependency => dependency.id))
-  const chatConnections = (spaceId: string) => deps.manager.listEffectiveMcpApps(spaceId)
+  const chatConnections = (spaceId: string | null) => effectiveMcp(spaceId)
     .filter(resource => !denied.has(resource.specId) && resource.status === 'active')
-  const beforeChatConnections = chatConnections(app.spaceId!)
+  const beforeChatConnections = chatConnections(fromSpaceId)
   const afterChatConnections = chatConnections(newSpaceId)
-  const beforeConnections = connections(app.spaceId!)
+  const beforeConnections = connections(fromSpaceId)
   const afterConnections = connections(newSpaceId)
   const difference = <T>(left: T[], right: T[], key: (item: T) => string) => left.filter(item => !right.some(other => key(other) === key(item)))
   const skillLabel = (skill: typeof beforeSkills[number], spaceId: string) => `${skill.name} (${skill.scope === 'global' ? 'Global' : getSpace(spaceId)?.name ?? spaceId})`
@@ -103,7 +112,7 @@ export function previewAppSpaceChange(
     pendingDecisionCount: deps.store.getDecisionCounts(appId).pending,
     retainedSessionCount: retainedSessionCount(deps.store, app),
     addedSkills: difference(afterSkills, beforeSkills, skill => skill.path).map(skill => skillLabel(skill, newSpaceId)),
-    removedSkills: difference(beforeSkills, afterSkills, skill => skill.path).map(skill => skillLabel(skill, app.spaceId!)),
+    removedSkills: difference(beforeSkills, afterSkills, skill => skill.path).map(skill => skillLabel(skill, fromSpaceId ?? newSpaceId)),
     addedConnections: difference(afterConnections, beforeConnections, resource => resource.id).map(connectionLabel),
     removedConnections: difference(beforeConnections, afterConnections, resource => resource.id).map(connectionLabel),
     addedChatConnections: difference(afterChatConnections, beforeChatConnections, resource => resource.id).map(connectionLabel),
@@ -121,7 +130,9 @@ export async function changeAppDefaultSpace(
   if (app.spaceId === newSpaceId) return
   const destination = resolveExecutionEnvironment(app, deps.manager, newSpaceId)
   validateExecutionEnvironment(destination)
-  retainAppEnvironments(deps.manager, deps.store, app)
+  // A space-less source has no prior space to pin records to, and resolving
+  // its environment would throw.
+  if (app.spaceId) retainAppEnvironments(deps.manager, deps.store, app)
   await deps.manager.moveToSpace(appId, newSpaceId)
   deps.runtime.syncAppSubscriptions(appId)
   console.log(`[Runtime] Default space changed: app=${appId}, from=${app.spaceId}, to=${newSpaceId}; existing work retained`)

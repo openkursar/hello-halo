@@ -8,6 +8,11 @@
  * Items carry counts and an alert dot, which turns the menu into a small status
  * board: an unreachable MCP or an unsaved edit is visible without opening each
  * group in turn.
+ *
+ * Below the sm breakpoint the column becomes one horizontally scrolling strip
+ * (the entries keep their width — a squeezed entry would ellipsize every label
+ * into the same few characters), and the strip scrolls inside its own box so
+ * the panel never widens the page.
  */
 
 export interface SettingsNavItem {
@@ -29,7 +34,11 @@ interface AppSettingsNavProps {
 
 export function AppSettingsNav({ items, activeId, onSelect }: AppSettingsNavProps) {
   return (
-    <nav className="sm:w-44 sm:flex-shrink-0 sm:sticky sm:top-4 sm:self-start">
+    <nav className="w-full sm:w-44 sm:flex-shrink-0 sm:sticky sm:top-4 sm:self-start">
+      {/* `w-full` is load-bearing below the breakpoint: the panel stacks its
+          children with `items-start`, which shrink-to-fits this nav to the
+          strip's content width instead of the panel's. The strip would then
+          push past the panel edge instead of scrolling inside it. */}
       <div className="flex gap-1 overflow-x-auto sm:flex-col sm:overflow-visible">
         {items.map(item => {
           const active = item.id === activeId
@@ -37,7 +46,7 @@ export function AppSettingsNav({ items, activeId, onSelect }: AppSettingsNavProp
             <button
               key={item.id}
               onClick={() => onSelect(item.id)}
-              className={`flex items-center gap-1.5 whitespace-nowrap px-2.5 py-1.5 text-xs text-left transition-colors rounded-md sm:rounded-r-md sm:rounded-l-none sm:border-l-2 ${
+              className={`flex max-sm:flex-shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-1.5 text-xs text-left transition-colors rounded-md sm:rounded-r-md sm:rounded-l-none sm:border-l-2 ${
                 active
                   ? 'bg-primary/[0.08] text-primary font-medium sm:border-primary'
                   : 'text-muted-foreground hover:text-foreground hover:bg-secondary sm:border-transparent'

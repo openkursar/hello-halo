@@ -1,19 +1,21 @@
 /**
- * Task Store — merges conversation and automation-app items into the single
- * task-panel list.
+ * Task Store — merges conversation, automation-app and team items into the
+ * single task-panel list.
  *
- * chat.store (conversations) and apps.store (automation apps) each derive
- * their own task-relevant items without depending on each other — the
- * conversation domain must not depend on the apps domain, or vice versa.
- * This module is the only place the two are combined; task-panel UI should
- * read from here rather than reaching into either domain store directly.
+ * chat.store (conversations), apps.store (automation apps) and team.store
+ * (teams) each derive their own task-relevant items without depending on each
+ * other — no domain needs to know the others exist. This module is the only
+ * place they are combined; task-panel UI should read from here rather than
+ * reaching into a domain store directly.
  */
 import { useMemo } from 'react'
 import i18n from '../i18n'
 import { usePulseItems } from './chat.store'
 import { useAutomationTaskItems } from './apps.store'
 import { useSpaceStore } from './space.store'
+import { useTeamStore } from './team.store'
 import type { PulseItem, TaskItem, TaskItemStatus } from '../types'
+import type { TeamListItem } from '../../shared/apps/team-types'
 
 function conversationToTaskItem(item: PulseItem): TaskItem {
   return {
@@ -31,6 +33,24 @@ function conversationToTaskItem(item: PulseItem): TaskItem {
     starred: item.starred,
     readAt: item.readAt,
     kept: item.kept,
+  }
+}
+
+/**
+ * A team that owes the user a decision. Teams are not space-scoped, so the
+ * space name stays empty and the panel renders no workspace pill for them.
+ */
+function teamToTaskItem(team: TeamListItem): TaskItem {
+  return {
+    key: `team:${team.id}`,
+    source: 'team',
+    status: 'waiting',
+    title: team.name,
+    detail: i18n.t('Waiting for your decision'),
+    spaceId: null,
+    spaceName: '',
+    updatedAt: team.updatedAt,
+    teamId: team.id,
   }
 }
 
@@ -52,6 +72,7 @@ const STATUS_PRIORITY: Record<TaskItemStatus, number> = {
 export function useTaskItems(): TaskItem[] {
   const pulseItems = usePulseItems()
   const automationItems = useAutomationTaskItems()
+  const teams = useTeamStore(state => state.teams)
   const haloSpace = useSpaceStore(state => state.haloSpace)
   const spaces = useSpaceStore(state => state.spaces)
 
@@ -66,13 +87,14 @@ export function useTaskItems(): TaskItem[] {
     const items: TaskItem[] = [
       ...pulseItems.map(conversationToTaskItem),
       ...automationItems.map(item => ({ ...item, spaceName: resolveSpaceName(item.spaceId) })),
+      ...teams.filter(team => team.hasWaitingUser).map(teamToTaskItem),
     ]
 
     return items.sort((a, b) => {
       const priorityDiff = STATUS_PRIORITY[a.status] - STATUS_PRIORITY[b.status]
       return priorityDiff !== 0 ? priorityDiff : b.updatedAt - a.updatedAt
     })
-  }, [pulseItems, automationItems, haloSpace, spaces])
+  }, [pulseItems, automationItems, teams, haloSpace, spaces])
 }
 
 /** Count of items needing the user's attention (waiting, error, or an unseen completion). */

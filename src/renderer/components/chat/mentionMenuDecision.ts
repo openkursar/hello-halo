@@ -1,19 +1,13 @@
 /**
- * The composer's `#` mention menu: which conversations match a query, and
- * whether that is enough to open the menu.
+ * The conversation part of the composer's `@` menu: which conversations match
+ * a query, and whether that is enough to open the menu at all.
  *
- * A bare `#` (empty query) deliberately shows EVERY conversation, up to the
- * cap — the opposite of how the separate, file-only `@` trigger behaves
- * (empty query there shows nothing extra; unrelated to this module, `@`'s
- * own logic lives inline in InputArea.tsx). Two reasons, both load-bearing —
- * losing either one reopens a version of the same regression `@` once had:
- * 1. Conversation titles are usually auto-generated ("Fix onboarding bug")
- *    and rarely memorized verbatim — candidates here exist to be BROWSED,
- *    not looked up by a query the user would already have to know.
- * 2. `#` is rare in ordinary text (unlike `@`, which shows up in emails,
- *    "cc @someone") — an eager, wide-open candidate list on bare trigger
- *    carries little risk of hijacking input the user never meant as a
- *    mention, which is exactly the risk that made `@` unsafe to do this for.
+ * An empty query deliberately keeps EVERY conversation a candidate rather
+ * than none, because conversation titles are auto-generated ("Fix onboarding
+ * bug") and rarely memorized verbatim — they exist to be browsed, not looked
+ * up by a query the user would have to know already. How many of those
+ * actually reach the screen on a bare `@` is the menu's call, not this
+ * module's: it caps each kind so no single group crowds out the others.
  */
 
 import type { ConversationMentionCandidate } from './cross-conversation'

@@ -38,6 +38,16 @@ for (const appId of ['person-000', 'system-coordinator']) {
   teams.addMember({ teamId: 'review-team', appId, memberName: appId, role: 'Researcher', isLead: appId === 'system-coordinator', aiProvisioned: appId === 'system-coordinator', isSystemCoordinator: appId === 'system-coordinator', addedAt: now })
 }
 teams.insertEpoch({ id: 'review-task', teamId: 'review-team', title: 'Review launch evidence', startedAt: now, endedAt: null, endReason: null, summary: null, lifecycle: 'conversation', chatKey: null, outcome: null, triggerType: 'manual' })
+// A second team blocked on the user, so the task panel's team entry is real
+// persisted state rather than a stub. Its lead is deliberately unset: a lead
+// app is hidden from the people directory, and this fixture's directory
+// assertions count people.
+teams.insertTeam({
+  id: 'decision-team', name: 'Decision team', goal: 'Settle the launch decision', owningSpaceId: 'halo-temp',
+  leadAppId: null, memberSourcing: 'manual', collabMode: 'structured',
+  escalationRouting: 'user', status: 'waiting_user', currentEpochId: null, createdAt: now, updatedAt: now, hostNodeId: null,
+})
+teams.addMember({ teamId: 'decision-team', appId: 'person-000', memberName: 'person-000', role: 'Researcher', isLead: false, aiProvisioned: false, isSystemCoordinator: false, addedAt: now })
 for (let index = 0; index < 34; index++) {
   const appId = index === 33 ? 'system-coordinator' : 'person-000'
   const runId = `review-run-${index}`

@@ -123,7 +123,7 @@ function formatTime(ts: number): string {
 
 function ChannelOverview() {
   const { t } = useTranslation()
-  const { setView } = useAppStore()
+  const { navigate } = useAppStore()
   const [config, setConfig] = useState<HaloConfig | null>(null)
 
   useEffect(() => {
@@ -137,12 +137,12 @@ function ChannelOverview() {
   const channels = config?.notificationChannels as NotificationChannelsConfig | undefined
 
   const handleGoToSettings = useCallback(() => {
-    setView('settings')
+    navigate('settings')
     setTimeout(() => {
       const el = document.getElementById('message-channels')
       el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     }, 100)
-  }, [setView])
+  }, [navigate])
 
   return (
     <div className="space-y-2">

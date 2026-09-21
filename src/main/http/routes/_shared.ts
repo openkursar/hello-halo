@@ -43,7 +43,6 @@ import { getAppRuntime, getImChannelManager, sendAppChatMessage, stopAppChat, st
 import { buildDefaultAssistantSpec } from '../../apps/runtime/im-channels/wecom-bot-default-spec'
 import type { AppListFilter, UninstallOptions, InstalledApp } from '../../apps/manager'
 import type { ActivityQueryOptions, EscalationResponse, AppChatRequest } from '../../apps/runtime'
-import { readSessionMessages } from '../../apps/runtime/session-store'
 import { getImSessionRegistry } from '../../apps/runtime/im-session-registry'
 import { listAvailableSkills } from '../../apps/skill-discovery'
 import { deriveSkillCommandName } from '../../apps/spec/skill-identity'
@@ -283,7 +282,6 @@ export {
   moveArtifact,
   patchTouchesMcp,
   readArtifactContent,
-  readSessionMessages,
   readdirSync,
   realpathSync,
   reconcileArtifacts,

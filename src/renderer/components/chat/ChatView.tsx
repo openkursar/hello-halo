@@ -643,8 +643,11 @@ function EmptyState({
             the docked composer's own width (InputArea.tsx's non-standalone
             `max-w-[720px]`) so it doesn't visibly narrow once the first
             message sends it to the bottom. */}
+        {/* text-left stops the empty state's centering (meant for the logo,
+            title and chips) from reaching into the composer, whose menus and
+            hints are ordinary left-reading UI. */}
         {composer && (
-          <div className="mt-7 w-full max-w-[720px]">
+          <div className="mt-7 w-full max-w-[720px] text-left">
             {composer}
           </div>
         )}

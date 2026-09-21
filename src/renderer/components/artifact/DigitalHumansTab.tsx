@@ -23,7 +23,7 @@ import { resolveSpecI18n } from '../../utils/spec-i18n'
 import { automationStatusLabel, deriveAutomationStatus } from '../../utils/automation-status'
 import { AutomationAvatar } from '../apps/AutomationAvatar'
 import { SpaceResourceRow } from './SpaceResourceRow'
-import { navigateToAppChat } from '../pulse'
+import { navigateToAppChat, startDigitalHumanConversation } from '../../utils/conversation-navigation'
 import { useSpaceDigitalHumans } from '../../hooks/useSpaceDigitalHumans'
 import { api } from '../../api'
 
@@ -35,7 +35,7 @@ export function DigitalHumansTab() {
 
   const handleOpenOverview = (appId: string) => {
     useAppsPageStore.getState().setCurrentTab('my-digital-humans')
-    useAppsPageStore.getState().openAppOverview(appId)
+    useAppsPageStore.getState().openActivityThread(appId)
     useAppStore.getState().navigate('apps')
   }
 
@@ -43,16 +43,8 @@ export function DigitalHumansTab() {
   // acting on a digital human from a browsing surface means "talk to it now",
   // and resuming a past conversation is the left list's job.
   const handleOpenChat = async (appId: string, appSpaceId: string | null) => {
-    try {
-      const res = await api.appSessionCreate(appId)
-      if (res.success && res.data) {
-        navigateToAppChat(appSpaceId, appId, res.data.conversationId)
-      } else {
-        console.error('[DigitalHumansTab] Failed to create session:', res.error)
-      }
-    } catch (err) {
-      console.error('[DigitalHumansTab] Create session error:', err)
-    }
+    const conversationId = await startDigitalHumanConversation(appId)
+    if (conversationId) navigateToAppChat(appSpaceId, appId, conversationId)
   }
 
   if (digitalHumans.length === 0) {

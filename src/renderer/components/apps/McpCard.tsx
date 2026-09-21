@@ -27,6 +27,8 @@ interface McpCardProps {
   app: InstalledApp
   sdkEntry?: McpServerStatus
   spaceMap: Record<string, string>
+  /** Digital humans declaring this server, from the capability inventory. */
+  declaredBy?: number
   onOpen: () => void
 }
 
@@ -41,7 +43,7 @@ function healthTextClass(health: McpHealth): string {
   }
 }
 
-export function McpCard({ app, sdkEntry, spaceMap, onOpen }: McpCardProps) {
+export function McpCard({ app, sdkEntry, spaceMap, declaredBy, onOpen }: McpCardProps) {
   const { t } = useTranslation()
   const { pauseApp, resumeApp, uninstallApp, moveAppToSpace, reinstallApp } = useAppsStore()
   const dependents = useMcpDependents()
@@ -261,7 +263,7 @@ export function McpCard({ app, sdkEntry, spaceMap, onOpen }: McpCardProps) {
       <div className="mt-2.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
         {sdkEntry?.lastCheckedAt != null && <span>{formatTimeAgo(sdkEntry.lastCheckedAt, t)}</span>}
         {sdkEntry?.latencyMs != null && <><span>·</span><span className="tabular-nums">{sdkEntry.latencyMs}ms</span></>}
-        {usedByCount > 0 && <span className="ml-auto">{t('used by {{count}}', { count: usedByCount })}</span>}
+        {declaredBy ? <span className="ml-auto">{t('Declared by {{count}} digital humans', { count: declaredBy })}</span> : null}
       </div>
 
       {DialogComponent}

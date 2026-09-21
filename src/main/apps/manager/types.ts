@@ -439,6 +439,13 @@ export interface AppManagerService {
   getStudioSummary(language?: string, excludeIds?: string[]): import('../../../shared/apps/people-directory').StudioSummary
   listPeopleDirectory(filter: import('../../../shared/apps/people-directory').PersonDirectoryFilter): { items: import('../../../shared/apps/people-directory').PersonDirectoryRecord[]; total: number; offset: number; limit: number }
 
+  /**
+   * Ids of digital humans currently in one of the given statuses, without
+   * loading their records. For callers that need set membership before they
+   * paginate, such as the directory's "needs you" filter.
+   */
+  listPersonIdsByStatus(statuses: readonly AppStatus[]): string[]
+
   listApps(filter?: AppListFilter): InstalledApp[]
 
   /**

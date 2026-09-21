@@ -760,8 +760,10 @@ export const useAppsStore = create<AppsState>((set, get) => ({
 
       return {
         appStates: { ...s.appStates, [appId]: state },
+        // Removal is not a runtime state and has no representation in the
+        // broadcast, so a broadcast must never be able to undo it.
         apps: s.apps.map(a =>
-          a.id === appId ? { ...a, status: appStatus } : a
+          a.id === appId ? { ...a, status: a.status === 'uninstalled' ? a.status : appStatus } : a
         ),
       }
     })

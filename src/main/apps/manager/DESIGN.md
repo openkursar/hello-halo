@@ -356,6 +356,7 @@ interface AppManagerService {
   updateLastRun(appId: string, outcome: RunOutcome, errorMessage?: string): void
   getApp(appId: string): InstalledApp | null
   listApps(filter?: AppListFilter): InstalledApp[]
+  listPersonIdsByStatus(statuses: readonly AppStatus[]): string[]
   ensureKnowledgeSeeded(appId: string): void
   getAppWorkDir(appId: string): string
   clearAppMemory(appId: string): number
@@ -364,6 +365,11 @@ interface AppManagerService {
   onAppStatusChange(handler: StatusChangeHandler): Unsubscribe
 }
 ```
+
+`listPersonIdsByStatus` answers set membership without deserializing specs —
+`listApps` parses every installed spec, which is the wrong price for a question
+about one column. The people directory uses it to decide, before it paginates,
+who is stopped.
 
 ## Capability inventory and shared-resource impact
 

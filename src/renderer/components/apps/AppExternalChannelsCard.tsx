@@ -1,11 +1,12 @@
 /**
  * AppExternalChannelsCard
  *
- * Overview-page card for bots and external channels. Surfaces IM/HTTP
- * sessions that exist outside the main conversation board: these are the
- * digital human's own external traffic, not something the user started from
- * Halo, so they stay an observation-only surface here instead of appearing
- * in the main board's conversation list.
+ * Bots and external channels for one digital human, shown in its settings next
+ * to the bot binding it describes. Surfaces IM/HTTP sessions that exist outside
+ * the main conversation board: these are the digital human's own external
+ * traffic, not something the user started from Halo, so they stay an
+ * observation-only surface here instead of appearing in the main board's
+ * conversation list.
  *
  * - Unbound: weak-state row linking to the config page's notification
  *   section, where channel binding actually lives.
@@ -113,7 +114,7 @@ export function AppExternalChannelsCard({ appId, spaceId }: AppExternalChannelsC
                     {CHANNEL_LABELS[instance.type] ?? instance.type}
                   </div>
                   <div className="text-[11px] text-muted-foreground mt-0.5">
-                    {t('{{count}} external sessions', { count: instanceSessions.length })}
+                    {t('{{count}} IM sessions', { count: instanceSessions.length })}
                     {lastActiveAt > 0 && ` · ${formatLastActive(lastActiveAt, t)}`}
                   </div>
                 </div>

@@ -77,7 +77,7 @@ GET    /api/apps/<appId>/available-skills                          [ai]       di
 GET    /api/skills/command-name                                    [ai]       store                   Preview the slash-command name a skill title would install under
 DELETE /api/apps/<appId>                                           [ai]       digital-human           Soft-delete (uninstall) a digital human; recoverable via reinstall
 POST   /api/apps/<appId>/reinstall                                 [ai]       digital-human           Reinstall a previously soft-deleted (uninstalled) digital human
-POST   /api/apps/<appId>/move-space                                [ai]       digital-human,workspace Move a digital human to a different space (or make it global)
+POST   /api/apps/<appId>/move-space                                [ai]       digital-human,workspace Set which space a digital human starts new work in
 POST   /api/apps/<appId>/clear-memory                              [ai]       digital-human           Delete all of a digital human's memory files
 DELETE /api/apps/<appId>/permanent                                 [wrapped]  digital-human           Permanently delete a digital human and all its data
 POST   /api/apps/<appId>/pause                                     [ai]       digital-human           Pause a digital human (stops scheduling)

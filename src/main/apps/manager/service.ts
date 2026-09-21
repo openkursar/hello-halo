@@ -980,6 +980,8 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
 
     listPeopleDirectory(filter) { return store.listPeopleDirectory(filter) },
 
+    listPersonIdsByStatus(statuses) { return store.listPersonIdsByStatus(statuses) },
+
     listApps(filter?: AppListFilter): InstalledApp[] {
       return store.list(filter)
     },

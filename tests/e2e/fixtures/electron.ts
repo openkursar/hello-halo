@@ -50,14 +50,18 @@ interface ElectronFixtures {
 
 /**
  * Get the app entry point path.
- * Requires "npm run build" to produce out/main/index.mjs.
+ *
+ * Read from package.json's `main` rather than hard-coded: the bundle's module
+ * format is a build setting (electron.vite.config.ts) and the app's own entry
+ * field is the only thing that must agree with the launcher.
  */
 export function getAppEntryPath(): string {
   const projectRoot = path.resolve(__dirname, '../../..')
-  const appEntryPath = path.join(projectRoot, 'out/main/index.mjs')
+  const main = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf-8')).main as string
+  const appEntryPath = path.resolve(projectRoot, main)
 
   if (!fs.existsSync(appEntryPath)) {
-    throw new Error('Built app not found. Run "npm run build" first.')
+    throw new Error(`Built app not found at ${appEntryPath}. Run "npm run build" first.`)
   }
 
   // Ensure product.json exists in out/main/ so auth-loader can find providers.

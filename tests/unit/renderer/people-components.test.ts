@@ -1,6 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest'
 const env = vi.hoisted(() => ({ runner: null as any, people: {} as any, apps: {} as any, directory: {} as any, teams: [] as any[], page: {} as any, api: {} as any }))
-vi.mock('react', async original => ({ ...await original<typeof import('react')>(), useState: (value: any) => env.runner.state(value), useRef: (value: any) => env.runner.ref(value), useMemo: (compute: any) => compute(), useEffect: () => {}, useLayoutEffect: () => {} }))
+vi.mock('react', async original => ({ ...await original<typeof import('react')>(), useState: (value: any) => env.runner.state(value), useRef: (value: any) => env.runner.ref(value), useMemo: (compute: any) => compute(), useCallback: (fn: any) => fn, useEffect: () => {}, useLayoutEffect: () => {} }))
 vi.mock('zustand/react/shallow', () => ({ useShallow: (select: any) => select }))
 vi.mock('../../../src/renderer/stores/people-view.store', () => ({ usePeopleViewStore: Object.assign((select?: any) => select ? select(env.people) : env.people, { getState: () => env.people, setState: (patch: any) => Object.assign(env.people, patch) }) }))
 vi.mock('../../../src/renderer/stores/people-directory.store', () => ({ usePeopleDirectoryStore: () => env.directory }))
@@ -12,7 +12,11 @@ vi.mock('../../../src/renderer/utils/spec-i18n', () => ({ resolveSpecI18n: (spec
 vi.mock('../../../src/renderer/hooks/useDataContent', () => ({ useDataContent: () => ({}) }))
 vi.mock('../../../src/renderer/components/chat/MarkdownRenderer', () => ({ MarkdownRenderer: () => null }))
 vi.mock('../../../src/renderer/components/apps/AutomationAvatar', () => ({ AutomationAvatar: () => null }))
+// Reaches the space store, and through it the chat/canvas singletons — out of
+// reach of this file's api stub and irrelevant to what the directory renders.
+vi.mock('../../../src/renderer/components/apps/WorkspaceMigrationDialog', () => ({ WorkspaceMigrationDialog: () => null }))
 vi.mock('../../../src/renderer/api', () => ({ api: env.api }))
+vi.mock('../../../src/renderer/utils/conversation-navigation', () => ({ openDigitalHumanChat: vi.fn() }))
 import { PeopleDirectory } from '../../../src/renderer/components/apps/PeopleDirectory'
 import { EscalationCard } from '../../../src/renderer/components/apps/EscalationCard'
 
@@ -22,15 +26,17 @@ class ComponentRunner {
   ref(initial: any) { const index = this.index++; this.values[index] ??= { current: initial }; return this.values[index] }
   render(component: () => any) { this.index = 0; env.runner = this; return component() }
 }
-function nodes(tree: any): any[] { if (!tree || typeof tree !== 'object') return []; return [tree, ...[tree.props?.children].flat(Infinity).flatMap(nodes)] }
+/** Flattens the element tree, rendering plain function components inline so
+ * assertions see through extracted sub-components like PersonCard. */
+function nodes(tree: any): any[] { if (!tree || typeof tree !== 'object') return []; if (typeof tree.type === 'function') return nodes(tree.type(tree.props)); return [tree, ...[tree.props?.children].flat(Infinity).flatMap(nodes)] }
 function element(tree: any, type: string, label?: string) { return nodes(tree).find(node => node.type === type && (!label || node.props['aria-label'] === label || node.props.children === label)) }
 const app = (id: string, spaceId: string) => ({ id, spaceId, status: 'active', spec: { type: 'automation', name: id, description: `${id} research` } }) as any
 beforeEach(() => {
   env.people = { query: '', team: '', space: '', attention: false, view: 'cards', page: 1, directoryScroll: 80, drafts: {}, setFilters: (patch: any) => Object.assign(env.people, patch), rememberPerson: vi.fn(), saveDraft: (key: string, value: any) => { env.people.drafts[key] = value }, clearDraft: (key: string) => { delete env.people.drafts[key] } }
   env.apps = { appStates: { Lin: { pendingDecisionCount: 1 }, Amy: { pendingDecisionCount: 0 } }, activityEntries: {}, isLoading: false, error: null }
-  env.directory = { data: { items: [{ id: 'Lin', name: 'Lin', description: 'Research', status: 'paused', spaceId: 'halo', state: { pendingDecisionCount: 1 }, teams: [{ id: 'research', name: 'Research' }] }], total: 1, pendingTotal: 1, removedTotal: 0 }, load: vi.fn(), refresh: vi.fn(), loading: false, error: false }
+  env.directory = { data: { items: [{ id: 'Lin', name: 'Lin', description: 'Research', status: 'paused', spaceId: 'halo', state: { pendingDecisionCount: 1 }, teams: [{ id: 'research', name: 'Research' }] }], total: 1, attentionTotal: 1, removedTotal: 0 }, load: vi.fn(), refresh: vi.fn(), loading: false, error: false }
   env.teams = [{ id: 'research', name: 'Research', localMembers: [{ appId: 'Lin' }] }]
-  env.page = { openActivityThread: vi.fn(), openAppChat: vi.fn(), openAppTeams: vi.fn() }
+  env.page = { openActivityThread: vi.fn(), openAppTeams: vi.fn() }
 })
 it('directory retains search, team, workspace and attention preferences when opening a summarized person', () => {
   const runner = new ComponentRunner()
@@ -43,10 +49,20 @@ it('directory retains search, team, workspace and attention preferences when ope
   tree = render(); expect(nodes(tree).filter(node => node.type === 'article')).toHaveLength(1)
   element(tree, 'button', 'List view').props.onClick(); tree = render()
   const article = nodes(tree).find(node => node.type === 'article')
-  nodes(article).find(node => node.type === 'button').props.onClick()
+  nodes(article).find(node => node.type === 'button').props.onClick({ stopPropagation: () => {} })
   expect(env.page.openActivityThread).toHaveBeenCalledWith('Lin')
   expect(env.people).toMatchObject({ query: 'research', team: 'research', space: 'halo', attention: true, view: 'list', directoryScroll: 80 })
 })
+it('lists a stopped person as needing the owner and says so on the card', () => {
+  env.directory.data.items = [{ id: 'Kai', name: 'Kai', description: 'Ops', status: 'error', spaceId: 'halo', state: { blocked: 'auto_disabled', automaticEnabled: false, pendingDecisionCount: 0 }, teams: [] }]
+  const tree = new ComponentRunner().render(() => PeopleDirectory({ spaceMap: { halo: 'Halo' }, onCreate: vi.fn() }))
+  const labels = nodes(tree).filter(node => node.type === 'h2').map(node => node.props.children).flat(Infinity)
+  expect(labels).toContain('Needs you')
+  expect(labels).not.toContain('Paused')
+  // Stopping turns automatic tasks off, so the card must not read as paused.
+  expect(nodes(tree).some(node => node.type === 'span' && node.props.children === 'Stopped, waiting for you')).toBe(true)
+})
+
 it('failed submission retains the exact draft after closing and reopening the question', async () => {
   const entry = { id: 'question', appId: 'Lin', runId: 'run', type: 'escalation', ts: 1, content: { summary: 'Approve?' } } as any
   env.apps.respondToEscalation = vi.fn().mockResolvedValue(false)

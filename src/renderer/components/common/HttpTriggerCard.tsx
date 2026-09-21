@@ -29,7 +29,7 @@ interface BaseOption {
 
 /** Navigate to Settings and scroll to the Remote Access section. */
 function openRemoteSettings() {
-  useAppStore.getState().setView('settings')
+  useAppStore.getState().navigate('settings')
   // The settings page renders all sections in one scroll container; defer the
   // scroll until after the view switch has mounted the target section.
   setTimeout(() => {

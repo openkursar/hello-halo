@@ -15,8 +15,10 @@ import type { InstalledApp, AvailableSkill } from '../../../shared/apps/app-type
 import { useAppsStore } from '../../stores/apps.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useSpaceStore } from '../../stores/space.store'
+import { useCapabilityInventory } from '../../hooks/useCapabilityInventory'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { resolveSpecI18n } from '../../utils/spec-i18n'
+import { matchesInstallSource, type InstallSourceFilter } from '../../utils/install-source'
 import { toSkillDirName } from '../../../shared/skill-naming'
 import { isElectron } from '../../api/transport'
 import { api } from '../../api'
@@ -59,8 +61,10 @@ export function SkillCardWall({ spaceMap, onBrowseStore, onManualAdd }: SkillCar
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [scopeFilter, setScopeFilter] = useState('all')
+  const [sourceFilter, setSourceFilter] = useState<InstallSourceFilter>('all')
   const [discovered, setDiscovered] = useState<(AvailableSkill & { __spaceId: string })[]>([])
   const [discoveryLoading, setDiscoveryLoading] = useState(false)
+  const inventory = useCapabilityInventory()
 
   useEffect(() => {
     const id = setTimeout(() => setDebouncedSearch(search), 300)
@@ -114,11 +118,19 @@ export function SkillCardWall({ spaceMap, onBrowseStore, onManualAdd }: SkillCar
     return skillApps.filter(app => {
       if (scopeFilter === 'global' && app.spaceId !== null) return false
       if (scopeFilter !== 'all' && scopeFilter !== 'global' && app.spaceId !== scopeFilter) return false
+      if (!matchesInstallSource(app, sourceFilter)) return false
       if (!q) return true
       const { name, description } = resolveSpecI18n(app.spec, getCurrentLanguage())
       return name.toLowerCase().includes(q) || (description ?? '').toLowerCase().includes(q)
     })
-  }, [skillApps, debouncedSearch, scopeFilter])
+  }, [skillApps, debouncedSearch, scopeFilter, sourceFilter])
+
+  /** Digital humans each skill reaches, from the usage inventory. */
+  const usageByAppId = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const entry of inventory.data?.entries ?? []) counts.set(entry.appId, entry.consumers.length)
+    return counts
+  }, [inventory.data])
 
   const groups = useMemo<CardGroup[]>(() => {
     const error: InstalledApp[] = []
@@ -150,7 +162,7 @@ export function SkillCardWall({ spaceMap, onBrowseStore, onManualAdd }: SkillCar
   })
 
   /** The unmanaged group has no install record to filter on, so it only shows in the unfiltered view. */
-  const showUnmanaged = !debouncedSearch && scopeFilter === 'all' && (unmanaged.length > 0 || discoveryLoading)
+  const showUnmanaged = !debouncedSearch && scopeFilter === 'all' && sourceFilter === 'all' && (unmanaged.length > 0 || discoveryLoading)
 
   const isEmptyOverall = skillApps.length === 0 && unmanaged.length === 0 && !discoveryLoading
   const isEmptyFiltered = !isEmptyOverall && groups.length === 0 && !showUnmanaged
@@ -179,7 +191,7 @@ export function SkillCardWall({ spaceMap, onBrowseStore, onManualAdd }: SkillCar
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      <div className="flex-shrink-0 flex items-center gap-2 py-2.5">
+      <div className="flex-shrink-0 flex flex-wrap items-center gap-2 py-2.5">
         <div className="relative flex-1 min-w-0">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
           <input
@@ -190,10 +202,16 @@ export function SkillCardWall({ spaceMap, onBrowseStore, onManualAdd }: SkillCar
             className="w-full pl-9 pr-3 py-2 text-[13px] bg-card border border-border/60 rounded-lg focus:outline-none focus:border-primary focus:shadow-[inset_0_0_0_1px_var(--primary)] text-foreground placeholder:text-muted-foreground/50"
           />
         </div>
-        <select value={scopeFilter} onChange={e => setScopeFilter(e.target.value)} className="flex-shrink-0 px-3 py-2 text-[13px] bg-card border border-border/60 rounded-lg text-muted-foreground hover:text-foreground hover:border-border transition-colors focus:outline-none focus:ring-1 focus:ring-primary">
+        <select value={scopeFilter} onChange={e => setScopeFilter(e.target.value)} aria-label={t('Scope')} className="flex-shrink-0 px-3 py-2 text-[13px] bg-card border border-border/60 rounded-lg text-muted-foreground hover:text-foreground hover:border-border transition-colors focus:outline-none focus:ring-1 focus:ring-primary">
           <option value="all">{t('All workspaces')}</option>
           <option value="global">{t('Global')}</option>
           {spaceOptions.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+        <select value={sourceFilter} onChange={e => setSourceFilter(e.target.value as InstallSourceFilter)} aria-label={t('Source')} className="flex-shrink-0 px-3 py-2 text-[13px] bg-card border border-border/60 rounded-lg text-muted-foreground hover:text-foreground hover:border-border transition-colors focus:outline-none focus:ring-1 focus:ring-primary">
+          <option value="all">{t('All sources')}</option>
+          <option value="store">{t('Store')}</option>
+          <option value="manual">{t('Custom')}</option>
+          <option value="builtin">{t('Built in')}</option>
         </select>
         {/* Also in the overall-empty state, but that one is unreachable once a
             single skill exists — manual add has to live here too. */}
@@ -214,7 +232,7 @@ export function SkillCardWall({ spaceMap, onBrowseStore, onManualAdd }: SkillCar
         {isEmptyFiltered ? (
           <div className="flex flex-col items-center justify-center gap-2 py-12 text-center">
             <p className="text-sm text-foreground">{t('No matching Skills')}</p>
-            <button onClick={() => { setSearch(''); setScopeFilter('all') }} className="text-xs text-primary hover:underline">
+            <button onClick={() => { setSearch(''); setScopeFilter('all'); setSourceFilter('all') }} className="text-xs text-primary hover:underline">
               {t('Clear filters')}
             </button>
           </div>
@@ -243,7 +261,8 @@ export function SkillCardWall({ spaceMap, onBrowseStore, onManualAdd }: SkillCar
                         key={app.id}
                         app={app}
                         spaceMap={spaceMap}
-                        onOpen={() => selectApp(app.id, app.spec.type, app.spaceId ?? undefined)}
+                        usageCount={usageByAppId.get(app.id)}
+                        onOpen={() => selectApp(app.id, app.spec.type)}
                       />
                     ))}
                   </div>

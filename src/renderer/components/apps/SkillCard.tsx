@@ -25,6 +25,8 @@ import { api } from '../../api'
 interface SkillCardProps {
   app: InstalledApp
   spaceMap: Record<string, string>
+  /** Digital humans this skill reaches, from the capability inventory. */
+  usageCount?: number
   onOpen: () => void
 }
 
@@ -43,7 +45,7 @@ function sourceLabel(source: string | undefined, t: (s: string) => string): stri
   }
 }
 
-export function SkillCard({ app, spaceMap, onOpen }: SkillCardProps) {
+export function SkillCard({ app, spaceMap, usageCount, onOpen }: SkillCardProps) {
   const { t } = useTranslation()
   const { pauseApp, resumeApp, uninstallApp, moveAppToSpace, reinstallApp } = useAppsStore()
   const haloSpace = useSpaceStore(s => s.haloSpace)
@@ -77,6 +79,7 @@ export function SkillCard({ app, spaceMap, onOpen }: SkillCardProps) {
     sourceLabel(spec.store?.install_source, t),
     spec.version ? `v${spec.version}` : null,
     fileCount > 1 ? t('{{count}} files', { count: fileCount }) : null,
+    usageCount ? t('Available to {{count}} digital humans', { count: usageCount }) : null,
   ].filter((v): v is string => v !== null)
   const spaceLabel = app.spaceId ? (spaceMap[app.spaceId] ?? app.spaceId) : t('Global')
   const space = app.spaceId

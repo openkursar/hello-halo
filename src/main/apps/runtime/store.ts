@@ -22,6 +22,8 @@ import type {
   RunStatus,
   TriggerType,
 } from './types'
+import type { AppStatus } from '../manager'
+import { BLOCKED_STATUSES, blockedReason } from './app-state'
 
 // ============================================
 // Internal Row Types (flat DB shape)
@@ -515,7 +517,14 @@ export class ActivityStore {
     return rows.map(row => this.withContinuation(rowToEntry(row)))
   }
 
-  /** Get all pending (unanswered) escalation entries across all apps, oldest first */
+  /**
+   * Everything waiting on the owner across all apps: unanswered escalations
+   * oldest first, plus the people that stopped and cannot restart themselves.
+   *
+   * The second half is unpaginated on purpose — a stopped person produces one
+   * row and stays stopped until the owner acts, so the set is naturally small
+   * and a cursor over it would only hide a backlog that should be visible.
+   */
   getPendingInbox(options?: PendingDecisionQuery): import('../../../shared/apps/app-types').PendingDecisionInbox {
     const limit = Math.min(500, Math.max(1, Math.floor(options?.limit ?? 100)))
     const filter = `e.type = 'escalation' AND e.user_response_json IS NULL
@@ -530,7 +539,21 @@ export class ActivityStore {
       WHERE ${filter} ${cursor} ORDER BY e.ts, e.id LIMIT ?`).all(...values) as (EntryRow & { app_name: string | null })[]
     const total = (this.db.prepare(`SELECT COUNT(*) AS count FROM activity_entries e JOIN installed_apps a ON a.id = e.app_id
       WHERE ${filter}`).get() as { count: number }).count
-    return { entries: rows.map(rowToEntry), total, names: Object.fromEntries(rows.flatMap(row => row.app_name ? [[row.app_id, row.app_name]] : [])) }
+    const blocked = (this.db.prepare(`SELECT id, status, error_message AS message,
+      json_extract(spec_json, '$.name') AS name FROM installed_apps
+      WHERE json_extract(spec_json, '$.type') = 'automation'
+        AND status IN (SELECT value FROM json_each(?)) ORDER BY id`)
+      .all(JSON.stringify(BLOCKED_STATUSES)) as Array<{ id: string; status: AppStatus; message: string | null; name: string | null }>)
+      .flatMap(row => {
+        const reason = blockedReason(row.status)
+        return reason ? [{ appId: row.id, name: row.name ?? row.id, reason, ...(row.message ? { message: row.message } : {}) }] : []
+      })
+    return {
+      entries: rows.map(rowToEntry),
+      total: total + blocked.length,
+      names: Object.fromEntries(rows.flatMap(row => row.app_name ? [[row.app_id, row.app_name]] : [])),
+      blocked,
+    }
   }
 
   getPendingEntries(appId: string, options?: PendingDecisionQuery): ActivityEntry[] {
@@ -700,18 +723,27 @@ export class ActivityStore {
     return rows.map(row => this.withContinuation(rowToEntry(row)))
   }
 
-  private closeDecision(entryId: string): ActivityEntry | null {
+  private closeDecision(entryId: string, reason: 'task_closed' | 'dismissed' = 'task_closed'): ActivityEntry | null {
     const entry = this.getEntry(entryId)
     if (!entry || entry.type !== 'escalation') return null
     const canCancelContinuation = entry.continuation && ['queued', 'running', 'failed'].includes(entry.continuation.status)
     if ((entry.userResponse || entry.content.resolution) && !canCancelContinuation) return null
     if (canCancelContinuation) this.updateContinuation(entryId, 'cancelled')
     if (!entry.userResponse && !entry.content.resolution) {
-      entry.content.resolution = { reason: 'task_closed', ts: Date.now() }
+      entry.content.resolution = { reason, ts: Date.now() }
       delete entry.content.deadlineReviewRequired
       this.db.prepare('UPDATE activity_entries SET content_json = ? WHERE id = ?').run(JSON.stringify(entry.content), entryId)
     }
     return this.getEntry(entryId)
+  }
+
+  /**
+   * Close one unanswered request without answering it. The run stays open, so
+   * this is the only exit for a request whose work outlives it — a team
+   * member's conversation epoch never ends on its own.
+   */
+  dismissDecision(entryId: string): ActivityEntry | null {
+    return this.closeDecision(entryId, 'dismissed')
   }
 
   closeRun(runId: string): ActivityEntry[] {

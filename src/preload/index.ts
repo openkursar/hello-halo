@@ -526,6 +526,7 @@ export interface HaloAPI {
   appGetPendingInbox: (options?: import('../shared/apps/app-types').PendingDecisionQuery) => Promise<IpcResponse<import('../shared/apps/app-types').PendingDecisionInbox>>
   appRetryEscalationContinuation: (input: { appId: string; entryId: string }) => Promise<IpcResponse>
   appConfirmEscalationDeadline: (input: { appId: string; entryId: string; deadlineAt: number | null }) => Promise<IpcResponse>
+  appDismissEscalation: (input: { appId: string; entryId: string }) => Promise<IpcResponse>
   appCloseRun: (input: { appId: string; runId: string }) => Promise<IpcResponse>
   appStopRun: (input: { appId: string; runId: string }) => Promise<IpcResponse>
   appGetCapabilityInventory: () => Promise<IpcResponse<import('../shared/apps/capability-inventory').CapabilityInventory>>

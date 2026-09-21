@@ -1,11 +1,11 @@
 import { beforeEach, expect, it, vi } from 'vitest'
-const state = vi.hoisted(() => ({ api: { appGetActivityEntry: vi.fn() }, people: {} as Record<string, unknown>, page: { currentTab: 'my-digital-humans', selectedAppId: 'previous', setInitialAppId: vi.fn(), setCurrentTab: vi.fn(), openActivityThread: vi.fn(), openSessionDetail: vi.fn() }, selectTeam: vi.fn(), upsert: vi.fn(), setView: vi.fn() }))
+const state = vi.hoisted(() => ({ api: { appGetActivityEntry: vi.fn() }, people: {} as Record<string, unknown>, page: { currentTab: 'my-digital-humans', selectedAppId: 'previous', setInitialAppId: vi.fn(), setCurrentTab: vi.fn(), openActivityThread: vi.fn(), openSessionDetail: vi.fn() }, selectTeam: vi.fn(), upsert: vi.fn(), navigate: vi.fn() }))
 vi.mock('../../../src/renderer/api', () => ({ api: state.api }))
 vi.mock('../../../src/renderer/stores/people-view.store', () => ({ usePeopleViewStore: { setState: (patch: object) => Object.assign(state.people, patch) } }))
 vi.mock('../../../src/renderer/stores/apps-page.store', () => ({ useAppsPageStore: { getState: () => state.page } }))
 vi.mock('../../../src/renderer/stores/apps.store', () => ({ useAppsStore: { getState: () => ({ handleNewActivityEntry: state.upsert }) } }))
 vi.mock('../../../src/renderer/stores/team.store', () => ({ useTeamStore: { getState: () => ({ selectTeam: state.selectTeam }) } }))
-vi.mock('../../../src/renderer/stores/app.store', () => ({ useAppStore: { getState: () => ({ setView: state.setView }) } }))
+vi.mock('../../../src/renderer/stores/app.store', () => ({ useAppStore: { getState: () => ({ navigate: state.navigate }) } }))
 import { openWorkNotification } from '../../../src/renderer/utils/people-navigation'
 beforeEach(() => { vi.clearAllMocks(); state.people = {}; state.page.currentTab = 'my-digital-humans' })
 it('resolves the canonical team task and decision instead of opening an unrelated person execution', async () => {

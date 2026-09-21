@@ -27,7 +27,7 @@ operations on this page:
   POST   /api/apps/<appId>/im-chat/clear                             Clear a digital human's chat history in a bound IM chat   !! destructive
   GET    /api/apps/<appId>/im-chat/messages                          Read a digital human's transcript in a bound IM chat
   POST   /api/apps/<appId>/im-chat/stop                              Stop a digital human's in-progress reply in a bound IM chat (keeps history)
-  POST   /api/apps/<appId>/move-space                                Move a digital human to a different space (or make it global)
+  POST   /api/apps/<appId>/move-space                                Set which space a digital human starts new work in
   PATCH  /api/apps/<appId>/overrides                                 Merge-patch per-installation overrides (notification level, model)
   POST   /api/apps/<appId>/pause                                     Pause a digital human (stops scheduling)
   DELETE /api/apps/<appId>/permanent                                 Permanently delete a digital human and all its data
@@ -127,7 +127,7 @@ POST   /api/apps/<appId>/chat/stop                                 Stop a digita
           -d '{"conversationId":"<conversationId — a uuid from GET /api/spaces/$HALO_SPACE_ID/conversations>"}'
      # body: {"conversationId": "<conversationId — a uuid from GET /api/spaces/$HALO_SPACE_ID/conversations>"}
      # out: {success:true}
-     # note: conversationId is optional — omit it (or send {}) to stop every session of this app
+     # note: Name the session to stop. Stopping every session at once is a much bigger act, so it must be asked for explicitly: send {"all": true}. Sending neither returns 400 rather than guessing.
 
 POST   /api/apps/<appId>/clear-memory                              Delete all of a digital human's memory files
      !! DESTRUCTIVE: cannot be undone. Confirm with the user in plain language before running this.
@@ -189,15 +189,15 @@ POST   /api/apps/<appId>/im-chat/stop                              Stop a digita
      # out: {success:true,data:{stopped:boolean}}
      # note: chatType is "direct" or "group". Unlike im-chat/clear, this only aborts the current turn — the session and its history continue on the next inbound message.
 
-POST   /api/apps/<appId>/move-space                                Move a digital human to a different space (or make it global)
+POST   /api/apps/<appId>/move-space                                Set which space a digital human starts new work in
      # note: reversible — can be undone or corrected afterward.
      curl -sX POST "$HALO_API_URL/api/apps/<appId>/move-space" \
           -H "Authorization: Bearer $HALO_API_TOKEN" \
           -H "Content-Type: application/json" \
           -d '{"newSpaceId":"<spaceId — a uuid from GET /api/spaces>"}'
      # body: {"newSpaceId": "<spaceId — a uuid from GET /api/spaces>"}
-     # out: {success:true,data:{activationWarning?:string}}
-     # note: Send {"newSpaceId": null} to make it global (available in every space). 404 if appId does not exist; 400 if newSpaceId is an empty string.
+     # out: {success:true,data:{}}
+     # note: Changes the default only: work already running, existing chat sessions and team work keep the environment they started in. A digital human must belong to a space, so newSpaceId is required — null is rejected. Nothing is stopped or restarted. 404 if appId does not exist; 400 if newSpaceId is an empty string.
 
 PATCH  /api/apps/<appId>/overrides                                 Merge-patch per-installation overrides (notification level, model)
      # note: reversible — can be undone or corrected afterward.

@@ -153,6 +153,11 @@ export function registerAppsRoutes(app: Express): void {
     if (!runtime) return
     await respondOperation(res, 'confirm-deadline', () => runtime.confirmEscalationDeadline(req.params.appId, req.params.entryId, req.body.deadlineAt))
   })
+  app.post('/api/apps/:appId/escalation/:entryId/dismiss', async (req: Request, res: Response) => {
+    const runtime = getRuntimeOrFail(res)
+    if (!runtime) return
+    await respondOperation(res, 'dismiss-escalation', () => runtime.dismissEscalation(req.params.appId, req.params.entryId))
+  })
   app.post('/api/apps/:appId/runs/:runId/close', async (req: Request, res: Response) => {
     const runtime = getRuntimeOrFail(res)
     if (!runtime) return
@@ -1176,8 +1181,10 @@ export function registerAppsRoutes(app: Express): void {
       }
       const space = getSpace(appData.spaceId ?? spaceId)
       if (!space?.path) {
-        console.warn('[AppsHTTP] IM history space unavailable', { appId, spaceId: appData.spaceId ?? spaceId })
-        res.status(404).json({ success: false, error: 'Conversation workspace is unavailable' })
+        // No space yet means nothing was ever transcribed here, which is an
+        // empty history — not a failure the caller has to handle separately.
+        console.warn('[AppsHTTP] IM history space unavailable; reporting empty history', { appId, spaceId: appData.spaceId ?? spaceId })
+        res.json({ success: true, data: [] })
         return
       }
       const messages = loadImChatMessages(space.path, appId, channel, chatType, chatId)

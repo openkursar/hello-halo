@@ -84,6 +84,30 @@ describe('durable decisions', () => {
     expect(store.getEntry('solo')?.userResponse).toBeUndefined()
   })
 
+  it('dismisses one request without forging an answer, closing its work or touching the others', () => {
+    question('team', undefined, 'team-a')
+    question('solo')
+    const dismissed = store.dismissDecision('team')
+    expect(dismissed?.content.resolution?.reason).toBe('dismissed')
+    expect(dismissed?.userResponse).toBeUndefined()
+    expect(store.isRunClosed('team')).toBe(false)
+    expect(store.getAllPendingEscalations().map(entry => entry.id)).toEqual(['solo'])
+    expect(() => store.acceptDecision('person', 'team', { ts: 1, text: 'yes' })).toThrow('closed')
+    expect(store.dismissDecision('team')).toBeNull()
+  })
+
+  it('leaves an answered request alone and cancels work still queued behind a dismissed one', () => {
+    question('answered')
+    question('queued')
+    store.acceptDecision('person', 'answered', { ts: 1, text: 'yes' })
+    store.updateContinuation('answered', 'completed')
+    expect(store.dismissDecision('answered')).toBeNull()
+    expect(store.getEntry('answered')?.userResponse?.text).toBe('yes')
+    store.acceptDecision('person', 'queued', { ts: 1, text: 'go' })
+    expect(store.dismissDecision('queued')?.continuation?.status).toBe('cancelled')
+    expect(store.getEntry('queued')?.userResponse?.text).toBe('go')
+  })
+
   it('includes coordinator decisions in the bounded inbox and excludes uninstalled people', () => {
     question('a')
     manager.getAppDatabase().prepare(`INSERT INTO installed_apps(id, spec_id, space_id, spec_json, installed_at) VALUES ('coordinator', 'lead', 'space', '{"type":"automation"}', 1)`).run()
@@ -96,6 +120,24 @@ describe('durable decisions', () => {
     expect(next.entries[0].appId).toBe('coordinator')
     manager.getAppDatabase().prepare("UPDATE installed_apps SET status = 'uninstalled', uninstalled_at = ? WHERE id = 'coordinator'").run(Date.now())
     expect(store.getPendingInbox().total).toBe(1)
+  })
+
+  it('carries stopped people alongside the questions, unpaginated and with their recorded cause', () => {
+    question('a')
+    const db = manager.getAppDatabase()
+    db.prepare(`INSERT INTO installed_apps(id, spec_id, space_id, spec_json, status, error_message, installed_at)
+      VALUES ('stopped', 'stopped-spec', 'space', '{"type":"automation","name":"Scout"}', 'error', 'Auto-disabled after 3 consecutive errors', 1)`).run()
+    db.prepare(`INSERT INTO installed_apps(id, spec_id, space_id, spec_json, status, installed_at)
+      VALUES ('gone', 'gone-spec', 'space', '{"type":"automation"}', 'uninstalled', 1)`).run()
+    db.prepare(`INSERT INTO installed_apps(id, spec_id, space_id, spec_json, status, installed_at)
+      VALUES ('tool', 'tool-spec', 'space', '{"type":"mcp"}', 'error', 1)`).run()
+    const inbox = store.getPendingInbox({ limit: 1 })
+    expect(inbox.blocked).toEqual([{ appId: 'stopped', name: 'Scout', reason: 'auto_disabled', message: 'Auto-disabled after 3 consecutive errors' }])
+    // One question plus one stopped person: the badge counts work, not questions.
+    expect(inbox.total).toBe(2)
+    expect(store.getPendingInbox({ limit: 1, afterTs: inbox.entries[0].ts, afterId: inbox.entries[0].id }).blocked).toHaveLength(1)
+    db.prepare("UPDATE installed_apps SET status = 'active', error_message = NULL WHERE id = 'stopped'").run()
+    expect(store.getPendingInbox().blocked).toEqual([])
   })
 
   it('keeps stable cursors across equal timestamps and answered earlier pages', () => {

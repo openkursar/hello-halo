@@ -524,7 +524,12 @@ escalation:
 > **App status flow**:
 > - AI raises an escalation → App status: `waiting_user`
 > - User responds → follow-up run continues
-> - Timeout with no response → App status: `error`, desktop notification pushed
+> - User dismisses the request → it closes unanswered and the work keeps running
+> - `timeout_hours` set and reached → the request expires unanswered; the run it
+>   belongs to ends in `error` once none of its requests are still open
+>
+> A request outlives pausing, resuming and restarting the App: only answering it,
+> dismissing it, closing its work, or its own deadline ends it.
 
 ---
 

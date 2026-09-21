@@ -481,8 +481,7 @@ on it.
 
 **Layer split in the renderer**: local sessions render in the interactive
 `AppChatView` (keyed by conversationId for a clean remount on switch); IM/HTTP
-sessions stay read-only in `ImChatView`. `AppChatContainer` branches on
-`session.source === 'local'`.
+sessions stay read-only in `ImChatView`, reached through `ImSessionDetailView`.
 
 ### 2.14 Cross-Session Relay (Pending Relay Spool)
 
@@ -610,6 +609,26 @@ global slot free), `onStarted` (the run row exists, fired from `executeRun`'s
 guarantees the caller is never left waiting on an admission that already
 happened, e.g. when the run fails before inserting its row.
 
+### 2.17 A Stop Is Work for the Owner, Not a Status
+
+**Decision**: when the runtime stops a person — consecutive failures hitting the
+threshold, an expired sign-in — that is reported as an item waiting on the
+owner, not only as a status. `app-state.ts` derives `AutomationAppState.blocked`
+from the persisted status; `getPendingInbox` returns the same people beside the
+unanswered questions and counts them in its total.
+
+**Rationale**: a stop and an unanswered question are the same thing to the
+owner — work that will not move until they act — and they end the same way, with
+`resume()`. Carrying the stop only as a status produced a person marked as
+needing the owner whose request list, which holds questions and nothing else,
+was legitimately empty. A surface that claims someone needs the owner has to
+carry the way out of it.
+
+**`error` is a state, not a default**. It used to be the fall-through of the
+status ladder in both derivations, so an unmapped status was indistinguishable
+from a person the runtime had stopped — an uninstalled person read as one that
+had failed. Every status is now mapped explicitly and the ladder exists once.
+
 ---
 
 ## 3. SQLite Schema
@@ -659,6 +678,8 @@ src/main/apps/runtime/
   errors.ts                  -- Runtime-specific error types
   migrations.ts              -- Schema for automation_runs + activity_entries
   store.ts                   -- ActivityStore (CRUD for runs and entries)
+  app-state.ts               -- persisted AppStatus + live execution facts -> AutomationAppState (status, blocked, automaticEnabled). Shared by getAppState and the directory page; two copies of this ladder is how they came to disagree
+  people-directory.ts        -- bounded directory page projection
   prompt.ts                  -- buildAppSystemPrompt() for automation (headless) sessions
   report-tool.ts             -- report_to_user SDK MCP tool
   escalation-cut.ts          -- when a turn that asked the user may be ended (§2.3); applied by execute.ts and app-chat-sink.ts

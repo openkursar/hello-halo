@@ -16,8 +16,10 @@ import type { InstalledApp } from '../../../shared/apps/app-types'
 import { useAppsStore } from '../../stores/apps.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useAppStore } from '../../stores/app.store'
+import { useCapabilityInventory } from '../../hooks/useCapabilityInventory'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { resolveSpecI18n } from '../../utils/spec-i18n'
+import { matchesInstallSource, type InstallSourceFilter } from '../../utils/install-source'
 import { deriveMcpHealth } from '../../utils/mcpStatus'
 import { api } from '../../api'
 import { McpCard } from './McpCard'
@@ -44,6 +46,8 @@ export function McpCardWall({ spaceMap, onBrowseStore, onManualAdd }: McpCardWal
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [scopeFilter, setScopeFilter] = useState('all')
+  const [sourceFilter, setSourceFilter] = useState<InstallSourceFilter>('all')
+  const inventory = useCapabilityInventory()
   // Tracks which collapsible groups the user opened, rather than which they
   // closed. Seeded with 'uninstalled' so that one group starts expanded —
   // apps living there can still be reinstalled or deleted, worth surfacing.
@@ -88,13 +92,21 @@ export function McpCardWall({ spaceMap, onBrowseStore, onManualAdd }: McpCardWal
     return mcpApps.filter(app => {
       if (scopeFilter === 'global' && app.spaceId !== null) return false
       if (scopeFilter !== 'all' && scopeFilter !== 'global' && app.spaceId !== scopeFilter) return false
+      if (!matchesInstallSource(app, sourceFilter)) return false
       if (!q) return true
       const { name, description } = resolveSpecI18n(app.spec, getCurrentLanguage())
       if (name.toLowerCase().includes(q) || (description ?? '').toLowerCase().includes(q)) return true
       const sdkEntry = mcpStatus.find(s => s.name === app.specId)
       return sdkEntry?.tools?.some(tool => tool.toLowerCase().includes(q)) ?? false
     })
-  }, [mcpApps, debouncedSearch, scopeFilter, mcpStatus])
+  }, [mcpApps, debouncedSearch, scopeFilter, sourceFilter, mcpStatus])
+
+  /** Digital humans each server is declared by, from the usage inventory. */
+  const usageByAppId = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const entry of inventory.data?.entries ?? []) counts.set(entry.appId, entry.consumers.length)
+    return counts
+  }, [inventory.data])
 
   const groups = useMemo<CardGroup[]>(() => {
     const needsMe: InstalledApp[] = []
@@ -158,7 +170,7 @@ export function McpCardWall({ spaceMap, onBrowseStore, onManualAdd }: McpCardWal
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      <div className="flex-shrink-0 flex items-center gap-2 py-2.5">
+      <div className="flex-shrink-0 flex flex-wrap items-center gap-2 py-2.5">
         <div className="relative flex-1 min-w-0">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
           <input
@@ -169,10 +181,16 @@ export function McpCardWall({ spaceMap, onBrowseStore, onManualAdd }: McpCardWal
             className="w-full pl-9 pr-3 py-2 text-[13px] bg-card border border-border/60 rounded-lg focus:outline-none focus:border-primary focus:shadow-[inset_0_0_0_1px_var(--primary)] text-foreground placeholder:text-muted-foreground/50"
           />
         </div>
-        <select value={scopeFilter} onChange={e => setScopeFilter(e.target.value)} className="flex-shrink-0 px-3 py-2 text-[13px] bg-card border border-border/60 rounded-lg text-muted-foreground hover:text-foreground hover:border-border transition-colors focus:outline-none focus:ring-1 focus:ring-primary">
+        <select value={scopeFilter} onChange={e => setScopeFilter(e.target.value)} aria-label={t('Scope')} className="flex-shrink-0 px-3 py-2 text-[13px] bg-card border border-border/60 rounded-lg text-muted-foreground hover:text-foreground hover:border-border transition-colors focus:outline-none focus:ring-1 focus:ring-primary">
           <option value="all">{t('All workspaces')}</option>
           <option value="global">{t('Global')}</option>
           {spaceOptions.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+        <select value={sourceFilter} onChange={e => setSourceFilter(e.target.value as InstallSourceFilter)} aria-label={t('Source')} className="flex-shrink-0 px-3 py-2 text-[13px] bg-card border border-border/60 rounded-lg text-muted-foreground hover:text-foreground hover:border-border transition-colors focus:outline-none focus:ring-1 focus:ring-primary">
+          <option value="all">{t('All sources')}</option>
+          <option value="store">{t('Store')}</option>
+          <option value="manual">{t('Custom')}</option>
+          <option value="builtin">{t('Built in')}</option>
         </select>
         {/* Also in the overall-empty state, but that one is unreachable once a
             single MCP server exists — manual add has to live here too. */}
@@ -190,7 +208,7 @@ export function McpCardWall({ spaceMap, onBrowseStore, onManualAdd }: McpCardWal
         {isEmptyFiltered ? (
           <div className="flex flex-col items-center justify-center gap-2 py-12 text-center">
             <p className="text-sm text-foreground">{t('No matching MCP servers')}</p>
-            <button onClick={() => { setSearch(''); setScopeFilter('all') }} className="text-xs text-primary hover:underline">
+            <button onClick={() => { setSearch(''); setScopeFilter('all'); setSourceFilter('all') }} className="text-xs text-primary hover:underline">
               {t('Clear filters')}
             </button>
           </div>
@@ -221,7 +239,8 @@ export function McpCardWall({ spaceMap, onBrowseStore, onManualAdd }: McpCardWal
                         app={app}
                         sdkEntry={mcpStatus.find(s => s.name === app.specId)}
                         spaceMap={spaceMap}
-                        onOpen={() => selectApp(app.id, app.spec.type, app.spaceId ?? undefined)}
+                        declaredBy={usageByAppId.get(app.id)}
+                        onOpen={() => selectApp(app.id, app.spec.type)}
                       />
                     ))}
                   </div>

@@ -144,9 +144,9 @@ describe('resolveInboundIdentity', () => {
 
     await resolveInboundIdentity(INSTANCE_ID, APP_ID, CHANNEL, 'chat-1', capability)
 
-    // Two sessions were resolved by this one fetch, but consumers (e.g.
-    // ImSessionPanel) re-fetch their whole list per event — one event for
-    // the batch avoids N redundant full-list refetches.
+    // Two sessions were resolved by this one fetch, but session list
+    // consumers re-fetch their whole list per event — one event for the
+    // batch avoids N redundant full-list refetches.
     expect(broadcastToAllMock).toHaveBeenCalledTimes(1)
     expect(sendToRendererMock).toHaveBeenCalledTimes(1)
   })

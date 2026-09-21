@@ -498,8 +498,8 @@ async function runAppChatTurn(
   // Halo's own configuration and data, which is not a sensible default for a
   // digital human the user installed to do something else.
   //
-  // Never for guests. `buildGuestMcpServers` already withholds the server (it
-  // is in neither guest map, and unknown ids are not injected), so the
+  // Never for guests. `filterMcpServersByPolicy` already withholds the server
+  // (it is in neither guest map, and unknown ids are not injected), so the
   // credentials and the usage guide have to be withheld here too — otherwise
   // an outside sender gets a prompt describing a tool the session does not have.
   const usesHaloApi =

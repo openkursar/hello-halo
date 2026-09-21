@@ -22,12 +22,13 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { Pin, SquareCheckBig, ChevronRight, MessageSquare } from 'lucide-react'
+import { Pin, SquareCheckBig, ChevronRight, MessageSquare, Users } from 'lucide-react'
 import { useChatStore } from '../../stores/chat.store'
 import { useTaskItems } from '../../stores/task.store'
-import { useSpaceStore } from '../../stores/space.store'
+import { useTeamStore } from '../../stores/team.store'
 import { useAppStore } from '../../stores/app.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
+import { navigateToConversation } from '../../utils/conversation-navigation'
 import { AutomationAvatar } from '../apps/AutomationAvatar'
 import { useTranslation } from '../../i18n'
 import { cn } from '../../lib/utils'
@@ -63,68 +64,11 @@ const STATUS_TEXT_CLASS: Record<TaskItemStatus, string> = {
   'idle': 'text-muted-foreground',
 }
 
-/**
- * Navigate to a conversation, handling cross-space switching.
- * Extracted as a standalone function so it can be called from any context.
- */
-export function navigateToConversation(spaceId: string, conversationId: string) {
-  const chatStore = useChatStore.getState()
-  const currentSpaceId = chatStore.currentSpaceId
-
-  // Always land on the space view — a caller outside it (e.g. the task
-  // panel from the Apps page) would otherwise select the conversation
-  // without ever switching the top-level view to show it.
-  useAppStore.getState().navigate('space')
-
-  if (currentSpaceId === spaceId) {
-    chatStore.selectConversation(conversationId)
-    return
-  }
-
-  // Different space - switch space first
-  const spaceStore = useSpaceStore.getState()
-  const targetSpace = spaceStore.haloSpace?.id === spaceId
-    ? spaceStore.haloSpace
-    : spaceStore.spaces.find(s => s.id === spaceId)
-
-  if (!targetSpace) return
-
-  // Set flag for SpacePage to consume after it finishes loading conversations
-  useChatStore.setState({ pendingPulseNavigation: conversationId })
-
-  // Switch space — SpacePage's initSpace will pick up the flag and call selectConversation
-  spaceStore.setCurrentSpace(targetSpace)
-}
-
-/**
- * Navigate to a digital-human conversation, handling cross-space switching
- * exactly like navigateToConversation above, but landing on the app-chat
- * link (selectAppChatConversation) instead of a regular conversation.
- *
- * @param appSpaceId - The digital human's home space, or null for a global
- *   app — a global app has no space to switch to, so it opens in whichever
- *   space is currently active instead of forcing a jump.
- */
-export function navigateToAppChat(appSpaceId: string | null, appId: string, conversationId: string) {
-  const chatStore = useChatStore.getState()
-  useAppStore.getState().navigate('space')
-
-  const targetSpaceId = appSpaceId ?? chatStore.currentSpaceId
-  if (!targetSpaceId) return
-
-  if (chatStore.currentSpaceId === targetSpaceId) {
-    chatStore.selectAppChatConversation(targetSpaceId, appId, conversationId)
-    return
-  }
-
-  const spaceStore = useSpaceStore.getState()
-  const targetSpace = spaceStore.haloSpace?.id === targetSpaceId
-    ? spaceStore.haloSpace
-    : spaceStore.spaces.find(s => s.id === targetSpaceId)
-  if (!targetSpace) return
-
-  useChatStore.setState({ pendingAppChatNavigation: { appId, conversationId } })
-  spaceStore.setCurrentSpace(targetSpace)
+/** Open a team's workbench, which lives on the Apps page under the Teams tab. */
+function navigateToTeam(teamId: string) {
+  useTeamStore.getState().selectTeam(teamId)
+  useAppsPageStore.getState().setCurrentTab('team')
+  useAppStore.getState().navigate('apps')
 }
 
 /**
@@ -166,6 +110,7 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
     state.currentSpaceId ? state.spaceStates.get(state.currentSpaceId)?.currentConversationId ?? null : null
   )
   const selectedAppId = useAppsPageStore(state => state.selectedAppId)
+  const selectedTeamId = useTeamStore(state => state.currentTeamId)
   const appView = useAppStore(state => state.view)
 
   // Drives the elapsed-time text for running items. Only ticks while at
@@ -181,6 +126,8 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
   const handleItemClick = useCallback((item: TaskItem) => {
     if (item.source === 'conversation' && item.conversationId) {
       navigateToConversation(item.spaceId!, item.conversationId)
+    } else if (item.source === 'team' && item.teamId) {
+      navigateToTeam(item.teamId)
     } else {
       navigateToAutomation(item)
     }
@@ -243,6 +190,7 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
 
   const renderItem = (item: TaskItem) => {
     const isConversation = item.source === 'conversation'
+    const isTeam = item.source === 'team'
     // Grace-period item: user already looked at it, counting down to
     // auto-hide (chat.store `pulseReadAt`, 60s) unless kept. Automation
     // items never carry readAt, so this is always false for them.
@@ -258,7 +206,7 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
     // conversation and a digital human could show as selected at once.
     const isSelected = isConversation
       ? appView === 'space' && item.spaceId === currentSpaceId && item.conversationId === currentConversationId
-      : appView === 'apps' && item.appId === selectedAppId
+      : appView === 'apps' && (isTeam ? item.teamId === selectedTeamId : item.appId === selectedAppId)
 
     return (
       <div
@@ -281,15 +229,17 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
               )
         )}
       >
-        {/* Identity icon — MessageSquare for a conversation, the digital
-            human's own generated face for automation. Never a status dot:
-            status is conveyed by the section and elapsed text. */}
-        {isConversation ? (
+        {/* Identity icon — MessageSquare for a conversation, Users for a team,
+            the digital human's own generated face for automation. Never a
+            status dot: status is conveyed by the section and elapsed text. */}
+        {isConversation || isTeam ? (
           <div className={cn(
             'w-[30px] h-[30px] flex-shrink-0 rounded-sm flex items-center justify-center',
             isReady && !isSeen ? 'bg-primary/[0.12] text-accent-on-dark' : 'bg-secondary text-subtle-foreground'
           )}>
-            <MessageSquare className="w-4 h-4" strokeWidth={1.8} />
+            {isTeam
+              ? <Users className="w-4 h-4" strokeWidth={1.8} />
+              : <MessageSquare className="w-4 h-4" strokeWidth={1.8} />}
           </div>
         ) : (
           <div className="w-[30px] h-[30px] flex-shrink-0 rounded-sm overflow-hidden">
@@ -312,14 +262,17 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
                 Tooltip component: its bubble is absolutely positioned and
                 `whitespace-nowrap`, which overflows this 340px panel's
                 scroll box sideways. */}
-            <span
-              title={item.spaceId
-                ? t('Workspace: {{name}}', { name: item.spaceName })
-                : t('Global — runs outside any workspace')}
-              className="flex-shrink-0 max-w-[45%] truncate text-[10px] text-muted-foreground px-1.5 py-0.5 rounded bg-secondary/70"
-            >
-              {item.spaceName}
-            </span>
+            {/* Teams span workspaces, so they carry no workspace pill. */}
+            {!isTeam && (
+              <span
+                title={item.spaceId
+                  ? t('Workspace: {{name}}', { name: item.spaceName })
+                  : t('Global — runs outside any workspace')}
+                className="flex-shrink-0 max-w-[45%] truncate text-[10px] text-muted-foreground px-1.5 py-0.5 rounded bg-secondary/70"
+              >
+                {item.spaceName}
+              </span>
+            )}
             {isRunning && (
               <span className="ml-auto flex items-center flex-shrink-0 text-[11px] text-subtle-foreground tabular-nums">
                 {isQueued ? (

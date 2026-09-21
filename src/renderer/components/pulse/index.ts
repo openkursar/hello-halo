@@ -1,2 +1,2 @@
-export { PulseList, navigateToConversation, navigateToAppChat } from './PulseList'
+export { PulseList } from './PulseList'
 export { TaskStatusDot } from './TaskStatusDot'

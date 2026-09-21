@@ -51,6 +51,7 @@ import { executeRun } from './execute'
 import { injectIntoActiveRun, isRunActive } from './active-runs'
 import { readSessionMessages } from './session-store'
 import { legacySessionEnvironmentKey } from './execution-environment'
+import { automaticEnabled, blockedReason, deriveRuntimeStatus } from './app-state'
 import { getActiveTeamRuntime } from './team'
 import { truncateUtf16Safe } from './text-truncate'
 import { getSpace } from '../../services/space.service'
@@ -1253,21 +1254,20 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         }
       }
 
-      // Map AppStatus to AutomationAppState.status
-      let status: AutomationAppState['status']
       const appPrefix = `${appId}:`
       const isRunning = Array.from(runningAbortControllers.keys()).some(k => k.startsWith(appPrefix))
       const isQueued = (pendingTriggers.get(appId) ?? 0) > 0
 
       const counts = store.getDecisionCounts(appId)
-      const automaticEnabled = app.status === 'active' || app.status === 'waiting_user'
-      status = isRunning ? 'running' : isQueued || counts.continuations > 0 ? 'queued'
-        : counts.pending > 0 ? 'waiting_user' : app.status === 'needs_login' ? 'needs_login'
-        : automaticEnabled ? 'idle' : app.status === 'paused' ? 'paused' : 'error'
-
       const state: AutomationAppState = {
-        status,
-        automaticEnabled,
+        status: deriveRuntimeStatus({
+          appStatus: app.status,
+          running: isRunning,
+          queued: isQueued || counts.continuations > 0,
+          pendingDecisions: counts.pending,
+        }),
+        automaticEnabled: automaticEnabled(app.status),
+        blocked: blockedReason(app.status),
         runningCount: Array.from(runningAbortControllers.keys()).filter(key => key.startsWith(appPrefix)).length,
         pendingDecisionCount: counts.pending,
         pendingSoloDecisionCount: counts.solo,
@@ -1331,6 +1331,23 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       getActiveTeamRuntime()?.reconcileAwaitingDecision(appId)
       drainContinuations()
       return store.getEntry(entryId)!
+    },
+
+    async dismissEscalation(appId: string, entryId: string): Promise<void> {
+      if (!appManager.getApp(appId)) throw new AppNotFoundError(appId)
+      const existing = store.getEntry(entryId)
+      if (!existing || existing.appId !== appId) throw new EscalationNotFoundError(appId, entryId)
+      const entry = store.dismissDecision(entryId)
+      if (!entry) throw new Error('This request was already answered or closed')
+      console.log('[Runtime] Decision dismissed by user', { appId, entryId })
+      publishDecision(entry)
+      getActiveTeamRuntime()?.reconcileAwaitingDecision(appId)
+      // Nothing will answer it now, so release the wait it was holding.
+      if (appManager.getApp(appId)?.status === 'waiting_user' &&
+        !store.getAllPendingEscalations().some(item => item.appId === appId)) {
+        appManager.updateStatus(appId, 'active')
+      }
+      broadcastAppStatus(appId)
     },
 
     async retryEscalationContinuation(appId: string, entryId: string): Promise<void> {

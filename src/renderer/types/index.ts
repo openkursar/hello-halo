@@ -448,11 +448,11 @@ export const PULSE_READ_GRACE_PERIOD_MS = 60_000
  */
 export type TaskItemStatus = 'running' | 'waiting' | 'completed-unseen' | 'error' | 'idle';
 
-export type TaskSource = 'conversation' | 'automation';
+export type TaskSource = 'conversation' | 'automation' | 'team';
 
-/** A single entry in the task panel, aggregated from conversations and automation apps. */
+/** A single entry in the task panel, aggregated from conversations, automation apps and teams. */
 export interface TaskItem {
-  /** Globally unique: `conv:<conversationId>` or `app:<appId>` */
+  /** Globally unique: `conv:<conversationId>`, `app:<appId>` or `team:<teamId>` */
   key: string;
   source: TaskSource;
   status: TaskItemStatus;
@@ -483,6 +483,9 @@ export interface TaskItem {
   appName?: string;
   escalationId?: string;
   runId?: string;
+
+  /** Present when source === 'team' — a team with a decision waiting on the user. */
+  teamId?: string;
 }
 
 // Full conversation with messages

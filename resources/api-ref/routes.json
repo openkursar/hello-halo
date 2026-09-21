@@ -505,6 +505,10 @@
   },
   {
     "method": "POST",
+    "path": "/api/apps/:appId/escalation/:entryId/dismiss"
+  },
+  {
+    "method": "POST",
     "path": "/api/apps/:appId/runs/:runId/close"
   },
   {

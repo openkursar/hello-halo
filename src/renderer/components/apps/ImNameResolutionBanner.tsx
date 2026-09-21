@@ -18,12 +18,11 @@ import { api } from '../../api'
 import type { ImSessionRecord, ImChannelInstanceStatus } from '../../../shared/types/im-channel'
 
 /**
- * WeCom's own documentation for the "message" permission capability — the
- * exact page explaining how to authorize it and copy the URL this feature
- * needs. Not a Halo-authored guide (this feature has none yet), but the
- * authoritative source for the steps involved.
+ * Halo's own guide: authorizing WeCom's "message" capability, copying the
+ * URL, and pasting it into Settings → Message Channels. WeCom's platform
+ * docs cover only the first half and never mention where the URL goes.
  */
-const IM_NAME_RESOLUTION_DOC_URL = 'https://developer.work.weixin.qq.com/document/path/101764'
+const IM_NAME_RESOLUTION_DOC_URL = 'https://hello-halo.cc/docs/digital-humans/wecom-name-resolution.html'
 
 /** LocalStorage-backed dismiss flag. Permanent until localStorage is cleared — matches "not a required setup step, don't keep asking". */
 function useDismissedFlag(key: string): [boolean, () => void] {

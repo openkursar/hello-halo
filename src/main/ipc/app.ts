@@ -167,6 +167,12 @@ export function registerAppHandlers(): void {
       await r.runtime.confirmEscalationDeadline(input.appId, input.entryId, input.deadlineAt)
       return { success: true }
     }),
+    appDismissEscalation: (input: { appId: string; entryId: string }) => appOperation('dismiss-escalation', async () => {
+      const r = requireRuntime()
+      if (!r.success) return r
+      await r.runtime.dismissEscalation(input.appId, input.entryId)
+      return { success: true }
+    }),
     appCloseRun: (input: { appId: string; runId: string }) => appOperation('close-run', async () => {
       const r = requireRuntime()
       if (!r.success) return r

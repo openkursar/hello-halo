@@ -174,7 +174,10 @@ export interface EscalationContinuation {
 
 /** Content of an activity entry */
 export interface ActivityEntryContent {
-  resolution?: { reason: 'task_closed' | 'expired' | 'legacy_system_closed'; ts: number; legacyText?: string; attribution?: 'unverified' }
+  // `dismissed` is the user declining one request while its work continues;
+  // `task_closed` is the work itself ending. The card states which happened,
+  // so sharing a reason would make it claim the wrong one.
+  resolution?: { reason: 'task_closed' | 'dismissed' | 'expired' | 'legacy_system_closed'; ts: number; legacyText?: string; attribution?: 'unverified' }
   source?: ActivitySource
   resumeAvailable?: boolean
   stopped?: boolean
@@ -299,6 +302,16 @@ export interface RunQueryOptions {
   offset?: number
 }
 
+/**
+ * Why a digital human has stopped and cannot start itself again.
+ *
+ * - auto_disabled: consecutive failures hit the threshold; the runtime stopped it
+ * - needs_login:   a sign-in it depends on expired
+ *
+ * Both are cleared by the same user action (resume).
+ */
+export type BlockedReason = 'auto_disabled' | 'needs_login'
+
 /** Real-time state of an automation App (for UI display) */
 export interface AutomationAppState {
   automaticEnabled?: boolean
@@ -328,6 +341,21 @@ export interface AutomationAppState {
   lastDurationMs?: number
   consecutiveErrors?: number
   pendingEscalationId?: string
+  /** Set while the person is stopped and only the user can restart it. */
+  blocked?: BlockedReason
+}
+
+/**
+ * Whether this digital human is waiting on its owner: it has questions to
+ * answer, or it has stopped and only the owner can restart it.
+ *
+ * Both are the same thing to the person looking at the screen: work that will
+ * not move until they act. Every surface claiming someone needs the owner must
+ * ask this one function — a surface with its own definition can list a person
+ * for a reason the page they open offers no way to resolve.
+ */
+export function needsAttention(state?: Pick<AutomationAppState, 'pendingDecisionCount' | 'blocked'>): boolean {
+  return (state?.pendingDecisionCount ?? 0) > 0 || !!state?.blocked
 }
 
 /** Per-app snapshot for the digital-human card wall's batched first paint. */
@@ -346,10 +374,21 @@ export interface PendingDecisionQuery {
   afterId?: string
 }
 
+/** A digital human that stopped and is waiting for its owner to restart it. */
+export interface BlockedPerson {
+  appId: string
+  name: string
+  reason: BlockedReason
+  /** What the runtime recorded when it stopped, when it recorded anything. */
+  message?: string
+}
+
 export interface PendingDecisionInbox {
   entries: ActivityEntry[]
+  /** Pending questions plus stopped people — everything the owner must act on. */
   total: number
   names: Record<string, string>
+  blocked: BlockedPerson[]
 }
 
 export interface AppRunStartInfo {

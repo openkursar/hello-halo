@@ -79,7 +79,7 @@ export default defineConfig({
   projects: [
     {
       name: 'people-upgrade',
-      testMatch: ['**/people-upgrade.spec.ts', '**/people-capabilities.spec.ts'],
+      testMatch: ['**/people-upgrade.spec.ts', '**/people-capabilities.spec.ts', '**/people-settings.spec.ts', '**/people-tasks.spec.ts'],
       use: { actionTimeout: 15000 }
     },
     {

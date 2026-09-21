@@ -8,7 +8,7 @@ not here:
   running shell commands in the working directory -> terminal
 
 operations on this page:
-  POST   /api/apps/<appId>/move-space                                Move a digital human to a different space (or make it global)
+  POST   /api/apps/<appId>/move-space                                Set which space a digital human starts new work in
   GET    /api/artifacts/content                                      Read one file from a space
   GET    /api/artifacts/detect-type                                  Detect whether a file is text or binary and how it would be viewed
   POST   /api/artifacts/save                                         Overwrite a file's content
@@ -31,15 +31,15 @@ operations on this page:
   GET    /api/spaces/halo                                            Read the built-in temporary space
   PUT    /api/spaces/reorder                                         Set the display order of spaces
 
-POST   /api/apps/<appId>/move-space                                Move a digital human to a different space (or make it global)
+POST   /api/apps/<appId>/move-space                                Set which space a digital human starts new work in
      # note: reversible — can be undone or corrected afterward.
      curl -sX POST "$HALO_API_URL/api/apps/<appId>/move-space" \
           -H "Authorization: Bearer $HALO_API_TOKEN" \
           -H "Content-Type: application/json" \
           -d '{"newSpaceId":"<spaceId — a uuid from GET /api/spaces>"}'
      # body: {"newSpaceId": "<spaceId — a uuid from GET /api/spaces>"}
-     # out: {success:true,data:{activationWarning?:string}}
-     # note: Send {"newSpaceId": null} to make it global (available in every space). 404 if appId does not exist; 400 if newSpaceId is an empty string.
+     # out: {success:true,data:{}}
+     # note: Changes the default only: work already running, existing chat sessions and team work keep the environment they started in. A digital human must belong to a space, so newSpaceId is required — null is rejected. Nothing is stopped or restarted. 404 if appId does not exist; 400 if newSpaceId is an empty string.
 
 GET    /api/artifacts/content                                      Read one file from a space
      curl -s "$HALO_API_URL/api/artifacts/content?path=/absolute/path/inside/the/space" -H "Authorization: Bearer $HALO_API_TOKEN"

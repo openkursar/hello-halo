@@ -7,7 +7,7 @@
  * │ ┌──────────────────────────────────────────────────┐ │
  * │ │ Textarea                                         │ │
  * │ └──────────────────────────────────────────────────┘ │
- * │ [+] [Knowledge] [Tools] [Thinking]────────  [Send] │
+ * │ [Recipient] [+] [Tools] [Thinking] [Knowledge] ── [Send] │
  * │      Bottom toolbar: always visible, expandable     │
  * └──────────────────────────────────────────────────────┘
  *
@@ -20,10 +20,9 @@
  */
 
 import { useState, useRef, useEffect, useMemo, useCallback, KeyboardEvent, ClipboardEvent, DragEvent } from 'react'
-import { Plus, ImagePlus, Loader2, AlertCircle, Atom, Lightbulb, MessageSquare } from 'lucide-react'
+import { Plus, ImagePlus, Loader2, AlertCircle, Atom, Lightbulb, MessageSquare, Bot } from 'lucide-react'
 import { useAppStore } from '../../stores/app.store'
 import { useChatStore } from '../../stores/chat.store'
-import { api } from '../../api'
 import { useOnboardingStore } from '../../stores/onboarding.store'
 import { getOnboardingPrompt } from '../onboarding/onboardingData'
 import { ToolsetControls } from './ToolsetControls'
@@ -32,6 +31,7 @@ import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
 import { ImageAttachmentPreview } from './ImageAttachmentPreview'
 import { KnowledgeBaseButton } from './KnowledgeBaseButton'
 import { processImage, isValidImageType, formatFileSize } from '../../utils/imageProcessor'
+import { startDigitalHumanConversation } from '../../utils/conversation-navigation'
 import type { ImageAttachment, Artifact } from '../../types'
 import { getCurrentSource, resolveModelVision } from '../../types'
 import { useTranslation } from '../../i18n'
@@ -42,6 +42,7 @@ import type { ConversationMentionCandidate } from './cross-conversation'
 import { decideConversationMentionCandidates } from './mentionMenuDecision'
 import { formatConversationReference } from '../../../shared/conversation-reference'
 import { DigitalHumanSelector, type DigitalHumanSelectorConfig } from './DigitalHumanSelector'
+import { AutomationAvatar } from '../apps/AutomationAvatar'
 
 // ── mention helpers ──
 //
@@ -99,15 +100,46 @@ function formatArtifactReference(relativePath: string): string {
  * switches who the message goes to and leaves no trace in the text.
  */
 type MentionCandidate =
-  | { kind: 'digitalHuman'; key: string; text: null; appId: string; name: string }
+  | { kind: 'digitalHuman'; key: string; text: null; appId: string; name: string; paused: boolean }
   | { kind: 'conversation'; key: string; text: string; conversation: ConversationMentionCandidate }
   | { kind: 'artifact'; key: string; text: string; artifact: Artifact }
 
-/** Section heading shown above the first row of each kind, in menu order. */
-const MENTION_GROUP_LABEL: Record<MentionCandidate['kind'], string> = {
-  digitalHuman: 'Digital humans',
-  conversation: 'Conversations',
-  artifact: 'Files',
+/**
+ * Section heading shown above each kind's rows.
+ *
+ * A switch, not a lookup table: the extractor only collects literals written
+ * inside `t(...)`, so a table of bare strings ships an untranslated heading.
+ */
+function mentionGroupLabel(kind: MentionCandidate['kind'], t: (key: string) => string): string {
+  switch (kind) {
+    case 'digitalHuman': return t('Digital humans')
+    case 'conversation': return t('Conversations')
+    case 'artifact': return t('Files')
+  }
+}
+
+/**
+ * Rows per group on a bare "@", before the user types anything to narrow.
+ *
+ * Browsing and searching want opposite things. A bare "@" is a question about
+ * what kinds of things can be addressed at all, so every group must reach the
+ * screen — one long group running past the fold reads as "digital humans are
+ * the only option". Once a query exists the user knows what they are after,
+ * and the cap would only hide matches, so it lifts.
+ */
+const MENTION_GROUP_PREVIEW_LIMIT = 4
+
+/** One kind's rows, plus where they start in the flat keyboard-navigation order. */
+interface MentionGroup {
+  kind: MentionCandidate['kind']
+  candidates: MentionCandidate[]
+  /**
+   * True when the preview limit dropped rows, which the heading then says.
+   * Deliberately a flag and not a count: the source lists are themselves
+   * capped, so any number shown would understate what typing reveals.
+   */
+  truncated: boolean
+  startIndex: number
 }
 
 interface InputAreaProps {
@@ -179,10 +211,10 @@ const draftRecoverySubscribers = new Map<string, Set<(draft: InputDraft) => void
 const MAX_IMAGE_SIZE = 20 * 1024 * 1024  // 20MB max per image (before compression)
 const MAX_IMAGES = 10  // Max images per message
 
-// Number of actions offered by the attachment control. With only one
-// (image), the toolbar shows it directly instead of hiding it behind a
-// "+" popover — bump this when an attach action is added or removed.
-const ATTACH_ACTION_COUNT: number = 2
+// Number of actions offered by the "+" control. With only one, the toolbar
+// shows it directly instead of hiding it behind a popover — bump this when an
+// action is added or removed.
+const ATTACH_ACTION_COUNT: number = 3
 
 // Error message type
 interface ImageError {
@@ -471,14 +503,14 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
     fileInputRef.current?.click()
   }
 
-  // Handle "Reference a conversation" click (from attachment menu) — inserts
-  // "#" at the cursor and opens the exact same state a hand-typed "#" would
-  // (mentionMenuOpen, trigger '#', empty query), rather than a separate
-  // picker: this is the only way the two entry points are guaranteed to stay
-  // in sync, since they share this one code path instead of two written
-  // separately.
-  /** Types the "@" for the user and opens the menu — the same path, discoverable. */
-  const handleReferenceConversationClick = () => {
+  /**
+   * Types the "@" for the user and opens the menu — mouse-only users get
+   * there from the "+" menu, and see the "@" appear in the box, which teaches
+   * the shortcut on the way. Deliberately not a separate picker: both "+"
+   * entries land in this one menu, so the kinds can never drift apart into
+   * two pickers with their own filtering and keyboard behavior.
+   */
+  const handleOpenMentionMenu = () => {
     setShowAttachMenu(false)
     const cursor = textareaRef.current?.selectionStart ?? content.length
     const before = content.slice(0, cursor)
@@ -584,37 +616,61 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
     }).candidates
   }, [mentionConversations, mentionMatch, mentionMenuOpen])
 
+  // A locked selector (generating, or messages queued) drops the people group
+  // rather than the whole menu — files and conversations stay referenceable
+  // mid-turn, while switching recipient stays impossible by every route.
   const filteredDigitalHumans = useMemo(() => {
-    if (!mentionMenuOpen || !digitalHumanSelector) return []
+    if (!mentionMenuOpen || !digitalHumanSelector || digitalHumanSelector.locked) return []
     const query = mentionMatch?.query.trim().toLowerCase() ?? ''
     const options = digitalHumanSelector.options
     return query ? options.filter(o => o.name.toLowerCase().includes(query)) : options
   }, [mentionMenuOpen, digitalHumanSelector, mentionMatch])
 
-  // Single list backing both rendering and keyboard navigation. People come
-  // first: "@" reads as addressing someone before it reads as pointing at
-  // something.
-  const mentionCandidates = useMemo<MentionCandidate[]>(() => [
-    ...filteredDigitalHumans.map((option): MentionCandidate => ({
-      kind: 'digitalHuman',
-      key: `digital-human:${option.appId}`,
-      text: null,
-      appId: option.appId,
-      name: option.name,
-    })),
-    ...filteredMentionConversations.map((conversation): MentionCandidate => ({
-      kind: 'conversation',
-      key: `conversation:${conversation.id}`,
-      text: formatConversationReference(conversation.title, conversation.id),
-      conversation,
-    })),
-    ...filteredMentionArtifacts.map((artifact): MentionCandidate => ({
-      kind: 'artifact',
-      key: `artifact:${artifact.path}:${artifact.type}`,
-      text: formatArtifactReference(artifact.relativePath),
-      artifact,
-    })),
-  ], [filteredDigitalHumans, filteredMentionConversations, filteredMentionArtifacts])
+  // Menu order: people come first, since "@" reads as addressing someone
+  // before it reads as pointing at something. Empty groups are dropped so a
+  // heading never appears over nothing.
+  const mentionGroups = useMemo<MentionGroup[]>(() => {
+    const byKind: MentionCandidate[][] = [
+      filteredDigitalHumans.map((option): MentionCandidate => ({
+        kind: 'digitalHuman',
+        key: `digital-human:${option.appId}`,
+        text: null,
+        appId: option.appId,
+        name: option.name,
+        paused: option.status === 'paused',
+      })),
+      filteredMentionConversations.map((conversation): MentionCandidate => ({
+        kind: 'conversation',
+        key: `conversation:${conversation.id}`,
+        text: formatConversationReference(conversation.title, conversation.id),
+        conversation,
+      })),
+      filteredMentionArtifacts.map((artifact): MentionCandidate => ({
+        kind: 'artifact',
+        key: `artifact:${artifact.path}:${artifact.type}`,
+        text: formatArtifactReference(artifact.relativePath),
+        artifact,
+      })),
+    ]
+
+    const browsing = !mentionMatch?.query.trim()
+    const groups: MentionGroup[] = []
+    let startIndex = 0
+    for (const all of byKind) {
+      if (all.length === 0) continue
+      const candidates = browsing ? all.slice(0, MENTION_GROUP_PREVIEW_LIMIT) : all
+      groups.push({ kind: all[0].kind, candidates, truncated: candidates.length < all.length, startIndex })
+      startIndex += candidates.length
+    }
+    return groups
+  }, [filteredDigitalHumans, filteredMentionConversations, filteredMentionArtifacts, mentionMatch])
+
+  // Flat view of the same rows — keyboard navigation walks one list across
+  // group boundaries, so it can never disagree with what is rendered.
+  const mentionCandidates = useMemo<MentionCandidate[]>(
+    () => mentionGroups.flatMap(group => group.candidates),
+    [mentionGroups]
+  )
 
   const handleSlashClose = () => {
     setSlashMenuOpen(false)
@@ -667,13 +723,8 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
     setContent(`${prefix}${content.slice(match.end)}`)
     handleMentionClose()
 
-    try {
-      const res = await api.appSessionCreate(appId)
-      if (res.success && res.data) digitalHumanSelector?.onChange(appId, res.data.conversationId)
-      else console.error('[InputArea] Failed to create digital-human session:', res.error)
-    } catch (err) {
-      console.error('[InputArea] Create digital-human session error:', err)
-    }
+    const conversationId = await startDigitalHumanConversation(appId)
+    if (conversationId) digitalHumanSelector?.onChange(appId, conversationId)
 
     requestAnimationFrame(() => {
       if (textareaRef.current) {
@@ -933,39 +984,58 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
           {mentionMenuOpen && mentionCandidates.length > 0 && (
             <div className="absolute bottom-full left-0 mb-2 w-full max-w-md bg-popover border border-border rounded-xl shadow-lg z-30 overflow-hidden">
               <div className="max-h-[336px] overflow-y-auto py-1">
-                {mentionCandidates.map((candidate, index) => {
-                  const isSelected = index === mentionSelectedIndex
-                  const startsGroup = mentionCandidates[index - 1]?.kind !== candidate.kind
-                  return (
-                    <div key={candidate.key}>
-                      {startsGroup && (
-                        <div className="px-3 pt-2 pb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/60 select-none">
-                          {t(MENTION_GROUP_LABEL[candidate.kind])}
-                        </div>
+                {mentionGroups.map(group => (
+                  <div key={group.kind}>
+                    {/* "More exists" rides on the heading rather than a line
+                        of its own: stacked under the last row it read as a
+                        second heading for the group below it. */}
+                    <div className="px-3 pt-2 pb-1 flex items-baseline justify-between gap-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/60 select-none">
+                      <span className="truncate">{mentionGroupLabel(group.kind, t)}</span>
+                      {group.truncated && (
+                        <span className="shrink-0 normal-case font-normal tracking-normal text-muted-foreground/40">
+                          {t('Type to see more')}
+                        </span>
                       )}
-                      <button
-                        onMouseDown={(e) => {
-                          e.preventDefault()
-                          selectMentionCandidate(candidate)
-                        }}
-                        className={`w-full flex items-center gap-2 text-left min-h-[38px] py-1 border-l-2 ${isSelected ? 'bg-primary/10 border-primary pl-2.5 pr-3' : 'border-transparent pl-2.5 pr-3 hover:bg-muted/50'}`}
-                      >
-                        {candidate.kind === 'digitalHuman' ? (
-                          <span className="text-sm truncate flex-1 min-w-0">{candidate.name}</span>
-                        ) : candidate.kind === 'conversation' ? (
-                          <ConversationMentionRow candidate={candidate.conversation} />
-                        ) : (
-                          <>
-                            <span className="text-xs font-medium text-primary/80 shrink-0">
-                              {candidate.artifact.type === 'folder' ? t('Folder') : t('File')}
-                            </span>
-                            <span className="text-sm truncate flex-1 min-w-0">{candidate.artifact.relativePath}</span>
-                          </>
-                        )}
-                      </button>
                     </div>
-                  )
-                })}
+                    {group.candidates.map((candidate, indexInGroup) => {
+                      const isSelected = group.startIndex + indexInGroup === mentionSelectedIndex
+                      return (
+                        <button
+                          key={candidate.key}
+                          onMouseDown={(e) => {
+                            e.preventDefault()
+                            selectMentionCandidate(candidate)
+                          }}
+                          className={`w-full flex items-center gap-2 text-left min-h-[38px] py-1 border-l-2 ${isSelected ? 'bg-primary/10 border-primary pl-2.5 pr-3' : 'border-transparent pl-2.5 pr-3 hover:bg-muted/50'}`}
+                        >
+                          {candidate.kind === 'digitalHuman' ? (
+                            <>
+                              {/* Same generated face as the recipient chip and
+                                  the people directory — a name alone made this
+                                  the only kind of row with nothing to look at. */}
+                              <span className="shrink-0 w-7 h-7 flex items-center justify-center overflow-hidden rounded-lg">
+                                <AutomationAvatar name={candidate.name} size={28} />
+                              </span>
+                              <span className="text-sm truncate flex-1 min-w-0">{candidate.name}</span>
+                              {candidate.paused && (
+                                <span className="shrink-0 text-[10px] text-muted-foreground">{t('Paused')}</span>
+                              )}
+                            </>
+                          ) : candidate.kind === 'conversation' ? (
+                            <ConversationMentionRow candidate={candidate.conversation} />
+                          ) : (
+                            <>
+                              <span className="text-xs font-medium text-primary/80 shrink-0">
+                                {candidate.artifact.type === 'folder' ? t('Folder') : t('File')}
+                              </span>
+                              <span className="text-sm truncate flex-1 min-w-0">{candidate.artifact.relativePath}</span>
+                            </>
+                          )}
+                        </button>
+                      )
+                    })}
+                  </div>
+                ))}
               </div>
               <div className="border-t border-border/40 px-3 py-1.5 flex items-center gap-3 text-[10px] text-muted-foreground/40 select-none">
                 <span>↑↓ {t('navigate')}</span>
@@ -1053,10 +1123,8 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
                 const nextCursor = e.target.selectionStart ?? val.length
                 setCursorPos(nextCursor)
                 const nextMentionMatch = getMentionMatch(val, nextCursor)
-                // Opens when any kind has something to offer. A locked
-                // selector (generating or queued) drops only the people part
-                // rather than the whole menu, so files and conversations stay
-                // referenceable mid-turn.
+                // Opens when any kind has something to offer; the per-kind
+                // availability rules mirror the filtered lists above.
                 const query = nextMentionMatch?.query ?? ''
                 const hasPeople = !!digitalHumanSelector && !digitalHumanSelector.locked
                   && digitalHumanSelector.options.some(o => !query || o.name.toLowerCase().includes(query.trim().toLowerCase()))
@@ -1079,7 +1147,7 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
               // redundancy the docked (post-first-message) state inherits
               // the same placeholder for, since it's the same InputArea
               // instance either way.
-              placeholder={placeholder || t('@ for people, files and conversations, / for skills and commands')}
+              placeholder={placeholder || t('@ for digital humans, files and conversations, / for skills and commands')}
               readOnly={isOnboardingSendStep}
               rows={1}
               className={`w-full bg-transparent resize-none text-[15px] leading-[1.5]
@@ -1102,8 +1170,15 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
             onImageClick={handleImageButtonClick}
             imageCount={images.length}
             maxImages={MAX_IMAGES}
-            onReferenceConversationClick={handleReferenceConversationClick}
-            hasReferenceableConversations={mentionConversations.length > 0}
+            onOpenMentionMenu={handleOpenMentionMenu}
+            digitalHumanBlockedReason={
+              !digitalHumanSelector || digitalHumanSelector.options.length === 0
+                ? t('No digital humans in this space yet')
+                : digitalHumanSelector.locked
+                  ? t('Switch recipient after the current reply finishes')
+                  : null
+            }
+            conversationBlockedReason={mentionConversations.length === 0 ? t('No other conversations in this space yet') : null}
             canSend={canSend}
             onSend={handleSend}
             onStop={onStop}
@@ -1138,10 +1213,12 @@ interface InputToolbarProps {
   onImageClick: () => void
   imageCount: number
   maxImages: number
-  /** Inserts "#" and opens the conversation mention menu — same code path as typing "#" by hand. */
-  onReferenceConversationClick: () => void
-  /** Whether this space has any other conversation to reference — disables the menu item (never hides it) when false. */
-  hasReferenceableConversations: boolean
+  /** Inserts "@" and opens the mention menu — same code path as typing "@" by hand. Backs both menu entries that lead there. */
+  onOpenMentionMenu: () => void
+  /** Why "Chat with a digital human" cannot be used now, or null. Disables — never hides — the entry, so it stays discoverable. */
+  digitalHumanBlockedReason: string | null
+  /** Why "Reference a conversation" cannot be used now, or null. Same disable-never-hide rule. */
+  conversationBlockedReason: string | null
   canSend: boolean
   onSend: () => void
   onStop?: () => void
@@ -1164,8 +1241,9 @@ function InputToolbar({
   onImageClick,
   imageCount,
   maxImages,
-  onReferenceConversationClick,
-  hasReferenceableConversations,
+  onOpenMentionMenu,
+  digitalHumanBlockedReason,
+  conversationBlockedReason,
   canSend,
   onSend,
   onStop,
@@ -1178,17 +1256,20 @@ function InputToolbar({
   const { t } = useTranslation()
   return (
     <div className="flex flex-nowrap items-center justify-between gap-1 px-4 pb-2.5 mt-2">
-      {/* Left section: recipient selector + attachment + toolsets + thinking.
+      {/* Left section, ordered by how often a control is reached for:
+          the "+" menu and the per-turn toggles sit inboard, and knowledge —
+          a one-off binding, not a per-message decision — sits outermost.
           Scrolls horizontally on narrow widths so the fixed Send/Stop group
           is never pushed off. */}
       <div className="flex flex-nowrap items-center gap-1 min-w-0 overflow-x-auto scrollbar-none">
+        {/* Renders only while a digital human is selected — see its own docs. */}
         {digitalHumanSelector && !isOnboarding && (
           <DigitalHumanSelector {...digitalHumanSelector} />
         )}
 
-        {/* Attachment — a single available action (image) shows directly as
-            its own icon button instead of hiding behind a "+" popover; the
-            popover form only earns its keep once a second action exists. */}
+        {/* A single available action shows directly as its own icon button
+            instead of hiding behind a "+" popover; the popover form only
+            earns its keep once a second action exists. */}
         {!isGenerating && !isOnboarding && (
           ATTACH_ACTION_COUNT === 1 ? (
             <button
@@ -1216,7 +1297,7 @@ function InputToolbar({
               }}
             >
               <PopoverTrigger
-                title={t('Add attachment')}
+                title={t('More actions')}
                 className={`w-8 h-8 shrink-0 items-center justify-center rounded-sm cursor-pointer
                   transition-all duration-150
                   ${showAttachMenu
@@ -1255,17 +1336,36 @@ function InputToolbar({
                     </span>
                   )}
                 </button>
+                {/* Both entries below open the same "@" menu; only the label
+                    and the availability check differ, so a user who thinks in
+                    "talk to someone" and one who thinks in "point at a past
+                    conversation" each find their own way in. */}
                 <button
-                  onClick={onReferenceConversationClick}
-                  disabled={!hasReferenceableConversations}
+                  onClick={onOpenMentionMenu}
+                  disabled={!!digitalHumanBlockedReason}
                   className={`w-full px-3 py-2 flex items-center gap-3 text-sm
                     transition-colors duration-150
-                    ${!hasReferenceableConversations
+                    ${digitalHumanBlockedReason
                       ? 'text-muted-foreground/40 cursor-not-allowed'
                       : 'text-foreground hover:bg-muted/50'
                     }
                   `}
-                  title={!hasReferenceableConversations ? t('No other conversations in this space yet') : undefined}
+                  title={digitalHumanBlockedReason ?? undefined}
+                >
+                  <Bot size={16} className="text-muted-foreground" />
+                  <span>{t('Chat with a digital human')}</span>
+                </button>
+                <button
+                  onClick={onOpenMentionMenu}
+                  disabled={!!conversationBlockedReason}
+                  className={`w-full px-3 py-2 flex items-center gap-3 text-sm
+                    transition-colors duration-150
+                    ${conversationBlockedReason
+                      ? 'text-muted-foreground/40 cursor-not-allowed'
+                      : 'text-foreground hover:bg-muted/50'
+                    }
+                  `}
+                  title={conversationBlockedReason ?? undefined}
                 >
                   <MessageSquare size={16} className="text-muted-foreground" />
                   <span>{t('Reference a conversation')}</span>
@@ -1274,9 +1374,6 @@ function InputToolbar({
             </Popover>
           )
         )}
-
-        {/* Knowledge base loader */}
-        {!isGenerating && !isOnboarding && !hideKnowledgeControls && <KnowledgeBaseButton />}
 
         {/* On-demand toolsets (catalog menu + activation pills) */}
         {!isGenerating && !isOnboarding && !hideToolsetControls && <ToolsetControls />}
@@ -1298,6 +1395,10 @@ function InputToolbar({
             <span className="hidden sm:inline text-xs whitespace-nowrap">{t('Deep Thinking')}</span>
           </button>
         )}
+
+        {/* Knowledge base loader */}
+        {!isGenerating && !isOnboarding && !hideKnowledgeControls && <KnowledgeBaseButton />}
+
         {toolbarSlot && <div className="shrink-0">{toolbarSlot}</div>}
       </div>
 

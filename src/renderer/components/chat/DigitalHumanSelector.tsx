@@ -1,13 +1,15 @@
 /**
  * DigitalHumanSelector — main conversation board's input-area "recipient"
- * control.
+ * chip.
  *
- * Docked at the input's left edge, a dropdown of the space's available
- * digital humans. "Halo" is not a list entry — listing it alongside digital
- * humans read as a mysterious extra category rather than "no selection".
- * Instead, once a digital human is selected the trigger itself grows a clear
- * ("x") affordance that switches straight back to Halo — the same "select
- * from a list to change, clear the chip to reset" pattern as a filter chip.
+ * Renders only while a digital human is selected; with no selection it is
+ * absent from the toolbar entirely, because "sending to Halo" is the default
+ * and needs no control to say so. Choosing a recipient in the first place
+ * happens through the "@" menu (reachable by typing "@" or from the "+"
+ * menu), so this chip is purely the standing indication of "this goes to
+ * someone else", plus the two things only it can do: switch to a different
+ * digital human, or clear ("x") straight back to Halo.
+ *
  * Locked (disabled, not hidden) while generating or with queued messages, so
  * a reply in flight can never land in the wrong session.
  *
@@ -28,7 +30,7 @@ import { ChevronDown, Bot, X } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { AutomationAvatar } from '../apps/AutomationAvatar'
 import { cn } from '../../lib/utils'
-import { api } from '../../api'
+import { startDigitalHumanConversation } from '../../utils/conversation-navigation'
 import type { AppStatus } from '../../../shared/apps/app-types'
 
 export interface DigitalHumanSelectorOption {
@@ -96,37 +98,26 @@ export function DigitalHumanSelector({ current, options, onChange, locked }: Dig
     setOpen(false)
     setCreatingAppId(appId)
     try {
-      const res = await api.appSessionCreate(appId)
-      if (res.success && res.data) {
-        onChange(appId, res.data.conversationId)
-      } else {
-        console.error('[DigitalHumanSelector] Failed to create session:', res.error)
-      }
-    } catch (err) {
-      console.error('[DigitalHumanSelector] Create session error:', err)
+      const conversationId = await startDigitalHumanConversation(appId)
+      if (conversationId) onChange(appId, conversationId)
     } finally {
       setCreatingAppId(null)
     }
   }
 
+  if (current === null) return null
+
   return (
     <>
-      <div
-        className={cn(
-          'h-8 flex items-center rounded-sm text-xs font-medium transition-colors ease-halo max-w-[160px] shrink-0',
-          currentOption ? 'bg-secondary text-foreground' : ''
-        )}
-      >
+      <div className="h-8 flex items-center rounded-sm text-xs font-medium bg-secondary text-foreground transition-colors ease-halo max-w-[160px] shrink-0">
         <button
           ref={buttonRef}
           type="button"
           disabled={locked}
           onClick={toggleOpen}
           className={cn(
-            'h-full flex items-center gap-1.5 pl-2 rounded-sm min-w-0',
-            currentOption ? 'pr-1' : 'pr-2',
-            locked && 'opacity-50 cursor-not-allowed',
-            !currentOption && 'text-muted-foreground hover:text-foreground hover:bg-secondary'
+            'h-full flex items-center gap-1.5 pl-2 pr-1 rounded-sm min-w-0',
+            locked && 'opacity-50 cursor-not-allowed'
           )}
           title={
             locked
@@ -134,6 +125,9 @@ export function DigitalHumanSelector({ current, options, onChange, locked }: Dig
               : currentOption ? t('Chatting with {{name}}', { name: currentOption.name }) : t('Chat with a digital human')
           }
         >
+          {/* Falls back to a generic label when the selected app is gone
+              (uninstalled mid-conversation) — the chip must still render, or
+              there is no way left to clear back to Halo. */}
           {currentOption ? (
             <AutomationAvatar name={currentOption.name} size={16} />
           ) : (
@@ -143,21 +137,19 @@ export function DigitalHumanSelector({ current, options, onChange, locked }: Dig
           <ChevronDown className="w-3 h-3 shrink-0 opacity-60" />
         </button>
 
-        {currentOption && (
-          <button
-            type="button"
-            disabled={locked}
-            onClick={handleClear}
-            title={t('Switch back to Halo')}
-            aria-label={t('Switch back to Halo')}
-            className={cn(
-              'h-full flex items-center pr-2 pl-0.5 rounded-sm shrink-0',
-              locked ? 'opacity-50 cursor-not-allowed' : 'hover:text-destructive'
-            )}
-          >
-            <X className="w-3 h-3" />
-          </button>
-        )}
+        <button
+          type="button"
+          disabled={locked}
+          onClick={handleClear}
+          title={t('Switch back to Halo')}
+          aria-label={t('Switch back to Halo')}
+          className={cn(
+            'h-full flex items-center pr-2 pl-0.5 rounded-sm shrink-0',
+            locked ? 'opacity-50 cursor-not-allowed' : 'hover:text-destructive'
+          )}
+        >
+          <X className="w-3 h-3" />
+        </button>
       </div>
 
       {open && menuPosition && createPortal(

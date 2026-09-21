@@ -315,6 +315,8 @@ export interface AppRuntimeService {
    */
   retryEscalationContinuation(appId: string, entryId: string): Promise<void>
   confirmEscalationDeadline(appId: string, entryId: string, deadlineAt: number | null): void
+  /** Decline ONE unanswered request; the run it belongs to keeps going. */
+  dismissEscalation(appId: string, entryId: string): Promise<void>
   closeRun(appId: string, runId: string): Promise<void>
   stopRun(appId: string, runId: string): Promise<void>
   getPendingEntries(appId: string, options?: PendingDecisionQuery): ActivityEntry[]

@@ -35,7 +35,8 @@ export interface PeopleDirectoryPage {
   total: number
   offset: number
   limit: number
-  pendingTotal: number
+  /** Unanswered questions plus stopped people, across the whole directory rather than this page. */
+  attentionTotal: number
   removedTotal: number
 }
 

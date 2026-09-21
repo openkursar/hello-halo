@@ -118,8 +118,8 @@ export function SpacesPage() {
         </p>
       </div>
 
-      {/* Toolbar — same row layout as AutomationCardWall/SkillCardWall's
-          search toolbar, so filtering UI is consistent across list pages. */}
+      {/* Toolbar — same row layout as the capability walls' search toolbar,
+          so filtering UI is consistent across list pages. */}
       <div className="flex-shrink-0 flex items-center gap-2 px-6 sm:px-10 py-2.5">
         <div className="relative flex-1 min-w-0">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />

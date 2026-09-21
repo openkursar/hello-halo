@@ -131,6 +131,21 @@ export class AppManagerStore {
     return result
   }
 
+  /**
+   * Ids of digital humans currently in one of the given statuses.
+   *
+   * Deliberately narrow: the directory needs the membership of a small set
+   * before it paginates, and answering through `list()` would deserialize
+   * every installed spec to read one column.
+   */
+  listPersonIdsByStatus(statuses: readonly AppStatus[]): string[] {
+    if (statuses.length === 0) return []
+    const rows = this.db.prepare(`SELECT id FROM installed_apps
+      WHERE json_extract(spec_json, '$.type') = 'automation'
+        AND status IN (SELECT value FROM json_each(?))`).all(JSON.stringify(statuses)) as Array<{ id: string }>
+    return rows.map(row => row.id)
+  }
+
   listPeopleDirectory(filter: import('../../../shared/apps/people-directory').PersonDirectoryFilter) {
     const limit = Math.min(100, Math.max(1, Math.floor(filter.limit ?? 24)))
     const offset = Math.max(0, Math.floor(filter.offset ?? 0))

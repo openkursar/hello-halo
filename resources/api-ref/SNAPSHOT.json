@@ -1,9 +1,9 @@
 {
-  "totalRoutes": 241,
+  "totalRoutes": 242,
   "expose": {
     "ai": 146,
     "wrapped": 11,
-    "internal": 84,
+    "internal": 85,
     "unlabeled": 0
   },
   "groups": {

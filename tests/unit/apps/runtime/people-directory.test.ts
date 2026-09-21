@@ -26,7 +26,10 @@ describe('bounded people directory', () => {
     database.runMigrations(db, 'app_runtime', migrations)
     managerStore = new AppManagerStore(db)
     activity = new ActivityStore(db)
-    manager = { listPeopleDirectory: filter => managerStore.listPeopleDirectory(filter) } as AppManagerService
+    manager = {
+      listPeopleDirectory: filter => managerStore.listPeopleDirectory(filter),
+      listPersonIdsByStatus: statuses => managerStore.listPersonIdsByStatus(statuses),
+    } as AppManagerService
     const insert = db.prepare(`INSERT INTO installed_apps(id, spec_id, space_id, spec_json, user_config_json, status, installed_at)
       VALUES (?, ?, 'space', ?, ?, ?, 100)`)
     for (let index = 0; index < 150; index++) {
@@ -71,8 +74,25 @@ describe('bounded people directory', () => {
     expect(page.total).toBe(1)
     expect(page.items[0].name).toBe('研究员')
     expect(page.items[0].state).toMatchObject({ status: 'running', pendingDecisionCount: 1, runningCount: 1 })
-    expect(page.pendingTotal).toBe(1)
+    expect(page.items[0].state.blocked).toBeUndefined()
+    expect(page.attentionTotal).toBe(1)
     expect(buildPeopleDirectory(manager, activity, runtime, memberships, { removed: true }).items.map(person => person.id)).toEqual(['p149'])
+  })
+
+  it('treats a stopped person as waiting on the owner, and a removed one as neither', () => {
+    const db = database.getAppDatabase()
+    db.prepare("UPDATE installed_apps SET status = 'error' WHERE id = 'p002'").run()
+    db.prepare("UPDATE installed_apps SET status = 'needs_login' WHERE id = 'p003'").run()
+    // A coordinator is absent from the directory, so it must not inflate the badge.
+    db.prepare("UPDATE installed_apps SET status = 'error' WHERE id = 'p000'").run()
+    const attention = buildPeopleDirectory(manager, activity, runtime, memberships, { attention: true })
+    expect(attention.items.map(person => person.id)).toEqual(['p002', 'p003'])
+    expect(attention.attentionTotal).toBe(2)
+    expect(attention.items.map(person => person.state.blocked)).toEqual(['auto_disabled', 'needs_login'])
+    expect(attention.items.map(person => person.state.status)).toEqual(['error', 'needs_login'])
+    const removed = buildPeopleDirectory(manager, activity, runtime, memberships, { removed: true })
+    expect(removed.items[0].state.blocked).toBeUndefined()
+    expect(removed.items[0].state.status).toBe('paused')
   })
 
   it('uses a constant query count while page size grows and caps recent history', () => {

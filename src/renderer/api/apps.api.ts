@@ -54,6 +54,10 @@ export const appsApi = {
     if (isElectron()) return window.halo.appConfirmEscalationDeadline({ appId, entryId, deadlineAt })
     return httpRequest('POST', `/api/apps/${encodeURIComponent(appId)}/escalation/${encodeURIComponent(entryId)}/deadline`, { deadlineAt })
   },
+  appDismissEscalation: async (appId: string, entryId: string): Promise<ApiResponse> => {
+    if (isElectron()) return window.halo.appDismissEscalation({ appId, entryId })
+    return httpRequest('POST', `/api/apps/${encodeURIComponent(appId)}/escalation/${encodeURIComponent(entryId)}/dismiss`)
+  },
   appCloseRun: async (appId: string, runId: string): Promise<ApiResponse> => {
     if (isElectron()) return window.halo.appCloseRun({ appId, runId })
     return httpRequest('POST', `/api/apps/${encodeURIComponent(appId)}/runs/${encodeURIComponent(runId)}/close`)

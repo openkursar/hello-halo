@@ -24,6 +24,7 @@ import { changeAppDefaultSpace, previewAppSpaceChange, retainAppEnvironments } f
 
 describe('retained execution environments', () => {
   let root: string
+  let globalAppDir: string
   let database: DatabaseManager
   let store: ActivityStore
   let app: InstalledApp
@@ -33,6 +34,10 @@ describe('retained execution environments', () => {
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), 'halo-environment-'))
+    // A space-less app keeps its memory outside every space (manager's global
+    // branch), so the fixture needs that directory to exist too.
+    globalAppDir = join(root, 'global', 'apps', 'person')
+    mkdirSync(globalAppDir, { recursive: true })
     fixtures.spaces.clear(); fixtures.skills.clear(); fixtures.sessions = []
     for (const id of ['a', 'b', 'c']) {
       const path = join(root, id)
@@ -51,7 +56,7 @@ describe('retained execution environments', () => {
     connections = { a: [], b: [], c: [] }
     manager = {
       getApp: () => app,
-      getAppWorkDir: () => app.dataPath ?? join(fixtures.spaces.get(app.spaceId!).path, '.halo', 'apps', app.id),
+      getAppWorkDir: () => app.dataPath ?? (app.spaceId ? join(fixtures.spaces.get(app.spaceId).path, '.halo', 'apps', app.id) : globalAppDir),
       listEffectiveMcpApps: (id: string) => connections[id],
       moveToSpace: async (_id: string, spaceId: string) => { app = { ...app, dataPath: manager.getAppWorkDir(app.id), spaceId } },
     } as unknown as AppManagerService
@@ -121,6 +126,26 @@ describe('retained execution environments', () => {
     expect(() => validateEnvironmentConnections(chat, app, manager, 'chat')).toThrow(/switch accounts/)
     app.spec.requires!.mcps!.push({ id: 'search', enabled: false })
     expect(() => validateEnvironmentConnections(chat, app, manager, 'chat')).not.toThrow()
+  })
+
+  it('gives a space-less digital human a work space, crediting only what the space adds', async () => {
+    app = { ...app, spaceId: null } as InstalledApp
+    connections.b = [
+      { id: 'global-account', specId: 'calendar', spaceId: null, status: 'active', spec: { name: 'Calendar' } } as InstalledApp,
+      { id: 'space-account', specId: 'calendar', spaceId: 'b', status: 'active', spec: { name: 'Calendar' } } as InstalledApp,
+    ]
+    fixtures.skills.set('b', [
+      { name: 'Shared', path: '/global/shared', scope: 'global' },
+      { name: 'Review', path: '/b/review', scope: 'space' },
+    ])
+    const preview = previewAppSpaceChange({ manager, store, runtime }, app.id, 'b')
+    expect(preview.fromSpaceId).toBeNull()
+    expect(preview.addedSkills).toEqual(['Review (b)'])
+    expect(preview.removedSkills).toEqual([])
+    expect(preview.addedConnections).toEqual(['Calendar (b)'])
+    expect(preview.removedConnections).toEqual([])
+    await changeAppDefaultSpace({ manager, store, runtime }, app.id, 'b')
+    expect(app.spaceId).toBe('b')
   })
 
   it('inventory retention excludes completed, closed and deleted work', () => {

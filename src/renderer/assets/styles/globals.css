@@ -80,34 +80,38 @@
   --hero-to: 262 83% 64%;
 }
 
-/* Light theme */
+/* Light theme. White-canvas ladder: --background is pure white (the content
+   canvas) and every other surface steps DOWN from it — card 98% (subtle, for
+   chrome panels), muted/input 94%, hover 92%, border 89% — so hierarchy reads
+   from lightness, not from outlines. Keep muted ≥5 points below the canvas and
+   border ≥9, or fills and dividers wash out (the v2 prototype's mistake). */
 .light {
-  --background: 220 23% 97%;
-  --foreground: 222 15% 13%;
-  --card: 0 0% 100%;
-  --card-foreground: 222 15% 13%;
+  --background: 0 0% 100%;
+  --foreground: 222 16% 11%;
+  --card: 220 14% 98%;
+  --card-foreground: 222 16% 11%;
   --popover: 0 0% 100%;
-  --popover-foreground: 222 15% 13%;
+  --popover-foreground: 222 16% 11%;
   --primary: 217 91% 55%;
   --primary-foreground: 0 0% 100%;
   --primary-hover: 221 83% 48%;
-  --secondary: 225 18% 96%;
-  --secondary-foreground: 222 15% 13%;
-  --muted: 225 18% 96%;
+  --secondary: 220 14% 94%;
+  --secondary-foreground: 222 16% 11%;
+  --muted: 220 14% 94%;
   --muted-foreground: 218 9% 39%;
-  /* Darkened from the prototype's 58%, which scores only 2.98 against
-     --background — see the dark-theme note above. 46% clears 4.5. */
+  /* Darkened from the prototype's 58%, which scores only 2.98 on light
+     surfaces — see the dark-theme note above. 46% clears 4.5. */
   --subtle-foreground: 221 10% 46%;
   --accent: 217 91% 55%;
   --accent-foreground: 0 0% 100%;
   /* Falls back to --primary in light mode, matching the prototype's
      `[data-theme="light"]` override of the same on-dark-only accent text. */
   --accent-on-dark: 217 91% 55%;
-  --surface-hover: 220 19% 94%;
+  --surface-hover: 220 14% 92%;
   --destructive: 0 72% 51%;
   --destructive-foreground: 0 0% 100%;
-  --border: 220 14% 91%;
-  --input: 225 18% 96%;
+  --border: 220 12% 89%;
+  --input: 220 14% 94%;
   --ring: 217 91% 55%;
 
   --shadow-soft: 0 12px 32px -14px rgba(20, 24, 40, .14);

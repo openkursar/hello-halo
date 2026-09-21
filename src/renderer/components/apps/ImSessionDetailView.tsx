@@ -16,7 +16,7 @@ import { useTranslation } from '../../i18n'
 import { useEngineCapabilities } from '../../stores/engine.store'
 import { api } from '../../api'
 import { ImChatView } from './ImChatView'
-import { navigateToAppChat } from '../pulse'
+import { navigateToAppChat } from '../../utils/conversation-navigation'
 import { buildImSessionKey } from '../../../shared/apps/im-keys'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
 

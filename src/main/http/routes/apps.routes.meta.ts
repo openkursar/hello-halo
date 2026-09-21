@@ -13,6 +13,9 @@ export const MODULE: RouteModuleMeta = {
     'POST /api/apps/:appId/space-preview': { expose: 'internal' },
     'POST /api/apps/:appId/escalation/:entryId/retry': { expose: 'internal' },
     'POST /api/apps/:appId/escalation/:entryId/deadline': { expose: 'internal' },
+    // Declining a request is the user's call about their own decision, never
+    // the AI's — an agent able to dismiss it would be answering for them.
+    'POST /api/apps/:appId/escalation/:entryId/dismiss': { expose: 'internal' },
     'POST /api/apps/:appId/runs/:runId/close': { expose: 'internal' },
     'POST /api/apps/:appId/runs/:runId/stop': { expose: 'internal' },
     'POST /api/apps/:appId/runs/start': { expose: 'internal' },
@@ -205,10 +208,10 @@ export const MODULE: RouteModuleMeta = {
     'POST /api/apps/:appId/move-space': {
       expose: 'ai',
       group: ['digital-human', 'workspace'],
-      summary: 'Move a digital human to a different space (or make it global)',
+      summary: 'Set which space a digital human starts new work in',
       body: '{"newSpaceId": "<spaceId — a uuid from GET /api/spaces>"}',
-      returns: '{success:true,data:{activationWarning?:string}}',
-      notes: 'Send {"newSpaceId": null} to make it global (available in every space). 404 if appId does not exist; 400 if newSpaceId is an empty string.',
+      returns: '{success:true,data:{}}',
+      notes: 'Changes the default only: work already running, existing chat sessions and team work keep the environment they started in. A digital human must belong to a space, so newSpaceId is required — null is rejected. Nothing is stopped or restarted. 404 if appId does not exist; 400 if newSpaceId is an empty string.',
       impact: 'reversible',
     },
 
@@ -317,7 +320,7 @@ export const MODULE: RouteModuleMeta = {
       summary: "Stop a digital human's in-progress chat reply",
       body: '{"conversationId": "<conversationId — a uuid from GET /api/spaces/$HALO_SPACE_ID/conversations>"}',
       returns: '{success:true}',
-      notes: 'conversationId is optional — omit it (or send {}) to stop every session of this app',
+      notes: 'Name the session to stop. Stopping every session at once is a much bigger act, so it must be asked for explicitly: send {"all": true}. Sending neither returns 400 rather than guessing.',
     },
     'GET /api/apps/:appId/chat/status': {
       expose: 'ai',
