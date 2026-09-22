@@ -52,6 +52,11 @@ export const CODEX_CAPABILITIES: EngineCapabilities = {
     skills: true,
     mcp: true,
     hooks: false,
+    // thread/start takes no tool allow/deny lists and routes no tool call
+    // through canUseTool, so Halo's permission options would be accepted and
+    // ignored. MCP injection still applies (that happens before the engine),
+    // but a built-in command tool cannot be withheld here.
+    permissionRules: false,
     sessionResume: true,
     // Codex app-server exposes only thread/resume (continue original thread);
     // there is no branch-to-new-thread primitive, so session forking is off.

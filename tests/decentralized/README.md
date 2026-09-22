@@ -78,7 +78,7 @@ Rules that keep results trustworthy:
    isolation (`run-scenarios.mjs --only <IDs>`) before treating it as real.
 2. **Model config** comes from `.env.local` (`HALO_TEST_API_KEY/URL/MODEL/PROVIDER`);
    protocol-only scenarios run without a key and are marked `[no-model-ok]`.
-3. **Stale nodes hold ports.** If a prior run died, `pkill -f out/main/index.mjs`
+3. **Stale nodes hold ports.** If a prior run died, `pkill -f "out/main/index"`
    before starting (launch-nodes `stop` only kills pids in the current manifest).
 4. `.cluster*/` dirs contain node data + the seeded model key — never commit.
 

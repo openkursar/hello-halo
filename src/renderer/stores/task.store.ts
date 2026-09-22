@@ -87,7 +87,7 @@ export function useTaskItems(): TaskItem[] {
     const items: TaskItem[] = [
       ...pulseItems.map(conversationToTaskItem),
       ...automationItems.map(item => ({ ...item, spaceName: resolveSpaceName(item.spaceId) })),
-      ...teams.filter(team => team.hasWaitingUser).map(teamToTaskItem),
+      ...teams.filter(team => !team.ephemeral && team.hasWaitingUser).map(teamToTaskItem),
     ]
 
     return items.sort((a, b) => {

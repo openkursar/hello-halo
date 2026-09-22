@@ -53,7 +53,7 @@ function groupRows(rows: PeopleDirectorySummary[]): DirectoryGroup[] {
 export function PeopleDirectory({ spaceMap, onCreate }: { spaceMap: Record<string, string>; onCreate: () => void }) {
   const { t } = useTranslation()
   const prefs = usePeopleViewStore(useShallow(state => ({ query: state.query, team: state.team, space: state.space, attention: state.attention, view: state.view, page: state.page, setFilters: state.setFilters })))
-  const teams = useTeamStore(state => state.teams)
+  const teams = useTeamStore(state => state.teams).filter(team => !team.ephemeral)
   const { data, loading, error, load, refresh } = usePeopleDirectoryStore()
   const [showRemoved, setShowRemoved] = useState(false)
   const scroll = useRef<HTMLDivElement>(null)

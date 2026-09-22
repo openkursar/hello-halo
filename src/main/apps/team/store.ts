@@ -34,6 +34,7 @@ import type {
   BlackboardTaskRow,
   BlackboardFindingRow,
   TeamActivityRow,
+  TeamToolAuditRow,
   TeamEpochRow,
   TeamTriggerRow,
   TeamCheckRow,
@@ -42,7 +43,7 @@ import type {
   TaskPatch,
   TeamStore as ITeamStore,
 } from './types'
-import type { TeamActivity, TeamCheck, TeamDelegatedPolicy } from '../../../shared/apps/team-types'
+import type { TeamActivity, TeamCheck, TeamDelegatedPolicy, TeamToolAudit } from '../../../shared/apps/team-types'
 import type {
   TeamTrigger,
   TeamRunTriggerType,
@@ -69,6 +70,8 @@ function rowToTeam(row: TeamRow): Team {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     hostNodeId: row.host_node_id ?? null,
+    ephemeral: row.ephemeral === 1,
+    coordinatorConversationId: row.coordinator_conversation_id ?? null,
   }
 }
 
@@ -94,6 +97,22 @@ function rowToMember(row: TeamMemberRow): TeamMember {
   }
 }
 
+function rowToToolAudit(row: TeamToolAuditRow): TeamToolAudit {
+  return {
+    id: row.id,
+    teamId: row.team_id,
+    epochId: row.epoch_id,
+    appId: row.app_id,
+    actorAppId: row.actor_app_id ?? null,
+    external: row.external === 1,
+    toolName: row.tool_name,
+    detail: row.detail,
+    decision: row.decision as TeamToolAudit['decision'],
+    reason: row.reason ?? null,
+    createdAt: row.created_at,
+  }
+}
+
 /** A policy that fails to parse is treated as unset — never as a lockout. */
 function parsePolicy(json: string | null): TeamDelegatedPolicy | null {
   if (!json) return null
@@ -112,6 +131,7 @@ function rowToCheck(row: TeamCheckRow): TeamCheck {
     targetAppId: row.target_app_id,
     createdByAppId: row.created_by_app_id,
     instruction: row.instruction,
+    external: row.external === 1,
     schedule: JSON.parse(row.schedule_json) as TeamCheck['schedule'],
     runCount: row.run_count,
     createdAt: row.created_at,
@@ -262,6 +282,11 @@ export class TeamStore implements ITeamStore {
   private readonly stmtListActivityByEpoch: Database.Statement
   private readonly stmtListActivityByTeam: Database.Statement
   private readonly stmtCountActivityByEpoch: Database.Statement
+  // team_tool_audit
+  private readonly stmtInsertToolAudit: Database.Statement
+  private readonly stmtListToolAuditByTeam: Database.Statement
+  private readonly stmtListToolAuditByApp: Database.Statement
+  private readonly stmtPruneToolAudit: Database.Statement
   // team_epochs
   private readonly stmtInsertEpoch: Database.Statement
   private readonly stmtGetEpochById: Database.Statement
@@ -299,11 +324,13 @@ export class TeamStore implements ITeamStore {
       INSERT INTO teams (
         id, name, owning_space_id, goal, lead_app_id,
         member_sourcing, collab_mode, escalation_routing,
-        status, current_epoch_id, created_at, updated_at, host_node_id
+        status, current_epoch_id, created_at, updated_at, host_node_id,
+        ephemeral, coordinator_conversation_id
       ) VALUES (
         @id, @name, @owning_space_id, @goal, @lead_app_id,
         @member_sourcing, @collab_mode, @escalation_routing,
-        @status, @current_epoch_id, @created_at, @updated_at, @host_node_id
+        @status, @current_epoch_id, @created_at, @updated_at, @host_node_id,
+        @ephemeral, @coordinator_conversation_id
       )
     `)
     this.stmtGetTeamById = db.prepare(`SELECT * FROM teams WHERE id = ?`)
@@ -360,16 +387,17 @@ export class TeamStore implements ITeamStore {
     this.stmtUpsertCheck = db.prepare(`
       INSERT INTO team_checks (
         id, team_id, epoch_id, target_app_id, created_by_app_id,
-        instruction, schedule_json, run_count, created_at, updated_at, last_run_at
+        instruction, external, schedule_json, run_count, created_at, updated_at, last_run_at
       ) VALUES (
         @id, @team_id, @epoch_id, @target_app_id, @created_by_app_id,
-        @instruction, @schedule_json, @run_count, @created_at, @updated_at, @last_run_at
+        @instruction, @external, @schedule_json, @run_count, @created_at, @updated_at, @last_run_at
       )
       ON CONFLICT(id) DO UPDATE SET
         epoch_id = excluded.epoch_id,
         target_app_id = excluded.target_app_id,
         created_by_app_id = excluded.created_by_app_id,
         instruction = excluded.instruction,
+        external = excluded.external,
         schedule_json = excluded.schedule_json,
         run_count = excluded.run_count,
         updated_at = excluded.updated_at,
@@ -455,6 +483,30 @@ export class TeamStore implements ITeamStore {
     `)
     this.stmtCountActivityByEpoch = db.prepare(`
       SELECT COUNT(*) AS n FROM team_activity WHERE team_id = ? AND epoch_id = ?
+    `)
+
+    // ── team_tool_audit ───────────────────────────
+    this.stmtInsertToolAudit = db.prepare(`
+      INSERT OR IGNORE INTO team_tool_audit (
+        id, team_id, epoch_id, app_id, actor_app_id, external,
+        tool_name, detail, decision, reason, created_at
+      ) VALUES (
+        @id, @team_id, @epoch_id, @app_id, @actor_app_id, @external,
+        @tool_name, @detail, @decision, @reason, @created_at
+      )
+    `)
+    // Newest first: this is read to answer "what has been done with my computer
+    // lately", which is a question about the recent end of the list.
+    this.stmtListToolAuditByTeam = db.prepare(`
+      SELECT * FROM team_tool_audit
+      WHERE team_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?
+    `)
+    this.stmtListToolAuditByApp = db.prepare(`
+      SELECT * FROM team_tool_audit
+      WHERE team_id = ? AND app_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?
+    `)
+    this.stmtPruneToolAudit = db.prepare(`
+      DELETE FROM team_tool_audit WHERE created_at < ?
     `)
     // ── team_epochs ───────────────────────────────
     this.stmtInsertEpoch = db.prepare(`
@@ -554,6 +606,8 @@ export class TeamStore implements ITeamStore {
       updated_at: team.updatedAt,
       // Default to a locally-hosted office so existing callers need not change.
       host_node_id: team.hostNodeId ?? null,
+      ephemeral: team.ephemeral ? 1 : 0,
+      coordinator_conversation_id: team.coordinatorConversationId ?? null,
     })
   }
 
@@ -615,6 +669,28 @@ export class TeamStore implements ITeamStore {
 
   updateTeamCurrentEpoch(teamId: string, epochId: string | null): void {
     this.stmtUpdateTeamCurrentEpoch.run({ id: teamId, current_epoch_id: epochId, updated_at: Date.now() })
+  }
+
+  clearEphemeral(teamId: string): void {
+    this.db
+      .prepare(`UPDATE teams SET ephemeral = 0, updated_at = ? WHERE id = ?`)
+      .run(Date.now(), teamId)
+  }
+
+  setCoordinatorConversation(teamId: string, conversationId: string | null): void {
+    this.db
+      .prepare(`UPDATE teams SET coordinator_conversation_id = ?, updated_at = ? WHERE id = ?`)
+      .run(conversationId, Date.now(), teamId)
+  }
+
+  getCollabTeamByConversation(conversationId: string): Team | null {
+    const row = this.db
+      .prepare(
+        `SELECT * FROM teams WHERE coordinator_conversation_id = ?
+         ORDER BY created_at DESC, id ASC LIMIT 1`
+      )
+      .get(conversationId) as TeamRow | undefined
+    return row ? rowToTeam(row) : null
   }
 
   deleteTeam(teamId: string): boolean {
@@ -729,9 +805,14 @@ export class TeamStore implements ITeamStore {
   /** Cross-team lookup: every membership for an app (one app may join many teams). */
   listDirectoryMemberships(): import('../../../shared/apps/people-directory').DirectoryMembership[] {
     const rows = this.db.prepare(`SELECT m.app_id AS appId, m.team_id AS teamId, t.name AS teamName,
-      m.is_system_coordinator AS coordinator FROM team_members m JOIN teams t ON t.id = m.team_id`)
-      .all() as Array<{ appId: string; teamId: string; teamName: string; coordinator: number }>
-    return rows.map(({ coordinator, ...row }) => ({ ...row, isSystemCoordinator: coordinator === 1 }))
+      m.is_system_coordinator AS coordinator, t.ephemeral AS ephemeral
+      FROM team_members m JOIN teams t ON t.id = m.team_id`)
+      .all() as Array<{ appId: string; teamId: string; teamName: string; coordinator: number; ephemeral: number }>
+    return rows.map(({ coordinator, ephemeral, ...row }) => ({
+      ...row,
+      isSystemCoordinator: coordinator === 1,
+      ephemeral: ephemeral === 1,
+    }))
   }
 
   listMembersByAppId(appId: string): TeamMember[] {
@@ -812,6 +893,8 @@ export class TeamStore implements ITeamStore {
           created_at: now,
           updated_at: now,
           host_node_id: hostNodeId,
+          ephemeral: 0,
+          coordinator_conversation_id: null,
         })
       }
 
@@ -1138,6 +1221,38 @@ export class TeamStore implements ITeamStore {
     return (this.stmtCountActivityByEpoch.get(teamId, epochId) as { n: number }).n
   }
 
+  // ── team_tool_audit ─────────────────────────────
+
+  insertToolAudit(entry: TeamToolAudit): void {
+    this.stmtInsertToolAudit.run({
+      id: entry.id,
+      team_id: entry.teamId,
+      epoch_id: entry.epochId,
+      app_id: entry.appId,
+      actor_app_id: entry.actorAppId,
+      external: entry.external ? 1 : 0,
+      tool_name: entry.toolName,
+      detail: entry.detail,
+      decision: entry.decision,
+      reason: entry.reason,
+      created_at: entry.createdAt,
+    })
+  }
+
+  /** Newest first. `appId` narrows to one member; omit for the whole office. */
+  listToolAudit(teamId: string, options?: { appId?: string; limit?: number }): TeamToolAudit[] {
+    const limit = options?.limit ?? 200
+    const rows = options?.appId
+      ? (this.stmtListToolAuditByApp.all(teamId, options.appId, limit) as TeamToolAuditRow[])
+      : (this.stmtListToolAuditByTeam.all(teamId, limit) as TeamToolAuditRow[])
+    return rows.map(rowToToolAudit)
+  }
+
+  /** Drop rows older than a cutoff. The record is for review, not forever. */
+  pruneToolAudit(olderThan: number): number {
+    return this.stmtPruneToolAudit.run(olderThan).changes
+  }
+
   // ── team_epochs ─────────────────────────────────
 
   private hydrateEpoch(row: TeamEpochRow): TeamEpoch {
@@ -1310,6 +1425,8 @@ export class TeamStore implements ITeamStore {
       target_app_id: check.targetAppId,
       created_by_app_id: check.createdByAppId,
       instruction: check.instruction,
+      // Replicated rows from nodes without the field arrive undefined → 0.
+      external: check.external ? 1 : 0,
       schedule_json: JSON.stringify(check.schedule),
       run_count: check.runCount,
       created_at: check.createdAt,

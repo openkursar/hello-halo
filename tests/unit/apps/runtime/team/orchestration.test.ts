@@ -1166,6 +1166,53 @@ describe('TeamOrchestration', () => {
       expect(orch.getMemberStatus(RESEARCHER_APP)).toBe('working')
     })
 
+    it('restores the escalating turn\u2019s external origin on the resume wake', async () => {
+      // The sticky origin map does not survive a restart; the resume trigger is
+      // rebuilt from the persisted escalation record, so the flag must travel
+      // through resumeFromEscalation or the resumed turn runs permissive.
+      seedTeam(store, { collabMode: 'free', escalationRouting: 'user' })
+      const epoch = makeEpoch(store)
+      const { deps, pendings } = makeSession()
+      const orch = build(deps)
+
+      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, to: 'researcher', message: 'go', wait: false })
+      orch.captureReport(pendings[0].teamContext.correlationId, { kind: 'escalation', content: 'need a decision' })
+      pendings[0].resolve()
+      await flush()
+
+      const before = pendings.length
+      const ok = await orch.resumeFromEscalation({
+        teamId: TEAM_ID, epochId: epoch.id, appId: RESEARCHER_APP, response: 'skip it', external: true,
+      })
+      expect(ok).toBe(true)
+      await flush()
+
+      const resumeWake = pendings.slice(before).find((p) => p.conversationId === buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, epoch.id))
+      expect(resumeWake).toBeTruthy()
+      expect(resumeWake!.teamContext.external).toBe(true)
+    })
+
+    it('leaves a local escalation\u2019s resume wake unstamped', async () => {
+      seedTeam(store, { collabMode: 'free', escalationRouting: 'user' })
+      const epoch = makeEpoch(store)
+      const { deps, pendings } = makeSession()
+      const orch = build(deps)
+
+      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, to: 'researcher', message: 'go', wait: false })
+      orch.captureReport(pendings[0].teamContext.correlationId, { kind: 'escalation', content: 'need a decision' })
+      pendings[0].resolve()
+      await flush()
+
+      const before = pendings.length
+      expect(await orch.resumeFromEscalation({
+        teamId: TEAM_ID, epochId: epoch.id, appId: RESEARCHER_APP, response: 'skip it',
+      })).toBe(true)
+      await flush()
+
+      const resumeWake = pendings.slice(before).find((p) => p.conversationId === buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, epoch.id))
+      expect(resumeWake!.teamContext.external).toBeUndefined()
+    })
+
     it('the resume wake quotes the question it answers', async () => {
       seedTeam(store, { collabMode: 'free', escalationRouting: 'user' })
       const epoch = makeEpoch(store)

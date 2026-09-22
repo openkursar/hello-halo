@@ -88,3 +88,16 @@
 | L4 | ⏭️ SKIP | chained re-invite (B invites C) requires a joiner to mint an invite for an office it joined; invite minting is host/authority-only on this surface |
 | M1 | ✅ PASS | conversation created on joiner (pre-run) is office-wide consistent (2 nodes) |
 | M2 | ✅ PASS | rename on host converged on the joiner |
+
+---
+
+## Addendum · 2026-09-21 partial re-run (H3 only)
+
+> Run at 2026-09-21T12:27:48.361Z · cluster=5 ready node(s) · model key present=true
+> Scope: single-scenario re-run of H3 after the harness entry-point fix (out/main/index.cjs autodetect). This run briefly overwrote the full matrix above; restored, kept here as an addendum.
+
+| ID | Status | Evidence |
+|---|---|---|
+| H3 | ❌ FAIL | send status=0 err=undefined |
+
+H3 remains a known baseline drift flake (see full matrix notes). A full 64-scenario re-run is still pending on this branch.

@@ -212,6 +212,10 @@
     "path": "/api/wecom-bot/reconnect"
   },
   {
+    "method": "POST",
+    "path": "/api/feishu-bot/reachability"
+  },
+  {
     "method": "GET",
     "path": "/api/im-channels/status"
   },

@@ -71,6 +71,18 @@ interface DeliveryJob {
   /** Set only when the sender used `waitForReply` — arms the reply-matching window at dispatch. */
   waitCorrelationId?: string
   /**
+   * A non-conversation sender (e.g. a team member reporting to its coordinating
+   * space conversation). The caller supplies both faces of the message — what
+   * the model reads and what the transcript keeps — and the cross-conversation
+   * framing, pending-wait matching and circuit breaker all stand aside: the
+   * sender has its own budget and reply semantics upstream. Shares the turn
+   * gate and mailbox so exclusivity per conversation stays single-sourced.
+   */
+  external?: {
+    turnInput: string
+    persist: { content: string; source: string; metadata: Record<string, unknown> }
+  }
+  /**
    * Written by `dispatchToConversation` once the real message is identified
    * and patched. `job` is the same object reference threaded through
    * `turnGate.deliver` into the dispatch hook, so a caller that awaited an
@@ -156,6 +168,41 @@ function decBufferedIfAny(conversationId: string): void {
 
 async function dispatchToConversation(_sessionKey: string, job: DeliveryJob): Promise<void> {
   decBufferedIfAny(job.toConversationId)
+
+  if (job.external) {
+    const external = job.external
+    // Any prior reply-matching window belongs to a turn that is over now.
+    pendingWait.clearActiveCorrelation(job.toConversationId)
+    const beforeExternal = getConversation(job.spaceId, job.toConversationId)?.messages.length ?? 0
+    await sendMessage({
+      spaceId: job.spaceId,
+      conversationId: job.toConversationId,
+      message: external.turnInput,
+    })
+    const afterExternal = getConversation(job.spaceId, job.toConversationId)
+    // sendMessage persists the user turn synchronously at the captured index,
+    // but scan forward by content as well in case the concurrent turn shifted
+    // it — the framing text must not survive as a plain user bubble.
+    const externalMessage = afterExternal?.messages
+      .slice(beforeExternal)
+      .find((m) => m.role === 'user' && m.content === external.turnInput)
+    if (externalMessage) {
+      updateMessageById(job.spaceId, job.toConversationId, externalMessage.id, {
+        content: external.persist.content,
+        role: 'system',
+        source: external.persist.source,
+        metadata: { ...externalMessage.metadata, ...external.persist.metadata },
+      })
+      job.result = { messageId: externalMessage.id }
+    } else {
+      console.warn(
+        `[ConversationInterop] external delivery patch missed: conversation=${job.toConversationId} ` +
+          `expected index=${beforeExternal} — the delivered turn stays persisted as a plain user message`
+      )
+    }
+    return
+  }
+
   circuitBreaker.recordInboundForwardDepth(job.toConversationId, job.forwardDepth)
   if (job.waitCorrelationId) {
     pendingWait.armActiveCorrelation(job.toConversationId, job.waitCorrelationId)
@@ -531,4 +578,56 @@ export async function deliverToConversationAndWait(params: DeliverAndWaitParams)
 
 export function tryResolveAsReply(fromConversationId: string, toConversationId: string, message: string): boolean {
   return pendingWait.tryResolveAsReply(fromConversationId, toConversationId, message)
+}
+
+export interface ExternalDeliverParams {
+  spaceId: string
+  toConversationId: string
+  /** What the model reads as this turn's input (already framed by the caller). */
+  turnInput: string
+  /** What the transcript keeps for this message. */
+  persist: { content: string; source: string; metadata: Record<string, unknown> }
+}
+
+/**
+ * Deliver a message from a NON-conversation sender (e.g. a team member
+ * reporting to the space conversation coordinating its collaboration).
+ *
+ * Shares the per-conversation turn gate, mailbox cap and leaked-reservation
+ * recovery with cross-conversation delivery — one exclusivity domain per
+ * conversation — but skips the cross-conversation circuit breaker and
+ * pending-wait matching: the sender's own coordination layer (the team bus)
+ * already budgets and receipts these messages.
+ */
+export async function deliverExternalMessage(params: ExternalDeliverParams): Promise<DeliverResult> {
+  if (!getConversation(params.spaceId, params.toConversationId)) {
+    return { ok: false, reason: 'not_found' }
+  }
+  if (bufferedCountFor(params.toConversationId) >= TARGET_MAILBOX_CAP) {
+    return { ok: false, reason: 'queue_full' }
+  }
+
+  const job: DeliveryJob = {
+    spaceId: params.spaceId,
+    fromConversationId: '',
+    toConversationId: params.toConversationId,
+    message: params.persist.content,
+    summary: '',
+    forwardDepth: 0,
+    external: { turnInput: params.turnInput, persist: params.persist },
+  }
+
+  reclaimLeakedReservation(job.toConversationId)
+
+  let disposition: 'dispatched' | 'buffered'
+  try {
+    disposition = (await turnGate.deliver(job.toConversationId, job, 'buffer')) as 'dispatched' | 'buffered'
+  } catch {
+    return { ok: false, reason: 'unreachable' }
+  }
+  if (disposition === 'buffered') {
+    incBuffered(job.toConversationId)
+    return { ok: true, status: 'queued' }
+  }
+  return { ok: true, status: 'delivered', messageId: job.result?.messageId ?? '' }
 }

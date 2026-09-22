@@ -186,6 +186,32 @@ export function registerTeamRoutes(app: Express): void {
     }
   })
 
+  // GET /api/teams/collab-for-conversation/:conversationId — the ephemeral
+  // collaboration bound to a space conversation (registered before /:teamId so
+  // the literal segment is not read as a team id).
+  app.get('/api/teams/collab-for-conversation/:conversationId', async (req: Request, res: Response) => {
+    try {
+      const service = getServiceOrFail(res)
+      if (!service) return
+      res.json({ success: true, data: service.getCollabForConversation(req.params.conversationId) })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/teams/:teamId/save-collab — keep a collaboration as a persistent team
+  app.post('/api/teams/:teamId/save-collab', async (req: Request, res: Response) => {
+    try {
+      if (!officeGateOk(req, res, req.params.teamId)) return
+      const service = getServiceOrFail(res)
+      if (!service) return
+      const { name } = req.body as { name?: string }
+      res.json({ success: true, data: service.saveCollab(req.params.teamId, name) })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
   // GET /api/teams/:teamId — get a single team
   app.get('/api/teams/:teamId', async (req: Request, res: Response) => {
     try {
@@ -388,7 +414,19 @@ export function registerTeamRoutes(app: Express): void {
           ? req.body.epochId
           : (store.getCurrentEpochForTeam(teamId)?.id ?? store.listEpochsByTeam(teamId)[0]?.id)) ?? ''
 
-      const result = await service.sendToMember({ teamId, appId: targetAppId, epochId, message, images, thinkingEnabled })
+      // An office credential is a teammate reaching in from their own machine;
+      // its absence is the owner using their own remote access. The two look
+      // identical from here on, so which one this was has to travel with the
+      // request — it decides what the woken member is allowed to do.
+      const result = await service.sendToMember({
+        teamId,
+        appId: targetAppId,
+        epochId,
+        message,
+        images,
+        thinkingEnabled,
+        ...(cred ? { external: true } : {}),
+      })
       res.json({ success: true, data: result })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })

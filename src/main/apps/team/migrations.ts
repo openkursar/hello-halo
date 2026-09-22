@@ -368,5 +368,100 @@ export const migrations: Migration[] = [
     up(db) {
       db.exec('ALTER TABLE team_members ADD COLUMN is_system_coordinator INTEGER NOT NULL DEFAULT 0')
     }
+  },
+  {
+    version: 17,
+    description: 'Add team_tool_audit: what a member did while someone else was driving it',
+    up(db) {
+      // Separate from team_activity on purpose. That table is the OFFICE's
+      // record and replicates to every node, because a directed message exists
+      // nowhere else as a message. This one is the owner's record of their own
+      // computer — which commands ran on it, which were refused — and it stays
+      // on the machine it describes, exactly like the delegated policy it is
+      // the counterpart to. Replicating it would hand every teammate a map of
+      // the owner's filesystem.
+      db.exec(`
+        CREATE TABLE team_tool_audit (
+          id TEXT PRIMARY KEY,
+          team_id TEXT NOT NULL,
+          epoch_id TEXT NOT NULL,
+          app_id TEXT NOT NULL,
+          actor_app_id TEXT,
+          external INTEGER NOT NULL DEFAULT 0,
+          tool_name TEXT NOT NULL,
+          detail TEXT NOT NULL DEFAULT '',
+          decision TEXT NOT NULL,
+          reason TEXT,
+          created_at INTEGER NOT NULL
+        )
+      `)
+      // The two questions asked of it: "what happened in this office lately"
+      // and "what has been done with THIS digital human".
+      db.exec(`
+        CREATE INDEX idx_tool_audit_team
+          ON team_tool_audit(team_id, created_at)
+      `)
+      db.exec(`
+        CREATE INDEX idx_tool_audit_app
+          ON team_tool_audit(app_id, created_at)
+      `)
+    }
+  },
+  {
+    version: 18,
+    description: 'Add teams.ephemeral + coordinator_conversation_id (space collaborations)',
+    up(db) {
+      // ephemeral: a temporary team the space agent assembled for one piece of
+      // work — hidden from the Teams page and the people directory, coordinated
+      // by a space conversation rather than a lead app. Defaults keep every
+      // existing team a normal persistent one.
+      db.exec(`ALTER TABLE teams ADD COLUMN ephemeral INTEGER NOT NULL DEFAULT 0`)
+      // The space conversation acting as the collaboration's coordinator.
+      // Member replies and turn-end notices route into it. NULL for persistent
+      // teams. Indexed: the space chat and the space agent's tools both resolve
+      // "the collaboration of this conversation" on every turn.
+      db.exec(`ALTER TABLE teams ADD COLUMN coordinator_conversation_id TEXT`)
+      db.exec(`
+        CREATE INDEX idx_teams_coordinator_conversation
+          ON teams(coordinator_conversation_id)
+      `)
+    }
+  },
+  {
+    version: 19,
+    description: 'Add team_checks.external: whether the check was set from another machine',
+    up(db) {
+      // A check set inside an external-origin turn must wake its target under
+      // teammate grants, however long after the setter's turn ended. Without
+      // this column the wake only looks at the creator's member row, so a local
+      // member relaying a stranger's request laundered it into an owner-level
+      // one. Existing rows default to 0 (owner-origin), the pre-field behavior.
+      db.exec(`ALTER TABLE team_checks ADD COLUMN external INTEGER NOT NULL DEFAULT 0`)
+    }
+  },
+  {
+    version: 20,
+    description: 'Enforce one collaboration binding per conversation (unique coordinator_conversation_id)',
+    up(db) {
+      // A concurrent createCollab race could bind two teams to one conversation;
+      // reads pick the newest (created_at DESC, id ASC), so keep exactly that
+      // row's binding and null the losers before adding the constraint.
+      db.exec(`
+        UPDATE teams SET coordinator_conversation_id = NULL
+          WHERE coordinator_conversation_id IS NOT NULL
+            AND id != (
+              SELECT t2.id FROM teams t2
+                WHERE t2.coordinator_conversation_id = teams.coordinator_conversation_id
+                ORDER BY t2.created_at DESC, t2.id ASC
+                LIMIT 1
+            )
+      `)
+      db.exec(`DROP INDEX idx_teams_coordinator_conversation`)
+      db.exec(`
+        CREATE UNIQUE INDEX idx_teams_coordinator_conversation
+          ON teams(coordinator_conversation_id)
+          WHERE coordinator_conversation_id IS NOT NULL
+      `)
+    }
   }
 ]

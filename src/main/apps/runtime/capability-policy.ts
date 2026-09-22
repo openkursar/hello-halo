@@ -14,7 +14,10 @@
 import {
   allowsCapability,
   allowsUserMcp,
+  buildAllowedToolRules,
   computeDisallowedBuiltins,
+  isRestrictivePolicy,
+  resolveBashAccess,
   CAPABILITY_MCP_TOGGLES,
   CAPABILITY_SAFE_MCP,
 } from '../../../shared/apps/capability-policy'
@@ -41,6 +44,23 @@ export function isBorrowedTeamTurn(
   overImChannel: boolean
 ): boolean {
   return !!teamTurnKind && !overImChannel
+}
+
+/**
+ * How an unstated permission reads for a borrowed team turn.
+ *
+ * A request that entered this machine from outside is held to 'strict': nothing
+ * is granted that the owner did not name, because nobody here vouched for the
+ * person who sent it. A turn that started here stays 'permissive' — every
+ * member involved is the owner's own, running with reach the owner already has,
+ * so demanding a grant would add a lock between two of their own rooms.
+ *
+ * `external` is stamped at the boundary and travels with the chain (see
+ * {@link TeamTriggerContext.external}), so routing a request through a local
+ * member does not launder it into a local one.
+ */
+export function resolveDelegationMode(teamContext: Pick<TeamTriggerContext, 'external'>): CapabilityMode {
+  return teamContext.external ? 'strict' : 'permissive'
 }
 
 const SAFE_MCP = new Set(CAPABILITY_SAFE_MCP)
@@ -90,4 +110,77 @@ export function filterMcpServersByPolicy(
   }
 
   return result
+}
+
+// ── Turning a policy into SDK options ──
+
+export interface ApplyCapabilityPolicyInput {
+  policy: CapabilityPolicy | undefined
+  mode: CapabilityMode
+  /** Everything the turn assembled, before the policy narrows it. */
+  mcpServers: Record<string, unknown>
+  /** User-installed MCP servers, so they are told apart from Halo's own. */
+  dbMcpServers: Record<string, unknown> | null
+  /** Servers that are the turn's channel rather than a capability. */
+  alwaysKeep?: ReadonlySet<string>
+}
+
+export interface AppliedCapabilityPolicy {
+  /** False when the policy withholds nothing — the turn was left untouched. */
+  enforced: boolean
+  disallowedTools: string[]
+  mcpServers: Record<string, any>
+}
+
+/**
+ * Narrow a turn's SDK options to what the policy grants. The single place both
+ * the IM-guest and the teammate path pass through.
+ *
+ * Three layers, because none holds alone: `disallowedTools` removes withheld
+ * built-ins from the model's pool, MCP injection decides the rest (an
+ * uninjected server does not exist for the turn), and `allowedTools` lists what
+ * runs without asking — everything else reaches the per-call gate, which
+ * refuses. That last layer is what command rules ride on, and why the engine
+ * rather than Halo evaluates them.
+ *
+ * A policy that withholds nothing returns `enforced: false` and changes no
+ * option, so an unrestricted turn keeps the engine's fast path exactly as it was.
+ */
+export function applyCapabilityPolicy(
+  sdkOptions: Record<string, any>,
+  input: ApplyCapabilityPolicyInput
+): AppliedCapabilityPolicy {
+  const { policy, mode, mcpServers, dbMcpServers, alwaysKeep } = input
+
+  if (!isRestrictivePolicy(policy, mode)) {
+    return { enforced: false, disallowedTools: [], mcpServers: mcpServers as Record<string, any> }
+  }
+
+  const disallowedTools = computeDisallowedBuiltins(policy, mode)
+  const filtered = filterMcpServersByPolicy(mcpServers, dbMcpServers, policy, mode, alwaysKeep)
+
+  sdkOptions.disallowedTools = disallowedTools
+  sdkOptions.allowedTools = buildAllowedToolRules(policy, mode)
+  sdkOptions.mcpServers = filtered
+  // Both must go: the flag and the mode each bypass the permission engine on
+  // their own, and the engine is what evaluates the command rules.
+  if (sdkOptions.extraArgs) delete sdkOptions.extraArgs['dangerously-skip-permissions']
+  sdkOptions.permissionMode = 'default'
+
+  return { enforced: true, disallowedTools, mcpServers: filtered }
+}
+
+/** One line for the log: what this turn was narrowed to. */
+export function describeAppliedPolicy(
+  applied: AppliedCapabilityPolicy,
+  policy: CapabilityPolicy | undefined,
+  mode: CapabilityMode
+): string {
+  if (!applied.enforced) return 'unrestricted'
+  const bash = resolveBashAccess(policy, mode)
+  const commands = bash.scope === 'listed' ? `commands=${bash.rules.length} rules` : `commands=${bash.scope}`
+  return (
+    `mode=${mode}, ${commands}, withheld=${applied.disallowedTools.length} tools, ` +
+    `mcpServers=[${Object.keys(applied.mcpServers).join(', ')}]`
+  )
 }

@@ -13,7 +13,7 @@
  *
  * Must run after `npm run build` and before packaging. That order is not
  * incidental: every threshold in this repo was measured on electron-vite output
- * (`out/main/index.mjs`), not on a packaged app, so measuring anything else
+ * (`out/main/index.{cjs,mjs}`), not on a packaged app, so measuring anything else
  * silently compares against numbers that describe a different artifact.
  *
  * Fixtures are generated rather than committed, so a clean checkout produces

@@ -768,6 +768,8 @@ Halo targets **dozens** of IM platforms (WeCom Bot, WeChat ilink, Feishu, DingTa
 ImChannelProvider  — type-level driver (one per IM brand)
   ├── type, displayName, description, direction
   ├── configFields, defaultConfig        # drives settings UI
+  ├── hotUpdatableConfigKeys?            # applied without reconnecting
+  ├── credentialId?(config) → string     # what makes two instances "the same bot"
   ├── createInstance(id, config) → Instance
   └── validateConfig(config) → string | null
 

@@ -26,5 +26,5 @@ export const DEFAULT_DISABLED_TOOLS = [
   'WebSearch',
 ] as const
 
-/** Tools that are implicitly disabled when Agent Teams is off */
+/** Native CC Team tools; Halo exposes collaboration through the halo-team MCP server. */
 export const TEAM_TOOLS = ['TeamCreate', 'TeamDelete', 'SendMessage'] as const

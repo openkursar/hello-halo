@@ -36,21 +36,34 @@ function validateTarget(appId: string): string | null {
 }
 
 /**
- * Two enabled instances sharing a botId would route the same inbound traffic to
- * two digital humans. This was a renderer-side warning only, which a second
- * binding surface would have silently bypassed.
+ * Which credential a config points at. The provider answers, because the field
+ * carrying that identity is brand-specific (`botId`, `appId`, ...); `botId` is
+ * the fallback for providers that predate `credentialId`.
+ */
+function credentialIdOf(instance: ImChannelInstanceConfig): string {
+  const provider = getImChannelManager()?.getProvider(instance.type)
+  const viaProvider = provider?.credentialId?.(instance.config ?? {})
+  return String(viaProvider ?? instance.config?.botId ?? '').trim()
+}
+
+/**
+ * Two enabled instances sharing a credential would route the same inbound
+ * traffic to two digital humans — duplicated on most platforms, and split at
+ * random on any platform that delivers each event to a single connection. This
+ * was a renderer-side warning only, which a second binding surface would have
+ * silently bypassed.
  */
 function findDuplicateBot(
   instances: ImChannelInstanceConfig[],
   candidate: ImChannelInstanceConfig
 ): ImChannelInstanceConfig | undefined {
-  const botId = String(candidate.config?.botId ?? '').trim()
-  if (!botId || !candidate.enabled) return undefined
+  const credential = credentialIdOf(candidate)
+  if (!credential || !candidate.enabled) return undefined
   return instances.find(other =>
     other.id !== candidate.id
     && other.type === candidate.type
     && other.enabled
-    && String(other.config?.botId ?? '').trim() === botId
+    && credentialIdOf(other) === credential
   )
 }
 
@@ -78,6 +91,13 @@ export function setInstanceApp(instanceId: string, appId: string): BindResult {
   const target = instances.find(i => i.id === instanceId)
   if (!target) return { success: false, error: `Instance "${instanceId}" not found` }
   if (target.appId === appId) return { success: true }
+
+  // Binding is what lets the manager start an instance (enabled + appId), so
+  // an unbound instance whose credential is already live elsewhere must be
+  // caught here, not just in createInstance.
+  if (findDuplicateBot(instances, { ...target, appId })) {
+    return { success: false, error: 'This bot is already bound to another digital human' }
+  }
 
   persist(instances.map(i => i.id === instanceId ? { ...i, appId } : i))
   console.log(`[ImChannelBinding] instance ${instanceId} rebound to app ${appId}`)

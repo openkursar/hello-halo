@@ -24,6 +24,7 @@ import type {
   BlackboardTask,
   BlackboardFinding,
   TeamEpoch,
+  TeamToolAudit,
 } from '../../../../src/main/apps/team/types'
 
 // ============================================
@@ -49,6 +50,8 @@ function makeTeam(overrides?: Partial<Team>): Team {
     createdAt: now,
     updatedAt: now,
     hostNodeId: null,
+    ephemeral: false,
+    coordinatorConversationId: null,
     ...overrides,
   }
 }
@@ -137,6 +140,60 @@ describe('TeamStore', () => {
   // ===========================================================================
   // Migration / table creation
   // ===========================================================================
+
+  describe('the owner\u2019s record of borrowed work', () => {
+    const entry = (over: Partial<TeamToolAudit> = {}): TeamToolAudit => ({
+      id: 'a1',
+      teamId: 'team-1',
+      epochId: 'epoch-1',
+      appId: 'worker',
+      actorAppId: 'their-agent',
+      external: true,
+      toolName: 'Bash',
+      detail: 'npm run build',
+      decision: 'allowed',
+      reason: null,
+      createdAt: 1000,
+      ...over,
+    })
+
+    it('round-trips a call and reads newest first', () => {
+      store.insertToolAudit(entry({ id: 'a1', createdAt: 1000 }))
+      store.insertToolAudit(entry({ id: 'a2', createdAt: 2000, decision: 'denied', reason: 'not granted' }))
+
+      const rows = store.listToolAudit('team-1')
+      expect(rows.map(r => r.id)).toEqual(['a2', 'a1'])
+      expect(rows[0]).toMatchObject({ decision: 'denied', reason: 'not granted', external: true })
+    })
+
+    it('narrows to one digital human', () => {
+      store.insertToolAudit(entry({ id: 'a1', appId: 'worker' }))
+      store.insertToolAudit(entry({ id: 'a2', appId: 'other' }))
+
+      expect(store.listToolAudit('team-1', { appId: 'worker' }).map(r => r.id)).toEqual(['a1'])
+    })
+
+    it('ignores a row it already holds instead of throwing', () => {
+      store.insertToolAudit(entry())
+      expect(() => store.insertToolAudit(entry())).not.toThrow()
+      expect(store.listToolAudit('team-1')).toHaveLength(1)
+    })
+
+    it('drops rows past a cutoff \u2014 a record for review, not forever', () => {
+      store.insertToolAudit(entry({ id: 'old', createdAt: 100 }))
+      store.insertToolAudit(entry({ id: 'new', createdAt: 5000 }))
+
+      expect(store.pruneToolAudit(1000)).toBe(1)
+      expect(store.listToolAudit('team-1').map(r => r.id)).toEqual(['new'])
+    })
+
+    it('never leaves this machine: it is absent from the office replication snapshot', () => {
+      // team_activity replicates office-wide; this table deliberately does not,
+      // because it describes the owner's computer rather than the office.
+      store.insertToolAudit(entry())
+      expect(store.listActivityByTeam('team-1')).toHaveLength(0)
+    })
+  })
 
   describe('migrations', () => {
     it('uses the frozen app_team namespace', () => {

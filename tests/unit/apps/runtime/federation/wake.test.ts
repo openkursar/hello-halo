@@ -86,6 +86,20 @@ const EPOCH_ID = 'epoch-1'
  * bringing member M (so A persists M as a remote member owned by B). runLocalTurn
  * is B's owner-side turn runner.
  */
+/**
+ * Shutdown for everything wireNodes starts, drained after each test.
+ *
+ * A wired host keeps timers running (coalesced roster refresh, liveness); left
+ * alive they fire during a later test file and hit the closed in-memory
+ * database, which Vitest reports as an unhandled error attributed to whatever
+ * happened to be running at the time.
+ */
+const wiredNodes: (() => void)[] = []
+
+function stopWiredNodes(): void {
+  while (wiredNodes.length > 0) wiredNodes.pop()!()
+}
+
 function wireNodes(
   federationStore: FederationStore,
   teamStore: TeamStore,
@@ -135,6 +149,11 @@ function wireNodes(
   }
   bFed.coordinator.requestJoin(request)
 
+  wiredNodes.push(() => {
+    hostManager.stopAll()
+    bFed.coordinator.stop()
+  })
+
   return { hostManager }
 }
 
@@ -173,6 +192,7 @@ describe('federation remote wake (position transparency)', () => {
   })
 
   afterEach(() => {
+    stopWiredNodes()
     dbManager.closeAll()
   })
 
@@ -547,6 +567,7 @@ describe('message-bus M-1: resolvePendingWaitsForMember', () => {
   })
 
   afterEach(() => {
+    stopWiredNodes()
     dbManager.closeAll()
   })
 

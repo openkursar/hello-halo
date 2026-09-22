@@ -346,7 +346,17 @@ try {
     const rested = await waitIdle(team.id, 200_000)
     const d = await detail(team.id)
     const bob = d.members.find((m) => m.memberName === 'Bob')
-    const bobHistory = await apiOk(node, 'GET', `/api/teams/${team.id}/chat-messages?appId=${bob.appId}`)
+    // Read the RUN's transcript explicitly: without ?epochId the route resolves
+    // "the currently open run epoch", which no longer exists once the run has
+    // rested — whether the unqualified read races the seal is model timing, not
+    // the behavior under test (peer-to-peer team_send delivery).
+    const epochs = await apiOk(node, 'GET', `/api/teams/${team.id}/epochs`)
+    const runEpoch = epochs.find((e) => e.lifecycle === 'run')
+    const bobHistory = await apiOk(
+      node,
+      'GET',
+      `/api/teams/${team.id}/chat-messages?appId=${bob.appId}&epochId=${runEpoch?.id ?? ''}`,
+    )
     const received = JSON.stringify(bobHistory).includes('HELLO-FROM-ALICE')
     mark(rested && received ? 'PASS' : 'FAIL', `rested=${!!rested} received=${received}`)
   })

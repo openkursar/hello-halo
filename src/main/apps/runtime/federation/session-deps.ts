@@ -105,6 +105,18 @@ export function withOwnerResolvedSpace(
   return ownSpaceId ? { ...request, spaceId: ownSpaceId } : request
 }
 
+/**
+ * Mark an arriving wake as what it is: a request from another machine.
+ *
+ * Set here rather than trusted from the frame, for the same reason the space is
+ * re-resolved above — the sender authored every field, so a sender that simply
+ * omitted this one would have its request run as if the owner had started it.
+ * Arriving over the link IS the evidence, and it is evidence only this side has.
+ */
+export function withExternalOrigin(request: SerializedWakeRequest): SerializedWakeRequest {
+  return { ...request, teamContext: { ...request.teamContext, external: true } }
+}
+
 export function makeLocationAwareSessionDeps(
   config: LocationAwareSessionDepsConfig
 ): OrchestrationSessionDeps {

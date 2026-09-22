@@ -16,7 +16,7 @@
 | System prompt composition | `system-prompt.ts` | Space context, conversation context, tool availability injection. `buildKnowledgeSection` is exported separately for creation-time append. |
 | Knowledge context resolution | `knowledge-context.ts` | Conversation `knowledgeBaseIds` → injectable `KBReference[]` (agent→tlon dependency collector). Cheap id-only variant feeds the session knowledge fingerprint. |
 | Subagent orchestration | `subagent-handler.ts` | Nested agent invocations — Halo supports agents spawning agents. |
-| Permission gating | `permission-handler.ts` | AskUserQuestion, tool approval, permission mode resolution. |
+| Permission gating | `permission-handler.ts` | AskUserQuestion, and the optional `ToolGate` a caller supplies for calls the engine left undecided. Knows nothing about what a policy says — only whom to ask. |
 | MCP server routing | `mcp-manager.ts` | Registration, discovery, per-session MCP bindings. Owns the shared status cache (`agent:mcp-status` broadcast). |
 | MCP connection probe | `mcp-probe.ts` | Native initialize+tools/list handshake via `@modelcontextprotocol/sdk` — no agent session, no token cost. Classifies failures (401→needs-auth, refused/timeout→failed + `errorDetail`). Triggered by app lifecycle events (install/resume/spec-update, wired in `apps/runtime`), by SDK-reported `failed`/`needs-auth` (stream-processor follow-up), and manually via `agent:probe-mcp` IPC. A probe that connects also clears the server's CC auth record. |
 | CC MCP auth state | `mcp-auth-state.ts` | Removes stale OAuth records CC persists under `CLAUDE_CONFIG_DIR` after any 4xx from a URL-based MCP server. Such a record has no expiry and makes CC skip the server entirely, so it is cleared before session creation and after a successful probe. Mirrors CC-internal formats; a mismatch degrades to a no-op. |
@@ -169,6 +169,42 @@ behavior do not inject — they go through the normal send path and queue.
 5. **Mirrors of CC-internal formats stay in one module and fail closed.** `mcp-auth-state.ts` reproduces CC's entry-key derivation and keychain naming; a CC upgrade that changes either must make the lookup miss, never make it match the wrong record. Revalidate when bumping `@anthropic-ai/claude-agent-sdk`.
 6. **Guard every `mainWindow` access** in async callbacks with `!mainWindow.isDestroyed()`.
 7. **Every engine clamps the effort ladder to its own enum.** See §9.
+8. **An option a caller relies on as a restriction must be honoured or refused, never ignored.**
+   `features.permissionRules` states whether an engine enforces `allowedTools` /
+   `disallowedTools` / `canUseTool` at all (Codex does not: `thread/start` takes
+   no tool lists and routes no call through the gate). A caller restricting a
+   turn on someone else's behalf must check it and refuse — a restriction the
+   engine accepts and ignores reads as protection while the request runs with
+   everything. Adding an engine means answering this flag honestly.
+9. **Session reuse must not outlive the options a caller depends on.**
+   `computeSessionInputsFingerprint` covers `allowedTools` as well as
+   `disallowedTools` / `permissionMode` / the skip-permissions flag, because the
+   auto-allow rules decide which calls the engine settles by itself. Reuse
+   normally DEFERS a rebuild while the session is busy and returns the existing
+   session — correct for a model or knowledge change, wrong when the options are
+   a restriction. `SessionGates.requireFreshInputs` makes that case throw
+   (`SessionOptionsStaleError`) instead: the request is reported as not started
+   rather than run with the previous caller's permissions. The gate also covers
+   the in-flight sharing point: a concurrent creation is shared with a gated
+   caller only when its inputs fingerprint matches; otherwise the caller waits
+   the creation out and re-evaluates against the finished session, where the
+   same stale check applies.
+10. **Bash rule matching is the engine's semantics, never re-derived in Halo.**
+    A `Bash(...)` whitelist rule handed over via `allowedTools` is evaluated
+    entirely inside the Claude Code engine, which splits a compound command
+    (`&&`, `;`, `|`, `$()`, backticks, newlines, wrappers like `bash -c`) on
+    every shell separator and requires each part to match a rule on its own.
+    This is an EXTERNAL assumption: the matcher lives in the bundled CLI
+    (currently `@anthropic-ai/claude-agent-sdk` 0.2.89) and cannot be unit
+    tested offline from this repo. Halo deliberately runs no pattern test of
+    its own — a second matcher would drift from the engine's and clear what it
+    refused. The dependence is fail-closed by construction: any call the
+    engine's rules do not auto-allow reaches the per-call gate
+    (`apps/runtime/delegation-gate.ts`), which under a whitelist refuses
+    unconditionally. An engine build that stopped splitting compound commands
+    would therefore degrade the whitelist to whole-string matching — narrower
+    than intended, never wider, never full access. Revalidate the splitting
+    behavior when bumping the SDK (same ritual as hard rule 5).
 
 ## 9) Reasoning Effort
 

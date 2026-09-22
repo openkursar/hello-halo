@@ -8,7 +8,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { X, Copy, Check, Loader2, RefreshCw, Link2 } from 'lucide-react'
+import { capabilityPolicyFromPreset } from '../../../shared/apps/capability-policy'
+import type { CapabilityPresetId } from '../../../shared/apps/capability-policy'
+import { isRemoteMember } from '../../../shared/apps/team-types'
+import { DelegationPresetPicker } from '../capability/DelegationPresetPicker'
 import { api } from '../../api'
+import { useTeamStore } from '../../stores/team.store'
 import { useTranslation } from '../../i18n'
 
 interface TeamInviteDialogProps {
@@ -30,6 +35,30 @@ export function TeamInviteDialog({ teamId, onClose }: TeamInviteDialogProps) {
   const [copied, setCopied] = useState(false)
   const [revoking, setRevoking] = useState(false)
   const [revokeError, setRevokeError] = useState<string | null>(null)
+
+  // Handing out a link is also handing out reach into the digital humans
+  // already in this office — the ones running on THIS computer. The question
+  // belongs here, at the moment that reach is created, and it is applied to all
+  // of them at once: nobody sets it per member before knowing who is joining.
+  const detail = useTeamStore(s => s.detail)
+  const updateMember = useTeamStore(s => s.updateMember)
+  const localMembers = (detail?.team.id === teamId ? detail.members : []).filter(m => !isRemoteMember(m))
+  const [preset, setPreset] = useState<CapabilityPresetId>('read_only')
+  const [applying, setApplying] = useState(false)
+
+  const applyPreset = useCallback(async (next: CapabilityPresetId) => {
+    setPreset(next)
+    if (localMembers.length === 0) return
+    setApplying(true)
+    try {
+      const policy = capabilityPolicyFromPreset(next)
+      await Promise.all(
+        localMembers.map(m => updateMember(teamId, m.appId, { delegatedPolicy: policy })),
+      )
+    } finally {
+      setApplying(false)
+    }
+  }, [localMembers, teamId, updateMember])
 
   const generate = useCallback(async () => {
     setLoading(true)
@@ -141,6 +170,23 @@ export function TeamInviteDialog({ teamId, onClose }: TeamInviteDialogProps) {
               <p className="text-xs text-muted-foreground">
                 {t('Anyone with this link can bring a digital human into this team.')}
               </p>
+
+              {localMembers.length > 0 && (
+                <div className="border-t border-border pt-3">
+                  <DelegationPresetPicker
+                    value={preset}
+                    onChange={next => { void applyPreset(next) }}
+                    title={t('What the people you invite can have your digital humans do')}
+                    subtitle={t('Applies to every digital human of yours in this team. Talking to them yourself is unaffected.')}
+                  />
+                  {applying && (
+                    <p className="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      {t('Saving…')}
+                    </p>
+                  )}
+                </div>
+              )}
 
               <div className="flex flex-col items-end gap-1.5 border-t border-border pt-3">
                 {revokeError && <p className="text-xs text-destructive">{revokeError}</p>}

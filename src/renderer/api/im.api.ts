@@ -60,6 +60,48 @@ export const imApi = {
     return httpRequest('POST', '/api/wecom-bot/scan-auth/create-assistant', input)
   },
 
+  // ===== Feishu Bot — Scan-Auth (QR-code device flow) =====
+  feishuBotScanAuthStart: async (): Promise<ApiResponse<{ deviceCode: string; authUrl: string; expiresInMs: number }>> => {
+    if (isElectron()) {
+      return window.halo.feishuBotScanAuthStart()
+    }
+    return httpRequest('POST', '/api/feishu-bot/scan-auth/start')
+  },
+
+  feishuBotScanAuthPoll: async (
+    deviceCode: string,
+  ): Promise<ApiResponse<{ appId: string; appSecret: string; tenantBrand: 'feishu' | 'lark'; openId?: string }> & { kind?: string }> => {
+    if (isElectron()) {
+      return window.halo.feishuBotScanAuthPoll(deviceCode)
+    }
+    return httpRequest('POST', '/api/feishu-bot/scan-auth/poll', { deviceCode })
+  },
+
+  feishuBotScanAuthCancel: async (deviceCode: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.feishuBotScanAuthCancel(deviceCode)
+    }
+    return httpRequest('POST', '/api/feishu-bot/scan-auth/cancel', { deviceCode })
+  },
+
+  feishuBotScanAuthCreateAssistant: async (
+    input: { appIdSuffix: string },
+  ): Promise<ApiResponse<{ appId: string; appName: string }>> => {
+    if (isElectron()) {
+      return window.halo.feishuBotScanAuthCreateAssistant(input)
+    }
+    return httpRequest('POST', '/api/feishu-bot/scan-auth/create-assistant', input)
+  },
+
+  feishuBotReachability: async (
+    instanceId: string,
+  ): Promise<ApiResponse<{ state: string; connectedSinceMs: number | null; lastInboundAgoMs: number | null; inboundCount: number; lastError?: string }>> => {
+    if (isElectron()) {
+      return window.halo.feishuBotReachability(instanceId)
+    }
+    return httpRequest('POST', '/api/feishu-bot/reachability', { instanceId })
+  },
+
   // ===== IM Channels (multi-instance) =====
   imChannelsStatus: async (): Promise<ApiResponse> => {
     if (isElectron()) {

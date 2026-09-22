@@ -39,7 +39,7 @@ Halo is a local-first Electron AI product with:
 - **Remote Access**: HTTP Server + WebSocket, PIN auth, tunnel support
 - **OpenAI Compatible Mode**: Anthropic <-> OpenAI protocol bridge
 - **Apps Layer**: spec, manager, runtime, conversation-mcp implemented; runtime supports schedule/event/IM triggers
-- **IM Channels**: Plugin-style provider architecture — currently ships WeCom Bot + WeChat ilink; designed to scale to dozens of IM platforms via `ImChannelProvider` interface
+- **IM Channels**: Plugin-style provider architecture — currently ships WeCom Bot + WeChat ilink + Feishu Bot; designed to scale to dozens of IM platforms via `ImChannelProvider` interface
 - **Platform Layer**: store (SQLite), scheduler, event, memory, background implemented
 - **App Store**: Registry system, store UI, install/uninstall
 - **Digital Team / Remote Office**: in-process coordination kernel (message-bus/blackboard/orchestration) + cross-node federation (device-key identity, authority election/replication/handover, durable feed outbox, multi-replica session transcripts, Go relay gateway); validated by a dedicated multi-process cluster regression tier (`tests/decentralized/`)

@@ -42,11 +42,13 @@ import { registerPerfHandlers } from '../ipc/perf'
 import { registerGitBashHandlers, initializeGitBashOnStartup } from '../ipc/git-bash'
 import { cleanupAllCaches } from '../services/artifact-cache.service'
 import { flushSpaceActivity } from '../services/space.service'
+import { onConversationDeleted } from '../services/conversation.service'
 import { disposeSearchContext } from '../services/web-search'
 import {
   initConversationInterop,
   disposeConversationInterop,
   createConversationInteropMcpServer,
+  deliverExternalMessage,
 } from '../services/conversation-interop'
 import { setConversationInteropFactory } from '../services/agent/toolsets/broker'
 import { markExtendedServicesReady } from './state'
@@ -72,7 +74,7 @@ import { recoverPersistedOffices } from './office-recovery'
 import { initIdentity, getLocalIdentity, getLocalPublicKeyPem, signWithLocalKey } from '../http/identity'
 import { verifyOfficeCredential } from '../http/auth'
 import { setFederationInbound, sendFederationFrameToClient, listOfficeClientIds, broadcastToAll, getSessionIdentity } from '../http/websocket'
-import { createFederationManager, setFederationManager, getFederationManager, makeLocationAwareSessionDeps, withOwnerResolvedSpace, createRelayCapture, createLocationAwareBlackboard, WsFederationClient, classifyArtifactFetchFailure } from '../apps/runtime/federation'
+import { createFederationManager, setFederationManager, getFederationManager, makeLocationAwareSessionDeps, withOwnerResolvedSpace, withExternalOrigin, createRelayCapture, createLocationAwareBlackboard, WsFederationClient, classifyArtifactFetchFailure } from '../apps/runtime/federation'
 import { getRemoteAccessStatus } from '../services/remote'
 import type { OwnerStatus, MemberWriteRecord, ArtifactRef } from '../apps/runtime/federation'
 import { SELF_NODE_ID, TEAM_EVENTS, buildTeamSessionKey } from '../../shared/apps/team-types'
@@ -92,6 +94,7 @@ import { registerTaskHandlers } from '../ipc/task'
 import { registerAnalyticsHandlers } from '../ipc/analytics'
 import { registerNotificationChannelHandlers } from '../ipc/notification-channels'
 import { registerWecomBotHandlers } from '../ipc/wecom-bot'
+import { registerFeishuBotHandlers } from '../ipc/feishu-bot'
 import { registerImChannelHandlers } from '../ipc/im-channels'
 import { registerImSessionHandlers } from '../ipc/im-sessions'
 import { registerStoreHandlers } from '../ipc/store'
@@ -585,8 +588,14 @@ async function initPlatformAndApps(): Promise<void> {
           const run = async () => {
             notifyLocalBoard()
             try {
+              // Two corrections a wake needs on arrival, both because every
+              // field on it was written by the sender: the member's real space
+              // here, and the fact that this request came from another machine.
               return await localSessionDeps.sendAppChatMessage(
-                withOwnerResolvedSpace(request, (appId) => localSessionDeps.getMemberSpaceId(appId))
+                withOwnerResolvedSpace(
+                  withExternalOrigin(request),
+                  (appId) => localSessionDeps.getMemberSpaceId(appId)
+                )
               )
             } finally {
               notifyLocalBoard()
@@ -968,6 +977,26 @@ async function initPlatformAndApps(): Promise<void> {
         },
         // See `TurnReportDeps.isLeadGenerating` for the contract this fills.
         isLeadGenerating: isAppChatConversationGenerating,
+        // A space coordinator's "inbox" is its space conversation: member
+        // replies and turn-end notices land there through the conversation
+        // delivery layer (wake when idle, queue behind a busy turn). A full
+        // mailbox or a vanished conversation reads as undelivered — loud, so
+        // the sending member is told instead of waiting forever.
+        deliverToSpaceCoordinator: async (request) => {
+          const result = await deliverExternalMessage({
+            spaceId: request.spaceId,
+            toConversationId: request.conversationId,
+            turnInput: request.turnInput,
+            persist: {
+              content: request.persist.content,
+              source: 'team-message',
+              metadata: request.persist.metadata,
+            },
+          })
+          if (!result.ok) {
+            throw new Error(`Could not reach the coordinating conversation (${result.reason})`)
+          }
+        },
         onBlackboardWrite: (record) => getFederationManager()?.routeAuthorityWrite(record),
         // Auto-seal (quiescence) / breach end a run without going through the
         // service-level pauseTeam, so they must also push the rested run-state to
@@ -1103,6 +1132,29 @@ async function initPlatformAndApps(): Promise<void> {
       teamTriggerScheduler.rehydrate()
     } else if (teamService && !eventRouter) {
       console.warn('[Bootstrap] EventRouter unavailable; team trigger scheduler not initialized')
+    }
+
+    // A space conversation that coordinated a temporary collaboration is that
+    // collaboration's whole reason to exist: deleting the conversation
+    // dissolves an ephemeral team (member apps cleaned up) and unbinds a saved
+    // one, so hidden member apps can never outlive the work they were made for.
+    if (teamService) {
+      onConversationDeleted((_spaceId, conversationId) => {
+        try {
+          const collabTeam = teamStore.getCollabTeamByConversation(conversationId)
+          if (!collabTeam) return
+          if (collabTeam.ephemeral) {
+            console.log(`[Bootstrap] conversation deleted → dissolving collaboration team=${collabTeam.id}`)
+            void teamService.dissolveTeam(collabTeam.id).catch((err) =>
+              console.error('[Bootstrap] collaboration cleanup failed:', err)
+            )
+          } else {
+            teamStore.setCoordinatorConversation(collabTeam.id, null)
+          }
+        } catch (err) {
+          console.error('[Bootstrap] collaboration cleanup failed:', err)
+        }
+      })
     }
 
     // Periodic checks share the scheduler and the same pre-start window — their
@@ -1357,6 +1409,9 @@ export function initializeExtendedServices(): void {
 
   // WeCom Bot IPC handlers — legacy compat, delegates to ImChannelManager
   registerWecomBotHandlers()
+
+  // Feishu Bot IPC handlers — QR device flow that creates the Feishu app
+  registerFeishuBotHandlers()
 
   // IM Channel IPC handlers (multi-instance: im-channels:status, im-channels:reconnect, etc.)
   registerImChannelHandlers()

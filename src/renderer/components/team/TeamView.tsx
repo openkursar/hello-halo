@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, Info, Settings, Users, PanelLeft, UserPlus, Play, Pause } from 'lucide-react'
+import { ArrowLeft, Info, Settings, Users, PanelLeft, UserPlus, Play, Pause, BookmarkPlus } from 'lucide-react'
 import { isRemoteMember, type RosterMember, type TeamDetail } from '../../../shared/apps/team-types'
 import { useTeamStore } from '../../stores/team.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
@@ -18,7 +18,7 @@ import { WorkbenchDrawer } from './workbench/WorkbenchDrawer'
 import { useTaskBoard } from './workbench/useTaskBoard'
 import { taskGroup, visibleTasks } from './workbench/model'
 
-export function TeamView({ detail }: { detail: TeamDetail }) {
+export function TeamView({ detail, onBack }: { detail: TeamDetail; onBack?: () => void }) {
   const { t } = useTranslation()
   const navigationTarget = usePeopleViewStore(state => state.teamTarget)
   const [width, setWidth] = useState(() => window.innerWidth)
@@ -45,6 +45,20 @@ export function TeamView({ detail }: { detail: TeamDetail }) {
   const [settingsMember, setSettingsMember] = useState<string | null>(null)
   const [invite, setInvite] = useState(false)
   const [runningAction, setRunningAction] = useState(false)
+  // A temporary space collaboration: coordinated from its space conversation,
+  // so the persistent-team chrome (settings, invite, run/pause) stays hidden
+  // and the one action offered is keeping the team.
+  const isEphemeral = detail.team.ephemeral === true
+  const [saving, setSaving] = useState(false)
+  const saveTeam = async () => {
+    if (saving) return
+    setSaving(true)
+    try {
+      await useTeamStore.getState().saveCollab(detail.team.id)
+    } finally {
+      setSaving(false)
+    }
+  }
   const setGroup = useTeamViewPrefsStore(s => s.setTaskGroup)
   const apps = useAppsStore(state => state.apps)
   const ownedMemberIds = useMemo(() => detail.members.filter(member => !isRemoteMember(member) && apps.some(app => app.id === member.appId)).map(member => member.appId), [detail.members, apps])
@@ -104,7 +118,7 @@ export function TeamView({ detail }: { detail: TeamDetail }) {
   const members = <MemberRail detail={detail} selectedAppId={selectedMemberId ?? undefined} writableAppIds={ownedMemberIds} onMember={onMember} onDetails={member => { setSettingsMember(member.appId); setDrawer('settings') }} onTask={(id, memberId, decisionId) => { onTask(id, false, memberId); if (decisionId) setDecisionTarget(decisionId) }} />
   return <div className="flex h-full min-h-0 flex-col">
     <header className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
-      <button onClick={() => useTeamStore.getState().selectTeam(null)} aria-label={t('Back to teams')} className="rounded-lg p-2 hover:bg-secondary"><ArrowLeft size={18} /></button>
+      <button onClick={() => onBack ? onBack() : useTeamStore.getState().selectTeam(null)} aria-label={t('Back to teams')} className="rounded-lg p-2 hover:bg-secondary"><ArrowLeft size={18} /></button>
       <div className="flex min-w-0 flex-1 items-center gap-1">
         <h1 className="min-w-0 truncate text-sm font-medium">{detail.team.name}</h1>
         <Popover>
@@ -117,9 +131,11 @@ export function TeamView({ detail }: { detail: TeamDetail }) {
           </PopoverContent>
         </Popover>
       </div>
+      {isEphemeral && <span className="hidden shrink-0 rounded-full border border-border px-2 py-0.5 text-[10px] text-muted-foreground sm:inline">{t('Temporary collaboration')}</span>}
+      {isEphemeral && <button disabled={saving} onClick={() => void saveTeam()} className="flex shrink-0 items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs text-primary hover:bg-secondary disabled:opacity-50"><BookmarkPlus size={13} aria-hidden="true" />{t('Keep this team')}</button>}
       <button onClick={() => setDrawer('tasks')} aria-label={t('Tasks')} className="rounded-lg p-2 hover:bg-secondary lg:hidden"><PanelLeft size={17} /></button>
       <button onClick={() => setDrawer('members')} aria-label={t('Members')} className="rounded-lg p-2 hover:bg-secondary xl:hidden"><Users size={17} /></button>
-      <button onClick={() => { setSettingsMember(null); setDrawer('settings') }} aria-label={t('Team settings')} className="rounded-lg p-2 hover:bg-secondary"><Settings size={17} /></button>
+      {!isEphemeral && <button onClick={() => { setSettingsMember(null); setDrawer('settings') }} aria-label={t('Team settings')} className="rounded-lg p-2 hover:bg-secondary"><Settings size={17} /></button>}
     </header>
     {tasksError && <div role="alert" className="px-4 py-2 text-xs text-destructive">{tasksError} <button onClick={() => void useTeamStore.getState().loadConversations(detail.team.id)} className="underline">{t('Retry')}</button></div>}
     <div className="flex min-h-0 flex-1">
@@ -140,7 +156,7 @@ export function TeamView({ detail }: { detail: TeamDetail }) {
     {drawer === 'tasks' && width < 1024 && <WorkbenchDrawer title={t('Tasks')} onClose={() => setDrawer(null)}>{taskSidebar}</WorkbenchDrawer>}
     {drawer === 'members' && width < 1280 && <WorkbenchDrawer title={t('Members')} onClose={() => setDrawer(null)}>{members}</WorkbenchDrawer>}
     {drawer === 'settings' && <WorkbenchDrawer title={settingsMember ? t('Member details') : t('Team settings')} onClose={() => setDrawer(null)}>
-      {!detail.team.hostNodeId && <div className="flex gap-2 border-b border-border p-3">
+      {!detail.team.hostNodeId && !isEphemeral && <div className="flex gap-2 border-b border-border p-3">
         <button onClick={() => { setDrawer(null); setInvite(true) }} className="flex items-center gap-1 rounded-lg border border-border px-3 py-2 text-xs"><UserPlus size={14} />{t('Invite')}</button>
         <button disabled={runningAction} onClick={async () => {
           setRunningAction(true)

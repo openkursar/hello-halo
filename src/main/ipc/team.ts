@@ -70,6 +70,16 @@ export function registerTeamIpc(): void {
     handle('team:dissolve', (s) => s.dissolveTeam(teamId))
   )
 
+  ipcMain.handle(TEAM_IPC.collabForConversation, async (_e, conversationId: string) =>
+    handle('team:collab-for-conversation', (s) => s.getCollabForConversation(conversationId))
+  )
+
+  ipcMain.handle(
+    TEAM_IPC.saveCollab,
+    async (_e, input: { teamId: string; name?: string }) =>
+      handle('team:save-collab', (s) => s.saveCollab(input.teamId, input.name))
+  )
+
   ipcMain.handle(
     TEAM_IPC.addMember,
     async (_e, input: { teamId: string; member: TeamMemberInput }) =>
@@ -230,6 +240,16 @@ export function registerTeamIpc(): void {
   // ── team:epoch-artifacts — products produced during a specific run ────────
   ipcMain.handle('team:epoch-artifacts', async (_e, input: { teamId: string; epochId: string }) =>
     handle('team:epoch-artifacts', (s) => s.listArtifacts(input.teamId, input.epochId))
+  )
+
+  // ── team:tool-audit — what borrowed turns did on THIS machine ─────────────
+  // Desktop-only on purpose, and deliberately absent from the office-member
+  // HTTP allowlist: the record is the owner's view of their own computer, so
+  // handing it to a teammate's credential would be the leak it exists to catch.
+  ipcMain.handle('team:tool-audit', async (_e, input: { teamId: string; appId?: string; limit?: number }) =>
+    handle('team:tool-audit', (s) =>
+      s.listToolAudit(input.teamId, { ...(input.appId ? { appId: input.appId } : {}), ...(input.limit ? { limit: input.limit } : {}) })
+    )
   )
 
   // ── triggers (team as a first-class triggerable entity) ───────────────────

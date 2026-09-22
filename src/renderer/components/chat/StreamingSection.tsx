@@ -12,7 +12,6 @@ import { StreamingBubble } from './StreamingBubble'
 import { BrowserTaskCard } from '../tool/BrowserTaskCard'
 import { TerminalTaskCard } from '../tool/TerminalTaskCard'
 import { AskUserQuestionCard } from './AskUserQuestionCard'
-import { TeamPanel } from './TeamPanel'
 import { QueuedMessagesPanel } from './QueuedMessagesPanel'
 import type { Thought, PendingQuestion } from '../../types'
 import type { BrowserToolCall } from './useBrowserToolCalls'
@@ -92,9 +91,6 @@ export function StreamingSection({
         {(thoughts.length > 0 || isThinking) && (
           <ThoughtProcess thoughts={thoughts} isThinking={isThinking} />
         )}
-
-        {/* Agent Team panel — multi-agent collaboration status */}
-        <TeamPanel thoughts={thoughts} />
 
         {/* Real-time browser task card */}
         {browserToolCalls.length > 0 && (

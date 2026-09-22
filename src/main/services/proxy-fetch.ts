@@ -34,18 +34,19 @@ import { getConfig, onNetworkConfigChange } from '../foundation/config.service'
 import { isHttpLoggingEnabled, logHttpRequest, logHttpResponse, logHttpResponseBody } from '../foundation/logging'
 
 // ============================================================================
-// Preserve originals before any global patching
+// Baseline transports
 // ============================================================================
 
 /**
- * Original global fetch — captured before initGlobalProxy() patches globalThis.fetch.
- * Used internally in the DIRECT path to avoid infinite recursion.
+ * The DIRECT path's fetch.
+ *
+ * Nothing here patches `globalThis.fetch` or `https.globalAgent`: proxying is
+ * opt-in per call site. Plain `fetch()` and `node:https` in the main process
+ * therefore ignore both the app proxy and the system proxy — code that must
+ * honor them has to call `proxyFetch`, or take an agent from
+ * `resolveProxyAgent` when it owns its own transport.
  */
 const _originalFetch: typeof fetch = globalThis.fetch
-
-/** Default Node.js agents — restored when proxy is cleared */
-const _defaultHttpAgent = http.globalAgent
-const _defaultHttpsAgent = https.globalAgent
 
 // ============================================================================
 // Proxy Resolution Cache
@@ -380,6 +381,22 @@ function makeRequest(
 
     nodeReq.on('error', reject)
 
+    // Honor init.signal on this path too. The DIRECT path gets abort for free
+    // from native fetch; without this, a caller that aborts a proxied request
+    // keeps waiting for a socket nobody is going to close.
+    const signal = init?.signal
+    if (signal) {
+      const onAbort = (): void => {
+        nodeReq.destroy(signal.reason instanceof Error ? signal.reason : new Error('Aborted'))
+      }
+      if (signal.aborted) {
+        onAbort()
+      } else {
+        signal.addEventListener('abort', onAbort, { once: true })
+        nodeReq.on('close', () => signal.removeEventListener('abort', onAbort))
+      }
+    }
+
     // Write request body
     if (init?.body != null) {
       bodyToBuffer(init.body).then(buf => {
@@ -485,6 +502,33 @@ export async function proxyFetch(
   }
 
   return response
+}
+
+/**
+ * Resolve the proxy agent that `proxyFetch` would use for `url`, for callers
+ * that cannot go through fetch at all.
+ *
+ * The case this exists for is a third-party SDK that owns its own transport —
+ * a WebSocket dial, or an HTTP client with its own connection pool. Such an SDK
+ * usually accepts an `agent`, and handing it this one keeps it on the same
+ * route as every other outbound request in the app: app-level proxy first,
+ * then Chromium's system resolution, then direct.
+ *
+ * Returns undefined for a direct route, which is also what an `agent` option
+ * expects to mean "use the default".
+ */
+export async function resolveProxyAgent(url: string): Promise<ProxyAgent | undefined> {
+  const appProxy = getAppProxy()
+  let proxyUrl: string | null
+  if (appProxy) {
+    const hostname = (() => {
+      try { return new URL(url).hostname } catch { return '' }
+    })()
+    proxyUrl = BYPASS_HOSTS.has(hostname) ? null : appProxy
+  } else {
+    proxyUrl = await resolveSystemProxy(url)
+  }
+  return proxyUrl ? getOrCreateAgent(proxyUrl) : undefined
 }
 
 /**

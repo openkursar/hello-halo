@@ -148,6 +148,9 @@ interface TeamState {
   runTeam: (teamId: string) => Promise<boolean>
   pauseTeam: (teamId: string) => Promise<boolean>
 
+  /** Keep a temporary collaboration as a persistent team. */
+  saveCollab: (teamId: string, name?: string) => Promise<boolean>
+
   // ── Real-time Event Handlers (called from App.tsx) ──
   applyTeamUpdated: (event: TeamUpdatedEvent) => void
   applyTeamBlackboard: (event: TeamBlackboardEvent) => void
@@ -598,6 +601,21 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       return false
     } catch (err) {
       console.error('[TeamStore] setEdges error:', err)
+      return false
+    }
+  },
+
+  saveCollab: async (teamId, name) => {
+    try {
+      const res = await api.teamSaveCollab(teamId, name)
+      if (res.success) {
+        await get().loadTeams()
+        if (get().currentTeamId === teamId) await get().loadDetail(teamId)
+        return true
+      }
+      return false
+    } catch (err) {
+      console.error('[TeamStore] saveCollab error:', err)
       return false
     }
   },

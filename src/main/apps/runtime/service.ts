@@ -799,6 +799,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         }
         void getActiveTeamRuntime()!.resumeFromEscalation({
           teamId: team.teamId, epochId: team.epochId, appId: entry.appId, taskId: team.taskId,
+          external: team.external,
           continuationId: entry.id, response: decision, question: entry.content.question || entry.content.summary,
           onDeferred: () => continuationDispatches.delete(entry.id),
           onStarted,

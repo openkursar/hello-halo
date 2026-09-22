@@ -123,6 +123,16 @@ export const teamApi = {
     return httpRequest('GET', `/api/teams/${teamId}/epochs/${epochId}/artifacts`)
   },
 
+  /**
+   * What this office's members did on this machine while someone else was
+   * driving them. No HTTP route: the record describes the owner's own computer,
+   * so it is read where that computer is and nowhere else.
+   */
+  teamToolAudit: async (teamId: string, options?: { appId?: string; limit?: number }): Promise<ApiResponse> => {
+    if (isElectron()) return window.halo.teamToolAudit({ teamId, ...options })
+    return { success: false, error: 'DESKTOP_ONLY' }
+  },
+
   teamCreate: async (input: CreateTeamInput, confirmedProposal?: ProposedMember[]): Promise<ApiResponse> => {
     if (isElectron()) return window.halo.teamCreate({ input, confirmedProposal })
     return httpRequest('POST', '/api/teams', { input, confirmedProposal })
@@ -136,6 +146,16 @@ export const teamApi = {
   teamDissolve: async (teamId: string): Promise<ApiResponse> => {
     if (isElectron()) return window.halo.teamDissolve(teamId)
     return httpRequest('DELETE', `/api/teams/${teamId}`)
+  },
+
+  teamCollabForConversation: async (conversationId: string): Promise<ApiResponse> => {
+    if (isElectron()) return window.halo.teamCollabForConversation(conversationId)
+    return httpRequest('GET', `/api/teams/collab-for-conversation/${encodeURIComponent(conversationId)}`)
+  },
+
+  teamSaveCollab: async (teamId: string, name?: string): Promise<ApiResponse> => {
+    if (isElectron()) return window.halo.teamSaveCollab({ teamId, name })
+    return httpRequest('POST', `/api/teams/${teamId}/save-collab`, name ? { name } : {})
   },
 
   teamAddMember: async (teamId: string, member: TeamMemberInput): Promise<ApiResponse> => {

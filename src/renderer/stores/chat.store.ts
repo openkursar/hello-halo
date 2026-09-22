@@ -234,6 +234,10 @@ let _prevPulseFingerprint = ''
 let _prevUnseenSize = 0
 let _prevPulseReadAtSize = 0
 let _prevStarredFingerprint = ''
+// Last spaceStates the starred fingerprint was built from. Streaming replaces
+// `sessions` on every token but never `spaceStates`, so the walk over every
+// conversation in every space can be skipped outright on those commits.
+let _prevSpaceStates: Map<string, SpaceState> | null = null
 
 /**
  * Extract a fingerprint of starred conversations across all spaces.
@@ -255,7 +259,10 @@ useChatStore.subscribe((state) => {
   const sessionFingerprint = _extractPulseFingerprint(state.sessions)
   const unseenSize = state.unseenCompletions.size
   const pulseReadAtSize = state.pulseReadAt.size
-  const starredFingerprint = _extractStarredFingerprint(state.spaceStates)
+  const starredFingerprint = state.spaceStates === _prevSpaceStates
+    ? _prevStarredFingerprint
+    : _extractStarredFingerprint(state.spaceStates)
+  _prevSpaceStates = state.spaceStates
 
   if (
     sessionFingerprint === _prevPulseFingerprint &&

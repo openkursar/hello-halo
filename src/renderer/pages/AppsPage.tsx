@@ -87,7 +87,7 @@ export function AppsPage() {
 
   // How many teams have a decision waiting on the user — surfaced on the Teams
   // tab itself so it's visible without having to switch away and back.
-  const waitingTeamsCount = useTeamStore(s => s.teams.filter(tm => tm.hasWaitingUser).length)
+  const waitingTeamsCount = useTeamStore(s => s.teams.filter(tm => !tm.ephemeral && tm.hasWaitingUser).length)
 
   /** Filter apps visible in the current tab (excludes store tab) */
   const appsForCurrentTab = useMemo(() => {

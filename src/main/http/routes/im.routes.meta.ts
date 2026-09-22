@@ -33,6 +33,21 @@ export const MODULE: RouteModuleMeta = {
     'POST /api/wecom-bot/scan-auth/cancel': { expose: 'internal' },
     
     'POST /api/wecom-bot/scan-auth/create-assistant': { expose: 'internal' },
+    // Same reasoning as the WeCom flow above, and one step stronger: the poll
+    // step hands back an App Secret that also creates the Feishu app it belongs
+    // to, so an agent could provision a tenant-level app nobody asked for.
+    'POST /api/feishu-bot/scan-auth/start': { expose: 'internal' },
+    'POST /api/feishu-bot/scan-auth/poll': { expose: 'internal' },
+    'POST /api/feishu-bot/scan-auth/cancel': { expose: 'internal' },
+    'POST /api/feishu-bot/scan-auth/create-assistant': { expose: 'internal' },
+    'POST /api/feishu-bot/reachability': {
+      expose: 'ai',
+      group: 'channels',
+      summary: 'Check whether a Feishu bot is actually reachable, not just connected',
+      body: '{"instanceId":"<instanceId — from GET /api/im-channels/status>"}',
+      returns: '{success:true,data:{state,connectedSinceMs,lastInboundAgoMs,inboundCount,lastError?}}',
+      notes: 'A Feishu app awaiting administrator release connects normally and receives nothing, so "connected" alone does not mean the bot works. inboundCount 0 with a long connectedSinceMs is the signature of that case. No credentials in this response.',
+    },
     'GET /api/im-channels/status': {
       expose: 'ai',
       group: 'channels',

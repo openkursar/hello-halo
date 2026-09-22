@@ -45,6 +45,8 @@ export interface DirectoryMembership {
   teamId: string
   teamName: string
   isSystemCoordinator: boolean
+  /** Member of a temporary space collaboration — hidden from the directory. */
+  ephemeral: boolean
 }
 
 export interface DirectoryRuntimeSnapshot {

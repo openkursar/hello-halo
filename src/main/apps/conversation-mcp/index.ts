@@ -715,3 +715,6 @@ export function createHaloAppsMcpServer(spaceId: string, guideConsulted: () => b
     tools: allTools
   })
 }
+
+export { createSpaceTeamMcpServer, TEAM_TOOLSET_GUIDE } from './team-mcp'
+export type { SpaceTeamMcpScope } from './team-mcp'

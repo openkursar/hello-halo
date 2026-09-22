@@ -107,6 +107,13 @@ import {
   pollResult as wecomPollResult,
   ScanAuthError as WecomScanAuthError,
 } from '../../apps/runtime/im-channels/wecom-bot-scan-auth'
+import {
+  beginRegistration as feishuBeginRegistration,
+  pollRegistration as feishuPollRegistration,
+  FeishuScanAuthError,
+} from '../../apps/runtime/im-channels/feishu-bot-scan-auth'
+import { buildFeishuAssistantSpec } from '../../apps/runtime/im-channels/feishu-bot-default-spec'
+import { readFeishuReachability } from '../../apps/runtime/im-channels/feishu-bot.provider'
 
 // Helper: get working directory for a space
 export function getWorkingDir(spaceId: string): string {
@@ -221,6 +228,7 @@ export {
   McpCommandBlockedError,
   Readable,
   WecomScanAuthError,
+  FeishuScanAuthError,
   agentController,
   analytics,
   RENDERER_ALLOWED_EVENTS,
@@ -228,6 +236,10 @@ export {
   basename,
   broadcastToAll,
   buildDefaultAssistantSpec,
+  buildFeishuAssistantSpec,
+  feishuBeginRegistration,
+  feishuPollRegistration,
+  readFeishuReachability,
   clearAllTokenCaches,
   clearAppChat,
   clearImSession,

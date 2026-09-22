@@ -57,6 +57,15 @@ export function getTeamService(): TeamService | null {
   return serviceInstance
 }
 
+/**
+ * How long the owner's record of borrowed work is kept.
+ *
+ * Long enough to answer "what has this team been doing with my computer" after
+ * a break — a month covers a holiday — and short enough that an office running
+ * for years does not carry every command it ever ran.
+ */
+const TOOL_AUDIT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
+
 // ── Initialization ──
 
 interface InitTeamStoreDeps {
@@ -72,6 +81,18 @@ export function initTeamStore(deps: InitTeamStoreDeps): TeamStore {
 
   const store = new TeamStore(appDb)
   storeInstance = store
+
+  // The record of borrowed work is for review, not for keeping. Pruned once at
+  // startup rather than on every write: it is read by a person opening a panel,
+  // so nothing depends on the cutoff being exact, and a periodic sweep would
+  // buy precision nobody can perceive at the cost of a timer that runs forever.
+  try {
+    const dropped = store.pruneToolAudit(Date.now() - TOOL_AUDIT_RETENTION_MS)
+    if (dropped > 0) console.log(`[TeamStore] Pruned ${dropped} tool-audit rows past retention`)
+  } catch (error) {
+    // A record that cannot be trimmed is still a usable record.
+    console.error('[TeamStore] Tool-audit prune failed:', (error as Error).message)
+  }
 
   const duration = performance.now() - start
   console.log(`[TeamStore] Initialized in ${duration.toFixed(1)}ms`)

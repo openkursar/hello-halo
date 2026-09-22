@@ -134,7 +134,7 @@ export interface AgentConfig {
   sdkEngine?: 'anthropic' | 'halo' | 'codex';  // Agent SDK engine (requires restart)
   configDirMode?: 'halo' | 'cc' | 'custom';  // Claude CLI config directory mode
   customConfigDir?: string;  // Custom config dir path (when configDirMode === 'custom')
-  enableTeams?: boolean;    // Enable Agent Teams (multi-agent collaboration)
+  enableTeams?: boolean;    // Legacy setting; native CC Teams are disabled
   enableDigitalHumans?: boolean; // Enable Digital Humans MCP tools (automation app management)
   enableConversationInterop?: boolean; // Master switch for Cross-Conversation Interop (conversation_read/conversation_send). Undefined/true = on.
   enableConversationSend?: boolean; // Sub-switch, only meaningful when enableConversationInterop is on: false = read-only (no conversation_send)
@@ -534,7 +534,7 @@ export interface EngineCapabilities {
   todo: { states: TodoState[]; hasActiveForm: boolean };
   subAgent: { model: 'declarative' | 'imperative' | 'none'; visibleLifecycle: boolean };
   features: {
-    skills: boolean; mcp: boolean; hooks: boolean;
+    skills: boolean; mcp: boolean; hooks: boolean; permissionRules: boolean;
     sessionResume: boolean; sessionFork: boolean; interrupt: boolean;
     multimodalImage: boolean; contextCompaction: boolean; askUserQuestion: boolean;
   };
@@ -632,6 +632,13 @@ export interface Message {
     summary?: string;
     forwardDepth?: number;
     correlationId?: string;
+    // Provenance of a `source: 'team-message'` message: a team member (or a
+    // system notice) delivered to the space conversation coordinating its
+    // collaboration. fromMemberName is null for system-authored notices.
+    teamId?: string;
+    epochId?: string;
+    teamName?: string;
+    fromMemberName?: string | null;
   };
   error?: string;  // Error message when assistant response failed (e.g., 429 rate limit)
   /**
@@ -641,8 +648,10 @@ export interface Message {
    *   persisted as `role: 'system'` so it can never read as the owner speaking
    * - `cross-conversation-notice`: system notice written into the sending
    *   conversation (e.g. delivery cooldown)
+   * - `team-message`: a team member's message or a collaboration status notice
+   *   delivered to the coordinating space conversation
    */
-  source?: 'injection' | 'cross-conversation' | 'cross-conversation-notice';
+  source?: 'injection' | 'cross-conversation' | 'cross-conversation-notice' | 'team-message';
   sources?: KBSource[];  // Knowledge-base documents the agent Read this turn (clickable citations)
 }
 

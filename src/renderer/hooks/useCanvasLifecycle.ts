@@ -75,6 +75,11 @@ export function useCanvasLifecycle() {
     []
   )
 
+  const openTeam = useCallback(
+    (teamId: string, title?: string) => canvasLifecycle.openTeam(teamId, title),
+    []
+  )
+
   const closeTab = useCallback(
     (tabId: string) => canvasLifecycle.closeTab(tabId),
     []
@@ -175,6 +180,7 @@ export function useCanvasLifecycle() {
     attachAIBrowserView,
     openContent,
     openTerminal,
+    openTeam,
     closeTab,
     closeAllTabs,
     switchTab,

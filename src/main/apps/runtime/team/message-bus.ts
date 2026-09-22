@@ -16,6 +16,7 @@ import {
   TEAM_CIRCUIT_DEFAULTS,
   toActivitySubject,
   isRemoteMember,
+  parseSpaceCoordinatorAppId,
 } from '../../../../shared/apps/team-types'
 import { parseTeamSessionKey } from '../../../../shared/apps/im-keys'
 import type { TeamStore } from '../../team'
@@ -72,6 +73,15 @@ export interface TeamDeliveryHooks {
    * reachable. Absent → treated as reachable (non-federated runtimes).
    */
   checkReachable?(appId: string, teamId: string): boolean
+  /**
+   * Deliver an envelope addressed to a SPACE COORDINATOR — the space
+   * conversation coordinating an ephemeral collaboration. There is no member
+   * session behind that sentinel appId, so the turn gate plays no part: the
+   * space conversation has its own exclusivity (a busy one queues the message
+   * itself), and no completion ever comes back through `completeTurn`. Absent →
+   * such a send fails loudly instead of waking a phantom app-chat session.
+   */
+  deliverToCoordinator?(params: { envelope: TeamEnvelope; trigger: TeamTriggerContext }): Promise<void>
 }
 
 /**
@@ -165,6 +175,13 @@ export interface SendInput {
   wait?: boolean
   /** Guards against ping-pong: initial lead wake is 0, each forwarded wake increments. */
   forwardDepth?: number
+  /**
+   * The chain this send belongs to was started on another machine. Travels with
+   * the message like `forwardDepth` does, and for the same reason: a chain that
+   * forgets where it came from on the first hop never carries its origin far
+   * enough to matter (see {@link TeamTriggerContext.external}).
+   */
+  external?: boolean
   taskRef?: string
 }
 
@@ -351,7 +368,15 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
       // it (and every test harness) keeps the pure queueing behavior.
       ...(hooks.deliverMidTurn
         ? {
+            // An external-origin message never joins a running turn: injection
+            // skips the turn-origin resolution a wake goes through (the running
+            // turn keeps whatever strictness it started with, and the session's
+            // sticky origin is never updated), so whether the sender's request
+            // ran strict would depend on whether the target happened to be
+            // busy. Refusing here costs latency only — the gate buffers it and
+            // the wake at turn end resolves origin normally.
             deliverMidTurn: (sessionKey: string, job: EnvelopeJob): boolean =>
+              !job.trigger.external &&
               !job.trigger.correlationId.startsWith('decision:') && hooks.deliverMidTurn!({
                 sessionKey,
                 appId: job.envelope.toAppId,
@@ -531,6 +556,16 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     trigger: TeamTriggerContext,
     onBusy: BusyDisposition = 'buffer'
   ): Promise<WakeDisposition> {
+    // A space coordinator has no member session: no slot to reserve, no
+    // completion to wait for. The space conversation's own delivery layer
+    // queues behind a busy turn, so the gate is bypassed whole.
+    if (parseSpaceCoordinatorAppId(env.toAppId)) {
+      if (!hooks.deliverToCoordinator) {
+        throw new TeamBusError('The coordinating conversation is not reachable in this runtime.')
+      }
+      await hooks.deliverToCoordinator({ envelope: env, trigger })
+      return 'dispatched'
+    }
     const sessionKey = buildTeamSessionKey(env.toAppId, env.teamId, env.epochId)
     return turnGate.deliver(sessionKey, { envelope: env, trigger }, onBusy)
   }
@@ -560,7 +595,11 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     // will never arrive: report it now instead of a false "sent" that only
     // self-corrects at the hours-long backstop. Receipted sends skip this — their
     // completion receipt already carries the richer three-state.
-    if (!wait && hooks.checkReachable && !hooks.checkReachable(toAppId, input.teamId)) {
+    // A coordinator target is the local space conversation — always reachable,
+    // and unknown to any federation presence probe.
+    const coordinatorTarget = parseSpaceCoordinatorAppId(toAppId) !== null
+
+    if (!wait && !coordinatorTarget && hooks.checkReachable && !hooks.checkReachable(toAppId, input.teamId)) {
       console.warn(
         `${LOG_TAG} send: target owner unreachable, not delivered: team=${input.teamId} to=${input.to} app=${toAppId}`
       )
@@ -628,6 +667,7 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
       wait,
       taskId: input.taskRef,
       kind: fromAppId ? 'message' : 'human_message',
+      ...(input.external ? { external: true } : {}),
     }
     ;(trigger as TeamTriggerContext & { forwardDepth?: number }).forwardDepth = forwardDepth + 1
 
@@ -635,6 +675,18 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
       `${LOG_TAG} send: team=${input.teamId} epoch=${input.epochId} ` +
         `from=${fromAppId ?? 'person'} to=${input.to}(${toAppId}) wait=${wait} depth=${forwardDepth}`
     )
+
+    // A receipted send to the coordinator settles on hand-over: nothing runs a
+    // "turn" for the space conversation through this bus, so no completion will
+    // ever arrive to resolve the receipt — waiting would only hit the ceiling.
+    if (wait && coordinatorTarget) {
+      await deliver(envelope, trigger)
+      return {
+        from: input.to,
+        message: 'Delivered to the coordinating conversation. Any reply arrives there.',
+        status: 'ok',
+      }
+    }
 
     if (!wait) {
       const disposition = await deliver(envelope, trigger)

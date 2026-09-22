@@ -22,6 +22,7 @@ import { MessageList } from './MessageList'
 import type { MessageListHandle } from './MessageList'
 import { InputArea } from './InputArea'
 import { useConversationMentionCandidates } from './cross-conversation'
+import { TeamCollabPanel } from './team-collab'
 import { ScrollToBottomButton } from './ScrollToBottomButton'
 import { Sparkles } from '../icons/ToolIcons'
 import {
@@ -47,22 +48,24 @@ interface ChatViewProps {
 export function ChatView({ isCompact = false }: ChatViewProps) {
   const { t } = useTranslation()
   const { currentSpace } = useSpaceStore()
-  const {
-    getCurrentConversation,
-    getCurrentConversationId,
-    getCurrentSession,
-    getSession,
-    sessionInitInfo,
-    sendMessage,
-    stopGeneration,
-    injectMessage,
-    continueAfterInterrupt,
-    answerQuestion,
-    loadMessageThoughts,
-    currentSpaceId,
-    selectAppChatConversation,
-    clearAppChatSelection,
-  } = useChatStore()
+  // Subscriptions are per field on purpose. The chat store is the shared
+  // real-time bus for every conversation in the app — digital humans and team
+  // members included — so subscribing to the whole store would re-render this
+  // whole page on every token of every background turn. Actions are stable
+  // references; only the fields read below can trigger a render, and the live
+  // turn arrives through `session` further down.
+  const getCurrentConversationId = useChatStore(s => s.getCurrentConversationId)
+  const getSession = useChatStore(s => s.getSession)
+  const sessionInitInfo = useChatStore(s => s.sessionInitInfo)
+  const sendMessage = useChatStore(s => s.sendMessage)
+  const stopGeneration = useChatStore(s => s.stopGeneration)
+  const injectMessage = useChatStore(s => s.injectMessage)
+  const continueAfterInterrupt = useChatStore(s => s.continueAfterInterrupt)
+  const answerQuestion = useChatStore(s => s.answerQuestion)
+  const loadMessageThoughts = useChatStore(s => s.loadMessageThoughts)
+  const currentSpaceId = useChatStore(s => s.currentSpaceId)
+  const selectAppChatConversation = useChatStore(s => s.selectAppChatConversation)
+  const clearAppChatSelection = useChatStore(s => s.clearAppChatSelection)
 
   // ── Digital-human selection ──
   const selectedAppChat = useChatStore(
@@ -277,8 +280,13 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
   }, [])
 
   // Get current conversation and its session state
-  const currentConversation = getCurrentConversation()
-  const { isLoadingConversation } = useChatStore()
+  const currentConversationId = useChatStore(s =>
+    (s.currentSpaceId ? s.spaceStates.get(s.currentSpaceId)?.currentConversationId : null) ?? null
+  )
+  const currentConversation = useChatStore(s =>
+    currentConversationId ? s.conversationCache.get(currentConversationId) ?? null : null
+  )
+  const isLoadingConversation = useChatStore(s => s.isLoadingConversation)
 
   // Lazy loader for a message's separated thoughts, bound to the active
   // space + conversation ids. Passed to MessageList's thoughtsLoader prop.
@@ -289,7 +297,10 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
         : Promise.resolve([]),
     [loadMessageThoughts, currentSpaceId, currentConversation?.id]
   )
-  const session = getCurrentSession()
+  // The live turn of the conversation on screen. `getSession('')` is the store's
+  // own empty-session constant — a stable identity for "no session yet", so the
+  // fallback does not look like a change to anything downstream.
+  const session = useChatStore(s => s.sessions.get(currentConversationId ?? '')) ?? getSession('')
   const { isGenerating, streamingContent, isStreaming, thoughts, isThinking, compactInfo, error, errorType, textBlockVersion, pendingQuestion } = session
 
   // ── Digital-human selector wiring ──
@@ -297,8 +308,10 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
   // reads that link's own session so switching is blocked mid-reply no matter
   // which side (Halo or a digital human) is currently generating.
   const activeConversationId = selectedAppChat ? selectedAppChat.conversationId : currentConversation?.id ?? null
-  const activeSession = getSession(activeConversationId ?? '')
-  const digitalHumanSelectorLocked = activeSession.isGenerating || activeSession.queuedMessages.length > 0
+  const digitalHumanSelectorLocked = useChatStore(s => {
+    const active = s.sessions.get(activeConversationId ?? '')
+    return !!active && (active.isGenerating || active.queuedMessages.length > 0)
+  })
   const digitalHumanSelector: DigitalHumanSelectorConfig | undefined = currentSpaceId ? {
     current: selectedAppChat?.appId ?? null,
     options: digitalHumanOptions,
@@ -564,6 +577,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
               pendingQuestion={pendingQuestion}
               onAnswerQuestion={currentConversation ? (answers) => answerQuestion(currentConversation.id, answers) : undefined}
               onAtBottomStateChange={handleAtBottomStateChange}
+              footerExtra={<TeamCollabPanel conversationId={currentConversation?.id} />}
             />
           )}
         </div>

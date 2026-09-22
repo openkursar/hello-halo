@@ -117,7 +117,7 @@ export interface Orchestration {
   /** Can this session take a turn — a streaming turn OR a held reservation. */
   isSessionOccupied(sessionKey: string): boolean
 
-  startEpoch(teamId: string, trigger?: TeamRunTrigger): Promise<TeamEpoch>
+  startEpoch(teamId: string, trigger?: TeamRunTrigger, instruction?: string): Promise<TeamEpoch>
   /**
    * Return the open 'conversation' epoch for a (team, chat), or create one. Used
    * by message-driven entries (IM): each chat gets its own long-lived epoch so
@@ -159,6 +159,8 @@ export interface Orchestration {
     appId: string
     body: string
     onBusy: BusyDisposition
+    /** The check was set by someone on another machine. */
+    external?: boolean
   }): Promise<WakeDisposition>
 
   captureReport(correlationId: string, outcome: TurnCompletion): void
@@ -210,6 +212,8 @@ export interface Orchestration {
      * wrong one.
      */
     question?: string
+    /** The escalating turn ran with external origin (persisted with the escalation). */
+    external?: boolean
   }): Promise<boolean>
 }
 
@@ -775,6 +779,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     appId: string
     body: string
     onBusy: BusyDisposition
+    external?: boolean
   }): Promise<WakeDisposition> {
     return wakeSelf({ ...params, kind: 'periodic_check' })
   }
@@ -792,6 +797,12 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     body: string
     kind: TeamTriggerContext['kind']
     onBusy: BusyDisposition
+    /**
+     * The standing instruction behind this wake was left by someone on another
+     * machine. A runtime wake has no sender to read it from, so whoever set the
+     * instruction has to say so when arming it.
+     */
+    external?: boolean
   }): Promise<WakeDisposition> {
     const { teamId, epochId, appId, body, kind, onBusy } = params
     const correlationId = randomUUID()
@@ -806,7 +817,15 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
         correlationId,
         createdAt: Date.now(),
       },
-      trigger: { teamId, epochId, correlationId, fromAppId: null, wait: false, kind },
+      trigger: {
+        teamId,
+        epochId,
+        correlationId,
+        fromAppId: null,
+        wait: false,
+        kind,
+        ...(params.external ? { external: true } : {}),
+      },
       onBusy,
     })
   }
@@ -1021,6 +1040,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     taskId?: string
     response: string
     question?: string
+    external?: boolean
   }): Promise<boolean> {
     const { teamId, epochId, appId, taskId, response, question } = params
     const team = store.getTeamById(teamId)
@@ -1068,6 +1088,11 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       wait: false,
       taskId,
       kind: 'message',
+      // Restore the escalating turn's origin from the persisted record: the
+      // in-memory stickiness (team/external-origin.ts) does not survive a
+      // restart, and an unstamped 'message' wake would resume a stranger's
+      // work with the owner's own reach.
+      ...(params.external ? { external: true } : {}),
     }
     ;(trigger as TeamTriggerContext & { forwardDepth?: number }).forwardDepth = 1
 
@@ -1132,7 +1157,11 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     ].join('\n')
   }
 
-  async function startEpoch(teamId: string, runTrigger: TeamRunTrigger = { type: 'manual' }): Promise<TeamEpoch> {
+  async function startEpoch(
+    teamId: string,
+    runTrigger: TeamRunTrigger = { type: 'manual' },
+    instruction?: string
+  ): Promise<TeamEpoch> {
     const team = store.getTeamById(teamId)
     if (!team) throw new Error(`Team not found: ${teamId}`)
     if (!team.leadAppId) throw new Error(`Team has no lead provisioned: ${teamId}`)
@@ -1166,7 +1195,10 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       kind: 'run_start',
     }
     const digest = buildRecentRunsDigest(teamId, epoch.id)
-    const startBody = 'The team run has started. Read the goal and the board, then decompose and dispatch the work.'
+    const brief = instruction?.trim()
+    const startBody =
+      'The team run has started. Read the goal and the board, then decompose and dispatch the work.' +
+      (brief ? `\n\nThis run's brief from the requester:\n${brief}` : '')
     const startEnvelope: TeamEnvelope = {
       id: randomUUID(),
       teamId,

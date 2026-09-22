@@ -276,11 +276,14 @@ export function createReportToolServer(
       }
       if (team && safeType === 'escalation') {
         const reportText = input.data ? `${input.message}\n\n${input.data}` : input.message
-        // Tag the escalation entry so the team view aggregates it.
+        // Tag the escalation entry so the team view aggregates it. The origin
+        // rides along because the continuation that answers this may run in a
+        // fresh process, where nothing else remembers whose request this was.
         content.teamContext = {
           teamId: team.teamId,
           epochId: team.epochId,
           ...(team.taskId ? { taskId: team.taskId } : {}),
+          ...(team.external ? { external: true } : {}),
         }
         getActiveTeamRuntime()?.captureReport(team.correlationId, {
           kind: 'escalation',

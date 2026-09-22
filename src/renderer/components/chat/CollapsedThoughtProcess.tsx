@@ -18,7 +18,6 @@ import {
 import { TodoCard, parseTodoInput } from '../tool/TodoCard'
 import { ToolResultViewer } from './tool-result'
 import { SubAgentTimeline } from './SubAgentTimeline'
-import { TeamSnapshotPanel } from './TeamPanel'
 import { ErrorContent } from './ErrorContent'
 import {
   getThoughtIcon,
@@ -226,20 +225,22 @@ export function CollapsedThoughtProcess({ thoughts, defaultExpanded = false, def
     })
   }, [thoughts])
 
-  // Check if there's anything to show
-  const hasContent = displayThoughts.length > 0 || (latestTodos && latestTodos.length > 0)
-  if (!hasContent) return null
-
-  // Only count system-level errors, not tool execution failures
-  const errorCount = thoughts.filter(t => t.type === 'error').length
-
-  // Calculate duration from first to last thought
+  // Calculate duration from first to last thought.
+  // Must stay above the early return below: a hook after it would change the
+  // hook count the first time this panel gains content, which React rejects.
   const duration = useMemo(() => {
     if (thoughts.length < 1) return 0
     const first = new Date(thoughts[0].timestamp).getTime()
     const last = new Date(thoughts[thoughts.length - 1].timestamp).getTime()
     return (last - first) / 1000
   }, [thoughts])
+
+  // Check if there's anything to show
+  const hasContent = displayThoughts.length > 0 || (latestTodos && latestTodos.length > 0)
+  if (!hasContent) return null
+
+  // Only count system-level errors, not tool execution failures
+  const errorCount = thoughts.filter(t => t.type === 'error').length
 
   return (
     <div className="mb-2">
@@ -282,11 +283,11 @@ export function CollapsedThoughtProcess({ thoughts, defaultExpanded = false, def
           {/* Thought items — lazy-loaded: only items near the scroll viewport are rendered */}
           {displayThoughts.length > 0 && (
             <div ref={scrollContainerRef} className={`${isMaximized ? 'max-h-[80vh]' : 'max-h-[300px]'} scrollbar-overlay px-3 transition-all duration-200`}>
-              {displayThoughts.map((thought, index) => {
+              {displayThoughts.map((thought) => {
                 const isTaskThought = thought.type === 'tool_use' && (thought.toolName === 'Task' || thought.toolName === 'Agent')
                 return (
                   <LazyCollapsedThoughtItem
-                    key={`${thought.id}-${index}`}
+                    key={thought.id}
                     thought={thought}
                     scrollContainerRef={scrollContainerRef}
                     allThoughts={isTaskThought ? thoughts : undefined}
@@ -295,11 +296,6 @@ export function CollapsedThoughtProcess({ thoughts, defaultExpanded = false, def
               })}
             </div>
           )}
-
-          {/* Team snapshot — shown when agent team collaboration is detected in thoughts */}
-          <div className="px-3 mt-2">
-            <TeamSnapshotPanel thoughts={thoughts} />
-          </div>
 
           {/* TodoCard at bottom - only one instance */}
           {latestTodos && latestTodos.length > 0 && (

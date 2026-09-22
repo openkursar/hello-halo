@@ -28,6 +28,7 @@
  */
 
 import { api } from '../api'
+import i18n from '../i18n'
 import { isBinaryExtension } from '../constants/file-types'
 
 // ============================================
@@ -45,6 +46,7 @@ export type ContentType =
   | 'csv'
   | 'browser'
   | 'terminal'
+  | 'team'
 
 export interface BrowserState {
   isLoading: boolean
@@ -76,6 +78,8 @@ export interface TabState {
   browserState?: BrowserState
   isEditMode?: boolean // For markdown tabs - switches between preview and editor
   terminalSessionId?: string // For terminal tabs - the pty session id
+  /** Persistent Halo team rendered by the Team workbench. */
+  teamId?: string
 }
 
 // Callback types
@@ -741,6 +745,33 @@ class CanvasLifecycle {
       type: 'terminal',
       title: title || 'Terminal',
       terminalSessionId: sessionId,
+      isDirty: false,
+      isLoading: false,
+    }
+
+    this.tabs.set(tabId, tab)
+    this.setOpen(true)
+    this.notifyTabsChange()
+    await this.switchTab(tabId)
+    return tabId
+  }
+
+  /** Open the existing Team workbench inside the Content Canvas. */
+  async openTeam(teamId: string, title?: string): Promise<string> {
+    for (const [tabId, tab] of this.tabs) {
+      if (tab.type === 'team' && tab.teamId === teamId) {
+        this.setOpen(true)
+        await this.switchTab(tabId)
+        return tabId
+      }
+    }
+
+    const tabId = generateTabId()
+    const tab: TabState = {
+      id: tabId,
+      type: 'team',
+      title: title || i18n.t('Team'),
+      teamId,
       isDirty: false,
       isLoading: false,
     }

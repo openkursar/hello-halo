@@ -119,6 +119,34 @@ export function classifySessionSource(channel: string): SessionSource {
 }
 
 /**
+ * Which config field carries a built-in provider's credential identity.
+ * Single source of truth for {@link imCredentialId}; types absent here have no
+ * form-entered credential (e.g. weixin-ilink's token comes from a QR flow),
+ * so they never participate in duplicate-credential checks.
+ */
+const IM_CREDENTIAL_FIELDS: Partial<Record<ImChannelType, string>> = {
+  'wecom-bot': 'botId',
+  'feishu-bot': 'appId',
+}
+
+/**
+ * Credential identity of an instance config — what makes two instances "the
+ * same bot". The one implementation behind ImChannelProvider.credentialId for
+ * built-in providers AND the renderer's inline duplicate warning, so the
+ * per-brand field knowledge exists exactly once. Returns undefined when the
+ * type has no form credential or the field is still empty (half-filled form).
+ */
+export function imCredentialId(
+  type: ImChannelType,
+  config: Record<string, unknown> | undefined,
+): string | undefined {
+  const field = IM_CREDENTIAL_FIELDS[type]
+  if (!field) return undefined
+  const value = String(config?.[field] ?? '').trim()
+  return value || undefined
+}
+
+/**
  * Persisted configuration for a single IM channel instance.
  * Stored in config.json under imChannels.instances[].
  */
@@ -252,6 +280,22 @@ export interface ImChannelProvider {
    * is connection-relevant (the default, safe behavior).
    */
   readonly hotUpdatableConfigKeys?: string[]
+
+  /**
+   * Identity of the credential a config points at — what makes two instances
+   * "the same bot". Used to refuse binding one bot to two digital humans, which
+   * would split or duplicate its inbound traffic.
+   *
+   * Only the provider knows which of its fields carries that identity (`botId`,
+   * `appId`, an account handle, ...), so generic code must ask rather than guess.
+   * Return undefined when the config names no credential yet (a half-filled
+   * form). Providers that omit this get the legacy `config.botId` comparison.
+   *
+   * Built-in providers delegate to {@link imCredentialId} so the renderer's
+   * inline duplicate warning reads the same knowledge without a provider
+   * instance.
+   */
+  credentialId?(config: Record<string, unknown>): string | undefined
 
   /**
    * Create a running instance from persisted config.

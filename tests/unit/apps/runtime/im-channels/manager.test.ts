@@ -351,6 +351,98 @@ describe('ImChannelManager.toStatus derivation', () => {
   })
 })
 
+describe('ImChannelManager.applyConfig — duplicate credential gate', () => {
+  let manager: ImChannelManager
+  let provider: FakeProvider
+
+  beforeEach(() => {
+    manager = new ImChannelManager()
+    provider = makeProvider()
+    manager.registerProvider(provider)
+  })
+
+  it('starts only the first of two enabled instances sharing a credential', () => {
+    manager.applyConfig(
+      [makeConfig('i1'), makeConfig('i2', { appId: 'app-2' })],
+      noopInbound,
+    )
+    expect(provider.created).toHaveLength(1)
+    expect(manager.getInstance('i1')).toBeDefined()
+    expect(manager.getInstance('i2')).toBeUndefined()
+  })
+
+  it('surfaces the refusal in the loser instance status', () => {
+    manager.applyConfig(
+      [makeConfig('i1'), makeConfig('i2', { appId: 'app-2' })],
+      noopInbound,
+    )
+    const status = manager.getInstanceStatus('i2')
+    expect(status?.connected).toBe(false)
+    expect(status?.reason).toContain('already in use')
+    expect(status?.reason).toContain('i1')
+    // The winner carries no failure.
+    expect(manager.getInstanceStatus('i1')?.reason).toBeUndefined()
+  })
+
+  it('stops an already-running duplicate even when its config is unchanged', () => {
+    // i2 is alone and running; a later save adds i1 with the same credential
+    // ahead of it. The unchanged-config skip must not keep i2 alive alongside
+    // the new winner.
+    manager.applyConfig([makeConfig('i2', { appId: 'app-2' })], noopInbound)
+    const i2 = manager.getInstance('i2') as FakeInstance
+
+    manager.applyConfig(
+      [makeConfig('i1'), makeConfig('i2', { appId: 'app-2' })],
+      noopInbound,
+    )
+    expect(i2.stopped).toBe(true)
+    expect(manager.getInstance('i2')).toBeUndefined()
+    expect(manager.getInstance('i1')).toBeDefined()
+  })
+
+  it('lets the loser start once the blocker is disabled', () => {
+    manager.applyConfig(
+      [makeConfig('i1'), makeConfig('i2', { appId: 'app-2' })],
+      noopInbound,
+    )
+    manager.applyConfig(
+      [makeConfig('i1', { enabled: false }), makeConfig('i2', { appId: 'app-2' })],
+      noopInbound,
+    )
+    expect(manager.getInstance('i2')).toBeDefined()
+    expect(manager.getInstanceStatus('i2')?.reason).toBeUndefined()
+  })
+
+  it('keys on the provider-declared credentialId when the provider has one', () => {
+    const feishuLike = makeProvider({
+      credentialId: (config) => String(config.appId ?? '').trim() || undefined,
+    })
+    manager = new ImChannelManager()
+    manager.registerProvider(feishuLike)
+
+    manager.applyConfig(
+      [
+        makeConfig('i1', { config: { appId: 'cli_x', botId: 'ignored-1' } }),
+        makeConfig('i2', { appId: 'app-2', config: { appId: 'cli_x', botId: 'ignored-2' } }),
+      ],
+      noopInbound,
+    )
+    expect(feishuLike.created).toHaveLength(1)
+    expect(manager.getInstanceStatus('i2')?.reason).toContain('already in use')
+  })
+
+  it('never treats instances without a resolvable credential as duplicates', () => {
+    manager.applyConfig(
+      [
+        makeConfig('i1', { config: { botId: '' } }),
+        makeConfig('i2', { appId: 'app-2', config: { botId: ' ' } }),
+      ],
+      noopInbound,
+    )
+    expect(provider.created).toHaveLength(2)
+  })
+})
+
 describe('ImChannelManager.stopInstance — onInstanceStop resilience', () => {
   it('fires onInstanceStop after teardown', () => {
     const manager = new ImChannelManager()

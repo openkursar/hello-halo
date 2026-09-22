@@ -49,14 +49,15 @@ import AiBot, {
 import { readFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join, basename, extname } from 'path'
-import type {
-  ImChannelProvider,
-  ImChannelInstance,
-  ImFileCapability,
-  ImIdentityCapability,
-  ImChannelConfigFieldDef,
-  ImChannelType,
-  ImConnectionState,
+import {
+  imCredentialId,
+  type ImChannelProvider,
+  type ImChannelInstance,
+  type ImFileCapability,
+  type ImIdentityCapability,
+  type ImChannelConfigFieldDef,
+  type ImChannelType,
+  type ImConnectionState,
 } from '../../../../shared/types/im-channel'
 import type {
   InboundMessage,
@@ -76,7 +77,9 @@ import { ensureUtf8 } from './wecom-content-utf8'
 import { ConnectionArbiter } from './connection-arbiter'
 import { stageMediaFile, pruneMediaTempDir } from './media-temp-files'
 import { notifyAppEvent } from '../../../services/notification.service'
+import { resolveProxyAgent } from '../../../services/proxy-fetch'
 import { fetchWecomIdentityDirectory } from './wecom-identity-resolve'
+import { downloadWecomMedia } from './wecom-media-download'
 
 // ============================================
 // Constants
@@ -235,6 +238,11 @@ export class WecomBotProvider implements ImChannelProvider {
    * 7-day-expiring credential gets re-pasted.
    */
   readonly hotUpdatableConfigKeys = ['nameResolveUrl']
+
+  /** Two enabled instances sharing a Bot ID would duplicate inbound traffic. */
+  credentialId(config: Record<string, unknown>): string | undefined {
+    return imCredentialId(this.type, config)
+  }
 
   createInstance(instanceId: string, config: Record<string, unknown>): ImChannelInstance {
     return new WecomBotInstance(instanceId, config as unknown as WecomBotProviderConfig)
@@ -530,8 +538,46 @@ class WecomBotInstance implements ImChannelInstance {
 
   // ── SDK client lifecycle ──────────────────────────────────────
 
+  /**
+   * Open the WebSocket.
+   *
+   * Kicked off without awaiting because the caller is synchronous; the proxy
+   * lookup it waits on is a local Chromium call, and `currentClient` already
+   * guards against a teardown landing mid-flight.
+   */
   private openClient(): void {
+    void this.openClientWithProxy().catch((err: unknown) => {
+      logEvent(this.instanceId, 'error', 'ws_open_threw', {
+        cat: 'internal',
+        err: err instanceof Error ? err.message : String(err),
+      })
+    })
+  }
+
+  private async openClientWithProxy(): Promise<void> {
     const wsUrl = this.config.wsUrl || DEFAULT_WS_URL
+
+    // On a machine that only reaches the internet through a proxy, a WebSocket
+    // opened without an agent connects to nothing — the SDK reads neither
+    // Halo's proxy setting nor the system one. Resolving it here puts this
+    // connection on the same route as every other outbound request.
+    let agent: Awaited<ReturnType<typeof resolveProxyAgent>>
+    try {
+      agent = await resolveProxyAgent(wsUrl.replace(/^ws/, 'http'))
+    } catch (err) {
+      agent = undefined
+      logEvent(this.instanceId, 'warn', 'proxy_resolve_failed', {
+        cat: 'network',
+        err: err instanceof Error ? err.message : String(err),
+      })
+    }
+    if (!this.active) {
+      logEvent(this.instanceId, 'info', 'ws_open_abandoned', { reason: 'stopped' })
+      return
+    }
+    if (agent) {
+      logEvent(this.instanceId, 'info', 'proxy_applied', { wsUrl })
+    }
 
     const sdkLogger = this.makeSdkLogger()
     const client = new AiBot.WSClient({
@@ -543,6 +589,7 @@ class WecomBotInstance implements ImChannelInstance {
       maxReconnectAttempts: -1,
       heartbeatInterval: 30_000,
       logger: sdkLogger,
+      ...(agent ? { wsOptions: { agent } } : {}),
     })
 
     // Ignore events from a superseded client object. teardownClient() /
@@ -1472,9 +1519,8 @@ class WecomBotInstance implements ImChannelInstance {
     attachments: InboundAttachment[],
     images: ImageAttachment[],
   ): Promise<void> {
-    if (!this.wsClient) return
     try {
-      const { buffer, filename } = await this.wsClient.downloadFile(url, aesKey)
+      const { buffer, filename } = await downloadWecomMedia(url, aesKey)
       const staged = await stageMediaFile(TEMP_DIR, filename || `image_${Date.now()}.jpg`, buffer)
 
       const ext = (url.split('?')[0].split('.').pop() ?? '').toLowerCase()
@@ -1519,9 +1565,8 @@ class WecomBotInstance implements ImChannelInstance {
     fallbackName: string,
     attachments: InboundAttachment[],
   ): Promise<void> {
-    if (!this.wsClient) return
     try {
-      const { buffer, filename } = await this.wsClient.downloadFile(url, aesKey)
+      const { buffer, filename } = await downloadWecomMedia(url, aesKey)
       const staged = await stageMediaFile(TEMP_DIR, filename || fallbackName, buffer)
       attachments.push({ type, filename: staged.filename, localPath: staged.localPath })
       logEvent(this.instanceId, 'info', 'media_download_done', {

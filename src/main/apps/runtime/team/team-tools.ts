@@ -65,9 +65,28 @@ export interface TeamMcpContext {
    * member. Absent → the caller's turn had no chain behind it (depth 0).
    */
   forwardDepth?: number
+  /**
+   * The turn these tools serve was set in motion from another machine. Stamped
+   * onto every message it sends, so passing a stranger's request through one of
+   * the owner's own digital humans does not turn it into the owner's.
+   */
+  external?: boolean
   /** Deferred: applied after the lead's turn ends, never aborts mid-turn. */
   requestComplete: (summary: string) => void
 }
+
+/**
+ * Where a tool call finds its team context. A member session's context is
+ * fixed at session creation (`createTeamMcpServer` wraps it in a constant
+ * resolver). A SPACE conversation's tools are seeded before any collaboration
+ * exists — its resolver looks the current collaboration up per call, so
+ * `collab_start` and the first `team_send` work inside one turn, with no
+ * session rebuild in between.
+ */
+export type ResolveTeamMcpContext = () => TeamMcpContext | null
+
+const NO_TEAM_CONTEXT =
+  'No active team collaboration is bound to this conversation. Start one with collab_start first.'
 
 const TASK_STATUS_VALUES = ['pending', 'in_progress', 'done', 'rejected', 'blocked'] as const
 
@@ -164,7 +183,7 @@ function busErrorResult(err: unknown) {
   return textResult(`Team operation failed: ${message}`, true)
 }
 
-function buildSendTool(ctx: TeamMcpContext) {
+function buildSendTool(resolve: ResolveTeamMcpContext) {
   return tool(
     TEAM_TOOL_NAMES.send,
     'Send a message directly to a teammate. Use this to answer the requester; ' +
@@ -180,6 +199,8 @@ function buildSendTool(ctx: TeamMcpContext) {
       message: z.string().describe('Message body. Keep it directive and self-contained.'),
     },
     async (input) => {
+      const ctx = resolve()
+      if (!ctx) return textResult(NO_TEAM_CONTEXT, true)
       console.log(
         `${LOG_TAG} ${TEAM_TOOL_NAMES.send}: team=${ctx.teamId} from=${ctx.callerAppId} to="${input.to}"`
       )
@@ -194,6 +215,7 @@ function buildSendTool(ctx: TeamMcpContext) {
           to: input.to,
           message: input.message,
           forwardDepth: ctx.forwardDepth,
+          ...(ctx.external ? { external: true } : {}),
         })
         // A teammate send is always async; the sync receipt shape is unreachable
         // from here (only a person's 1:1 chat asks for one).
@@ -250,7 +272,7 @@ function buildSendTool(ctx: TeamMcpContext) {
   )
 }
 
-function buildPostTaskTool(ctx: TeamMcpContext) {
+function buildPostTaskTool(resolve: ResolveTeamMcpContext) {
   return tool(
     TEAM_TOOL_NAMES.postTask,
     'Create a blackboard task and assign it to a teammate. Tasks should be ' +
@@ -263,6 +285,8 @@ function buildPostTaskTool(ctx: TeamMcpContext) {
       parentId: z.string().optional().describe('Optional parent task id for subtasks.'),
     },
     async (input) => {
+      const ctx = resolve()
+      if (!ctx) return textResult(NO_TEAM_CONTEXT, true)
       console.log(
         `${LOG_TAG} ${TEAM_TOOL_NAMES.postTask}: team=${ctx.teamId} assignee="${input.assignee}" ` +
           `title="${input.title.slice(0, 60)}"`
@@ -294,7 +318,7 @@ function buildPostTaskTool(ctx: TeamMcpContext) {
   )
 }
 
-function buildUpdateTaskTool(ctx: TeamMcpContext) {
+function buildUpdateTaskTool(resolve: ResolveTeamMcpContext) {
   return tool(
     TEAM_TOOL_NAMES.updateTask,
     'Update a blackboard task: set its status, attach the file it produced, or ' +
@@ -318,6 +342,8 @@ function buildUpdateTaskTool(ctx: TeamMcpContext) {
       note: z.string().optional().describe('Short note (e.g. rejection reason or blocker).'),
     },
     async (input) => {
+      const ctx = resolve()
+      if (!ctx) return textResult(NO_TEAM_CONTEXT, true)
       console.log(
         `${LOG_TAG} ${TEAM_TOOL_NAMES.updateTask}: team=${ctx.teamId} task=${input.taskId} ` +
           `status=${input.status}`
@@ -361,7 +387,7 @@ function buildUpdateTaskTool(ctx: TeamMcpContext) {
   )
 }
 
-function buildPostFindingTool(ctx: TeamMcpContext) {
+function buildPostFindingTool(resolve: ResolveTeamMcpContext) {
   return tool(
     TEAM_TOOL_NAMES.postFinding,
     'Append a shared finding to the blackboard (append-only; any member may ' +
@@ -382,6 +408,8 @@ function buildPostFindingTool(ctx: TeamMcpContext) {
         ),
     },
     async (input) => {
+      const ctx = resolve()
+      if (!ctx) return textResult(NO_TEAM_CONTEXT, true)
       if (!input.content && !input.ref) {
         return textResult('You must provide at least one of "content" or "ref".', true)
       }
@@ -416,7 +444,7 @@ function buildPostFindingTool(ctx: TeamMcpContext) {
   )
 }
 
-function buildReadBoardTool(ctx: TeamMcpContext) {
+function buildReadBoardTool(resolve: ResolveTeamMcpContext) {
   return tool(
     TEAM_TOOL_NAMES.readBoard,
     'Read the team blackboard: tasks, findings, and the member roster. Use this ' +
@@ -442,6 +470,8 @@ function buildReadBoardTool(ctx: TeamMcpContext) {
         .describe('Only tasks in this status.'),
     },
     async (input) => {
+      const ctx = resolve()
+      if (!ctx) return textResult(NO_TEAM_CONTEXT, true)
       console.log(
         `${LOG_TAG} ${TEAM_TOOL_NAMES.readBoard}: team=${ctx.teamId} epoch=${ctx.epochId} ` +
           `mine=${input.mine ?? false} status=${input.status ?? 'any'}`
@@ -471,7 +501,7 @@ function buildReadBoardTool(ctx: TeamMcpContext) {
   )
 }
 
-function buildReadArtifactTool(ctx: TeamMcpContext) {
+function buildReadArtifactTool(resolve: ResolveTeamMcpContext) {
   return tool(
     TEAM_TOOL_NAMES.readArtifact,
     'Read a teammate\u2019s published artifact by its reference, wherever it was ' +
@@ -490,6 +520,8 @@ function buildReadArtifactTool(ctx: TeamMcpContext) {
         ),
     },
     async (input) => {
+      const ctx = resolve()
+      if (!ctx) return textResult(NO_TEAM_CONTEXT, true)
       console.log(
         `${LOG_TAG} ${TEAM_TOOL_NAMES.readArtifact}: team=${ctx.teamId} epoch=${ctx.epochId} ref="${input.ref}"`
       )
@@ -522,7 +554,7 @@ function buildReadArtifactTool(ctx: TeamMcpContext) {
   )
 }
 
-function buildScheduleTool(ctx: TeamMcpContext) {
+function buildScheduleTool(resolve: ResolveTeamMcpContext) {
   return tool(
     TEAM_TOOL_NAMES.schedule,
     'Have a teammate (or yourself) wake up on a rhythm and act on a standing ' +
@@ -553,6 +585,8 @@ function buildScheduleTool(ctx: TeamMcpContext) {
         .describe('A single future moment as an ISO-8601 timestamp, e.g. "2026-08-11T09:00:00Z".'),
     },
     async (input) => {
+      const ctx = resolve()
+      if (!ctx) return textResult(NO_TEAM_CONTEXT, true)
       console.log(
         `${LOG_TAG} ${TEAM_TOOL_NAMES.schedule}: team=${ctx.teamId} epoch=${ctx.epochId} ` +
           `from=${ctx.callerAppId} to="${input.to}"`
@@ -569,6 +603,9 @@ function buildScheduleTool(ctx: TeamMcpContext) {
           createdByAppId: ctx.callerAppId,
           targetAppId,
           instruction: input.instruction,
+          // Same taint team_send stamps on messages: a standing instruction set
+          // in an externally-driven turn stays a stranger's instruction.
+          ...(ctx.external ? { external: true } : {}),
           schedule,
         })
         record(ctx, {
@@ -589,7 +626,7 @@ function buildScheduleTool(ctx: TeamMcpContext) {
   )
 }
 
-function buildUnscheduleTool(ctx: TeamMcpContext) {
+function buildUnscheduleTool(resolve: ResolveTeamMcpContext) {
   return tool(
     TEAM_TOOL_NAMES.unschedule,
     'Stop a periodic check. Name the teammate to stop everything running on ' +
@@ -602,6 +639,8 @@ function buildUnscheduleTool(ctx: TeamMcpContext) {
       checkId: z.string().optional().describe('Stop only this check. Omit to stop all of theirs.'),
     },
     async (input) => {
+      const ctx = resolve()
+      if (!ctx) return textResult(NO_TEAM_CONTEXT, true)
       console.log(
         `${LOG_TAG} ${TEAM_TOOL_NAMES.unschedule}: team=${ctx.teamId} epoch=${ctx.epochId} to="${input.to}"`
       )
@@ -653,7 +692,7 @@ function parseScheduleInput(input: { every?: string; cron?: string; once?: strin
   return { kind: 'once', once: at }
 }
 
-function buildCompleteTool(ctx: TeamMcpContext) {
+function buildCompleteTool(resolve: ResolveTeamMcpContext) {
   return tool(
     TEAM_TOOL_NAMES.complete,
     'End the team run. Call this ONLY when the whole goal is achieved and every ' +
@@ -664,6 +703,8 @@ function buildCompleteTool(ctx: TeamMcpContext) {
       summary: z.string().describe('Concise summary of the completed run.'),
     },
     async (input) => {
+      const ctx = resolve()
+      if (!ctx) return textResult(NO_TEAM_CONTEXT, true)
       if (!ctx.selfIsLead) {
         return textResult('Only the team lead can end the run (team_complete).', true)
       }
@@ -685,16 +726,17 @@ function buildCompleteTool(ctx: TeamMcpContext) {
 }
 
 export function createTeamMcpServer(context: TeamMcpContext): SdkMcpServer {
+  const resolve: ResolveTeamMcpContext = () => context
   const tools = [
-    buildSendTool(context),
-    buildPostTaskTool(context),
-    buildUpdateTaskTool(context),
-    buildPostFindingTool(context),
-    buildReadBoardTool(context),
-    buildReadArtifactTool(context),
-    buildScheduleTool(context),
-    buildUnscheduleTool(context),
-    buildCompleteTool(context),
+    buildSendTool(resolve),
+    buildPostTaskTool(resolve),
+    buildUpdateTaskTool(resolve),
+    buildPostFindingTool(resolve),
+    buildReadBoardTool(resolve),
+    buildReadArtifactTool(resolve),
+    buildScheduleTool(resolve),
+    buildUnscheduleTool(resolve),
+    buildCompleteTool(resolve),
   ]
 
   console.log(
@@ -707,4 +749,22 @@ export function createTeamMcpServer(context: TeamMcpContext): SdkMcpServer {
     version: '1.0.0',
     tools,
   })
+}
+
+/**
+ * The coordination tools a SPACE conversation gets when its team toolset is
+ * enabled. Deliberately without `team_schedule`/`team_unschedule`: standing
+ * timers are a persistent-team capability, not a one-collaboration one — a
+ * saved team's lead gets them through the member server above.
+ */
+export function buildCoordinationTools(resolve: ResolveTeamMcpContext) {
+  return [
+    buildSendTool(resolve),
+    buildPostTaskTool(resolve),
+    buildUpdateTaskTool(resolve),
+    buildPostFindingTool(resolve),
+    buildReadBoardTool(resolve),
+    buildReadArtifactTool(resolve),
+    buildCompleteTool(resolve),
+  ]
 }

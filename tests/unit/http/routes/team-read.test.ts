@@ -612,7 +612,26 @@ describe('POST /api/teams/:teamId/members/:appId/send scope gating', () => {
       message: 'hi',
       images: undefined,
       thinkingEnabled: true,
+      // The credential is what says this came from another person's machine,
+      // and the woken member is held to what its owner granted teammates
+      // rather than to the owner's own reach.
+      external: true,
     })
+  })
+
+  it('does not mark the owner\u2019s own remote access as coming from elsewhere', async () => {
+    // Same route, no office credential: this is the owner reaching their own
+    // machine from a phone, and marking it external would restrict them in
+    // their own office.
+    listMembersByTeam.mockReturnValue([{ appId: 'member-1' }])
+    getCurrentEpochForTeam.mockReturnValue({ id: 'epoch-1' })
+    await withServer(buildApp(null), async (base) => {
+      const res = await post(base, 'X', 'member-1', { message: 'hi' })
+      expect(res.status).toBe(200)
+    })
+    expect(sendToMember).toHaveBeenCalledWith(
+      expect.not.objectContaining({ external: expect.anything() }),
+    )
   })
 
   it('honors an explicit ?epochId in the body over the current epoch', async () => {

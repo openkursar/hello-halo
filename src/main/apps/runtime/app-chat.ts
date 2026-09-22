@@ -45,6 +45,7 @@ import {
 } from '../../services/agent/helpers'
 import { emitAgentEvent } from '../../services/agent/events'
 import { resolveCredentialsForSdk, buildBaseSdkOptions } from '../../services/agent/sdk-config'
+import { getEngineCapabilities } from '../../services/agent/resolved-sdk'
 import { applyReasoningEffort } from '../../services/agent/reasoning-effort'
 import { createCanUseTool } from '../../services/agent/permission-handler'
 import { getImPermissionContext } from './im-permission-registry'
@@ -83,10 +84,23 @@ import { NATIVE_CHAT_ENTRY } from './prompt/entry-native'
 import { buildImEntry, buildImConstraints, type ImSessionContext } from './im-channels/im-prompt'
 import { buildTeamEntry, buildTeamConstraints, buildTeamImBridge } from './team/team-prompt'
 import { getActiveTeamRuntime } from './team'
+import { forgetTurnOrigin, resolveTurnOrigin } from './team/external-origin'
 import { consumeIntentionalStop } from './intentional-stop'
 import { createTeamMcpServer } from './team/team-tools'
 import { TEAM_MCP_SERVER_NAME } from '../../../shared/apps/team-types'
-import { computeDisallowedBuiltins, filterMcpServersByPolicy, isBorrowedTeamTurn } from './capability-policy'
+import {
+  applyCapabilityPolicy,
+  describeAppliedPolicy,
+  isBorrowedTeamTurn,
+  resolveDelegationMode,
+} from './capability-policy'
+import {
+  beginDelegatedTurn,
+  clearDelegation,
+  createDelegationAuditHooks,
+  decideDelegatedTool,
+} from './delegation-gate'
+import type { CapabilityMode, CapabilityPolicy } from '../../../shared/apps/capability-policy'
 import type { TeamTriggerContext } from '../../../shared/apps/team-types'
 import { createFileSendMcpServer } from './im-channels/file-send-mcp'
 import { mergeConfigWithDefaults } from './config-defaults'
@@ -531,6 +545,14 @@ async function runAppChatTurn(
   // the bound member keeps its team identity + tools and gains a front-desk
   // bridge so it replies to the person in-chat. It runs as a trusted team peer,
   // so IM guest hardening (buildImConstraints) is intentionally NOT applied.
+  // Where the work this turn continues was asked for. Resolved once, here,
+  // because the answer is needed in three places that cannot each re-derive it:
+  // the team tools this turn sends with, what the turn is allowed to do, and
+  // the owner's record of it. Not read from the trigger alone — a wake authored
+  // by the runtime here (an answered question, a periodic check) carries no
+  // origin of its own; see team/external-origin.ts.
+  const externalOrigin = teamContext ? resolveTurnOrigin(conversationId, teamContext) : false
+
   if (teamContext) {
     // Every team turn (user/IM/teammate) stamps the epoch's activity, and wakes
     // it when hibernated so coordination resumes and member replies route back.
@@ -620,8 +642,11 @@ async function runAppChatTurn(
     runId: CHAT_RUN_ID,
     sessionKey: conversationId,
     notificationLevel: app.userOverrides?.notificationLevel,
-    // Team turns route report() to the team runtime instead of the inbox.
-    ...(teamContext ? { teamContext } : {}),
+    // Team turns route report() to the team runtime instead of the inbox. The
+    // RESOLVED origin is what travels, not the trigger's own stamp: a runtime
+    // wake carries none, and an escalation raised in this turn must persist the
+    // origin the turn actually ran under (see resumeFromEscalation).
+    ...(teamContext ? { teamContext: { ...teamContext, external: externalOrigin } } : {}),
   }
 
   // Built-in server ids below are mirrored in shared/apps/builtin-mcp.ts — keep in sync.
@@ -683,6 +708,8 @@ async function runAppChatTurn(
             // Stamped onto the messages this turn sends, so the circuit
             // breaker's depth limit spans hops.
             forwardDepth: teamContext.forwardDepth,
+            // Same reasoning, different property of the chain: where it started.
+            ...(externalOrigin ? { external: true } : {}),
             // Lead-only team_complete → deferred seal after the lead's turn ends.
             requestComplete: (summary) =>
               getActiveTeamRuntime()!.requestSeal(teamContext.teamId, teamContext.epochId, summary),
@@ -715,60 +742,76 @@ async function runAppChatTurn(
   sdkOptions.systemPrompt = systemPrompt
 
   // Non-native sessions (IM channels, etc.) are non-interactive — the user
-  // cannot respond to interactive tool prompts, so deny them preemptively
+  // cannot respond to interactive tool prompts, so deny them preemptively.
+  //
+  // The per-call gate is installed on every non-native session, not only the
+  // ones currently restricted: it reads what the turn in flight registered, and
+  // a session outlives the turn that created it. Without it a session built for
+  // one caller would keep answering for the next, whoever that turns out to be.
+  // It is inert while nothing is registered, so an unrestricted turn is
+  // unaffected.
   const defaultConvId = getAppChatConversationId(appId)
   if (conversationId !== defaultConvId) {
     sdkOptions.canUseTool = createCanUseTool({
       spaceId,
       conversationId,
       nonInteractive: true,
+      gate: (toolName, toolInput) => decideDelegatedTool(conversationId, toolName, toolInput),
     })
   }
 
-  // ── IM guest permission control ────────────────────────────────
-  // For non-owner senders in IM sessions, restrict available tools via SDK options.
-  // Two layers:
-  //   1. disallowedTools (built-in) — blacklist computed by inverting the guest's whitelist.
-  //      The SDK removes these from the model's visible tool pool entirely.
-  //   2. MCP injection control — a server that is not injected does not exist.
-  // Owner sessions are unaffected (bypassPermissions, full tool access).
+  // ── What somebody OTHER than the owner may make this digital human do ──
+  //
+  // Two callers ask this question and get the same answer from the same place:
+  // an IM guest (a stranger in a chat window — silence refuses) and a teammate
+  // driving a team turn. The teammate's reading depends on where the request
+  // came from: one that entered this machine from outside is held to what the
+  // owner granted teammates, one that started here is not (see
+  // `resolveDelegationMode`).
+  //
   // permCtx was read earlier (before system prompt build) for ownerIds injection.
+  const borrowedTeamTurn = !!teamContext && isBorrowedTeamTurn(teamContext.kind, !!imSession)
+  let delegation: { policy: CapabilityPolicy | undefined; mode: CapabilityMode } | null = null
   if (permCtx && !permCtx.isOwner) {
-    const disallowed = computeDisallowedBuiltins(permCtx.guestPolicy, 'strict')
-    sdkOptions.disallowedTools = disallowed
-    sdkOptions.allowedTools = []
-    if (sdkOptions.extraArgs) {
-      delete sdkOptions.extraArgs['dangerously-skip-permissions']
+    delegation = { policy: permCtx.guestPolicy, mode: 'strict' }
+  } else if (borrowedTeamTurn && teamContext) {
+    delegation = {
+      policy: getActiveTeamRuntime()?.getDelegatedPolicy(teamContext.teamId, appId) ?? undefined,
+      mode: resolveDelegationMode({ external: externalOrigin }),
     }
-    sdkOptions.permissionMode = 'default'
-    sdkOptions.mcpServers = filterMcpServersByPolicy(mcpServers, dbMcpServers, permCtx.guestPolicy, 'strict')
-    console.log(
-      `[AppChat][${appId}] Guest session: sender=${permCtx.senderId}, ` +
-      `disallowed=${disallowed.length} tools, ` +
-      `mcpServers=[${Object.keys(sdkOptions.mcpServers).join(', ')}]`
-    )
   }
 
-  // ── Delegated capability control (someone else put this digital human to work) ──
-  // A withheld capability is absent from the turn rather than refused mid-call,
-  // and an unset policy withholds nothing.
-  const delegatedPolicy =
-    teamContext && isBorrowedTeamTurn(teamContext.kind, !!imSession)
-      ? getActiveTeamRuntime()?.getDelegatedPolicy(teamContext.teamId, appId) ?? null
-      : null
-  if (delegatedPolicy) {
-    const disallowed = computeDisallowedBuiltins(delegatedPolicy, 'permissive')
-    if (disallowed.length > 0) sdkOptions.disallowedTools = disallowed
-    sdkOptions.mcpServers = filterMcpServersByPolicy(
+  let applied: ReturnType<typeof applyCapabilityPolicy> | null = null
+  if (delegation) {
+    applied = applyCapabilityPolicy(sdkOptions, {
+      policy: delegation.policy,
+      mode: delegation.mode,
       mcpServers,
       dbMcpServers,
-      delegatedPolicy,
-      'permissive',
-      TEAM_CHANNEL_MCP
-    )
+      // The team's own coordination tools are the channel this turn happens on,
+      // not a capability: withholding them isolates the member instead of
+      // restricting the caller. An IM guest's turn has no such channel.
+      alwaysKeep: borrowedTeamTurn ? TEAM_CHANNEL_MCP : undefined,
+    })
+    if (applied.enforced) {
+      // A restriction the engine would accept and ignore is worse than one the
+      // owner is told they cannot have: it reads as protection while the
+      // request runs with everything. An engine that cannot be asked is read
+      // the same way as one that says no.
+      const engine = getEngineCapabilities()
+      if (!engine?.features.permissionRules) {
+        throw new Error(
+          `"${app.spec.name}" is running on ${engine?.displayName ?? 'an engine'}, which cannot hold ` +
+          `someone else's request to what you allowed, so the request was not started. ` +
+          `Switch Halo's agent engine to Claude Code to let teammates put your digital humans to work.`
+        )
+      }
+      sdkOptions.hooks = createDelegationAuditHooks(conversationId)
+    }
     console.log(
-      `[AppChat][${appId}] Teammate-driven turn: disallowed=${disallowed.length} tools, ` +
-      `mcpServers=[${Object.keys(sdkOptions.mcpServers).join(', ')}]`
+      `[AppChat][${appId}] Borrowed turn ` +
+      `(${permCtx && !permCtx.isOwner ? `guest=${permCtx.senderId}` : `teammate=${teamContext?.fromAppId ?? 'person'}`}): ` +
+      describeAppliedPolicy(applied, delegation.policy, delegation.mode)
     )
   }
 
@@ -790,6 +833,33 @@ async function runAppChatTurn(
   // the queue of messages awaiting an answer, so a session rebuild underneath it
   // never orphans a caller.
   const sink = getAppChatSink({ appId, conversationId, runId: chatRunId, spacePath })
+
+  // Put this turn's terms in force for the per-call gate and the owner's
+  // record. Registered before the session is touched: a session build can
+  // itself fail, and the terms must already be the ones a tool call would be
+  // judged by if it somehow got that far.
+  //
+  // Registered for an unrestricted turn too, with nothing to withhold — that is
+  // what replaces the terms a previous, restricted turn left on the same
+  // conversation, so the owner does not inherit a teammate's limits.
+  if (conversationId !== defaultConvId) {
+    beginDelegatedTurn(conversationId, {
+      policy: applied?.enforced ? delegation?.policy : undefined,
+      mode: applied?.enforced ? delegation!.mode : 'permissive',
+      ...(applied?.enforced && borrowedTeamTurn && teamContext
+        ? {
+            audit: {
+              teamId: teamContext.teamId,
+              epochId: teamContext.epochId,
+              appId,
+              actorAppId: teamContext.fromAppId,
+              external: externalOrigin,
+              sink: (entry) => getActiveTeamRuntime()?.recordToolAudit(entry),
+            },
+          }
+        : {}),
+    })
+  }
 
   let round: AppChatRoundHandle | undefined
   // Carried to the finally below, which is where a team turn's ending is
@@ -826,7 +896,15 @@ async function runAppChatTurn(
       sdkOptions,
       resumeSessionId,
       workDir,
-      { displayModel: resolvedCreds.displayModel, sink }
+      { displayModel: resolvedCreds.displayModel, sink },
+      undefined,
+      undefined,
+      undefined,
+      // A restricted turn must run on a session actually built with its
+      // restrictions. Reuse normally defers a rebuild while the session is busy
+      // and hands back the one that exists — here that would run this request
+      // with whatever the previous caller was allowed.
+      applied?.enforced ? { requireFreshInputs: true } : undefined
     )
 
     // A reused session keeps the consumer it was created with; refresh the model
@@ -1324,6 +1402,10 @@ async function clearSessionByConversationId(
   // 5. Drop the sink. Its rounds were already settled when closeV2Session
   //    stopped the consumer; the next message builds a fresh one.
   disposeAppChatSink(conversationId)
+  // The terms and the origin the last turn left belong to a thread of work that
+  // no longer exists.
+  clearDelegation(conversationId)
+  forgetTurnOrigin(conversationId)
 
   // 6. Zero the registry's activity summary so the conversation list preview
   //    matches the now-empty transcript (no-op if the session was never

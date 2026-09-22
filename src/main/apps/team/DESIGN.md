@@ -45,6 +45,7 @@ under the isolated migration namespace `app_team`.
 | `team_epochs` | one row per run OR conversation, including business task metadata | retained for history; resource teardown does not imply business completion |
 | `team_triggers` | one row per trigger | long-lived definition |
 | `team_checks` | one row per periodic check | per-epoch; deleted when its epoch ends |
+| `team_tool_audit` | append-only | local-only; pruned by age, never replicated |
 
 Epoch-scoped rows are never auto-deleted on seal — they remain as the durable,
 observable record of a run (技术 §8.2 persistence layering).
@@ -60,9 +61,14 @@ else:
   this column and is deliberately kept out of the app spec it provisions, since
   a copy frozen in the system prompt could never be reached by the owner's later
   edits and would leave the member holding two conflicting job descriptions.
-- `delegated_policy_json` — what a teammate may make it do. NULL = unrestricted,
-  so a team that never opened the screen behaves exactly as before. **Never
+- `delegated_policy_json` — what a teammate may make it do. **Never
   replicated**: it guards one person's machine, so only that machine needs it.
+  How NULL reads depends on which machine asked — a request that started here
+  is unrestricted by it, one that entered from outside is granted nothing it
+  does not name (see `apps/runtime/team/DESIGN.md` § "How strictly a borrowed
+  turn reads silence"). The invite and join screens write a preset into it at
+  the moment a team first crosses machines, so in practice it is set before any
+  stranger can ask anything.
 - `accepts_checks` — the single bit of that policy other nodes do need, so a
   teammate is refused a periodic check early and readably instead of at the far
   end. Derived from the policy on write.
@@ -98,6 +104,26 @@ taken before the owner's latest edit reached the authority must not undo it.
   §8.2. It marks members whose app was auto-created for this team (AI sourcing)
   so the service can clean up orphans on dissolve. Manual members are never
   auto-deleted.
+
+- `teams.ephemeral` + `teams.coordinator_conversation_id` (v18) mark a
+  TEMPORARY SPACE COLLABORATION: a team the space agent assembled for one
+  piece of work, coordinated by the space conversation itself rather than a
+  lead app. Its `lead_app_id` holds the coordinator SENTINEL
+  (`spaceCoordinatorAppId(conversationId)`, `shared/apps/team-types`), which
+  also occupies a member row (`member_name = 'coordinator'`, `is_lead`,
+  `is_system_coordinator`, `ai_provisioned = 0` so dissolve never tries to
+  uninstall an app that does not exist). Consequences the code keeps:
+  - hidden everywhere person-facing: `listDirectoryMemberships` carries the
+    flag (directory exclusion), `listTeamItems` carries it (Teams page and
+    picker filtering), and one collaboration exists per conversation
+    (`getCollabTeamByConversation`).
+  - `runTeam` refuses an ephemeral team; "save as team" (`saveCollab`) only
+    clears the flag — the real lead is provisioned lazily on the saved team's
+    first standalone run, so saving never disturbs the live collaboration.
+  - its one epoch is a `'conversation'` epoch keyed
+    `space:{conversationId}` (`spaceCollabChatKey`), so it never occupies
+    `current_epoch_id`, never auto-seals on quiescence, and seals through
+    `completeCollab` (team_complete) as `completed`.
 - Business task metadata is stored on `team_epochs`; see the task lifetime contract below.
 
 ---
@@ -128,6 +154,15 @@ taken before the owner's latest edit reached the authority must not undo it.
   one either: a successful reply is a fresh `message` act with its own correlation
   id, never a `reply` act, so these rows can show that a message FAILED but never
   that one was answered. Do not build "is this still waiting?" on top of them.
+- **team_tool_audit** (v17): `insertToolAudit` (append-only, idempotent by id),
+  `listToolAudit` (newest first, optionally one member), `pruneToolAudit`.
+  The one table here that is NOT office state: it records what a member did on
+  THIS machine while somebody else drove it, which is a fact about the owner's
+  computer rather than about the office. So it is absent from the replication
+  snapshot, absent from the office-member HTTP allowlist, and read only over
+  desktop IPC — replicating it would hand every teammate a map of the owner's
+  filesystem. It is the counterpart to `delegated_policy_json`, and stays local
+  for the same reason.
 - **team_epochs**: `insertEpoch`, `getEpochById`, `endEpoch` (seal),
   `touchEpoch` (stamp `last_activity_at`, monotonic), `listEpochsByTeam`,
   `getCurrentEpochForTeam` (open epoch, or null when idle).

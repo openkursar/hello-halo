@@ -160,18 +160,28 @@ export function StreamingBubble({
    */
   const heightMeasureRef = useRef<number>(0)
   useEffect(() => {
-    if (currentRef.current) {
-      // Throttle: only measure every 100ms
-      const now = Date.now()
-      if (now - heightMeasureRef.current < 100) return
-      heightMeasureRef.current = now
+    if (!currentRef.current) return
 
+    const measure = () => {
+      heightMeasureRef.current = Date.now()
       requestAnimationFrame(() => {
         if (currentRef.current) {
           setCurrentHeight(currentRef.current.scrollHeight)
         }
       })
     }
+
+    // Throttle to one measurement per 100ms, but always keep a trailing one:
+    // dropping the skipped measurement outright left the viewport sized to
+    // stale content whenever the last chunk landed inside the window, which
+    // clips the tail of the reply until something else changes.
+    const wait = 100 - (Date.now() - heightMeasureRef.current)
+    if (wait <= 0) {
+      measure()
+      return
+    }
+    const timer = setTimeout(measure, wait)
+    return () => clearTimeout(timer)
   }, [content, segments.length])
 
   /**

@@ -638,6 +638,42 @@ describe('MessageBus', () => {
       expect(midTurnDeliveries[0].envelope.body).toBe('stop, the plan changed')
     })
 
+    it('never injects an EXTERNAL message into a running turn — it queues for a normal wake', async () => {
+      // Injection skips turn-origin resolution: the running turn keeps its
+      // strictness and the sticky origin is never updated, so an injected
+      // external message would run under whatever the turn started with.
+      // It must buffer instead and enter through the wake path.
+      seedTeam(store, 'free')
+      const { hooks, wakes, midTurnDeliveries, busy } = makeHooks({ midTurn: true })
+      const bus = createMessageBus({ store, hooks })
+
+      await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP, to: 'researcher', message: 'do T1' })
+      expect(wakes).toHaveLength(1)
+
+      const second = await bus.send({
+        teamId: TEAM_ID,
+        epochId: EPOCH_ID,
+        fromAppId: LEAD_APP,
+        to: 'researcher',
+        message: 'from another machine',
+        external: true,
+      })
+
+      expect(midTurnDeliveries).toHaveLength(0)
+      expect('messageId' in second && second.delivery).toBe('queued')
+      expect(bus.hasBufferedMessages(EPOCH_ID)).toBe(true)
+
+      // The buffered message is delivered as a WAKE when the turn ends, with
+      // its external origin intact for resolveTurnOrigin to act on.
+      const researcherKey = buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, EPOCH_ID)
+      busy.delete(researcherKey)
+      bus.completeTurn({ sessionKey: researcherKey, trigger: wakes[0].trigger, outcome: { kind: 'result', content: 'done' } })
+      await Promise.resolve()
+      expect(wakes).toHaveLength(2)
+      expect(wakes[1].envelope.body).toBe('from another machine')
+      expect(wakes[1].trigger.external).toBe(true)
+    })
+
     it('charges the circuit breaker for a mid-turn delivery like any other send', async () => {
       // The budget is the only backstop against members interrupting each other
       // without end, and interrupting is exactly what this path does. A route

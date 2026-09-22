@@ -322,18 +322,19 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
     }
   },
 
-  // Handle thought for a specific conversation
+  // Handle thought for a specific conversation.
+  // Highest-frequency write in this store — every reasoning step of every
+  // running agent, including background digital humans and team members. Keep
+  // it allocation-free and unlogged.
   handleAgentThought: (data) => {
     const { conversationId, thought } = data
-    console.log(`[ChatStore] handleAgentThought [${conversationId}]:`, thought.type, thought.id)
 
     set((state) => {
       const newSessions = new Map(state.sessions)
       const session = newSessions.get(conversationId) || createEmptySessionState()
 
-      // Check if thought with same id already exists (avoid duplicates after recovery)
-      const existingIds = new Set(session.thoughts.map(t => t.id))
-      if (existingIds.has(thought.id)) {
+      // Skip a thought already recorded (can re-arrive after stream recovery)
+      if (session.thoughts.some(t => t.id === thought.id)) {
         console.log(`[ChatStore] Skipping duplicate thought: ${thought.id}`)
         return state // No change
       }

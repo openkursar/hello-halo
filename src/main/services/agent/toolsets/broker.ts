@@ -19,7 +19,7 @@
 
 import { getConfig, saveConfig } from '../../../foundation/config.service'
 import { createWebSearchMcpServer } from '../../web-search'
-import { createHaloAppsMcpServer } from '../../app-bridge'
+import * as appBridge from '../../app-bridge'
 import { createOfficialDocsSession } from '../../official-docs-mcp'
 import { emitAgentEvent } from '../events'
 import { getAvailableToolsets, getToolset } from './registry'
@@ -108,7 +108,7 @@ export function buildMcpServerRecord(scope: ToolsetScope): Record<string, unknow
   const { server: docsMcpServer, guideConsulted } = createOfficialDocsSession()
   record['halo-docs'] = docsMcpServer
   if (getConfig().agent?.enableDigitalHumans !== false) {
-    add('halo-apps', () => createHaloAppsMcpServer(scope.spaceId, guideConsulted))
+    add('halo-apps', () => appBridge.createHaloAppsMcpServer(scope.spaceId, guideConsulted))
   }
   // Boolean-gated, always-on — a brand-new conversation already has
   // conversation_read with no per-conversation setup. enableConversationSend

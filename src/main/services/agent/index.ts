@@ -111,9 +111,11 @@ export type { McpProbeResult } from './mcp-probe'
 // ============================================
 
 export { createCanUseTool, resolveQuestion, rejectQuestion, rejectAllQuestions } from './permission-handler'
+export type { ToolGate } from './permission-handler'
 export { listToolsets, openToolsetByUser, closeToolsetByUser } from './toolsets'
 export type { ToolsetStatus, ToolsetsChangedEvent } from './toolsets'
 export { getWorkingDir, getApiCredentials } from './helpers'
 export { parseSDKMessage, buildMessageContent, formatCanvasContext } from './message-utils'
-export { getOrCreateV2Session, activeSessions, v2Sessions, getConsumerHandle } from './session-manager'
+export { getOrCreateV2Session, activeSessions, v2Sessions, getConsumerHandle, SessionOptionsStaleError } from './session-manager'
+export type { SessionGates } from './session-manager'
 export { broadcastMcpStatus } from './mcp-manager'

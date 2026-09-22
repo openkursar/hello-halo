@@ -11,6 +11,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   classifySessionSource,
+  imCredentialId,
   IM_CHANNEL_TYPES,
   HTTP_SESSION_CHANNEL,
 } from '../../../src/shared/types/im-channel'
@@ -35,5 +36,31 @@ describe('classifySessionSource', () => {
 
   it('is case-sensitive: a mis-cased channel is not treated as IM', () => {
     expect(classifySessionSource('WeCom-Bot')).toBe('http')
+  })
+})
+
+describe('imCredentialId', () => {
+  it('reads the per-brand credential field', () => {
+    expect(imCredentialId('wecom-bot', { botId: 'aib-123', secret: 's' })).toBe('aib-123')
+    expect(imCredentialId('feishu-bot', { appId: 'cli_abc', appSecret: 's' })).toBe('cli_abc')
+  })
+
+  it('trims whitespace and treats an empty field as no credential', () => {
+    expect(imCredentialId('wecom-bot', { botId: '  aib-123  ' })).toBe('aib-123')
+    expect(imCredentialId('wecom-bot', { botId: '   ' })).toBeUndefined()
+    expect(imCredentialId('feishu-bot', { appId: '' })).toBeUndefined()
+    expect(imCredentialId('feishu-bot', {})).toBeUndefined()
+    expect(imCredentialId('feishu-bot', undefined)).toBeUndefined()
+  })
+
+  it('returns undefined for types without a form-entered credential', () => {
+    // weixin-ilink's token comes from a QR flow; such instances must never
+    // collide in duplicate-credential checks.
+    expect(imCredentialId('weixin-ilink-bot', { botToken: 'tok', accountId: 'a' })).toBeUndefined()
+  })
+
+  it('never confuses one brand\'s field with another\'s', () => {
+    expect(imCredentialId('feishu-bot', { botId: 'aib-123' })).toBeUndefined()
+    expect(imCredentialId('wecom-bot', { appId: 'cli_abc' })).toBeUndefined()
   })
 })

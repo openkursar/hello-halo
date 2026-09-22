@@ -11,6 +11,7 @@ operations on this page:
   POST   /api/apps/<appId>/im-chat/clear                             Clear a digital human's chat history in a bound IM chat   !! destructive
   GET    /api/apps/<appId>/im-chat/messages                          Read a digital human's transcript in a bound IM chat
   POST   /api/apps/<appId>/im-chat/stop                              Stop a digital human's in-progress reply in a bound IM chat (keeps history)
+  POST   /api/feishu-bot/reachability                                Check whether a Feishu bot is actually reachable, not just connected
   GET    /api/im-channels/permission-defaults                        Get this build's default guest-access permission settings for new IM instances
   GET    /api/im-channels/providers                                  List available IM channel provider types and their config fields
   POST   /api/im-channels/reconnect                                  Reconnect one IM channel instance
@@ -52,6 +53,15 @@ POST   /api/apps/<appId>/im-chat/stop                              Stop a digita
      # body: {"channel": "wecom", "chatType": "direct", "chatId": "<chatId — from GET /api/im-sessions>"}
      # out: {success:true,data:{stopped:boolean}}
      # note: chatType is "direct" or "group". Unlike im-chat/clear, this only aborts the current turn — the session and its history continue on the next inbound message.
+
+POST   /api/feishu-bot/reachability                                Check whether a Feishu bot is actually reachable, not just connected
+     curl -sX POST "$HALO_API_URL/api/feishu-bot/reachability" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"instanceId":"<instanceId — from GET /api/im-channels/status>"}'
+     # body: {"instanceId":"<instanceId — from GET /api/im-channels/status>"}
+     # out: {success:true,data:{state,connectedSinceMs,lastInboundAgoMs,inboundCount,lastError?}}
+     # note: A Feishu app awaiting administrator release connects normally and receives nothing, so "connected" alone does not mean the bot works. inboundCount 0 with a long connectedSinceMs is the signature of that case. No credentials in this response.
 
 GET    /api/im-channels/permission-defaults                        Get this build's default guest-access permission settings for new IM instances
      curl -s "$HALO_API_URL/api/im-channels/permission-defaults" -H "Authorization: Bearer $HALO_API_TOKEN"

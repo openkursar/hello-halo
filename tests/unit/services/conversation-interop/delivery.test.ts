@@ -37,10 +37,10 @@ const { store, sendMessage, isNativeConversationBusy, hasLiveNativeSession } = v
     if (!conv) throw new Error('conversation not found')
     conv.messages.push({ id: `msg-${nextMessageId++}`, role: 'user', content: params.message })
   })
-  const isNativeConversationBusy = vi.fn(() => false)
+  const isNativeConversationBusy = vi.fn((_conversationId: string) => false)
   // Defaults to true so existing tests (none of which exercise the
   // crashed-before-init recovery path) never trip reclaimLeakedReservation.
-  const hasLiveNativeSession = vi.fn(() => true)
+  const hasLiveNativeSession = vi.fn((_conversationId: string) => true)
   return { store, sendMessage, isNativeConversationBusy, hasLiveNativeSession }
 })
 
@@ -76,6 +76,7 @@ vi.mock('../../../../src/main/services/conversation-interop/busy', () => ({ isNa
 import {
   deliverToConversation,
   deliverToConversationAndWait,
+  deliverExternalMessage,
   tryResolveAsReply,
   releaseConversationTurn,
   drainConversationTurn,
@@ -127,8 +128,7 @@ describe('deliverToConversation', () => {
     })
 
     expect(result.ok).toBe(true)
-    if (!result.ok) return
-    expect(result.status).toBe('delivered')
+    if (!result.ok || result.status !== 'delivered') throw new Error('expected a delivered result')
     expect(sendMessage).toHaveBeenCalledTimes(1)
 
     expect(target.messages).toHaveLength(1)
@@ -837,5 +837,122 @@ describe('deliverToConversationAndWait', () => {
       ok: true,
       outcome: { status: 'replied', message: 'the answer, also please ack' },
     })
+  })
+})
+
+describe('deliverExternalMessage (team → coordinating conversation)', () => {
+  beforeEach(() => {
+    store.clear()
+    sendMessage.mockClear()
+    isNativeConversationBusy.mockReturnValue(false)
+    hasLiveNativeSession.mockReturnValue(true)
+  })
+
+  it('sends the framed turn input and persists the raw content with the given source/metadata', async () => {
+    const target = seed('ext-tgt-1', 'Space Thread')
+
+    const result = await deliverExternalMessage({
+      spaceId: 'space-1',
+      toConversationId: 'ext-tgt-1',
+      turnInput: '[Team message from researcher]\n\nBrief ready',
+      persist: {
+        content: 'Brief ready',
+        source: 'team-message',
+        metadata: { teamId: 'team-1', fromMemberName: 'researcher' },
+      },
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.status).toBe('delivered')
+    // The model read the framed input…
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ message: '[Team message from researcher]\n\nBrief ready' })
+    )
+    // …but the transcript keeps the raw body as a system team message.
+    const persisted = target.messages[0]
+    expect(persisted.role).toBe('system')
+    expect(persisted.source).toBe('team-message')
+    expect(persisted.content).toBe('Brief ready')
+    expect(persisted.metadata).toMatchObject({ teamId: 'team-1', fromMemberName: 'researcher' })
+  })
+
+  it('still patches the delivered turn when a concurrent append shifts it past the captured index', async () => {
+    const target = seed('ext-tgt-shift', 'Racy Thread')
+    // The running turn appends something BEFORE sendMessage persists the
+    // delivered turn — a pure index read would patch the wrong message.
+    sendMessage.mockImplementationOnce(async (params: { conversationId: string; message: string }) => {
+      const conv = store.get(params.conversationId)!
+      conv.messages.push({ id: 'assistant-early', role: 'assistant', content: 'streamed first' })
+      conv.messages.push({ id: 'ext-user-msg', role: 'user', content: params.message })
+    })
+
+    const result = await deliverExternalMessage({
+      spaceId: 'space-1',
+      toConversationId: 'ext-tgt-shift',
+      turnInput: '[Team message]\n\nshifted',
+      persist: { content: 'shifted', source: 'team-message', metadata: { teamId: 'team-1' } },
+    })
+
+    expect(result).toMatchObject({ ok: true, status: 'delivered' })
+    const patched = target.messages.find((m) => m.id === 'ext-user-msg')!
+    expect(patched.role).toBe('system')
+    expect(patched.source).toBe('team-message')
+    expect(patched.content).toBe('shifted')
+    // The concurrently appended assistant message is untouched.
+    expect(target.messages.find((m) => m.id === 'assistant-early')).toEqual({
+      id: 'assistant-early',
+      role: 'assistant',
+      content: 'streamed first',
+    })
+  })
+
+  it('warns instead of failing silently when the delivered turn cannot be located', async () => {
+    const target = seed('ext-tgt-miss', 'Miss Thread')
+    // sendMessage "succeeds" but persists nothing matchable — the patch has
+    // no target and the framing text would survive as a plain user bubble.
+    sendMessage.mockImplementationOnce(async () => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    try {
+      const result = await deliverExternalMessage({
+        spaceId: 'space-1',
+        toConversationId: 'ext-tgt-miss',
+        turnInput: '[Team message]\n\ngone',
+        persist: { content: 'gone', source: 'team-message', metadata: {} },
+      })
+
+      expect(result).toMatchObject({ ok: true, status: 'delivered' })
+      expect(target.messages).toHaveLength(0)
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('external delivery patch missed'))
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('ext-tgt-miss'))
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('queues behind a busy conversation instead of interrupting it', async () => {
+    seed('ext-tgt-2', 'Busy Thread')
+    isNativeConversationBusy.mockReturnValue(true)
+
+    const result = await deliverExternalMessage({
+      spaceId: 'space-1',
+      toConversationId: 'ext-tgt-2',
+      turnInput: 'x',
+      persist: { content: 'x', source: 'team-message', metadata: {} },
+    })
+
+    expect(result).toEqual({ ok: true, status: 'queued' })
+    expect(sendMessage).not.toHaveBeenCalled()
+  })
+
+  it('reports not_found for a vanished conversation', async () => {
+    const result = await deliverExternalMessage({
+      spaceId: 'space-1',
+      toConversationId: 'missing-ext',
+      turnInput: 'x',
+      persist: { content: 'x', source: 'team-message', metadata: {} },
+    })
+    expect(result).toEqual({ ok: false, reason: 'not_found' })
   })
 })

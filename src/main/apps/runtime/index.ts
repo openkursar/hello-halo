@@ -52,7 +52,7 @@ import { MIGRATION_NAMESPACE, migrations } from './migrations'
 import { createEventRouter, type EventRouter } from './event-router'
 import { FileWatcherSource } from './sources/file-watcher.source'
 import { WebhookSource, type WebhookSecretResolver } from './sources/webhook.source'
-import { ImChannelManager, WecomBotProvider, WeixinIlinkBotProvider, setActiveImChannelManager } from './im-channels'
+import { ImChannelManager, WecomBotProvider, WeixinIlinkBotProvider, FeishuBotProvider, setActiveImChannelManager } from './im-channels'
 import { ImSessionRegistry, setImSessionRegistry } from './im-session-registry'
 import { PendingRelayStore, setPendingRelayStore, getPendingRelayStore } from './pending-relays'
 import { dispatchInboundMessage, clearSupplementBuffersForInstance } from './dispatch-inbound'
@@ -61,8 +61,10 @@ import { clearAllImStreamHandles } from './im-stream-registry'
 import { getConfig } from '../../foundation/config.service'
 import { getDataFolderName } from '../../foundation/product-config'
 import { onMcpAppsChange } from '../manager/service'
-import { createHaloAppsMcpServer } from '../conversation-mcp'
+import { createHaloAppsMcpServer, createSpaceTeamMcpServer, TEAM_TOOLSET_GUIDE } from '../conversation-mcp'
+import { TEAM_MCP_SERVER_NAME } from '../../../shared/apps/team-types'
 import { registerAppBridge } from '../../services/app-bridge'
+import { registerToolset } from '../../services/agent/toolsets/registry'
 import { handleMcpAppsChange } from '../../services/agent/session-manager'
 import { handleMcpAppsChangeForStatus } from '../../services/agent/mcp-probe'
 import type { AppRuntimeService } from './types'
@@ -237,6 +239,24 @@ export async function initAppRuntime(
   // the MCP-apps-change event from this side.
   registerAppBridge({ getAppManager, createHaloAppsMcpServer, onMcpAppsChange })
   onMcpAppsChange(handleMcpAppsChange)
+  // Team collaboration is an opt-in toolset, not an always-on server: its tool
+  // surface (and usage guide) enters a space conversation only when the user
+  // flips the switch, the same shape as ai-browser / ai-terminal. Registered
+  // from the apps tier because the team service lives here; the registry is a
+  // downward import.
+  registerToolset({
+    id: TEAM_MCP_SERVER_NAME,
+    displayName: 'Team Collaboration',
+    summary: 'Assemble a team of AI members to work in parallel, coordinate them, and delegate to saved teams.',
+    usageGuide: TEAM_TOOLSET_GUIDE,
+    isAvailable: () => true,
+    createServer: (scope) =>
+      createSpaceTeamMcpServer({
+        spaceId: scope.spaceId,
+        conversationId: scope.conversationId,
+        workDir: scope.workDir,
+      }),
+  })
   // Keep the shared MCP status cache honest: probe on enable/install/update,
   // drop stale entries on pause/uninstall.
   onMcpAppsChange(handleMcpAppsChangeForStatus)
@@ -321,7 +341,7 @@ export async function initAppRuntime(
   // Register built-in providers
   imChannelManager.registerProvider(new WecomBotProvider())
   imChannelManager.registerProvider(new WeixinIlinkBotProvider())
-  // Future: imChannelManager.registerProvider(new FeishuBotProvider())
+  imChannelManager.registerProvider(new FeishuBotProvider())
   // Future: imChannelManager.registerProvider(new DingTalkBotProvider())
 
   // Clean up supplement buffers when an instance is torn down
@@ -416,7 +436,9 @@ function spaceChangeDependencies() {
 export function getStudioSummary(language?: string) {
   const manager = getAppManager()
   if (!manager) throw new Error('App manager is not initialized')
-  const coordinators = getTeamStore()?.listDirectoryMemberships().filter(member => member.isSystemCoordinator).map(member => member.appId) ?? []
+  const coordinators = getTeamStore()?.listDirectoryMemberships()
+    .filter(member => member.isSystemCoordinator || member.ephemeral)
+    .map(member => member.appId) ?? []
   return manager.getStudioSummary(language, coordinators)
 }
 

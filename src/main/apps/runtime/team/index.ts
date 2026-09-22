@@ -7,6 +7,8 @@
 import { createMessageBus } from './message-bus'
 import { createBlackboard } from './blackboard'
 import { createOrchestration } from './orchestration'
+import { createCoordinatorDelivery } from './space-coordinator'
+import type { DeliverToSpaceConversation } from './space-coordinator'
 import { createTeamChecks } from './checks'
 import { createBoardDigest } from './board-digest'
 import { createBoardArchive } from './board-archive'
@@ -30,6 +32,7 @@ import type {
   RosterBusyEntry,
   TeamCheck,
   TeamDelegatedPolicy,
+  TeamToolAudit,
   TeamTriggerContext,
 } from '../../../../shared/apps/team-types'
 import { buildTeamSessionKey, TEAM_DEFAULT_TURN_TIMEOUT_MS } from '../../../../shared/apps/team-types'
@@ -140,6 +143,11 @@ export interface TeamRuntime {
    * someone other than the owner; never shown to teammates.
    */
   getDelegatedPolicy(teamId: string, appId: string): TeamDelegatedPolicy | null
+  /**
+   * File one tool call a member made while somebody else was driving it. Stays
+   * on this machine — it describes this computer, not the office.
+   */
+  recordToolAudit(entry: TeamToolAudit): void
   /** Location-transparent read of a published team artifact (see {@link ReadTeamArtifact}). */
   readArtifact?: ReadTeamArtifact
   /**
@@ -190,7 +198,8 @@ export interface TeamRuntime {
    * an unchanged answer writes, publishes and announces nothing.
    */
   reconcileAwaitingDecision(appId: string): void
-  startEpoch(teamId: string, trigger?: TeamRunTrigger): Promise<TeamEpoch>
+  /** `instruction` is this run's concrete brief, appended to the lead's start wake. */
+  startEpoch(teamId: string, trigger?: TeamRunTrigger, instruction?: string): Promise<TeamEpoch>
   /** Get/create a per-chat long-lived 'conversation' epoch (message-driven entries, e.g. IM). */
   ensureConversationEpoch(teamId: string, chatKey: string, title?: string, createdBy?: string, entryAppId?: string): TeamEpoch
   /** Rename a conversation epoch (captured + replicated office-wide). */
@@ -232,6 +241,8 @@ export interface TeamRuntime {
     response: string
     /** Several may be open at once; without it an answer binds to the wrong one. */
     question?: string
+    /** The escalating turn ran with external origin (persisted with the escalation). */
+    external?: boolean
   }): Promise<boolean>
 }
 
@@ -324,6 +335,13 @@ export interface CreateTeamRuntimeDeps {
   /** A team's periodic checks changed → refresh any open board. */
   onChecksChanged?: (teamId: string) => void
   /**
+   * Deliver team traffic addressed to a SPACE COORDINATOR into its space
+   * conversation (bootstrap wires it to conversation-interop's external
+   * delivery). Absent → sends to a coordinator fail loudly (test runtimes,
+   * and any runtime built before the space-collaboration feature is wired).
+   */
+  deliverToSpaceCoordinator?: DeliverToSpaceConversation
+  /**
    * The turn-end report's busy probe. See `TurnReportDeps.isLeadGenerating`
    * for what it must be and why. Required, not optional: `createTeamRuntime`
    * has exactly one production caller (`bootstrap/extended.ts`) and no test
@@ -367,6 +385,9 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
       isBusy: (sessionKey) => (orchestration ? orchestration.isBusy(sessionKey) : false),
       deliverMidTurn: (params) => (orchestration ? orchestration.deliverMidTurn(params) : false),
       ...(deps.checkMemberReachable ? { checkReachable: deps.checkMemberReachable } : {}),
+      ...(deps.deliverToSpaceCoordinator
+        ? { deliverToCoordinator: createCoordinatorDelivery({ store, deliver: deps.deliverToSpaceCoordinator }) }
+        : {}),
     },
     circuitOverrides: deps.circuitOverrides,
     syncWaitTimeoutMs: deps.syncWaitTimeoutMs,
@@ -465,6 +486,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     digest,
     archive,
     getDelegatedPolicy: (teamId, appId) => store.getMember(teamId, appId)?.delegatedPolicy ?? null,
+    recordToolAudit: (entry) => store.insertToolAudit(entry),
     ...(deps.readArtifact ? { readArtifact: deps.readArtifact } : {}),
     getMemberStatus: memberStatus,
     getObservableStatus: (teamId) => orchestration!.getObservableStatus(teamId),
@@ -476,7 +498,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
       turnReport.noteTurnEnded(params)
     },
     reconcileAwaitingDecision: (appId) => orchestration!.reconcileAwaitingDecision(appId),
-    startEpoch: (teamId, trigger) => orchestration!.startEpoch(teamId, trigger),
+    startEpoch: (teamId, trigger, instruction) => orchestration!.startEpoch(teamId, trigger, instruction),
     ensureConversationEpoch: (teamId, chatKey, title, createdBy, entryAppId) =>
       orchestration!.ensureConversationEpoch(teamId, chatKey, title, createdBy, entryAppId),
     renameConversationEpoch: (teamId, epochId, title) =>
@@ -605,6 +627,7 @@ export function getActiveTeamRuntime(): TeamRuntime | null {
 }
 
 export { buildTeamSessionKey }
+export type { DeliverToSpaceConversation, CoordinatorDeliveryRequest } from './space-coordinator'
 export type { Orchestration, OrchestrationSessionDeps } from './orchestration'
 export type { Blackboard, BlackboardWriteRecord } from './blackboard'
 export type { MessageBus, TurnCompletion } from './message-bus'

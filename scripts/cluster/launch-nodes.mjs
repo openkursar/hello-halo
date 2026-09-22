@@ -180,11 +180,13 @@ function resolveGatewayUrl() {
 // ── Paths & build ────────────────────────────────────────────────────────────
 
 function getAppEntryPath() {
-  const appEntry = path.join(PROJECT_ROOT, 'out/main/index.mjs')
-  if (!fs.existsSync(appEntry)) {
-    FAIL('Built app not found at out/main/index.mjs. Run "npm run build" first, or pass --build.')
+  // electron-vite has emitted both extensions across versions; take whichever
+  // the current build produced.
+  for (const name of ['index.cjs', 'index.mjs']) {
+    const appEntry = path.join(PROJECT_ROOT, 'out/main', name)
+    if (fs.existsSync(appEntry)) return appEntry
   }
-  return appEntry
+  FAIL('Built app not found at out/main/index.{cjs,mjs}. Run "npm run build" first, or pass --build.')
 }
 
 function runBuild() {

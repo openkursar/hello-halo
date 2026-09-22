@@ -11,7 +11,11 @@ export function buildPeopleDirectory(
   memberships: DirectoryMembership[],
   query: PeopleDirectoryQuery,
 ): PeopleDirectoryPage {
-  const excluded = new Set(memberships.filter(member => member.isSystemCoordinator).map(member => member.appId))
+  // Coordinators are an internal role; ephemeral-collaboration members exist
+  // for one piece of work in a space and are not standalone digital humans.
+  const excluded = new Set(
+    memberships.filter(member => member.isSystemCoordinator || member.ephemeral).map(member => member.appId)
+  )
   const counts = store.getDirectoryDecisionCounts()
   // A stop needs the owner exactly as much as an unanswered question does, so
   // it counts towards the badge and survives the attention filter.

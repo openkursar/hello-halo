@@ -61,6 +61,19 @@ export interface Team {
    * and always populated on read.
    */
   hostNodeId?: string | null
+  /**
+   * True for a temporary space collaboration: a team the space agent assembled
+   * for one piece of work. Hidden from the Teams page and the people directory;
+   * its coordinator is the space conversation itself, not a lead app. "Save as
+   * team" clears this flag and the team becomes an ordinary persistent one.
+   */
+  ephemeral?: boolean
+  /**
+   * For an ephemeral collaboration: the space conversation acting as its
+   * coordinator. Member replies and turn-end notices are delivered into this
+   * conversation. Null for persistent teams.
+   */
+  coordinatorConversationId?: string | null
 }
 
 export interface TeamMember {
@@ -241,6 +254,45 @@ export interface TeamActivity {
   createdAt: number
 }
 
+// ── The record of what a borrowed turn actually did ──
+
+/**
+ * One tool call made by a digital human while someone other than its owner was
+ * driving it — what ran, or what was refused and why.
+ *
+ * Kept apart from `team_activity`, which is the OFFICE's record and replicates
+ * to every node: this is the owner's record of their own machine, so it never
+ * leaves it. The distinction is the same one the delegated policy draws — what
+ * the office needs to coordinate, versus what one person needs to see about
+ * their own computer.
+ */
+export interface TeamToolAudit {
+  id: string
+  teamId: string
+  epochId: string
+  /** The digital human that ran (or was stopped from running) the tool. */
+  appId: string
+  /** The teammate that drove this turn; null when a person was driving. */
+  actorAppId: string | null
+  /** Whether the driver was on another machine. */
+  external: boolean
+  /** Tool name as the engine reports it (`Bash`, `mcp__ai-browser__…`). */
+  toolName: string
+  /**
+   * One line naming what the call was aimed at — the command, the path, the URL.
+   * A summary, never the full input: this is a list to scan, and a tool input
+   * can carry a file's entire contents.
+   */
+  detail: string
+  decision: 'allowed' | 'denied'
+  /** Why it was refused. Null when it ran. */
+  reason: string | null
+  createdAt: number
+}
+
+/** Tool detail lines are scanned in a list, so they stay to one short line. */
+export const TEAM_AUDIT_DETAIL_MAX = 160
+
 /** Subject lines are one line and short — a feed row, not a preview pane. */
 export const TEAM_ACTIVITY_SUBJECT_MAX = 80
 
@@ -321,6 +373,13 @@ export interface TeamCheck {
   createdByAppId: string
   /** Verbatim standing instruction, delivered on every wake. */
   instruction: string
+  /**
+   * The turn that set this check was itself driven from another machine, so the
+   * wakes it causes must run under what the owner granted teammates — a local
+   * creator does not launder a stranger's standing instruction. Absent on rows
+   * written before the field existed → false.
+   */
+  external?: boolean
   schedule: TeamCheckSchedule
   runCount: number
   createdAt: number
@@ -474,12 +533,33 @@ export interface TeamTriggerContext {
    * restarts at 0 on every hop never reaches the limit.
    */
   forwardDepth?: number
+  /**
+   * This turn was set in motion from a machine that is not this one, so it runs
+   * under what the owner granted teammates rather than under the owner's own
+   * reach (`shared/apps/capability-policy`).
+   *
+   * Stamped ONLY where a request crosses into this node — an inbound office wake
+   * and the office-credential 1:1 endpoint — and then carried along every hop it
+   * causes here, because a stranger's request does not become the owner's by
+   * passing through one of the owner's own digital humans on the way.
+   *
+   * A value arriving on the wire is authored by the sender and is therefore
+   * overwritten on arrival, never trusted.
+   */
+  external?: boolean
 }
 
 export interface TeamContext {
   teamId: string
   epochId: string
   taskId?: string
+  /**
+   * The turn this context was captured in ran with external origin. Persisted
+   * with an escalation entry so the resumed turn — possibly after a process
+   * restart that emptied the in-memory origin stickiness — runs under the same
+   * grants as the turn that asked the question.
+   */
+  external?: boolean
 }
 
 // ── Triggers ──
@@ -859,6 +939,8 @@ export interface TeamListItem {
    * `location-aware-blackboard.ts`'s OWNED/SHADOW split).
    */
   hostNodeId?: string | null
+  /** True for a temporary space collaboration (hidden from the Teams page). */
+  ephemeral?: boolean
   updatedAt: number
 }
 
@@ -935,6 +1017,30 @@ export interface TeamArtifactGroup {
   memberName: string
   spaceId: string | null
   artifacts: TeamArtifact[]
+}
+
+// ── Space collaboration projection (renderer card + space agent status) ──
+
+export interface CollabMemberSummary {
+  appId: string
+  memberName: string
+  role: string
+  status: TeamMemberRuntimeStatus
+  /** Title of the board task this member is currently on, when one is open. */
+  currentTaskTitle?: string
+}
+
+/** The ephemeral collaboration bound to one space conversation, compactly. */
+export interface CollabSummary {
+  teamId: string
+  name: string
+  goal: string
+  epochId: string
+  /** False once the collaboration epoch is sealed (work finished). */
+  active: boolean
+  /** True once the user kept this team ("save as team"). */
+  saved: boolean
+  members: CollabMemberSummary[]
 }
 
 // ── Observability event payloads ──
@@ -1030,10 +1136,45 @@ export interface TeamOfficeStatusEvent {
 
 // ── Name constants (frozen — do not rename) ──
 
+/**
+ * The team MCP server name, and also the id of the space-side toolset (the
+ * broker keys its server record by toolset id, so the two are the same string
+ * by construction). Both packagings of the server share it — see
+ * `conversation-mcp/team-mcp.ts`.
+ */
 export const TEAM_MCP_SERVER_NAME = 'halo-team'
 
 /** Sentinel owner-node id for a locally-owned team member (not federated). */
 export const SELF_NODE_ID = 'SELF'
+
+// ── Space coordinator (ephemeral collaboration) ──
+
+/**
+ * Addressing name members use to reach the coordinator of an ephemeral
+ * collaboration — the space agent itself. It occupies a member row so name
+ * resolution, roster rendering and the activity record all work unchanged, but
+ * its "appId" is a sentinel: no app is installed behind it, and the delivery
+ * layer routes anything addressed to it into the space conversation.
+ */
+export const SPACE_COORDINATOR_MEMBER_NAME = 'coordinator'
+
+const SPACE_COORDINATOR_APP_PREFIX = 'space-conv-'
+
+/**
+ * Sentinel appId representing a space conversation acting as a team
+ * coordinator. Filename-safe (rides in team session keys) and parseable so the
+ * bus can route deliveries for it away from app-chat.
+ */
+export function spaceCoordinatorAppId(conversationId: string): string {
+  return `${SPACE_COORDINATOR_APP_PREFIX}${conversationId}`
+}
+
+/** The conversationId behind a coordinator sentinel appId, or null. */
+export function parseSpaceCoordinatorAppId(appId: string): string | null {
+  return appId.startsWith(SPACE_COORDINATOR_APP_PREFIX)
+    ? appId.slice(SPACE_COORDINATOR_APP_PREFIX.length)
+    : null
+}
 
 /**
  * Whether a member runs on someone else's machine (federated), as opposed to
@@ -1123,6 +1264,7 @@ export function shouldShowRelayedTranscript(args: {
   )
 }
 
+/** Coordination tools, built once and served by both packagings of the server. */
 export const TEAM_TOOL_NAMES = {
   send: 'team_send',
   postTask: 'team_post_task',
@@ -1133,6 +1275,19 @@ export const TEAM_TOOL_NAMES = {
   complete: 'team_complete',
   schedule: 'team_schedule',
   unschedule: 'team_unschedule',
+} as const
+
+/**
+ * Tools only a space conversation gets: assembling and keeping a temporary
+ * collaboration, and delegating to a saved team. Meaningless to a member, who
+ * is already inside exactly one team.
+ */
+export const SPACE_TEAM_TOOL_NAMES = {
+  collabStart: 'collab_start',
+  collabSave: 'collab_save',
+  list: 'team_list',
+  run: 'team_run',
+  status: 'team_status',
 } as const
 
 export const TEAM_MIGRATION_NAMESPACE = 'app_team'
@@ -1179,6 +1334,10 @@ export const TEAM_IPC = {
   archiveConversation: 'team:archive-conversation',
   /** One-shot pull of an invite link that arrived via halo:// before the renderer was up. */
   consumePendingInvite: 'team:consume-pending-invite',
+  /** The ephemeral collaboration bound to a space conversation, if any. */
+  collabForConversation: 'team:collab-for-conversation',
+  /** Keep an ephemeral collaboration as a persistent team. */
+  saveCollab: 'team:save-collab',
 } as const
 
 export const TEAM_CIRCUIT_DEFAULTS = {
@@ -1201,4 +1360,6 @@ export {
   parseMemberChatKey,
   nativeConversationChatKey,
   isNativeConversationChatKey,
+  spaceCollabChatKey,
+  parseSpaceCollabChatKey,
 } from './im-keys'

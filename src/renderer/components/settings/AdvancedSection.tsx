@@ -46,19 +46,12 @@ interface CapabilityGroup {
   /** CC SDK tools to add/remove from disabledTools (empty for MCP-only capabilities) */
   tools: readonly string[]
   /** Optional: dedicated AgentConfig boolean flag (for MCP servers, env vars, etc.) */
-  configKey?: 'enableTeams' | 'enableDigitalHumans' | 'enableConversationInterop' | 'enableConversationSend'
+  configKey?: 'enableDigitalHumans' | 'enableConversationInterop' | 'enableConversationSend'
   /** Default value when configKey is not set in config (default: false) */
   configDefault?: boolean
 }
 
 const CAPABILITY_GROUPS: readonly CapabilityGroup[] = [
-  {
-    id: 'teams',
-    labelKey: 'Agent Teams',
-    descKey: 'Multi-agent collaboration. Agents can spawn teammates to work in parallel.',
-    tools: ['TeamCreate', 'TeamDelete', 'SendMessage'],
-    configKey: 'enableTeams',
-  },
   {
     id: 'planMode',
     labelKey: 'Plan Mode',
@@ -129,7 +122,7 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
     config?.agent?.sdkEngine ?? 'anthropic'
   )
   const [disabledTools, setDisabledToolsState] = useState<string[]>(
-    config?.agent?.disabledTools ?? DEFAULT_DISABLED_TOOLS
+    config?.agent?.disabledTools ?? [...DEFAULT_DISABLED_TOOLS]
   )
   // Track dedicated config flags for capabilities that use configKey
   const [configFlags, setConfigFlags] = useState<Record<string, boolean>>(() => {
@@ -307,7 +300,7 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
       await saveAgentConfig({ disabledTools: newDisabled, ...extraPatch })
     } catch (error) {
       console.error('[AdvancedSection] Failed to update capability:', error)
-      setDisabledToolsState(config?.agent?.disabledTools ?? DEFAULT_DISABLED_TOOLS)
+      setDisabledToolsState(config?.agent?.disabledTools ?? [...DEFAULT_DISABLED_TOOLS])
       if (key) {
         setConfigFlags(prev => ({
           ...prev,

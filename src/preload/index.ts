@@ -30,6 +30,7 @@ import { terminalRpc } from '../shared/rpc/contracts/terminal.contract'
 import { artifactRpc } from '../shared/rpc/contracts/artifact.contract'
 import { searchRpc } from '../shared/rpc/contracts/search.contract'
 import { wecomBotRpc } from '../shared/rpc/contracts/wecom-bot.contract'
+import { feishuBotRpc } from '../shared/rpc/contracts/feishu-bot.contract'
 import { gitBashRpc } from '../shared/rpc/contracts/git-bash.contract'
 import { overlayRpc } from '../shared/rpc/contracts/overlay.contract'
 import { appRpc } from '../shared/rpc/contracts/app.contract'
@@ -494,6 +495,13 @@ export interface HaloAPI {
   wecomBotScanAuthCancel: (scode: string) => Promise<IpcResponse>
   wecomBotScanAuthCreateAssistant: (input: { botIdPrefix: string }) => Promise<IpcResponse<{ appId: string; appName: string }>>
 
+  // Feishu Bot (飞书机器人) — Scan-Auth (QR-code device flow that creates the app)
+  feishuBotScanAuthStart: () => Promise<IpcResponse<{ deviceCode: string; authUrl: string; expiresInMs: number }>>
+  feishuBotScanAuthPoll: (deviceCode: string) => Promise<IpcResponse<{ appId: string; appSecret: string; tenantBrand: 'feishu' | 'lark'; openId?: string }> & { kind?: string }>
+  feishuBotScanAuthCancel: (deviceCode: string) => Promise<IpcResponse>
+  feishuBotScanAuthCreateAssistant: (input: { appIdSuffix: string }) => Promise<IpcResponse<{ appId: string; appName: string }>>
+  feishuBotReachability: (instanceId: string) => Promise<IpcResponse<{ state: string; connectedSinceMs: number | null; lastInboundAgoMs: number | null; inboundCount: number; lastError?: string }>>
+
   // IM Channels (multi-instance)
   imChannelsStatus: () => Promise<IpcResponse>
   imChannelsInstanceStatus: (instanceId: string) => Promise<IpcResponse>
@@ -607,6 +615,8 @@ export interface HaloAPI {
   teamCreate: (input: { input: CreateTeamInput; confirmedProposal?: ProposedMember[] }) => Promise<IpcResponse>
   teamUpdate: (input: { teamId: string; input: UpdateTeamInput }) => Promise<IpcResponse>
   teamDissolve: (teamId: string) => Promise<IpcResponse>
+  teamCollabForConversation: (conversationId: string) => Promise<IpcResponse>
+  teamSaveCollab: (input: { teamId: string; name?: string }) => Promise<IpcResponse>
   teamAddMember: (input: { teamId: string; member: TeamMemberInput }) => Promise<IpcResponse>
   teamUpdateMember: (input: { teamId: string; appId: string; input: UpdateTeamMemberInput }) => Promise<IpcResponse>
   teamCancelCheck: (input: { teamId: string; checkId: string }) => Promise<IpcResponse>
@@ -629,6 +639,7 @@ export interface HaloAPI {
   teamEpochBoard: (input: { teamId: string; epochId: string }) => Promise<IpcResponse>
   /** Products produced during one specific run. */
   teamEpochArtifacts: (input: { teamId: string; epochId: string }) => Promise<IpcResponse>
+  teamToolAudit: (input: { teamId: string; appId?: string; limit?: number }) => Promise<IpcResponse>
   /**
    * Remote office: mint an invite link (host). An optional scope narrows what the
    * joiner may see/contact/be-assigned (omitted = default-open). The scope shape is
@@ -968,6 +979,9 @@ const api: HaloAPI = {
   // WeCom Bot (企业微信智能机器人) status + scan-auth (derived from wecomBotRpc)
   ...bindRpc(wecomBotRpc),
 
+  // Feishu Bot (飞书机器人) scan-auth (derived from feishuBotRpc)
+  ...bindRpc(feishuBotRpc),
+
   // IM Channels (multi-instance)
   ...bindRpc(imChannelsRpc),
 
@@ -996,6 +1010,8 @@ const api: HaloAPI = {
   teamCreate: (input) => ipcRenderer.invoke(TEAM_IPC.create, input),
   teamUpdate: (input) => ipcRenderer.invoke(TEAM_IPC.update, input),
   teamDissolve: (teamId) => ipcRenderer.invoke(TEAM_IPC.dissolve, teamId),
+  teamCollabForConversation: (conversationId) => ipcRenderer.invoke(TEAM_IPC.collabForConversation, conversationId),
+  teamSaveCollab: (input) => ipcRenderer.invoke(TEAM_IPC.saveCollab, input),
   teamAddMember: (input) => ipcRenderer.invoke(TEAM_IPC.addMember, input),
   teamUpdateMember: (input) => ipcRenderer.invoke(TEAM_IPC.updateMember, input),
   teamCancelCheck: (input) => ipcRenderer.invoke(TEAM_IPC.cancelCheck, input),
@@ -1013,6 +1029,7 @@ const api: HaloAPI = {
   teamListEpochs: (teamId) => ipcRenderer.invoke('team:list-epochs', teamId),
   teamEpochBoard: (input) => ipcRenderer.invoke('team:epoch-board', input),
   teamEpochArtifacts: (input) => ipcRenderer.invoke('team:epoch-artifacts', input),
+  teamToolAudit: (input) => ipcRenderer.invoke('team:tool-audit', input),
   teamGenerateInvite: (input) => ipcRenderer.invoke(TEAM_IPC.generateInvite, input),
   teamRevokeInvite: (input) => ipcRenderer.invoke(TEAM_IPC.revokeInvite, input),
   teamJoinOffice: (input) => ipcRenderer.invoke(TEAM_IPC.joinOffice, input),

@@ -120,10 +120,15 @@ function extractUrl(url: unknown): string {
 }
 
 
-// Static elapsed time — only mounted after thinking completes
-function TimerDisplay({ startTime }: { startTime: number | null }) {
-  const elapsed = startTime ? ((Date.now() - startTime) / 1000).toFixed(1) : '0.0'
-  return <span>{elapsed}s</span>
+// How long the finished reasoning took, measured between its first and last
+// step. Derived from the steps themselves rather than from the clock at render
+// time: a duration read off `Date.now()` keeps growing every time the panel
+// re-renders, so a long-finished turn silently inflates on screen.
+function elapsedSeconds(thoughts: Thought[]): string {
+  if (thoughts.length === 0) return '0.0'
+  const first = new Date(thoughts[0].timestamp).getTime()
+  const last = new Date(thoughts[thoughts.length - 1].timestamp).getTime()
+  return Math.max(0, (last - first) / 1000).toFixed(1)
 }
 
 // Individual thought item (for non-special tools)
@@ -385,14 +390,15 @@ export function ThoughtProcess({ thoughts, isThinking }: ThoughtProcessProps) {
     }
   }, [thoughts.length])
 
-  // Calculate elapsed time from first thought's timestamp
-  // This is more reliable than tracking component mount time
-  const startTime = useMemo(() => {
-    if (thoughts.length > 0) {
-      return new Date(thoughts[0].timestamp).getTime()
-    }
-    return null
-  }, [thoughts.length > 0 ? thoughts[0]?.timestamp : null])
+  // Header summary of what the agent is doing right now. Recomputed per render
+  // without this memo — a backwards scan of the whole step list, on the hottest
+  // render path in the app.
+  const actionSummary = useMemo(
+    () => (isThinking ? getActionSummaryData(thoughts) : null),
+    [isThinking, thoughts]
+  )
+
+  const elapsed = useMemo(() => elapsedSeconds(thoughts), [thoughts])
 
   // Get latest todo data (only render one TodoCard at bottom)
   const latestTodos = useMemo(() => {
@@ -421,11 +427,16 @@ export function ThoughtProcess({ thoughts, isThinking }: ThoughtProcessProps) {
   }, [thoughts])
 
   // Smart auto-scroll: only scrolls when user is at bottom
-  // Stops auto-scroll when user scrolls up to read history
+  // Stops auto-scroll when user scrolls up to read history.
+  // `behavior: 'auto'` is not a preference — steps arrive faster than a smooth
+  // scroll can finish, so an animated scroll was being retargeted mid-flight on
+  // every step and the panel never came to rest. Instant follow matches the
+  // team session view, which tails the same kind of stream.
   const { handleScroll } = useSmartScroll({
     containerRef: contentRef,
     threshold: 50,
-    deps: [thoughts, isExpanded]
+    deps: [thoughts, isExpanded],
+    behavior: 'auto',
   })
 
   // Don't render if no thoughts and not thinking
@@ -476,16 +487,13 @@ export function ThoughtProcess({ thoughts, isThinking }: ThoughtProcessProps) {
 
           {/* Title: action summary when thinking, "Thought process" when done */}
           <span className={`text-sm font-medium ${isThinking ? 'text-primary' : 'text-foreground'}`}>
-            {isThinking ? (() => {
-              const data = getActionSummaryData(thoughts)
-              return t(data.key, data.params)
-            })() : t('Already thought')}
+            {actionSummary ? t(actionSummary.key, actionSummary.params) : t('Already thought')}
           </span>
 
           {/* Stats: only show elapsed time when thinking is complete */}
           {!isThinking && (
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground/60">
-              <TimerDisplay startTime={startTime} />
+              <span>{elapsed}s</span>
             </div>
           )}
 

@@ -60,13 +60,13 @@ function makeHarness(store: TeamStore, opts?: { busy?: boolean; wake?: WakeDispo
     onJobDue: vi.fn((kind: string, handler: JobDueHandler) => { if (kind === TEAM_CHECK_JOB_KIND) due = handler }),
   } as any
 
-  const wakes: { appId: string; body: string; onBusy: string }[] = []
+  const wakes: { appId: string; body: string; onBusy: string; external?: boolean }[] = []
   const published: { op: string; check: TeamCheck }[] = []
   const checks = createTeamChecks({
     store,
     scheduler,
     wake: async (p) => {
-      wakes.push({ appId: p.appId, body: p.body, onBusy: p.onBusy })
+      wakes.push({ appId: p.appId, body: p.body, onBusy: p.onBusy, external: p.external })
       return opts?.wake ?? 'dispatched'
     },
     isBusy: () => opts?.busy ?? false,
@@ -152,6 +152,51 @@ describe('team periodic checks', () => {
 
     expect(await h.fireDue(check.id)).toBe('useful')
     expect(h.wakes[1].body).toContain('run #2')
+  })
+
+  it('wakes as external when the check was set by a remote-owned member', async () => {
+    const h = makeHarness(store)
+    const check = h.checks.schedule({ ...baseInput(), createdByAppId: REMOTE })
+
+    expect(await h.fireDue(check.id)).toBe('useful')
+    expect(h.wakes[0].external).toBe(true)
+  })
+
+  it('keeps external taint when a LOCAL member sets a check from an external-origin turn', async () => {
+    // The laundering path: a stranger's instruction relayed through a local
+    // member must not gain the owner's own reach on every later round.
+    const h = makeHarness(store)
+    const check = h.checks.schedule({ ...baseInput(), external: true })
+
+    expect(store.getCheckById(check.id)!.external).toBe(true)
+    expect(await h.fireDue(check.id)).toBe('useful')
+    expect(h.wakes[0].external).toBe(true)
+  })
+
+  it('wakes a plainly local check without external taint', async () => {
+    const h = makeHarness(store)
+    const check = h.checks.schedule(baseInput())
+
+    expect(store.getCheckById(check.id)!.external).toBe(false)
+    expect(await h.fireDue(check.id)).toBe('useful')
+    expect(h.wakes[0].external).toBe(false)
+  })
+
+  it('round-trips the external flag through replication (arrives set, stays set)', async () => {
+    const h = makeHarness(store)
+    const replicated: TeamCheck = {
+      id: 'check-tainted', teamId: TEAM, epochId: EPOCH,
+      targetAppId: TARGET, createdByAppId: SETTER,
+      instruction: 'Keep watching.', external: true,
+      schedule: { kind: 'every', every: '1h' },
+      runCount: 0, createdAt: 1, updatedAt: 1, lastRunAt: null,
+    }
+
+    h.checks.applyReplicated(replicated)
+
+    expect(store.getCheckById('check-tainted')!.external).toBe(true)
+    expect(await h.fireDue('check-tainted')).toBe('useful')
+    expect(h.wakes[0].external).toBe(true)
   })
 
   it('skips the round when the target is mid-turn instead of queueing it', async () => {

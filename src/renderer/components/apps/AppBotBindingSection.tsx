@@ -23,6 +23,7 @@ import { api } from '../../api'
 import { CHANNEL_LABELS } from './im-channel-labels'
 import { WecomScanAuthDialog } from '../settings/WecomScanAuthDialog'
 import { WeixinIlinkScanDialog } from '../settings/WeixinIlinkScanDialog'
+import { FeishuScanAuthDialog } from '../settings/FeishuScanAuthDialog'
 import type { ImChannelInstanceStatus, ImChannelInstanceConfig, ImSessionRecord } from '../../../shared/types/im-channel'
 
 function newInstanceId(): string {
@@ -47,6 +48,7 @@ export function AppBotBindingSection({ appId, appName, spaceId }: AppBotBindingS
   const [busyId, setBusyId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [showScan, setShowScan] = useState(false)
+  const [showFeishuScan, setShowFeishuScan] = useState(false)
   const [showPicker, setShowPicker] = useState(false)
   const [showAddMenu, setShowAddMenu] = useState(false)
   // iLink writes its token onto an existing instance, so the instance is
@@ -104,6 +106,35 @@ export function AppBotBindingSection({ appId, appName, spaceId }: AppBotBindingS
       // The scan protocol does not return the scanner's userid, so owner
       // auto-claim binds the first direct-message sender — same rationale as
       // the global scan path.
+      permissionEnabled: true,
+    }
+    const res = await api.imChannelsCreateInstance(instance)
+    if (!res.success) setError(res.error ?? t('Failed to bind'))
+    void load()
+    void refreshConfig()
+  }, [appId, load, refreshConfig, t])
+
+  const handleFeishuScanComplete = useCallback(async (result: {
+    appId: string
+    appSecret: string
+    tenantBrand: 'feishu' | 'lark'
+  }) => {
+    const instance: ImChannelInstanceConfig = {
+      id: newInstanceId(),
+      type: 'feishu-bot',
+      enabled: true,
+      appId,
+      config: {
+        appId: result.appId,
+        appSecret: result.appSecret,
+        domain: result.tenantBrand,
+        requireMention: true,
+        quoteReply: true,
+      },
+      replyScope: 'all',
+      // The device flow returns the scanner's open_id, but not the id inbound
+      // messages will carry, so owner auto-claim binds the first direct-message
+      // sender — same rationale as the global scan path.
       permissionEnabled: true,
     }
     const res = await api.imChannelsCreateInstance(instance)
@@ -210,6 +241,12 @@ export function AppBotBindingSection({ appId, appName, spaceId }: AppBotBindingS
                 {t('WeCom bot')}
               </button>
               <button
+                onClick={() => { setShowAddMenu(false); setShowFeishuScan(true) }}
+                className="w-full px-3 py-2 text-left text-sm text-foreground hover:bg-secondary transition-colors"
+              >
+                {t('Feishu bot')}
+              </button>
+              <button
                 onClick={handleAddWechat}
                 className="w-full px-3 py-2 text-left text-sm text-foreground hover:bg-secondary transition-colors"
               >
@@ -278,6 +315,14 @@ export function AppBotBindingSection({ appId, appName, spaceId }: AppBotBindingS
         targetAppId={appId}
         targetAppName={appName}
         onComplete={handleScanComplete}
+      />
+
+      <FeishuScanAuthDialog
+        open={showFeishuScan}
+        onClose={() => { setShowFeishuScan(false); void load() }}
+        targetAppId={appId}
+        targetAppName={appName}
+        onComplete={handleFeishuScanComplete}
       />
     </div>
   )

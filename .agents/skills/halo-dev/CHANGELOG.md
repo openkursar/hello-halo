@@ -2,6 +2,35 @@
 
 > Focus: architectural and module-level milestones relevant to engineering decisions.
 
+## 2026-09-21 - Feishu/Lark IM channel: bot provisioned by QR, no developer console
+
+Third IM provider, and the first whose setup flow *creates* the platform-side
+bot rather than collecting credentials for one that already exists:
+
+- `im-channels/feishu-bot-scan-auth.ts`: OAuth 2.0 Device Authorization Grant
+  (RFC 8628) against `accounts.feishu.cn/oauth/v1/app/registration`. Scanning
+  in the Feishu client creates an agent app with bot capability, messaging and
+  card scopes, `im.message.receive_v1` and WebSocket delivery already
+  configured, and returns its App ID / App Secret. Lark tenants are detected
+  mid-poll (`user_info.tenant_brand`) and switch account host; the brand is
+  returned because every later API/WS call must target the same domain.
+- `im-channels/feishu-bot.provider.ts`: adapter over `@larksuiteoapi/node-sdk`'s
+  channel helper (long connection, dedup, per-chat queueing, uploads). Feishu
+  replies are ordinary API calls, so unlike WeCom there is no reply window,
+  frame cache or push queue. Adds the outer connect-retry loop the SDK lacks
+  before its first successful handshake.
+- `im-channels/feishu-stream-session.ts`: bridges the push-style StreamingHandle
+  onto the SDK's producer-style streaming card, with a plain-message fallback
+  that keeps the "final answer is always delivered" guarantee.
+- `ImChannelProvider.credentialId?(config)` (shared contract): generic code no
+  longer assumes `config.botId` when deciding whether two instances are the same
+  bot. Feishu makes the old assumption expensive — it delivers each event to
+  exactly ONE connection, so a duplicate splits traffic at random instead of
+  duplicating it.
+- Renderer: `FeishuScanAuthDialog` + `FeishuInstanceCard`, and the owner/guest
+  editor extracted to `ImInstancePermissionSection` so both provider cards share
+  one implementation.
+
 ## 2026-07-18 - P2P Office Resilience: transferable authority, survivable host loss
 
 The office authority is no longer welded to the creator node; any surviving

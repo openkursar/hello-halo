@@ -16,7 +16,7 @@
 import { existsSync, mkdirSync, appendFileSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { jsonrepair } from 'jsonrepair'
-import { TRANSPARENT_TOOLS } from '../../services/agent/constants'
+import { isTransparentTool } from '../../services/agent/constants'
 import type { TeamTriggerContext } from '../../../shared/apps/team-types'
 import type { ImageAttachment, ImageMediaType } from '../../../shared/types/image-attachment'
 
@@ -262,7 +262,7 @@ function createThoughtIdGenerator(): () => string {
   return () => `session-thought-${++idx}`
 }
 
-// TRANSPARENT_TOOLS imported from services/agent/constants — single source of truth.
+// isTransparentTool imported from services/agent/constants — single source of truth.
 
 /**
  * Convert stored SDK events into renderer-compatible Message[] with full thoughts.
@@ -444,7 +444,7 @@ export function convertEventsToMessages(events: StoredEvent[]): MessageRecord[] 
           }
           pendingThoughts.push(thought)
           lastThoughtTs = ts
-          if (!TRANSPARENT_TOOLS.has(block.name || '')) {
+          if (!isTransparentTool(block.name || '')) {
             hadSubstantiveTool = true
           }
           if (block.id) {
@@ -544,7 +544,7 @@ export function convertEventsToMessages(events: StoredEvent[]): MessageRecord[] 
           lastThoughtTs = ts
 
           // Mark substantive tool — breaks text continuity
-          if (!TRANSPARENT_TOOLS.has(block.name || '')) {
+          if (!isTransparentTool(block.name || '')) {
             hadSubstantiveTool = true
           }
 

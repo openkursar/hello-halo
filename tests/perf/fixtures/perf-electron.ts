@@ -4,7 +4,7 @@
  * Reuses `tests/e2e/fixtures/electron.ts` as-is for launch + env prep
  * (isolated HOME/HALO_DATA_DIR, product.json path rewrite, OAuth source
  * loading, SDK symlink). Baselines measure
- * `out/main/index.mjs` (electron-vite's production build, same optimized
+ * the `out/main` entry (electron-vite's production build, same optimized
  * JS as the packaged app) rather than the packaged `.app`, because:
  *   - the e2e fixture already has real auth working end-to-end; launching
  *     the packaged binary directly bypasses all of it, so AI calls in

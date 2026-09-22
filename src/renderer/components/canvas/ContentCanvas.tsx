@@ -36,6 +36,7 @@ import { CsvViewer } from './viewers/CsvViewer'
 import { TextViewer } from './viewers/TextViewer'
 import { BrowserViewer, BrowserViewerFallback } from './viewers/BrowserViewer'
 import { TerminalViewer } from './viewers/TerminalViewer'
+import { TeamViewer } from './viewers/TeamViewer'
 import { api } from '../../api'
 import { useTranslation } from '../../i18n'
 import { getBrowserHomepage } from '../../utils/browser-homepage'
@@ -288,6 +289,9 @@ function TabContent({ tab, onScrollChange, onContentChange, onSaveComplete, onEd
 
     case 'terminal':
       return <TerminalViewer tab={tab} />
+
+    case 'team':
+      return <TeamViewer tab={tab} />
 
     default:
       return <TextViewer tab={tab} onScrollChange={onScrollChange} />

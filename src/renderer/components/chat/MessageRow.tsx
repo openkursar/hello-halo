@@ -10,7 +10,6 @@
 import { memo, type ReactNode } from 'react'
 import { MessageItem } from './MessageItem'
 import { CollapsedThoughtProcess, LazyCollapsedThoughtProcess } from './CollapsedThoughtProcess'
-import { TeamSnapshotPanel } from './TeamPanel'
 import { InjectionAnnotation } from './InjectionAnnotation'
 import {
   CrossConversationMessage,
@@ -18,6 +17,7 @@ import {
   isCrossConversationMessage,
   isCrossConversationNotice,
 } from './cross-conversation'
+import { TeamMemberMessage, isTeamMessage } from './team-collab'
 import type { Message, Thought } from '../../types'
 
 export interface MessageRowProps {
@@ -89,6 +89,14 @@ export const MessageRow = memo(function MessageRow({
     )
   }
 
+  if (isTeamMessage(message)) {
+    return (
+      <div className={`pb-4 ${className}`}>
+        <TeamMemberMessage message={message} />
+      </div>
+    )
+  }
+
   const hasInlineThoughts = Array.isArray(message.thoughts) && message.thoughts.length > 0
   const hasSeparatedThoughts = message.thoughts === null && !!message.thoughtsSummary
 
@@ -122,12 +130,6 @@ export const MessageRow = memo(function MessageRow({
           )}
 
           {afterThoughts && <div className="my-3 space-y-3">{afterThoughts}</div>}
-          {/* Agent Team snapshot — shows completed team collaboration for this turn.
-              Derived from thoughts — automatically persisted and available in history. */}
-          {hasInlineThoughts && (
-            <TeamSnapshotPanel thoughts={message.thoughts as Thought[]} />
-          )}
-
           {/* Only render bubble if there is text content.
               Assistant events with only tool_use/thinking blocks have empty content —
               rendering MessageItem for those would produce empty visible bubbles. */}

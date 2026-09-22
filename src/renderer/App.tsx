@@ -48,6 +48,7 @@ import type { ToastPayload } from '../shared/types/notification'
 import { hasAnyAISource } from './types'
 import { openWorkNotification, type WorkNavigationTarget } from './utils/people-navigation'
 import { useTeamStore } from './stores/team.store'
+import { canvasLifecycle } from './services/canvas-lifecycle'
 import type { TeamUpdatedEvent, TeamBlackboardEvent, TeamMessageEvent, TeamPresenceEvent, TeamOfficeStatusEvent } from '../shared/apps/team-types'
 
 // Lazy load heavy page components for better initial load performance
@@ -135,23 +136,25 @@ export default function App() {
   const { view, config, initialize, setMcpStatus, navigate, enterApp, setConfig, completeDeferredGitBashCheck } = useAppStore()
   const isTaskPanelOpen = useTaskPanelStore(s => s.isOpen)
   const platform = usePlatform()
-  const {
-    handleAgentMessage,
-    handleAgentToolCall,
-    handleAgentToolResult,
-    handleAgentError,
-    handleAgentComplete,
-    handleAgentThought,
-    handleAgentThoughtDelta,
-    handleAgentCompact,
-    handleAgentSessionInfo,
-    handleAgentTurnStart,
-    handleAskQuestion,
-    currentSpaceId,
-    setCurrentSpace: setChatCurrentSpace,
-    loadConversations,
-    selectConversation
-  } = useChatStore()
+  // Per-field subscriptions, not the whole store: this is the app root, and the
+  // chat store commits once per streaming token for every conversation in the
+  // app (digital humans and team members included). A whole-store subscription
+  // here re-rendered the entire tree at token rate.
+  const handleAgentMessage = useChatStore(s => s.handleAgentMessage)
+  const handleAgentToolCall = useChatStore(s => s.handleAgentToolCall)
+  const handleAgentToolResult = useChatStore(s => s.handleAgentToolResult)
+  const handleAgentError = useChatStore(s => s.handleAgentError)
+  const handleAgentComplete = useChatStore(s => s.handleAgentComplete)
+  const handleAgentThought = useChatStore(s => s.handleAgentThought)
+  const handleAgentThoughtDelta = useChatStore(s => s.handleAgentThoughtDelta)
+  const handleAgentCompact = useChatStore(s => s.handleAgentCompact)
+  const handleAgentSessionInfo = useChatStore(s => s.handleAgentSessionInfo)
+  const handleAgentTurnStart = useChatStore(s => s.handleAgentTurnStart)
+  const handleAskQuestion = useChatStore(s => s.handleAskQuestion)
+  const currentSpaceId = useChatStore(s => s.currentSpaceId)
+  const setChatCurrentSpace = useChatStore(s => s.setCurrentSpace)
+  const loadConversations = useChatStore(s => s.loadConversations)
+  const selectConversation = useChatStore(s => s.selectConversation)
   const { initialize: initializeOnboarding } = useOnboardingStore()
   const { isSearchOpen, closeSearch, isHighlightBarVisible, hideHighlightBar, goToPreviousResult, goToNextResult, openSearch } = useSearchStore()
 
@@ -573,11 +576,12 @@ export default function App() {
   useEffect(() => {
     console.log('[App] Registering agent event listeners')
 
-    // Primary thought listener - handles all agent reasoning events
+    // Primary thought listener - handles all agent reasoning events.
+    // Deliberately unlogged: this is the highest-frequency channel in the app
+    // (every reasoning step of every running agent), and formatting a line per
+    // event was itself a measurable cost with devtools attached.
     const unsubThought = api.onAgentThought((data) => {
-      const _d = data as AgentEventBase & { thought: Thought }
-      console.log(`[App][+${Date.now() % 100000}ms] Received agent:thought: type=${_d.thought?.type} id=${_d.thought?.id}`)
-      handleAgentThought(_d)
+      handleAgentThought(data as AgentEventBase & { thought: Thought })
     })
 
     // Thought delta listener - handles incremental updates to streaming thoughts
@@ -605,12 +609,16 @@ export default function App() {
 
     const unsubToolCall = api.onAgentToolCall((data) => {
       console.log('[App] Received agent:tool-call event:', data)
-      handleAgentToolCall(data as AgentEventBase & ToolCall)
+      const toolCall = data as AgentEventBase & ToolCall
+      // The Team view never opens itself — the collaboration card and team
+      // messages offer it, and the user decides (same rule as the AI browser).
+      handleAgentToolCall(toolCall)
     })
 
     const unsubToolResult = api.onAgentToolResult((data) => {
       console.log('[App] Received agent:tool-result event:', data)
-      handleAgentToolResult(data as AgentEventBase & { toolId: string; result: string; isError: boolean })
+      const toolResult = data as AgentEventBase & { toolId: string; result: string; isError: boolean }
+      handleAgentToolResult(toolResult)
     })
 
     const unsubError = api.onAgentError((data) => {

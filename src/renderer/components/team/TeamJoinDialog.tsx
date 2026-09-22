@@ -13,6 +13,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { X, Loader2, Check, LogIn, Eye, Lock, Plus } from 'lucide-react'
 import type { InstalledApp } from '../../../shared/apps/app-types'
+import { capabilityPolicyFromPreset } from '../../../shared/apps/capability-policy'
+import type { CapabilityPresetId } from '../../../shared/apps/capability-policy'
+import { DelegationPresetPicker } from '../capability/DelegationPresetPicker'
 import { api } from '../../api'
 import { useAppsStore } from '../../stores/apps.store'
 import { useTeamStore } from '../../stores/team.store'
@@ -53,9 +56,14 @@ export function TeamJoinDialog({ onClose, onCreateDigitalHuman, initialLink }: T
   const loadApps = useAppsStore(s => s.loadApps)
   const teams = useTeamStore(s => s.teams)
   const loadTeams = useTeamStore(s => s.loadTeams)
+  const updateMember = useTeamStore(s => s.updateMember)
 
   const [link, setLink] = useState(initialLink ?? '')
   const [selectedAppIds, setSelectedAppIds] = useState<string[]>([])
+  // Read-only by default. The people in this office are on other computers, so
+  // the question is not "do I trust them" but "what should be possible without
+  // me watching" — and the answer that needs no thought is: look, don't touch.
+  const [preset, setPreset] = useState<CapabilityPresetId>('read_only')
   const [consented, setConsented] = useState(false)
   const [joining, setJoining] = useState(false)
   const [submitted, setSubmitted] = useState(false)
@@ -110,6 +118,16 @@ export function TeamJoinDialog({ onClose, onCreateDigitalHuman, initialLink }: T
         bringAppIds: selectedAppIds,
       })
       if (res.success) {
+        // Written straight after the join, before the office can ask anything
+        // of them: the members exist from the moment the join lands, and a
+        // brought digital human with no policy yet would run a teammate's first
+        // request on whatever the default happened to be.
+        const policy = capabilityPolicyFromPreset(preset)
+        await Promise.all(
+          selectedAppIds.map(appId =>
+            updateMember(parsed.officeId, appId, { delegatedPolicy: policy }),
+          ),
+        )
         await loadTeams()
         onClose()
         return
@@ -195,6 +213,15 @@ export function TeamJoinDialog({ onClose, onCreateDigitalHuman, initialLink }: T
               </div>
             )}
           </div>
+
+          {bringable.length > 0 && (
+            <DelegationPresetPicker
+              value={preset}
+              onChange={setPreset}
+              title={t('What they can have it do')}
+              subtitle={t('Teammates work through your digital human on your computer. This is how far that reaches; talking to it yourself is unaffected.')}
+            />
+          )}
 
           {bringable.length > 0 && (
             <div className="rounded-lg border border-border bg-secondary/30 p-3.5">

@@ -35,9 +35,17 @@ vi.mock('../../../../../src/main/apps/manager', () => ({
   }),
 }))
 
+// getProvider is part of the mock because the duplicate-credential rule asks
+// the provider which of its fields identifies the bot (botId for WeCom, appId
+// for Feishu) instead of assuming one field name.
 vi.mock('../../../../../src/main/apps/runtime/index', () => ({
   getImChannelManager: () => ({
     applyConfig: () => { state.applied++ },
+    getProvider: (type: string) => (
+      type === 'feishu-bot'
+        ? { credentialId: (config: Record<string, unknown>) => String(config.appId ?? '').trim() || undefined }
+        : { /* legacy provider: no credentialId, falls back to botId */ }
+    ),
   }),
   dispatchInboundMessage: () => {},
   invalidateImSessions: () => { state.invalidated++ },
@@ -100,6 +108,37 @@ describe('setInstanceApp — target validation', () => {
   })
 })
 
+describe('setInstanceApp — duplicate credential block', () => {
+  it('rejects binding an instance whose bot is already live on another bound instance', () => {
+    // inst-2 is unbound (appId '') so the manager is not running it; binding it
+    // is exactly the step that would start a second connection on bot-a.
+    state.instances = [
+      instance({ id: 'inst-1', appId: 'app-1' }),
+      instance({ id: 'inst-2', appId: '' }),
+    ]
+    const res = setInstanceApp('inst-2', 'app-2')
+    expect(res.success).toBe(false)
+    expect(res.error).toContain('already bound')
+    expect(state.saved).toBeNull()
+  })
+
+  it('allows binding when the credentials differ', () => {
+    state.instances = [
+      instance({ id: 'inst-1', appId: 'app-1' }),
+      instance({ id: 'inst-2', appId: '', config: { botId: 'bot-b' } }),
+    ]
+    expect(setInstanceApp('inst-2', 'app-2').success).toBe(true)
+  })
+
+  it('allows binding when the conflicting instance is disabled', () => {
+    state.instances = [
+      instance({ id: 'inst-1', appId: 'app-1', enabled: false }),
+      instance({ id: 'inst-2', appId: '' }),
+    ]
+    expect(setInstanceApp('inst-2', 'app-2').success).toBe(true)
+  })
+})
+
 describe('setInstanceApp — write behaviour', () => {
   it('rebinds and re-applies to the running manager', () => {
     state.instances = [instance()]
@@ -157,6 +196,34 @@ describe('createInstance', () => {
   it('does not treat a blank botId as a duplicate', () => {
     state.instances = [instance({ id: 'inst-1', config: { botId: '' } })]
     expect(createInstance(instance({ id: 'inst-2', config: { botId: '' } })).success).toBe(true)
+  })
+
+  it('rejects a Feishu app already bound elsewhere, keyed on App ID not botId', () => {
+    const feishu = (id: string, appId: string): ImChannelInstanceConfig => instance({
+      id,
+      appId,
+      type: 'feishu-bot',
+      config: { appId: 'cli_a1b2c3d4e5f60718', appSecret: 's' },
+    })
+    state.instances = [feishu('inst-1', 'app-1')]
+    const res = createInstance(feishu('inst-2', 'app-2'))
+    expect(res.success).toBe(false)
+    expect(res.error).toContain('already bound')
+  })
+
+  it('allows two Feishu instances with different App IDs', () => {
+    state.instances = [instance({
+      id: 'inst-1',
+      type: 'feishu-bot',
+      config: { appId: 'cli_a1b2c3d4e5f60718', appSecret: 's' },
+    })]
+    const res = createInstance(instance({
+      id: 'inst-2',
+      appId: 'app-2',
+      type: 'feishu-bot',
+      config: { appId: 'cli_ffffffffffffffff', appSecret: 's' },
+    }))
+    expect(res.success).toBe(true)
   })
 
   it('validates the target before touching config', () => {

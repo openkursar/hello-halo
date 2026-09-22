@@ -57,6 +57,7 @@ POST   /api/notify-channels/clear-cache                            [ai]       ch
 GET    /api/notify-channels/product-config                         [ai]       channels                Read the product-level notification channel customisation
 GET    /api/wecom-bot/status                                       [ai]       channels                Check whether a WeCom bot channel is configured and connected
 POST   /api/wecom-bot/reconnect                                    [ai]       channels                Reconnect all configured WeCom bot instances
+POST   /api/feishu-bot/reachability                                [ai]       channels                Check whether a Feishu bot is actually reachable, not just connected
 GET    /api/im-channels/status                                     [ai]       channels                Get connection status for all IM channel instances, or one via ?instanceId=
 POST   /api/im-channels/reconnect                                  [ai]       channels                Reconnect one IM channel instance
 POST   /api/im-channels/reload                                     [ai]       channels                Reload all IM channel instances from saved config

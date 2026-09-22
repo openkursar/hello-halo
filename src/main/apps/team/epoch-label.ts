@@ -10,7 +10,7 @@
  */
 
 import type { TeamConversationKind, TeamEpoch, TeamMember } from '../../../shared/apps/team-types'
-import { parseMemberChatKey, isNativeConversationChatKey, parseTeamChatKey } from '../../../shared/apps/im-keys'
+import { parseMemberChatKey, isNativeConversationChatKey, parseTeamChatKey, parseSpaceCollabChatKey } from '../../../shared/apps/im-keys'
 import type { TeamStore } from './types'
 
 /** Max stored length of an auto-derived conversation title (UI truncates further). */
@@ -32,6 +32,9 @@ export function deriveConversationTitle(raw: string): string | null {
 /** Classify a conversation epoch by its chatKey namespace. */
 export function conversationKindOf(chatKey: string): TeamConversationKind {
   if (isNativeConversationChatKey(chatKey)) return 'native'
+  // A space collaboration's epoch is a native-style thread: titled, not an IM
+  // chat, and not a member 1:1.
+  if (parseSpaceCollabChatKey(chatKey)) return 'native'
   if (parseMemberChatKey(chatKey)) return 'member'
   return 'im'
 }

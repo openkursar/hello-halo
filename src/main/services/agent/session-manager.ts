@@ -641,6 +641,8 @@ function assertMcpInstancesUnbound(
  *   actual creation: reads each KB's index.md and appends the "# Knowledge"
  *   section to the system prompt. Deferred for cost, not correctness — a reused
  *   session would throw the resolution away (its prompt is frozen at creation).
+ * @param gates - Conditions the returned session must actually meet. See
+ *   {@link SessionGates}.
  */
 export async function getOrCreateV2Session(
   spaceId: string,
@@ -651,7 +653,8 @@ export async function getOrCreateV2Session(
   consumer?: SessionConsumerOptions,
   resolvedKbIds?: string[],
   buildMcpServers?: () => Record<string, unknown> | null,
-  resolveKnowledgeBases?: () => KBReference[]
+  resolveKnowledgeBases?: () => KBReference[],
+  gates?: SessionGates
 ): Promise<V2SessionInfo['session']> {
   // Concurrent calls for the same conversation (a fire-and-forget
   // ensureSessionWarm racing the first sendMessage) must not both reach
@@ -660,26 +663,69 @@ export async function getOrCreateV2Session(
   // down the healthy session by conversationId. Latecomers share the in-flight
   // result; if their inputs differ (credentials/KB changed mid-flight), the
   // fingerprint check on the next call reconciles with a rebuild.
+  //
+  // EXCEPT when the latecomer's options are a restriction (requireFreshInputs):
+  // "reconciles on the next call" is exactly the deferral that gate exists to
+  // refuse — the shared session would run this request with whatever the
+  // creation in flight was built with. Share only on a matching inputs
+  // fingerprint; otherwise wait the creation out and re-evaluate against the
+  // finished session, where the existing stale check applies.
   const inFlight = inFlightSessionCreations.get(conversationId)
   if (inFlight) {
-    console.log(`[Agent][${conversationId}] Session creation already in flight, sharing result`)
-    return inFlight
+    const shareable =
+      !gates?.requireFreshInputs ||
+      (inFlight.inputsFingerprint !== undefined &&
+        inFlight.inputsFingerprint === computeSessionInputsFingerprint(sdkOptions))
+    if (shareable) {
+      console.log(`[Agent][${conversationId}] Session creation already in flight, sharing result`)
+      return inFlight.promise
+    }
+    console.warn(
+      `[Agent][${conversationId}] Session creation in flight was built on different inputs; ` +
+      `waiting it out instead of sharing (requireFreshInputs)`
+    )
+    await inFlight.promise.catch(() => undefined)
+    // The creator's own finally may not have run yet; clear the settled entry
+    // (identity-checked) so the re-entry below does not share it after all.
+    if (inFlightSessionCreations.get(conversationId) === inFlight) {
+      inFlightSessionCreations.delete(conversationId)
+    }
+    return getOrCreateV2Session(
+      spaceId, conversationId, sdkOptions, sessionId, workDir,
+      consumer, resolvedKbIds, buildMcpServers, resolveKnowledgeBases, gates
+    )
   }
 
   const promise = getOrCreateV2SessionInner(
     spaceId, conversationId, sdkOptions, sessionId, workDir,
-    consumer, resolvedKbIds, buildMcpServers, resolveKnowledgeBases
+    consumer, resolvedKbIds, buildMcpServers, resolveKnowledgeBases, gates
   )
-  inFlightSessionCreations.set(conversationId, promise)
+  const record: InFlightSessionCreation = {
+    promise,
+    // Same opt-out as the fingerprint stored on the session: a lazy-MCP caller
+    // (main chat) has no eager inputs to hash, and no gated caller either.
+    inputsFingerprint: buildMcpServers ? undefined : computeSessionInputsFingerprint(sdkOptions),
+  }
+  inFlightSessionCreations.set(conversationId, record)
   try {
     return await promise
   } finally {
-    inFlightSessionCreations.delete(conversationId)
+    // Identity-checked: a gated latecomer may have already cleared this entry
+    // and started its own creation, which must not be deleted underneath it.
+    if (inFlightSessionCreations.get(conversationId) === record) {
+      inFlightSessionCreations.delete(conversationId)
+    }
   }
 }
 
-/** conversationId -> in-flight getOrCreateV2Session promise. */
-const inFlightSessionCreations = new Map<string, Promise<V2SessionInfo['session']>>()
+interface InFlightSessionCreation {
+  promise: Promise<V2SessionInfo['session']>
+  /** Inputs the creation was invoked with; undefined for lazy-MCP callers. */
+  inputsFingerprint: string | undefined
+}
+
+/** conversationId -> in-flight getOrCreateV2Session creation. */
+const inFlightSessionCreations = new Map<string, InFlightSessionCreation>()
 
 /**
  * Consumer wiring for a newly created session. Grouped rather than passed as
@@ -688,6 +734,61 @@ const inFlightSessionCreations = new Map<string, Promise<V2SessionInfo['session'
  * the session gets a persistent consumer at all.
  */
 export type SessionConsumerOptions = Omit<ConsumerContext, 'spaceId' | 'conversationId'>
+
+/** Conditions a caller needs the returned session to actually meet. */
+export interface SessionGates {
+  /**
+   * Refuse rather than hand back a live session built on different options.
+   *
+   * Reuse normally defers a rebuild while the session is busy and returns the
+   * existing one — right for a model or knowledge change, where one more turn
+   * on the old settings costs nothing. It is wrong when the options ARE the
+   * restriction a turn must run under: the deferral would run somebody else's
+   * request with the permissions of whoever used the session last.
+   */
+  requireFreshInputs?: boolean
+}
+
+/**
+ * Thrown when {@link SessionGates.requireFreshInputs} cannot be honoured right
+ * now. The work is not lost — the caller reports it and the request can be sent
+ * again once the session is free.
+ */
+export class SessionOptionsStaleError extends Error {
+  constructor(conversationId: string) {
+    super(
+      `The digital human is still busy with earlier work, so this request was not started. ` +
+      `Try again once it finishes (conversation ${conversationId}).`
+    )
+    this.name = 'SessionOptionsStaleError'
+  }
+}
+
+/**
+ * The conditions under which a needed rebuild is deferred instead of performed,
+ * one per guard in getOrCreateV2SessionInner. requireFreshInputs refuses
+ * exactly when any of them holds — computed here as the single source so a new
+ * or changed guard cannot leave the refusal behind, which would silently run a
+ * gated request on the previous caller's options (DESIGN.md hard rule 9).
+ */
+function assessRebuildDeferral(
+  conversationId: string,
+  consumer: ConsumerHandle | undefined
+): { awaitingInit: boolean; activeTurn: boolean; idleWithTeamTasks: boolean; any: boolean } {
+  const awaitingInit = turnsAwaitingInit.has(conversationId)
+  const activeTurn = Boolean(consumer?.isRunning && consumer.getActiveSessionState() !== null)
+  const idleWithTeamTasks = Boolean(
+    consumer?.isRunning &&
+      !consumer.getActiveSessionState() &&
+      hasActiveTeamTasks(consumer.getTeamLifecycleThoughts())
+  )
+  return {
+    awaitingInit,
+    activeTurn,
+    idleWithTeamTasks,
+    any: awaitingInit || activeTurn || idleWithTeamTasks,
+  }
+}
 
 async function getOrCreateV2SessionInner(
   spaceId: string,
@@ -698,7 +799,8 @@ async function getOrCreateV2SessionInner(
   consumerOptions?: SessionConsumerOptions,
   resolvedKbIds?: string[],
   buildMcpServers?: () => Record<string, unknown> | null,
-  resolveKnowledgeBases?: () => KBReference[]
+  resolveKnowledgeBases?: () => KBReference[],
+  gates?: SessionGates
 ): Promise<V2SessionInfo['session']> {
   // Per-conversation credential/model fingerprint — used to rebuild this
   // conversation's session when its own model pin changes (the global
@@ -755,12 +857,27 @@ async function getOrCreateV2SessionInner(
 
       if (needsCredentialRebuild) {
         const consumer = consumers.get(conversationId)
+        const deferral = assessRebuildDeferral(conversationId, consumer)
+
+        // The guards below trade correctness-now for not destroying work in
+        // flight, and hand back the session as it stands. A caller whose options
+        // ARE a restriction cannot take that trade — running one more turn on
+        // the old settings is exactly the thing being prevented — so it is told
+        // the session is not available instead.
+        if (gates?.requireFreshInputs && deferral.any) {
+          pendingConsumerRebuilds.add(conversationId)
+          console.warn(
+            `[Agent][${conversationId}] Refusing to reuse a session built on different permissions ` +
+            `while it is busy; the request was not started.`
+          )
+          throw new SessionOptionsStaleError(conversationId)
+        }
 
         // Guard 0: A user turn is dispatched but not yet acknowledged by
         // system:init — the consumer looks idle, but rebuilding now (e.g. a
         // warm-up racing a just-sent message after a model switch) would
         // destroy the in-flight message. Defer like Guard 1.
-        if (turnsAwaitingInit.has(conversationId)) {
+        if (deferral.awaitingInit) {
           pendingConsumerRebuilds.add(conversationId)
           console.log(
             `[Agent][${conversationId}] Session rebuild deferred — a dispatched turn is awaiting system:init.`
@@ -774,8 +891,7 @@ async function getOrCreateV2SessionInner(
         // Instead, mark for deferred rebuild: the consumer checks pendingConsumerRebuilds
         // after each turn completes (session-consumer.ts consumePendingRebuild) and breaks
         // its loop, triggering a clean rebuild on the next sendMessage.
-        const isActivelyProcessing = consumer?.isRunning && consumer.getActiveSessionState() !== null
-        if (isActivelyProcessing) {
+        if (deferral.activeTurn) {
           pendingConsumerRebuilds.add(conversationId)
           console.log(
             `[Agent][${conversationId}] Session rebuild deferred — consumer is actively processing a turn ` +
@@ -788,8 +904,7 @@ async function getOrCreateV2SessionInner(
         // Guard 2: Consumer is idle between turns but CC subprocess has active team agents.
         // Their results arrive as a future autonomous turn. Killing the session now would
         // abort all in-flight agent tasks.
-        const isIdleBetweenTurns = consumer?.isRunning && !consumer.getActiveSessionState()
-        if (isIdleBetweenTurns && hasActiveTeamTasks(consumer!.getTeamLifecycleThoughts())) {
+        if (deferral.idleWithTeamTasks) {
           // A pending rebuild flag (credential or toolset change) is safe to keep:
           // the consumer only consumes it once no team tasks remain (consumeLoop),
           // so it cannot break the loop mid-team while messages are queued.

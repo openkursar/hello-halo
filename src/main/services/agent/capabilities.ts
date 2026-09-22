@@ -67,7 +67,7 @@ export interface EngineCapabilities {
     /** Tool input streaming (input_json_delta in CC). */
     toolInput: 'token' | 'final-only'
     /** Tool output (e.g. shell stdout) streaming. */
-    toolOutput: 'token' | 'final-only'
+    toolOutput: 'token' | 'item' | 'final-only'
   }
   tools: {
     /** Tool kinds the engine emits with its native CC-compatible name. */
@@ -107,6 +107,17 @@ export interface EngineCapabilities {
     skills: boolean
     mcp: boolean
     hooks: boolean
+    /**
+     * Whether the engine enforces Halo's permission options — `allowedTools` /
+     * `disallowedTools` rules and the `canUseTool` gate.
+     *
+     * This is what lets a turn driven by somebody other than the owner run at
+     * all: an engine that ignores those options would take the policy as advice
+     * and run whatever it liked on the owner's machine. Callers must refuse the
+     * turn rather than downgrade it — a restriction that silently does nothing
+     * is worse than one the owner is told they cannot have.
+     */
+    permissionRules: boolean
     sessionResume: boolean
     /**
      * Whether the engine can branch a resumed session into a NEW session id
@@ -155,6 +166,7 @@ export const ANTHROPIC_CAPABILITIES: EngineCapabilities = {
     skills: true,
     mcp: true,
     hooks: true,
+    permissionRules: true,
     sessionResume: true,
     sessionFork: true,
     interrupt: true,

@@ -55,6 +55,22 @@ export function isNativeConversationChatKey(chatKey: string): boolean {
 }
 
 /**
+ * Build the chatKey for an ephemeral space collaboration's conversation epoch —
+ * the one long-lived context a temporary team shares with the space
+ * conversation that coordinates it.
+ *
+ * Format: "space:{conversationId}"
+ */
+export function spaceCollabChatKey(conversationId: string): string {
+  return `space:${conversationId}`
+}
+
+/** Parse a space-collaboration chatKey back to its conversationId (null when not one). */
+export function parseSpaceCollabChatKey(chatKey: string): string | null {
+  return chatKey.startsWith('space:') ? chatKey.slice('space:'.length) : null
+}
+
+/**
  * Build a fully-qualified session key for IM channel conversations.
  *
  * Format: "app-chat:{appId}:{channel}:{chatType}:{chatId}"

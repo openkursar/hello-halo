@@ -1,9 +1,24 @@
 import type { ActivityEntry, InstalledApp } from '../../shared/apps/app-types'
 import type { TeamListItem } from '../../shared/apps/team-types'
 
+/**
+ * Apps hidden from person-facing surfaces: dedicated coordinators (an internal
+ * role) and every member of an ephemeral space collaboration (they exist for
+ * one piece of work, not as standalone digital humans).
+ */
+export function hiddenTeamMemberIds(teams: TeamListItem[]): Set<string> {
+  return new Set(
+    teams.flatMap(team =>
+      team.localMembers
+        .filter(member => member.isSystemCoordinator || team.ephemeral)
+        .map(member => member.appId)
+    )
+  )
+}
+
 export function visibleDigitalHumans(apps: InstalledApp[], teams: TeamListItem[]): InstalledApp[] {
-  const coordinators = new Set(teams.flatMap(team => team.localMembers.filter(member => member.isSystemCoordinator).map(member => member.appId)))
-  return apps.filter(app => app.spec.type === 'automation' && !coordinators.has(app.id))
+  const hidden = hiddenTeamMemberIds(teams)
+  return apps.filter(app => app.spec.type === 'automation' && !hidden.has(app.id))
 }
 
 export function activitySourceKind(entry: ActivityEntry): 'team' | 'automation' | 'chat' | 'unknown' {

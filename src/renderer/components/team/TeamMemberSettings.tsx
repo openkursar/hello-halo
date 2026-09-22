@@ -16,10 +16,11 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { ArrowLeft, ChevronRight, ExternalLink, Timer } from 'lucide-react'
-import type { TeamCheckView, TeamDetail, TeamMember, TeamDelegatedPolicy } from '../../../shared/apps/team-types'
+import type { TeamCheckView, TeamDetail, TeamMember, TeamDelegatedPolicy, TeamToolAudit } from '../../../shared/apps/team-types'
 import { checksForMember, isRemoteMember } from '../../../shared/apps/team-types'
 import { fullCapabilityPolicy } from '../../../shared/apps/capability-policy'
 import { CapabilityPolicyFields } from '../capability/CapabilityPolicyFields'
+import { api } from '../../api'
 import { SystemPromptEditor } from '../apps/SystemPromptEditor'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { useTeamStore } from '../../stores/team.store'
@@ -149,6 +150,8 @@ export function TeamMemberSettings({ detail, member, onBack }: TeamMemberSetting
 
           {isMine && <DelegatedCapabilities teamId={detail.team.id} member={member} />}
 
+          {isMine && <BorrowedWorkRecord teamId={detail.team.id} member={member} />}
+
           <MemberChecks teamId={detail.team.id} checks={checks} />
         </div>
       </div>
@@ -264,6 +267,101 @@ function MemberChecks({ teamId, checks }: { teamId: string; checks: TeamCheckVie
           onConfirm={() => { const c = stopping; setStopping(null); void cancelCheck(teamId, c.id) }}
           onCancel={() => setStopping(null)}
         />
+      )}
+    </div>
+  )
+}
+
+/**
+ * What was actually done with this digital human while somebody else was
+ * driving it.
+ *
+ * The permission switches above say what is POSSIBLE; this says what happened,
+ * and the two answer different questions. A person who has granted something
+ * broad is not asking "what did I allow" — they know — they are asking whether
+ * they should have. Only a record of real calls answers that.
+ *
+ * Folded away because on a healthy team it is long and uninteresting; the count
+ * of refusals is on the outside, because that is the part worth noticing
+ * without opening anything.
+ */
+function BorrowedWorkRecord({ teamId, member }: { teamId: string; member: TeamMember }) {
+  const { t, i18n } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const [entries, setEntries] = useState<TeamToolAudit[] | null>(null)
+  const appId = member.appId
+
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    void (async () => {
+      const res = await api.teamToolAudit(teamId, { appId, limit: 200 })
+      if (!cancelled) setEntries(res.success ? (res.data as TeamToolAudit[]) ?? [] : [])
+    })()
+    return () => { cancelled = true }
+  }, [open, teamId, appId])
+
+  const nameByApp = new Map(
+    (useTeamStore.getState().detail?.members ?? []).map(m => [m.appId, m.memberName]),
+  )
+  const refused = entries?.filter(e => e.decision === 'denied').length ?? 0
+
+  return (
+    <div className="rounded-lg border border-border">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="flex w-full items-center gap-2 px-3 py-2.5 text-left"
+      >
+        <span className="flex-1 text-sm text-foreground">{t('What it has been asked to do')}</span>
+        {refused > 0 && (
+          <span className="flex-shrink-0 rounded-full bg-amber-500/15 px-2 py-0.5 text-xs text-amber-700 dark:text-amber-400">
+            {t('{{count}} refused', { count: refused })}
+          </span>
+        )}
+        <ChevronRight className={`h-4 w-4 text-muted-foreground transition-transform ${open ? 'rotate-90' : ''}`} />
+      </button>
+      {open && (
+        <div className="space-y-2 border-t border-border px-3 py-3">
+          <p className="text-xs text-muted-foreground/70">
+            {t('Every tool it reached for while a teammate — or a person on another machine — was driving it. Your own conversations with it are not listed.')}
+          </p>
+          {entries === null ? (
+            <p className="text-sm text-muted-foreground">{t('Loading…')}</p>
+          ) : entries.length === 0 ? (
+            <p className="text-sm text-muted-foreground">{t('Nobody else has put it to work yet.')}</p>
+          ) : (
+            <div className="space-y-1">
+              {entries.map(entry => (
+                <div
+                  key={entry.id}
+                  className="flex items-start gap-2 rounded-md border border-border/60 px-2 py-1.5"
+                >
+                  <span
+                    className={`mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full ${
+                      entry.decision === 'denied' ? 'bg-amber-500' : 'bg-emerald-500'
+                    }`}
+                    aria-hidden
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-xs text-foreground">
+                      <span className="font-medium">{entry.toolName}</span>
+                      {entry.detail && <span className="text-muted-foreground"> · {entry.detail}</span>}
+                    </p>
+                    <p className="mt-0.5 truncate text-xs text-muted-foreground/70">
+                      {t('{{who}} · {{when}}', {
+                        who: entry.actorAppId
+                          ? nameByApp.get(entry.actorAppId) ?? t('a teammate')
+                          : t('a person on another machine'),
+                        when: new Date(entry.createdAt).toLocaleString(i18n.language),
+                      })}
+                      {entry.decision === 'denied' && ` · ${t('refused')}`}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       )}
     </div>
   )
