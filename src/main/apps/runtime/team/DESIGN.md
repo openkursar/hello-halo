@@ -192,6 +192,22 @@ The coupling is inverted through `TeamDeliveryHooks` (see "Integration seam").
   never reach the agent-facing message. No remote fetch injected → cross-machine
   reads report an honest "unavailable".
 
+  The same file serves a PERSON clicking a shared file
+  (`createTeamArtifactOpener`, reached through `TeamService.openArtifact` and
+  the `team:open-artifact` IPC). It must stay on the reader's resolution — a
+  ref that names one member's file for the agent and another's for the person
+  is the worst kind of wrong — so both take the same `fetchRemote` from
+  bootstrap and local paths from `createLocalArtifactPathResolver`. What it
+  hands back is a path the OS can open: a same-machine file in place; a
+  teammate's file fetched, size-capped (`MAX_OPEN_COPY_BYTES`) and written
+  read-only under a per-(team, epoch, ref) directory in the OS temp dir, marked
+  as downloaded on Windows, and flagged `revealOnly` when its extension is one
+  the OS would execute — the renderer then shows it in its folder instead of
+  opening it. Failures cross as a code (`TeamArtifactOpenFailure`) because the
+  renderer writes the sentence. Stale copies are pruned by an idle startup task
+  (`pruneSharedFileCopies`). Desktop only: the result is a local path, so remote
+  clients download through the artifact route instead.
+
 ## Output is not delivery
 
 **A member's own output reaches no teammate. Ever.** Speaking to a teammate is

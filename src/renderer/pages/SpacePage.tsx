@@ -174,7 +174,7 @@ export function SpacePage() {
   // Space isolation: clear canvas tabs when switching to a different space
   useEffect(() => {
     if (currentSpace) {
-      canvasLifecycle.enterSpace(currentSpace.id)
+      void canvasLifecycle.enterSpace(currentSpace.id)
     }
   }, [currentSpace?.id])
 

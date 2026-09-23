@@ -10,3 +10,10 @@ Each member is required to observe:
 3. Whether the new feature has obvious business defects or code bugs.
 4. Whether there are performance issues, covering both first-screen performance (initial render, resource/bundle size, code splitting and lazy loading) and runtime performance (unnecessary re-renders, large-list rendering, memory leaks, redundant computations and requests).
 The above four points must be strictly communicated to all members.
+
+A review finds problems; it must not change product intent. Communicate these rules to all members as strictly as the four points:
+- Classify every finding as one of: **bug** (a user gets a wrong result), **regression** (something that worked no longer does), or **suggestion** (code quality, hardening, hypothetical future risk). Only bugs and regressions block release; suggestions are listed separately and are never dispatched as fixes without the owner's approval.
+- Code that looks odd is presumed to be a requirement until evidence shows it is a defect. A pinned value, a deliberate restriction, or a missing check may be the product's choice — ask, do not "fix".
+- Every proposed fix must state whether user-visible behavior changes. A fix that changes what users see or do (including in fallback or rare paths) needs the owner's approval first; prefer the narrowest fix that removes the defect and leaves all other behavior identical.
+- Unverified hypotheses (e.g. "this probably fails on Windows") are labeled as such and are not grounds for redesigning a flow that has already been tested.
+- The final report groups findings into: must fix (bug/regression, fix leaves behavior unchanged) / needs owner decision (fix changes behavior) / suggestions. Write it for the owner per the human-comms skill: scenarios first, no code symbols.

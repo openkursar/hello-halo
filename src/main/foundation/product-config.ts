@@ -18,11 +18,22 @@ import { app } from 'electron'
 import { type AuthProviderConfig } from '../../shared/types'
 import type { CategoryTaxonomy, RegistrySource } from '../../shared/store/store-types'
 import type { NotifyChannelsProductConfig } from '../../shared/types/notification-channels'
+import type { UpdaterChannel } from '../../shared/types/updater'
 
 // AuthProviderConfig is defined in src/shared/types/ai-sources.ts so the main
 // loader and the renderer setup UI share one source of truth. Re-exported here
 // for ergonomic local imports from this module.
 export { type AuthProviderConfig }
+
+/**
+ * How Windows applies an update that has finished downloading.
+ *
+ * - 'legacy': hand the file to the NSIS installer on exit. Extraction and file
+ *   replacement happen after the user clicks, which is the wait they feel.
+ * - 'staged': unpack the new version beside the current one while the app is
+ *   still running, so applying is a rename and a relaunch.
+ */
+export type WindowsUpdateMode = 'legacy' | 'staged'
 
 /**
  * Update configuration for auto-updater
@@ -36,6 +47,19 @@ export interface UpdateConfig {
   owner?: string
   /** GitHub repository name (for github provider) */
   repo?: string
+  /** Release feed this build belongs to. Omitted → 'stable'. */
+  channel?: UpdaterChannel
+  /** Windows apply strategy. Omitted or unrecognized → 'legacy'. */
+  windowsMode?: WindowsUpdateMode
+  /**
+   * Base64 Ed25519 public key that staged update descriptions must verify against.
+   *
+   * A staged update unpacks an archive and then runs it, so the description
+   * naming that archive has to be provably ours. The internal feed is plain
+   * HTTP, which authenticates nobody — this key is what does. Without it,
+   * staged mode is refused and the build stays on the installer.
+   */
+  manifestPublicKey?: string
 }
 
 /**
@@ -503,6 +527,54 @@ export function getDataFolderName(): string {
  */
 export function getServiceDefaults(): ServiceDefaults | undefined {
   return loadProductConfig().serviceDefaults
+}
+
+/**
+ * Release feed this build belongs to.
+ *
+ * Anything other than an explicit 'experience' reads as stable, so a typo in a
+ * variant file can only ever move a build toward the more conservative feed.
+ */
+export function getUpdateChannel(): UpdaterChannel {
+  return loadProductConfig().updateConfig?.channel === 'experience' ? 'experience' : 'stable'
+}
+
+/**
+ * Windows apply strategy for this build, after safety fallbacks.
+ *
+ * Staged mode is withheld unless it was asked for *and* a verification key
+ * shipped with it. A build configured to unpack-and-run archives it cannot
+ * authenticate is worse than one that keeps using the installer, so the two
+ * settings are resolved together rather than trusted separately.
+ */
+export function getWindowsUpdateMode(): WindowsUpdateMode {
+  const update = loadProductConfig().updateConfig
+  if (!update || update.windowsMode === undefined) return 'legacy'
+
+  if (update.windowsMode !== 'staged' && update.windowsMode !== 'legacy') {
+    console.error(
+      `[ProductConfig] Unrecognized updateConfig.windowsMode "${String(update.windowsMode)}" — using legacy`
+    )
+    return 'legacy'
+  }
+  if (update.windowsMode === 'legacy') return 'legacy'
+
+  if (!update.manifestPublicKey?.trim()) {
+    console.error(
+      '[ProductConfig] updateConfig.windowsMode is "staged" but manifestPublicKey is missing — ' +
+        'staged updates cannot be authenticated, falling back to legacy'
+    )
+    return 'legacy'
+  }
+  return 'staged'
+}
+
+/**
+ * Base64 Ed25519 key that staged update descriptions must verify against.
+ * Undefined when this build ships no key (and therefore cannot stage).
+ */
+export function getUpdateManifestPublicKey(): string | undefined {
+  return loadProductConfig().updateConfig?.manifestPublicKey?.trim() || undefined
 }
 
 /**

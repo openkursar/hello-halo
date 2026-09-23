@@ -145,6 +145,38 @@ Strategy: log + graceful degradation, never crash the app.
 3. **Migration failure**: Transaction rollback. The database stays at the previous
    version. Log the error. The consuming module can decide how to handle.
 
+### 3.5a Data written by a newer build (schema-ahead)
+
+Migrations are forward-only. An older build opening a database that a newer
+build already migrated finds nothing pending and would run against a shape it
+does not know — silent damage, not a startup failure. This stops being
+hypothetical when two installs share one data directory (stable and preview
+share `dataFolderName` by design; see `services/updater/DESIGN.md` §8).
+
+- **Detection.** `runMigrations` compares the namespace's stored version with
+  the newest migration the build carries, and throws `SchemaAheadError`
+  (namespace, stored, supported) when the stored one is higher. The newest
+  migration *is* the supported version, so there is no separate constant to
+  drift.
+- **Refuse, never degrade.** The caller must stop the process, not continue
+  with the module disabled: every write from a build that cannot read the
+  schema compounds the damage. `isSchemaAheadError` is exported so bootstrap
+  can tell this apart from an ordinary init failure; the dialog and exit live
+  in `bootstrap/schema-refusal.ts` because this module stays free of Electron
+  and UI.
+- **Pre-migration snapshot.** Before the first pending migration of a run,
+  a file-backed database with existing data (`currentVersion > 0`) is copied
+  with `VACUUM INTO` to `<db>.<timestamp>.premigrate.bak` — consistent even
+  with WAL content outstanding. Once per database per process, however many
+  namespaces migrate. A failed snapshot is logged and does not block startup:
+  refusing to start over a precaution would turn a full disk into an unusable
+  app. The newest two snapshots are kept; older ones are pruned, since each is
+  a full copy of a database that is routinely hundreds of MB.
+- **Why the snapshot matters.** It is the way back for a user who opened
+  their data with a newer build and needs the older one again; the refusal
+  dialog points them to it. Reinstalling does not help and is the one action
+  the dialog must not suggest.
+
 ### 3.6 PRAGMA configuration
 
 Applied on every connection open:
@@ -198,8 +230,10 @@ better-sqlite3's transaction API is slightly awkward to use raw.
 
 ```
 src/main/platform/store/
-  index.ts          -- Public API: initStore(), DatabaseManager, types
+  index.ts          -- Public API: initStore(), DatabaseManager, types,
+                       SchemaAheadError / isSchemaAheadError
   database-manager.ts -- DatabaseManager implementation
+  schema-guard.ts   -- schema-ahead error + pre-migration snapshot (§3.5a)
   types.ts          -- Migration, DatabaseManager interfaces
 ```
 

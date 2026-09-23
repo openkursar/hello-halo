@@ -9,7 +9,7 @@ import {
 import type {
   ApiResponse,
 } from './_shared'
-import type { UpdaterStatusPayload } from '../../shared/types/updater'
+import type { UpdaterChannel, UpdaterStatusPayload } from '../../shared/types/updater'
 
 export const updaterApi = {
   // ===== Updater (Electron only) =====
@@ -34,6 +34,20 @@ export const updaterApi = {
     }
     // Remote mode: get version from server
     return httpRequest('GET', '/api/system/version')
+  },
+
+  /**
+   * Which release feed this build follows.
+   *
+   * Remote clients are looking at somebody else's desktop install and cannot
+   * act on its update channel, so they are told nothing rather than shown a
+   * channel that is not theirs.
+   */
+  getUpdateChannel: async (): Promise<ApiResponse<UpdaterChannel>> => {
+    if (!isElectron()) {
+      return { success: false, error: 'Only available in desktop app' }
+    }
+    return { success: true, data: await window.halo.getUpdateChannel() }
   },
 
   onUpdaterStatus: (callback: (data: UpdaterStatusPayload) => void) => {

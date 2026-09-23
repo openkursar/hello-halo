@@ -251,6 +251,17 @@ export function registerTeamIpc(): void {
     handle('team:epoch-artifacts', (s) => s.listArtifacts(input.teamId, input.epochId))
   )
 
+  // ── team:open-artifact — a person clicking a shared file ──────────────────
+  // Addressed by ref, never by the path the listing carries: that path was
+  // resolved against this machine, and a teammate's member produced its file
+  // on theirs. Desktop-only — the result is a local path, which means nothing
+  // to a remote client (those download through the artifact route instead).
+  ipcMain.handle(
+    TEAM_IPC.openArtifact,
+    async (_e, input: { teamId: string; epochId: string; ref: string }) =>
+      handle('team:open-artifact', (s) => s.openArtifact(input.teamId, input.epochId, input.ref))
+  )
+
   // ── team:tool-audit — what borrowed turns did on THIS machine ─────────────
   // Desktop-only on purpose, and deliberately absent from the office-member
   // HTTP allowlist: the record is the owner's view of their own computer, so

@@ -30,6 +30,12 @@ Services Layer (src/main/services)
   - domain services: agent, ai-browser, ai-sources, space, conversation,
     artifact, analytics, remote, etc.
   - app-bridge.ts   : DI seam so services reach Apps data without importing up
+  - openai-compat-router (src/main/openai-compat-router) sits in this tier:
+    services/agent starts it and encodes backend configs through its index;
+    it depends on services only through the standalone proxy-fetch utility,
+    never through a domain service. It owns the Claude Code identity sent
+    upstream (utils/claude-code-identity), which services/agent reads
+    through the router's index.
 
 Platform Layer (src/main/platform)
   - store       : SQLite manager + migrations foundation
@@ -143,9 +149,13 @@ src/
 │       ├── remote/                     # Remote Access: HTTP-server + Cloudflare tunnel coordination (service + tunnel + issuer-client)
 │       ├── stealth/                   # Anti-detection evasions
 │       ├── web-search/                # Web search MCP server
+│       ├── updater/                   # Auto-update. Two paths behind one surface:
+│       │                              #   electron-updater (mac/linux/win installer) and
+│       │                              #   the Windows staged path (background unpack +
+│       │                              #   directory swap). See updater/DESIGN.md
 │       └── *.service.ts + utilities   # Domain singletons: config, conversation, space,
 │                                      #   artifact, artifact-cache, search,
-│                                      #   window, overlay, onboarding, updater, notification,
+│                                      #   window, overlay, onboarding, notification,
 │                                      #   announcement (static-feed poll → toast; the only
 │                                      #     server→client push that is not version-coupled),
 │                                      #   protocol, api-validator, model-capabilities,
@@ -221,8 +231,11 @@ src/
 ```
 
 Outside `src/`: `gateway/` is a standalone Go module (the federation relay gateway —
-a dumb frame router for off-LAN offices; see §24), and `tests/decentralized/` is the
-cluster regression tier that boots REAL multi-process nodes (see its README.md).
+a dumb frame router for off-LAN offices; see §24), `win-update-helper/` is a standalone
+Go module shipping two binaries (the Windows update helper that performs the directory
+swap, and the packer that builds update archives — see `services/updater/DESIGN.md`),
+and `tests/decentralized/` is the cluster regression tier that boots REAL multi-process
+nodes (see its README.md).
 
 ## 5) Data Types
 
@@ -686,6 +699,23 @@ Notes:
    - Failures are logged as warnings and never interrupt the queue or the process.
    - Implemented in `src/main/bootstrap/idle-queue.ts` (`registerIdleTask`, `startIdleDrain`).
 
+### The first-screen cue (do not gate deferred work on first paint alone)
+
+`ready-to-show` fires on first paint, and the window is created hidden, so it
+doubles as "reveal the window" and "start the deferred tier". Both uses assume
+Windows will give the process a paint — which is false for a launch that has no
+foreground context: the installer's "run when finished" checkbox, or the
+updater relaunching after a swap. That process then runs with no window, no
+tray, no database and no automation while its processes sit in Task Manager,
+and the user's only recourse is launching it again, which merely reveals the
+window that was there all along.
+
+`createWindow` therefore drives a single `firstScreen` cue off three signals —
+first paint, page loaded (after a short grace period so a normal start is not
+revealed unpainted), and an absolute deadline — and `registerFirstScreenListener`
+is what the deferred tier subscribes to. Keep the two on the same cue: a launch
+that reaches one and not the other is worse than one that reaches neither.
+
 ### Shutdown behavior
 
 - `before-quit` calls `cleanupExtendedServices()` via bootstrap shutdown flow.
@@ -787,6 +817,7 @@ See `quick.md §4` for the current list. Keep the two documents in sync when clo
 
 When touching a module, read its design doc first:
 - `src/main/services/agent/DESIGN.md` — Agent engine (largest subsystem, read this before any agent-related change)
+- `src/main/services/updater/DESIGN.md` — Auto-update: the two apply paths, why staged update descriptions are signed at build time, and the reversal contract with the native helper
 - `src/main/services/agent/toolsets/DESIGN.md` — Toolset Broker (on-demand in-process MCP loading; how tool capabilities enter a session, including the self-API switch — see §17.1)
 - `src/main/services/ai-terminal/DESIGN.md` — AI Terminal (pty + xterm headless, MCP tools, xterm.js viewer)
 - `src/main/apps/spec/DESIGN.md`
@@ -910,7 +941,7 @@ model and where things are:
 
 | Piece | Location | Role |
 |---|---|---|
-| Coordination kernel | `apps/runtime/team/` | message-bus (send/wait/turn-complete), blackboard (tasks/findings/activity), board-digest (what a member missed, rendered into its turn input), orchestration, artifact-read (location-transparent `team_read_artifact`). **Never imports the federation transport** — cross-node behavior arrives only through bootstrap-injected seams. |
+| Coordination kernel | `apps/runtime/team/` | message-bus (send/wait/turn-complete), blackboard (tasks/findings/activity), board-digest (what a member missed, rendered into its turn input), orchestration, artifact-read (location-transparent `team_read_artifact` for agents, and the opener behind a person clicking a shared file — one resolution for both). **Never imports the federation transport** — cross-node behavior arrives only through bootstrap-injected seams. |
 | Team persistence | `apps/team/` | teams/members (incl. per-team duty + delegated capability policy)/edges/epochs/triggers/checks/activity (SQLite, `app_team`) + published-ref semantics SSOT (`artifact-refs.ts`, shared with the federation owner-serve gate) |
 | Federation runtime | `apps/runtime/federation/` | join/presence coordinator, per-node manager (host+joiner roles), M2 authority (election/replication/handover), activity relay |
 | Feed substrate | `apps/runtime/federation/log/` + `ctrl-feed.ts` + `session-feed.ts` | per-author append-only feeds: durable ctrl outbox (effectively-once wake/turn-complete) + multi-replica session transcripts (local-first history) |

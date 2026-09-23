@@ -14,6 +14,7 @@
  */
 import type { Express, Request, Response } from 'express'
 import { isTerminalAvailable } from '../../services/ai-terminal/available'
+import { NO_SUCH_TERMINAL_SESSION as noSuchSession } from '../../../shared/types/terminal'
 
 /** Reject every terminal route on hosts where the feature is unavailable. */
 function ensureAvailable(res: Response): boolean {
@@ -59,7 +60,7 @@ export function registerTerminalRoutes(app: Express): void {
       }
       const { terminalInput } = await import('../../services/ai-terminal')
       const ok = terminalInput(req.body.sessionId, req.body.data)
-      res.json(ok ? { success: true } : { success: false, error: 'No such terminal session' })
+      res.json(ok ? { success: true } : noSuchSession)
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }
@@ -75,7 +76,7 @@ export function registerTerminalRoutes(app: Express): void {
       }
       const { terminalResize } = await import('../../services/ai-terminal')
       const ok = terminalResize(req.body.sessionId, cols, rows)
-      res.json(ok ? { success: true } : { success: false, error: 'No such terminal session' })
+      res.json(ok ? { success: true } : noSuchSession)
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }
@@ -86,7 +87,7 @@ export function registerTerminalRoutes(app: Express): void {
     try {
       const { killTerminal } = await import('../../services/ai-terminal')
       const ok = killTerminal(req.body.sessionId)
-      res.json(ok ? { success: true } : { success: false, error: 'No such terminal session' })
+      res.json(ok ? { success: true } : noSuchSession)
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }
@@ -97,7 +98,7 @@ export function registerTerminalRoutes(app: Express): void {
     try {
       const { getTerminalReplay } = await import('../../services/ai-terminal')
       const replay = await getTerminalReplay(req.body.sessionId)
-      res.json(replay ? { success: true, data: replay } : { success: false, error: 'No such terminal session' })
+      res.json(replay ? { success: true, data: replay } : noSuchSession)
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }

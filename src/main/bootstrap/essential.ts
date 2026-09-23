@@ -26,7 +26,7 @@ import { registerAgentHandlers } from '../ipc/agent'
 import { registerArtifactHandlers } from '../ipc/artifact'
 import { registerTerminalHandlers } from '../ipc/terminal'
 import { registerSystemHandlers } from '../ipc/system'
-import { registerUpdaterHandlers, initAutoUpdater } from '../services/updater.service'
+import { registerUpdaterHandlers, initAutoUpdater } from '../services/updater'
 import { registerAuthHandlers } from '../ipc/auth'
 import { registerBootstrapStatusHandler } from './state'
 

@@ -647,8 +647,21 @@ export type { DeliverToSpaceConversation, CoordinatorDeliveryRequest } from './s
 export type { Orchestration, OrchestrationSessionDeps } from './orchestration'
 export type { Blackboard, BlackboardWriteRecord } from './blackboard'
 export type { MessageBus, TurnCompletion } from './message-bus'
-export { createTeamArtifactReader, createLocalArtifactResolver, RemoteArtifactError } from './artifact-read'
-export type { ReadTeamArtifact, TeamArtifactReadResult, RemoteArtifactFailure } from './artifact-read'
+export {
+  createTeamArtifactReader,
+  createTeamArtifactOpener,
+  createLocalArtifactResolver,
+  createLocalArtifactPathResolver,
+  defaultSharedCopyRoot,
+  pruneSharedFileCopies,
+  RemoteArtifactError,
+} from './artifact-read'
+export type {
+  ReadTeamArtifact,
+  OpenTeamArtifact,
+  TeamArtifactReadResult,
+  RemoteArtifactFailure,
+} from './artifact-read'
 export { resolveArtifactRef } from './artifact-path'
 export type { ArtifactRefResolution, ArtifactRefRejection } from './artifact-path'
 export { createTeamTriggerScheduler, TEAM_JOB_KIND } from './team-triggers'

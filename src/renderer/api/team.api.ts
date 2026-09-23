@@ -9,6 +9,7 @@ import type {
   TeamEdge,
   ProposedMember,
   TeamTriggerInput,
+  TeamArtifactOpenResult,
 } from '../../shared/apps/team-types'
 import type { ImageAttachment } from '../../shared/types/image-attachment'
 
@@ -33,6 +34,20 @@ export const teamApi = {
   teamListArtifacts: async (teamId: string): Promise<ApiResponse> => {
     if (isElectron()) return window.halo.teamListArtifacts(teamId)
     return httpRequest('GET', `/api/teams/${teamId}/artifacts`)
+  },
+
+  /**
+   * Resolve a shared file to a path this machine can open. Desktop only: the
+   * result is a local path, which a remote client cannot act on — there the
+   * caller downloads through the artifact route instead.
+   */
+  teamOpenArtifact: async (
+    teamId: string,
+    epochId: string,
+    ref: string
+  ): Promise<ApiResponse<TeamArtifactOpenResult>> => {
+    if (isElectron()) return window.halo.teamOpenArtifact({ teamId, epochId, ref })
+    return { success: false, error: 'not available in remote mode' }
   },
 
   /**

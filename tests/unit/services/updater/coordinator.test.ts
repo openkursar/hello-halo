@@ -29,15 +29,20 @@ vi.mock('electron-updater', () => ({ default: { autoUpdater } }))
 vi.mock('@electron-toolkit/utils', () => ({ is: { dev: false } }))
 
 const send = vi.fn()
-vi.mock('../../../src/main/foundation/window.service', () => ({
+vi.mock('../../../../src/main/foundation/window.service', () => ({
   getMainWindow: () => ({ isDestroyed: () => false, webContents: { send } })
 }))
 
 let productConfig: { updateConfig?: { provider: string; url?: string } } = {
   updateConfig: { provider: 'generic', url: UPDATE_URL }
 }
-vi.mock('../../../src/main/foundation/product-config', () => ({
-  loadProductConfig: () => productConfig
+vi.mock('../../../../src/main/foundation/product-config', () => ({
+  loadProductConfig: () => productConfig,
+  getUpdateChannel: () => 'stable',
+  // These tests run on a non-Windows host, so the staged path is out of scope
+  // here and is covered by its own unit tests.
+  getWindowsUpdateMode: () => 'legacy',
+  getUpdateManifestPublicKey: () => undefined
 }))
 
 /** Statuses pushed to the renderer over the `updater:status` channel. */
@@ -54,12 +59,12 @@ function emit(event: string, payload?: unknown): void {
 }
 
 async function initUpdater() {
-  const module = await import('../../../src/main/services/updater.service')
+  const module = await import('../../../../src/main/services/updater')
   module.initAutoUpdater()
   return module
 }
 
-describe('updater.service', () => {
+describe('updater coordinator', () => {
   beforeEach(async () => {
     vi.useFakeTimers()
     vi.resetModules()

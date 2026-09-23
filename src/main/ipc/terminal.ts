@@ -29,6 +29,7 @@ import { getMainWindow, onMainWindowChange } from '../foundation/window.service'
 import { broadcastToAll } from '../http/websocket'
 import { terminalRpc } from '../../shared/rpc/contracts/terminal.contract'
 import { registerRawRpcHandlers } from './rpc'
+import { NO_SUCH_TERMINAL_SESSION as noSuchSession } from '../../shared/types/terminal'
 
 const subscriptions: Array<() => void> = []
 
@@ -102,22 +103,22 @@ export function registerTerminalHandlers(): void {
 
     terminalInput: async (data: { sessionId: string; data: string }) => {
       const ok = terminalInput(data.sessionId, data.data)
-      return ok ? { success: true } : { success: false, error: 'No such terminal session' }
+      return ok ? { success: true } : noSuchSession
     },
 
     terminalResize: async (data: { sessionId: string; cols: number; rows: number }) => {
       const ok = terminalResize(data.sessionId, data.cols, data.rows)
-      return ok ? { success: true } : { success: false, error: 'No such terminal session' }
+      return ok ? { success: true } : noSuchSession
     },
 
     killTerminal: async (data: { sessionId: string }) => {
       const ok = killTerminal(data.sessionId)
-      return ok ? { success: true } : { success: false, error: 'No such terminal session' }
+      return ok ? { success: true } : noSuchSession
     },
 
     getTerminalReplay: async (data: { sessionId: string }) => {
       const replay = await getTerminalReplay(data.sessionId)
-      return replay ? { success: true, data: replay } : { success: false, error: 'No such terminal session' }
+      return replay ? { success: true, data: replay } : noSuchSession
     },
 
     // Desktop viewer flow control. The desktop app has a single window, so one
@@ -125,7 +126,7 @@ export function registerTerminalHandlers(): void {
     // http/websocket.ts.
     terminalAttach: async (data: { sessionId: string }) => {
       const ok = terminalViewerAttach(data.sessionId, DESKTOP_VIEWER_ID)
-      return ok ? { success: true } : { success: false, error: 'No such terminal session' }
+      return ok ? { success: true } : noSuchSession
     },
 
     terminalDetach: async (data: { sessionId: string }) => {

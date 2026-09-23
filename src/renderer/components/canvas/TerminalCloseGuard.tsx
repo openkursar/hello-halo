@@ -76,7 +76,9 @@ export function TerminalCloseGuard() {
         const store = useTerminalStore.getState()
         const info = store.sessions.get(sessionId)
         if (info && info.state === 'running' && !info.aiTouched) {
-          await store.killSession(sessionId)
+          // Silent: this runs during a navigation the user did not connect to
+          // any one terminal, so a failure toast here would come out of nowhere.
+          await store.killSession(sessionId, { silent: true })
         }
       },
     })

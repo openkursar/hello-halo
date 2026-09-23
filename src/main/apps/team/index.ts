@@ -113,6 +113,7 @@ interface InitTeamServiceDeps {
   getRuntime: () => TeamRuntime | null
   spaces: TeamServiceDeps['spaces']
   listArtifacts: TeamServiceDeps['listArtifacts']
+  openArtifact?: TeamServiceDeps['openArtifact']
   proposeMembersFromGoal?: TeamServiceDeps['proposeMembersFromGoal']
   getTriggerSync?: TeamServiceDeps['getTriggerSync']
   // Federation egress hooks: roster/membership/lifecycle mutations are projected
@@ -139,6 +140,7 @@ export function initTeamService(deps: InitTeamServiceDeps): TeamService {
     getRuntime: deps.getRuntime,
     spaces: deps.spaces,
     listArtifacts: deps.listArtifacts,
+    openArtifact: deps.openArtifact,
     proposeMembersFromGoal: deps.proposeMembersFromGoal ?? proposeMembersViaSdk,
     getTriggerSync: deps.getTriggerSync,
     onRosterMutated: deps.onRosterMutated,

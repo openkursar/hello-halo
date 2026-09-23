@@ -328,7 +328,11 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
     <div
       className={`rounded-lg text-sm ${
         isUser ? 'message-user px-3.5 py-2.5' : 'message-assistant px-4 py-3'
-      } ${isStreaming ? 'streaming-message' : ''} ${isWorking ? 'message-working' : ''} ${!isInContainer ? 'max-w-[85%]' : 'w-full'}`}
+      } ${isStreaming ? 'streaming-message' : ''} ${isWorking ? 'message-working' : ''} ${
+        // Assistant bubbles hold the column width so the layout does not shift when
+        // the streaming bubble is replaced; user bubbles shrink to their content.
+        isInContainer ? 'w-full' : isUser ? 'max-w-[85%]' : 'w-[85%]'
+      }`}
     >
       {/* Working indicator - shows when AI is working */}
       {isWorking && !isUser && (

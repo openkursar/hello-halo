@@ -78,7 +78,7 @@ export function TerminalTaskCard({ terminalToolCalls, isActive, showOpenButton =
       if (typeof session === 'string') referenced = session
     }
     const target = referenced || runningSessions()[0]?.id
-    if (target) openInCanvas(target)
+    if (target) void openInCanvas(target)
   }
 
   return (

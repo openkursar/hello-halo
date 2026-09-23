@@ -132,7 +132,12 @@ app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled')
 // Must be called before app.whenReady() and requestSingleInstanceLock() so that
 // each build variant (e.g. Halo vs Halo-Enterprise) uses its own userData directory.
 // This isolates cookies, sessions, localStorage, Claude SDK config, etc.
-import { getDataFolderName, DEFAULT_DATA_FOLDER_NAME, getMacIconPath } from './foundation/product-config'
+import { getDataFolderName, DEFAULT_DATA_FOLDER_NAME, getMacIconPath, getUpdateChannel, loadProductConfig } from './foundation/product-config'
+import {
+  clearRunningInstance,
+  explainLostSingleInstanceLock,
+  markRunningInstance,
+} from './foundation/running-instance'
 import { isHostnameTrustedForCertificates } from './services/browser-policy.service'
 import { join as joinPath } from 'path'
 import { isolateLogPath, logFatal } from './foundation/logging'
@@ -157,7 +162,14 @@ if (!gotTheLock) {
   // Another instance is already running, exit immediately
   // Use app.exit() instead of app.quit() to terminate synchronously
   // This prevents any further initialization code from executing
+  explainLostSingleInstanceLock(getUpdateChannel())
   app.exit(0)
+} else if (app.isPackaged) {
+  // Leave a note for any build that later loses the lock to this process. Only
+  // meaningful when two installs share a data directory, which is exactly when
+  // the losing build is a different one and the user needs to be told so.
+  markRunningInstance(getUpdateChannel(), loadProductConfig().name)
+  app.on('will-quit', clearRunningInstance)
 }
 
 // Handle second-instance event (when user tries to launch another instance)
@@ -224,7 +236,7 @@ import { flushAllPendingIndexWrites } from './services/conversation.service'
 import { shutdownRemoteAccess } from './services/remote'
 import { registerDeepLinkHandling, handleDeepLinkArgv } from './services/deep-link.service'
 import { stopOpenAICompatRouter } from './openai-compat-router'
-import { manualCheckForUpdates } from './services/updater.service'
+import { manualCheckForUpdates } from './services/updater'
 import { initAnalytics } from './services/analytics'
 import { registerProtocols } from './foundation/protocol.service'
 import { setMainWindow } from './foundation/window.service'
@@ -245,6 +257,35 @@ if (isServerMode()) {
 let mainWindow: BrowserWindow | null = null
 let displayHandlersRegistered = false
 let isAppQuitting = false
+
+/**
+ * "The first screen is up" — the cue the deferred startup tier waits on.
+ *
+ * Kept separate from Electron's first-paint event because a launch that never
+ * paints still has to reach this point; see the reveal logic in createWindow.
+ */
+let firstScreenReached = false
+const firstScreenListeners: Array<() => void> = []
+
+function registerFirstScreenListener(listener: () => void): void {
+  if (firstScreenReached) {
+    listener()
+    return
+  }
+  firstScreenListeners.push(listener)
+}
+
+function announceFirstScreen(): void {
+  if (firstScreenReached) return
+  firstScreenReached = true
+  for (const listener of firstScreenListeners.splice(0)) {
+    try {
+      listener()
+    } catch (error) {
+      console.error('[Main] First-screen listener failed:', error)
+    }
+  }
+}
 let recentRecoveryWindowStart = 0
 let recoveryAttempts = 0
 
@@ -454,10 +495,43 @@ function createWindow(): void {
     }
   })
 
-  mainWindow.on('ready-to-show', () => {
-    console.log('[Main] ready-to-show event fired')
-    mainWindow?.maximize()
-    mainWindow?.show()
+  // The window is created hidden and revealed on first paint. When the process
+  // was started by something non-interactive — the installer's "run when
+  // finished" box, or the updater relaunching after a swap — Windows may never
+  // give it a foreground paint, so that event never arrives and the app runs
+  // with no window and no tray while its processes sit in Task Manager. The
+  // user's only recourse is launching it again, which merely reveals the
+  // window that was there all along.
+  //
+  // So first paint is the preferred cue, not the only one: a loaded page will
+  // do, and failing that a deadline. Whichever fires first wins.
+  // First paint normally arrives about a second in. The page-loaded cue fires
+  // earlier than that, so it waits a moment rather than revealing an unpainted
+  // window; the outer deadline covers a launch where neither ever arrives.
+  const REVEAL_AFTER_LOAD_MS = 1500
+  const REVEAL_DEADLINE_MS = 8000
+  let revealed = false
+  let revealTimer: NodeJS.Timeout | undefined
+  let loadRevealTimer: NodeJS.Timeout | undefined
+  const reveal = (cue: string) => {
+    if (revealed || !mainWindow || mainWindow.isDestroyed()) return
+    revealed = true
+    clearTimeout(revealTimer)
+    clearTimeout(loadRevealTimer)
+    console.log(`[Main] Showing main window (${cue})`)
+    mainWindow.maximize()
+    mainWindow.show()
+    announceFirstScreen()
+  }
+  revealTimer = setTimeout(() => reveal('deadline'), REVEAL_DEADLINE_MS)
+
+  mainWindow.on('ready-to-show', () => reveal('ready-to-show'))
+  mainWindow.webContents.on('did-finish-load', () => {
+    loadRevealTimer ??= setTimeout(() => reveal('page loaded'), REVEAL_AFTER_LOAD_MS)
+  })
+  mainWindow.on('closed', () => {
+    clearTimeout(revealTimer)
+    clearTimeout(loadRevealTimer)
   })
 
   // Fix PATH after page loads (avoid blocking startup)
@@ -620,22 +694,23 @@ app.whenReady().then(async () => {
   // Window reference is managed by window.service.ts
   initializeEssentialServices()
 
-  // Phase 2: Extended Services (deferred until window is visible)
-  // This ensures Extended initialization NEVER affects startup speed
-  if (mainWindow) {
-    // Wait for window to actually show before loading Extended services
-    // This guarantees 100% that startup is not affected
-    mainWindow.once('ready-to-show', () => {
-      // Additional delay to ensure first paint is complete
-      // requestIdleCallback equivalent for Node.js
-      setImmediate(() => {
-        initializeExtendedServices()
+  // Phase 2: Extended Services (deferred until the first screen is up)
+  // This ensures Extended initialization NEVER affects startup speed.
+  //
+  // Tied to the same cue that reveals the window rather than to first paint
+  // alone: a launch that never paints — the installer's "run when finished"
+  // box, the updater relaunching after a swap — would otherwise leave the app
+  // running with no tray, no database and no automation, which is far worse
+  // than merely having no window.
+  registerFirstScreenListener(() => {
+    // Yield first so the paint (when there was one) is not competing with it.
+    setImmediate(() => {
+      initializeExtendedServices()
 
-        // Initialize analytics (after IPC handlers registered and window created)
-        initAnalytics().catch(err => console.warn('[Analytics] Init failed:', err))
-      })
+      // Initialize analytics (after IPC handlers registered and window created)
+      initAnalytics().catch(err => console.warn('[Analytics] Init failed:', err))
     })
-  }
+  })
 
   app.on('activate', function () {
     // On macOS, re-show the window when clicking dock icon

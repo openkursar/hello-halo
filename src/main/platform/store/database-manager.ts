@@ -10,9 +10,16 @@ import Database from 'better-sqlite3'
 import { existsSync, mkdirSync, renameSync } from 'fs'
 import { dirname } from 'path'
 import type { DatabaseManager, Migration } from './types'
+import { SchemaAheadError, snapshotBeforeMigration } from './schema-guard'
 
 /** Internal meta-table for tracking migration versions per namespace. */
 const MIGRATIONS_TABLE = '_migrations'
+
+/** Suffix marking a pre-migration snapshot; also the pattern used to prune old ones. */
+const BACKUP_SUFFIX = '.premigrate.bak'
+
+/** How many pre-migration snapshots to keep before pruning the oldest. */
+const MAX_BACKUPS = 2
 
 /** SQL to create the migrations tracking table. */
 const CREATE_MIGRATIONS_TABLE_SQL = `
@@ -151,6 +158,15 @@ export function createDatabaseManager(appDbPath: string): DatabaseManager {
   const connections = new Map<string, Database.Database>()
 
   /**
+   * Databases already snapshotted during this process run.
+   *
+   * Several namespaces migrate during one startup; one snapshot taken before
+   * the first of them captures the pre-upgrade state for all, and avoids
+   * writing a full copy of a multi-hundred-MB file once per module.
+   */
+  const snapshotted = new Set<string>()
+
+  /**
    * Get or create a database connection for the given path.
    */
   function getOrOpen(dbPath: string): Database.Database {
@@ -261,11 +277,27 @@ export function createDatabaseManager(appDbPath: string): DatabaseManager {
       // Get current version for this namespace
       const currentVersion = getCurrentVersion(db, namespace)
 
+      // The newest migration this build carries IS its statement of what it
+      // understands, so this check cannot drift from the code the way a
+      // separately-maintained "supported version" constant would.
+      const supportedVersion = sorted[sorted.length - 1].version
+      if (currentVersion > supportedVersion) {
+        throw new SchemaAheadError(namespace, currentVersion, supportedVersion)
+      }
+
       // Filter to only unapplied migrations
       const pending = sorted.filter(m => m.version > currentVersion)
 
       if (pending.length === 0) {
         return // Already up to date
+      }
+
+      // Snapshot before the schema changes shape. A migration that succeeds
+      // still cannot be undone, and the user may need to go back to the build
+      // that wrote this data.
+      if (currentVersion > 0 && !db.memory && !snapshotted.has(db.name)) {
+        snapshotted.add(db.name)
+        snapshotBeforeMigration(db, db.name, BACKUP_SUFFIX, MAX_BACKUPS)
       }
 
       // Verify no gaps in the migration sequence from current

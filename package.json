@@ -1,6 +1,6 @@
 {
   "name": "halo",
-  "version": "2.1.16-dev.0-rc.10",
+  "version": "2.1.16-dev.0-rc.27",
   "description": "AI that gets things done",
   "type": "module",
   "main": "./out/main/index.cjs",
@@ -67,7 +67,8 @@
     "build:android:debug": "npm run cap:sync && ANDROID_HOME=$HOME/Library/Android/sdk ./android/gradlew -p android assembleDebug",
     "release:android": "npm run cap:sync && ANDROID_HOME=$HOME/Library/Android/sdk ./android/gradlew -p android assembleRelease && node -e \"const v=require('./package.json').version; const fs=require('fs'); fs.mkdirSync('dist',{recursive:true}); fs.copyFileSync('android/app/build/outputs/apk/release/app-release.apk','dist/Halo-'+v+'.apk'); console.log('Output: dist/Halo-'+v+'.apk')\"",
     "cap:open:ios": "npx cap open ios",
-    "cap:run:ios": "npm run cap:sync && npx cap run ios"
+    "cap:run:ios": "npm run cap:sync && npx cap run ios",
+    "build:update-helper": "node scripts/build-update-helper.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.2.89",
@@ -316,6 +317,10 @@
         {
           "from": "resources/git-bash",
           "to": "git-bash"
+        },
+        {
+          "from": "resources/update-helper",
+          "to": "update-helper"
         }
       ],
       "target": [

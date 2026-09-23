@@ -13,6 +13,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import type { Response as ExpressResponse } from 'express'
+import { CLAUDE_CODE_USER_AGENT } from '../../../src/main/openai-compat-router/utils/claude-code-identity'
 
 const runInterceptors = vi.fn()
 vi.mock('../../../src/main/openai-compat-router/interceptors', () => ({
@@ -395,7 +396,7 @@ describe('anthropic passthrough header merge', () => {
     })
     const userAgentKeys = Object.keys(headers).filter((k) => k.toLowerCase() === 'user-agent')
     expect(userAgentKeys).toHaveLength(1)
-    expect(headers[userAgentKeys[0]]).toBe('claude-cli/2.1.278 (external, cli)')
+    expect(headers[userAgentKeys[0]]).toBe(CLAUDE_CODE_USER_AGENT)
   })
 
   it('gives a provider-owned user-agent precedence over the SDK identity', async () => {
@@ -410,7 +411,7 @@ describe('anthropic passthrough header merge', () => {
 
   it('injects the Claude Code compatibility identity when user-agent is absent', async () => {
     const headers = await runPassthrough({})
-    expect(headers['user-agent']).toBe('claude-cli/2.1.278 (external, cli)')
+    expect(headers['user-agent']).toBe(CLAUDE_CODE_USER_AGENT)
   })
 
   it('skips x-api-key when the provider supplies an Authorization header', async () => {

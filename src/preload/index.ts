@@ -6,7 +6,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { RpcContract, RpcClient } from '../shared/rpc/define'
 import type { CatalogModelCapability, ModelCapabilityOverride } from '../shared/types/model-capabilities'
 import type { EscalationResponse } from '../shared/apps/app-types'
-import type { UpdaterStatusPayload } from '../shared/types/updater'
+import type { UpdaterChannel, UpdaterStatusPayload } from '../shared/types/updater'
 import { modelCapabilitiesRpc } from '../shared/rpc/contracts/model-capabilities.contract'
 import { onboardingRpc } from '../shared/rpc/contracts/onboarding.contract'
 import { securityRpc } from '../shared/rpc/contracts/security.contract'
@@ -375,6 +375,8 @@ export interface HaloAPI {
   installUpdate: () => Promise<IpcResponse>
   // Resolves the raw version string — this handler does not wrap in IpcResponse.
   getVersion: () => Promise<string>
+  // Resolves the raw channel string — this handler does not wrap in IpcResponse.
+  getUpdateChannel: () => Promise<UpdaterChannel>
   onUpdaterStatus: (callback: (data: UpdaterStatusPayload) => void) => () => void
 
   // Display scale (persistent UI zoom)
@@ -633,6 +635,11 @@ export interface HaloAPI {
   teamSetTrigger: (input: { teamId: string; trigger: TeamTriggerInput; triggerId?: string }) => Promise<IpcResponse>
   teamRemoveTrigger: (input: { teamId: string; triggerId: string }) => Promise<IpcResponse>
   teamListArtifacts: (teamId: string) => Promise<IpcResponse>
+  /**
+   * Resolve a shared file to a path this machine can open. Addressed by ref,
+   * because a listing's path only resolves for a member running here.
+   */
+  teamOpenArtifact: (input: { teamId: string; epochId: string; ref: string }) => Promise<IpcResponse<import('../shared/apps/team-types').TeamArtifactOpenResult>>
   /** Load a member's team-channel chat history for one run (JSONL). */
   teamChatMessages: (input: { appId: string; spaceId: string; teamId: string; epochId: string; sinceSeq?: number }) => Promise<IpcResponse>
   /** Run history (epochs), newest first. */
@@ -900,6 +907,7 @@ const api: HaloAPI = {
   checkForUpdates: () => ipcRenderer.invoke('updater:check'),
   installUpdate: () => ipcRenderer.invoke('updater:install'),
   getVersion: () => ipcRenderer.invoke('updater:get-version'),
+  getUpdateChannel: () => ipcRenderer.invoke('updater:get-channel'),
   onUpdaterStatus: (callback) => createEventListener('updater:status', callback),
 
   // Browser (embedded browser for Content Canvas).
@@ -1026,6 +1034,7 @@ const api: HaloAPI = {
   teamPause: (teamId) => ipcRenderer.invoke(TEAM_IPC.pause, teamId),
   teamGetDetail: (teamId) => ipcRenderer.invoke(TEAM_IPC.getDetail, teamId),
   teamListArtifacts: (teamId) => ipcRenderer.invoke(TEAM_IPC.listArtifacts, teamId),
+  teamOpenArtifact: (input) => ipcRenderer.invoke(TEAM_IPC.openArtifact, input),
   teamListTriggers: (teamId) => ipcRenderer.invoke(TEAM_IPC.listTriggers, teamId),
   teamSetTrigger: (input) => ipcRenderer.invoke(TEAM_IPC.setTrigger, input),
   teamRemoveTrigger: (input) => ipcRenderer.invoke(TEAM_IPC.removeTrigger, input),

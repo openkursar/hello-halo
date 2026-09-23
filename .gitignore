@@ -107,3 +107,10 @@ src/sdk/
 # Local git worktrees created for isolated work
 .claude/worktrees/
 .cluster*
+
+# Compiled Windows update helper (built by scripts/build-update-helper.mjs)
+resources/update-helper/
+win-update-helper/bin/
+
+# Editor swap files
+*.swp

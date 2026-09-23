@@ -7,6 +7,8 @@ export * from './config'
 export * from './url'
 export * from './json-schema'
 export * from './normalize-system-prompt'
+export * from './claude-code-identity'
+export * from './claude-code-attribution'
 export * from './session-affinity'
 
 /**

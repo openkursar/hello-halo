@@ -1021,7 +1021,38 @@ export interface TeamArtifactGroup {
   appId: string
   memberName: string
   spaceId: string | null
+  /**
+   * The run these files belong to. Carried rather than left to the caller: a
+   * listing requested without an epoch resolves one here, and opening a file
+   * has to name the same run the listing used.
+   */
+  epochId: string
   artifacts: TeamArtifact[]
+}
+
+/**
+ * Why a shared file could not be opened. The renderer writes the sentence, so
+ * the reason crosses as a code — the main process holds no translations.
+ */
+export type TeamArtifactOpenFailure = 'not-found' | 'ambiguous' | 'unreachable' | 'unavailable' | 'too-large' | 'error'
+
+/** Outcome of opening a shared file, whichever machine produced it. */
+export interface TeamArtifactOpenResult {
+  ok: boolean
+  ref: string
+  /** Absolute path on THIS machine. Present when ok. */
+  path?: string
+  /** Owner display name when the file came from another machine; null when local. */
+  owner?: string | null
+  /** True when `path` is a read-only copy of a teammate's file, not the file itself. */
+  copied?: boolean
+  /**
+   * The copy is a kind of file the OS would run rather than display. Show it
+   * in its folder instead of opening it: a click on a shared file must never
+   * execute what someone else's digital human produced.
+   */
+  revealOnly?: boolean
+  reason?: TeamArtifactOpenFailure
 }
 
 // ── Space collaboration projection (renderer card + space agent status) ──
@@ -1325,6 +1356,7 @@ export const TEAM_IPC = {
   pause: 'team:pause',
   getDetail: 'team:get-detail',
   listArtifacts: 'team:list-artifacts',
+  openArtifact: 'team:open-artifact',
   listTriggers: 'team:list-triggers',
   setTrigger: 'team:set-trigger',
   removeTrigger: 'team:remove-trigger',

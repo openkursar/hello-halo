@@ -48,6 +48,7 @@ import type {
   TeamRunTrigger,
   EpochBoard,
   TeamArtifactGroup,
+  TeamArtifactOpenResult,
   TeamArtifact,
   TeamConversation,
   TeamPendingEscalation,
@@ -71,6 +72,13 @@ export interface TeamServiceDeps {
   getRuntime: () => TeamRuntime | null
   spaces: TeamSpaceDeps
   listArtifacts: (spaceId: string) => Promise<Artifact[]>
+  /**
+   * Resolve a published ref to a path this machine can open, fetching from the
+   * producing member's owner when it is not here (apps/runtime/team's opener,
+   * injected so this layer holds no transport). Absent in test runtimes, where
+   * opening reports the capability as unavailable rather than pretending.
+   */
+  openArtifact?: (params: { teamId: string; epochId: string; ref: string }) => Promise<TeamArtifactOpenResult>
   proposeMembersFromGoal: (goal: string, owningSpaceId: string) => Promise<ProposedMember[]>
   /**
    * Late-bound to avoid a runtime<->service import cycle: the scheduler is
@@ -238,6 +246,12 @@ export interface TeamService {
   setTrigger(teamId: string, input: TeamTriggerInput, triggerId?: string): TeamTrigger
   removeTrigger(teamId: string, triggerId: string): void
   listArtifacts(teamId: string, epochId?: string): Promise<TeamArtifactGroup[]>
+  /**
+   * Resolve a shared file to a path this machine can open. Location-transparent:
+   * a teammate's file is fetched from their machine and written here read-only,
+   * so editing the copy cannot be mistaken for editing their original.
+   */
+  openArtifact(teamId: string, epochId: string, ref: string): Promise<TeamArtifactOpenResult>
   /**
    * What this office's members did on THIS machine while somebody else was
    * driving them, newest first. Local-only, like the policy it records against:
@@ -1302,8 +1316,20 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       .filter((m) => groups.get(m.appId)?.artifacts.length)
       .map((m) => {
         const g = groups.get(m.appId)!
-        return { appId: m.appId, memberName: m.memberName, spaceId: g.spaceId, artifacts: g.artifacts }
+        return { appId: m.appId, memberName: m.memberName, spaceId: g.spaceId, epochId: epoch.id, artifacts: g.artifacts }
       })
+  }
+
+  /**
+   * `path` in a listing is resolved against THIS machine, which is only the
+   * right file when the producer runs here. Opening therefore goes by ref
+   * through the same rule the agent's reader uses, so a click and a
+   * `team_read_artifact` can never land on different files.
+   */
+  async function openArtifact(teamId: string, epochId: string, ref: string): Promise<TeamArtifactOpenResult> {
+    requireTeam(teamId)
+    if (!deps.openArtifact) return { ok: false, ref, reason: 'unavailable' }
+    return deps.openArtifact({ teamId, epochId, ref })
   }
 
   function listEpochs(teamId: string): TeamEpochSummary[] {
@@ -1649,6 +1675,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     pauseTeam,
     dissolveTeam,
     listArtifacts,
+    openArtifact,
     listToolAudit,
     listEpochs,
     getEpochBoard,

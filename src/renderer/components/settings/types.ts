@@ -110,7 +110,15 @@ export interface HealthReport {
  * 'downloading' covers the window between finding an update and it being
  * ready to apply, so the row never looks idle while work is in flight.
  */
-export type UpdateCheckPhase = 'idle' | 'checking' | 'downloading' | 'ready' | 'up-to-date' | 'failed'
+export type UpdateCheckPhase =
+  | 'idle'
+  | 'checking'
+  | 'downloading'
+  /** Unpacking beside the running version; no percentage to report. */
+  | 'staging'
+  | 'ready'
+  | 'up-to-date'
+  | 'failed'
 
 /**
  * Update status state

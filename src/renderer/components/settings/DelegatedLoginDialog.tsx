@@ -109,8 +109,13 @@ export function DelegatedLoginDialog({ open, onClose, onComplete }: DelegatedLog
       setError(t('Could not open a terminal session'))
       return
     }
-    openInCanvas(session.id, t('Claude Code login'))
-    await api.terminalInput(session.id, `${status.loginCommand}\n`)
+    try {
+      await openInCanvas(session.id, t('Claude Code login'))
+      await api.terminalInput(session.id, `${status.loginCommand}\n`)
+    } catch (err) {
+      console.error('[DelegatedLoginDialog] Could not start the login command:', err)
+      setError(t('Could not open a terminal session'))
+    }
   }
 
   const handleCopy = async () => {

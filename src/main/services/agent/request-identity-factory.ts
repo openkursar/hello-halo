@@ -3,8 +3,12 @@
  * whatever this returns — every identity value is built here.
  */
 
-import { createHash } from 'node:crypto'
 import type { RequestIdentity } from '@hello-halo/agent-sdk'
+import {
+  CLAUDE_CODE_USER_AGENT,
+  buildAttributionLine,
+  extractFirstUserMessageText,
+} from '../../openai-compat-router'
 
 // ---------------------------------------------------------------------------
 // Platform detection
@@ -39,51 +43,12 @@ function normalizeArch(arch: string): Arch {
 }
 
 // ---------------------------------------------------------------------------
-// Fingerprint
-// ---------------------------------------------------------------------------
-
-/** Constant across installs; changing it changes the value on every request. */
-const FINGERPRINT_SALT = '59cf53e54c78'
-
-function computeFingerprint(firstUserMessageText: string, version: string): string {
-  const chars = [4, 7, 20].map(i => firstUserMessageText[i] || '0').join('')
-  const input = `${FINGERPRINT_SALT}${chars}${version}`
-  return createHash('sha256').update(input).digest('hex').slice(0, 3)
-}
-
-function extractFirstUserMessageText(
-  messages: Array<{ role: string; content: unknown }>,
-): string {
-  const userMsg = messages.find(m => m.role === 'user')
-  if (!userMsg) return ''
-  const content = userMsg.content
-  if (typeof content === 'string') return content
-  if (Array.isArray(content)) {
-    const textBlock = content.find(
-      (b: Record<string, unknown>) => b.type === 'text',
-    )
-    if (textBlock && typeof (textBlock as Record<string, unknown>).text === 'string') {
-      return (textBlock as Record<string, unknown>).text as string
-    }
-  }
-  return ''
-}
-
-// ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
 
-/**
- * Pinned rather than read from the installed packages: such a read can throw,
- * and a throw here costs the whole identity, not just the version.
- * `CLAUDE_CODE_COMPAT_USER_AGENT` in `openai-compat-router/server/request-handler.ts`
- * pins the same value and must move with this one.
- */
-const DEFAULT_CC_VERSION = '2.1.278'
 const DEFAULT_SDK_PACKAGE_VERSION = '0.74.0'
 
 interface IdentityParams {
-  ccVersion?: string
   sdkPackageVersion?: string
   deviceId?: string
   sessionId?: string
@@ -91,13 +56,12 @@ interface IdentityParams {
 }
 
 export function buildRequestIdentity(params: IdentityParams): RequestIdentity {
-  const ccVersion = params.ccVersion ?? DEFAULT_CC_VERSION
   const pkgVer = params.sdkPackageVersion ?? DEFAULT_SDK_PACKAGE_VERSION
 
   return {
     headers: {
       'accept': 'application/json',
-      'user-agent': `claude-cli/${ccVersion} (external, cli)`,
+      'user-agent': CLAUDE_CODE_USER_AGENT,
       'x-app': 'cli',
       'anthropic-dangerous-direct-browser-access': 'true',
       ...(params.sessionId
@@ -116,17 +80,10 @@ export function buildRequestIdentity(params: IdentityParams): RequestIdentity {
       'x-stainless-retry-count': String(attempt),
     }),
 
-    systemPrefix: (messages) => {
-      const fingerprint = computeFingerprint(
-        extractFirstUserMessageText(messages),
-        ccVersion,
-      )
-      const version = `${ccVersion}.${fingerprint}`
-      return {
-        type: 'text',
-        text: `x-anthropic-billing-header: cc_version=${version}; cc_entrypoint=cli; cch=00000;`,
-      }
-    },
+    systemPrefix: (messages) => ({
+      type: 'text',
+      text: buildAttributionLine(extractFirstUserMessageText(messages)),
+    }),
 
     metadata: {
       user_id: JSON.stringify({

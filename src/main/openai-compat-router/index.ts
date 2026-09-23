@@ -94,7 +94,11 @@ export {
   generateToolCallId,
   // JSON helpers
   safeJsonParse,
-  deepClone
+  deepClone,
+  // Claude Code identity on outgoing Anthropic requests
+  CLAUDE_CODE_USER_AGENT,
+  buildAttributionLine,
+  extractFirstUserMessageText
 } from './utils'
 
 // ============================================================================

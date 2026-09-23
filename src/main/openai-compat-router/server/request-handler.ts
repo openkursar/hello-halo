@@ -25,7 +25,7 @@ import {
   streamAnthropicPassthrough,
   pipeAnthropicPassthrough
 } from '../stream'
-import { isNativeAnthropicHost, normalizeSystemPrompt, safeJsonParse, pickSessionAffinityHeaders, pickSessionId, inlineToolSchemaRefs } from '../utils'
+import { isNativeAnthropicHost, normalizeClaudeCodeAttribution, normalizeSystemPrompt, resolveClaudeCodeUserAgent, safeJsonParse, pickSessionAffinityHeaders, pickSessionId, inlineToolSchemaRefs } from '../utils'
 import { proxyFetch } from '../../services/proxy-fetch'
 import { getApiTypeFromUrl, isValidEndpointUrl, getEndpointUrlError, shouldForceStream } from './api-type'
 import { runInterceptors } from '../interceptors'
@@ -48,8 +48,6 @@ export interface RequestHandlerOptions {
 }
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000 // 10 minutes
-// Some Anthropic models gate access on the reported Claude Code version.
-const CLAUDE_CODE_COMPAT_USER_AGENT = 'claude-cli/2.1.278 (external, cli)'
 
 /**
  * Anthropic error type to HTTP status code mapping
@@ -292,9 +290,9 @@ async function fetchAnthropicUpstream(
       }
     }
     headers['content-type'] = contentTypeValue || 'application/json'
-    headers['user-agent'] = userAgentValue && !userAgentValue.startsWith('claude-cli/')
-      ? userAgentValue
-      : CLAUDE_CODE_COMPAT_USER_AGENT
+    // Some Anthropic models gate access on the reported Claude Code version; its
+    // in-prompt counterpart is handled by normalizeClaudeCodeAttribution.
+    headers['user-agent'] = resolveClaudeCodeUserAgent(userAgentValue)
 
     return await proxyFetch(targetUrl, {
       method: 'POST',
@@ -755,9 +753,12 @@ export async function handleMessagesRequest(
 
   // Route based on apiType
   if (configApiType === 'anthropic_passthrough') {
-    return handleAnthropicPassthrough(request, config, res, {
+    // The version gate lives upstream of this path only (see
+    // utils/claude-code-attribution.ts).
+    const { request: attributed, modified: attributionNormalized } = normalizeClaudeCodeAttribution(request)
+    return handleAnthropicPassthrough(attributed, config, res, {
       ...options,
-      requestModified
+      requestModified: requestModified || attributionNormalized
     })
   }
 

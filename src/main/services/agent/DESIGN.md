@@ -261,7 +261,12 @@ When the active engine is `halo`, `buildBaseSdkOptions` attaches a
 `requestIdentity` to the SDK options. The SDK is identity-agnostic — it has a
 `RequestIdentity` seam and forwards whatever it is handed; every
 provider-specific constant and algorithm lives host-side in
-`request-identity-factory.ts`.
+`request-identity-factory.ts` — except the reported Claude Code version, its
+user-agent and its attribution line, which live in
+`openai-compat-router/utils/claude-code-identity.ts` (read through the
+router's index). The router applies the same
+fixed version to every request it forwards on its Anthropic passthrough path,
+in both the header and the system prompt.
 
 What the factory produces, per request:
 
