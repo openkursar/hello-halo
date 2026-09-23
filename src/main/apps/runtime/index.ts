@@ -436,10 +436,12 @@ function spaceChangeDependencies() {
 export function getStudioSummary(language?: string) {
   const manager = getAppManager()
   if (!manager) throw new Error('App manager is not initialized')
-  const coordinators = getTeamStore()?.listDirectoryMemberships()
-    .filter(member => member.isSystemCoordinator || member.ephemeral)
+  // Must exclude exactly what the directory listing excludes, or the summary
+  // counts disagree with the rows underneath them.
+  const ephemeral = getTeamStore()?.listDirectoryMemberships()
+    .filter(member => member.ephemeral)
     .map(member => member.appId) ?? []
-  return manager.getStudioSummary(language, coordinators)
+  return manager.getStudioSummary(language, ephemeral)
 }
 
 export function listPeopleDirectory(query: import('../../../shared/apps/people-directory').PeopleDirectoryQuery = {}) {

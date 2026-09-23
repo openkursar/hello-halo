@@ -97,6 +97,7 @@ function makeRuntime(store: TeamStore) {
     sealEpoch: vi.fn(async () => {}),
     getObservableStatus: vi.fn(() => 'idle'),
     getMemberStatus: vi.fn(() => 'working' as const),
+    getMemberBusy: vi.fn(() => []),
   }
 }
 
@@ -284,6 +285,42 @@ describe('temporary space collaborations', () => {
   it('runTeam refuses an ephemeral collaboration outright', async () => {
     const { team } = await ctx.service.createCollab(collabInput())
     await expect(ctx.service.runTeam(team.id)).rejects.toThrow(/Save it as a team/)
+  })
+
+  it('a collaboration works in one conversation and cannot open a second', async () => {
+    const { team, epochId } = await ctx.service.createCollab(collabInput())
+
+    // The room is the conversation its space conversation coordinates — the
+    // kind is what lets a surface find it without guessing.
+    expect(ctx.service.listConversations(team.id)).toMatchObject([
+      { epochId, kind: 'collab', label: team.name, readonly: false },
+    ])
+
+    expect(() => ctx.service.openConversation(team.id, 'Side task')).toThrow(/temporary collaboration/)
+    expect(ctx.service.listConversations(team.id)).toHaveLength(1)
+  })
+
+  it('a completed collaboration keeps its room listed for review', async () => {
+    const { team, epochId } = await ctx.service.createCollab(collabInput())
+    await ctx.service.completeCollab(team.id, 'done')
+
+    // The room's record survives the seal: history stays reachable from the
+    // workbench instead of vanishing into an unrecoverable "unavailable" state.
+    const rooms = ctx.service.listConversations(team.id)
+    expect(rooms.find(c => c.epochId === epochId)).toMatchObject({ kind: 'collab' })
+  })
+
+  it('a saved collaboration opens tasks again, and its room still reads as the collaboration it was', async () => {
+    const { team, epochId } = await ctx.service.createCollab(collabInput())
+    ctx.service.saveCollab(team.id)
+
+    const { epochId: taskId } = ctx.service.openConversation(team.id, 'Follow-up')
+    const rooms = ctx.service.listConversations(team.id)
+    expect(rooms).toHaveLength(2)
+    // The room keeps its own identity: saving the team does not rewrite it into
+    // a task, and the task the team opened beside it is an ordinary one.
+    expect(rooms.find(c => c.epochId === epochId)?.kind).toBe('collab')
+    expect(rooms.find(c => c.epochId === taskId)?.kind).toBe('native')
   })
 
   it('a saved collaboration provisions its real lead on the first standalone run', async () => {

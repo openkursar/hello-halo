@@ -27,11 +27,12 @@ function patternToRegex(pattern: string): RegExp {
 }
 
 /**
- * The office-member allowlist: the team READ-ONLY family plus the single
- * member-dispatch endpoint (send-to-member). The POST is admitted here only so
- * the credential reaches the route; the route itself then enforces who may
- * dispatch to whom (canContact + canCoordinationWrite). Exported so downstream
- * slices and tests can introspect the security boundary.
+ * The office-member allowlist: the team READ-ONLY family plus the two
+ * member-dispatch endpoints (send-to-member and its stop). The POSTs are
+ * admitted here only so the credential reaches the route; each route then
+ * enforces who may dispatch to whom (canContact + canCoordinationWrite) —
+ * stopping a member is gated as dispatching to it, never more loosely.
+ * Exported so downstream slices and tests can introspect the security boundary.
  */
 export const OFFICE_READ_ROUTES: ScopeRoute[] = [
   { method: 'GET', regex: patternToRegex('/api/teams/:teamId') },
@@ -42,6 +43,7 @@ export const OFFICE_READ_ROUTES: ScopeRoute[] = [
   { method: 'GET', regex: patternToRegex('/api/teams/:teamId/epochs/:epochId/board') },
   { method: 'GET', regex: patternToRegex('/api/teams/:teamId/epochs/:epochId/artifacts') },
   { method: 'POST', regex: patternToRegex('/api/teams/:teamId/members/:appId/send') },
+  { method: 'POST', regex: patternToRegex('/api/teams/:teamId/members/:appId/stop') },
 ]
 
 /**

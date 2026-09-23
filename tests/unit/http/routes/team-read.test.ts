@@ -46,6 +46,7 @@ const listEpochs = vi.fn<[string], unknown[]>()
 const getTeamDetail = vi.fn<[string], unknown>()
 const getEpochBoard = vi.fn<[string, string], unknown>()
 const sendToMember = vi.fn<[unknown], Promise<unknown>>()
+const stopMember = vi.fn<[unknown], Promise<unknown>>()
 const listArtifacts = vi.fn<[string, string?], Promise<unknown[]>>()
 
 vi.mock('../../../../src/main/apps/team', () => ({
@@ -54,6 +55,7 @@ vi.mock('../../../../src/main/apps/team', () => ({
     getTeamDetail: (teamId: string) => getTeamDetail(teamId),
     getEpochBoard: (teamId: string, epochId: string) => getEpochBoard(teamId, epochId),
     sendToMember: (input: unknown) => sendToMember(input),
+    stopMember: (input: unknown) => stopMember(input),
     listArtifacts: (teamId: string, epochId?: string) => listArtifacts(teamId, epochId),
   }),
   getTeamStore: () => ({
@@ -138,6 +140,7 @@ beforeEach(() => {
   readTeamMemberMessages.mockReturnValue([])
   fetchMemberHistory.mockResolvedValue({ messages: [], stale: false })
   sendToMember.mockResolvedValue({ ok: true, finalMessage: 'done' })
+  stopMember.mockResolvedValue({ ok: true, stopped: true })
 })
 
 // ── Cross-office isolation ────────────────────────────────────────────────
@@ -644,5 +647,86 @@ describe('POST /api/teams/:teamId/members/:appId/send scope gating', () => {
     expect(sendToMember).toHaveBeenCalledWith(
       expect.objectContaining({ epochId: 'epoch-explicit' }),
     )
+  })
+})
+
+// ── Member dispatch: POST /members/:appId/stop ────────────────────────────
+
+describe('POST /api/teams/:teamId/members/:appId/stop scope gating', () => {
+  async function post(base: string, teamId: string, appId: string, body: Record<string, unknown> = {}) {
+    return fetch(`${base}/api/teams/${teamId}/members/${appId}/stop`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  }
+
+  it('PIN request (no credential) may stop, and the epoch is left for the service to resolve', async () => {
+    listMembersByTeam.mockReturnValue([{ appId: 'member-1' }])
+
+    await withServer(buildApp(null), async (base) => {
+      const res = await post(base, 'X', 'member-1')
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.data).toEqual({ ok: true, stopped: true })
+    })
+    // No epochId invented at the boundary: the service resolves the same session
+    // a send would, so the two can never act on different conversations.
+    expect(stopMember).toHaveBeenCalledWith({ teamId: 'X', appId: 'member-1' })
+  })
+
+  it('honors an explicit epochId in the body', async () => {
+    listMembersByTeam.mockReturnValue([{ appId: 'member-1' }])
+    await withServer(buildApp(null), async (base) => {
+      const res = await post(base, 'X', 'member-1', { epochId: 'epoch-explicit' })
+      expect(res.status).toBe(200)
+    })
+    expect(stopMember).toHaveBeenCalledWith({ teamId: 'X', appId: 'member-1', epochId: 'epoch-explicit' })
+  })
+
+  it('404 when the target is not a member of the team', async () => {
+    listMembersByTeam.mockReturnValue([{ appId: 'member-1' }])
+    await withServer(buildApp(null), async (base) => {
+      const res = await post(base, 'X', 'intruder')
+      expect(res.status).toBe(404)
+    })
+    expect(stopMember).not.toHaveBeenCalled()
+  })
+
+  it('403 when a read-only caller tries to stop a peer (gated as dispatching to it)', async () => {
+    listMembersByTeam.mockReturnValue([
+      { appId: 'caller', memberIdentity: 'id-reader', scopeJson: JSON.stringify({ visibility: 'readonly' }) },
+      { appId: 'target', memberIdentity: 'id-target' },
+    ])
+    await withServer(buildApp('X'), async (base) => {
+      const res = await post(base, 'X', 'target')
+      expect(res.status).toBe(403)
+    })
+    expect(stopMember).not.toHaveBeenCalled()
+  })
+
+  it('403 when a non-lead caller targets a lead-only member', async () => {
+    getTeamById.mockReturnValue({ leadAppId: 'the-lead' })
+    listMembersByTeam.mockReturnValue([
+      { appId: 'caller', memberIdentity: 'id-reader' },
+      { appId: 'target', memberIdentity: 'id-target', scopeJson: JSON.stringify({ contactable: 'lead-only' }) },
+    ])
+    await withServer(buildApp('X'), async (base) => {
+      const res = await post(base, 'X', 'target')
+      expect(res.status).toBe(403)
+    })
+    expect(stopMember).not.toHaveBeenCalled()
+  })
+
+  it('a full+contactable-all caller may stop a peer', async () => {
+    listMembersByTeam.mockReturnValue([
+      { appId: 'caller', memberIdentity: 'id-reader' },
+      { appId: 'target', memberIdentity: 'id-target' },
+    ])
+    await withServer(buildApp('X'), async (base) => {
+      const res = await post(base, 'X', 'target')
+      expect(res.status).toBe(200)
+    })
+    expect(stopMember).toHaveBeenCalledTimes(1)
   })
 })

@@ -544,6 +544,45 @@ export interface HistoryResponseFrame {
   fid: Fid
 }
 
+/**
+ * Viewer → owner: abort the turn a member is running right now. A turn runs only
+ * in the process that owns the member, so pressing stop on another node's
+ * teammate has to travel — a local abort there would find nothing and silently
+ * do nothing.
+ */
+export interface StopTurnRequestFrame {
+  kind: 'stop-turn-request'
+  officeId: string
+  fromNode: NodeId
+  teamId: string
+  /** The member whose turn is to be aborted (must be owned by the receiver). */
+  appId: string
+  /** The session whose turn is aborted; the owner keys its chat session by it. */
+  epochId: string
+  /** Set by the host when forwarding to the true owner. One hop max. */
+  relayed?: boolean
+  fid: Fid
+}
+
+/** Owner → viewer: the stop was carried out, or an `error` code says why not. */
+export interface StopTurnResponseFrame {
+  kind: 'stop-turn-response'
+  officeId: string
+  fromNode: NodeId
+  reFid: Fid
+  teamId: string
+  appId: string
+  epochId: string
+  /**
+   * Present on success. False means the stop arrived and found nothing running —
+   * a real answer, not a failure: the turn had already ended.
+   */
+  stopped?: boolean
+  /** Technical code (e.g. 'not-owned'); NEVER surfaced to users. */
+  error?: string
+  fid: Fid
+}
+
 /** The union of all M2-added frames (folded into FederationMessage in ./types). */
 export type M2Frame =
   | AuthorityClaimFrame
@@ -561,6 +600,8 @@ export type M2Frame =
   | OfficeDissolvedFrame
   | HistoryRequestFrame
   | HistoryResponseFrame
+  | StopTurnRequestFrame
+  | StopTurnResponseFrame
 
 /** Frame kinds the M2 dispatch layer owns (everything outside the M1 set). */
 export const M2_FRAME_KINDS: ReadonlySet<string> = new Set<M2Frame['kind']>([
@@ -579,6 +620,8 @@ export const M2_FRAME_KINDS: ReadonlySet<string> = new Set<M2Frame['kind']>([
   'office-dissolved',
   'history-request',
   'history-response',
+  'stop-turn-request',
+  'stop-turn-response',
 ])
 
 export function isM2Frame(frame: { kind: string }): frame is M2Frame {

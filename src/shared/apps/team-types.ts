@@ -426,8 +426,13 @@ export interface TeamCheckView {
  *   'native' — created in the Halo UI ("New session"), user ↔ team (lead).
  *   'im'     — an inbound IM chat handled by the team (read-only in Halo).
  *   'member' — a 1:1 side-thread with a specific teammate (member direct chat).
+ *   'run'    — one execution of the team's goal.
+ *   'collab' — the one conversation a temporary space collaboration works in,
+ *              coordinated by the space conversation that assembled the team.
+ *              A collaboration has exactly this conversation and cannot open
+ *              another, so a reader that finds it has found the whole room.
  */
-export type TeamConversationKind = 'native' | 'im' | 'member' | 'run'
+export type TeamConversationKind = 'native' | 'im' | 'member' | 'run' | 'collab'
 
 /**
  * A renderer-facing projection of one open conversation epoch. Labels are
@@ -1328,6 +1333,7 @@ export const TEAM_IPC = {
   joinOffice: 'team:join-office',
   leaveOffice: 'team:leave-office',
   sendToMember: 'team:send-to-member',
+  stopMember: 'team:stop-member',
   listConversations: 'team:list-conversations',
   openConversation: 'team:open-conversation',
   renameConversation: 'team:rename-conversation',

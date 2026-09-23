@@ -117,6 +117,8 @@ import { cleanupImChannelTempFiles, getActiveImChannelManager } from '../apps/ru
 import { registerIdleTask, startIdleDrain } from './idle-queue'
 import { seedDefaultAppIfNeeded } from '../apps/manager/seed'
 import { loadBuiltinApps } from '../apps/manager/builtin-loader'
+import { seedBuiltinSkills } from '../apps/manager/builtin-skills'
+import { verifyOfficeRuntime } from '../services/office-runtime'
 import { backfillKnowledgeSeeds } from '../apps/manager/knowledge-backfill'
 
 // Module-level reference to db for cleanup
@@ -690,6 +692,13 @@ async function initPlatformAndApps(): Promise<void> {
         // member, diverging from how the same member reads on its own node.
         readMemberHistory: ({ teamId, appId, epochId }) =>
           serializeTeamTranscript(teamId, appId, epochId),
+        // Owner-side turn abort: a stop pressed on a viewer's machine lands here,
+        // in the only process where that member's turn actually runs. Routed
+        // through the LOCAL session deps — the same call a stop pressed on this
+        // machine makes — so a teammate stops identically whichever keyboard the
+        // button was pressed on.
+        stopMemberTurn: ({ teamId, appId, epochId }) =>
+          localSessionDeps.stopTeamSession(appId, teamId, epochId),
         // The same read without the request-scoped seam, driving the session-feed
         // plane's proactive replication of owned transcripts to every office node.
         readOwnedTranscript: (teamId, appId, epochId) =>
@@ -837,6 +846,13 @@ async function initPlatformAndApps(): Promise<void> {
           // undefined → `unregister()` threw → the remote wake promise never
           // resolved → 30-min hang + "no waiter; dropping").
           registerTurnComplete: (corr, cb) => fedManager.registerTurnComplete(corr, cb),
+          sendStop: (p) =>
+            fedManager.stopMemberTurn({
+              officeId: p.officeId,
+              ownerNodeId: p.ownerNodeId,
+              appId: p.appId,
+              epochId: p.epochId,
+            }),
         })
       : localSessionDeps
 
@@ -1249,6 +1265,8 @@ async function initPlatformAndApps(): Promise<void> {
   registerIdleTask('seed-default-app', () => seedDefaultAppIfNeeded(appManager))
   registerIdleTask('startup-snapshot', () => runStartupSnapshot(appManager, runtime))
   registerIdleTask('backfill-knowledge-seeds', () => backfillKnowledgeSeeds(appManager))
+  registerIdleTask('seed-builtin-skills', () => seedBuiltinSkills(appManager))
+  registerIdleTask('verify-office-runtime', () => verifyOfficeRuntime())
   startIdleDrain()
 
   const dt = performance.now() - t0

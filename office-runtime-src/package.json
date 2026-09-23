@@ -1,0 +1,17 @@
+{
+  "name": "halo-office-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Staging manifest for the bundled pure-JS Office library runtime. scripts/prepare-office-runtime.mjs installs these into resources/office-runtime/node_modules for the halo-node shim (NODE_PATH). Pure-JS packages only — the prepare script fails the build if any native .node binary lands.",
+  "dependencies": {
+    "@pdf-lib/fontkit": "1.1.1",
+    "docx": "9.7.1",
+    "exceljs": "4.4.0",
+    "fast-xml-parser": "5.11.1",
+    "jszip": "3.10.2",
+    "mammoth": "1.12.3",
+    "pdf-lib": "1.17.1",
+    "pptxgenjs": "4.0.1",
+    "unpdf": "1.8.1"
+  }
+}

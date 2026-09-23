@@ -449,7 +449,13 @@ try {
     const owner = activityPerMember.find(({ activity }) => (activity ?? []).some((e) => e.type === 'escalation'))
     if (!owner) { mark('FAIL', `no escalation activity entry found on any member; noSaveFailure=${noSaveFailure}`); return }
     const entry = owner.activity.find((e) => e.type === 'escalation')
-    const respond = await apiOk(node, 'POST', `/api/apps/${owner.appId}/escalation/${entry.id}/respond`, { text: 'Use a plain markdown report.' })
+    // acceptDecision rejects a bare text reply when the entry has structured
+    // questions; it requires one answer per question instead.
+    const questions = entry.content?.questions
+    const payload = questions?.length
+      ? { answers: questions.map(() => ({ text: 'Use a plain markdown report.' })) }
+      : { text: 'Use a plain markdown report.' }
+    const respond = await apiOk(node, 'POST', `/api/apps/${owner.appId}/escalation/${entry.id}/respond`, payload)
     const resumed = await pollUntil(async () => {
       const d = await detail(team.id)
       return d.team.status !== 'waiting_user' ? d : null

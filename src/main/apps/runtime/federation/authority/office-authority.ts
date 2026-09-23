@@ -31,6 +31,7 @@ import { createReplication, type Replication, type MemberWriteRecord } from './r
 import { createScopeGate, type ScopeGate } from './scope-gate'
 import { createArtifactService, type ArtifactService } from './artifact-fetch'
 import { createHistoryService, type HistoryService, type ReadMemberHistory } from './history-fetch'
+import { createStopTurnService, type StopTurnService, type StopMemberTurn } from './stop-turn'
 import { handleShadowWriteReject, confirmShadowWrite } from './location-aware-blackboard'
 import type { ArtifactRef } from '../protocol-m2'
 
@@ -118,6 +119,15 @@ export interface OfficeAuthorityDeps {
    */
   readMemberHistory?: ReadMemberHistory
 
+  // ── stop plane ──
+  /**
+   * Owner-side: abort an owned member's running turn. Injected so the federation
+   * layer never imports app-chat. Absent → this node stops nothing (every
+   * request answers "nothing was running"), which is the honest reading: a node
+   * that cannot run turns has none to abort.
+   */
+  stopMemberTurn?: StopMemberTurn
+
   // ── replication observability ──
   /**
    * Fired after a hot-standby applies a replicated task/finding to its replica
@@ -163,6 +173,7 @@ export interface OfficeAuthority {
   replication: Replication
   artifact: ArtifactService
   history: HistoryService
+  stopTurn: StopTurnService
   isAuthoritySelf: () => boolean
   isPaused: () => boolean
   getTerm: () => number
@@ -335,6 +346,19 @@ export function createOfficeAuthority(deps: OfficeAuthorityDeps): OfficeAuthorit
     },
   })
 
+  const stopTurn = createStopTurnService({
+    officeId,
+    selfNodeId,
+    store: teamStore,
+    send: (to, frame) => deps.send(to, frame as FederationMessage),
+    // No aborter injected → this node runs no turns, so none can be running.
+    stopMemberTurn: deps.stopMemberTurn ?? (() => Promise.resolve(false)),
+    isNodeReachable: (nodeId) => {
+      const status = federationStore.getNode(officeId, nodeId)?.status
+      return status !== 'offline' && status !== 'suspect'
+    },
+  })
+
   /**
    * Resolve the scope subject for a member write from the AUTHENTICATED sender
    * node, server-side. Returns the subject appId only when:
@@ -486,6 +510,10 @@ export function createOfficeAuthority(deps: OfficeAuthorityDeps): OfficeAuthorit
       case 'history-response':
         history.handleM2Frame(from, frame)
         break
+      case 'stop-turn-request':
+      case 'stop-turn-response':
+        stopTurn.handleM2Frame(from, frame)
+        break
       case 'reject':
         // A reject is observed (e.g. EPOCH_STALE → step down / re-align). The
         // term-observe above already handled the common case; log for diagnostics.
@@ -513,6 +541,7 @@ export function createOfficeAuthority(deps: OfficeAuthorityDeps): OfficeAuthorit
     replication,
     artifact,
     history,
+    stopTurn,
     isAuthoritySelf: () => handover.isAuthoritySelf(),
     isPaused: () => handover.isPaused(),
     getTerm: () => termState.getTerm(),

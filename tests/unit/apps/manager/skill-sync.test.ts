@@ -23,8 +23,12 @@ import {
 import type { InstalledApp } from '../../../../src/main/apps/manager/types'
 import type { AppSpec } from '../../../../src/main/apps/spec/schema'
 
-function setAgentConfig(agent: Record<string, unknown>): void {
-  saveConfig({ agent: { ...getConfig().agent, ...agent } })
+type AgentConfig = ReturnType<typeof getConfig>['agent']
+
+function setAgentConfig(agent: Partial<AgentConfig>): void {
+  // Spreading a Partial widens every required key to optional, which
+  // exactOptionalPropertyTypes rejects; the merge itself is total.
+  saveConfig({ agent: { ...getConfig().agent, ...agent } as AgentConfig })
 }
 
 function testDir(): string {
@@ -59,7 +63,7 @@ function globalSkillApp(overrides?: Partial<InstalledApp>): InstalledApp {
     installedAt: Date.now(),
     upgradeStrategy: 'auto',
     ...overrides,
-  }
+  } as InstalledApp
 }
 
 const noSpace = (): string | null => null
@@ -100,6 +104,16 @@ describe('syncSkillToFilesystem (global scope)', () => {
     expect(existsSync(join(customDir, 'skills', 'my-skill', 'SKILL.md'))).toBe(true)
     expect(existsSync(join(legacySkillsDir(), 'my-skill'))).toBe(false)
   })
+
+  // The file on disk is the enable switch: pause deletes it to stop the SDK
+  // loading the skill, so any write that ignores status would re-enable it.
+  for (const status of ['paused', 'uninstalled'] as const) {
+    it(`refuses to write a ${status} skill`, () => {
+      syncSkillToFilesystem(globalSkillApp({ status }), noSpace)
+
+      expect(existsSync(join(resolveGlobalSkillsDir(), 'my-skill', 'SKILL.md'))).toBe(false)
+    })
+  }
 })
 
 describe('reconcileGlobalSkillsLocation', () => {

@@ -35,6 +35,9 @@ import { isBinaryExtension } from '../constants/file-types'
 // Types
 // ============================================
 
+/** Tab types whose viewer parses raw bytes rather than text (see TabState.bytes). */
+const DOCUMENT_TYPES = new Set(['xlsx', 'docx', 'pdf'])
+
 export type ContentType =
   | 'code'
   | 'markdown'
@@ -44,6 +47,9 @@ export type ContentType =
   | 'text'
   | 'json'
   | 'csv'
+  | 'xlsx'
+  | 'docx'
+  | 'pptx'
   | 'browser'
   | 'terminal'
   | 'team'
@@ -68,6 +74,12 @@ export interface TabState {
   path?: string
   url?: string
   content?: string
+  /**
+   * Raw file bytes for the document viewers (xlsx/docx/pdf), filled instead of
+   * `content` — those parsers want bytes, and base64 in `content` would cost a
+   * main-thread decode per tab. Released with the tab on close.
+   */
+  bytes?: Uint8Array
   language?: string
   mimeType?: string
   isDirty: boolean
@@ -275,6 +287,13 @@ function detectContentType(path: string): { type: ContentType; language?: string
       return { type: 'json', language: 'json' }
     case 'csv':
       return { type: 'csv' }
+    case 'xlsx':
+    case 'xls':
+      return { type: 'xlsx' }
+    case 'docx':
+      return { type: 'docx' }
+    case 'pptx':
+      return { type: 'pptx' }
     case 'png':
     case 'jpg':
     case 'jpeg':
@@ -518,8 +537,10 @@ class CanvasLifecycle {
       }
     }
 
-    // PDF files are opened via BrowserView (Chromium native PDF renderer)
-    if (type === 'pdf') {
+    // PDF files are opened via BrowserView (Chromium native PDF renderer) on
+    // desktop. Remote clients have no BrowserView — fall through to a content
+    // tab whose base64 bytes are rendered by the pdfjs-based PdfViewer.
+    if (type === 'pdf' && !api.isRemoteMode()) {
       return this.openPdf(path, title)
     }
 
@@ -584,20 +605,36 @@ class CanvasLifecycle {
   }
 
   /**
-   * Load file content asynchronously
+   * Documents take the bytes channel; everything else takes the text/base64
+   * one. Splitting here rather than in the viewers keeps every tab holding
+   * exactly one representation of its file.
    */
   private async loadFileContent(tabId: string, path: string, type: ContentType): Promise<void> {
     const tab = this.tabs.get(tabId)
     if (!tab) return
 
-    // Images use halo-file:// protocol directly (no content loading needed)
-    if (type === 'image') {
+    // Images use halo-file:// protocol directly (no content loading needed).
+    // pptx has no in-canvas renderer, so its placeholder needs no bytes either.
+    if (type === 'image' || type === 'pptx') {
       tab.isLoading = false
       this.notifyTabsChange()
       return
     }
 
     try {
+      if (DOCUMENT_TYPES.has(type)) {
+        const response = await api.readArtifactBytes(path)
+        if (!this.tabs.has(tabId)) return
+        if (!response.success || !response.data) {
+          throw new Error(response.error || 'Failed to read file')
+        }
+        tab.bytes = response.data
+        tab.isLoading = false
+        tab.error = undefined
+        this.notifyTabsChange()
+        return
+      }
+
       const response = await api.readArtifactContent(path)
 
       // Tab might have been closed during async operation

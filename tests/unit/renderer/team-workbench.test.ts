@@ -2,6 +2,7 @@ import { taskTime } from '../../../src/renderer/components/team/workbench/time'
 import { executionTurns } from '../../../src/renderer/components/team/workbench/model'
 import { describe, expect, it } from 'vitest'
 import { taskConversationRows, COLLABORATION_PREVIEW_LIMIT, conversationMessages, activityLevel, taskGroup, visibleTasks, taskActivityRows, taskReportMessages, isTeamBackgroundTurn, decisionMessageId, sharedTaskDecisions } from '../../../src/renderer/components/team/workbench/model'
+import { conversationLabel } from '../../../src/renderer/components/team/run-history'
 import type { TeamConversation, TeamActivity } from '../../../src/shared/apps/team-types'
 import type { ActivityEntry } from '../../../src/shared/apps/app-types'
 const task = (patch: Partial<TeamConversation> = {}): TeamConversation => ({ epochId: 'task', teamId: 'team', kind: 'native', label: 'Task', readonly: false, startedAt: 1, lastActivityAt: 1, ...patch })
@@ -223,4 +224,18 @@ it('bounds each expandable activity group during a long message burst', () => {
   const rows = taskActivityRows([], events)
   expect(rows.flatMap(row => row.activities ?? [])).toHaveLength(1200)
   expect(rows.every(row => (row.activities?.length ?? 0) <= 20)).toBe(true)
+})
+
+describe('conversation labels', () => {
+  const label = (kind: TeamConversation['kind']) => conversationLabel(task({ kind, label: '' }), key => key)
+
+  it('names a collaboration room as one, never as a direct message', () => {
+    expect(label('collab')).toBe('Collaboration')
+    expect(label('native')).toBe('New session')
+    expect(label('member')).toBe('Direct message')
+  })
+
+  it('keeps the proper name a room arrives with', () => {
+    expect(conversationLabel(task({ kind: 'collab', label: 'Research crew' }), key => key)).toBe('Research crew')
+  })
 })

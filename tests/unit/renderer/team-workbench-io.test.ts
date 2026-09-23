@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 const calls = vi.hoisted(() => ({ history: vi.fn(), state: vi.fn(), detail: vi.fn(), epochs: vi.fn(), conversations: vi.fn() }))
 vi.mock('../../../src/renderer/api', () => ({ api: { teamChatMessages: calls.history, appChatSessionState: calls.state, teamGetDetail: calls.detail, teamListEpochs: calls.epochs, teamListConversations: calls.conversations } }))
 vi.mock('../../../src/renderer/i18n', () => ({ default: { t: (s: string) => s } }))
-import { loadTeamSessionHistory, retainTeamSessionHistory, matchesTeamHistory } from '../../../src/renderer/components/team/session-history'
+import { loadTeamSessionHistory, retainTeamSessionHistory, matchesTeamHistory, peekTeamSessionHistory } from '../../../src/renderer/components/team/session-history'
 import { observeExecution } from '../../../src/renderer/components/team/workbench/execution-state'
 import { useTeamStore } from '../../../src/renderer/stores/team.store'
 
@@ -19,10 +19,28 @@ describe('workbench I/O budget', () => {
     expect(calls.history).toHaveBeenLastCalledWith('a', 's', 't', 'e', 2)
     expect(result.data).toHaveLength(4)
     expect((result.data as { content?: string }[])[2].content).toBe('updated')
+    // Releasing the last reader keeps the transcript warm rather than dropping
+    // it: reopening a member is the common move, and starting from blank made
+    // every switch pay a full re-read mid-run.
     release()
+    expect(peekTeamSessionHistory('a', 's', 't', 'e')).toHaveLength(4)
     calls.history.mockResolvedValueOnce({ success: true, data: [] })
     await loadTeamSessionHistory('a', 's', 't', 'e')
-    expect(calls.history).toHaveBeenLastCalledWith('a', 's', 't', 'e', undefined)
+    expect(calls.history).toHaveBeenLastCalledWith('a', 's', 't', 'e', 3)
+  })
+  it('the warm set is bounded, so transcripts cannot accumulate', async () => {
+    retainTeamSessionHistory('a', 's', 't', 'bounded')()
+    calls.history.mockResolvedValue({ success: true, data: [{ id: '1', seq: 1 }] })
+    await loadTeamSessionHistory('a', 's', 't', 'bounded')
+    expect(peekTeamSessionHistory('a', 's', 't', 'bounded')).toHaveLength(1)
+
+    // Five other sessions viewed and left push the first one out.
+    for (const epoch of ['e1', 'e2', 'e3', 'e4', 'e5']) {
+      const release = retainTeamSessionHistory('a', 's', 't', epoch)
+      await loadTeamSessionHistory('a', 's', 't', epoch)
+      release()
+    }
+    expect(peekTeamSessionHistory('a', 's', 't', 'bounded')).toBeNull()
   })
   it('rejects history events from other tasks or members', () => {
     expect(matchesTeamHistory({ teamId: 't', epochId: 'other', appId: 'a' }, 't', 'e', 'a')).toBe(false)

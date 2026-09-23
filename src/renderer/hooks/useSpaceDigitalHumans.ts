@@ -9,7 +9,7 @@
 import { useEffect, useMemo } from 'react'
 import { useAppsStore } from '../stores/apps.store'
 import { useTeamStore } from '../stores/team.store'
-import { hiddenTeamMemberIds } from '../utils/people-model'
+import { coordinatorIds, ephemeralMemberIds } from '../utils/people-model'
 import type { InstalledApp } from '../../shared/apps/app-types'
 
 interface Options {
@@ -32,7 +32,7 @@ export function useSpaceDigitalHumans(spaceId: string | null, { includeUninstall
     if (!spaceId) return []
     // Coordinators and ephemeral-collaboration members are team-internal — a
     // person never addresses them directly.
-    const hidden = hiddenTeamMemberIds(teams)
+    const hidden = new Set([...ephemeralMemberIds(teams), ...coordinatorIds(teams)])
     return apps.filter(a =>
       a.spec.type === 'automation'
       && (a.spaceId === spaceId || a.spaceId === null)

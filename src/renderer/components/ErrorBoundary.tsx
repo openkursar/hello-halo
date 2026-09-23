@@ -3,6 +3,9 @@
  *
  * Wraps the entire app to catch component errors and display a user-friendly UI.
  * This complements the global error handler in index.html which catches pre-React errors.
+ *
+ * Also usable around a single pane (pass `fallback`), so a failure that only
+ * costs one view does not have to escalate to the full-window diagnostic screen.
  */
 
 import { Component, ReactNode } from 'react'
@@ -10,6 +13,11 @@ import { HaloLogo } from './brand/HaloLogo'
 
 interface Props {
   children: ReactNode
+  /**
+   * Replacement UI for a scoped boundary. Omit it at the app root to get the
+   * full diagnostic screen (message, stack, reload).
+   */
+  fallback?: ReactNode
 }
 
 interface State {
@@ -45,6 +53,8 @@ export class ErrorBoundary extends Component<Props, State> {
 
   render() {
     if (this.state.hasError) {
+      if (this.props.fallback) return this.props.fallback
+
       const { error, errorInfo } = this.state
       const errorMessage = error?.message || 'Unknown error'
       const errorStack = error?.stack || ''

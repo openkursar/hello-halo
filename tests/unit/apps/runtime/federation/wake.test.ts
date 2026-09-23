@@ -209,6 +209,7 @@ describe('federation remote wake (position transparency)', () => {
       isSessionActive: () => false,
       injectIntoSession: () => false,
       closeTeamSession: async () => {},
+      stopTeamSession: async () => false,
       getMemberSpaceId: () => 'local-space',
     }
 
@@ -217,6 +218,7 @@ describe('federation remote wake (position transparency)', () => {
       resolveOwnerNode,
       selfNodeId: NODE_A,
       sendWake: (p) => hostManager.sendWakeToMember(p),
+      sendStop: () => Promise.resolve(false),
       registerTurnComplete: (corr, cb) => hostManager.registerTurnComplete(corr, cb),
       getRemoteSpaceId: (appId) => hostManager.getRemoteMemberSpaceId(appId),
     })
@@ -269,6 +271,7 @@ describe('federation remote wake (position transparency)', () => {
       isSessionActive: () => false,
       injectIntoSession: () => false,
       closeTeamSession: async () => {},
+      stopTeamSession: async () => false,
       getMemberSpaceId: () => 'local-space',
     }
 
@@ -277,6 +280,7 @@ describe('federation remote wake (position transparency)', () => {
       resolveOwnerNode: () => SELF_NODE_ID,
       selfNodeId: NODE_A,
       sendWake,
+      sendStop: () => Promise.resolve(false),
       registerTurnComplete: (corr, cb) => hostManager.registerTurnComplete(corr, cb),
       getRemoteSpaceId: () => undefined,
     })
@@ -297,11 +301,13 @@ describe('federation remote wake (position transparency)', () => {
         isSessionActive: () => false,
         injectIntoSession: () => false,
         closeTeamSession: async () => {},
+        stopTeamSession: async () => false,
         getMemberSpaceId: () => 'local-space',
       },
       resolveOwnerNode: () => NODE_B,
       selfNodeId: NODE_A,
       sendWake: () => true,
+      sendStop: () => Promise.resolve(false),
       registerTurnComplete: () => () => {},
       getRemoteSpaceId: (appId) => hostManager.getRemoteMemberSpaceId(appId),
     })
@@ -332,6 +338,7 @@ describe('federation remote wake (position transparency)', () => {
         isSessionActive: () => false,
         injectIntoSession: () => false,
         closeTeamSession: async () => {},
+        stopTeamSession: async () => false,
         getMemberSpaceId: () => 'local-space',
       },
       resolveOwnerNode: (_appId, teamId) =>
@@ -342,6 +349,7 @@ describe('federation remote wake (position transparency)', () => {
         sends.push({ officeId: p.officeId, ownerNodeId: p.ownerNodeId })
         return true
       },
+      sendStop: () => Promise.resolve(false),
       registerTurnComplete: (_corr, cb) => {
         setTimeout(() => cb({ kind: 'result', content: 'scoped-ok' }), 0)
         return () => {}
@@ -363,11 +371,13 @@ describe('federation remote wake (position transparency)', () => {
         isSessionActive: () => false,
         injectIntoSession: () => false,
         closeTeamSession: async () => {},
+        stopTeamSession: async () => false,
         getMemberSpaceId: () => 'local-space',
       },
       resolveOwnerNode: () => NODE_B,
       selfNodeId: NODE_A,
-      sendWake: () => false, // unreachable
+      sendWake: () => false,
+      sendStop: () => Promise.resolve(false),
       registerTurnComplete: () => () => {},
       getRemoteSpaceId: () => undefined,
     })
@@ -389,11 +399,13 @@ describe('federation remote wake (position transparency)', () => {
           isSessionActive: () => false,
           injectIntoSession: () => false,
           closeTeamSession: async () => {},
+          stopTeamSession: async () => false,
           getMemberSpaceId: () => 'local-space',
         },
         resolveOwnerNode: () => NODE_B,
         selfNodeId: NODE_A,
-        sendWake: () => true, // "sent" — but no completion will ever come back
+        sendWake: () => true,
+        sendStop: () => Promise.resolve(false),
         registerTurnComplete: (_corr, cb) => {
           registered = cb
           return () => {
@@ -493,6 +505,7 @@ describe('owner-side wake: spaceId is re-resolved locally (not the wire sentinel
         isSessionActive: () => false,
         injectIntoSession: () => false,
         closeTeamSession: async () => {},
+        stopTeamSession: async () => false,
         getMemberSpaceId: () => 'authority-local-space',
       }
 
@@ -501,6 +514,7 @@ describe('owner-side wake: spaceId is re-resolved locally (not the wire sentinel
         resolveOwnerNode,
         selfNodeId: NODE_A,
         sendWake: (p) => hostManager.sendWakeToMember(p),
+        sendStop: () => Promise.resolve(false),
         registerTurnComplete: (corr, cb) => hostManager.registerTurnComplete(corr, cb),
         // Force the sentinel: the authority has NO cached remote space, so the wire
         // request.spaceId becomes the appId — exactly the production failure input.

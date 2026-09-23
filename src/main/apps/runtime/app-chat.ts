@@ -477,8 +477,17 @@ async function runAppChatTurn(
     appDataPath: environment.memoryDir,
   }
 
+  // This turn's membership, resolved before the identity layer: the team Entry
+  // renders it below, and `selfIsDisposable` (see team-prompt.ts for the
+  // contract) decides which surfaces the turn mounts — a disposable member gets
+  // no memory and no digital-human management.
+  const teamPromptCtx = teamContext
+    ? getActiveTeamRuntime()?.buildPromptContext(teamContext.teamId, appId) ?? null
+    : null
+  const disposableMember = teamPromptCtx?.selfIsDisposable === true
+
   // ── 3. Build system prompt for interactive chat ──────
-  const memoryInstructions = memory.getPromptInstructions('session')
+  const memoryInstructions = disposableMember ? '' : memory.getPromptInstructions('session')
   const usesAIBrowser = resolvePermission(app, 'ai-browser')
   const usesTerminal = resolvePermission(app, 'ai-terminal') && isTerminalAvailable()
   const usesEmail = resolvePermission(app, 'email') // gated on channel config downstream
@@ -563,9 +572,6 @@ async function runAppChatTurn(
     // envelope, never the user's words.
     getActiveTeamRuntime()?.maybeAutoNameConversation(teamContext.teamId, teamContext.epochId, fromHuman, message)
   }
-  const teamPromptCtx = teamContext
-    ? getActiveTeamRuntime()?.buildPromptContext(teamContext.teamId, appId) ?? null
-    : null
   let entry: string
   let constraints: string[]
   if (teamPromptCtx) {
@@ -586,7 +592,7 @@ async function runAppChatTurn(
   const systemPrompt = assembleAppChatPrompt({ identity, entry, constraints })
 
   // ── 4. Build MCP servers ─────────────────────────────
-  const memoryMcpServer = createMemoryStatusMcpServer(memoryScope)
+  const memoryMcpServer = disposableMember ? null : createMemoryStatusMcpServer(memoryScope)
 
   validateEnvironmentConnections(environment, app, manager, 'chat')
   const disabledMcpIds = new Set(
@@ -655,11 +661,13 @@ async function runAppChatTurn(
   const { server: docsMcpServer, guideConsulted } = createOfficialDocsSession()
   const mcpServers: Record<string, any> = {
     ...(dbMcpServers ?? {}),
-    'halo-memory': memoryMcpServer,
+    ...(memoryMcpServer ? { 'halo-memory': memoryMcpServer } : {}),
     'halo-notify': notifyMcpServer,
     'halo-docs': docsMcpServer,
     ...(personCaller.authority !== 'guest' ? { 'halo-person-context': createPersonContextMcpServer(personCaller) } : {}),
-    ...(digitalHumansEnabled ? { 'halo-apps': createHaloAppsMcpServer(spaceId, guideConsulted, { omitPersonContext: true }) } : {}),
+    ...(digitalHumansEnabled && !disposableMember
+      ? { 'halo-apps': createHaloAppsMcpServer(spaceId, guideConsulted, { omitPersonContext: true }) }
+      : {}),
     'web-search': createWebSearchMcpServer(),
     'ocr': createOcrMcpServer(),
     ...(usesAIBrowser ? { 'ai-browser': createAIBrowserMcpServer(scopedBrowserCtx, workDir) } : {}),
@@ -717,9 +725,13 @@ async function runAppChatTurn(
         }
       : {}),
   }
+  // `disposableMember` rides this line rather than one of its own: when a member
+  // has no memory and no digital-human tools, this is the record that says the
+  // absence was the rule and not a mount that failed.
   console.log(
     `[AppChat][${appId}] MCP servers: [${Object.keys(mcpServers).join(', ')}], ` +
-    `aiBrowser=${usesAIBrowser}, email=${usesEmail}, fileSend=${imFileSend ? 'yes' : 'no'}`
+    `aiBrowser=${usesAIBrowser}, email=${usesEmail}, fileSend=${imFileSend ? 'yes' : 'no'}, ` +
+    `disposableMember=${disposableMember}`
   )
 
   // ── 5. Build SDK options ─────────────────────────────
@@ -946,8 +958,11 @@ async function runAppChatTurn(
     // owner, never seeing what it recorded before. Only on the first turn: the
     // V2 session carries the conversation forward, so the block stays in context
     // without being resent. Kept out of the JSONL trigger — the transcript shows
-    // what was actually said, not our preamble.
-    const memoryPreamble = resumeSessionId ? '' : await buildSessionMemoryPreamble(memoryScope, appId)
+    // what was actually said, not our preamble. A disposable member has no
+    // memory to open with (see `disposableMember`) — reading one would also
+    // teach it that it has a file to maintain.
+    const memoryPreamble =
+      resumeSessionId || disposableMember ? '' : await buildSessionMemoryPreamble(memoryScope, appId)
 
     // Who else is executing this same digital human right now. Unlike the memory
     // block this goes on EVERY turn: it is true only at the moment it is built,
@@ -1112,16 +1127,19 @@ async function runAppChatTurn(
     // source carrying no key of its own is routed by header, and without them
     // compaction takes the raw-SDK path with an empty key, fails, and quietly
     // installs the heuristic summary as the digital human's memory.
-    void checkAndCompactMemory(memory, memoryScope, app.spec.name, chatRunId, async () => ({
-      anthropicApiKey: resolvedCreds.anthropicApiKey,
-      anthropicBaseUrl: resolvedCreds.anthropicBaseUrl,
-      sdkModel: resolvedCreds.sdkModel,
-      provider: credentials.provider,
-      oauthProvider: credentials.oauthProvider,
-      delegatedAuth: credentials.delegatedAuth,
-      delegatedRoutingHeader: resolvedCreds.delegatedRoutingHeader,
-      capabilities: resolvedCreds.capabilities,
-    }))
+    // Skipped for a disposable member: it has no memory to keep in check.
+    if (!disposableMember) {
+      void checkAndCompactMemory(memory, memoryScope, app.spec.name, chatRunId, async () => ({
+        anthropicApiKey: resolvedCreds.anthropicApiKey,
+        anthropicBaseUrl: resolvedCreds.anthropicBaseUrl,
+        sdkModel: resolvedCreds.sdkModel,
+        provider: credentials.provider,
+        oauthProvider: credentials.oauthProvider,
+        delegatedAuth: credentials.delegatedAuth,
+        delegatedRoutingHeader: resolvedCreds.delegatedRoutingHeader,
+        capabilities: resolvedCreds.capabilities,
+      }))
+    }
 
     // Flush buffered IM supplements (deferred so busy lock is released first)
     if (conversationId !== defaultConvId) {

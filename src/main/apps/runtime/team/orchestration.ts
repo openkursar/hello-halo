@@ -80,6 +80,16 @@ export interface OrchestrationSessionDeps {
    * sessionId so the run stays a retrievable, resumable history record.
    */
   closeTeamSession(appId: string, teamId: string, epochId: string): Promise<void>
+  /**
+   * Abort the turn this member is running right now, as a person pressing stop
+   * means it. Distinct from `closeTeamSession`, which reclaims a session the
+   * machinery is done with; this one interrupts work in progress. Resolves with
+   * whether a turn was actually running — false is an answer ("already
+   * finished"), not a failure. Rejects only when the request could not be put to
+   * the member at all, which for a member owned by another machine means its
+   * machine could not be reached.
+   */
+  stopTeamSession(appId: string, teamId: string, epochId: string): Promise<boolean>
   getMemberSpaceId(appId: string): string | null
 }
 
@@ -1558,6 +1568,10 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       selfRole: self.role,
       selfDuty: self.duty ?? null,
       selfIsLead: self.isLead,
+      // Both halves are needed: a team that is merely temporary does not make a
+      // member disposable — one the person installed themselves survives its
+      // end (only AI-provisioned apps are cleaned up on dissolve).
+      selfIsDisposable: team.ephemeral === true && self.aiProvisioned,
       roster,
     }
   }

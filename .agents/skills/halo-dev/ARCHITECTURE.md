@@ -432,8 +432,53 @@ ContentCanvas.tsx          # Main container + tab switching
     ├── JsonViewer.tsx     # Format/minify
     ├── CsvViewer.tsx      # Table view
     ├── TextViewer.tsx
-    └── BrowserViewer.tsx  # Live web pages
+    ├── BrowserViewer.tsx  # Live web pages
+    ├── XlsxViewer.tsx     # SheetJS parse in a Web Worker + virtualized table
+    ├── DocxViewer.tsx     # docx-preview
+    ├── PdfViewer.tsx      # pdfjs-dist; remote/web only (desktop uses BrowserView)
+    ├── PptxViewer.tsx     # Placeholder — no renderer; open externally / download
+    └── OfficeFallback.tsx # Shared unreadable/unsupported state with escape hatches
 ```
+
+The four document viewers are `React.lazy` chunks (SheetJS / docx-preview / pdfjs
+are large) behind `ViewerSuspense`, which pairs Suspense with a scoped
+ErrorBoundary — a chunk that fails to load must cost one pane, not the window.
+They are also the only viewers keyed on `tab.id`, because this switch reuses one
+component instance per type and their per-document state (page, zoom, active
+sheet) would otherwise bleed across tabs.
+
+### Two content channels per tab
+
+`TabState` carries either `content` (text, or base64 for images) **or** `bytes`
+(`Uint8Array`), never both. `canvas-lifecycle` picks by tab type:
+
+| Channel | Method | Desktop | Remote / web |
+|---|---|---|---|
+| Text / base64 | `readArtifactContent` | IPC | `GET /api/artifacts/content` (JSON) |
+| Raw bytes (xlsx/docx/pdf) | `readArtifactBytes` | IPC — a `Buffer` crosses as a `Uint8Array` via structured clone | `GET /api/artifacts/download`, read incrementally |
+
+The bytes channel exists because base64 is not viable at document sizes: it costs
+an encoded string in main, a second copy of it in the IPC clone, and a decode on
+the renderer's main thread that has no cheap form — an isolated renderer has no
+`Buffer`, and Chromium 122 has no one-shot base64 primitive. Both bytes
+transports are native end to end, and both read the same paths the text channel
+already reaches, so neither grants the renderer new reach.
+
+Documents are capped at `MAX_PREVIEW_DOCUMENT_SIZE`, well below the generic binary
+limit: the viewer parses the whole file before anything paints and holds the bytes
+for the life of the tab. Past the cap the viewer's fallback — open externally /
+download — is the better answer.
+
+**The two transports enforce that cap in different processes**, which is why the
+constant lives in `shared/constants/artifact-preview.ts` rather than beside either
+one. Desktop refuses the read in the main process. Remote cannot: it goes through
+the generic download route, and that route must keep serving files of any size —
+serving a large file is its entire purpose — so the ceiling is the preview
+caller's to hold. `readArtifactBytes` therefore rejects on `Content-Length` when
+the server declares one, and otherwise reads the body incrementally and aborts
+once the budget is spent, because a proxy that re-encodes the response removes
+`Content-Length` and `arrayBuffer()` would buffer the whole body first — the exact
+thing the cap exists to prevent.
 
 ### Layout Modes
 

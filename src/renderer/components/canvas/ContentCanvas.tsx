@@ -23,7 +23,7 @@
  * BrowserView lifecycle is managed centrally by CanvasLifecycle.
  */
 
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useState, lazy, Suspense } from 'react'
 import { X, ChevronLeft, Maximize2, Minimize2 } from 'lucide-react'
 import { useCanvasLifecycle, type TabState, type ContentType } from '../../hooks/useCanvasLifecycle'
 import { CanvasTabBar } from './CanvasTabs'
@@ -40,6 +40,14 @@ import { TeamViewer } from './viewers/TeamViewer'
 import { api } from '../../api'
 import { useTranslation } from '../../i18n'
 import { getBrowserHomepage } from '../../utils/browser-homepage'
+import { ErrorBoundary } from '../ErrorBoundary'
+
+// Office viewers ship heavy parsers (SheetJS, docx-preview, pdfjs) — lazy
+// chunks keep them out of the startup bundle.
+const XlsxViewer = lazy(() => import('./viewers/XlsxViewer'))
+const DocxViewer = lazy(() => import('./viewers/DocxViewer'))
+const PdfViewer = lazy(() => import('./viewers/PdfViewer'))
+const PptxViewer = lazy(() => import('./viewers/PptxViewer'))
 
 interface ContentCanvasProps {
   className?: string
@@ -189,28 +197,31 @@ interface TabContentProps {
 
 function TabContent({ tab, onScrollChange, onContentChange, onSaveComplete, onEditRequest }: TabContentProps) {
   const { t } = useTranslation()
-  // Browser and PDF tabs use BrowserView (handle their own loading state)
-  if (tab.type === 'browser' || tab.type === 'pdf') {
+  // Browser tabs (and desktop PDF tabs) use BrowserView (handle their own
+  // loading state). In remote mode PDFs open as content tabs rendered by the
+  // pdfjs viewer below instead.
+  if (tab.type === 'browser') {
     if (api.isRemoteMode()) {
       return <BrowserViewerFallback tab={tab} />
     }
     return <BrowserViewer tab={tab} />
   }
+  if (tab.type === 'pdf' && !api.isRemoteMode()) {
+    return <BrowserViewer tab={tab} />
+  }
 
   // Handle loading state for non-browser tabs
   if (tab.isLoading) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <div className="flex flex-col items-center gap-3">
-          <div className="w-8 h-8 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
-          <p className="text-sm text-muted-foreground">{t('Loading...')}</p>
-        </div>
-      </div>
-    )
+    return <LoadingState tabId={tab.id} />
   }
 
+  // Office viewers render their own error fallback (with open-externally and
+  // download escape hatches), so they bypass the generic error state below.
+  const isOfficeType =
+    tab.type === 'xlsx' || tab.type === 'docx' || tab.type === 'pptx' || tab.type === 'pdf'
+
   // Handle error state
-  if (tab.error) {
+  if (tab.error && !isOfficeType) {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="flex flex-col items-center gap-3 text-center max-w-md px-4">
@@ -276,6 +287,42 @@ function TabContent({ tab, onScrollChange, onContentChange, onSaveComplete, onEd
     case 'csv':
       return <CsvViewer tab={tab} onScrollChange={onScrollChange} />
 
+    // Document viewers are keyed on the tab, and the key goes on the boundary so
+    // it covers the whole subtree. This switch reuses one instance per type
+    // across tabs, which otherwise leaks two ways: per-document state (page,
+    // zoom, active sheet) bleeds into the next document — the trap CsvViewer
+    // already documents — and a tripped ErrorBoundary would keep showing its
+    // failure placeholder for every later tab of that type. Only these are
+    // keyed; browser / terminal / team tabs intentionally survive a switch.
+    case 'xlsx':
+      return (
+        <ViewerSuspense key={tab.id}>
+          <XlsxViewer tab={tab} onScrollChange={onScrollChange} />
+        </ViewerSuspense>
+      )
+
+    case 'docx':
+      return (
+        <ViewerSuspense key={tab.id}>
+          <DocxViewer tab={tab} onScrollChange={onScrollChange} />
+        </ViewerSuspense>
+      )
+
+    case 'pdf':
+      // Remote mode only — desktop PDFs returned a BrowserView above
+      return (
+        <ViewerSuspense key={tab.id}>
+          <PdfViewer tab={tab} />
+        </ViewerSuspense>
+      )
+
+    case 'pptx':
+      return (
+        <ViewerSuspense key={tab.id}>
+          <PptxViewer tab={tab} />
+        </ViewerSuspense>
+      )
+
     case 'text':
       // Use CodeViewer for text files too - enables editing even without syntax highlighting
       return (
@@ -296,6 +343,72 @@ function TabContent({ tab, onScrollChange, onContentChange, onSaveComplete, onEd
     default:
       return <TextViewer tab={tab} onScrollChange={onScrollChange} />
   }
+}
+
+/**
+ * Loading state for file tabs.
+ *
+ * A large document takes a visible moment to read and parse, so after a short
+ * delay the label says so instead of spinning silently. The trigger is elapsed
+ * time, not file size: the size is not known until the read returns, and only
+ * file-tree clicks carry artifact metadata at all — a size threshold would stay
+ * quiet exactly where it is needed most. Time also covers the other reasons a
+ * read is slow (remote mode, a network volume), which size never would.
+ */
+function LoadingState({ tabId }: { tabId: string }) {
+  const { t } = useTranslation()
+  const [isSlow, setIsSlow] = useState(false)
+
+  useEffect(() => {
+    setIsSlow(false)
+    const handle = window.setTimeout(() => setIsSlow(true), 600)
+    return () => window.clearTimeout(handle)
+  }, [tabId])
+
+  return (
+    <div className="flex items-center justify-center h-full">
+      <div className="flex flex-col items-center gap-3">
+        <div className="w-8 h-8 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+        <p className="text-sm text-muted-foreground">
+          {isSlow ? t('Large file, still loading...') : t('Loading...')}
+        </p>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Boundary for lazy-loaded office viewer chunks.
+ *
+ * Suspense alone is not enough: it handles the pending import but not a
+ * rejected one, so a chunk that fails to load throws past it to the root
+ * boundary and blanks the whole window. That is a real scenario after an
+ * incremental update leaves stale chunk hashes in a running window — losing one
+ * pane is acceptable there, losing the app is not.
+ */
+function ViewerSuspense({ children }: { children: React.ReactNode }) {
+  const { t } = useTranslation()
+  return (
+    <ErrorBoundary
+      fallback={
+        <div className="flex items-center justify-center h-full">
+          <p className="text-sm text-muted-foreground px-4 text-center">
+            {t('Could not load the viewer. Reopen the file to try again.')}
+          </p>
+        </div>
+      }
+    >
+      <Suspense
+        fallback={
+          <div className="flex items-center justify-center h-full">
+            <div className="w-8 h-8 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+          </div>
+        }
+      >
+        {children}
+      </Suspense>
+    </ErrorBoundary>
+  )
 }
 
 /**

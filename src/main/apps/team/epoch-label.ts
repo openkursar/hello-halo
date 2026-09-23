@@ -32,9 +32,10 @@ export function deriveConversationTitle(raw: string): string | null {
 /** Classify a conversation epoch by its chatKey namespace. */
 export function conversationKindOf(chatKey: string): TeamConversationKind {
   if (isNativeConversationChatKey(chatKey)) return 'native'
-  // A space collaboration's epoch is a native-style thread: titled, not an IM
-  // chat, and not a member 1:1.
-  if (parseSpaceCollabChatKey(chatKey)) return 'native'
+  // A space collaboration's room is its own kind, not a native session: a reader
+  // that cannot tell them apart cannot tell which conversation the space
+  // conversation coordinates (and must not create a second one beside it).
+  if (parseSpaceCollabChatKey(chatKey)) return 'collab'
   if (parseMemberChatKey(chatKey)) return 'member'
   return 'im'
 }
@@ -61,6 +62,13 @@ export function deriveConversationLabel(
     const member = (members ?? store.listMembersByTeam(epoch.teamId)).find((m) => m.appId === memberAppId)
     return member?.memberName ?? ''
   }
+
+  // A collaboration room always carries an explicit title (the team name, set
+  // at creation), so this is only reached for a legacy/hand-edited row. It must
+  // still not fall into the IM branch below: the describer would be asked about
+  // a key that is not a chat, and any future 'space:' support in
+  // parseTeamChatKey would silently turn the fallback into a wrong label.
+  if (parseSpaceCollabChatKey(chatKey)) return ''
 
   if (!isNativeConversationChatKey(chatKey)) {
     const described = describeChatKey?.(epoch.teamId, chatKey)

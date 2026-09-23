@@ -28,6 +28,7 @@ function makeDeps(sendWakeResult = true) {
     isSessionActive: () => false,
     injectIntoSession: () => false,
     closeTeamSession: async () => {},
+    stopTeamSession: async () => false,
     getMemberSpaceId: () => 'space-local',
   } as unknown as OrchestrationSessionDeps
 
@@ -36,6 +37,7 @@ function makeDeps(sendWakeResult = true) {
     resolveOwnerNode: () => OWNER,
     selfNodeId: SELF,
     sendWake: () => sendWakeResult,
+    sendStop: () => Promise.resolve(false),
     registerTurnComplete: (_corr, cb) => {
       completion = cb
       return () => {

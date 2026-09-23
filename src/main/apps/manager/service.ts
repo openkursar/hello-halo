@@ -566,9 +566,11 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       store.updateUninstalledAt(appId, null)
       notifyStatusChange(appId, oldStatus, newStatus)
 
-      // Re-sync skill file to filesystem on reinstall
+      // Re-sync skill file to filesystem on reinstall. `app` is the
+      // pre-transition snapshot, so hand the sync the new status — it refuses to
+      // write for a record that still reads 'uninstalled'.
       if (app.spec.type === 'skill') {
-        syncSkillToFilesystem(app, getSpacePath)
+        syncSkillToFilesystem({ ...app, status: newStatus }, getSpacePath)
       }
 
       // Notify session-manager to invalidate affected sessions
@@ -668,9 +670,11 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       store.updateStatus(appId, newStatus, null, null)
       notifyStatusChange(appId, oldStatus, newStatus)
 
-      // Restore the skill file so the SDK picks it up again.
+      // Restore the skill file so the SDK picks it up again. `app` is the
+      // pre-transition snapshot, so hand the sync the new status — it refuses to
+      // write for a record that still reads 'paused'.
       if (app.spec.type === 'skill') {
-        syncSkillToFilesystem(app, getSpacePath)
+        syncSkillToFilesystem({ ...app, status: newStatus }, getSpacePath)
       }
 
       // MCP resumed = available again in sessions

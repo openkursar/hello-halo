@@ -29,6 +29,7 @@ type LucideIcon = typeof Sparkles
 export function conversationLabel(c: TeamConversation, t: (k: string) => string): string {
   if (c.label && c.label.trim()) return c.label
   if (c.kind === 'native') return t('New session')
+  if (c.kind === 'collab') return t('Collaboration')
   if (c.kind === 'im') return t('Chat')
   return t('Direct message')
 }

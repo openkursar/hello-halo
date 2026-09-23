@@ -2,22 +2,29 @@ import type { ActivityEntry, InstalledApp } from '../../shared/apps/app-types'
 import type { TeamListItem } from '../../shared/apps/team-types'
 
 /**
- * Apps hidden from person-facing surfaces: dedicated coordinators (an internal
- * role) and every member of an ephemeral space collaboration (they exist for
- * one piece of work, not as standalone digital humans).
+ * Members of an ephemeral space collaboration. They exist for one piece of work
+ * and are gone with it, so no person-facing surface lists them.
  */
-export function hiddenTeamMemberIds(teams: TeamListItem[]): Set<string> {
+export function ephemeralMemberIds(teams: TeamListItem[]): Set<string> {
   return new Set(
-    teams.flatMap(team =>
-      team.localMembers
-        .filter(member => member.isSystemCoordinator || team.ephemeral)
-        .map(member => member.appId)
-    )
+    teams.filter(team => team.ephemeral).flatMap(team => team.localMembers.map(member => member.appId))
+  )
+}
+
+/**
+ * Dedicated team coordinators. They are the person's own digital humans and the
+ * only place their model and capabilities can be set, so the directory lists
+ * them; but their work arrives through the team, so they are not offered as a
+ * direct recipient alongside the digital humans a person addresses themselves.
+ */
+export function coordinatorIds(teams: TeamListItem[]): Set<string> {
+  return new Set(
+    teams.flatMap(team => team.localMembers.filter(member => member.isSystemCoordinator).map(member => member.appId))
   )
 }
 
 export function visibleDigitalHumans(apps: InstalledApp[], teams: TeamListItem[]): InstalledApp[] {
-  const hidden = hiddenTeamMemberIds(teams)
+  const hidden = ephemeralMemberIds(teams)
   return apps.filter(app => app.spec.type === 'automation' && !hidden.has(app.id))
 }
 

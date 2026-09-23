@@ -209,6 +209,15 @@ export function registerTeamIpc(): void {
     ) => handle('team:send-to-member', (s) => s.sendToMember(input))
   )
 
+  // ── team:stop-member — abort the turn ONE member is running ───────────────
+  // The service routes to a remote-owned target over the office link, so the
+  // button behaves the same whichever machine the member runs on.
+  ipcMain.handle(
+    TEAM_IPC.stopMember,
+    async (_e, input: { teamId: string; appId: string; epochId?: string }) =>
+      handle('team:stop-member', (s) => s.stopMember(input))
+  )
+
   // ── Conversations (office-shared session objects) ─────────────────────────
   ipcMain.handle(TEAM_IPC.listConversations, async (_e, teamId: string) =>
     handle('team:list-conversations', (s) => s.listConversations(teamId))

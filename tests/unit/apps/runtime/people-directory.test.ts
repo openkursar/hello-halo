@@ -13,9 +13,11 @@ describe('bounded people directory', () => {
   let database: DatabaseManager
   let managerStore: AppManagerStore
   let activity: ActivityStore
+  // p000 is an ephemeral-collaboration member (hidden); p001 is a dedicated
+  // coordinator — visible, since the directory is where it gets configured.
   const memberships = [
-    { appId: 'p000', teamId: 'team', teamName: 'Research', isSystemCoordinator: true },
-    { appId: 'p001', teamId: 'team', teamName: 'Research', isSystemCoordinator: false },
+    { appId: 'p000', teamId: 'team', teamName: 'Research', isSystemCoordinator: false, ephemeral: true },
+    { appId: 'p001', teamId: 'team', teamName: 'Research', isSystemCoordinator: true, ephemeral: false },
   ]
   let manager: AppManagerService
   const runtime = { getDirectoryRuntimeSnapshot: () => ({ p001: { runningCount: 1, queued: false } }) } as unknown as AppRuntimeService
@@ -39,7 +41,7 @@ describe('bounded people directory', () => {
   })
   afterEach(() => database.closeAll())
 
-  it('projects secret-free records with stable bounded pages and exact coordinator exclusion', () => {
+  it('projects secret-free records with stable bounded pages; ephemeral members hidden, coordinators visible', () => {
     const page = buildPeopleDirectory(manager, activity, runtime, memberships, { limit: 24 })
     expect(page.total).toBe(148)
     expect(page.removedTotal).toBe(1)

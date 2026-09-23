@@ -147,6 +147,7 @@ behavior do not inject — they go through the normal send path and queue.
 | If you need to... | Start here |
 |---|---|
 | Change how the SDK is invoked or configured | `sdk-config.ts` / `resolved-sdk.ts` |
+| Change what identity the host puts on outgoing requests | `request-identity-factory.ts` (see §10) |
 | Change how hard a model thinks | `reasoning-effort.ts` (never set `effort` / `maxThinkingTokens` at a call site) |
 | Change engine bundling detection / startup fallback | `engine-availability.ts` / `resolved-sdk.ts` |
 | Change how SDK events become thoughts | `stream-processor.ts` |
@@ -253,3 +254,50 @@ a value there is always something the user typed, which is what makes
 forwarding an unrecognized one safe. A change to it is part of the aiSources
 signature (`config.service.ts`), so it invalidates sessions like any other
 credential change — the toggle does not, since it is not config.
+
+## 10) Request Identity (halo engine only)
+
+When the active engine is `halo`, `buildBaseSdkOptions` attaches a
+`requestIdentity` to the SDK options. The SDK is identity-agnostic — it has a
+`RequestIdentity` seam and forwards whatever it is handed; every
+provider-specific constant and algorithm lives host-side in
+`request-identity-factory.ts`.
+
+What the factory produces, per request:
+
+| Field | Effect |
+|---|---|
+| `headers` | Client identity (`user-agent`, `x-app`, `x-stainless-*`), plus `x-claude-code-session-id` when a session id is supplied |
+| `headersForAttempt` | Retry counter |
+| `systemPrefix` | A text block prepended to the system array, carrying a per-request fingerprint derived from the first user message |
+| `metadata.user_id` | Device id, optionally account uuid and session id |
+| `betaQueryParam` | Beta features advertised by query parameter |
+| `contextManagement` | Thinking-retention policy for long sessions — see below |
+
+**`contextManagement` is the one field with a behavior effect, not just a wire
+effect.** It sends `edits: [{ type: 'clear_thinking_20251015', keep: 'all' }]`,
+which sets how much prior thinking is retained as a session grows. This is a
+deliberate choice, confirmed by the product owner alongside the identity work
+as a whole; it is also why the field is listed here rather than left implicit —
+it changes existing long sessions, so it does not belong in a commit that
+claims to be identity-only.
+
+**Gated on the engine.** The block only runs when `getActiveEngine() === 'halo'`;
+the default engine is `anthropic`, so a user who never switches engines is
+unaffected.
+
+**Session id comes from the conversation.** `sdk-config.ts` passes
+`conversationId` (a uuid) as `sessionId`, which is what populates both the
+session header and `metadata.user_id.session_id`. Dropping it silently halves
+the payload — as it did while the parameter went unpassed.
+
+**A failure here is degraded, not fatal.** The factory is built inside a
+`try/catch`: on failure the request still goes out, only without the identity
+headers. The catch logs the drop with the conversation id, because a silently
+unidentified session is indistinguishable from a correctly-identified one in
+every downstream log.
+
+**This is deliberate product behavior**, chosen so hallucination-prone gateway
+paths see the same shape as a first-party client. It is not an accident of
+bundling — it is why the SDK itself carries no provider identity. Do not
+"clean it up" out of the host without a product decision.

@@ -94,6 +94,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   // Actions
   navigate: (view) => {
     const currentView = get().view
+    // Navigating to where you already are leaves nothing behind. Recording it
+    // anyway made the return target the current screen, so back did nothing --
+    // reachable from every always-enabled nav entry (rail, narrow sheet,
+    // overflow menu), which do not disable the destination you are on.
+    if (currentView === view) return
     // Record the view being left as the return target, except for transient
     // screens that are never a meaningful place to come back to.
     if (currentView !== 'splash' && currentView !== 'setup' && currentView !== 'serverConnect' && currentView !== 'serverList') {

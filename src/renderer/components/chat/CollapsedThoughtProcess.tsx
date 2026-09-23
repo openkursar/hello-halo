@@ -339,10 +339,14 @@ export function LazyCollapsedThoughtProcess({ thoughtsSummary, onLoadThoughts }:
   const [isLoading, setIsLoading] = useState(false)
 
   // Once loaded, render expanded — user explicitly clicked to load thoughts
-  if (loadedThoughts) {
+  if (loadedThoughts && loadedThoughts.length > 0) {
     return <CollapsedThoughtProcess thoughts={loadedThoughts} defaultExpanded />
   }
 
+  // Empty array is truthy: without the length check above, a message with
+  // saved-but-empty thoughts renders null and silently disappears instead of
+  // showing the unavailable state.
+  const unavailable = loadedThoughts !== null
   const duration = thoughtsSummary.duration
 
   const handleClick = async () => {
@@ -363,18 +367,20 @@ export function LazyCollapsedThoughtProcess({ thoughtsSummary, onLoadThoughts }:
     <div className="mb-2">
       <button
         onClick={handleClick}
-        disabled={isLoading}
-        className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs transition-all duration-200 w-full bg-card/80 hover:bg-secondary/60 border border-border/50"
+        disabled={isLoading || unavailable}
+        className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs transition-all duration-200 w-full bg-card/80 hover:bg-secondary/60 border border-border/50 disabled:hover:bg-card/80"
       >
         {isLoading ? (
           <Loader2 size={12} className="text-muted-foreground animate-spin" />
         ) : (
-          <ChevronRight size={12} className="text-muted-foreground" />
+          <ChevronRight size={12} className={unavailable ? 'text-muted-foreground/40' : 'text-muted-foreground'} />
         )}
-        <Lightbulb size={14} className="text-primary" />
-        <span className="text-muted-foreground">{t('Already thought')}</span>
+        <Lightbulb size={14} className={unavailable ? 'text-muted-foreground/40' : 'text-primary'} />
+        <span className="text-muted-foreground">
+          {unavailable ? t('Thought process was not saved for this message') : t('Already thought')}
+        </span>
         <div className="flex items-center gap-1.5 text-muted-foreground/60">
-          {duration != null && <span>{duration.toFixed(1)}s</span>}
+          {!unavailable && duration != null && <span>{duration.toFixed(1)}s</span>}
         </div>
       </button>
     </div>

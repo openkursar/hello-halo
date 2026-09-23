@@ -17,8 +17,12 @@ contains the selected task's team record, not a cross-task notification feed.
 
 ## Interaction contract
 
-The renderer has one task selection and a three-column workbench. Task activity
-is a modal drawer bound to that selection; it has no independent task selector.
+The renderer has one task selection and a three-column workbench. A temporary
+space collaboration is the exception, and has no task selection at all: its one
+conversation (`kind: 'collab'`) is the room, so it is never a choice — the task
+list, its search and filters, the way to create a task and the links that leave
+for another task are all absent, leaving the room and the members beside it.
+Task activity is a modal drawer bound to that selection; it has no independent task selector.
 It contains unfinished work, outputs, coordination history and internal member
 reports. Switching the selected digital human changes only the member view inside
 the current task. Every team member uses the same conversation and execution

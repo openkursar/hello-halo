@@ -28,6 +28,7 @@ export const MODULE: RouteModuleMeta = {
     'GET /api/teams/:teamId/detail': { expose: 'internal' },
     'GET /api/teams/:teamId/chat-messages': { expose: 'internal' },
     'POST /api/teams/:teamId/members/:appId/send': { expose: 'internal' },
+    'POST /api/teams/:teamId/members/:appId/stop': { expose: 'internal' },
     'GET /api/teams/:teamId/artifacts': { expose: 'internal' },
     'GET /api/teams/:teamId/conversations': { expose: 'internal' },
     'POST /api/teams/:teamId/conversations': { expose: 'internal' },

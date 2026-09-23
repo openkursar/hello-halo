@@ -1,15 +1,26 @@
 import { describe, expect, it } from 'vitest'
-import { activitySourceKind, isPendingDecision, mergeActivityEntries, visibleDigitalHumans } from '../../../src/renderer/utils/people-model'
+import { activitySourceKind, coordinatorIds, ephemeralMemberIds, isPendingDecision, mergeActivityEntries, visibleDigitalHumans } from '../../../src/renderer/utils/people-model'
 import type { ActivityEntry, InstalledApp } from '../../../src/shared/apps/app-types'
 import type { TeamListItem } from '../../../src/shared/apps/team-types'
 
 const decision = (id: string, patch: Partial<ActivityEntry> = {}): ActivityEntry => ({ id, appId: 'person', runId: `run-${id}`, type: 'escalation', ts: 1, content: { summary: 'Question' }, ...patch })
 
 describe('digital human work projection', () => {
-  it('keeps human-created team leaders and names containing Lead visible', () => {
-    const apps = ['system', 'owner', 'Lead researcher'].map(id => ({ id, spec: { type: 'automation' } }) as InstalledApp)
-    const teams = [{ localMembers: [{ appId: 'system', isLead: true, isSystemCoordinator: true }, { appId: 'owner', isLead: true, isSystemCoordinator: false }] }] as TeamListItem[]
-    expect(visibleDigitalHumans(apps, teams).map(app => app.id)).toEqual(['owner', 'Lead researcher'])
+  it('lists every team leader, and withholds only what an ephemeral collaboration built', () => {
+    const apps = ['system', 'owner', 'Lead researcher', 'throwaway'].map(id => ({ id, spec: { type: 'automation' } }) as InstalledApp)
+    const teams = [
+      { localMembers: [{ appId: 'system', isLead: true, isSystemCoordinator: true }, { appId: 'owner', isLead: true, isSystemCoordinator: false }] },
+      { ephemeral: true, localMembers: [{ appId: 'throwaway', isLead: false, isSystemCoordinator: false }] },
+    ] as TeamListItem[]
+    expect(visibleDigitalHumans(apps, teams).map(app => app.id)).toEqual(['system', 'owner', 'Lead researcher'])
+  })
+  it('keeps coordinators out of the recipients a person addresses directly', () => {
+    const teams = [
+      { localMembers: [{ appId: 'system', isLead: true, isSystemCoordinator: true }, { appId: 'owner', isLead: true, isSystemCoordinator: false }] },
+      { ephemeral: true, localMembers: [{ appId: 'throwaway', isLead: false, isSystemCoordinator: false }] },
+    ] as TeamListItem[]
+    expect([...coordinatorIds(teams)]).toEqual(['system'])
+    expect([...ephemeralMemberIds(teams)]).toEqual(['throwaway'])
   })
   it('never infers an unknown historical source from its text or available team', () => {
     expect(activitySourceKind(decision('old', { content: { summary: 'Team finance asked me' } }))).toBe('unknown')

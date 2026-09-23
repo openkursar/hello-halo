@@ -168,8 +168,11 @@ function readManifest(rootDir: string): BuiltinManifest | null {
  *
  * Subdirectories are descended recursively; resulting keys use forward-slash
  * paths (e.g. "references/INDEX.md"), matching what `skill-sync.ts` expects.
+ *
+ * Exported for the builtin-skills seeder (builtin-skills.ts), which builds the
+ * same `skill_files` shape from resources/builtin-skills/.
  */
-function readSkillFiles(skillDir: string): Record<string, string> {
+export function readSkillFiles(skillDir: string): Record<string, string> {
   const out: Record<string, string> = {}
   const root = resolve(skillDir)
 

@@ -2,7 +2,7 @@
  * Agent Module - System Prompt
  *
  * Halo's custom system prompt for the Claude Code SDK.
- * This replaces the SDK's default 'claude_code' preset with Halo-specific instructions.
+ * This replaces the SDK's default 'default' preset with Halo-specific instructions.
  *
  * Two prompt profiles are available:
  * - 'official': Base prompt without Halo-specific optimizations

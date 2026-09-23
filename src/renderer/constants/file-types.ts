@@ -19,8 +19,9 @@ export const BINARY_EXTENSIONS = new Set([
   // Media (audio/video)
   'mp3', 'mp4', 'avi', 'mov', 'mkv', 'flv', 'wmv', 'wav', 'flac', 'aac', 'ogg',
   'm4a', 'm4v', 'webm',
-  // Office documents (use external app for better experience)
-  'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp',
+  // Legacy/OpenDocument office formats (no in-canvas viewer; use external app).
+  // docx/xlsx/xls/pptx are deliberately absent — Canvas has viewers for them.
+  'doc', 'ppt', 'odt', 'ods', 'odp',
   // Fonts
   'ttf', 'otf', 'woff', 'woff2', 'eot',
   // Database
@@ -30,6 +31,24 @@ export const BINARY_EXTENSIONS = new Set([
   // Disk images
   'iso', 'img', 'vmdk', 'vdi',
 ])
+
+/**
+ * Office documents and PDFs, which open in a dedicated Canvas viewer.
+ *
+ * In remote/web mode these keep an explicit download control next to the
+ * preview. Preview is an addition there, not a replacement: a user on another
+ * device is more likely to want the file itself — to open it in real Office —
+ * than to read it in a browser pane, and for .pptx the preview is only a
+ * placeholder. Desktop needs no equivalent: the file is already on disk and
+ * double-click opens it in the system application.
+ */
+export const DOCUMENT_EXTENSIONS = new Set([
+  'xlsx', 'xls', 'docx', 'pptx', 'pdf',
+])
+
+export function isDocumentExtension(extension: string | undefined): boolean {
+  return !!extension && DOCUMENT_EXTENSIONS.has(extension.toLowerCase())
+}
 
 /**
  * Check if extension is a known binary format

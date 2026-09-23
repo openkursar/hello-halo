@@ -201,7 +201,7 @@ export function registerArtifactRoutes(app: Express): void {
         return
       }
 
-      const result = readArtifactContent(validatedPath)
+      const result = await readArtifactContent(validatedPath)
       res.json({ success: true, data: result })
     } catch (error) {
       res.status(500).json({ success: false, error: (error as Error).message })

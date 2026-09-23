@@ -435,7 +435,11 @@ export function forceReconnectWebSocket(): void {
 /**
  * Register event listener (works for IPC, WebSocket, or Capacitor WS)
  */
-export function onEvent(channel: string, callback: (data: unknown) => void): () => void {
+// Generic in the payload so a slice can declare the shape its consumers get
+// (see artifactApi.onArtifactChanged) instead of casting at the call site; the
+// channel is stringly-typed either way, so `T` is the declaration, not a proof.
+export function onEvent<T = unknown>(channel: string, callback: (data: T) => void): () => void {
+  const listener = callback as (data: unknown) => void
   if (isElectron()) {
     // Use IPC in Electron
     const methodMap: Record<string, keyof typeof window.halo> = {
@@ -490,7 +494,7 @@ export function onEvent(channel: string, callback: (data: unknown) => void): () 
 
     const method = methodMap[channel]
     if (method && typeof window.halo[method] === 'function') {
-      return (window.halo[method] as (cb: (data: unknown) => void) => () => void)(callback)
+      return (window.halo[method] as (cb: (data: unknown) => void) => () => void)(listener)
     }
 
     return () => {}
@@ -499,10 +503,10 @@ export function onEvent(channel: string, callback: (data: unknown) => void): () 
     if (!wsEventListeners.has(channel)) {
       wsEventListeners.set(channel, new Set())
     }
-    wsEventListeners.get(channel)!.add(callback)
+    wsEventListeners.get(channel)!.add(listener)
 
     return () => {
-      wsEventListeners.get(channel)?.delete(callback)
+      wsEventListeners.get(channel)?.delete(listener)
     }
   }
 }

@@ -15,6 +15,7 @@ export const artifactRpc = {
   openArtifact: rawRpcMethod('artifact:open'),
   showArtifactInFolder: rawRpcMethod('artifact:show-in-folder'),
   readArtifactContent: rawRpcMethod('artifact:read-content'),
+  readArtifactBytes: rawRpcMethod('artifact:read-bytes'),
   saveArtifactContent: rawRpcMethod('artifact:save-content'),
   detectFileType: rawRpcMethod('artifact:detect-file-type'),
   createArtifactFile: rawRpcMethod('artifact:create-file'),

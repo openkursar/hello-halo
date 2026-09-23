@@ -19,7 +19,7 @@ import type { ArtifactTreeNode, ArtifactTreeUpdateEvent } from '../../types'
 import { FileIcon } from '../icons/ToolIcons'
 import { ChevronRight, ChevronDown, Download, Eye, Loader2, FilePlus, FolderPlus, Edit3, Trash2, FolderOpen, Copy, RefreshCw } from 'lucide-react'
 import { useTranslation } from '../../i18n'
-import { canOpenInCanvas } from '../../constants/file-types'
+import { canOpenInCanvas, isDocumentExtension } from '../../constants/file-types'
 import { ContextMenu, type ContextMenuItem } from '../ui/ContextMenu'
 import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 import { useNotificationStore } from '../../stores/notification.store'
@@ -918,6 +918,7 @@ function TreeNodeComponent({ node, style, dragHandle }: NodeRendererProps<Artifa
   const isLoading = lazyLoad?.loadingPaths.has(data.path) ?? false
   const dimmed = isDimmed(data.name)
   const canViewInCanvas = !isFolder && canOpenInCanvas(data.extension)
+  const showDownload = isWebMode && !isFolder && isDocumentExtension(data.extension)
   const touchedStatus = !isFolder ? touchedFiles?.get(data.path) : undefined
 
   // Handle folder toggle with lazy loading (must be before early return)
@@ -1137,6 +1138,21 @@ function TreeNodeComponent({ node, style, dragHandle }: NodeRendererProps<Artifa
       )}
       {!isFolder && !canViewInCanvas && isWebMode && (
         <Download className="w-3 h-3 text-primary flex-shrink-0 ml-1 opacity-0 group-hover:opacity-100 transition-opacity duration-75" />
+      )}
+      {/* Documents in web mode: a real download control next to the preview
+          affordance. Always visible, since web mode includes touch clients with
+          no hover to reveal it. */}
+      {showDownload && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            api.downloadArtifact(data.path)
+          }}
+          className="p-0.5 rounded flex-shrink-0 ml-1 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+          title={t('Download')}
+        >
+          <Download className="w-3 h-3" />
+        </button>
       )}
     </div>
     </ContextMenu>

@@ -610,7 +610,18 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       const res = await api.teamSaveCollab(teamId, name)
       if (res.success) {
         await get().loadTeams()
-        if (get().currentTeamId === teamId) await get().loadDetail(teamId)
+        if (get().currentTeamId === teamId) {
+          await get().loadDetail(teamId)
+          await get().loadConversations(teamId)
+          // The ephemeral workbench showed the collaboration's single room
+          // implicitly (it ignores the selection). Saving flips the workbench
+          // to selection-driven routing, so without this the user lands in the
+          // blank new-task state and their running conversation "disappears".
+          if (!get().selectedConversationId) {
+            const room = get().conversations.find(c => c.kind === 'collab')
+            if (room) get().selectConversation(room.epochId)
+          }
+        }
         return true
       }
       return false

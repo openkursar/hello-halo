@@ -80,6 +80,18 @@ export const teamApi = {
     })
   },
 
+  /**
+   * Stop the turn a member is running. Needed alongside the local app-chat stop
+   * because a member owned by another machine runs its turn there: aborting here
+   * would find no session and quietly succeed while the member kept working.
+   */
+  teamStopMember: async (input: { teamId: string; appId: string; epochId?: string }): Promise<ApiResponse> => {
+    if (isElectron()) return window.halo.teamStopMember(input)
+    return httpRequest('POST', `/api/teams/${input.teamId}/members/${input.appId}/stop`, {
+      epochId: input.epochId,
+    })
+  },
+
   // ===== Conversations (office-shared session objects) =====
   /** Every open conversation of this office (native / IM / member), newest first. */
   teamListConversations: async (teamId: string): Promise<ApiResponse> => {

@@ -32,6 +32,8 @@ import {
 } from '../../../shared/constants/model-runtime-limits'
 import { getActiveEngine } from './resolved-sdk'
 import { getDeviceIdentity } from '../../foundation/device-identity'
+import { applyOfficeRuntimeEnv } from '../office-runtime'
+import { buildRequestIdentity } from './request-identity-factory'
 
 // ============================================
 // Configuration
@@ -725,6 +727,10 @@ export function buildSdkEnv(params: SdkEnvParams): Record<string, string | numbe
     console.log(`[SDK Config] Injected app proxy into subprocess env: ${appProxy}`)
   }
 
+  // Bundled Office runtime: make the halo-node shim resolvable on PATH. No-op
+  // (one log line) when the runtime bundle is absent.
+  applyOfficeRuntimeEnv(env)
+
   // Normalize proxy env vars: add http:// if protocol is missing.
   // Some Windows users (esp. with Clash/V2Ray) set HTTPS_PROXY=127.0.0.1:7890
   // without protocol prefix. The Claude Code CLI's Anthropic SDK does
@@ -902,7 +908,7 @@ export async function buildBaseSdkOptions(params: BaseSdkOptionsParams): Promise
     stderr: stderrHandler || ((data: string) => {
       console.error(`[Agent][${conversationId}] CLI stderr:`, data)
     }),
-    // Use Halo's custom system prompt instead of SDK's 'claude_code' preset.
+    // Use Halo's custom system prompt instead of SDK's 'default' preset.
     // The capability index advertises optional toolsets (agent/toolsets) the AI
     // can ask the user to enable; full tool schemas enter context only once the
     // toolset is enabled and the session is rebuilt. AI Browser is one such
@@ -946,20 +952,22 @@ export async function buildBaseSdkOptions(params: BaseSdkOptionsParams): Promise
     sdkOptions.mcpServers = mcpServers
   }
 
-  // Request identity — host-injected headers, system prefix, and metadata
-  // for subscription gateway fingerprinting when the halo engine is active.
+  // Request identity — host-injected headers, system prefix and metadata
+  // (halo engine only).
   if (getActiveEngine() === 'halo') {
     try {
-      const ccPkg = require('@anthropic-ai/claude-code/package.json')
-      const sdkPkg = require('@anthropic-ai/sdk/package.json')
-      const { buildRequestIdentity } = require('./request-identity-factory')
       sdkOptions.requestIdentity = buildRequestIdentity({
-        ccVersion: ccPkg.version,
-        sdkPackageVersion: sdkPkg.version,
         deviceId: getDeviceIdentity().deviceId,
+        // Halo's conversation id is a uuid, which is what this field requires.
+        sessionId: conversationId,
       })
     } catch (err) {
-      console.warn('[SDK Config] Failed to build requestIdentity:', (err as Error).message)
+      // Dropped, not fatal: the request still goes out, just without the
+      // identity headers.
+      console.warn(
+        `[Agent][${conversationId}] requestIdentity dropped — this session's requests carry no host identity headers:`,
+        (err as Error).message,
+      )
     }
   }
 

@@ -719,6 +719,18 @@ files here allowed to.
   That is why `TeamPromptContext` carries no per-turn field: who started the turn
   and whether the sender is blocking on the reply are rendered into the message
   body by `renderEnvelope`, not into the prompt.
+
+  `selfIsDisposable` is the one field neither rendered nor per-turn: it reports
+  that the app running this turn will NOT outlive the team (an AI-provisioned
+  member of a temporary collaboration — both halves required: a digital human
+  the person installed is never cleaned up by a dissolve, and outlives the
+  team). `app-chat` reads it to withhold the surfaces whose only purpose is to
+  outlive the work: memory (`memory.md`, the memory tool, the compaction pass —
+  a record nothing would ever read) and the digital-human tools (`halo-apps`, a
+  member about to be deleted creating artifacts that are not). The flag flips
+  one way only, on "save as team", so a saved team's members keep both from
+  their next turn — the deliberate session rebuild the fingerprint is designed
+  for, not a per-turn one.
 - Lead provisioning (`buildLeadSystemPrompt` + `provisionLeadSpec`) lives in the
   team data/lifecycle layer at `apps/team/lead.ts`, not here — the lead app spec
   is provisioning data the team service installs, so keeping it out of runtime

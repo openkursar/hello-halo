@@ -147,7 +147,10 @@ an epoch can consist entirely of messages.
   answers with `feed-subscribe` from its watermark. Publish triggers: the
   manager's `relaySink` (debounced + finalize pass) and a start-time heal.
 - `session-deps.ts` — location-aware session deps so a woken member runs with the
-  right owner-resolved space.
+  right owner-resolved space. Also where "stop this member" becomes
+  position-transparent: a locally-owned member is aborted in place, a remote one
+  over the stop plane. Unlike `closeTeamSession`, doing nothing for a remote
+  member is not an option — someone asked for a running turn to end.
 
 **M2 authority — `authority/`**
 - `office-authority.ts` — the per-office integration root composing the pieces
@@ -164,7 +167,11 @@ an epoch can consist entirely of messages.
   responses carry the responder's committedSeq),
   `scope-gate.ts` (invite-scope enforcement), `governance.ts`,
   `escalation-routing.ts`, `location-aware-blackboard.ts`,
-  `artifact-fetch.ts` (lazy artifact bytes), `history-fetch.ts` (transcript pull).
+  `artifact-fetch.ts` (lazy artifact bytes), `history-fetch.ts` (transcript pull),
+  `stop-turn.ts` (owner-served turn abort: a stop pressed on a viewer's machine
+  travels to the node actually running the member's turn — same pending table,
+  host relay and ownership gate as the transcript pull, answering a fact rather
+  than a payload).
 
 ## Manager internals (`manager.ts`)
 

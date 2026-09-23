@@ -450,6 +450,47 @@ export function ThoughtProcess({ thoughts, isThinking }: ThoughtProcessProps) {
 
   // Check if there's content to show in the scrollable area
   const hasDisplayContent = displayThoughts.length > 0
+  // A turn shows "thinking" before its first step exists, and some turns never
+  // emit one — gate the expand affordance so the header isn't clickable into
+  // an empty body.
+  const hasBodyContent = hasDisplayContent || (latestTodos?.length ?? 0) > 0
+
+  const header = (
+    <>
+      {/* Status indicator */}
+      {isThinking ? (
+        <Loader2 size={16} className="text-primary animate-spin" />
+      ) : (
+        <CheckCircle2
+          size={16}
+          className={errorCount > 0 ? 'text-destructive' : 'text-primary'}
+        />
+      )}
+
+      {/* Title: action summary when thinking, "Thought process" when done */}
+      <span className={`text-sm font-medium ${isThinking ? 'text-primary' : 'text-foreground'}`}>
+        {actionSummary ? t(actionSummary.key, actionSummary.params) : t('Already thought')}
+      </span>
+
+      {/* Stats: only show elapsed time when thinking is complete */}
+      {!isThinking && (
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground/60">
+          <span>{elapsed}s</span>
+        </div>
+      )}
+
+      {/* Spacer */}
+      <div className="flex-1" />
+
+      {/* Expand icon */}
+      {hasBodyContent && (
+        <ChevronDown
+          size={16}
+          className={`text-muted-foreground transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`}
+        />
+      )}
+    </>
+  )
 
   return (
     <div className="animate-fade-in mb-4">
@@ -471,44 +512,19 @@ export function ThoughtProcess({ thoughts, isThinking }: ThoughtProcessProps) {
         `}
       >
         {/* Header */}
-        <button
-          onClick={() => setIsExpanded(!isExpanded)}
-          className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-secondary/60 transition-colors"
-        >
-          {/* Status indicator */}
-          {isThinking ? (
-            <Loader2 size={16} className="text-primary animate-spin" />
-          ) : (
-            <CheckCircle2
-              size={16}
-              className={errorCount > 0 ? 'text-destructive' : 'text-primary'}
-            />
-          )}
-
-          {/* Title: action summary when thinking, "Thought process" when done */}
-          <span className={`text-sm font-medium ${isThinking ? 'text-primary' : 'text-foreground'}`}>
-            {actionSummary ? t(actionSummary.key, actionSummary.params) : t('Already thought')}
-          </span>
-
-          {/* Stats: only show elapsed time when thinking is complete */}
-          {!isThinking && (
-            <div className="flex items-center gap-1.5 text-xs text-muted-foreground/60">
-              <span>{elapsed}s</span>
-            </div>
-          )}
-
-          {/* Spacer */}
-          <div className="flex-1" />
-
-          {/* Expand icon */}
-          <ChevronDown
-            size={16}
-            className={`text-muted-foreground transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`}
-          />
-        </button>
+        {hasBodyContent ? (
+          <button
+            onClick={() => setIsExpanded(!isExpanded)}
+            className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-secondary/60 transition-colors"
+          >
+            {header}
+          </button>
+        ) : (
+          <div className="w-full flex items-center gap-3 px-4 py-3 text-left">{header}</div>
+        )}
 
         {/* Content */}
-        {isExpanded && (
+        {isExpanded && hasBodyContent && (
           <div className="border-t border-border/30 thought-content">
             {/* Scrollable thought items */}
             {hasDisplayContent && (

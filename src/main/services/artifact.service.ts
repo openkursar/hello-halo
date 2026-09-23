@@ -9,11 +9,12 @@
  */
 
 import { statSync, existsSync, realpathSync, readFileSync, writeFileSync, openSync, readSync, closeSync } from 'fs'
-import { promises as fsAsync } from 'fs'
+import { promises as fsAsync, type Stats } from 'fs'
 import { join, extname, basename, dirname, sep } from 'path'
 import { shell } from 'electron'
 import { getTempSpacePath } from '../foundation/config.service'
 import { CPP_LEVEL_IGNORE_DIRS } from '../../shared/constants/ignore-patterns'
+import { MAX_PREVIEW_DOCUMENT_SIZE, formatPreviewSize } from '../../shared/constants/artifact-preview'
 import { getSpace } from './space.service'
 import {
   listArtifacts as listArtifactsCached,
@@ -304,6 +305,12 @@ const MIME_TYPES: Record<string, string> = {
   webp: 'image/webp',
   ico: 'image/x-icon',
   bmp: 'image/bmp',
+  // Documents
+  pdf: 'application/pdf',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  xls: 'application/vnd.ms-excel',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
 }
 
 /**
@@ -318,7 +325,7 @@ function getMimeType(ext: string): string {
  * Check if file is binary (image, etc.)
  */
 function isBinaryFile(ext: string): boolean {
-  const binaryExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'bmp', 'pdf', 'zip', 'tar', 'gz', 'rar']
+  const binaryExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'bmp', 'pdf', 'zip', 'tar', 'gz', 'rar', 'xlsx', 'xls', 'docx', 'pptx']
   return binaryExtensions.includes(ext.toLowerCase().replace('.', ''))
 }
 
@@ -333,50 +340,94 @@ export interface ArtifactContent {
   size: number
 }
 
-export function readArtifactContent(filePath: string): ArtifactContent {
-  console.log(`[Artifact] Reading content: ${filePath}`)
+const MAX_TEXT_SIZE = 10 * 1024 * 1024
+const MAX_BINARY_SIZE = 50 * 1024 * 1024
 
-  if (!existsSync(filePath)) {
+/**
+ * Documents get a tighter ceiling than other binaries — see
+ * MAX_PREVIEW_DOCUMENT_SIZE for why, and note that the remote transport enforces
+ * the same number from the renderer side.
+ */
+const PREVIEW_DOCUMENT_EXTENSIONS = new Set(['xlsx', 'xls', 'docx', 'pptx', 'pdf'])
+
+function maxReadSize(ext: string): number {
+  const bare = ext.toLowerCase().replace('.', '')
+  if (PREVIEW_DOCUMENT_EXTENSIONS.has(bare)) return MAX_PREVIEW_DOCUMENT_SIZE
+  return isBinaryFile(ext) ? MAX_BINARY_SIZE : MAX_TEXT_SIZE
+}
+
+/**
+ * Shared entry gate for both read paths, so the two can never drift on which
+ * files they will open or how large those may be.
+ */
+async function statForRead(filePath: string): Promise<Stats> {
+  let stats: Stats
+  try {
+    stats = await fsAsync.stat(filePath)
+  } catch {
     throw new Error(`File not found: ${filePath}`)
   }
-
-  const stats = statSync(filePath)
   if (stats.isDirectory()) {
     throw new Error(`Cannot read directory content: ${filePath}`)
   }
+  const maxSize = maxReadSize(extname(filePath))
+  if (stats.size > maxSize) {
+    throw new Error(
+      `File too large to preview: ${formatPreviewSize(stats.size)} ` +
+      `(limit ${formatPreviewSize(maxSize)})`
+    )
+  }
+  return stats
+}
+
+/**
+ * Read a file as raw bytes for the Canvas document viewers.
+ *
+ * Kept separate from readArtifactContent (contract: `content: string`) rather
+ * than an encoding flag: base64 there would cost a string, a second copy in
+ * the IPC clone, and a decode loop on the renderer's main thread — with no
+ * cheaper option available (isolated renderer has no Buffer; Chromium has no
+ * one-shot base64 primitive). A Buffer crosses structured clone as a
+ * Uint8Array, avoiding all of that.
+ *
+ * Same paths and size limits as readArtifactContent; only the encoding differs.
+ */
+export async function readArtifactBytes(filePath: string): Promise<Buffer> {
+  console.log(`[Artifact] Reading bytes: ${filePath}`)
+  await statForRead(filePath)
+
+  try {
+    return await fsAsync.readFile(filePath)
+  } catch (error) {
+    console.error(`[Artifact] Failed to read file: ${filePath}`, error)
+    throw new Error(`Failed to read file: ${(error as Error).message}`)
+  }
+}
+
+export async function readArtifactContent(filePath: string): Promise<ArtifactContent> {
+  console.log(`[Artifact] Reading content: ${filePath}`)
+  const stats = await statForRead(filePath)
 
   const ext = extname(filePath)
   const mimeType = getMimeType(ext)
 
-  // Check file size limit (10MB for text, 50MB for binary)
-  const maxTextSize = 10 * 1024 * 1024  // 10MB
-  const maxBinarySize = 50 * 1024 * 1024  // 50MB
-  const isBinary = isBinaryFile(ext)
-  const maxSize = isBinary ? maxBinarySize : maxTextSize
-
-  if (stats.size > maxSize) {
-    throw new Error(`File too large: ${stats.size} bytes (max: ${maxSize} bytes)`)
-  }
-
   try {
-    if (isBinary) {
-      // Read as base64 for binary files
-      const buffer = readFileSync(filePath)
+    // Always async: a synchronous read of a multi-megabyte file blocks every
+    // other main-process consumer, including the window that is waiting on it.
+    if (isBinaryFile(ext)) {
+      const buffer = await fsAsync.readFile(filePath)
       return {
         content: buffer.toString('base64'),
         mimeType,
         encoding: 'base64',
         size: stats.size
       }
-    } else {
-      // Read as UTF-8 for text files
-      const content = readFileSync(filePath, 'utf-8')
-      return {
-        content,
-        mimeType,
-        encoding: 'utf-8',
-        size: stats.size
-      }
+    }
+    return {
+      content: await fsAsync.readFile(filePath, 'utf-8'),
+      mimeType,
+      encoding: 'utf-8',
+      size: stats.size
     }
   } catch (error) {
     console.error(`[Artifact] Failed to read file: ${filePath}`, error)
@@ -427,6 +478,9 @@ export type CanvasContentType =
   | 'text'
   | 'json'
   | 'csv'
+  | 'xlsx'
+  | 'docx'
+  | 'pptx'
   | 'binary'
 
 /**
@@ -448,8 +502,10 @@ const BINARY_EXTENSIONS = new Set([
   'zip', 'tar', 'gz', 'bz2', 'xz', '7z', 'rar', 'tgz',
   // Media (non-viewable)
   'mp3', 'mp4', 'avi', 'mov', 'mkv', 'flv', 'wmv', 'wav', 'flac', 'aac', 'ogg',
-  // Office documents (use external app)
-  'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp',
+  // Legacy/OpenDocument office formats (no in-canvas viewer; use external app).
+  // Keep in step with the renderer's own list in constants/file-types.ts —
+  // docx/xlsx/xls/pptx are deliberately absent, Canvas has viewers for them.
+  'doc', 'ppt', 'odt', 'ods', 'odp',
   // Fonts
   'ttf', 'otf', 'woff', 'woff2', 'eot',
   // Database
@@ -458,6 +514,12 @@ const BINARY_EXTENSIONS = new Set([
   'class', 'pyc', 'pyo', 'o', 'obj', 'a', 'lib',
   'iso', 'img', 'vmdk', 'vdi',
 ])
+
+// OOXML office documents (open in their own Canvas viewer; .xls is read by the
+// same SheetJS-backed viewer as .xlsx)
+const OFFICE_CONTENT_TYPES: Record<string, CanvasContentType> = {
+  xlsx: 'xlsx', xls: 'xlsx', docx: 'docx', pptx: 'pptx',
+}
 
 // Known image extensions (open in ImageViewer)
 const IMAGE_EXTENSIONS = new Set([
@@ -634,6 +696,19 @@ export function detectFileType(filePath: string): FileTypeInfo {
       canViewInCanvas: true,
       contentType: 'pdf',
       mimeType: 'application/pdf',
+    }
+  }
+
+  // OOXML office documents → the dedicated Canvas viewers. Answers must match
+  // the renderer's own extension mapping in services/canvas-lifecycle.ts, which
+  // short-circuits these locally; this branch is what remote mode and any other
+  // caller of detect-type sees.
+  if (OFFICE_CONTENT_TYPES[ext]) {
+    return {
+      isText: false,
+      canViewInCanvas: true,
+      contentType: OFFICE_CONTENT_TYPES[ext],
+      mimeType: getMimeType(ext),
     }
   }
 

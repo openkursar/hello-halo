@@ -35,7 +35,14 @@ export function TeamView({ detail, onBack }: { detail: TeamDetail; onBack?: () =
   const selectedId = useTeamStore(s => s.selectedConversationId)
   const select = useTeamStore(s => s.selectConversation)
   const tasks = useMemo(() => visibleTasks(conversations), [conversations])
-  const task = conversations.find(item => item.epochId === selectedId) ?? null
+  // A temporary space collaboration: coordinated from its space conversation,
+  // so the persistent-team chrome (settings, invite, run/pause) stays hidden,
+  // the one action offered is keeping the team, and the whole workbench is the
+  // single room that conversation coordinates — there is no other task to pick,
+  // create or link to.
+  const isEphemeral = detail.team.ephemeral === true
+  const collabRoom = conversations.find(item => item.kind === 'collab') ?? null
+  const task = isEphemeral ? collabRoom : conversations.find(item => item.epochId === selectedId) ?? null
   const taskBoard = useTaskBoard(detail, task?.epochId ?? null)
   const [executionTarget, setExecutionTarget] = useState<string | undefined>()
   const [activityTarget, setActivityTarget] = useState<string | undefined>()
@@ -45,10 +52,6 @@ export function TeamView({ detail, onBack }: { detail: TeamDetail; onBack?: () =
   const [settingsMember, setSettingsMember] = useState<string | null>(null)
   const [invite, setInvite] = useState(false)
   const [runningAction, setRunningAction] = useState(false)
-  // A temporary space collaboration: coordinated from its space conversation,
-  // so the persistent-team chrome (settings, invite, run/pause) stays hidden
-  // and the one action offered is keeping the team.
-  const isEphemeral = detail.team.ephemeral === true
   const [saving, setSaving] = useState(false)
   const saveTeam = async () => {
     if (saving) return
@@ -114,7 +117,13 @@ export function TeamView({ detail, onBack }: { detail: TeamDetail; onBack?: () =
     setDrawer(null)
   }
   const newTask = () => { setSelectedMemberId(defaultOwnedMemberId ?? initialMemberId); setRoomKey(key => key + 1); select(null); setDrawer(null) }
-  const taskSidebar = <TaskSidebar query={taskQuery} onQuery={setTaskQuery} status={taskStatus} onStatus={setTaskStatus} teamId={detail.team.id} roster={detail.roster} tasks={tasks} selectedId={selectedId} isOwner={!detail.team.hostNodeId} onSelect={id => onTask(id, conversations.some(item => item.epochId === id && item.waitingForMe))} onNew={newTask} />
+  // A collaboration's room cannot be archived or superseded — it is the team's
+  // one conversation for as long as the team exists.
+  const roomMissing = isEphemeral ? !collabRoom : !!selectedId && !task
+  const roomMissingLabel = loadingTasks ? t('Loading task…') : isEphemeral ? t('This collaboration’s conversation is unavailable.') : t('This task is unavailable. Refresh the task list to try again.')
+  // One room means nothing to list, search, filter or add — and its absence is
+  // also what removes the way into a second conversation.
+  const taskSidebar = isEphemeral ? null : <TaskSidebar query={taskQuery} onQuery={setTaskQuery} status={taskStatus} onStatus={setTaskStatus} teamId={detail.team.id} roster={detail.roster} tasks={tasks} selectedId={selectedId} isOwner={!detail.team.hostNodeId} onSelect={id => onTask(id, conversations.some(item => item.epochId === id && item.waitingForMe))} onNew={newTask} />
   const members = <MemberRail detail={detail} selectedAppId={selectedMemberId ?? undefined} writableAppIds={ownedMemberIds} onMember={onMember} onDetails={member => { setSettingsMember(member.appId); setDrawer('settings') }} onTask={(id, memberId, decisionId) => { onTask(id, false, memberId); if (decisionId) setDecisionTarget(decisionId) }} />
   return <div className="flex h-full min-h-0 flex-col">
     <header className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
@@ -133,15 +142,15 @@ export function TeamView({ detail, onBack }: { detail: TeamDetail; onBack?: () =
       </div>
       {isEphemeral && <span className="hidden shrink-0 rounded-full border border-border px-2 py-0.5 text-[10px] text-muted-foreground sm:inline">{t('Temporary collaboration')}</span>}
       {isEphemeral && <button disabled={saving} onClick={() => void saveTeam()} className="flex shrink-0 items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs text-primary hover:bg-secondary disabled:opacity-50"><BookmarkPlus size={13} aria-hidden="true" />{t('Keep this team')}</button>}
-      <button onClick={() => setDrawer('tasks')} aria-label={t('Tasks')} className="rounded-lg p-2 hover:bg-secondary lg:hidden"><PanelLeft size={17} /></button>
+      {taskSidebar && <button onClick={() => setDrawer('tasks')} aria-label={t('Tasks')} className="rounded-lg p-2 hover:bg-secondary lg:hidden"><PanelLeft size={17} /></button>}
       <button onClick={() => setDrawer('members')} aria-label={t('Members')} className="rounded-lg p-2 hover:bg-secondary xl:hidden"><Users size={17} /></button>
       {!isEphemeral && <button onClick={() => { setSettingsMember(null); setDrawer('settings') }} aria-label={t('Team settings')} className="rounded-lg p-2 hover:bg-secondary"><Settings size={17} /></button>}
     </header>
     {tasksError && <div role="alert" className="px-4 py-2 text-xs text-destructive">{tasksError} <button onClick={() => void useTeamStore.getState().loadConversations(detail.team.id)} className="underline">{t('Retry')}</button></div>}
     <div className="flex min-h-0 flex-1">
-      {width >= 1024 && <div className="w-64 shrink-0 border-r border-border">{taskSidebar}</div>}
+      {taskSidebar && width >= 1024 && <div className="w-64 shrink-0 border-r border-border">{taskSidebar}</div>}
       <main className="flex min-w-0 flex-1 flex-col">
-        {selectedId && !task ? <p role="status" className="p-6 text-sm text-muted-foreground">{loadingTasks ? t('Loading task…') : t('This task is unavailable. Refresh the task list to try again.')}</p> : <TaskRoom key={roomKey} detail={detail} selectedAppId={selectedMemberId} onSelectMember={onMember} decisionTarget={decisionTarget}
+        {roomMissing ? <p role="status" className="p-6 text-sm text-muted-foreground">{roomMissingLabel}</p> : <TaskRoom key={roomKey} detail={detail} selectedAppId={selectedMemberId} onSelectMember={onMember} decisionTarget={decisionTarget}
           onExecution={appId => { setExecutionTarget(appId); setActivityTarget(undefined); setDrawer('activity') }} task={task} tasks={tasks} onTask={onTask} onCreated={select} boardState={taskBoard} onActivity={id => { setExecutionTarget(undefined); setDecisionTarget(undefined); setActivityTarget(id); setDrawer('activity') }} />}
 
       </main>
@@ -153,7 +162,7 @@ export function TeamView({ detail, onBack }: { detail: TeamDetail; onBack?: () =
       if (decision && ownedMemberIds.includes(decision.appId)) setDefaultMember(detail.team.id, decision.appId)
       setDecisionTarget(id)
     }} />}
-    {drawer === 'tasks' && width < 1024 && <WorkbenchDrawer title={t('Tasks')} onClose={() => setDrawer(null)}>{taskSidebar}</WorkbenchDrawer>}
+    {taskSidebar && drawer === 'tasks' && width < 1024 && <WorkbenchDrawer title={t('Tasks')} onClose={() => setDrawer(null)}>{taskSidebar}</WorkbenchDrawer>}
     {drawer === 'members' && width < 1280 && <WorkbenchDrawer title={t('Members')} onClose={() => setDrawer(null)}>{members}</WorkbenchDrawer>}
     {drawer === 'settings' && <WorkbenchDrawer title={settingsMember ? t('Member details') : t('Team settings')} onClose={() => setDrawer(null)}>
       {!detail.team.hostNodeId && !isEphemeral && <div className="flex gap-2 border-b border-border p-3">

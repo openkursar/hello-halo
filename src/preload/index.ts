@@ -303,11 +303,13 @@ export interface HaloAPI {
   openArtifact: (filePath: string) => Promise<IpcResponse>
   showArtifactInFolder: (filePath: string) => Promise<IpcResponse>
   readArtifactContent: (filePath: string) => Promise<IpcResponse>
+  /** Raw file bytes for the Canvas document viewers (a Buffer, cloned as a Uint8Array). */
+  readArtifactBytes: (filePath: string) => Promise<IpcResponse<Uint8Array>>
   saveArtifactContent: (filePath: string, content: string) => Promise<IpcResponse>
   detectFileType: (filePath: string) => Promise<IpcResponse<{
     isText: boolean
     canViewInCanvas: boolean
-    contentType: 'code' | 'markdown' | 'html' | 'image' | 'pdf' | 'text' | 'json' | 'csv' | 'binary'
+    contentType: 'code' | 'markdown' | 'html' | 'image' | 'pdf' | 'text' | 'json' | 'csv' | 'xlsx' | 'docx' | 'pptx' | 'binary'
     language?: string
     mimeType: string
   }>>
@@ -664,6 +666,8 @@ export interface HaloAPI {
   teamLeaveOffice: (input: { officeId: string }) => Promise<IpcResponse>
   /** Send a message to a remote member via the office owner (team wake). */
   teamSendToMember: (input: { teamId: string; appId: string; epochId: string; message: string; images?: ImageAttachment[]; thinkingEnabled?: boolean }) => Promise<IpcResponse>
+  /** Stop a member's running turn, wherever that member runs. */
+  teamStopMember: (input: { teamId: string; appId: string; epochId?: string }) => Promise<IpcResponse>
   /** Conversations (office-shared session objects). */
   teamListConversations: (teamId: string) => Promise<IpcResponse>
   teamOpenConversation: (input: { teamId: string; title?: string; memberAppId?: string }) => Promise<IpcResponse>
@@ -1035,6 +1039,7 @@ const api: HaloAPI = {
   teamJoinOffice: (input) => ipcRenderer.invoke(TEAM_IPC.joinOffice, input),
   teamLeaveOffice: (input) => ipcRenderer.invoke(TEAM_IPC.leaveOffice, input),
   teamSendToMember: (input) => ipcRenderer.invoke(TEAM_IPC.sendToMember, input),
+  teamStopMember: (input) => ipcRenderer.invoke(TEAM_IPC.stopMember, input),
   teamListConversations: (teamId) => ipcRenderer.invoke(TEAM_IPC.listConversations, teamId),
   teamOpenConversation: (input) => ipcRenderer.invoke(TEAM_IPC.openConversation, input),
   teamRenameConversation: (input) => ipcRenderer.invoke(TEAM_IPC.renameConversation, input),

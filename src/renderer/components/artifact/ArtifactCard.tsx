@@ -11,7 +11,7 @@ import type { Artifact } from '../../types'
 import { FileIcon } from '../icons/ToolIcons'
 import { ExternalLink, Download, Eye } from 'lucide-react'
 import { useTranslation } from '../../i18n'
-import { canOpenInCanvas } from '../../constants/file-types'
+import { canOpenInCanvas, isDocumentExtension } from '../../constants/file-types'
 
 // Check if running in web mode
 const isWebMode = api.isRemoteMode()
@@ -45,6 +45,11 @@ export function ArtifactCard({ artifact, onShowContextMenu }: ArtifactCardProps)
 
   // Check if this file can be viewed in the canvas
   const canViewInCanvas = !isFolder && canOpenInCanvas(artifact.extension)
+
+  // Documents in web mode get their own download control alongside the preview.
+  // Always shown, not hover-revealed: web mode includes touch clients that have
+  // no hover at all.
+  const showDownload = isWebMode && !isFolder && isDocumentExtension(artifact.extension)
 
   // Handle click to open file
   // Priority: Canvas > System App (desktop) > Download (web)
@@ -127,7 +132,9 @@ export function ArtifactCard({ artifact, onShowContextMenu }: ArtifactCardProps)
         }
       `}
       title={canViewInCanvas
-        ? t('Click to preview · double-click to open with system')
+        ? (showDownload
+            ? t('Click to preview · use the download button to save the file')
+            : t('Click to preview · double-click to open with system'))
         : (isWebMode ? t('Click to download file') : artifact.path)
       }
     >
@@ -167,6 +174,19 @@ export function ArtifactCard({ artifact, onShowContextMenu }: ArtifactCardProps)
           ) : (
             <ExternalLink className="w-4 h-4 text-muted-foreground/50 flex-shrink-0" />
           )
+        )}
+
+        {showDownload && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              api.downloadArtifact(artifact.path)
+            }}
+            className="p-1 rounded flex-shrink-0 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+            title={t('Download')}
+          >
+            <Download className="w-4 h-4" />
+          </button>
         )}
       </div>
     </div>

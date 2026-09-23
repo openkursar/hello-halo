@@ -11,10 +11,12 @@ export function buildPeopleDirectory(
   memberships: DirectoryMembership[],
   query: PeopleDirectoryQuery,
 ): PeopleDirectoryPage {
-  // Coordinators are an internal role; ephemeral-collaboration members exist
-  // for one piece of work in a space and are not standalone digital humans.
+  // Ephemeral-collaboration members exist for one piece of work in a space and
+  // are not standalone digital humans. A dedicated coordinator IS one: the
+  // directory is the only place its model and capabilities can be set, so
+  // hiding it left a digital human the person owns with no way to configure it.
   const excluded = new Set(
-    memberships.filter(member => member.isSystemCoordinator || member.ephemeral).map(member => member.appId)
+    memberships.filter(member => member.ephemeral).map(member => member.appId)
   )
   const counts = store.getDirectoryDecisionCounts()
   // A stop needs the owner exactly as much as an unanswered question does, so

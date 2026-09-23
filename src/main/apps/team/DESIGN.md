@@ -120,10 +120,31 @@ taken before the owner's latest edit reached the authority must not undo it.
   - `runTeam` refuses an ephemeral team; "save as team" (`saveCollab`) only
     clears the flag — the real lead is provisioned lazily on the saved team's
     first standalone run, so saving never disturbs the live collaboration.
+  - a member the team BUILT is disposable: the app dies with the collaboration,
+    so what only pays off over a longer life is withheld from its turns — its
+    memory, and managing other digital humans (it would otherwise be creating
+    artifacts that outlive it). A member the person installed is never
+    disposable. The predicate and its consequences live in the runtime (see
+    `apps/runtime/team` DESIGN, `selfIsDisposable`).
   - its one epoch is a `'conversation'` epoch keyed
     `space:{conversationId}` (`spaceCollabChatKey`), so it never occupies
     `current_epoch_id`, never auto-seals on quiescence, and seals through
     `completeCollab` (team_complete) as `completed`.
+  - the disposable-member gating (`selfIsDisposable`, stripping memory and the
+    digital-human MCPs from a member's turn) applies to TEAM turns only —
+    `app-chat` is the sole entry point that carries a team context. It is
+    deliberately absent from `apps/runtime/execute.ts`: an ephemeral member's
+    spec declares no subscriptions, so the automation path is unreachable by
+    construction, and a manual out-of-band trigger (HTTP trigger by appId)
+    runs it as a plain app — the same pre-existing semantic every
+    AI-provisioned team member has had. The gating is a token-cost trim on the
+    team hot path, not a security boundary; do not mirror it into execute. That epoch projects as
+    `kind: 'collab'` (`epoch-label`), which is how a surface finds the room its
+    coordinating conversation owns instead of inferring it from the team shape.
+  - `openConversation` refuses an ephemeral team: the collaboration works in ONE
+    conversation, so a second one here would be a context nobody coordinates and
+    that `getCollabForConversation` could not find again. Saving the team is what
+    makes separate tasks possible.
 - Business task metadata is stored on `team_epochs`; see the task lifetime contract below.
 
 ---

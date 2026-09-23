@@ -182,6 +182,12 @@ export interface TeamRuntime {
    */
   noteMemberTurnStarted(params: { appId: string; teamId: string; epochId: string }): void
   /**
+   * Stop the turn a member is running, wherever that member runs. Resolves with
+   * whether one was actually running; rejects only when the member's machine
+   * could not be reached at all.
+   */
+  stopMemberTurn(params: { appId: string; teamId: string; epochId: string }): Promise<boolean>
+  /**
    * …and ended, however it ended — normally, on an error, or killed by hand.
    * This is what tells the lead a teammate stopped when the teammate itself did
    * not say so; without it the run goes quiet and nothing looks. Called from the
@@ -493,6 +499,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     getMemberBusy: (appId, teamId) => orchestration!.getMemberBusy(appId, teamId),
     noteMemberStatusChanged: (teamId) => orchestration!.noteMemberStatusChanged(teamId),
     noteMemberTurnStarted: (params) => turnReport.noteTurnStarted(params),
+    stopMemberTurn: ({ appId, teamId, epochId }) => session.stopTeamSession(appId, teamId, epochId),
     noteMemberTurnEnded: (params) => {
       orchestration!.noteMemberTurnEnded(params)
       turnReport.noteTurnEnded(params)
@@ -606,6 +613,15 @@ export function createDefaultSessionDeps(store: TeamStore): OrchestrationSession
     async closeTeamSession(appId, teamId, epochId) {
       const { closeTeamSession } = await import('../app-chat')
       await closeTeamSession(appId, teamId, epochId)
+    },
+    async stopTeamSession(appId, teamId, epochId) {
+      const { stopAppChatConversation } = await import('../app-chat')
+      const sessionKey = buildTeamSessionKey(appId, teamId, epochId)
+      // Read before the abort: afterwards the session no longer says it was
+      // running, and "was anything interrupted" is what the caller reports.
+      const wasRunning = isAppChatConversationGenerating(sessionKey)
+      await stopAppChatConversation(sessionKey)
+      return wasRunning
     },
     getMemberSpaceId(appId) {
       const app = getAppManager()?.getApp(appId)

@@ -800,6 +800,10 @@
     "path": "/api/teams/:teamId/members/:appId/send"
   },
   {
+    "method": "POST",
+    "path": "/api/teams/:teamId/members/:appId/stop"
+  },
+  {
     "method": "GET",
     "path": "/api/teams/:teamId/artifacts"
   },

@@ -254,6 +254,13 @@ export interface TeamService {
    * the team's current run when omitted/empty.
    */
   sendToMember(params: SendToMemberParams): Promise<SendToMemberResult>
+  /**
+   * Stop the turn ONE member is running. Position-transparent in the same way as
+   * {@link sendToMember}: a remote-owned member's turn runs on its owner node, so
+   * the request travels there. `stopped` is false when nothing was running —
+   * an answer, not a failure.
+   */
+  stopMember(params: StopMemberParams): Promise<StopMemberResult>
 
   // ── Conversations (office-shared session objects) ──
   /** Every open conversation of this office, newest first (P0-1: office-wide consistent). */
@@ -261,7 +268,8 @@ export interface TeamService {
   /**
    * Open a brand-new native team conversation ("New session") — a fresh,
    * independent context whose input target is the team lead (front-desk mode).
-   * Returns the epoch id the renderer chats against.
+   * Returns the epoch id the renderer chats against. Refused on a temporary
+   * collaboration, which has exactly one conversation for its whole life.
    */
   openConversation(teamId: string, title?: string, memberAppId?: string): { epochId: string }
   /** Rename a conversation (office-shared: replicated to every node). */
@@ -302,6 +310,25 @@ export interface SendToMemberResult {
    * ignored.
    */
   delivery?: 'queued' | 'mid_turn'
+}
+
+export interface StopMemberParams {
+  teamId: string
+  appId: string
+  /**
+   * The session to stop. Omitted → resolved exactly as the send and history
+   * paths resolve it (open run epoch → the member's long-lived chat → the
+   * latest epoch even when sealed), so all three act on one conversation.
+   */
+  epochId?: string
+}
+
+export interface StopMemberResult {
+  ok: boolean
+  /** Whether a turn was actually interrupted (false = it had already ended). */
+  stopped: boolean
+  /** Technical code (MEMBER_NOT_FOUND / NO_SESSION / UNREACHABLE); never shown raw. */
+  reason?: string
 }
 
 // ── Factory ──
@@ -1362,6 +1389,34 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     return store.listToolAudit(teamId, options)
   }
 
+  async function stopMember(params: StopMemberParams): Promise<StopMemberResult> {
+    requireTeam(params.teamId)
+    const target = store.listMembersByTeam(params.teamId).find((m) => m.appId === params.appId)
+    if (!target) return { ok: false, stopped: false, reason: 'MEMBER_NOT_FOUND' }
+
+    const rt = requireRuntime()
+    // Resolve the SAME epoch the send and history paths resolve, down to the
+    // last step, or stop would aim at a different conversation than the one the
+    // caller is writing to and reading from: the requested epoch, else an open
+    // run epoch, else the member's long-lived chat, else the latest epoch even
+    // when sealed. Sealing does not end a turn that is already running — a
+    // caller can send into a sealed epoch, which reopens it — so a stop that
+    // refused to look there would leave exactly that turn unstoppable.
+    //
+    // Read-only throughout: creating a conversation as a side effect of
+    // stopping nothing would be the opposite of what was asked. Resolving an
+    // epoch with no live turn costs nothing — it answers `stopped: false`.
+    const epochId =
+      params.epochId ||
+      store.getCurrentEpochForTeam(params.teamId)?.id ||
+      store.getOpenConversationEpoch(params.teamId, memberChatKey(params.appId))?.id ||
+      store.listEpochsByTeam(params.teamId)[0]?.id
+    if (!epochId) return { ok: true, stopped: false, reason: 'NO_SESSION' }
+
+    const stopped = await rt.stopMemberTurn({ appId: params.appId, teamId: params.teamId, epochId })
+    return { ok: true, stopped }
+  }
+
   async function sendToMember(params: SendToMemberParams): Promise<SendToMemberResult> {
     requireTeam(params.teamId)
     const target = store.listMembersByTeam(params.teamId).find((m) => m.appId === params.appId)
@@ -1532,7 +1587,16 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
   }
 
   function openConversation(teamId: string, title?: string, memberAppId?: string): { epochId: string } {
-    requireTeam(teamId)
+    const team = requireTeam(teamId)
+    // A collaboration works in ONE conversation, the one its space conversation
+    // coordinates; a second one here would be a context nobody coordinates and
+    // that `getCollabForConversation` cannot find again.
+    if (team.ephemeral) {
+      throw new Error(
+        'This is a temporary collaboration. Its work happens in the space conversation that started it — ' +
+          'save it as a team to keep separate tasks.'
+      )
+    }
     const rt = requireRuntime()
     // A fresh, independent native session. The uuid makes each "New session" its
     // own context (never collapses into a prior one). The lead is the front desk.
@@ -1589,6 +1653,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     listEpochs,
     getEpochBoard,
     sendToMember,
+    stopMember,
     listConversations,
     openConversation,
     renameConversation,

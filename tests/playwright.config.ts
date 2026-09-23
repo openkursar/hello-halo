@@ -171,7 +171,7 @@ export default defineConfig({
     },
     {
       name: 'team-render',
-      testMatch: '**/team-render.spec.ts',
+      testMatch: ['**/team-render.spec.ts', '**/team-collab.spec.ts'],
       use: {
         actionTimeout: 15000
       }

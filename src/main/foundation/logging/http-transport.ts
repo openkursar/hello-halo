@@ -30,6 +30,17 @@ httpLog.transports.file.level = 'info'
 // 20 MB per file with auto-rotation — generous for verbose request payloads
 httpLog.transports.file.maxSize = 20 * 1024 * 1024
 
+/**
+ * Re-point this transport's file path. `log.create()` instances don't share
+ * the default logger's `resolvePathFn`, so without this call http-raw.log stays
+ * at electron-log's default path while main.log moves into the isolated one —
+ * every dev run and packaged variant would interleave raw request bodies into
+ * a single shared file.
+ */
+export function isolateHttpLogPath(resolvePathFn: (variables: { fileName?: string }) => string): void {
+  httpLog.transports.file.resolvePathFn = resolvePathFn
+}
+
 // ============================================================================
 // Runtime toggle (in-memory, zero disk reads after init)
 // ============================================================================
