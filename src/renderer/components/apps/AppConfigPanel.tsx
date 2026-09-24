@@ -1441,7 +1441,7 @@ export function AppConfigPanel({ appId, spaceName }: AppConfigPanelProps) {
     // No scroll container of its own: the page's detail pane scrolls, and a
     // second (never-scrolling) overflow context here would become the sticky
     // group nav's reference frame and keep it from ever sticking.
-    <div className="p-4 sm:p-6 space-y-4">
+    <div className="px-6 py-4 sm:px-10 sm:py-6 space-y-4">
       {/* Tab switcher — right-aligned, above the grouped settings */}
       <div className="flex items-center gap-0.5 bg-secondary rounded-lg p-0.5 w-fit ml-auto">
         <button

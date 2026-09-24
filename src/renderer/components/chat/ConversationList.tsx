@@ -8,7 +8,7 @@ import { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react'
 import { createPortal } from 'react-dom'
 import { Virtuoso } from 'react-virtuoso'
 import { Plus } from '../icons/ToolIcons'
-import { EllipsisVertical, Pin, Pencil, Trash2, Search, ChevronRight } from 'lucide-react'
+import { EllipsisVertical, Pin, Pencil, Trash2, ChevronRight } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { useChatStore, useAllConversationStatuses } from '../../stores/chat.store'
 import { useSpaceStore } from '../../stores/space.store'
@@ -32,12 +32,11 @@ const DEFAULT_WIDTH = 260
 // icon-strip view the canvas-open `collapsed` prop uses — dragging it back
 // out past the same threshold restores the normal list.
 const DRAG_COLLAPSE_THRESHOLD = 100
-const SEARCH_DEBOUNCE_MS = 200
 const clampWidth = (v: number) => Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, v))
 
 interface ConversationListProps {
-  /** Canvas-open collapsed mode — 56px icon strip: search/grouping/pin all
-   * hidden, each conversation is just a status dot (prototype's
+  /** Canvas-open collapsed mode — 56px icon strip: grouping/pin hidden,
+   * each conversation is just a status dot (prototype's
    * `.body.canvas-open .conv`). Resizing is disabled in this mode. */
   collapsed?: boolean
 }
@@ -56,9 +55,10 @@ function appChatRegistryTarget(row: AppChatConversationRow): { channel: string; 
 }
 
 /**
- * Row timestamp: clock time for today, weekday-less date beyond it. Kept
- * narrower than `formatTimeAgo` because it has to fit beside a title in a
- * 140–360px sidebar without truncating it.
+ * Conversation timestamp: clock time for today, weekday-less date beyond it.
+ * Kept narrower than `formatTimeAgo` because it has to fit beside a title in a
+ * 140–360px sidebar without truncating it. The hover card reuses it so the same
+ * conversation never shows two different times.
  */
 function formatRowTime(timestamp: string | number, t: (s: string) => string): string {
   const d = new Date(timestamp)
@@ -75,6 +75,50 @@ function formatRowTime(timestamp: string | number, t: (s: string) => string): st
     return d.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' })
   }
   return d.toLocaleDateString(undefined, { year: '2-digit', month: 'numeric', day: 'numeric' })
+}
+
+/**
+ * Same shape as conversation.service.ts's generateTitle() ("Chat M-D H:MM"),
+ * so a fresh digital-human session reads like a fresh regular conversation
+ * instead of the more generic, slightly misleading "New chat". Computed here
+ * rather than persisted server-side: local-session displayName is left empty
+ * on purpose so the renderer can localize this fallback (see
+ * im-session-registry.ts's createLocalSession doc comment).
+ */
+function formatDefaultChatTitle(timestamp: number, t: (s: string, opts?: Record<string, unknown>) => string): string {
+  const d = new Date(timestamp)
+  const minute = d.getMinutes().toString().padStart(2, '0')
+  return t('Chat {{date}}', { date: `${d.getMonth() + 1}-${d.getDate()} ${d.getHours()}:${minute}` })
+}
+
+/**
+ * What distinguishes one session of the same digital human from another.
+ * Inside its own section the digital human's name/avatar is already on the
+ * sub-header, so a row shows only this; the collapsed rail has no header at
+ * all and pairs it with the owner's name instead.
+ */
+function appChatSessionLabel(row: AppChatConversationRow, t: (s: string, opts?: Record<string, unknown>) => string): string {
+  return row.isDefault
+    ? (row.lastMessage || t('No messages yet'))
+    : (row.customName || row.displayName.trim() || row.lastMessage || formatDefaultChatTitle(row.updatedAt, t))
+}
+
+/** What the hover card shows for a row, in either list form. */
+function hoverCardFor(
+  row: Extract<ConversationRow, { type: 'item' | 'dh-item' }>,
+  t: (s: string, opts?: Record<string, unknown>) => string,
+): { label: string; owner?: string; time?: string } {
+  if (row.type === 'dh-item') {
+    return {
+      label: appChatSessionLabel(row.row, t),
+      owner: row.row.digitalHumanName,
+      time: formatRowTime(row.row.updatedAt, t),
+    }
+  }
+  return {
+    label: row.conversation.title || t('New conversation'),
+    time: formatRowTime(row.conversation.updatedAt, t),
+  }
 }
 
 /** Flattened row fed to `Virtuoso` — headers and items share one list instead
@@ -224,37 +268,34 @@ export const ConversationList = memo(function ConversationList({
   const [editingTitle, setEditingTitle] = useState('')
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null)
   const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null)
-  const [searchQuery, setSearchQuery] = useState('')
-  const [debouncedQuery, setDebouncedQuery] = useState('')
-  const searchInputRef = useRef<HTMLInputElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const editContainerRef = useRef<HTMLDivElement>(null)
   const editInputRef = useRef<HTMLInputElement | null>(null)
   const focusedEditingIdRef = useRef<string | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
+  /** Hovered row's identity card — rows truncate their title and the
+   * collapsed rail shows no title at all, so both lean on this. `owner` is
+   * set for a digital human's session. */
+  const [hoverCard, setHoverCard] = useState<{
+    label: string
+    owner?: string
+    time?: string
+    top: number
+    left: number
+  } | null>(null)
 
-  // Debounced local filter — avoids re-filtering on every keystroke.
-  useEffect(() => {
-    const id = setTimeout(() => setDebouncedQuery(searchQuery.trim()), SEARCH_DEBOUNCE_MS)
-    return () => clearTimeout(id)
-  }, [searchQuery])
-
-  const filteredConversations = useMemo(() => {
-    if (!debouncedQuery) return conversations
-    const needle = debouncedQuery.toLowerCase()
-    return conversations.filter(c => (c.title ?? '').toLowerCase().includes(needle))
-  }, [conversations, debouncedQuery])
-
-  // Search by digital-human name (the row's "title").
-  const filteredAppChatRows = useMemo(() => {
-    if (!debouncedQuery) return allAppChatRows
-    const needle = debouncedQuery.toLowerCase()
-    return allAppChatRows.filter(r => r.digitalHumanName.toLowerCase().includes(needle))
-  }, [allAppChatRows, debouncedQuery])
+  const showHoverCard = useCallback((
+    el: HTMLElement,
+    card: { label: string; owner?: string; time?: string },
+  ) => {
+    const r = el.getBoundingClientRect()
+    setHoverCard({ ...card, top: r.top + r.height / 2, left: r.right + 8 })
+  }, [])
+  const hideHoverCard = useCallback(() => setHoverCard(null), [])
 
   const rows = useMemo<ConversationRow[]>(
-    () => buildConversationRows(filteredConversations, filteredAppChatRows, collapsedApps, t),
-    [filteredConversations, filteredAppChatRows, collapsedApps, t]
+    () => buildConversationRows(conversations, allAppChatRows, collapsedApps, t),
+    [conversations, allAppChatRows, collapsedApps, t]
   )
 
   // Handle drag resize
@@ -467,8 +508,10 @@ export const ConversationList = memo(function ConversationList({
     return (
       <div
         onClick={() => !isEditing && useChatStore.getState().selectConversation(conversation.id)}
+        onMouseEnter={(e) => showHoverCard(e.currentTarget, hoverCardFor({ type: 'item', key: conversation.id, conversation }, t))}
+        onMouseLeave={hideHoverCard}
         className={cn(
-          'group relative flex w-full items-center gap-1.5 rounded-sm px-2.5 py-1.5 text-[13px] transition-colors ease-halo cursor-pointer',
+          'group relative flex w-full items-center gap-1.5 rounded-sm pl-2.5 pr-1.5 py-1.5 text-[13px] transition-colors ease-halo cursor-pointer',
           isActive
             ? 'bg-secondary text-foreground font-medium'
             : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
@@ -521,10 +564,10 @@ export const ConversationList = memo(function ConversationList({
             <button
               onClick={(e) => handleTogglePin(e, conversation)}
               className={cn(
-                'ml-auto w-[22px] h-[22px] flex-shrink-0 rounded-[6px] flex items-center justify-center transition-colors',
+                'ml-auto w-[22px] h-[22px] flex-shrink-0 rounded-[6px] hidden group-hover:flex items-center justify-center transition-colors',
                 conversation.starred
                   ? 'text-accent-on-dark'
-                  : 'hidden group-hover:flex text-subtle-foreground hover:bg-surface-hover hover:text-foreground'
+                  : 'text-subtle-foreground hover:bg-surface-hover hover:text-foreground'
               )}
               title={conversation.starred ? t('Unpin') : t('Pin')}
               aria-pressed={conversation.starred}
@@ -552,19 +595,15 @@ export const ConversationList = memo(function ConversationList({
   const renderAppChatItem = useCallback((row: AppChatConversationRow, standalone: boolean) => {
     const isActive = row.id === selectedAppChat?.conversationId
     const isEditing = editingId === row.id
-    // Inside its own section the digital human's name/avatar is already on the
-    // sub-header, so the row shows only what distinguishes one session from
-    // another. A standalone row (Pinned) has no such header above it and has
-    // to carry that identity itself.
-    const sessionLabel = row.isDefault
-      ? (row.lastMessage || t('No messages yet'))
-      : (row.customName || row.displayName.trim() || row.lastMessage || t('New chat'))
+    const sessionLabel = appChatSessionLabel(row, t)
 
     return (
       <div
         onClick={() => !isEditing && !row.uninstalled && handleSelectAppChat(row)}
+        onMouseEnter={(e) => showHoverCard(e.currentTarget, hoverCardFor({ type: 'dh-item', key: row.id, row, standalone }, t))}
+        onMouseLeave={hideHoverCard}
         className={cn(
-          'group relative flex w-full items-center gap-1.5 rounded-sm pr-2.5 py-1.5 text-[13px] transition-colors ease-halo',
+          'group relative flex w-full items-center gap-1.5 rounded-sm pr-1.5 py-1.5 text-[13px] transition-colors ease-halo',
           standalone ? 'pl-2.5' : 'pl-5',
           row.uninstalled
             ? 'opacity-40 cursor-not-allowed'
@@ -611,10 +650,10 @@ export const ConversationList = memo(function ConversationList({
             <button
               onClick={(e) => handleToggleAppChatPin(e, row)}
               className={cn(
-                'ml-auto w-[22px] h-[22px] flex-shrink-0 rounded-[6px] flex items-center justify-center transition-colors',
+                'ml-auto w-[22px] h-[22px] flex-shrink-0 rounded-[6px] hidden group-hover:flex items-center justify-center transition-colors',
                 row.starred
                   ? 'text-accent-on-dark'
-                  : 'hidden group-hover:flex text-subtle-foreground hover:bg-surface-hover hover:text-foreground'
+                  : 'text-subtle-foreground hover:bg-surface-hover hover:text-foreground'
               )}
               title={row.starred ? t('Unpin') : t('Pin')}
               aria-pressed={row.starred}
@@ -635,8 +674,27 @@ export const ConversationList = memo(function ConversationList({
     )
   }, [selectedAppChat?.conversationId, editingId, editingTitle, t])
 
-  const hasQuery = debouncedQuery.length > 0
-  const noResults = hasQuery && rows.every(r => r.type === 'header')
+  // Fixed-positioned and portaled: the row lists scroll, and a scroll
+  // container clips anything reaching past its edge.
+  const hoverCardPortal = hoverCard && !editingId && createPortal(
+    <div
+      role="tooltip"
+      style={{ top: hoverCard.top, left: hoverCard.left }}
+      className="pointer-events-none fixed z-[60] w-[260px] -translate-y-1/2 rounded-lg border border-border bg-popover px-3.5 py-3 shadow-lg"
+    >
+      {hoverCard.owner && (
+        <span className="mb-1.5 flex items-center gap-2">
+          <AutomationAvatar name={hoverCard.owner} size={20} />
+          <span className="truncate text-[13px] text-muted-foreground">{hoverCard.owner}</span>
+        </span>
+      )}
+      <span className="block text-sm leading-relaxed text-foreground line-clamp-3">{hoverCard.label}</span>
+      {hoverCard.time && (
+        <span className="mt-1.5 block text-xs text-muted-foreground">{hoverCard.time}</span>
+      )}
+    </div>,
+    document.body
+  )
 
   if (collapsed || isDragCollapsed) {
     // Canvas-driven collapse (`collapsed`) has no drag handle — the canvas
@@ -661,21 +719,50 @@ export const ConversationList = memo(function ConversationList({
             <Plus className="w-4 h-4" />
           </button>
         </div>
-        <div className="flex-1 w-full overflow-y-auto px-2 py-1 flex flex-col items-center">
-          {conversations.map(conv => (
-            <button
-              key={conv.id}
-              onClick={() => useChatStore.getState().selectConversation(conv.id)}
-              title={conv.title}
-              className="flex h-[25px] w-full items-center justify-center"
-            >
-              <span className={cn(
-                'w-[7px] h-[7px] rounded-full',
-                conv.id === currentConversationId && !selectedAppChat ? 'bg-primary opacity-100' : 'bg-subtle-foreground opacity-50'
-              )} />
-            </button>
-          ))}
+        {/* Same rows as the expanded list, minus its section headers, so
+            collapsing never drops a conversation the open list shows. Dots
+            carry no label of their own, so the hover bubble is the only way
+            to tell them apart; it is portaled and fixed-positioned because
+            this column scrolls, and a scroll container clips anything
+            reaching past its edge. */}
+        <div className="flex-1 w-full overflow-y-auto px-2 py-1 flex flex-col items-center gap-1.5">
+          {rows.map(row => {
+            if (row.type === 'header' || row.type === 'dh-header') return null
+            const isAppChat = row.type === 'dh-item'
+            const id = isAppChat ? row.row.id : row.conversation.id
+            const active = isAppChat
+              ? row.row.id === selectedAppChat?.conversationId
+              : row.conversation.id === currentConversationId && !selectedAppChat
+            const status = conversationStatuses.get(id) ?? 'idle'
+            return (
+              <button
+                key={row.key}
+                onClick={() => {
+                  if (isAppChat) {
+                    if (!row.row.uninstalled) handleSelectAppChat(row.row)
+                  } else {
+                    useChatStore.getState().selectConversation(row.conversation.id)
+                  }
+                }}
+                onMouseEnter={(e) => showHoverCard(e.currentTarget, hoverCardFor(row, t))}
+                onMouseLeave={hideHoverCard}
+                className="flex h-5 w-8 items-center justify-center"
+              >
+                {/* Busy/attention states win over the plain dot: with the list
+                    collapsed this is the only place that state is visible. */}
+                {status !== 'idle' ? (
+                  <TaskStatusDot status={status} size="md" />
+                ) : (
+                  <span className={cn(
+                    'w-[7px] h-[7px] rounded-full transition-colors ease-halo',
+                    active ? 'bg-primary opacity-100' : 'bg-subtle-foreground opacity-50'
+                  )} />
+                )}
+              </button>
+            )
+          })}
         </div>
+        {hoverCardPortal}
         {showDragHandle && (
           <div
             className={`absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-primary/50 transition-colors z-20 ${
@@ -696,27 +783,7 @@ export const ConversationList = memo(function ConversationList({
       className="border-r border-border flex flex-col bg-background relative"
       style={{ width, transition: isDragging ? 'none' : 'width 0.2s ease' }}
     >
-      {/* Search + new conversation — prototype's `.conv-top`: search on top,
-          button below, 8px gap. Search filters this list locally (see
-          module doc); it intentionally has no ⌘K badge since that shortcut
-          opens the unrelated global search instead. */}
-      <div className="flex flex-col gap-2 px-2.5 pt-2.5 pb-3">
-        <div className="flex h-8 items-center gap-[7px] rounded-sm border border-transparent bg-surface-hover px-[9px] transition-colors duration ease-halo focus-within:border-primary">
-          <Search className="w-3.5 h-3.5 flex-shrink-0 text-subtle-foreground" strokeWidth={1.8} />
-          <input
-            ref={searchInputRef}
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Escape') {
-                setSearchQuery('')
-                searchInputRef.current?.blur()
-              }
-            }}
-            placeholder={t('Search conversations')}
-            className="flex-1 min-w-0 bg-transparent text-xs text-foreground outline-none placeholder:text-subtle-foreground"
-          />
-        </div>
+      <div className="flex flex-col gap-2 px-2.5 pt-4 pb-3">
         <button
           onClick={() => {
             const spaceId = useSpaceStore.getState().currentSpace?.id
@@ -731,15 +798,13 @@ export const ConversationList = memo(function ConversationList({
 
       {/* Conversation list - virtualized for performance with large lists */}
       <div className="flex-1 overflow-hidden">
-        {noResults ? (
-          <p className="px-4 py-8 text-center text-xs text-subtle-foreground">
-            {t('No matching conversations')}
-          </p>
-        ) : (
-          <Virtuoso
+        <Virtuoso
             data={rows}
             overscan={200}
-            className="px-2 pt-1 pb-3"
+            // Virtuoso's scroller only sets overflow-y, which leaves overflow-x
+            // resolving to `auto` — a stray pixel of row width then shows a
+            // horizontal scrollbar under a list that never scrolls sideways.
+            className="px-2 pt-1 pb-3 overflow-x-hidden"
             itemContent={(index, row) => {
               if (row.type === 'header') {
                 // No uppercase/letter-spacing: both are no-ops on CJK labels
@@ -791,8 +856,7 @@ export const ConversationList = memo(function ConversationList({
               }
               return renderConversationItem(row.conversation)
             }}
-          />
-        )}
+        />
       </div>
 
       {/* Drag handle - on right side */}
@@ -804,6 +868,8 @@ export const ConversationList = memo(function ConversationList({
         title={t('Drag to resize width')}
       />
     </div>
+
+    {hoverCardPortal}
 
     {/* Dropdown menu — Portal to document.body, fully outside flex layout.
         Pin lives inline on the row now; this keeps rename/delete. */}

@@ -12,7 +12,7 @@ import { KbAvatar } from './KbAvatar'
 import { ChatTab } from './ChatTab'
 import { RawFilesTab } from './RawFilesTab'
 import { SettingsTab } from './SettingsTab'
-import { MessageSquare, Settings, Star } from 'lucide-react'
+import { MessageSquare, Star } from 'lucide-react'
 
 type KBTab = 'chat' | 'files' | 'settings'
 
@@ -61,12 +61,12 @@ export function KBDetail({ kb, onDeleted }: KBDetailProps) {
   return (
     <div className="h-full flex flex-col overflow-hidden">
       {/* Hero section */}
-      <div className="flex-shrink-0 border-b border-border px-3 sm:px-4 py-3">
-        <div className="flex items-center gap-3">
-          <KbAvatar name={kb.name} id={kb.id} size={40} />
+      <div className="flex-shrink-0 px-6 sm:px-10">
+        <div className="flex items-center gap-3 py-3">
+          <KbAvatar name={kb.name} id={kb.id} size={44} />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <h2 className="text-sm font-semibold truncate">{kb.name}</h2>
+              <h2 className="text-lg font-semibold text-foreground truncate leading-tight">{kb.name}</h2>
               {kb.isDefault && (
                 <span title={t('Default knowledge base')} className="flex-shrink-0">
                   <Star className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
@@ -74,7 +74,7 @@ export function KBDetail({ kb, onDeleted }: KBDetailProps) {
               )}
             </div>
             {/* Stats row */}
-            <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground flex-wrap">
+            <div className="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground flex-wrap">
               <span
                 className={`inline-block w-2 h-2 rounded-full flex-shrink-0 ${
                   kb.status === 'active' ? 'bg-emerald-500' : 'border border-muted-foreground/40'
@@ -106,43 +106,38 @@ export function KBDetail({ kb, onDeleted }: KBDetailProps) {
               )}
             </div>
           </div>
-          {/* Quick actions */}
-          <div className="flex items-center gap-1 flex-shrink-0">
-            <button
-              onClick={() => setTab('chat')}
-              className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors btn-primary"
-              title={t('Ask this knowledge base')}
-            >
-              <MessageSquare className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">{t('Ask')}</span>
-            </button>
-            <button
-              onClick={() => setTab('settings')}
-              className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs bg-secondary hover:bg-secondary/80 rounded-lg transition-colors"
-              title={t('Settings')}
-            >
-              <Settings className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">{t('Settings')}</span>
-            </button>
-          </div>
+          {/* The one action worth a header slot — same treatment as the
+              digital human header's lead button. Everything else lives in
+              the tabs directly below. */}
+          <button
+            onClick={() => setTab('chat')}
+            title={t('Ask this knowledge base')}
+            className="flex-shrink-0 flex min-h-9 items-center gap-1.5 rounded-lg bg-primary border border-primary px-3.5 py-2 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+          >
+            <MessageSquare size={14} />
+            {t('Ask')}
+          </button>
         </div>
       </div>
 
-      {/* Tab bar */}
-      <div className="flex items-center gap-1 px-3 sm:px-4 py-1.5 border-b border-border flex-shrink-0 overflow-x-auto">
-        {tabs.map(tb => (
-          <button
-            key={tb.id}
-            onClick={() => setTab(tb.id)}
-            className={`px-3 py-1.5 text-sm rounded-lg transition-colors whitespace-nowrap ${
-              tab === tb.id
-                ? 'bg-primary/10 text-primary font-medium'
-                : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
-            }`}
-          >
-            {tb.label}
-          </button>
-        ))}
+      {/* Tab bar — same inset rule as the hero. `min-w-full w-max` keeps the
+          rule under the whole strip once the tabs scroll horizontally. */}
+      <div className="flex-shrink-0 px-6 sm:px-10 overflow-x-auto">
+        <div className="flex items-center gap-1 border-b border-border min-w-full w-max">
+          {tabs.map(tb => (
+            <button
+              key={tb.id}
+              onClick={() => setTab(tb.id)}
+              className={`flex-shrink-0 h-[34px] px-3.5 border-b-2 -mb-px text-[13px] font-medium whitespace-nowrap transition-colors ease-halo ${
+                tab === tb.id
+                  ? 'border-primary text-foreground'
+                  : 'border-transparent text-subtle-foreground hover:text-foreground'
+              }`}
+            >
+              {tb.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Tab content */}

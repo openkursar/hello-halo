@@ -100,7 +100,7 @@ export function SpaceCard({ space, summary, onOpen, onOpenTab }: SpaceCardProps)
       tabIndex={0}
       onClick={onOpen}
       onKeyDown={(e) => { if (e.key === 'Enter') onOpen() }}
-      className={`group relative flex flex-col text-left bg-card border rounded-lg p-4 transition-all cursor-pointer
+      className={`group relative flex h-full flex-col text-left bg-card border rounded-lg p-4 transition-all cursor-pointer
         focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary
         ${space.isMissing
           ? 'border-dashed opacity-60 hover:opacity-100'

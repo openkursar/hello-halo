@@ -1,7 +1,8 @@
 /**
  * NavRail - persistent global navigation column
  *
- * Left-most 56px column with the four primary destinations (conversation /
+ * Left-most column (56px, 64px on macOS where it also hosts the window's
+ * traffic lights) with the four primary destinations (conversation /
  * digital humans / knowledge base / store), plus tasks and settings pinned
  * to the bottom. Hidden only in a genuinely narrow layout (see
  * useIsNarrowShell) — HeaderShell's NarrowNavSheet is the escape hatch to
@@ -9,9 +10,8 @@
  *
  * The rail spans the window's full height, alongside both the Header row and
  * the content below it — matching the prototype's grid (sidebar as one full-
- * height column, header+body as the other). macOS traffic-light clearance is
- * a separate strip above this whole rail+Header row (see App.tsx), not
- * anything reserved here.
+ * height column, header+body as the other). On macOS the traffic lights live
+ * in this column too, in the spacer above the brand mark.
  */
 
 import { useId } from 'react'
@@ -27,8 +27,17 @@ import { useTranslation } from '../../i18n'
 import { cn } from '../../lib/utils'
 import { useIsNarrowShell } from '../../hooks/useIsMobile'
 import { useGoToConversation } from '../../hooks/useGoToConversation'
+import { usePlatform } from './Header'
+import { isElectron } from '../../api/transport'
 
 type Destination = 'chat' | 'digital-humans' | 'knowledge' | 'store'
+
+// Band the macOS traffic lights occupy, above the brand mark. Sized so the
+// brand mark lines up with ConversationList's "New conversation" button
+// (48px header + 16px top padding). Divided by
+// --display-scale so it stays a constant number of real pixels under zoom,
+// which is what trafficLightPosition is measured in.
+const MAC_TRAFFIC_LIGHT_CLEARANCE_PX = 52
 
 function useActiveDestination(): Destination | null {
   const view = useAppStore(s => s.view)
@@ -126,6 +135,8 @@ export function NavRail() {
   const taskBeacon = useTaskBeacon()
   const toggleTaskPanel = useTaskPanelStore(s => s.toggle)
   const isTaskPanelOpen = useTaskPanelStore(s => s.isOpen)
+  const platform = usePlatform()
+  const isMacElectron = isElectron() && platform.isMac
 
   const goChat = useGoToConversation()
   const goDigitalHumans = () => {
@@ -149,10 +160,23 @@ export function NavRail() {
   return (
     // pt-3/pb-3.5 (12px/14px) matches the prototype's `.sidebar{padding:12px
     // 0 14px}` — the brand mark sits right under that top padding, not below
-    // a Header-height spacer. macOS traffic-light clearance is a separate
-    // strip above this whole rail (App.tsx), so nothing here is platform-
-    // specific anymore.
-    <div className="flex flex-col items-center w-14 h-full flex-shrink-0 bg-card border-r border-border pt-3 pb-3.5">
+    // a Header-height spacer.
+    <div
+      className={cn(
+        'flex flex-col items-center h-full flex-shrink-0 bg-card border-r border-border pt-3 pb-3.5',
+        !isMacElectron && 'w-14'
+      )}
+      // The macOS traffic-light group is wider than the prototype's 56px
+      // column and doesn't zoom, so the rail keeps 64 real pixels at any
+      // zoom, and never less than 64 CSS pixels for its own icons.
+      style={isMacElectron ? { width: 'max(4rem, calc(64px / var(--display-scale, 1)))' } : undefined}
+    >
+      {isMacElectron && (
+        <div
+          className="w-full flex-shrink-0 drag-region"
+          style={{ height: `calc(${MAC_TRAFFIC_LIGHT_CLEARANCE_PX}px / var(--display-scale, 1))` }}
+        />
+      )}
       {/* Brand logo icon — halo ring, 1:1 square. */}
       <div className="flex-shrink-0 mb-7 flex items-center justify-center px-1">
         <img src={logoIconOnDark} alt="Halo" className="brand-mark-dark w-8 h-8" />

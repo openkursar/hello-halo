@@ -460,13 +460,13 @@ function createWindow(): void {
     // macOS: hiddenInset for traffic lights in content area
     // Windows/Linux: hidden + titleBarOverlay for native buttons overlay
     titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
-    // Vertically centered on the dedicated clearance strip rendered above
-    // the whole NavRail+Header row (MAC_TRAFFIC_LIGHT_CLEARANCE_PX in
-    // App.tsx). y is the top of the traffic-light button group, not its
-    // center — the true group height isn't documented/queryable, so this is
-    // tuned empirically rather than derived from a formula. That strip (not
-    // NavRail) compensates for zoom via --display-scale.
-    trafficLightPosition: isMac ? { x: 8, y: 6 } : undefined,
+    // Sits inside NavRail's column, in the spacer above the brand mark
+    // (MAC_TRAFFIC_LIGHT_CLEARANCE_PX in NavRail.tsx); the rail widens to 64px
+    // on macOS so the button group fits. x centers that group in the column,
+    // y is its top rather than its center — the true group size isn't
+    // documented/queryable, so both are tuned empirically. NavRail's spacer
+    // compensates for zoom via --display-scale.
+    trafficLightPosition: isMac ? { x: 5, y: 17 } : undefined,
     // Windows/Linux: native window controls overlay in content area.
     // Matches globals.css's dark-theme `--background`/`--foreground`
     // (the default theme) exactly, for the brief window before the renderer
