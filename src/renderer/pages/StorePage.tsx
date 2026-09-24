@@ -20,26 +20,19 @@ export function StorePage() {
   const { t } = useTranslation()
   const { openSearch } = useSearchStore()
   // Detail view and "My Publications" are their own self-contained screens
-  // (own back button, own title) — the browse-page title/lead below them
-  // would be a second, redundant "you're exploring the store" header on top
-  // of a screen that isn't the browse list anymore.
+  // (own back button, own title), so the browse-page title/lead below is
+  // dropped there. The Header keeps its title and search on every screen,
+  // same as the other top-level pages.
   const isSubView = useAppsPageStore(state => !!state.storeSelectedSlug || state.storeMineOpen)
 
   return (
     <div className="h-full flex flex-col bg-background">
-      {/* .header.plain: page title in the left slot, before
-          search — matches prototype's `.page-title` + `.hsearch` order.
-          Search replaces the settings button (settings is in NavRail).
-          Prototype's `.hsearch` has no `chat-only` class, so it's the same
-          position in both chat and plain header modes. */}
       <Header
         left={
-          isSubView ? undefined : (
-            <>
-              <span className="text-sm font-semibold text-foreground whitespace-nowrap">{t('Explore · Store')}</span>
-              <SearchIcon onClick={() => openSearch('global')} />
-            </>
-          )
+          <>
+            <span className="text-sm font-semibold text-foreground whitespace-nowrap">{t('Explore · Store')}</span>
+            <SearchIcon onClick={() => openSearch('global')} />
+          </>
         }
       />
       {/* Page title/lead — outer container only; StoreView keeps owning its

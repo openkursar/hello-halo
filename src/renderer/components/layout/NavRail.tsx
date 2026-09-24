@@ -14,9 +14,9 @@
  * in this column too, in the spacer above the brand mark.
  */
 
-import { useId } from 'react'
-import { MessageSquare, Bot, BookOpen, Compass, SquareCheckBig, Settings } from 'lucide-react'
-import type { LucideIcon } from 'lucide-react'
+import { useId, type ReactNode } from 'react'
+import { Settings } from 'lucide-react'
+import { ChatNavIcon, DigitalHumanNavIcon, KnowledgeNavIcon, StoreNavIcon, TasksNavIcon } from '../icons/NavIcons'
 import logoIconOnDark from '../../assets/brand/halo-logo-icon-on-dark.svg'
 import logoIconOnLight from '../../assets/brand/halo-logo-icon-on-light.svg'
 import { useAppStore } from '../../stores/app.store'
@@ -29,15 +29,17 @@ import { useIsNarrowShell } from '../../hooks/useIsMobile'
 import { useGoToConversation } from '../../hooks/useGoToConversation'
 import { usePlatform } from './Header'
 import { isElectron } from '../../api/transport'
+import { MAC_TRAFFIC_LIGHT_BOTTOM } from '../../../shared/constants/mac-traffic-lights'
 
 type Destination = 'chat' | 'digital-humans' | 'knowledge' | 'store'
 
-// Band the macOS traffic lights occupy, above the brand mark. Sized so the
-// brand mark lines up with ConversationList's "New conversation" button
-// (48px header + 16px top padding). Divided by
-// --display-scale so it stays a constant number of real pixels under zoom,
-// which is what trafficLightPosition is measured in.
-const MAC_TRAFFIC_LIGHT_CLEARANCE_PX = 52
+/** Gap between the macOS traffic lights and the brand mark below them. */
+const MAC_LIGHTS_TO_MARK_GAP_PX = 18
+/** The rail's own pt-3, which sits above the spacer. */
+const RAIL_TOP_PADDING_PX = 12
+// Spacer that holds the traffic lights above the brand mark, divided by
+// --display-scale so it stays in the real pixels the lights are placed in.
+const MAC_TRAFFIC_LIGHT_CLEARANCE_PX = MAC_TRAFFIC_LIGHT_BOTTOM + MAC_LIGHTS_TO_MARK_GAP_PX - RAIL_TOP_PADDING_PX
 
 function useActiveDestination(): Destination | null {
   const view = useAppStore(s => s.view)
@@ -50,21 +52,20 @@ function useActiveDestination(): Destination | null {
 }
 
 interface NavItemProps {
-  icon: LucideIcon
+  /** Rendered icon — passed as an element because the destination glyphs
+   * switch to their solid form when `active`. */
+  icon: ReactNode
   label: string
   /** Hover tooltip text; falls back to `label` when omitted. */
   tip?: string
   active?: boolean
-  /** Soft variant of `active` — weaker fill, used for the Tasks button's
-   * "pending, but panel not open" state. Ignored when `active` is set. */
-  attn?: boolean
   onClick?: () => void
   /** 44x44/rounded-lg instead of the default 40x40/rounded-md — the Tasks
    * button is a deliberate size step up (prototype: `.task-btn` vs
    * `.nav-item`), not a general size option. */
   size?: 'default' | 'lg'
-  /** Count badge, bottom-right of the icon — shown only alongside `attn`
-   * (matching the prototype's `.cta` visibility, gated on `.attn` alone). */
+  /** Count badge, bottom-right of the icon. Pending tasks are signalled by
+   * this alone — a background fill would read as the selected state. */
   badge?: number
   /** Small spinning ring, top-right of the icon — an in-progress indicator
    * (e.g. a task currently generating), independent of `badge`'s count. */
@@ -83,7 +84,7 @@ interface NavItemProps {
  * element (not a CSS pseudo-element) with `role="tooltip"` and wired via
  * `aria-describedby` so screen readers get it too.
  */
-function NavItem({ icon: Icon, label, tip, active, attn, onClick, size = 'default', badge, spinning }: NavItemProps) {
+function NavItem({ icon, label, tip, active, onClick, size = 'default', badge, spinning }: NavItemProps) {
   const tooltipId = useId()
   const isLg = size === 'lg'
 
@@ -98,12 +99,10 @@ function NavItem({ icon: Icon, label, tip, active, attn, onClick, size = 'defaul
         isLg ? 'w-11 h-11 rounded-lg' : 'w-10 h-10 rounded-md',
         active
           ? 'bg-primary/[0.18] text-accent-on-dark'
-          : attn
-            ? 'bg-primary/[0.12] text-accent-on-dark'
-            : 'text-subtle-foreground hover:bg-secondary hover:text-foreground'
+          : 'text-subtle-foreground hover:bg-secondary hover:text-foreground'
       )}
     >
-      <Icon className="w-5 h-5" strokeWidth={1.8} />
+      {icon}
 
       {spinning && (
         <span className="absolute top-[5px] right-[5px] w-[9px] h-[9px] rounded-full border-2 border-primary border-t-transparent animate-spin" />
@@ -177,24 +176,44 @@ export function NavRail() {
           style={{ height: `calc(${MAC_TRAFFIC_LIGHT_CLEARANCE_PX}px / var(--display-scale, 1))` }}
         />
       )}
-      {/* Brand logo icon — halo ring, 1:1 square. */}
-      <div className="flex-shrink-0 mb-7 flex items-center justify-center px-1">
-        <img src={logoIconOnDark} alt="Halo" className="brand-mark-dark w-8 h-8" />
-        <img src={logoIconOnLight} alt="Halo" className="brand-mark-light w-8 h-8" />
-      </div>
+      {/* Clicking a top-left logo is widely expected to go home; here that is
+          the conversation view. No hover fill or pointer, so it stays a brand
+          mark rather than reading as another nav item. */}
+      <button
+        type="button"
+        onClick={goChat}
+        aria-label={t('Return to conversation')}
+        className={cn(
+          'flex-shrink-0 flex items-center justify-center px-1 rounded-sm cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-card',
+          isMacElectron ? 'mb-[18px]' : 'mb-7'
+        )}
+      >
+        <img src={logoIconOnDark} alt="" className="brand-mark-dark w-8 h-8" />
+        <img src={logoIconOnLight} alt="" className="brand-mark-light w-8 h-8" />
+      </button>
 
       <nav className="flex-1 w-full flex flex-col items-center gap-1.5">
-        <NavItem icon={MessageSquare} label={t('Conversation')} active={active === 'chat'} onClick={goChat} />
         <NavItem
-          icon={Bot}
+          icon={<ChatNavIcon className="w-5 h-5" active={active === 'chat'} />}
+          label={t('Conversation')}
+          active={active === 'chat'}
+          onClick={goChat}
+        />
+        <NavItem
+          icon={<DigitalHumanNavIcon className="w-5 h-5" active={active === 'digital-humans'} />}
           label={t('Digital Humans')}
           tip={t('Digital Humans · Extensions')}
           active={active === 'digital-humans'}
           onClick={goDigitalHumans}
         />
-        <NavItem icon={BookOpen} label={t('Knowledge Base')} active={active === 'knowledge'} onClick={goKnowledge} />
         <NavItem
-          icon={Compass}
+          icon={<KnowledgeNavIcon className="w-5 h-5" active={active === 'knowledge'} />}
+          label={t('Knowledge Base')}
+          active={active === 'knowledge'}
+          onClick={goKnowledge}
+        />
+        <NavItem
+          icon={<StoreNavIcon className="w-5 h-5" active={active === 'store'} />}
           label={t('Store')}
           tip={t('Explore · Store')}
           active={active === 'store'}
@@ -204,17 +223,21 @@ export function NavRail() {
 
       <div className="w-full flex flex-col items-center gap-1.5">
         <NavItem
-          icon={SquareCheckBig}
+          icon={<TasksNavIcon className="w-5 h-5" active={isTaskPanelOpen} />}
           label={taskLabel}
           tip={taskTip}
           size="lg"
           active={isTaskPanelOpen}
-          attn={taskCount > 0}
           badge={taskCount}
           spinning={taskBeacon === 'running'}
           onClick={toggleTaskPanel}
         />
-        <NavItem icon={Settings} label={t('Settings')} active={view === 'settings'} onClick={goSettings} />
+        <NavItem
+          icon={<Settings className="w-5 h-5" strokeWidth={1.6} />}
+          label={t('Settings')}
+          active={view === 'settings'}
+          onClick={goSettings}
+        />
       </div>
     </div>
   )

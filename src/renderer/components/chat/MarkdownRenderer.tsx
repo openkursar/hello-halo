@@ -9,12 +9,51 @@
  * - ~8x faster first-paint on large documents
  */
 
-import { memo } from 'react'
+import { memo, useContext, useRef } from 'react'
+import { Maximize2 } from 'lucide-react'
 import { Streamdown } from 'streamdown'
 import type { PluginConfig } from 'streamdown'
 import 'streamdown/styles.css'
 import 'katex/dist/katex.min.css'
 import { useCodePlugin, useMathPlugin } from '../../lib/streamdown-plugins'
+import { useTranslation } from '../../i18n'
+import { OpenTableContext } from './open-table-context'
+
+function tableToCsv(table: HTMLTableElement): string {
+  return Array.from(table.rows)
+    .map(row => Array.from(row.cells)
+      .map(cell => {
+        const text = cell.innerText.trim()
+        return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
+      })
+      .join(','))
+    .join('\n')
+}
+
+function TableBlock({ children }: { children?: React.ReactNode }) {
+  const { t } = useTranslation()
+  const openTable = useContext(OpenTableContext)
+  const tableRef = useRef<HTMLTableElement>(null)
+
+  return (
+    <div className="group/table relative my-3">
+      <div className="overflow-x-auto rounded-lg border border-border/50">
+        <table ref={tableRef} className="w-full text-sm">{children}</table>
+      </div>
+      {openTable && (
+        <button
+          type="button"
+          onClick={() => { if (tableRef.current) openTable(tableToCsv(tableRef.current)) }}
+          title={t('Open in canvas')}
+          aria-label={t('Open in canvas')}
+          className="absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-md border border-border bg-background/90 text-muted-foreground opacity-0 transition-opacity ease-halo hover:text-foreground focus-visible:opacity-100 group-hover/table:opacity-100"
+        >
+          <Maximize2 className="h-3.5 w-3.5" />
+        </button>
+      )}
+    </div>
+  )
+}
 
 interface MarkdownRendererProps {
   content: string
@@ -73,11 +112,7 @@ const components = {
   ),
 
   // Tables
-  table: ({ children }: { children?: React.ReactNode }) => (
-    <div className="my-3 overflow-x-auto rounded-lg border border-border/50">
-      <table className="w-full text-sm">{children}</table>
-    </div>
-  ),
+  table: ({ children }: { children?: React.ReactNode }) => <TableBlock>{children}</TableBlock>,
   thead: ({ children }: { children?: React.ReactNode }) => (
     <thead className="bg-secondary/50">{children}</thead>
   ),

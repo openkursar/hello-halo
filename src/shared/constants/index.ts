@@ -6,6 +6,7 @@
 
 export * from './artifact-preview'
 export * from './display-scale'
+export * from './mac-traffic-lights'
 export * from './providers'
 export * from './model-runtime-limits'
 export * from './reasoning-effort'

@@ -930,7 +930,7 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
       transition-[padding] duration-300 ease-out
       ${standalone ? '' : isCompact ? 'px-3 py-2' : 'pt-3 px-6 pb-[18px]'}
     `}>
-      <div className={standalone ? '' : isCompact ? '' : 'max-w-[720px] mx-auto'}>
+      <div className={standalone ? '' : isCompact ? '' : 'max-w-chat mx-auto'}>
         {/* Error toast notification */}
         {imageError && (
           <div className="mb-2 p-3 rounded-xl bg-destructive/10 border border-destructive/20

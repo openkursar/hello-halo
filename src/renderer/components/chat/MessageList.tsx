@@ -51,6 +51,8 @@ export interface MessageListProps {
   errorType?: AgentErrorType | null  // Special error type for custom UI handling
   onContinue?: () => void  // Callback to continue after interrupt (for InterruptedBubble)
   isCompact?: boolean  // Compact mode when Canvas is open
+  /** Side padding for the transcript; defaults to the main chat's. */
+  sidePadClassName?: string
   textBlockVersion?: number  // Increments on each new text block (for StreamingBubble reset)
   pendingQuestion?: PendingQuestion | null  // Active question from AskUserQuestion tool
   onAnswerQuestion?: (answers: Record<string, string>) => void  // Callback when user answers
@@ -202,6 +204,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   errorType = null,
   onContinue,
   isCompact = false,
+  sidePadClassName,
   textBlockVersion = 0,
   pendingQuestion = null,
   onAnswerQuestion,
@@ -361,14 +364,18 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     }
   }, [displayMessages.length, scheduleScrollToEnd])
 
-  // Content width class — applied per-item so Virtuoso scroll container stays full-width
-  // (keeps scrollbar at the window edge, not next to message bubbles)
-  const contentWidthClass = isCompact ? 'max-w-full' : 'max-w-[720px] mx-auto'
+  // Width and side padding are applied per-item so Virtuoso's scroll container
+  // stays full-width, keeping the scrollbar at the pane edge. Padding cannot go
+  // on the scroller itself: Virtuoso's inner viewport is 100% wide and would
+  // overflow it sideways.
+  const contentWidthClass = isCompact ? 'max-w-full' : 'max-w-chat mx-auto'
+  const sidePadClass = sidePadClassName ?? (isCompact ? 'px-3' : 'px-6')
 
   // Render a single message item (called by Virtuoso)
   const itemContent = useCallback((index: number, message: Message) => {
     const previousCost = previousCostMap.get(index) ?? 0
     return (
+      <div className={sidePadClass}>
       <MessageRow
         message={message}
         previousCost={previousCost}
@@ -385,8 +392,9 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
         className={contentWidthClass}
         senderName={message.role === 'assistant' ? senderName : undefined}
       />
+      </div>
     )
-  }, [previousCostMap, thoughtsLoader, hideBrowserViewButton, defaultThoughtsExpanded, defaultThoughtsMaximized, injectionMap, contentWidthClass, senderName])
+  }, [previousCostMap, thoughtsLoader, hideBrowserViewButton, defaultThoughtsExpanded, defaultThoughtsMaximized, injectionMap, contentWidthClass, sidePadClass, senderName])
 
   // Ref for onContinue — keeps Footer callback stable when parent re-renders
   const onContinueRef = useRef(onContinue)
@@ -417,6 +425,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     if (!hasFooterContent) return <div className="pb-6" />
 
     return (
+      <div className={sidePadClass}>
       <div className={contentWidthClass}>
         {/* Streaming area — isolated component reads from refs, re-renders independently */}
         {(isGenerating || hasActiveQuestion) && (
@@ -466,12 +475,13 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
         {/* Bottom padding to match original py-6 spacing */}
         <div className="pb-6" />
       </div>
+      </div>
     )
   }, [
     isGenerating,
     pendingQuestion,
     error, errorType,
-    compactInfo, t, contentWidthClass,
+    compactInfo, t, contentWidthClass, sidePadClass,
     conversationId, hideBrowserViewButton,
     hasFooterExtra, footerExtraStore,
     senderName,

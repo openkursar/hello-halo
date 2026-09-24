@@ -32,6 +32,7 @@ import { NotificationToast } from './components/notification/NotificationToast'
 import { CredentialAlertBanner } from './components/settings/CredentialAlertBanner'
 import { NavRail } from './components/layout/NavRail'
 import { HeaderShell, usePlatform } from './components/layout/Header'
+import { MAC_TRAFFIC_LIGHT_BOTTOM, MAC_TRAFFIC_LIGHT_POSITION } from '../shared/constants/mac-traffic-lights'
 import { TaskPanel } from './components/layout/TaskPanel'
 import { useTaskPanelStore } from './stores/taskPanel.store'
 import { useNotificationStore } from './stores/notification.store'
@@ -125,9 +126,9 @@ function applyTheme(theme: 'light' | 'dark' | 'system') {
   })
 }
 
-// Same height as the Header, so trafficLightPosition (main/index.ts) centers
-// the lights in it just as it does in the Header row on rail views.
-const MAC_WINDOW_CONTROLS_BAND_PX = 48
+// Draggable strip holding the macOS traffic lights on views without the rail,
+// with the same margin below the lights as above them.
+const MAC_WINDOW_CONTROLS_BAND_PX = MAC_TRAFFIC_LIGHT_BOTTOM + MAC_TRAFFIC_LIGHT_POSITION.y
 
 export default function App() {
   const { t } = useTranslation()

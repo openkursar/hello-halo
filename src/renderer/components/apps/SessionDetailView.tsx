@@ -230,10 +230,11 @@ export function SessionDetailView({ appId, runId }: SessionDetailViewProps) {
       )}
 
       <div className="flex-1 relative overflow-hidden">
-        <div className="h-full px-4 sm:px-10">
+        <div className="h-full">
           <MessageList
             key={runId}
             ref={messageListRef}
+            sidePadClassName="px-4 sm:px-10"
             messages={messages}
             streamingContent=""
             isGenerating={false}

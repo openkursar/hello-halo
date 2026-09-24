@@ -548,8 +548,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
         <div
           className={`
             h-full animate-fade-up
-            transition-[padding] duration-300 ease-out
-            ${isCompact ? 'px-3' : 'px-6'}
+            ${isLoadingConversation || !hasMessages ? (isCompact ? 'px-3' : 'px-6') : ''}
           `}
         >
           {isLoadingConversation ? (
@@ -655,13 +654,13 @@ function EmptyState({
         {/* Composer — centered here until the first message is sent, then
             it docks to the bottom instead (see ChatView's render). Matches
             the docked composer's own width (InputArea.tsx's non-standalone
-            `max-w-[720px]`) so it doesn't visibly narrow once the first
+            `max-w-chat`) so it doesn't visibly narrow once the first
             message sends it to the bottom. */}
         {/* text-left stops the empty state's centering (meant for the logo,
             title and chips) from reaching into the composer, whose menus and
             hints are ordinary left-reading UI. */}
         {composer && (
-          <div className="mt-7 w-full max-w-[720px] text-left">
+          <div className="mt-7 w-full max-w-chat text-left">
             {composer}
           </div>
         )}

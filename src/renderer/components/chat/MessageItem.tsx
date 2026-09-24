@@ -326,7 +326,7 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
     </div>
   ) : (
     <div
-      className={`rounded-lg text-sm ${
+      className={`rounded-lg ${
         isUser ? 'message-user px-3.5 py-2.5' : 'message-assistant px-4 py-3'
       } ${isStreaming ? 'streaming-message' : ''} ${isWorking ? 'message-working' : ''} ${
         // Assistant bubbles hold the column width so the layout does not shift when

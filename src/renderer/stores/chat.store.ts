@@ -21,6 +21,7 @@ import { createMessagingSlice } from './chat/messaging'
 import { createAgentEventsSlice } from './chat/agent-events'
 import { createSessionSlice } from './chat/session'
 import { createAppChatSelectionSlice } from './chat/app-chat-selection'
+import { isAppChatKey } from '../../shared/apps/im-keys'
 
 export const useChatStore = create<ChatState>((set, get) => ({
   spaceStates: new Map<string, SpaceState>(),
@@ -342,7 +343,8 @@ export function useConversationTaskStatus(conversationId: string | undefined): T
 }
 
 /**
- * Selector: Get task statuses for all conversations in the current space.
+ * Selector: Get task statuses for all conversations in the current space, plus
+ * every live digital-human session (callers look those up by their row id).
  * Returns a Map of conversationId -> TaskStatus, only including non-idle entries.
  * This replaces N individual useConversationTaskStatus subscriptions with a single one.
  */
@@ -362,6 +364,14 @@ export function useAllConversationStatuses(): Map<string, TaskStatus> {
         if (status !== 'idle') {
           result.set(conv.id, status)
         }
+      }
+      // Digital-human sessions live outside spaceState.conversations but are
+      // listed beside them, keyed by the same session ids. They never enter
+      // unseenCompletions, so only their live state counts.
+      for (const [id, session] of state.sessions) {
+        if (!isAppChatKey(id)) continue
+        const status = deriveTaskStatus(session, false)
+        if (status !== 'idle') result.set(id, status)
       }
       return result
     },

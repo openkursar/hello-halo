@@ -14,7 +14,8 @@
  */
 
 import { useState } from 'react'
-import { Menu, X, MessageSquare, Bot, BookOpen, Compass, SquareCheckBig, Settings } from 'lucide-react'
+import { Menu, X, Settings } from 'lucide-react'
+import { ChatNavIcon, DigitalHumanNavIcon, KnowledgeNavIcon, StoreNavIcon, TasksNavIcon } from '../icons/NavIcons'
 import { useAppStore } from '../../stores/app.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useTaskPanelStore } from '../../stores/taskPanel.store'
@@ -98,7 +99,7 @@ export function NarrowNavSheet() {
                 onClick={goChat}
                 className="w-full px-4 py-3 flex items-center gap-3 hover:bg-secondary/80 transition-colors"
               >
-                <MessageSquare className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                <ChatNavIcon className="w-4 h-4 text-muted-foreground flex-shrink-0" />
                 <span className="text-sm text-foreground">{t('Conversation')}</span>
               </button>
 
@@ -106,7 +107,7 @@ export function NarrowNavSheet() {
                 onClick={goDigitalHumans}
                 className="w-full px-4 py-3 flex items-center gap-3 hover:bg-secondary/80 transition-colors"
               >
-                <Bot className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                <DigitalHumanNavIcon className="w-4 h-4 text-muted-foreground flex-shrink-0" />
                 <span className="text-sm text-foreground">{t('Digital Humans')}</span>
               </button>
 
@@ -114,7 +115,7 @@ export function NarrowNavSheet() {
                 onClick={goKnowledge}
                 className="w-full px-4 py-3 flex items-center gap-3 hover:bg-secondary/80 transition-colors"
               >
-                <BookOpen className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                <KnowledgeNavIcon className="w-4 h-4 text-muted-foreground flex-shrink-0" />
                 <span className="text-sm text-foreground">{t('Knowledge Base')}</span>
               </button>
 
@@ -122,7 +123,7 @@ export function NarrowNavSheet() {
                 onClick={goStore}
                 className="w-full px-4 py-3 flex items-center gap-3 hover:bg-secondary/80 transition-colors"
               >
-                <Compass className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                <StoreNavIcon className="w-4 h-4 text-muted-foreground flex-shrink-0" />
                 <span className="text-sm text-foreground">{t('Store')}</span>
               </button>
 
@@ -130,7 +131,7 @@ export function NarrowNavSheet() {
                 onClick={goTasks}
                 className="w-full px-4 py-3 flex items-center gap-3 hover:bg-secondary/80 transition-colors"
               >
-                <SquareCheckBig className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                <TasksNavIcon className="w-4 h-4 text-muted-foreground flex-shrink-0" />
                 <span className="text-sm text-foreground">{t('Tasks')}</span>
                 {taskCount > 0 && (
                   <span className="ml-auto text-xs text-muted-foreground tabular-nums">{taskCount}</span>

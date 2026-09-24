@@ -30,7 +30,7 @@ import { ModelSelector } from '../components/layout/ModelSelector'
 import { QuotaPill } from '../components/layout/QuotaPill'
 import { MobileOverflowMenu } from '../components/layout/MobileOverflowMenu'
 import { HeaderMoreMenu } from '../components/layout/HeaderMoreMenu'
-import { ContentCanvas, TerminalCloseGuard } from '../components/canvas'
+import { CanvasTableOpener, ContentCanvas, TerminalCloseGuard } from '../components/canvas'
 import { GitBashWarningBanner } from '../components/setup/GitBashWarningBanner'
 import { api } from '../api'
 import { useLayoutPreferences } from '../hooks/useLayoutPreferences'
@@ -337,205 +337,207 @@ export function SpacePage() {
   }
 
   return (
-    <div className="h-full w-full flex flex-col">
-      {/* Terminal pty close policy — mounted here (not in the canvas) so it stays
-          active for closeAll/space-switch teardown even when the canvas is
-          collapsed. Renders its prompt via a portal; no layout footprint. */}
-      <TerminalCloseGuard />
+    <CanvasTableOpener>
+      <div className="h-full w-full flex flex-col">
+        {/* Terminal pty close policy — mounted here (not in the canvas) so it stays
+            active for closeAll/space-switch teardown even when the canvas is
+            collapsed. Renders its prompt via a portal; no layout footprint. */}
+        <TerminalCloseGuard />
 
-      {/*
-        ChatCapsule overlay is now managed via IPC to render above BrowserView.
-        The overlay SPA is a separate WebContentsView that appears above all views.
-        Show/hide is controlled by api.showChatCapsuleOverlay() / api.hideChatCapsuleOverlay()
-      */}
+        {/*
+          ChatCapsule overlay is now managed via IPC to render above BrowserView.
+          The overlay SPA is a separate WebContentsView that appears above all views.
+          Show/hide is controlled by api.showChatCapsuleOverlay() / api.hideChatCapsuleOverlay()
+        */}
 
-      {/* Header — hidden (bare drag strip) when the canvas is maximized, since
-          there's no chrome to show and the strip still needs to be draggable
-          and clear the macOS traffic lights. */}
-      <Header
-        hidden={isCanvasMaximized}
-        title={!isMobile ? currentConversationTitle : undefined}
-        left={
-          <>
-            {/* Space Selector - dropdown for switching spaces (includes icon + name + "Manage Spaces") */}
-            <SpaceSelector />
+        {/* Header — hidden (bare drag strip) when the canvas is maximized, since
+            there's no chrome to show and the strip still needs to be draggable
+            and clear the macOS traffic lights. */}
+        <Header
+          hidden={isCanvasMaximized}
+          title={!isMobile ? currentConversationTitle : undefined}
+          left={
+            <>
+              {/* Space Selector - dropdown for switching spaces (includes icon + name + "Manage Spaces") */}
+              <SpaceSelector />
 
-            {/* Global search — prototype `.hsearch` sits directly after the
-                space selector, on the left, not grouped with the right-side
-                quota/model/rail icons. Hidden on mobile (reachable via the
-                overflow menu instead). */}
-            <div className="hidden sm:block">
-              <SearchIcon onClick={openSearch} isInSpace={true} />
-            </div>
-
-            {/* Mobile: Chat History Panel as bottom sheet */}
-            {isMobile && hasConversations && (
-              <div className="ml-1">
-                <ChatHistoryPanel />
+              {/* Global search — prototype `.hsearch` sits directly after the
+                  space selector, on the left, not grouped with the right-side
+                  quota/model/rail icons. Hidden on mobile (reachable via the
+                  overflow menu instead). */}
+              <div className="hidden sm:block">
+                <SearchIcon onClick={openSearch} isInSpace={true} />
               </div>
-            )}
-          </>
-        }
-        right={
-          <>
-            {/* Metered quota — renders only when the active source reports it */}
-            <QuotaPill sourceId={currentSourceId} />
 
-            {/* Model Selector - hidden on mobile (in overflow menu) */}
-            <div className="hidden sm:block">
-              <ModelSelector />
-            </div>
+              {/* Mobile: Chat History Panel as bottom sheet */}
+              {isMobile && hasConversations && (
+                <div className="ml-1">
+                  <ChatHistoryPanel />
+                </div>
+              )}
+            </>
+          }
+          right={
+            <>
+              {/* Metered quota — renders only when the active source reports it */}
+              <QuotaPill sourceId={currentSourceId} />
 
-            {/* Space resources rail toggle - desktop only; mobile reaches the
-                rail via its own floating trigger button. Prototype `#railBtn`
-                is a folder glyph (Files/Skill/MCP = "space resources"), not a
-                generic panel icon — and `.icon-btn`: 32×32, rounded-sm(8px),
-                17×17 icon, active state tints when the rail is open. */}
-            <div className="hidden sm:block">
-              <button
-                onClick={() => setRailExpanded(!effectiveRailExpanded)}
-                className={`w-8 h-8 rounded-sm flex items-center justify-center transition-colors ease-halo ${
-                  effectiveRailExpanded
-                    ? 'bg-primary/[0.12] text-accent-on-dark'
-                    : 'text-subtle-foreground hover:bg-secondary hover:text-foreground'
-                }`}
-                title={effectiveRailExpanded ? t('Close workspace resources') : t('Open workspace resources')}
-                aria-pressed={effectiveRailExpanded}
+              {/* Model Selector - hidden on mobile (in overflow menu) */}
+              <div className="hidden sm:block">
+                <ModelSelector />
+              </div>
+
+              {/* Space resources rail toggle - desktop only; mobile reaches the
+                  rail via its own floating trigger button. Prototype `#railBtn`
+                  is a folder glyph (Files/Skill/MCP = "space resources"), not a
+                  generic panel icon — and `.icon-btn`: 32×32, rounded-sm(8px),
+                  17×17 icon, active state tints when the rail is open. */}
+              <div className="hidden sm:block">
+                <button
+                  onClick={() => setRailExpanded(!effectiveRailExpanded)}
+                  className={`w-8 h-8 rounded-sm flex items-center justify-center transition-colors ease-halo ${
+                    effectiveRailExpanded
+                      ? 'bg-primary/[0.12] text-accent-on-dark'
+                      : 'text-subtle-foreground hover:bg-secondary hover:text-foreground'
+                  }`}
+                  title={effectiveRailExpanded ? t('Close workspace resources') : t('Open workspace resources')}
+                  aria-pressed={effectiveRailExpanded}
+                >
+                  <Folder className="w-[17px] h-[17px]" strokeWidth={1.8} />
+                </button>
+              </div>
+
+              <HeaderMoreMenu />
+
+              {/* Mobile: overflow menu collapses model/search/settings */}
+              <MobileOverflowMenu onSearch={() => openSearch('space')} />
+            </>
+          }
+        />
+
+        {/* Git Bash Warning Banner - Windows only, when in mock mode */}
+        {mockBashMode && !isCanvasMaximized && (
+          <GitBashWarningBanner
+            installProgress={gitBashInstallProgress}
+            onInstall={startGitBashInstall}
+          />
+        )}
+
+        {/* Main content */}
+        <div className="flex-1 flex overflow-hidden">
+          {/* Conversation list sidebar - always visible on desktop (prototype has
+              no "fully hidden" state, only the canvas-open narrow one); width
+              drag-resize and the canvas-open collapse still apply. Unmounted
+              when the canvas is maximized (matches the chat view) or on mobile. */}
+          {!isMobile && !isCanvasMaximized && (
+            <ConversationList collapsed={isCanvasOpen} />
+          )}
+
+          {/* Desktop Layout */}
+          {!isMobile && (
+            <>
+              {/* Chat view - hidden when maximized, adjusts width based on canvas state */}
+              {!isCanvasMaximized && (
+                <div
+                  ref={chatContainerRef}
+                  className={`
+                    flex flex-col min-w-0 relative
+                    ${isCanvasOpen ? 'border-r border-border/60' : 'flex-1 border-r border-transparent'}
+                  `}
+                  style={{
+                    width: isCanvasOpen ? dragChatWidth : undefined,
+                    flex: isCanvasOpen ? 'none' : '1',
+                    minWidth: isCanvasOpen ? chatWidthMin : undefined,
+                    maxWidth: isCanvasOpen ? chatWidthMax : undefined,
+                  }}
+                >
+                  <ChatView isCompact={isCanvasOpen} />
+
+                  {/* Drag handle for chat width - only when canvas is open */}
+                  {isCanvasOpen && (
+                    <div
+                      className={`
+                        absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize z-20
+                        hover:bg-primary/50 transition-colors
+                        ${isDraggingChat ? 'bg-primary/50' : ''}
+                      `}
+                      onMouseDown={handleChatDragStart}
+                      title={t('Drag to resize')}
+                    />
+                  )}
+                </div>
+              )}
+
+              {/* Content Canvas - main viewing area when open, full width when maximized */}
+              <div
+                className={`
+                  min-w-0 overflow-hidden
+                  ${isCanvasOpen || isCanvasMaximized
+                    ? 'flex-1 opacity-100'
+                    : 'w-0 flex-none opacity-0'}
+                `}
               >
-                <Folder className="w-[17px] h-[17px]" strokeWidth={1.8} />
+                {(isCanvasOpen || isCanvasMaximized || isCanvasTransitioning) && <ContentCanvas />}
+              </div>
+            </>
+          )}
+
+          {/* Mobile Layout */}
+          {isMobile && (
+            <div className="flex-1 flex flex-col min-w-0">
+              <ChatView isCompact={false} />
+            </div>
+          )}
+
+          {/* Artifact rail - defaults collapsed and auto-opens when the
+              conversation writes/edits files, or a workspace card's asset chip
+              asks for a specific tab (both effects above); otherwise follows
+              the user's own toggle, persisted per space. Only exception:
+              forced closed while the canvas is maximized (see useEffect
+              above), restoring on exit. */}
+          {!isMobile && (
+            <ArtifactRail
+              externalExpanded={effectiveRailExpanded}
+              onExpandedChange={setRailExpanded}
+              initialTab={pendingArtifactRailTab ?? undefined}
+              initialWidth={artifactRailWidthConfig}
+              onWidthChange={handleArtifactRailWidthChange}
+            />
+          )}
+        </div>
+
+        {/* Mobile Canvas Overlay */}
+        {isMobile && isCanvasOpen && (
+          <div className="fixed inset-0 z-50 flex flex-col bg-background animate-slide-in-right-full">
+            {/* Mobile Canvas Header */}
+            <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-card/80 backdrop-blur-sm">
+              <button
+                onClick={() => setCanvasOpen(false)}
+                className="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-colors"
+              >
+                <MessageSquare className="w-4 h-4" />
+                <span>{t('Return to conversation')}</span>
+              </button>
+              <button
+                onClick={() => setCanvasOpen(false)}
+                className="p-1.5 hover:bg-secondary rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5" />
               </button>
             </div>
 
-            <HeaderMoreMenu />
-
-            {/* Mobile: overflow menu collapses model/search/settings */}
-            <MobileOverflowMenu onSearch={() => openSearch('space')} />
-          </>
-        }
-      />
-
-      {/* Git Bash Warning Banner - Windows only, when in mock mode */}
-      {mockBashMode && !isCanvasMaximized && (
-        <GitBashWarningBanner
-          installProgress={gitBashInstallProgress}
-          onInstall={startGitBashInstall}
-        />
-      )}
-
-      {/* Main content */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Conversation list sidebar - always visible on desktop (prototype has
-            no "fully hidden" state, only the canvas-open narrow one); width
-            drag-resize and the canvas-open collapse still apply. Unmounted
-            when the canvas is maximized (matches the chat view) or on mobile. */}
-        {!isMobile && !isCanvasMaximized && (
-          <ConversationList collapsed={isCanvasOpen} />
-        )}
-
-        {/* Desktop Layout */}
-        {!isMobile && (
-          <>
-            {/* Chat view - hidden when maximized, adjusts width based on canvas state */}
-            {!isCanvasMaximized && (
-              <div
-                ref={chatContainerRef}
-                className={`
-                  flex flex-col min-w-0 relative
-                  ${isCanvasOpen ? 'border-r border-border/60' : 'flex-1 border-r border-transparent'}
-                `}
-                style={{
-                  width: isCanvasOpen ? dragChatWidth : undefined,
-                  flex: isCanvasOpen ? 'none' : '1',
-                  minWidth: isCanvasOpen ? chatWidthMin : undefined,
-                  maxWidth: isCanvasOpen ? chatWidthMax : undefined,
-                }}
-              >
-                <ChatView isCompact={isCanvasOpen} />
-
-                {/* Drag handle for chat width - only when canvas is open */}
-                {isCanvasOpen && (
-                  <div
-                    className={`
-                      absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize z-20
-                      hover:bg-primary/50 transition-colors
-                      ${isDraggingChat ? 'bg-primary/50' : ''}
-                    `}
-                    onMouseDown={handleChatDragStart}
-                    title={t('Drag to resize')}
-                  />
-                )}
-              </div>
-            )}
-
-            {/* Content Canvas - main viewing area when open, full width when maximized */}
-            <div
-              className={`
-                min-w-0 overflow-hidden
-                ${isCanvasOpen || isCanvasMaximized
-                  ? 'flex-1 opacity-100'
-                  : 'w-0 flex-none opacity-0'}
-              `}
-            >
-              {(isCanvasOpen || isCanvasMaximized || isCanvasTransitioning) && <ContentCanvas />}
+            {/* Mobile Canvas Content */}
+            <div className="flex-1 overflow-hidden">
+              <ContentCanvas />
             </div>
-          </>
-        )}
-
-        {/* Mobile Layout */}
-        {isMobile && (
-          <div className="flex-1 flex flex-col min-w-0">
-            <ChatView isCompact={false} />
           </div>
         )}
 
-        {/* Artifact rail - defaults collapsed and auto-opens when the
-            conversation writes/edits files, or a workspace card's asset chip
-            asks for a specific tab (both effects above); otherwise follows
-            the user's own toggle, persisted per space. Only exception:
-            forced closed while the canvas is maximized (see useEffect
-            above), restoring on exit. */}
-        {!isMobile && (
-          <ArtifactRail
-            externalExpanded={effectiveRailExpanded}
-            onExpandedChange={setRailExpanded}
-            initialTab={pendingArtifactRailTab ?? undefined}
-            initialWidth={artifactRailWidthConfig}
-            onWidthChange={handleArtifactRailWidthChange}
-          />
+        {/* Mobile Artifact Rail (shown as bottom sheet / overlay) */}
+        {isMobile && (
+          <ArtifactRail />
         )}
       </div>
-
-      {/* Mobile Canvas Overlay */}
-      {isMobile && isCanvasOpen && (
-        <div className="fixed inset-0 z-50 flex flex-col bg-background animate-slide-in-right-full">
-          {/* Mobile Canvas Header */}
-          <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-card/80 backdrop-blur-sm">
-            <button
-              onClick={() => setCanvasOpen(false)}
-              className="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-colors"
-            >
-              <MessageSquare className="w-4 h-4" />
-              <span>{t('Return to conversation')}</span>
-            </button>
-            <button
-              onClick={() => setCanvasOpen(false)}
-              className="p-1.5 hover:bg-secondary rounded-lg transition-colors"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-
-          {/* Mobile Canvas Content */}
-          <div className="flex-1 overflow-hidden">
-            <ContentCanvas />
-          </div>
-        </div>
-      )}
-
-      {/* Mobile Artifact Rail (shown as bottom sheet / overlay) */}
-      {isMobile && (
-        <ArtifactRail />
-      )}
-    </div>
+    </CanvasTableOpener>
   )
 }

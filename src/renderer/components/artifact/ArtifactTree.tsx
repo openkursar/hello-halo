@@ -1105,11 +1105,10 @@ function TreeNodeComponent({ node, style, dragHandle }: NodeRendererProps<Artifa
         />
       </span>
 
-      {/* File name — prototype inherits `.rail-body{font-size:12px}`; folders
-          are `.dir{font-weight:500;color:var(--text)}`, files are the plainer
-          `.tree-item{color:var(--text-2)}`. */}
+      {/* Folders are medium weight in the primary text color, files plainer
+          in the secondary one. */}
       <span className={`
-        text-xs truncate flex-1
+        text-[13px] truncate flex-1
         ${isFolder ? 'font-medium' : ''}
         ${node.isSelected
           ? 'text-accent-on-dark'

@@ -56,6 +56,9 @@
   --input: 220 19% 13%;
   --ring: 217 91% 60%;
   --radius: 0.75rem;
+  /* Chat transcript and composer column. Fixed, not fluid: on wide screens a
+     fluid column makes lines too long to read comfortably. */
+  --chat-reading-width: 800px;
 
   --shadow-soft: 0 12px 32px -12px rgba(0, 0, 0, .55);
   --shadow-pop: 0 20px 48px -16px rgba(0, 0, 0, .7);

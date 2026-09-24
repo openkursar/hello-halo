@@ -70,6 +70,9 @@ module.exports = {
         DEFAULT: '160ms',
         slow: '240ms',
       },
+      maxWidth: {
+        chat: 'var(--chat-reading-width)',
+      },
       // GitHub-like typography customization
       typography: ({ theme }) => ({
         DEFAULT: {

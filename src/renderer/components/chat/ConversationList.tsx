@@ -557,7 +557,7 @@ export const ConversationList = memo(function ConversationList({
 
             <EngineBadge engineId={conversation.engineId} size="xs" />
 
-            <span className="shrink-0 text-[10px] tabular-nums text-subtle-foreground group-hover:hidden">
+            <span className="shrink-0 text-[11px] tabular-nums text-subtle-foreground group-hover:hidden">
               {formatRowTime(conversation.updatedAt, t)}
             </span>
 
@@ -596,6 +596,7 @@ export const ConversationList = memo(function ConversationList({
     const isActive = row.id === selectedAppChat?.conversationId
     const isEditing = editingId === row.id
     const sessionLabel = appChatSessionLabel(row, t)
+    const status = conversationStatuses.get(row.id) ?? 'idle'
 
     return (
       <div
@@ -619,6 +620,8 @@ export const ConversationList = memo(function ConversationList({
 
         {standalone && <AutomationAvatar name={row.digitalHumanName} size={16} />}
 
+        {status !== 'idle' && <TaskStatusDot status={status} size="sm" />}
+
         {isEditing ? (
           <div ref={editContainerRef} className="flex flex-1 items-center gap-1" onClick={(e) => e.stopPropagation()}>
             <input
@@ -638,10 +641,10 @@ export const ConversationList = memo(function ConversationList({
           </span>
         )}
         {row.status === 'paused' && !isEditing && (
-          <span className="text-[10px] text-muted-foreground shrink-0">{t('Paused')}</span>
+          <span className="text-[11px] text-muted-foreground shrink-0">{t('Paused')}</span>
         )}
 
-        <span className="shrink-0 text-[10px] tabular-nums text-subtle-foreground group-hover:hidden">
+        <span className="shrink-0 text-[11px] tabular-nums text-subtle-foreground group-hover:hidden">
           {formatRowTime(row.updatedAt, t)}
         </span>
 
@@ -672,7 +675,7 @@ export const ConversationList = memo(function ConversationList({
         )}
       </div>
     )
-  }, [selectedAppChat?.conversationId, editingId, editingTitle, t])
+  }, [selectedAppChat?.conversationId, editingId, editingTitle, conversationStatuses, t])
 
   // Fixed-positioned and portaled: the row lists scroll, and a scroll
   // container clips anything reaching past its edge.
@@ -811,7 +814,7 @@ export const ConversationList = memo(function ConversationList({
                 // and only loosen them oddly.
                 return (
                   <div className={cn(
-                    'bg-background px-1.5 pb-1 text-[11px] font-medium text-subtle-foreground',
+                    'bg-background px-1.5 pb-1 text-xs font-medium text-subtle-foreground/70',
                     index === 0 ? 'pt-1' : 'mt-4 pt-2.5 border-t border-border/50'
                   )}>
                     <span title={row.hint} className="cursor-default">{row.label}</span>
@@ -844,7 +847,7 @@ export const ConversationList = memo(function ConversationList({
                         there to count. Sits on the same right edge as their
                         timestamps (see the pr above). */}
                     {row.collapsed && (
-                      <span className="shrink-0 ml-1 text-[10px] tabular-nums text-subtle-foreground">
+                      <span className="shrink-0 ml-1 text-[11px] tabular-nums text-subtle-foreground">
                         {row.count}
                       </span>
                     )}

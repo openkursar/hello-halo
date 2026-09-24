@@ -273,9 +273,10 @@ export function ImChatView({ appId, spaceId, session, clearKey, footerAction }: 
             <p className="text-sm text-muted-foreground">{t('No messages yet')}</p>
           </div>
         ) : (
-          <div className="h-full px-4">
+          <div className="h-full">
             <MessageList
               ref={messageListRef}
+              sidePadClassName="px-4"
               conversationId={conversationId}
               messages={messages}
               streamingContent={streamingContent}
