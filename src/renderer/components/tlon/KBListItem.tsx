@@ -118,13 +118,16 @@ export function KBListItem({ kb, onOpen }: KBListItemProps) {
       tabIndex={0}
       onClick={onOpen}
       onKeyDown={e => { if (e.key === 'Enter') onOpen() }}
-      className="group relative text-left bg-card border border-border rounded-lg p-4 transition-colors cursor-pointer hover:border-primary
+      className="group relative flex h-full flex-col text-left bg-card border border-border rounded-lg p-4 transition-colors cursor-pointer hover:border-primary
         focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
     >
       {/* Header row */}
       <div className="flex items-start gap-2.5">
         <KbAvatar name={kb.name} id={kb.id} size={36} />
         <div className="min-w-0 flex-1">
+          {/* Scope rides the title line, as on the skill/MCP/digital-human
+              cards — on its own row it left three stacked lines of almost
+              nothing in a header this size. */}
           <div className="flex items-center gap-1.5 min-w-0">
             <h3 className="text-sm font-semibold text-foreground truncate leading-tight">{kb.name}</h3>
             {kb.isDefault && (
@@ -132,8 +135,13 @@ export function KBListItem({ kb, onOpen }: KBListItemProps) {
                 <Star className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
               </span>
             )}
+            {kb.spaceIds.length > 0 && (
+              <span className="flex-shrink-0 truncate text-[10px] text-muted-foreground px-1.5 py-0.5 rounded bg-secondary/70">
+                {t('{{count}} workspace(s)', { count: kb.spaceIds.length })}
+              </span>
+            )}
           </div>
-          <div className="flex items-center gap-1.5 mt-0.5 min-w-0">
+          <div className="flex items-center gap-1.5 mt-1.5 min-w-0">
             <span
               className={`inline-block w-2 h-2 rounded-full flex-shrink-0 ${
                 isPaused ? 'border border-muted-foreground/40' : 'bg-emerald-500'
@@ -143,13 +151,6 @@ export function KBListItem({ kb, onOpen }: KBListItemProps) {
               {isPaused ? t('Paused') : t('Active')}
             </span>
           </div>
-          {kb.spaceIds.length > 0 && (
-            <div className="flex items-center gap-1 mt-1">
-              <span className="text-[10px] px-1.5 py-px rounded-full bg-secondary text-muted-foreground">
-                {t('{{count}} workspace(s)', { count: kb.spaceIds.length })}
-              </span>
-            </div>
-          )}
         </div>
 
         {/* Hover action row */}
@@ -185,13 +186,15 @@ export function KBListItem({ kb, onOpen }: KBListItemProps) {
         </div>
       </div>
 
-      {/* Description */}
-      {kb.description && (
-        <p className="mt-2.5 text-xs text-muted-foreground line-clamp-2">{kb.description}</p>
-      )}
+      {/* Description — always occupies its slot: with the meta row pinned to
+          the floor, omitting it just left a hole between header and footer. */}
+      <p className={`mt-2.5 text-xs line-clamp-2 ${kb.description ? 'text-muted-foreground' : 'text-muted-foreground/50'}`}>
+        {kb.description || t('No description yet')}
+      </p>
 
-      {/* Meta row */}
-      <div className="mt-2.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+      {/* Meta row — pinned to the card floor so it lands on the same line
+          across the row, whatever length of description sits above it. */}
+      <div className="mt-auto pt-2.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
         <span className="tabular-nums">{docCount}</span>
         {sizeStr && <><span>·</span><span className="tabular-nums">{sizeStr}</span></>}
         {lastLearnTime && <><span>·</span><span className="tabular-nums">{lastLearnTime}</span></>}

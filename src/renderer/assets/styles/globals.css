@@ -132,6 +132,11 @@
   border-color: hsl(var(--border));
 }
 
+/* Tailwind's preflight gives buttons a pointer but not selects. */
+select:not(:disabled) {
+  cursor: pointer;
+}
+
 html {
   color-scheme: dark;
 }
@@ -205,6 +210,22 @@ body {
     height: 100%;
     overflow: hidden;
   }
+}
+
+/* Desktop window edge.
+ * The line between window and desktop is normally the OS's own drop shadow,
+ * which remote-desktop/VDI sessions drop to save bandwidth — leaving the
+ * window with no visible edge at all. Drawing it here keeps the boundary
+ * under any session. Sits above app chrome (NavRail/Header paint to the
+ * window edge and would otherwise cover it) and never takes input, so it
+ * can't interfere with clicks or the title-bar drag region. */
+html.platform-desktop body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px hsl(var(--border));
 }
 
 /* For Portal modals rendered outside #root */
@@ -1344,8 +1365,8 @@ body {
   width: 1px;
   background: linear-gradient(
     to bottom,
-    hsl(var(--border)),
-    hsl(var(--border) / 0.5)
+    hsl(var(--border) / 0.6),
+    hsl(var(--border) / 0.25)
   );
 }
 

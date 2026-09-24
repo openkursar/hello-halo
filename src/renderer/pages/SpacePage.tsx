@@ -80,14 +80,15 @@ export function SpacePage() {
     return (spaceState?.conversations?.length ?? 0) > 0
   })
 
-  // Header center title (prototype `.header-title`) — current conversation's
-  // name, hidden on mobile like the prototype (`.header-title{display:none}`
-  // under its 720px breakpoint).
-  const currentConversationTitle = useChatStore(state => {
-    const conversationId = state.getCurrentSpaceState().currentConversationId
-    return conversationId ? state.conversationCache.get(conversationId)?.title : undefined
-  })
   const currentConversationId = useChatStore(state => state.getCurrentSpaceState().currentConversationId)
+
+  // Centered header title — name of the conversation currently open
+  const currentConversationTitle = useChatStore(state => {
+    const spaceState = state.spaceStates.get(state.currentSpaceId ?? '')
+    const id = spaceState?.currentConversationId
+    if (!id) return undefined
+    return spaceState?.conversations?.find(c => c.id === id)?.title || undefined
+  })
 
   // Canvas state - use precise selectors to minimize re-renders
   const isCanvasOpen = useCanvasIsOpen()

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { AlertCircle, ArrowUpRight, Loader2 } from 'lucide-react'
+import { AlertCircle, ArrowUpRight, ChevronDown, Loader2 } from 'lucide-react'
 import { useAppsStore } from '../../stores/apps.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { usePeopleViewStore } from '../../stores/people-view.store'
@@ -73,8 +73,8 @@ export function ActivityThread({ appId }: { appId: string }) {
   const newCount = historySnapshot ? entries.filter(entry => !historySnapshot.includes(entry.id)).length : 0
   const history = entries.filter(entry => !historySnapshot || historySnapshot.includes(entry.id)).filter(entry => !active.some(item => item.id === entry.id)).filter(entry => source === 'all' || activitySourceKind(entry) === source)
   const busy = state?.status === 'running' || state?.status === 'queued'
-  return <div ref={scroll} onScroll={event => { usePeopleViewStore.getState().saveScroll(`activity:${appId}`, event.currentTarget.scrollTop); if (event.currentTarget.scrollTop > 100) setHistorySnapshot(current => current ?? entries.map(entry => entry.id)) }} className="h-full overflow-y-auto p-4 sm:p-8">
-    <div className="mx-auto max-w-4xl">
+  return <div ref={scroll} onScroll={event => { usePeopleViewStore.getState().saveScroll(`activity:${appId}`, event.currentTarget.scrollTop); if (event.currentTarget.scrollTop > 100) setHistorySnapshot(current => current ?? entries.map(entry => entry.id)) }} className="h-full overflow-y-auto px-6 py-4 sm:px-10 sm:py-6">
+    <div>
       <main className="min-w-0">
         <RunsSummaryBand appId={appId} />
         {focusError && <p role="alert" className="mb-4 text-sm text-halo-warning">{t('This activity is unavailable. Other work remains accessible.')}</p>}
@@ -89,10 +89,13 @@ export function ActivityThread({ appId }: { appId: string }) {
         </section>
         {busy && <section className="mb-7 rounded-xl border border-primary/25 bg-primary/5 p-4"><h2 className="flex items-center gap-2 text-sm font-medium"><Loader2 size={16} className="animate-spin" />{state?.status === 'queued' ? t('Independent execution queued') : t('Independent execution in progress')}</h2>{state?.runningRunId && state.runningSessionKey && <button onClick={() => useAppsPageStore.getState().openSessionDetail(appId, state.runningRunId!, state.runningSessionKey!)} className="mt-3 flex min-h-8 items-center gap-1 text-xs text-primary">{t('View process')}<ArrowUpRight size={13} /></button>}{state?.runningRunId && state.status === 'running' && <button disabled={stopping} onClick={async () => { setStopping(true); setStopError(false); try { const result = await api.appStopRun(appId, state.runningRunId!); if (!result.success) throw new Error(result.error ?? 'Stop rejected'); await refresh() } catch (error) { console.warn('[ActivityThread] Could not stop current execution', { appId, runId: state.runningRunId, error }); setStopError(true) } finally { setStopping(false) } }} className="mt-2 min-h-8 text-xs text-muted-foreground disabled:opacity-50">{t('Stop this execution')}</button>}{stopError && <p role="alert" className="mt-2 text-xs text-destructive">{t('Could not stop this execution. Please try again.')}</p>}</section>}
         <PersonTeamWork appId={appId} />
-        <section><div className="mb-5 flex flex-wrap items-center justify-between gap-3"><h2 className="text-base font-medium">{t('Recent activity')}</h2><select aria-label={t('Activity source')} value={source} onChange={event => { setSource(event.target.value); setHistorySnapshot(null) }} className="min-h-9 rounded-lg border border-border bg-background px-2 text-xs"><option value="all">{t('All sources')}</option><option value="team">{t('Teams')}</option><option value="automation">{t('Independent executions')}</option><option value="chat">{t('Conversations')}</option><option value="unknown">{t('Unknown source')}</option></select></div>
+        <section><div className="mb-5 flex flex-wrap items-center justify-between gap-3"><h2 className="text-base font-medium">{t('Recent activity')}</h2><div className="relative"><select aria-label={t('Activity source')} value={source} onChange={event => { setSource(event.target.value); setHistorySnapshot(null) }} className="min-h-9 appearance-none rounded-lg border border-border bg-background pl-3 pr-9 text-xs"><option value="all">{t('All sources')}</option><option value="team">{t('Teams')}</option><option value="automation">{t('Independent executions')}</option><option value="chat">{t('Conversations')}</option><option value="unknown">{t('Unknown source')}</option></select><ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" /></div></div>
           {newCount > 0 && <button onClick={() => setHistorySnapshot(null)} className="mb-4 min-h-9 rounded-lg border border-primary/20 px-3 text-xs text-primary">{t('Show {{count}} new updates', { count: newCount })}</button>}
           {!initialLoading && !history.length && <p className="py-5 text-sm text-muted-foreground">{t('No activity to display.')}</p>}
-          {history.map(entry => <ActivityEntryCard key={entry.id} entry={entry} appId={appId} />)}
+          {history.length > 0 && <div className="relative">
+            <div className="timeline-rail absolute left-[9px] top-3 bottom-0 pointer-events-none" aria-hidden />
+            {history.map((entry, index) => <ActivityEntryCard key={entry.id} entry={entry} appId={appId} isLast={index === history.length - 1 && !hasMore} />)}
+          </div>}
           {hasMore && <button disabled={loading} onClick={async () => { setLoading(true); try { await useAppsStore.getState().loadMoreActivity(appId); setHistorySnapshot(null) } finally { setLoading(false) } }} className="min-h-10 w-full rounded-lg border border-border text-sm disabled:opacity-50">{loading ? t('Loading…') : t('Load more activity')}</button>}
         </section>
       </main>

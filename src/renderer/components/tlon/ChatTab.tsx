@@ -59,8 +59,10 @@ export function ChatTab({ kb }: ChatTabProps) {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Transcript */}
-      <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3">
+      {/* Transcript — capped at the main chat's 720px reading column; the
+          scroller stays full-width so the scrollbar sits at the pane edge. */}
+      <div className="flex-1 overflow-y-auto px-6 sm:px-10 py-4">
+        <div className="max-w-[720px] mx-auto h-full space-y-3">
         {messages.length === 0 && !generating ? (
           <div className="h-full flex flex-col items-center justify-center text-center px-6">
             <BookOpen className="w-8 h-8 text-muted-foreground mb-3" />
@@ -72,21 +74,24 @@ export function ChatTab({ kb }: ChatTabProps) {
             </p>
           </div>
         ) : (
+          /* Same bubble treatment as the main chat (shared message-user /
+             message-assistant styles), so one product doesn't render two
+             different-looking conversations. */
           messages.map(msg => {
             const isUser = msg.role === 'user'
             const asMarkdown = !isUser && !msg.error
             return (
               <div
                 key={msg.id}
-                className={isUser ? 'flex justify-end' : 'flex justify-start'}
+                className={`flex animate-fade-in ${isUser ? 'justify-end' : 'justify-start'}`}
               >
                 <div
-                  className={`max-w-[85%] rounded-xl px-3 py-2 text-sm break-words ${
+                  className={`max-w-[85%] rounded-lg text-sm break-words ${
                     isUser
-                      ? 'bg-primary text-primary-foreground whitespace-pre-wrap'
+                      ? 'message-user px-3.5 py-2.5 whitespace-pre-wrap'
                       : msg.error
-                        ? 'bg-destructive/10 text-destructive border border-destructive/30 whitespace-pre-wrap'
-                        : 'bg-card border border-border'
+                        ? 'bg-destructive/10 text-destructive border border-destructive/30 px-4 py-3 whitespace-pre-wrap'
+                        : 'message-assistant px-4 py-3'
                   }`}
                 >
                   {asMarkdown
@@ -102,48 +107,54 @@ export function ChatTab({ kb }: ChatTabProps) {
         )}
 
         {generating && (
-          <div className="flex justify-start">
-            <div className="inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm bg-card border border-border text-muted-foreground">
+          <div className="flex justify-start animate-fade-in">
+            <div className="message-assistant inline-flex items-center gap-2 rounded-lg px-4 py-3 text-sm text-muted-foreground">
               <Loader2 className="w-4 h-4 animate-spin" />
               {session?.status || t('Thinking…')}
             </div>
           </div>
         )}
 
-        <div ref={bottomRef} />
+          <div ref={bottomRef} />
+        </div>
       </div>
 
-      {/* Composer */}
-      <div className="border-t border-border p-3 sm:p-4">
-        {messages.length > 0 && (
-          <div className="flex justify-end mb-2">
+      {/* Composer — the main chat's rounded card shape and reading width,
+          without its slash commands / mentions / toolset controls, none of
+          which apply to a question against a single corpus. */}
+      <div className="px-6 sm:px-10 pt-3 pb-4">
+        <div className="max-w-[720px] mx-auto">
+          {messages.length > 0 && (
+            <div className="flex justify-end mb-2">
+              <button
+                onClick={() => clearChat(kb.id)}
+                disabled={generating}
+                className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50 transition-colors"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                {t('Clear chat')}
+              </button>
+            </div>
+          )}
+          <div className="flex items-end gap-2 rounded-[18px] border border-border bg-card px-3.5 py-2.5 shadow-soft transition-colors ease-halo focus-within:border-primary">
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              rows={2}
+              placeholder={t('Ask a question…')}
+              style={{ maxHeight: '180px' }}
+              className="flex-1 min-w-0 min-h-[52px] resize-none bg-transparent py-1 text-[15px] leading-[1.5] text-foreground outline-none placeholder:text-subtle-foreground"
+            />
             <button
-              onClick={() => clearChat(kb.id)}
-              disabled={generating}
-              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50 transition-colors"
+              onClick={handleSend}
+              disabled={!input.trim() || generating}
+              className="mb-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed"
+              title={t('Send')}
             >
-              <Trash2 className="w-3.5 h-3.5" />
-              {t('Clear chat')}
+              {generating ? <Sparkles className="w-4 h-4 animate-pulse" /> : <Send className="w-4 h-4" />}
             </button>
           </div>
-        )}
-        <div className="flex items-end gap-2">
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            rows={1}
-            placeholder={t('Ask a question…')}
-            className="flex-1 resize-none max-h-32 px-3 py-2 bg-input rounded-lg border border-border focus:border-primary focus:outline-none transition-colors text-sm"
-          />
-          <button
-            onClick={handleSend}
-            disabled={!input.trim() || generating}
-            className="inline-flex items-center justify-center w-10 h-10 bg-primary text-primary-foreground rounded-lg btn-primary disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
-            title={t('Send')}
-          >
-            {generating ? <Sparkles className="w-4 h-4 animate-pulse" /> : <Send className="w-4 h-4" />}
-          </button>
         </div>
       </div>
     </div>

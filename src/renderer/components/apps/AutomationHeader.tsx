@@ -223,9 +223,9 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
   ]
 
   return (
-    <div className="flex-shrink-0 border-b border-border">
+    <div className="flex-shrink-0">
       {/* ── Persona Card ── */}
-      <div className="flex flex-wrap items-start gap-3 px-4 pt-5 pb-4 sm:px-8">
+      <div className="flex flex-wrap items-start gap-3 px-6 pt-5 pb-4 sm:px-10">
         {/* Avatar */}
         <div className="flex-shrink-0 rounded-xl overflow-hidden">
           <AutomationAvatar name={name || appId} size={44} />
@@ -378,7 +378,7 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
         )}
       </div>
 
-      {actionError && <p role="alert" className="px-4 pb-3 text-sm text-destructive">{t('Could not apply this action. Please try again.')}</p>}
+      {actionError && <p role="alert" className="px-6 pb-3 text-sm text-destructive sm:px-10">{t('Could not apply this action. Please try again.')}</p>}
       {DialogComponent}
       {showShareDialog && (
         <ShareCurrentAppDialog
@@ -396,7 +396,10 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
 
       {/* ── Tab Bar ── */}
       {isAutomation && (
-        <div className="flex items-center gap-0.5 overflow-x-auto px-4 sm:px-8">
+        // Rule sits under the tabs, inset like the header; `min-w-full w-max`
+        // keeps it under the whole strip once the tabs scroll horizontally.
+        <div className="overflow-x-auto px-6 sm:px-10">
+          <div className="flex min-w-full w-max items-center gap-0.5 border-b border-border">
           {tabs.map(tab => {
             const Icon = tab.icon
             const isActive = currentTab === tab.key
@@ -416,6 +419,7 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
               </button>
             )
           })}
+          </div>
         </div>
       )}
     </div>

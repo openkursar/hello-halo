@@ -15,8 +15,6 @@ import { api } from '../api'
 import { useAppStore } from '../stores/app.store'
 import { useChatStore } from '../stores/chat.store'
 import { useSpaceStore } from '../stores/space.store'
-import { buildLocalSessionKey, getAppChatConversationId } from '../../shared/apps/im-keys'
-import type { ImSessionRecord } from '../../shared/types/im-channel'
 
 export function navigateToConversation(spaceId: string, conversationId: string) {
   const chatStore = useChatStore.getState()
@@ -75,37 +73,16 @@ export function navigateToAppChat(appSpaceId: string | null, appId: string, conv
 }
 
 /**
- * The desktop conversation to reopen for one digital human: the most recently
- * active of the sessions the main board's list shows for it. IM/HTTP sessions
- * are excluded — they are channel conversations read in the app's own session
- * browser, not places the main board can type into.
- */
-async function latestDigitalHumanConversationId(appId: string): Promise<string | null> {
-  try {
-    const result = await api.imSessionsList(appId)
-    if (!result.success || !Array.isArray(result.data)) return null
-    const latest = (result.data as ImSessionRecord[])
-      .filter(record => record.source === 'native' || record.source === 'local')
-      .sort((a, b) => (b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0))[0]
-    if (!latest) return null
-    return latest.source === 'native'
-      ? getAppChatConversationId(appId)
-      : buildLocalSessionKey(appId, latest.chatId)
-  } catch (error) {
-    console.warn('[ConversationNavigation] Conversation lookup failed', { appId, error })
-    return null
-  }
-}
-
-/**
  * Start a conversation with one digital human and return its conversationId,
  * or null when the backend refused or the call failed (logged here, so every
  * caller reports a failure the same way).
  *
  * The single place the renderer creates a digital-human session: the input's
- * recipient picker, its "@" mention path, the resource rail's chat action and
- * the "open the last conversation" action above all mean "start talking now"
- * and must not each evolve their own request.
+ * recipient picker, its "@" mention path, the resource rail's chat action, and
+ * every "Chat"/"talk to it now" button all mean the same thing and must not
+ * each evolve their own request — including not silently reopening whatever
+ * conversation happened to be most recent, which reads as "nothing happened"
+ * when the user expected a new one.
  */
 export async function startDigitalHumanConversation(appId: string): Promise<string | null> {
   try {
@@ -118,19 +95,25 @@ export async function startDigitalHumanConversation(appId: string): Promise<stri
   return null
 }
 
+const openingChats = new Map<string, Promise<boolean>>()
+
 /**
- * Talk to one digital human on the main conversation board: reopen their most
- * recent conversation, or start one when they have none — "talk to this person
- * now" has to land somewhere, and a person nobody has spoken to yet is the
- * normal case, not an error.
+ * "Talk to this digital human now": start a fresh conversation and open it on
+ * the main board. Repeat calls for the same digital human while one is still
+ * being created share it, so a double-click doesn't leave an extra empty
+ * session behind.
  *
- * Returns false when neither the lookup nor the creation produced a
- * conversation, so the caller can surface that nothing opened.
+ * Returns false when no conversation could be created.
  */
-export async function openDigitalHumanChat(appId: string, appSpaceId: string | null): Promise<boolean> {
-  const conversationId = await latestDigitalHumanConversationId(appId)
-    ?? await startDigitalHumanConversation(appId)
-  if (!conversationId) return false
-  navigateToAppChat(appSpaceId, appId, conversationId)
-  return true
+export function openDigitalHumanChat(appId: string, appSpaceId: string | null): Promise<boolean> {
+  const pending = openingChats.get(appId)
+  if (pending) return pending
+  const opening = (async () => {
+    const conversationId = await startDigitalHumanConversation(appId)
+    if (!conversationId) return false
+    navigateToAppChat(appSpaceId, appId, conversationId)
+    return true
+  })().finally(() => openingChats.delete(appId))
+  openingChats.set(appId, opening)
+  return opening
 }

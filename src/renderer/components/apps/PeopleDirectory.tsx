@@ -1,6 +1,6 @@
 import { useShallow } from 'zustand/react/shallow'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { ArrowUpRight, FolderInput, LayoutGrid, List, MessageSquare, MoreVertical, Play, Plus, Search, Unplug, Users } from 'lucide-react'
+import { ArrowUpRight, ChevronDown, FolderInput, LayoutGrid, List, MessageSquare, MoreVertical, Play, Plus, Search, Unplug, Users } from 'lucide-react'
 import { usePeopleDirectoryStore } from '../../stores/people-directory.store'
 import { api } from '../../api'
 import { useAppsStore } from '../../stores/apps.store'
@@ -93,8 +93,14 @@ export function PeopleDirectory({ spaceMap, onCreate }: { spaceMap: Record<strin
       {(showRemoved || (data?.removedTotal ?? 0) > 0) && <button onClick={() => { setShowRemoved(value => !value); prefs.setFilters({ page: 1 }) }} className="mb-4 min-h-8 text-xs text-muted-foreground hover:text-primary">{showRemoved ? t('Show installed digital humans') : t('View removed digital humans')}</button>}
       <div className="mb-5 flex flex-wrap gap-2">
         <label className="relative min-w-0 grow sm:max-w-sm"><Search size={16} className="absolute left-3 top-3 text-muted-foreground" /><input aria-label={t('Search digital humans')} placeholder={t('Search names, roles, or teams')} value={prefs.query} onChange={event => prefs.setFilters({ query: event.target.value })} className="min-h-10 w-full rounded-lg border border-border bg-background py-2 pl-9 pr-3 text-sm" /></label>
-        <select aria-label={t('Filter by team')} value={prefs.team} onChange={event => prefs.setFilters({ team: event.target.value })} className="min-h-10 max-w-full rounded-lg border border-border bg-background px-3 text-xs"><option value="">{t('All teams')}</option>{teams.map(team => <option value={team.id} key={team.id}>{team.name}</option>)}</select>
-        <select aria-label={t('Filter by workspace')} value={prefs.space} onChange={event => prefs.setFilters({ space: event.target.value })} className="min-h-10 max-w-full rounded-lg border border-border bg-background px-3 text-xs"><option value="">{t('All workspaces')}</option>{Object.entries(spaceMap).map(([id, name]) => <option value={id} key={id}>{name}</option>)}</select>
+        <div className="relative max-w-full">
+          <select aria-label={t('Filter by team')} value={prefs.team} onChange={event => prefs.setFilters({ team: event.target.value })} className="min-h-10 w-full appearance-none rounded-lg border border-border bg-background pl-3 pr-9 text-xs"><option value="">{t('All teams')}</option>{teams.map(team => <option value={team.id} key={team.id}>{team.name}</option>)}</select>
+          <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+        </div>
+        <div className="relative max-w-full">
+          <select aria-label={t('Filter by workspace')} value={prefs.space} onChange={event => prefs.setFilters({ space: event.target.value })} className="min-h-10 w-full appearance-none rounded-lg border border-border bg-background pl-3 pr-9 text-xs"><option value="">{t('All workspaces')}</option>{Object.entries(spaceMap).map(([id, name]) => <option value={id} key={id}>{name}</option>)}</select>
+          <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+        </div>
         <button aria-pressed={prefs.attention} onClick={() => prefs.setFilters({ attention: !prefs.attention })} className={`min-h-10 rounded-lg border px-3 text-xs ${prefs.attention ? 'border-halo-warning text-halo-warning' : 'border-border text-muted-foreground'}`}>{t('Needs my attention')}</button>
         <div className="ml-auto flex rounded-lg border border-border p-1">{(['cards', 'list'] as const).map(view => <button key={view} aria-label={view === 'cards' ? t('Card view') : t('List view')} aria-pressed={prefs.view === view} onClick={() => prefs.setFilters({ view })} className={`rounded p-2 ${prefs.view === view ? 'bg-secondary' : 'text-muted-foreground'}`}>{view === 'cards' ? <LayoutGrid size={16} /> : <List size={16} />}</button>)}</div>
       </div>

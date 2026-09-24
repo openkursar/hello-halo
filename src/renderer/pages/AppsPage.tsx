@@ -1,7 +1,9 @@
 /**
  * Apps Page
  *
- * Top-level page for the Apps system. Accessible from SpacePage header.
+ * Top-level page for the Apps system, reached from the NavRail — same tier
+ * as the Knowledge Base and Store pages, and its header follows their shape
+ * (title + global search; see TlonPage/StorePage for the pattern).
  * Layout: Header + tab bar + split pane (app list sidebar | detail area).
  *
  * Session Detail drill-down:
@@ -11,13 +13,14 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useAppStore } from '../stores/app.store'
 import { useSpaceStore } from '../stores/space.store'
 import { useAppsStore } from '../stores/apps.store'
 import { useAppsPageStore, tabForAppType } from '../stores/apps-page.store'
 import { useTeamStore } from '../stores/team.store'
+import { useSearchStore } from '../stores/search.store'
 import type { AppType } from '../../shared/apps/spec-types'
 import { Header } from '../components/layout/Header'
+import { SearchIcon } from '../components/search/SearchIcon'
 import { visibleDigitalHumans } from '../utils/people-model'
 import { PeopleInbox } from '../components/apps/PeopleInbox'
 import { PeopleDirectory } from '../components/apps/PeopleDirectory'
@@ -43,12 +46,11 @@ import { TeamTabContent } from '../components/team'
 import { useTranslation, getCurrentLanguage } from '../i18n'
 import { resolveSpecI18n } from '../utils/spec-i18n'
 import { api } from '../api'
-import { ChevronLeft, ChevronRight, Settings } from 'lucide-react'
+import { ArrowLeft, ChevronLeft, ChevronRight } from 'lucide-react'
 
 export function AppsPage() {
   const { t } = useTranslation()
-  const { navigate, navigateBack } = useAppStore()
-  const currentSpace = useSpaceStore(state => state.currentSpace)
+  const { openSearch } = useSearchStore()
   const haloSpace = useSpaceStore(state => state.haloSpace)
   const spaces = useSpaceStore(state => state.spaces)
   const { apps, loadApps, updateAppOverrides } = useAppsStore()
@@ -83,7 +85,6 @@ export function AppsPage() {
   const selectedTeamId = useTeamStore(s => s.currentTeamId)
   const inTeamWorkbench = currentTab === 'team' && selectedTeamId !== null
   const teams = useTeamStore(s => s.teams)
-
 
   // How many teams have a decision waiting on the user — surfaced on the Teams
   // tab itself so it's visible without having to switch away and back.
@@ -181,6 +182,13 @@ export function AppsPage() {
     [apps, selectedAppId]
   )
 
+  // Mirrors the content branches below: a selection only replaces the wall
+  // on these tabs, and on the capability tabs only once the app resolves.
+  const showsAppDetail = !!selectedAppId && (
+    currentTab === 'my-digital-humans'
+    || ((currentTab === 'my-skills' || currentTab === 'my-mcp') && !!selectedApp)
+  )
+
   // Locale-resolved display fields for breadcrumbs and login notice
   const resolvedSpec = useMemo(
     () => selectedApp ? resolveSpecI18n(selectedApp.spec, getCurrentLanguage()) : undefined,
@@ -267,31 +275,24 @@ export function AppsPage() {
 
   return (
     <div className="h-full flex flex-col bg-background">
-      {/* Header */}
+      {/* Header — title + global search, same shape as TlonPage. Stays put in
+          detail views too: it says which top-level section you are in, which a
+          detail's own back link does not, and global search is useful from
+          anywhere. */}
       <Header
         left={
-          <button
-            onClick={() => inTeamWorkbench ? useTeamStore.getState().selectTeam(null) : currentSpace ? navigate('space') : navigateBack('space')}
-            className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <ChevronLeft className="w-4 h-4" />
-            {inTeamWorkbench ? t('Teams') : currentSpace?.name ?? t('Back')}
-          </button>
-        }
-        right={
-          <button
-            onClick={() => navigate('settings')}
-            className="min-h-9 min-w-9 flex items-center justify-center p-1.5 hover:bg-secondary rounded-lg transition-colors"
-            title={t('Settings')}
-            aria-label={t('Settings')}
-          >
-            <Settings className="w-5 h-5" />
-          </button>
+          <>
+            <span className="text-sm font-semibold text-foreground whitespace-nowrap">{t('Digital Humans · Extensions')}</span>
+            <SearchIcon onClick={() => openSearch('global')} />
+          </>
         }
       />
 
-      {/* Tab bar — kept provider-agnostic via TabButton sub-component */}
-      {!inTeamWorkbench && <div className="flex items-center gap-1 px-3 sm:px-4 py-2 border-b border-border flex-shrink-0 overflow-x-auto">
+      {/* Tab bar — kept provider-agnostic via TabButton sub-component. Hidden
+          once something is opened (a person, a skill, an MCP server, a team):
+          those screens navigate by their own back link, so browse-level tabs
+          on top of them only offer a second, competing way out. */}
+      {!inTeamWorkbench && !showsAppDetail && <div className="flex items-center gap-1 px-3 sm:px-4 py-2 border-b border-border flex-shrink-0 overflow-x-auto">
         {/* The request inbox has no tab of its own: it is reached from the
             directory's "Needs you" group, so it highlights this tab. */}
         <TabButton
@@ -319,8 +320,8 @@ export function AppsPage() {
         <PeopleInbox />
       ) : currentTab === 'my-digital-humans' ? (
         selectedAppId && !selectedApp ? <div className="flex-1 p-6"><button onClick={clearSelection} className="mb-5 min-h-9 text-sm text-primary">{t('All digital humans')}</button>{detailFailed ? <p role="alert" className="text-sm text-destructive">{t('Could not load this digital human.')} <button onClick={() => setDetailRevision(value => value + 1)} className="underline">{t('Retry')}</button></p> : <p role="status" className="text-sm text-muted-foreground">{t('Loading…')}</p>}</div> : selectedAppId && selectedApp ? <div className="flex min-h-0 flex-1 flex-col">
-          <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-border px-4 py-2 text-xs">
-            <button onClick={clearSelection} className="flex min-h-8 items-center gap-1 text-muted-foreground hover:text-primary"><ChevronLeft size={15} />{t('All digital humans')}</button>
+          <div className="flex shrink-0 flex-wrap items-center gap-3 px-6 pt-3 text-sm sm:px-10">
+            <button onClick={clearSelection} className="inline-flex min-h-8 items-center gap-1.5 text-muted-foreground transition-colors ease-halo hover:text-primary"><ArrowLeft className="w-4 h-4" />{t('All digital humans')}</button>
             <PersonReturnLink />
           </div>
           {isSessionDetail ? <SessionBreadcrumb appName={selectedAppName ?? ''} runId={(detailView as { runId: string }).runId} onBack={() => openActivityThread(selectedApp.id)} /> : !isUninstalledDetail && <AutomationHeader appId={selectedAppId} spaceName={selectedApp.spaceId ? spaceMap[selectedApp.spaceId] : t('Global')} />}
@@ -331,12 +332,12 @@ export function AppsPage() {
         /* ── Capability library: wall first, one full-width detail behind a card ── */
         selectedAppId && selectedApp ? (
           <div className="flex min-h-0 flex-1 flex-col">
-            <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2 sm:px-4">
+            <div className="flex shrink-0 items-center gap-2 px-6 pt-3 sm:px-10">
               <button
                 onClick={clearSelection}
-                className="flex min-h-8 items-center gap-1 text-xs text-muted-foreground hover:text-primary"
+                className="flex min-h-8 items-center gap-1.5 text-xs text-muted-foreground transition-colors ease-halo hover:text-primary"
               >
-                <ChevronLeft size={15} />
+                <ArrowLeft size={15} />
                 {t('Back to capability library')}
               </button>
             </div>
@@ -344,11 +345,30 @@ export function AppsPage() {
           </div>
         ) : (
           <div className="flex min-h-0 flex-1 flex-col">
-            <div className="flex gap-2 border-b border-border p-3">
-              <TabButton active={currentTab === 'my-skills'} label={t('Skills')} onClick={() => setCurrentTab('my-skills')} />
-              <TabButton active={currentTab === 'my-mcp'} label={t('MCP connections')} onClick={() => setCurrentTab('my-mcp')} />
+            {/* Segmented control, not a second tab row: this switches between
+                two views of one library, while the row above navigates the
+                page. Stacking two tab bars made them compete. */}
+            <div className="px-6 sm:px-10 pt-4">
+              {/* Equal-width segments: the grid's 1fr tracks both resolve to
+                  the widest label, so switching doesn't shift the control. */}
+              <div className="inline-grid grid-cols-2 gap-1 rounded-lg bg-secondary p-0.5">
+                {(['my-skills', 'my-mcp'] as const).map(tab => (
+                  <button
+                    key={tab}
+                    onClick={() => setCurrentTab(tab)}
+                    aria-pressed={currentTab === tab}
+                    className={`rounded-md px-3 py-1.5 text-[13px] transition-colors ease-halo ${
+                      currentTab === tab
+                        ? 'bg-background font-medium text-foreground shadow-sm'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    {tab === 'my-skills' ? t('Skills') : t('MCP connections')}
+                  </button>
+                ))}
+              </div>
             </div>
-            <div className="flex min-h-0 flex-1 flex-col px-3 pb-3 sm:px-6">
+            <div className="flex min-h-0 flex-1 flex-col pt-2 pb-3">
               {currentTab === 'my-skills' ? (
                 <SkillCardWall
                   spaceMap={spaceMap}
@@ -445,7 +465,7 @@ function SessionBreadcrumb({ appName, runId, label, onBack }: SessionBreadcrumbP
   const displayLabel = label || (shortRunId ? `${t('Run')} ${shortRunId}` : '')
 
   return (
-    <div className="flex items-center gap-1.5 px-4 py-2.5 border-b border-border bg-muted/30 flex-shrink-0">
+    <div className="flex items-center gap-1.5 px-6 py-2.5 border-b border-border bg-muted/30 flex-shrink-0 sm:px-10">
       <button
         onClick={onBack}
         className="flex items-center gap-1 text-sm text-primary hover:text-primary/80 transition-colors font-medium"

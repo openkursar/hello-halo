@@ -217,7 +217,7 @@ export function SkillInfoCard({ appId, spaceName }: SkillInfoCardProps) {
   // ── Render ────────────────────────────────
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5">
+    <div className="flex-1 overflow-y-auto py-4 sm:py-6 px-6 sm:px-10 space-y-5">
       {pendingChange && <CapabilityChangeDialog appId={appId} title={pendingChange.title} onConfirm={pendingChange.apply} onClose={() => setPendingChange(null)} />}
       <CapabilityImpact appId={appId} />
       {showCopy && <SkillCopyDialog spec={spec} content={isEditing ? draftContent : skillContent} spaceId={app.spaceId} onClose={() => setShowCopy(false)} onSaved={() => { setIsEditing(false); setDraft('') }} />}

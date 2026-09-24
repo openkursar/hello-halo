@@ -21,7 +21,7 @@ export function NewSpaceCard({ onClick }: NewSpaceCardProps) {
   return (
     <button
       onClick={onClick}
-      className="flex flex-col items-center justify-center gap-1.5 min-h-[104px] rounded-lg border border-dashed border-border text-muted-foreground hover:border-primary/40 hover:text-foreground hover:bg-secondary/40 transition-colors ease-halo"
+      className="flex h-full min-h-[104px] flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed border-border text-muted-foreground hover:border-primary/40 hover:text-foreground hover:bg-secondary/40 transition-colors ease-halo"
     >
       <Plus className="w-5 h-5" />
       <span className="text-sm font-medium">{t('New Workspace')}</span>

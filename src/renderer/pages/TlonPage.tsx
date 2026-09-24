@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from '../i18n'
-import { ChevronLeft } from 'lucide-react'
+import { ArrowLeft } from 'lucide-react'
 import { Header } from '../components/layout/Header'
 import { SearchIcon } from '../components/search/SearchIcon'
 import { useSearchStore } from '../stores/search.store'
@@ -113,12 +113,12 @@ export function TlonPage() {
            share the same code path — only the ContentCanvas split differs. */
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* Back bar */}
-          <div className="flex items-center gap-2 px-3 sm:px-4 py-2 border-b border-border flex-shrink-0">
+          <div className="flex items-center gap-2 px-6 sm:px-10 pt-3 flex-shrink-0">
             <button
               onClick={() => selectKB(null)}
-              className="inline-flex items-center gap-1 text-sm text-primary hover:text-primary/80 transition-colors"
+              className="inline-flex min-h-8 items-center gap-1.5 text-sm text-muted-foreground transition-colors ease-halo hover:text-primary"
             >
-              <ChevronLeft className="w-4 h-4" />
+              <ArrowLeft className="w-4 h-4" />
               {t('Knowledge Bases')}
             </button>
           </div>

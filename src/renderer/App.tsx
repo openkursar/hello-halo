@@ -125,17 +125,16 @@ function applyTheme(theme: 'light' | 'dark' | 'system') {
   })
 }
 
-// The traffic-light button group's real height isn't documented or
-// queryable — 28px turned out too tight to fit it with any breathing room
-// top and bottom (see main/index.ts trafficLightPosition), so this is a
-// looser, empirically-adjusted value rather than a tightly computed one.
-const MAC_TRAFFIC_LIGHT_CLEARANCE_PX = 30
+// Same height as the Header, so trafficLightPosition (main/index.ts) centers
+// the lights in it just as it does in the Header row on rail views.
+const MAC_WINDOW_CONTROLS_BAND_PX = 48
 
 export default function App() {
   const { t } = useTranslation()
   const { view, config, initialize, setMcpStatus, navigate, enterApp, setConfig, completeDeferredGitBashCheck } = useAppStore()
   const isTaskPanelOpen = useTaskPanelStore(s => s.isOpen)
   const platform = usePlatform()
+  const isMacElectron = isElectron() && platform.isMac
   // Per-field subscriptions, not the whole store: this is the app root, and the
   // chat store commits once per streaming token for every conversation in the
   // app (digital humans and team members included). A whole-store subscription
@@ -1042,15 +1041,6 @@ export default function App() {
     }
   }
 
-  // macOS traffic lights (trafficLightPosition in main/index.ts) sit above
-  // whatever renders at the window's top-left corner. Rather than widening
-  // NavRail itself to clear them (which shifts where the Header begins and
-  // stops the rail from matching the prototype's plain 56px width), a single
-  // full-width strip pinned above the whole NavRail+Header row reserves just
-  // enough height for the lights, in normal flow — NavRail and Header both
-  // start immediately below it, so nothing needs its own per-column clearance.
-  const isMacElectron = isElectron() && platform.isMac
-
   // Show reconnection banner for remote/Capacitor modes
   const showReconnectBanner = (api.isRemoteMode() || api.isCapacitorMode())
     && wsState !== 'connected'
@@ -1124,21 +1114,7 @@ export default function App() {
   }
 
   return (
-    <div className="h-full w-full overflow-hidden bg-background flex flex-col shadow-[inset_0_0_0_1px_var(--border)]">
-      {/* Own visible edge, independent of the OS compositor's window shadow —
-          some remote-desktop/VDI protocols suppress that shadow entirely,
-          leaving the window looking borderless. */}
-      {/* macOS traffic-light clearance — a single full-width strip above the
-          whole NavRail+Header row, instead of widening NavRail itself (which
-          would shift where Header begins and stop the rail matching the
-          prototype's plain 56px width). NavRail's own top spacer no longer
-          needs any platform-specific sizing because of this. */}
-      {isMacElectron && (
-        <div
-          className="w-full flex-shrink-0 border-b border-border drag-region"
-          style={{ height: `calc(${MAC_TRAFFIC_LIGHT_CLEARANCE_PX}px / var(--display-scale, 1))` }}
-        />
-      )}
+    <div className="h-full w-full overflow-hidden bg-background flex flex-col">
       {/* WebSocket reconnection banner */}
       {showReconnectBanner && (
         <div className="fixed top-0 inset-x-0 z-50 flex items-center justify-center gap-2 py-1.5 bg-halo-warning/90 text-sm font-medium animate-slide-down safe-area-top"
@@ -1165,8 +1141,18 @@ export default function App() {
             </div>
           </>
         ) : (
-          <div className="flex-1 min-w-0 h-full overflow-hidden">
-            {renderView()}
+          <div className="flex-1 min-w-0 h-full overflow-hidden flex flex-col">
+            {/* No NavRail/Header here to hold the macOS traffic lights or to
+                drag the window by, so this band does both. */}
+            {isMacElectron && (
+              <div
+                className="flex-shrink-0 drag-region"
+                style={{ height: `calc(${MAC_WINDOW_CONTROLS_BAND_PX}px / var(--display-scale, 1))` }}
+              />
+            )}
+            <div className="flex-1 min-h-0 overflow-hidden">
+              {renderView()}
+            </div>
           </div>
         )}
       </div>

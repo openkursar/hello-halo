@@ -128,7 +128,7 @@ export function RawFilesTab({ kb }: RawFilesTabProps) {
   }
 
   return (
-    <div className="p-3 sm:p-4 space-y-4">
+    <div className="px-6 sm:px-10 py-3 sm:py-4 space-y-4">
       {/* Drop zone — dropped browser File objects carry no filesystem path, so
           adding files is desktop-only */}
       {isElectron ? (
