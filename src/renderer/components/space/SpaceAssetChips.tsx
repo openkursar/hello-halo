@@ -1,14 +1,9 @@
 /**
- * SpaceAssetChips / SpaceSummaryLine
+ * SpaceAssetChips
  *
  * What a workspace holds: files, digital humans, skills, MCP — in the same
  * order as the resource rail's tabs, so the chip strip reads as a cover of
- * that rail (`SpaceAssetChips`, management-page cards, clickable). The
- * dropdown row's second line (`SpaceSummaryLine`) shows a lighter read-only
- * variant instead: conversation count plus the three installed-asset counts,
- * no files. Both share the same count formatting (cap only, zero renders as
- * "0") and the same space+global total for skill/MCP, so the two surfaces
- * cannot drift apart.
+ * that rail on the management-page cards.
  */
 
 import { FileText, Bot } from 'lucide-react'
@@ -59,41 +54,6 @@ export function SpaceAssetChips({ summary, onSelectTab }: SpaceAssetChipsProps) 
           <Icon className="w-3.5 h-3.5 flex-shrink-0 text-subtle-foreground" />
           <span className="tabular-nums">{formatAssetCount(count)}</span>
         </button>
-      ))}
-    </div>
-  )
-}
-
-interface SpaceSummaryLineProps {
-  summary?: SpaceSummary
-}
-
-/** Read-only second line for a workspace dropdown row: conversation count
- * first (what actually distinguishes "which workspace was this" while
- * picking), then the installed-asset counts. Files is left out here — the
- * row already implies a folder, and there isn't room in a 288px dropdown for
- * a fifth number. */
-export function SpaceSummaryLine({ summary }: SpaceSummaryLineProps) {
-  const { t } = useTranslation()
-
-  const items = [
-    { key: 'conversations', node: t('{{count}} conversations', { count: summary?.conversationCount ?? 0 }) },
-    { key: 'digital-humans', Icon: Bot, count: summary?.digitalHumanCount },
-    { key: 'skill', Icon: APP_TYPE_GLYPH.skill, count: summary && summary.skillCount + summary.globalSkillCount },
-    { key: 'mcp', Icon: APP_TYPE_GLYPH.mcp, count: summary && summary.mcpCount + summary.globalMcpCount },
-  ]
-
-  return (
-    <div className="flex items-center gap-2.5 text-[10px] text-muted-foreground">
-      {items.map((item) => (
-        <span key={item.key} className="flex items-center gap-0.5">
-          {'node' in item ? item.node : (
-            <>
-              <item.Icon className="w-3 h-3 flex-shrink-0" />
-              <span className="tabular-nums">{formatAssetCount(item.count)}</span>
-            </>
-          )}
-        </span>
       ))}
     </div>
   )

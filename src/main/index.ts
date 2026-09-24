@@ -232,6 +232,7 @@ import {
 import { isServerMode } from './foundation/runtime-mode'
 import { initializeApp } from './foundation/config.service'
 import { applyDisplayScale, currentDisplayScale, nudgeDisplayScale, setDisplayScale, DISPLAY_STEP, registerDisplayHandlers } from './services/display.service'
+import { MAC_TRAFFIC_LIGHT_POSITION } from '../shared/constants/mac-traffic-lights'
 import { flushAllPendingIndexWrites } from './services/conversation.service'
 import { shutdownRemoteAccess } from './services/remote'
 import { registerDeepLinkHandling, handleDeepLinkArgv } from './services/deep-link.service'
@@ -460,13 +461,9 @@ function createWindow(): void {
     // macOS: hiddenInset for traffic lights in content area
     // Windows/Linux: hidden + titleBarOverlay for native buttons overlay
     titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
-    // Sits inside NavRail's column, in the spacer above the brand mark
-    // (MAC_TRAFFIC_LIGHT_CLEARANCE_PX in NavRail.tsx); the rail widens to 64px
-    // on macOS so the button group fits. x centers that group in the column,
-    // y is its top rather than its center — the true group size isn't
-    // documented/queryable, so both are tuned empirically. NavRail's spacer
-    // compensates for zoom via --display-scale.
-    trafficLightPosition: isMac ? { x: 5, y: 17 } : undefined,
+    // Sits in NavRail's column above the brand mark; the renderer derives its
+    // clearance from the same shared geometry.
+    trafficLightPosition: isMac ? MAC_TRAFFIC_LIGHT_POSITION : undefined,
     // Windows/Linux: native window controls overlay in content area.
     // Matches globals.css's dark-theme `--background`/`--foreground`
     // (the default theme) exactly, for the brief window before the renderer

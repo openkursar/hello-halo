@@ -10,6 +10,9 @@ export { ContentCanvas, CollapsibleCanvas, CanvasToggleButton } from './ContentC
 // Terminal pty close policy (mounted once at the space level, always active)
 export { TerminalCloseGuard } from './TerminalCloseGuard'
 
+// Opens chat tables in the canvas (wraps pages that host one)
+export { CanvasTableOpener } from './CanvasTableOpener'
+
 // Tab bar
 export { CanvasTabs, CanvasTabBar } from './CanvasTabs'
 

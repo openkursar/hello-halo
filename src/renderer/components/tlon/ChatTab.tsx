@@ -59,10 +59,10 @@ export function ChatTab({ kb }: ChatTabProps) {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Transcript — capped at the main chat's 720px reading column; the
+      {/* Transcript — capped at the main chat's reading column; the
           scroller stays full-width so the scrollbar sits at the pane edge. */}
       <div className="flex-1 overflow-y-auto px-6 sm:px-10 py-4">
-        <div className="max-w-[720px] mx-auto h-full space-y-3">
+        <div className="max-w-chat mx-auto h-full space-y-3">
         {messages.length === 0 && !generating ? (
           <div className="h-full flex flex-col items-center justify-center text-center px-6">
             <BookOpen className="w-8 h-8 text-muted-foreground mb-3" />
@@ -86,7 +86,7 @@ export function ChatTab({ kb }: ChatTabProps) {
                 className={`flex animate-fade-in ${isUser ? 'justify-end' : 'justify-start'}`}
               >
                 <div
-                  className={`max-w-[85%] rounded-lg text-sm break-words ${
+                  className={`max-w-[85%] rounded-lg break-words ${
                     isUser
                       ? 'message-user px-3.5 py-2.5 whitespace-pre-wrap'
                       : msg.error
@@ -123,7 +123,7 @@ export function ChatTab({ kb }: ChatTabProps) {
           without its slash commands / mentions / toolset controls, none of
           which apply to a question against a single corpus. */}
       <div className="px-6 sm:px-10 pt-3 pb-4">
-        <div className="max-w-[720px] mx-auto">
+        <div className="max-w-chat mx-auto">
           {messages.length > 0 && (
             <div className="flex justify-end mb-2">
               <button

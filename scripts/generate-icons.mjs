@@ -11,8 +11,9 @@
  *   resources/icon-1024.png       -> resources/icon.ico     (Windows, 16..256)
  *                                 -> resources/linux/*.png  (Linux, 16..512)
  *
- * The macOS source is kept separate because macOS icons sit inside Apple's
- * safe-area padding while the Windows/Linux sources fill the canvas.
+ * The macOS source is a separate file so it can carry the platform's safe-area
+ * padding. The current artwork fills the canvas on every platform, so the two
+ * sources are identical for now.
  *
  * The .icns is produced by app-builder, the same converter electron-builder
  * validates icons with, so the artifact cannot drift from what the packager

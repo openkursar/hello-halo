@@ -14,7 +14,6 @@ import { ChevronDown, ChevronRight, Plus, Unplug, Search, Lightbulb, LayoutGrid 
 import { useAppStore } from '../../stores/app.store'
 import { useSpaceStore } from '../../stores/space.store'
 import { SpaceAvatar } from '../space/SpaceAvatar'
-import { SpaceSummaryLine } from '../space/SpaceAssetChips'
 import { CreateSpaceDialog } from '../space/CreateSpaceDialog'
 import { useTranslation } from '../../i18n'
 import type { Space, SpaceSummary } from '../../types'
@@ -22,11 +21,8 @@ import type { Space, SpaceSummary } from '../../types'
 /** Minimum interval between loadSpaces calls (ms) */
 const LOAD_THROTTLE_MS = 5_000
 
-/** Max rows in the "Recent" preview section */
-const RECENT_COUNT = 3
-/** Below this many spaces, splitting into Recent/All just adds a redundant
- * section header over a list short enough to scan directly. */
-const RECENT_SECTION_MIN_SPACES = RECENT_COUNT + 1
+/** Below this many spaces the list is short enough to scan without search. */
+const SEARCH_MIN_SPACES = 4
 
 export function SpaceSelector() {
   const { t } = useTranslation()
@@ -153,25 +149,14 @@ export function SpaceSelector() {
   // unfiltered regardless of query, same as it already is outside search.
   const trimmedQuery = searchQuery.trim().toLowerCase()
   const isSearching = trimmedQuery.length > 0
-  const filteredSpaces = useMemo(
-    () => isSearching ? spaces.filter(s => s.name.toLowerCase().includes(trimmedQuery)) : spaces,
-    [spaces, isSearching, trimmedQuery]
-  )
-
-  // "Recent" is a read-only preview — it duplicates entries also listed in
-  // "All Spaces" below. Only shown once the list is long enough that a
-  // shortcut is worth it.
-  const showRecentSection = !isSearching && spaces.length >= RECENT_SECTION_MIN_SPACES
-  const recentSpaces = useMemo(() => {
-    if (!showRecentSection) return []
-    return [...spaces]
-      .sort((a, b) => {
-        const aTime = new Date(a.lastActiveAt || a.updatedAt).getTime()
-        const bTime = new Date(b.lastActiveAt || b.updatedAt).getTime()
-        return bTime - aTime
-      })
-      .slice(0, RECENT_COUNT)
-  }, [spaces, showRecentSection])
+  // Most recently used first: this list is for switching, and the manual
+  // order kept on the management page is for arranging.
+  const listedSpaces = useMemo(() => {
+    const matching = isSearching ? spaces.filter(s => s.name.toLowerCase().includes(trimmedQuery)) : spaces
+    return [...matching].sort((a, b) =>
+      new Date(b.lastActiveAt || b.updatedAt).getTime() - new Date(a.lastActiveAt || a.updatedAt).getTime()
+    )
+  }, [spaces, isSearching, trimmedQuery])
 
   // Matches what the dropdown row calls the same space. "Halo" alone read as
   // the app's own name to a first-time user, hiding that this is a space at all.
@@ -217,7 +202,7 @@ export function SpaceSelector() {
               var(--border)}`. flex-shrink-0 keeps it out of the scroll area
               entirely (no more `sticky`, which only fakes staying in place
               while still eating into the scrollable region's height). */}
-          {spaces.length >= RECENT_SECTION_MIN_SPACES && (
+          {spaces.length >= SEARCH_MIN_SPACES && (
             <div className="flex-shrink-0 px-3 py-2.5 border-b border-border">
               <div className="relative">
                 <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-subtle-foreground pointer-events-none" />
@@ -255,58 +240,17 @@ export function SpaceSelector() {
                 />
               )}
 
-              {isSearching ? (
-                filteredSpaces.length > 0 ? (
-                  <div className="flex flex-col">
-                    {filteredSpaces.map(space => (
-                      <SpaceDropdownRow
-                        key={space.id}
-                        space={space}
-                        summary={summaries[space.id]}
-                        isActive={space.id === currentSpace?.id}
-                        onSelect={handleSelectSpace}
-                      />
-                    ))}
-                  </div>
-                ) : (
-                  <div className="px-1.5 py-4 text-xs text-muted-foreground text-center">{t('No matching results found')}</div>
-                )
-              ) : (
-                <>
-                  {/* Recent — read-only shortcut preview, duplicates entries also
-                      listed in "All Spaces" below. */}
-                  {showRecentSection && (
-                    <>
-                      <div className="px-2.5 pt-0.5 pb-1 text-[10px] font-semibold text-subtle-foreground uppercase tracking-[0.06em]">
-                        {t('Recent')}
-                      </div>
-                      {recentSpaces.map(space => (
-                        <SpaceDropdownRow
-                          key={space.id}
-                          space={space}
-                          summary={summaries[space.id]}
-                          isActive={space.id === currentSpace?.id}
-                          onSelect={handleSelectSpace}
-                        />
-                      ))}
-                      <div className="px-2.5 pt-0.5 pb-1 mt-1 border-t border-border/50 text-[10px] font-semibold text-subtle-foreground uppercase tracking-[0.06em]">
-                        {t('All workspaces')}
-                      </div>
-                    </>
-                  )}
-
-                  {/* Dedicated spaces — switch only. Reorder/rename/delete
-                      moved to the workspace management page (SpacesPage). */}
-                  {spaces.map(space => (
-                    <SpaceDropdownRow
-                      key={space.id}
-                      space={space}
-                      summary={summaries[space.id]}
-                      isActive={space.id === currentSpace?.id}
-                      onSelect={handleSelectSpace}
-                    />
-                  ))}
-                </>
+              {listedSpaces.map(space => (
+                <SpaceDropdownRow
+                  key={space.id}
+                  space={space}
+                  summary={summaries[space.id]}
+                  isActive={space.id === currentSpace?.id}
+                  onSelect={handleSelectSpace}
+                />
+              ))}
+              {isSearching && listedSpaces.length === 0 && (
+                <div className="px-1.5 py-4 text-xs text-muted-foreground text-center">{t('No matching results found')}</div>
               )}
             </div>
           </div>
@@ -359,12 +303,8 @@ export function SpaceSelector() {
 }
 
 /** A single space row inside the SpaceSelector dropdown — switch only, see
- * the workspace management page (SpacesPage) for rename/delete/reorder.
- *
- * The second line is a summary (conversations + asset counts), not the path:
- * what distinguishes one workspace from another when picking is what it
- * holds, and a path is too long to read at 288px anyway (it stays on the
- * row's tooltip). */
+ * the workspace management page (SpacesPage) for rename/delete/reorder and
+ * the full asset counts. The path stays on the row's tooltip. */
 function SpaceDropdownRow({
   space,
   summary,
@@ -398,14 +338,12 @@ function SpaceDropdownRow({
       }`}
     >
       <SpaceAvatar space={space} size={24} className={space.isMissing ? 'opacity-60' : ''} />
-      <div className="flex-1 min-w-0">
-        <span className="block truncate text-[13px] font-medium">{name}</span>
-        {!space.isMissing && (
-          <div className="mt-0.5">
-            <SpaceSummaryLine summary={summary} />
-          </div>
-        )}
-      </div>
+      <span className="flex-1 min-w-0 truncate text-[13px] font-medium">{name}</span>
+      {!space.isMissing && summary && (
+        <span className="flex-shrink-0 text-[11px] tabular-nums text-subtle-foreground">
+          {t('{{count}} conversations', { count: summary.conversationCount })}
+        </span>
+      )}
       {space.isMissing && (
         <Unplug className="w-3.5 h-3.5 flex-shrink-0" aria-label={t('Unavailable')} />
       )}

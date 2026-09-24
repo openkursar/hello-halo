@@ -154,6 +154,8 @@ interface AppsPageState {
   currentTab: AppsPageTab
   /** Remembers which automation detail tab the user last selected (persisted) */
   lastAutomationTab: AutomationDetailTab
+  /** The sibling list beside a detail page is folded to icons (persisted) */
+  switcherCollapsed: boolean
 
   // ── Store Tab State ────────────────────────
   storeApps: RegistryEntry[]
@@ -252,6 +254,7 @@ export const useAppsPageStore = create<AppsPageState>()(
   // ── Tab State ──────────────────────────────
   currentTab: 'my-digital-humans',
   lastAutomationTab: 'activity',
+  switcherCollapsed: false,
 
   // ── Store Tab State ────────────────────────
   storeApps: [],
@@ -682,9 +685,10 @@ export const useAppsPageStore = create<AppsPageState>()(
 }),
     {
       name: 'halo-apps-page',
-      // Only persist the user's last automation tab preference
+      // Only persist layout preferences
       partialize: (state) => ({
         lastAutomationTab: state.lastAutomationTab,
+        switcherCollapsed: state.switcherCollapsed,
       }),
     }
   )

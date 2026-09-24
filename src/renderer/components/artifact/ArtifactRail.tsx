@@ -64,7 +64,7 @@ function TabStrip({ active, onChange }: { active: RailTab; onChange: (tab: RailT
         <button
           key={tab.id}
           onClick={() => onChange(tab.id)}
-          className={`h-[26px] px-2.5 rounded-sm text-xs transition-colors ease-halo ${
+          className={`h-[26px] px-2.5 rounded-sm text-[13px] transition-colors ease-halo ${
             active === tab.id ? 'bg-secondary text-foreground font-medium' : 'text-subtle-foreground hover:text-foreground'
           }`}
           aria-current={active === tab.id}
