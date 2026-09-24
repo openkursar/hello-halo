@@ -324,19 +324,30 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
             </button>
           </div>
         ) : isConversation ? (
-          <button
-            onClick={(e) => handleTogglePin(e, item)}
-            className={cn(
-              'w-[22px] h-[22px] flex-shrink-0 rounded-[6px] flex items-center justify-center transition-colors',
-              item.starred
-                ? 'text-blue-500'
-                : 'hidden group-hover/tk:flex text-subtle-foreground hover:bg-surface-hover hover:text-foreground'
+          <>
+            <button
+              onClick={(e) => handleTogglePin(e, item)}
+              className={cn(
+                'w-[22px] h-[22px] flex-shrink-0 rounded-[6px] flex items-center justify-center transition-colors',
+                item.starred
+                  ? 'text-blue-500'
+                  : 'hidden group-hover/tk:flex text-subtle-foreground hover:bg-surface-hover hover:text-foreground'
+              )}
+              title={item.starred ? t('Unpin') : t('Pin')}
+              aria-pressed={item.starred}
+            >
+              <Pin className="w-[13px] h-[13px]" strokeWidth={1.8} />
+            </button>
+            {/* A kept item has no countdown left to end it, so Remove stays reachable. */}
+            {item.kept && !!item.readAt && (
+              <button
+                onClick={(e) => handleRemove(e, item)}
+                className="hidden group-hover/tk:block h-[26px] px-[9px] flex-shrink-0 rounded-sm border border-border bg-card text-[11px] text-muted-foreground transition-colors ease-halo hover:bg-surface-hover hover:text-foreground"
+              >
+                {t('Remove')}
+              </button>
             )}
-            title={item.starred ? t('Unpin') : t('Pin')}
-            aria-pressed={item.starred}
-          >
-            <Pin className="w-[13px] h-[13px]" strokeWidth={1.8} />
-          </button>
+          </>
         ) : null}
 
         <ChevronRight

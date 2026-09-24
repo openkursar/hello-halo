@@ -49,7 +49,7 @@ export function TaskPanel() {
         className="w-7 h-7 rounded-sm flex items-center justify-center text-subtle-foreground transition-colors hover:bg-secondary hover:text-foreground"
         aria-label={t('Close')}
       >
-        <X className="w-[15px] h-[15px]" strokeWidth={1.8} />
+        <X className="w-4 h-4" strokeWidth={1.8} />
       </button>
     </div>
   )
