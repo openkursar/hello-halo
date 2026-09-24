@@ -233,7 +233,7 @@ function _computePulseCount(state: ChatState): number {
 // Track previous pulse-relevant state to avoid unnecessary recalculations
 let _prevPulseFingerprint = ''
 let _prevUnseenSize = 0
-let _prevPulseReadAtSize = 0
+let _prevPulseReadAtFingerprint = ''
 let _prevStarredFingerprint = ''
 // Last spaceStates the starred fingerprint was built from. Streaming replaces
 // `sessions` on every token but never `spaceStates`, so the walk over every
@@ -259,7 +259,10 @@ function _extractStarredFingerprint(spaceStates: Map<string, SpaceState>): strin
 useChatStore.subscribe((state) => {
   const sessionFingerprint = _extractPulseFingerprint(state.sessions)
   const unseenSize = state.unseenCompletions.size
-  const pulseReadAtSize = state.pulseReadAt.size
+  // Size alone misses "Keep", which flags an existing entry without adding one.
+  let keptCount = 0
+  for (const info of state.pulseReadAt.values()) if (info.kept) keptCount++
+  const pulseReadAtFingerprint = `${state.pulseReadAt.size}:${keptCount}`
   const starredFingerprint = state.spaceStates === _prevSpaceStates
     ? _prevStarredFingerprint
     : _extractStarredFingerprint(state.spaceStates)
@@ -268,7 +271,7 @@ useChatStore.subscribe((state) => {
   if (
     sessionFingerprint === _prevPulseFingerprint &&
     unseenSize === _prevUnseenSize &&
-    pulseReadAtSize === _prevPulseReadAtSize &&
+    pulseReadAtFingerprint === _prevPulseReadAtFingerprint &&
     starredFingerprint === _prevStarredFingerprint
   ) {
     return // No pulse-relevant changes
@@ -276,7 +279,7 @@ useChatStore.subscribe((state) => {
 
   _prevPulseFingerprint = sessionFingerprint
   _prevUnseenSize = unseenSize
-  _prevPulseReadAtSize = pulseReadAtSize
+  _prevPulseReadAtFingerprint = pulseReadAtFingerprint
   _prevStarredFingerprint = starredFingerprint
 
   const newItems = _computePulseItems(state)
@@ -291,7 +294,8 @@ useChatStore.subscribe((state) => {
       item.starred !== currentItems[i]?.starred ||
       item.title !== currentItems[i]?.title ||
       item.updatedAt !== currentItems[i]?.updatedAt ||
-      item.readAt !== currentItems[i]?.readAt
+      item.readAt !== currentItems[i]?.readAt ||
+      item.kept !== currentItems[i]?.kept
     )
 
   if (itemsChanged || newCount !== state._pulseCount) {
