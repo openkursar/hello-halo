@@ -37,6 +37,12 @@ try {
   console.log(`  ✔ ${sdkCli} copied from ${target} (symlinks not permitted)`)
 }
 
-// 3. Rebuild native modules for Electron
-run('electron-builder install-app-deps')
-run('electron-rebuild -f -w better-sqlite3')
+// 3. Rebuild native modules for Electron. Only needed to run Electron from this
+//    checkout: packaging swaps in prebuilt binaries (afterPack), so a packaging-
+//    only machine without a C++ toolchain sets HALO_SKIP_NATIVE_REBUILD=1.
+if (process.env.HALO_SKIP_NATIVE_REBUILD === '1') {
+  console.log('  - native rebuild skipped (HALO_SKIP_NATIVE_REBUILD=1)')
+} else {
+  run('electron-builder install-app-deps')
+  run('electron-rebuild -f -w better-sqlite3')
+}
