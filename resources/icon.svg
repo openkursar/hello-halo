@@ -1,24 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-labelledby="halo-title halo-desc">
-  <title id="halo-title">Halo App Icon</title>
-  <desc id="halo-desc">Halo app icon: a glowing blue halo ring on a near-black squircle</desc>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <!-- 真 squircle：R = 22.37% × 1024，圆角平滑 0.6（Figma corner-smoothing 算法） -->
-    <path id="squircle" d="M657.49 0c128.291 0 192.436 0 241.436 24.967a229.069 229.069 0 0 1 100.107 100.107c24.967 49.001 24.967 113.146 24.967 241.436L1024 657.49c0 128.291 0 192.436 -24.967 241.436a229.069 229.069 0 0 1 -100.107 100.107c-49.001 24.967 -113.146 24.967 -241.436 24.967L366.51 1024c-128.291 0 -192.436 0 -241.436 -24.967a229.069 229.069 0 0 1 -100.107 -100.107c-24.967 -49.001 -24.967 -113.146 -24.967 -241.436L0 366.51c0 -128.291 0 -192.436 24.967 -241.436a229.069 229.069 0 0 1 100.107 -100.107c49.001 -24.967 113.146 -24.967 241.436 -24.967Z"/>
-    <clipPath id="squircle-clip"><use href="#squircle"/></clipPath>
-    <filter id="halo-glow" x="-60%" y="-60%" width="220%" height="220%">
-      <feGaussianBlur stdDeviation="150"/>
-    </filter>
-    <linearGradient id="halo-inner" x1="0.869" y1="0.0" x2="0.131" y2="1.0">
-      <stop offset="0" stop-color="#3B82F6" stop-opacity=".3"/>
-      <stop offset="1" stop-color="#3B82F6" stop-opacity="0"/>
+    <!-- Stronger blue gradient: from-primary/45 to transparent -->
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.5"/>
+      <stop offset="70%" stop-color="#3b82f6" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#3b82f6" stop-opacity="0"/>
     </linearGradient>
   </defs>
-  <g clip-path="url(#squircle-clip)">
-    <use href="#squircle" fill="#0A0A0A"/>
-    <circle cx="512" cy="512" r="360" fill="#3B82F6" fill-opacity=".2" filter="url(#halo-glow)"/>
-    <g transform="translate(152 152) scale(7.5)">
-      <circle cx="48" cy="48" r="36" fill="url(#halo-inner)"/>
-      <circle cx="48" cy="48" r="46" fill="none" stroke="#3B82F6" stroke-opacity=".6" stroke-width="4"/>
-    </g>
-  </g>
+
+  <!-- Dark background inside the ring -->
+  <circle cx="512" cy="512" r="408" fill="#0a0a0a"/>
+
+  <!-- Inner gradient circle - stronger blue -->
+  <circle cx="512" cy="512" r="326" fill="url(#grad)"/>
+
+  <!-- Thin outer ring -->
+  <circle
+    cx="512"
+    cy="512"
+    r="420"
+    fill="none"
+    stroke="#3b82f6"
+    stroke-width="24"
+    stroke-opacity="0.6"
+  />
 </svg>
