@@ -1,28 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-labelledby="halo-title halo-desc">
-  <title id="halo-title">Halo App Icon · macOS</title>
-  <desc id="halo-desc">Halo macOS app icon: a glowing blue halo ring on a near-black squircle, placed on Apple's 824pt grid within a 1024pt canvas</desc>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <!-- Apple macOS 图标网格：1024 画布内 824×824 本体，四周各留 100 供投影 -->
-    <!-- 真 squircle：R = 22.37% × 824，圆角平滑 0.6 -->
-    <path id="body" d="M529.074 0c103.234 0 154.851 0 194.281 20.091a184.329 184.329 0 0 1 80.555 80.555c20.091 39.43 20.091 91.047 20.091 194.281L824 529.074c0 103.234 0 154.851 -20.091 194.281a184.329 184.329 0 0 1 -80.555 80.555c-39.43 20.091 -91.047 20.091 -194.281 20.091L294.926 824c-103.234 0 -154.851 0 -194.281 -20.091a184.329 184.329 0 0 1 -80.555 -80.555c-20.091 -39.43 -20.091 -91.047 -20.091 -194.281L0 294.926c0 -103.234 0 -154.851 20.091 -194.281a184.329 184.329 0 0 1 80.555 -80.555c39.43 -20.091 91.047 -20.091 194.281 -20.091Z"/>
-    <clipPath id="body-clip"><use href="#body" x="100" y="100"/></clipPath>
-    <filter id="icon-shadow" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="10" stdDeviation="16" flood-color="#000" flood-opacity=".28"/>
-    </filter>
-    <filter id="halo-glow" x="-60%" y="-60%" width="220%" height="220%">
-      <feGaussianBlur stdDeviation="127"/>
-    </filter>
-    <linearGradient id="halo-inner" x1="0.869" y1="0.0" x2="0.131" y2="1.0">
-      <stop offset="0" stop-color="#3B82F6" stop-opacity=".3"/>
-      <stop offset="1" stop-color="#3B82F6" stop-opacity="0"/>
+    <!-- Stronger blue gradient: from-primary/45 to transparent -->
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.5"/>
+      <stop offset="70%" stop-color="#3b82f6" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#3b82f6" stop-opacity="0"/>
     </linearGradient>
   </defs>
-  <use href="#body" x="100" y="100" fill="#0A0A0A" filter="url(#icon-shadow)"/>
-  <g clip-path="url(#body-clip)">
-    <circle cx="512" cy="512" r="288" fill="#3B82F6" fill-opacity=".2" filter="url(#halo-glow)"/>
-    <g transform="translate(224 224) scale(6)">
-      <circle cx="48" cy="48" r="36" fill="url(#halo-inner)"/>
-      <circle cx="48" cy="48" r="46" fill="none" stroke="#3B82F6" stroke-opacity=".6" stroke-width="4"/>
-    </g>
-  </g>
+
+  <!-- Dark background inside the ring -->
+  <circle cx="512" cy="512" r="408" fill="#0a0a0a"/>
+
+  <!-- Inner gradient circle - stronger blue -->
+  <circle cx="512" cy="512" r="326" fill="url(#grad)"/>
+
+  <!-- Thin outer ring -->
+  <circle
+    cx="512"
+    cy="512"
+    r="420"
+    fill="none"
+    stroke="#3b82f6"
+    stroke-width="24"
+    stroke-opacity="0.6"
+  />
 </svg>
