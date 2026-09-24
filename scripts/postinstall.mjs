@@ -9,7 +9,8 @@
  */
 
 import { execSync } from 'child_process'
-import { unlinkSync, symlinkSync, lstatSync } from 'fs'
+import { copyFileSync, unlinkSync, symlinkSync, lstatSync } from 'fs'
+import { dirname, join } from 'path'
 
 const run = (cmd) => execSync(cmd, { stdio: 'inherit' })
 
@@ -25,8 +26,16 @@ try {
   const stat = lstatSync(sdkCli)
   if (stat.isSymbolicLink() || stat.isFile()) unlinkSync(sdkCli)
 } catch { /* file doesn't exist yet, that's fine */ }
-symlinkSync(target, sdkCli)
-console.log(`  ✔ ${sdkCli} → ${target}`)
+try {
+  symlinkSync(target, sdkCli)
+  console.log(`  ✔ ${sdkCli} → ${target}`)
+} catch (err) {
+  // Windows allows symlinks only with Developer Mode or admin rights; a copy
+  // keeps the same content, it just forgoes the disk saving.
+  if (err.code !== 'EPERM') throw err
+  copyFileSync(join(dirname(sdkCli), target), sdkCli)
+  console.log(`  ✔ ${sdkCli} copied from ${target} (symlinks not permitted)`)
+}
 
 // 3. Rebuild native modules for Electron
 run('electron-builder install-app-deps')
