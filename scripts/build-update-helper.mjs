@@ -74,7 +74,7 @@ function main() {
     // The packer runs on the build machine, not on a user's, so it is built
     // for whatever this machine is.
     console.log('[update-helper] building packer for this machine...')
-    run('go', ['build', '-trimpath', '-o', join(MODULE_DIR, 'bin', 'halo-update-packer'), './cmd/halo-update-packer'], {
+    run('go', ['build', '-trimpath', '-o', join(MODULE_DIR, 'bin', `halo-update-packer${process.platform === 'win32' ? '.exe' : ''}`), './cmd/halo-update-packer'], {
       CGO_ENABLED: '0',
     })
   }

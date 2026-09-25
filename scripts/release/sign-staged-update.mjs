@@ -146,7 +146,7 @@ function main() {
   const archivePath = join(outDir, archiveName)
 
   const packerPath = resolve(
-    args.packer ?? join('win-update-helper', 'bin', 'halo-update-packer')
+    args.packer ?? join('win-update-helper', 'bin', `halo-update-packer${process.platform === 'win32' ? '.exe' : ''}`)
   )
   const measured = pack(packerPath, unpackedDir, archivePath)
 
