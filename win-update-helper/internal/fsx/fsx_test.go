@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"testing"
 	"time"
@@ -78,7 +79,12 @@ func TestIsTransient(t *testing.T) {
 	if IsTransient(errors.New("boom")) {
 		t.Error("an unclassified error is permanent")
 	}
-	if !IsTransient(&os.LinkError{Err: syscall.EACCES}) {
+	// A sharing violation on Windows, a busy/permission errno elsewhere.
+	locked := syscall.EACCES
+	if runtime.GOOS == "windows" {
+		locked = syscall.Errno(winSharingViolation)
+	}
+	if !IsTransient(&os.LinkError{Err: locked}) {
 		t.Error("a lock-like errno should be retried")
 	}
 }
