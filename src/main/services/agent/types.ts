@@ -34,6 +34,8 @@ export interface ResolvedModelCapabilities {
    * guess on the wire for exactly the models Halo knows nothing about.
    */
   maxOutputTokensConfigured: boolean
+  /** The model thinks adaptively instead of against a token budget. */
+  adaptiveThinking?: boolean
 }
 
 /**

@@ -39,7 +39,11 @@ export type AgentDefinition = {
   disallowedTools?: string[]
   /** The agent's system prompt */
   prompt: string
-  /** Model alias (e.g. 'sonnet', 'opus', 'haiku') or full model ID. If omitted, uses the main model */
+  /**
+   * Full model ID or an engine-specific tier ('standard' | 'flash' on the Halo
+   * engine; 'sonnet' | 'opus' | 'haiku' on the Claude Code engine). If omitted,
+   * uses the main model.
+   */
   model?: string
   mcpServers?: AgentMcpServerSpec[]
   /** Experimental: Critical reminder added to system prompt */

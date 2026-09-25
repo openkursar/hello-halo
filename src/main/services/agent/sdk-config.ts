@@ -969,6 +969,14 @@ export async function buildBaseSdkOptions(params: BaseSdkOptionsParams): Promise
         (err as Error).message,
       )
     }
+
+    // The halo engine knows nothing about models on its own: every limit and
+    // thinking style comes from Halo's resolved capabilities. Undeclared
+    // values fall back to the engine's generic defaults.
+    const limits = resolveSdkRuntimeLimits(credentials.capabilities)
+    if (limits.maxOutputTokens !== undefined) sdkOptions.maxOutputTokens = limits.maxOutputTokens
+    if (limits.autoCompactWindow !== undefined) sdkOptions.contextWindow = limits.autoCompactWindow
+    if (credentials.capabilities?.adaptiveThinking) sdkOptions.adaptiveThinking = true
   }
 
   return sdkOptions

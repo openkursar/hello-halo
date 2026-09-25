@@ -42,6 +42,11 @@ export interface ModelCapability {
   vision: boolean
   /** Whether the model supports extended thinking / reasoning mode */
   thinking: boolean
+  /**
+   * Whether the model takes adaptive thinking (no token budget) on the
+   * Anthropic Messages API. Absent = budget-based thinking.
+   */
+  adaptiveThinking?: boolean
 }
 
 /**

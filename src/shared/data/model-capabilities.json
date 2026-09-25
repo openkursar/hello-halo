@@ -477,7 +477,8 @@
       "contextWindow": 200000,
       "maxOutputTokens": 128000,
       "vision": true,
-      "thinking": true
+      "thinking": true,
+      "adaptiveThinking": true
     },
     "claude-sonnet-5[1m]": {
       "displayName": "Claude Sonnet 5 (1M)",
@@ -485,7 +486,8 @@
       "contextWindow": 1000000,
       "maxOutputTokens": 128000,
       "vision": true,
-      "thinking": true
+      "thinking": true,
+      "adaptiveThinking": true
     },
     "claude-fable-5": {
       "displayName": "Claude Fable 5",
@@ -493,7 +495,8 @@
       "contextWindow": 200000,
       "maxOutputTokens": 128000,
       "vision": true,
-      "thinking": true
+      "thinking": true,
+      "adaptiveThinking": true
     },
     "claude-fable-5[1m]": {
       "displayName": "Claude Fable 5 (1M)",
@@ -501,7 +504,8 @@
       "contextWindow": 1000000,
       "maxOutputTokens": 128000,
       "vision": true,
-      "thinking": true
+      "thinking": true,
+      "adaptiveThinking": true
     },
     "claude-fable-5-1": {
       "displayName": "Claude Fable 5.1",
@@ -509,7 +513,8 @@
       "contextWindow": 200000,
       "maxOutputTokens": 128000,
       "vision": true,
-      "thinking": true
+      "thinking": true,
+      "adaptiveThinking": true
     },
     "claude-fable-5-1[1m]": {
       "displayName": "Claude Fable 5.1 (1M)",
@@ -517,7 +522,8 @@
       "contextWindow": 1000000,
       "maxOutputTokens": 128000,
       "vision": true,
-      "thinking": true
+      "thinking": true,
+      "adaptiveThinking": true
     },
     "claude-opus-5-5": {
       "displayName": "Claude Opus 5.5",
@@ -525,7 +531,8 @@
       "contextWindow": 200000,
       "maxOutputTokens": 128000,
       "vision": true,
-      "thinking": true
+      "thinking": true,
+      "adaptiveThinking": true
     },
     "claude-opus-5-5[1m]": {
       "displayName": "Claude Opus 5.5 (1M)",
@@ -533,7 +540,8 @@
       "contextWindow": 1000000,
       "maxOutputTokens": 128000,
       "vision": true,
-      "thinking": true
+      "thinking": true,
+      "adaptiveThinking": true
     },
     "claude-opus-5": {
       "displayName": "Claude Opus 5",
@@ -541,7 +549,8 @@
       "contextWindow": 200000,
       "maxOutputTokens": 128000,
       "vision": true,
-      "thinking": true
+      "thinking": true,
+      "adaptiveThinking": true
     },
     "claude-opus-5[1m]": {
       "displayName": "Claude Opus 5 (1M)",
@@ -549,7 +558,8 @@
       "contextWindow": 1000000,
       "maxOutputTokens": 128000,
       "vision": true,
-      "thinking": true
+      "thinking": true,
+      "adaptiveThinking": true
     },
     "claude-opus-4-8": {
       "displayName": "Claude Opus 4.8",
@@ -557,7 +567,8 @@
       "contextWindow": 200000,
       "maxOutputTokens": 128000,
       "vision": true,
-      "thinking": true
+      "thinking": true,
+      "adaptiveThinking": true
     },
     "claude-opus-4-8[1m]": {
       "displayName": "Claude Opus 4.8 (1M)",
@@ -565,7 +576,8 @@
       "contextWindow": 1000000,
       "maxOutputTokens": 128000,
       "vision": true,
-      "thinking": true
+      "thinking": true,
+      "adaptiveThinking": true
     },
     "claude-opus-4-7": {
       "displayName": "Claude Opus 4.7",
@@ -573,7 +585,8 @@
       "contextWindow": 200000,
       "maxOutputTokens": 128000,
       "vision": true,
-      "thinking": true
+      "thinking": true,
+      "adaptiveThinking": true
     },
     "claude-opus-4-7[1m]": {
       "displayName": "Claude Opus 4.7 (1M)",
@@ -581,7 +594,8 @@
       "contextWindow": 1000000,
       "maxOutputTokens": 128000,
       "vision": true,
-      "thinking": true
+      "thinking": true,
+      "adaptiveThinking": true
     },
     "claude-opus-4-6": {
       "displayName": "Claude Opus 4.6",
@@ -589,7 +603,8 @@
       "contextWindow": 200000,
       "maxOutputTokens": 128000,
       "vision": true,
-      "thinking": true
+      "thinking": true,
+      "adaptiveThinking": true
     },
     "claude-opus-4-6[1m]": {
       "displayName": "Claude Opus 4.6 (1M)",
@@ -597,7 +612,8 @@
       "contextWindow": 1000000,
       "maxOutputTokens": 128000,
       "vision": true,
-      "thinking": true
+      "thinking": true,
+      "adaptiveThinking": true
     },
     "claude-opus-4-5-20251101": {
       "displayName": "Claude Opus 4.5",
@@ -613,7 +629,8 @@
       "contextWindow": 200000,
       "maxOutputTokens": 128000,
       "vision": true,
-      "thinking": true
+      "thinking": true,
+      "adaptiveThinking": true
     },
     "claude-sonnet-4-6[1m]": {
       "displayName": "Claude Sonnet 4.6 (1M)",
@@ -621,7 +638,8 @@
       "contextWindow": 1000000,
       "maxOutputTokens": 128000,
       "vision": true,
-      "thinking": true
+      "thinking": true,
+      "adaptiveThinking": true
     },
     "claude-sonnet-4-5-20250929": {
       "displayName": "Claude Sonnet 4.5",

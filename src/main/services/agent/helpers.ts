@@ -216,6 +216,7 @@ function resolveCapabilitiesFromSource(
     maxOutputTokensConfigured: userOverride?.maxOutputTokens !== undefined
       || modelCapabilitiesService.getPreset(modelId) !== null
       || catalogCapability?.maxOutputTokens !== undefined,
+    adaptiveThinking: resolved.adaptiveThinking === true,
   }
 }
 
