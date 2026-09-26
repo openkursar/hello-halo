@@ -257,6 +257,19 @@ function cleanNodePtyPrebuilds(context) {
     console.log(`[afterPack] ${key}: removed ${removed.length} non-target node-pty prebuild(s): ${removed.join(', ')}`);
   }
   console.log(`[afterPack] ${key}: keeping node-pty prebuilds/${targetDir}`);
+
+  // build/ and bin/ hold binaries compiled for the build host. node-pty tries
+  // build/ before prebuilds/, so in a package for another platform or chip they
+  // are dead weight that fails to load before the matching prebuild is found.
+  const hostKey = `${process.platform}-${process.arch}`;
+  if (hostKey !== key) {
+    for (const dir of ['build', 'bin']) {
+      const hostBuilt = path.join(unpackedDir, 'node_modules', 'node-pty', dir);
+      if (!fs.existsSync(hostBuilt)) continue;
+      fs.rmSync(hostBuilt, { recursive: true });
+      console.log(`[afterPack] ${key}: removed node-pty/${dir} (compiled for build host ${hostKey})`);
+    }
+  }
 }
 
 /**
