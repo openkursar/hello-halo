@@ -258,6 +258,21 @@ function cleanNodePtyPrebuilds(context) {
   }
   console.log(`[afterPack] ${key}: keeping node-pty prebuilds/${targetDir}`);
 
+  // The ConPTY runtime ships one directory per Windows architecture; only the
+  // target's is ever loaded.
+  const conptyRoot = path.join(unpackedDir, 'node_modules', 'node-pty', 'third_party', 'conpty');
+  if (platform === 'win32' && fs.existsSync(conptyRoot)) {
+    for (const release of fs.readdirSync(conptyRoot)) {
+      const releaseDir = path.join(conptyRoot, release);
+      if (!fs.statSync(releaseDir).isDirectory()) continue;
+      for (const archDir of fs.readdirSync(releaseDir)) {
+        if (archDir === `win10-${archStr}`) continue;
+        fs.rmSync(path.join(releaseDir, archDir), { recursive: true });
+        console.log(`[afterPack] ${key}: removed non-target node-pty conpty/${release}/${archDir}`);
+      }
+    }
+  }
+
   // build/ and bin/ hold binaries compiled for the build host. node-pty tries
   // build/ before prebuilds/, so in a package for another platform or chip they
   // are dead weight that fails to load before the matching prebuild is found.
