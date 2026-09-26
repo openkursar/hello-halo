@@ -14,6 +14,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { execSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -35,13 +36,18 @@ const log = {
   error: (msg) => console.log(`${colors.red}[ERROR]${colors.reset} ${msg}`)
 }
 
-// Cloudflared download URLs
-const CLOUDFLARED_URLS = {
-  'mac-arm64': 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-arm64.tgz',
-  'mac-x64': 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-amd64.tgz',
-  'win': 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe',
-  'linux': 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64'
+// Cloudflared is pinned to one release and every download is checked against
+// the SHA-256 that release publishes, so a new upstream release never changes
+// what ships without someone bumping these values.
+const CLOUDFLARED_VERSION = '2026.9.3'
+const CLOUDFLARED_ASSETS = {
+  'mac-arm64': { file: 'cloudflared-darwin-arm64.tgz', sha256: '5472c1a01c84bc31b3021056a73b4e5774ddddefc572124ea8fdf6c340639f32' },
+  'mac-x64': { file: 'cloudflared-darwin-amd64.tgz', sha256: 'ab588b3b4db9cdb4476c30a3db2a72635b1d8327d44741fee6799a0f37b0ec07' },
+  'win': { file: 'cloudflared-windows-amd64.exe', sha256: 'f096265ec2fcbe9bb6e2d64268db167ced3fcbb83d894bdb9e2fcdb26f2ea7e2' },
+  'linux': { file: 'cloudflared-linux-amd64', sha256: '77e26d8d900e0b8469f416239d14b5f296525fdf79fee6f511ef55609e3fbac2' }
 }
+const CLOUDFLARED_URLS = Object.fromEntries(Object.entries(CLOUDFLARED_ASSETS).map(([platform, asset]) =>
+  [platform, `https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/${asset.file}`]))
 
 // Cloudflared output paths
 const CLOUDFLARED_PATHS = {
@@ -197,6 +203,9 @@ function checkCloudflared(platform) {
   }
 
   const result = validateCloudflaredBinary(filePath, platform)
+  if (result.valid && readStamp(filePath) !== CLOUDFLARED_VERSION) {
+    Object.assign(result, { valid: false, reason: `not the pinned release ${CLOUDFLARED_VERSION}` })
+  }
   if (!result.valid) {
     log.warn(`cloudflared for ${platform}: ${result.reason}, will re-download`)
   }
@@ -245,6 +254,7 @@ function downloadCloudflared(platform) {
     // Mac: download and extract tgz
     const tgzPath = outputPath + '.tgz'
     curlDownload(url, tgzPath)
+    verifyAssetHash(platform, tgzPath)
     execSync(`tar -xzf "${tgzPath}" -C "${outputDir}"`, { stdio: 'pipe' })
 
     // Rename extracted file if needed (for mac-x64)
@@ -258,16 +268,40 @@ function downloadCloudflared(platform) {
   } else if (url.endsWith('.exe')) {
     // Windows: direct download
     curlDownload(url, outputPath)
+    verifyAssetHash(platform, outputPath)
   } else {
     // Linux: direct download
     curlDownload(url, outputPath)
+    verifyAssetHash(platform, outputPath)
     fs.chmodSync(outputPath, 0o755)
   }
 
   // Post-download integrity verification
   verifyCloudflared(platform, outputPath)
+  fs.writeFileSync(stampPath(outputPath), CLOUDFLARED_VERSION)
 
   log.success(`Downloaded cloudflared for ${platform}`)
+}
+
+/** Records which release a cloudflared binary came from; the binary itself carries no version marker. */
+function stampPath(binaryPath) {
+  return `${binaryPath}.version`
+}
+
+function readStamp(binaryPath) {
+  try {
+    return fs.readFileSync(stampPath(binaryPath), 'utf8').trim()
+  } catch {
+    return null
+  }
+}
+
+function verifyAssetHash(platform, file) {
+  const actual = createHash('sha256').update(fs.readFileSync(file)).digest('hex')
+  if (actual !== CLOUDFLARED_ASSETS[platform].sha256) {
+    fs.unlinkSync(file)
+    throw new Error(`cloudflared ${CLOUDFLARED_VERSION} for ${platform}: SHA-256 mismatch (got ${actual})`)
+  }
 }
 
 /**
