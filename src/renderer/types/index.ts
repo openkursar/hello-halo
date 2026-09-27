@@ -11,10 +11,12 @@ import {
 } from '../../shared/types/ai-sources';
 import { NotificationChannelsConfig }  from '../../shared/types/notification-channels';
 import type { KBSource } from '../../shared/types/tlon';
+import type { MemorySettings } from '../../shared/types/memory';
 // Re-exported below as well, but `export … from` creates no local binding, so the
 // declarations in this file that USE these names need their own import.
 import type { ApiProvider } from '../../shared/types/ai-sources';
 import type { FileChangesSummary } from '../../shared/file-changes';
+import type { GoalInput } from '../../shared/types/goal';
 // Re-export them
 export { DEFAULT_MODEL, getCurrentModelName, hasAnyAISource };
 
@@ -332,6 +334,7 @@ export interface SpaceLayoutPreferences {
 // All space preferences (extensible for future features)
 export interface SpacePreferences {
   layout?: SpaceLayoutPreferences;
+  memory?: MemorySettings;  // Memory shared by the space's conversations
 }
 
 export interface Space {
@@ -537,6 +540,8 @@ export interface EngineCapabilities {
     skills: boolean; mcp: boolean; hooks: boolean; permissionRules: boolean;
     sessionResume: boolean; sessionFork: boolean; interrupt: boolean;
     multimodalImage: boolean; contextCompaction: boolean; askUserQuestion: boolean;
+    /** Optional because a mobile client can talk to a server older than the flag. */
+    goal?: boolean;
   };
 }
 
@@ -639,6 +644,8 @@ export interface Message {
     epochId?: string;
     teamName?: string;
     fromMemberName?: string | null;
+    /** The goal the user set with this message (user messages only). */
+    goal?: GoalInput;
   };
   error?: string;  // Error message when assistant response failed (e.g., 429 rate limit)
   /**

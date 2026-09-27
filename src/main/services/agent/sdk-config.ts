@@ -20,7 +20,7 @@ import {
 import type { ApiCredentials, ResolvedModelCapabilities } from './types'
 import { inferOpenAIWireApi, credentialsToBackendConfig, getHeadlessElectronPath } from './helpers'
 import { resolveModelId } from '../../../shared/types/ai-sources'
-import { buildSystemPrompt, DEFAULT_ALLOWED_TOOLS } from './system-prompt'
+import { buildSystemPrompt, DEFAULT_ALLOWED_TOOLS, hostSystemPromptText, toEngineSystemPrompt } from './system-prompt'
 import { createCanUseTool } from './permission-handler'
 import { DEFAULT_DISABLED_TOOLS, TEAM_TOOLS } from '../../../shared/constants/disabled-tools'
 import {
@@ -30,10 +30,12 @@ import {
   CONTEXT_WINDOW_HARD_MIN,
   CONTEXT_WINDOW_HARD_CAP,
 } from '../../../shared/constants/model-runtime-limits'
-import { getActiveEngine } from './resolved-sdk'
+import { getActiveEngine, getEngineCapabilities } from './resolved-sdk'
 import { getDeviceIdentity } from '../../foundation/device-identity'
 import { applyOfficeRuntimeEnv } from '../office-runtime'
 import { buildRequestIdentity } from './request-identity-factory'
+import { createMemoryWriteHooks, type MemoryWriteGuardConfig } from '../../platform/memory'
+import { buildModelPricingTable } from '../../../shared/constants/model-pricing'
 
 // ============================================
 // Configuration
@@ -248,6 +250,40 @@ export interface BaseSdkOptionsParams {
    * override systemPrompt entirely after this builder returns.
    */
   toolsetIndex?: string
+  /**
+   * Memory instructions appended to the Halo system prompt (space chat). Callers
+   * that replace the system prompt afterwards (apps/runtime) carry their own.
+   */
+  memoryInstructions?: string
+  /**
+   * Memories this session writes or may only read. Enforced on the agent's file
+   * tools through engine hooks where the engine runs them; see
+   * platform/memory guard.ts.
+   */
+  memoryGuard?: MemoryWriteGuardConfig
+}
+
+// ============================================
+// Hooks
+// ============================================
+
+let guardDegradationLogged = false
+
+type SdkHookMatchers = Record<string, unknown[]>
+
+/**
+ * Add engine hooks to options that may already carry some, event by event.
+ *
+ * `hooks` is one option shared by every concern that watches tool calls (the
+ * memory guard set here, a caller's audit), so assigning it would silently
+ * drop whatever an earlier concern installed. Every writer goes through this.
+ */
+export function addSdkHooks(sdkOptions: Record<string, any>, hooks: SdkHookMatchers): void {
+  const merged: SdkHookMatchers = { ...(sdkOptions.hooks ?? {}) }
+  for (const [event, matchers] of Object.entries(hooks)) {
+    merged[event] = [...(merged[event] ?? []), ...matchers]
+  }
+  sdkOptions.hooks = merged
 }
 
 // ============================================
@@ -415,8 +451,9 @@ export function computeCredentialsFingerprint(sdkOptions: Record<string, any>): 
  * permission fields force a rebuild with the guest's restricted wiring.
  *
  * INVARIANT: every fingerprinted input must be stable across consecutive sends.
- * The system prompt currently varies only by calendar day (one rebuild per day
- * is acceptable); injecting anything higher-frequency into it — precise
+ * The system prompt varies at most by calendar day (Claude Code templates carry
+ * the date; the halo engine's append does not, the engine injects it per
+ * turn), and one rebuild per day is acceptable; injecting anything higher-frequency into it — precise
  * timestamps, live memory content, per-message state — would degrade this into
  * a session rebuild on EVERY message. Keep such content out of the prompt, or
  * exclude it here.
@@ -427,7 +464,7 @@ export function computeSessionInputsFingerprint(sdkOptions: Record<string, any>)
   // sets collapse into one material (['a,b'] vs ['a','b']) — a collision that
   // reads as "inputs unchanged" and reuses a session built on other rules.
   const mcpKeys = JSON.stringify(Object.keys(sdkOptions.mcpServers ?? {}).sort())
-  const prompt = typeof sdkOptions.systemPrompt === 'string' ? sdkOptions.systemPrompt : ''
+  const prompt = hostSystemPromptText(sdkOptions.systemPrompt)
   const permissionMode = String(sdkOptions.permissionMode ?? '')
   const disallowed = Array.isArray(sdkOptions.disallowedTools)
     ? JSON.stringify([...sdkOptions.disallowedTools].sort())
@@ -851,6 +888,9 @@ function validateSpawnInputs(electronPath: string, cliPath: string, workDir: str
  * @param params - SDK options parameters
  * @returns Base SDK options object
  */
+/** Models already reported as unpriced; buildBaseSdkOptions runs on every send. */
+const unpricedModelsLogged = new Set<string>()
+
 export async function buildBaseSdkOptions(params: BaseSdkOptionsParams): Promise<Record<string, any>> {
   const {
     credentials,
@@ -908,20 +948,21 @@ export async function buildBaseSdkOptions(params: BaseSdkOptionsParams): Promise
     stderr: stderrHandler || ((data: string) => {
       console.error(`[Agent][${conversationId}] CLI stderr:`, data)
     }),
-    // Use Halo's custom system prompt instead of SDK's 'default' preset.
-    // The capability index advertises optional toolsets (agent/toolsets) the AI
-    // can ask the user to enable; full tool schemas enter context only once the
+    // Halo's custom system prompt, or on the halo engine Halo's context appended
+    // to the engine's own default (see system-prompt.ts). The capability index
+    // advertises optional toolsets (agent/toolsets) the AI can ask the user to
+    // enable; full tool schemas enter context only once the
     // toolset is enabled and the session is rebuilt. AI Browser is one such
     // on-demand toolset here, so no aiBrowserEnabled branch. The Knowledge
     // section is appended at actual session creation (getOrCreateV2Session's
     // resolveKnowledgeBases) so a reused session never pays the index reads.
-    systemPrompt: buildSystemPrompt({
+    systemPrompt: toEngineSystemPrompt(buildSystemPrompt({
       workDir,
       modelInfo: credentials.displayModel,
       promptProfile: params.promptProfile,
       digitalHumansEnabled: params.digitalHumansEnabled,
       toolsetIndex: params.toolsetIndex
-    }),
+    }) + (params.memoryInstructions ? `\n\n${params.memoryInstructions}` : '')),
     maxTurns: params.maxTurns ?? 50,
     allowedTools: [...DEFAULT_ALLOWED_TOOLS],
     // Enable Skills loading from $CLAUDE_CONFIG_DIR/skills/ and <workspace>/.claude/skills/
@@ -938,6 +979,17 @@ export async function buildBaseSdkOptions(params: BaseSdkOptionsParams): Promise
     // Sandbox config is written to CLAUDE_CONFIG_DIR/settings.json (see ensureSandboxSettings)
     // instead of passing via SDK's sandbox option → --settings flag → tmpdir temp file.
     // This avoids CLI creating a temp file and chokidar watching the entire tmpdir.
+  }
+
+  if (params.memoryGuard) {
+    if (getEngineCapabilities()?.features.hooks) {
+      addSdkHooks(sdkOptions, createMemoryWriteHooks(params.memoryGuard))
+    } else if (!guardDegradationLogged) {
+      // Degraded, not refused: memory still works, only without the lock and
+      // the read-only boundary; the prompt asks the agent to edit carefully.
+      guardDegradationLogged = true
+      console.warn(`[SDK Config] Engine ${getActiveEngine()} runs no hooks — memory write guard unavailable for its sessions`)
+    }
   }
 
   // Build disallowed tools list from user config + implicit rules
@@ -977,6 +1029,14 @@ export async function buildBaseSdkOptions(params: BaseSdkOptionsParams): Promise
     if (limits.maxOutputTokens !== undefined) sdkOptions.maxOutputTokens = limits.maxOutputTokens
     if (limits.autoCompactWindow !== undefined) sdkOptions.contextWindow = limits.autoCompactWindow
     if (credentials.capabilities?.adaptiveThinking) sdkOptions.adaptiveThinking = true
+
+    // The engine ships no prices and costs an unlisted model at zero.
+    const modelPricing = buildModelPricingTable([credentials.sdkModel])
+    sdkOptions.modelPricing = modelPricing
+    if (!modelPricing[credentials.sdkModel] && !unpricedModelsLogged.has(credentials.sdkModel)) {
+      unpricedModelsLogged.add(credentials.sdkModel)
+      console.log(`[SDK Config] No list price for model "${credentials.sdkModel}" — its cost is reported as $0`)
+    }
   }
 
   return sdkOptions

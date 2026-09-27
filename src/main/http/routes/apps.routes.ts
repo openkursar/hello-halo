@@ -49,7 +49,7 @@ import type {
 import { resolveAppChatTarget, type AppChatTarget } from '../../controllers/app-chat-target.controller'
 import type { EscalationAnswerPayload } from '../../../shared/apps/app-types'
 import type { ImageAttachment } from '../../../shared/types/image-attachment'
-import { getStudioSummary, listPeopleDirectory, getAppCapabilityInventory, getAppSpaceChangePreview, moveAppDefaultSpace, readAppRunMessages } from '../../apps/runtime'
+import { getStudioSummary, listPeopleDirectory, getAppCapabilityInventory, getAppSpaceChangePreview, moveAppDefaultSpace, readAppRunMessages, getDigitalHumanMemoryStatus, consolidateDigitalHumanMemoryNow } from '../../apps/runtime'
 
 async function respondOperation(res: Response, name: string, operation: () => unknown | Promise<unknown>): Promise<void> {
   try {
@@ -445,6 +445,27 @@ export function registerAppsRoutes(app: Express): void {
       const filesRemoved = manager.clearAppMemory(appId)
       console.log('[HTTP] POST /api/apps/%s/clear-memory: filesRemoved=%d', appId, filesRemoved)
       res.json({ success: true, data: { filesRemoved } })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/apps/:appId/memory — memory size, last consolidation, whether one is running
+  app.get('/api/apps/:appId/memory', async (req: Request, res: Response) => {
+    try {
+      const status = await getDigitalHumanMemoryStatus(req.params.appId)
+      res.json(status ? { success: true, data: status } : { success: false, error: 'App not found' })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/apps/:appId/memory/consolidate — consolidate now (returns once started)
+  app.post('/api/apps/:appId/memory/consolidate', async (req: Request, res: Response) => {
+    try {
+      const result = consolidateDigitalHumanMemoryNow(req.params.appId)
+      console.log('[HTTP] POST /api/apps/%s/memory/consolidate: started=%s', req.params.appId, result.started)
+      res.json({ success: true, data: result })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }

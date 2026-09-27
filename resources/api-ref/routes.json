@@ -110,6 +110,26 @@
     "group": "workspace"
   },
   {
+    "method": "GET",
+    "path": "/api/spaces/:spaceId/preferences",
+    "group": "workspace"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/spaces/:spaceId/preferences",
+    "group": "workspace"
+  },
+  {
+    "method": "GET",
+    "path": "/api/spaces/:spaceId/memory",
+    "group": "workspace"
+  },
+  {
+    "method": "POST",
+    "path": "/api/spaces/:spaceId/memory/consolidate",
+    "group": "workspace"
+  },
+  {
     "method": "DELETE",
     "path": "/api/spaces/:spaceId",
     "group": "workspace"
@@ -234,6 +254,14 @@
   {
     "method": "POST",
     "path": "/api/agent/toolsets/close"
+  },
+  {
+    "method": "POST",
+    "path": "/api/agent/goal/get"
+  },
+  {
+    "method": "POST",
+    "path": "/api/agent/goal/set"
   },
   {
     "method": "GET",
@@ -595,6 +623,16 @@
   {
     "method": "POST",
     "path": "/api/apps/:appId/clear-memory",
+    "group": "digital-human"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/:appId/memory",
+    "group": "digital-human"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/memory/consolidate",
     "group": "digital-human"
   },
   {

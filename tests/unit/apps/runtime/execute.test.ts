@@ -22,15 +22,6 @@ import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
-// The raw compaction path dynamic-imports @anthropic-ai/sdk; mock it so the
-// API-key-path test can observe which client was (not) constructed.
-const anthropicCreateMock = vi.fn()
-vi.mock('@anthropic-ai/sdk', () => ({
-  default: class MockAnthropic {
-    messages = { create: anthropicCreateMock }
-  },
-}))
-
 // ── Agent SDK + electron-touching dependencies (mirrors runtime.test.ts) ──
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   unstable_v2_createSession: vi.fn(),
@@ -147,19 +138,29 @@ let nextSession: FakeSession
 vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
   createSession: vi.fn(async () => nextSession),
   query: vi.fn(),
+  getActiveEngine: () => null,
 }))
 
-vi.mock('../../../../src/main/platform/memory/snapshot', () => ({
-  buildMemorySnapshot: vi.fn().mockResolvedValue({
-    exists: false,
-    totalLines: 0,
-    sizeBytes: 0,
-    headers: [],
-    archiveTotalCount: 0,
-    memoryFilePath: '/tmp/space-1/memory.md',
-    rawContent: null,
-  }),
+vi.mock('../../../../src/main/platform/memory', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../../src/main/platform/memory')>()),
   createMemoryStatusMcpServer: vi.fn().mockReturnValue({ name: 'halo-memory', _isMcpServer: true }),
+}))
+
+// The memory lifecycle is exercised by its own tests; here only its wiring.
+vi.mock('../../../../src/main/apps/runtime/turn/memory-lifecycle', () => ({
+  prepareMemoryForTurn: vi.fn().mockResolvedValue({
+    snapshot: { exists: false, totalLines: 0, sizeBytes: 0, headers: [] },
+    runTimestamp: '2026-08-30-1000',
+  }),
+  finalizeMemoryAfterTurn: vi.fn().mockResolvedValue(undefined),
+  memoryPromptOptions: vi.fn().mockReturnValue({}),
+  loadSpaceTopicsForTurn: vi.fn().mockResolvedValue(null),
+  appMemoryGuard: vi.fn().mockReturnValue({ writable: [], readOnly: [], label: 'test' }),
+  appMemorySettings: vi.fn().mockReturnValue({ enabled: true, autoConsolidate: true, cadence: 'diligent' }),
+}))
+
+vi.mock('../../../../src/main/apps/runtime/memory-control', () => ({
+  appConsolidationInputs: vi.fn((app: { spec: { name: string } }) => ({ appName: app.spec.name })),
 }))
 
 // Captures the escalation callback so a test can raise one mid-stream, the way
@@ -227,11 +228,11 @@ vi.mock('../../../../src/main/apps/runtime/prompt', () => ({
 }))
 
 import { executeRun } from '../../../../src/main/apps/runtime/execute'
-import { providerRequiresFirstPartyClient } from '../../../../src/main/apps/runtime/turn/memory-lifecycle'
+import { finalizeMemoryAfterTurn } from '../../../../src/main/apps/runtime/turn/memory-lifecycle'
 import { RunExecutionError } from '../../../../src/main/apps/runtime/errors'
 import { query as agentSdkQuery, createSession } from '../../../../src/main/services/agent/resolved-sdk'
 import { getApiCredentials, getMcpServersForRequires } from '../../../../src/main/services/agent/helpers'
-import { resolveCredentialsForSdk } from '../../../../src/main/services/agent/sdk-config'
+import { resolveCredentialsForSdk, buildBaseSdkOptions } from '../../../../src/main/services/agent/sdk-config'
 import { getOrCreateV2Session } from '../../../../src/main/services/agent/session-manager'
 import { resolveExecutionEnvironment } from '../../../../src/main/apps/runtime/execution-environment'
 import { openSessionWriter } from '../../../../src/main/apps/runtime/session-store'
@@ -315,7 +316,6 @@ function makeMemory() {
   return {
     getPromptInstructions: vi.fn().mockReturnValue(''),
     saveSessionSummary: vi.fn().mockResolvedValue(undefined),
-    needsCompaction: vi.fn().mockResolvedValue(false),
   } as any
 }
 
@@ -338,23 +338,6 @@ function systemInit(sessionId = 'cc-session-xyz'): SdkMessage {
 const baseTrigger = {
   type: 'schedule' as const,
   description: 'scheduled tick',
-}
-
-/** Compaction output shape that passes isValidCompaction. */
-const LLM_COMPACTED_SUMMARY =
-  '# now\n\n## State | compacted via one-shot query\n\n# History\n\n## 2026-08-30-1100 | compacted\n'
-
-/** Memory fake with needsCompaction=true so a successful run reaches the compaction fork. */
-function makeCompactionMemory() {
-  return {
-    getPromptInstructions: vi.fn().mockReturnValue(''),
-    saveSessionSummary: vi.fn().mockResolvedValue(undefined),
-    needsCompaction: vi.fn().mockResolvedValue(true),
-    read: vi.fn().mockResolvedValue(
-      '# now\n\n## State | large memory\n\n# History\n\n## 2026-08-29-0900 | older entry\n',
-    ),
-    compact: vi.fn().mockResolvedValue('memory/2026-08-30-1000.md'),
-  } as any
 }
 
 // ============================================
@@ -557,210 +540,6 @@ describe('executeRun — onRunStarted lifecycle hook', () => {
   })
 })
 
-describe('executeRun — compaction provider routing (#121)', () => {
-  // Only Claude locks its OAuth tokens to first-party clients (api.anthropic.com
-  // 403s bare @anthropic-ai/sdk calls), so ONLY Claude OAuth takes the agent-SDK
-  // subprocess fork. Copilot/智谱 OAuth are safe on the raw SDK path because
-  // generateCompactionViaRawSdk → resolveCredentialsForSdk routes provider!=='anthropic'
-  // through the local OpenAI-compat router with an encoded BackendConfig — the
-  // exact same session-assembly path their normal chat turns use (session
-  // config / mcp-manager / codex options). Their endpoints (GitHub Copilot,
-  // open.bigmodel.cn) have no first-party lock. Delegated sources join the
-  // Claude OAuth fork: they hold no key, so the CLI subprocess is their only
-  // credential carrier.
-
-  beforeEach(() => {
-    vi.mocked(getApiCredentials).mockReset()
-    vi.mocked(getApiCredentials).mockResolvedValue({
-      baseUrl: 'https://api.test.com',
-      apiKey: 'test-key',
-      model: 'test-model',
-      provider: 'anthropic',
-    } as any)
-    vi.mocked(resolveCredentialsForSdk).mockReset()
-    vi.mocked(resolveCredentialsForSdk).mockResolvedValue({
-      anthropicBaseUrl: 'https://api.test.com',
-      anthropicApiKey: 'test-key',
-      sdkModel: 'test-model',
-      displayModel: 'Test Model',
-    })
-    vi.mocked(agentSdkQuery).mockReset()
-    anthropicCreateMock.mockReset()
-  })
-
-  it('routes Claude OAuth through a one-shot agent SDK query', async () => {
-    vi.mocked(getApiCredentials).mockResolvedValue({
-      provider: 'oauth',
-      oauthProvider: 'claude',
-      apiKey: '',
-      baseUrl: '',
-      model: 'claude-oauth-model',
-    } as any)
-    vi.mocked(agentSdkQuery).mockImplementationOnce((() =>
-      (async function* () {
-        yield {
-          type: 'assistant',
-          message: { content: [{ type: 'text', text: LLM_COMPACTED_SUMMARY }] },
-        }
-        yield { type: 'result', result: LLM_COMPACTED_SUMMARY }
-      })()) as any)
-
-    nextSession = new FakeSession({ script: [assistantReport()] })
-    const memory = makeCompactionMemory()
-    await executeRun({
-      app: makeApp(),
-      trigger: baseTrigger,
-      store: makeStore(),
-      memory,
-    })
-
-    // Fork taken: one-shot query, never the raw @anthropic-ai/sdk client.
-    expect(agentSdkQuery).toHaveBeenCalledTimes(1)
-    expect(anthropicCreateMock).not.toHaveBeenCalled()
-
-    const arg = vi.mocked(agentSdkQuery).mock.calls[0][0] as any
-    expect(arg.options.maxTurns).toBe(1)
-    expect(arg.options.model).toBe('test-model')
-    // Credentials ride in env (same as session assembly), not options.apiKey.
-    expect(arg.options.apiKey).toBeUndefined()
-    expect(arg.options.env.ANTHROPIC_API_KEY).toBe('test-key')
-    expect(arg.options.anthropicBaseUrl).toBe('https://api.test.com')
-    expect(arg.prompt).toContain('compacting the memory file')
-
-    // LLM summary written as the new memory.md, not the system fallback.
-    expect(memory.compact).toHaveBeenCalledWith(
-      expect.anything(),
-      'app',
-      expect.not.stringContaining('Compacted by system'),
-    )
-    expect(memory.compact.mock.calls[0][2]).toContain('## State | compacted via one-shot query')
-  })
-
-  it('routes delegated sources through the agent SDK query with the routing header', async () => {
-    vi.mocked(getApiCredentials).mockResolvedValue({
-      provider: 'oauth',
-      delegatedAuth: true,
-      apiKey: '',
-      baseUrl: '',
-      model: 'claude-cli-model',
-    } as any)
-    vi.mocked(resolveCredentialsForSdk).mockResolvedValue({
-      anthropicBaseUrl: 'http://127.0.0.1:60098',
-      anthropicApiKey: '',
-      sdkModel: 'test-model',
-      displayModel: 'Test Model',
-      delegatedRoutingHeader: 'x-halo-backend: encoded-config',
-    } as any)
-    vi.mocked(agentSdkQuery).mockImplementationOnce((() =>
-      (async function* () {
-        yield {
-          type: 'assistant',
-          message: { content: [{ type: 'text', text: LLM_COMPACTED_SUMMARY }] },
-        }
-        yield { type: 'result', result: LLM_COMPACTED_SUMMARY }
-      })()) as any)
-
-    nextSession = new FakeSession({ script: [assistantReport()] })
-    const memory = makeCompactionMemory()
-    await executeRun({
-      app: makeApp(),
-      trigger: baseTrigger,
-      store: makeStore(),
-      memory,
-    })
-
-    // Fork taken for delegated: never the keyless raw SDK client.
-    expect(agentSdkQuery).toHaveBeenCalledTimes(1)
-    expect(anthropicCreateMock).not.toHaveBeenCalled()
-
-    const arg = vi.mocked(agentSdkQuery).mock.calls[0][0] as any
-    // buildSdkEnv auth-channel rule (stubbed here; real invariants pinned in
-    // delegated-auth.test.ts): backend identity on the custom header, no API
-    // key near the subprocess.
-    expect(arg.options.env.ANTHROPIC_CUSTOM_HEADERS).toBe('x-halo-backend: encoded-config')
-    expect(arg.options.env.ANTHROPIC_API_KEY).toBeUndefined()
-    expect(memory.compact.mock.calls[0][2]).toContain('## State | compacted via one-shot query')
-  })
-
-  it('keeps API-key providers on the raw @anthropic-ai/sdk path', async () => {
-    anthropicCreateMock.mockResolvedValue({
-      content: [{ type: 'text', text: LLM_COMPACTED_SUMMARY }],
-    })
-
-    nextSession = new FakeSession({ script: [assistantReport()] })
-    const memory = makeCompactionMemory()
-    await executeRun({
-      app: makeApp(),
-      trigger: baseTrigger,
-      store: makeStore(),
-      memory,
-    })
-
-    expect(agentSdkQuery).not.toHaveBeenCalled()
-    expect(anthropicCreateMock).toHaveBeenCalledTimes(1)
-    expect(memory.compact.mock.calls[0][2]).toContain('## State | compacted via one-shot query')
-  })
-
-  it('falls back to the system summary when the agent SDK query yields nothing', async () => {
-    vi.mocked(getApiCredentials).mockResolvedValue({
-      provider: 'oauth',
-      oauthProvider: 'claude',
-    } as any)
-    vi.mocked(agentSdkQuery).mockImplementationOnce((() =>
-      (async function* () {
-        // Stream ends with no assistant text and no result.
-      })()) as any)
-
-    nextSession = new FakeSession({ script: [assistantReport()] })
-    const memory = makeCompactionMemory()
-    await executeRun({
-      app: makeApp(),
-      trigger: baseTrigger,
-      store: makeStore(),
-      memory,
-    })
-
-    expect(agentSdkQuery).toHaveBeenCalledTimes(1)
-    expect(memory.compact.mock.calls[0][2]).toContain('Compacted by system')
-  })
-
-  it.each([
-    ['github-copilot', 'copilot-oauth-model'],
-    ['zhipu-coding-oauth', 'zhipu-oauth-model'],
-  ] as const)(
-    'keeps %s OAuth on the raw @anthropic-ai/sdk path (router, not subprocess)',
-    async (oauthProvider, model) => {
-      // Raw SDK here is NOT a bare upstream call: resolveCredentialsForSdk sees
-      // provider!=='anthropic' and routes through the local OpenAI-compat
-      // router (encoded BackendConfig) — the same path as normal chat turns.
-      anthropicCreateMock.mockResolvedValue({
-        content: [{ type: 'text', text: LLM_COMPACTED_SUMMARY }],
-      })
-
-      vi.mocked(getApiCredentials).mockResolvedValue({
-        provider: 'oauth',
-        oauthProvider,
-        apiKey: 'oauth-token',
-        baseUrl: 'https://api.test.com',
-        model,
-      } as any)
-
-      nextSession = new FakeSession({ script: [assistantReport()] })
-      const memory = makeCompactionMemory()
-      await executeRun({
-        app: makeApp(),
-        trigger: baseTrigger,
-        store: makeStore(),
-        memory,
-      })
-
-      expect(agentSdkQuery).not.toHaveBeenCalled()
-      expect(anthropicCreateMock).toHaveBeenCalledTimes(1)
-      expect(memory.compact.mock.calls[0][2]).toContain('## State | compacted via one-shot query')
-    },
-  )
-})
-
 describe('executeRun — MCP wiring', () => {
   beforeEach(() => {
     // File-wide default (see the sdk-config mock above); reasserted here so
@@ -809,20 +588,31 @@ describe('executeRun — MCP wiring', () => {
   })
 })
 
-describe('providerRequiresFirstPartyClient', () => {
-  it('sends delegated sources to the first-party bucket regardless of provider id', () => {
-    expect(providerRequiresFirstPartyClient('oauth', undefined, true)).toBe(true)
-    expect(providerRequiresFirstPartyClient('oauth', 'claude-cli', true)).toBe(true)
+describe('executeRun — memory', () => {
+  it('records the run and requests consolidation after it, but never consolidates on the error path', async () => {
+    vi.mocked(finalizeMemoryAfterTurn).mockClear()
+    nextSession = new FakeSession({ script: [assistantReport()] })
+    await executeRun({ app: makeApp(), trigger: baseTrigger, store: makeStore(), memory: makeMemory() })
+    expect(finalizeMemoryAfterTurn).toHaveBeenCalledTimes(1)
+    const [, , , inputs, opts] = vi.mocked(finalizeMemoryAfterTurn).mock.calls[0]
+    expect(inputs.appName).toBe('Test App')
+    expect(opts).toBeUndefined()
+
+    vi.mocked(finalizeMemoryAfterTurn).mockClear()
+    nextSession = new FakeSession({ throwOnStream: new Error('boom') } as any)
+    await executeRun({ app: makeApp(), trigger: baseTrigger, store: makeStore(), memory: makeMemory() })
+    const errorCall = vi.mocked(finalizeMemoryAfterTurn).mock.calls.at(-1)
+    expect(errorCall?.[4]).toEqual({ saveSessionSummary: true, consolidate: false })
   })
 
-  it('keeps the Claude OAuth lock and the raw-SDK default for the rest', () => {
-    expect(providerRequiresFirstPartyClient('oauth', 'claude')).toBe(true)
-    expect(providerRequiresFirstPartyClient('oauth', 'github-copilot')).toBe(false)
-    expect(providerRequiresFirstPartyClient('anthropic')).toBe(false)
-    expect(providerRequiresFirstPartyClient('openai')).toBe(false)
+  it('holds the run\'s file tools to its memory boundaries', async () => {
+    nextSession = new FakeSession({ script: [assistantReport()] })
+    vi.mocked(buildBaseSdkOptions).mockClear()
+    await executeRun({ app: makeApp(), trigger: baseTrigger, store: makeStore(), memory: makeMemory() })
+    const params = vi.mocked(buildBaseSdkOptions).mock.calls[0][0] as unknown as Record<string, unknown>
+    expect(params.memoryGuard).toEqual({ writable: [], readOnly: [], label: 'test' })
   })
 })
-
 
 describe('executeRun — original continuation context', () => {
   it('refuses to infer an unpinned old execution environment from the current default', async () => {

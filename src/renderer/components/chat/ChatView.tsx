@@ -40,6 +40,9 @@ import { useSpaceDigitalHumans } from '../../hooks/useSpaceDigitalHumans'
 import { resolveSpecI18n } from '../../utils/spec-i18n'
 import { getAppChatConversationId } from '../../api/_shared'
 import type { DigitalHumanSelectorConfig } from './DigitalHumanSelector'
+import { useGoalComposer } from '../goal'
+import { showsMessageList } from './conversation-body'
+import type { GoalInput } from '../../../shared/types/goal'
 
 interface ChatViewProps {
   isCompact?: boolean
@@ -326,6 +329,19 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
     },
   } : undefined
 
+  const sendWithGoal = useCallback(
+    (content: string, images: ImageAttachment[] | undefined, thinkingEnabled: boolean, goal: GoalInput) =>
+      sendMessage(content, images, thinkingEnabled, { goal }),
+    [sendMessage]
+  )
+  const goalComposer = useGoalComposer({
+    spaceId: currentSpaceId,
+    conversationId: currentConversationId,
+    draftKey: activeConversationId ?? undefined,
+    isGenerating,
+    send: sendWithGoal,
+  })
+
   // Build the slash-command list for the autocomplete menu.
   // Only reads from SDK slash_commands array.
   // Commands are categorized as 'skill' if they appear in the skills array, otherwise 'builtin'.
@@ -424,7 +440,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
     // Can send if has text OR has images
     if ((!content.trim() && (!images || images.length === 0)) || isGenerating) return
 
-    await sendMessage(content, images, thinkingEnabled)
+    return sendMessage(content, images, thinkingEnabled)
   }
 
   // Handle stop - stops the current conversation's generation
@@ -454,7 +470,12 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
   const displayIsGenerating = isMockAnimating || isGenerating
   const displayIsThinking = isMockThinking || isThinking
   const displayIsStreaming = isStreaming  // Only real streaming (not mock)
-  const hasMessages = displayMessages.length > 0 || !!displayStreamingContent || displayIsThinking
+  const hasMessages = showsMessageList({
+    messageCount: displayMessages.length,
+    streamingContent: displayStreamingContent,
+    isThinking: displayIsThinking,
+    error,
+  })
 
   // Track previous compact state for smooth transitions
   const prevCompactRef = useRef(isCompact)
@@ -511,6 +532,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
       standalone={isFullTakeoverEmpty}
       digitalHumanSelector={digitalHumanSelector}
       draftKey={activeConversationId ?? undefined}
+      goal={goalComposer}
     />
   )
 

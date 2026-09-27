@@ -86,6 +86,8 @@ To read their text content, call the ocr_image tool with these absolute paths (o
 export interface NonVisionImageFallback {
   /** Prompt block to prepend to the outbound user message */
   contextBlock: string
+  /** Where the images were written — files this turn was handed */
+  filePaths: string[]
 }
 
 /**
@@ -142,5 +144,8 @@ export function prepareNonVisionImageFallback(params: {
   if (entries.length === 0) return null
 
   console.log(`[Agent][${scope.conversationId}] Non-vision fallback: ${entries.length}/${images.length} image(s) persisted for OCR (model=${credentials.model})`)
-  return { contextBlock: formatImageAttachmentBlock(entries, images.length - entries.length) }
+  return {
+    contextBlock: formatImageAttachmentBlock(entries, images.length - entries.length),
+    filePaths: entries.map(e => e.path),
+  }
 }

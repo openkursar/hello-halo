@@ -8,6 +8,7 @@ import { useChatStore } from './stores/chat.store'
 import { useOnboardingStore } from './stores/onboarding.store'
 import { initAIBrowserStoreListeners } from './stores/ai-browser.store'
 import { initTerminalStoreListeners } from './stores/terminal.store'
+import { initGoalStoreListeners } from './stores/goal.store'
 import { initPerfStoreListeners } from './stores/perf.store'
 import { useSpaceStore } from './stores/space.store'
 import { useSearchStore } from './stores/search.store'
@@ -566,9 +567,11 @@ export default function App() {
     initPerfStoreListeners()
     const cleanupBrowser = initAIBrowserStoreListeners()
     const cleanupTerminal = initTerminalStoreListeners()
+    const cleanupGoal = initGoalStoreListeners()
     return () => {
       cleanupBrowser()
       cleanupTerminal()
+      cleanupGoal()
     }
   }, [])
 

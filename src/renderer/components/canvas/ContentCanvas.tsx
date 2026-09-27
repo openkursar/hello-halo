@@ -37,6 +37,7 @@ import { TextViewer } from './viewers/TextViewer'
 import { BrowserViewer, BrowserViewerFallback } from './viewers/BrowserViewer'
 import { TerminalViewer } from './viewers/TerminalViewer'
 import { TeamViewer } from './viewers/TeamViewer'
+import { GoalEditor } from '../goal'
 import { api } from '../../api'
 import { useTranslation } from '../../i18n'
 import { getBrowserHomepage } from '../../utils/browser-homepage'
@@ -339,6 +340,10 @@ function TabContent({ tab, onScrollChange, onContentChange, onSaveComplete, onEd
 
     case 'team':
       return <TeamViewer tab={tab} />
+
+    // Keyed: each goal tab holds its own form.
+    case 'goal':
+      return <GoalEditor key={tab.id} tab={tab} />
 
     default:
       return <TextViewer tab={tab} onScrollChange={onScrollChange} />

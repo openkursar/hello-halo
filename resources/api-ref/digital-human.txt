@@ -27,6 +27,8 @@ operations on this page:
   POST   /api/apps/<appId>/im-chat/clear                             Clear a digital human's chat history in a bound IM chat   !! destructive
   GET    /api/apps/<appId>/im-chat/messages                          Read a digital human's transcript in a bound IM chat
   POST   /api/apps/<appId>/im-chat/stop                              Stop a digital human's in-progress reply in a bound IM chat (keeps history)
+  GET    /api/apps/<appId>/memory                                    Read the state of a digital human's memory
+  POST   /api/apps/<appId>/memory/consolidate                        Consolidate a digital human's memory now
   POST   /api/apps/<appId>/move-space                                Set which space a digital human starts new work in
   PATCH  /api/apps/<appId>/overrides                                 Merge-patch per-installation overrides (notification level, model)
   POST   /api/apps/<appId>/pause                                     Pause a digital human (stops scheduling)
@@ -189,6 +191,16 @@ POST   /api/apps/<appId>/im-chat/stop                              Stop a digita
      # out: {success:true,data:{stopped:boolean}}
      # note: chatType is "direct" or "group". Unlike im-chat/clear, this only aborts the current turn — the session and its history continue on the next inbound message.
 
+GET    /api/apps/<appId>/memory                                    Read the state of a digital human's memory
+     curl -s "$HALO_API_URL/api/apps/<appId>/memory" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:{exists,totalBytes,topicCount,lastConsolidatedAt,lastAttempt,consolidating}}
+
+POST   /api/apps/<appId>/memory/consolidate                        Consolidate a digital human's memory now
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/apps/<appId>/memory/consolidate" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:{started:boolean,reason?:"already-running"|"empty"|"not-found"}}
+     # note: Returns once started; runs in the background with the digital human's model. Keeps a restorable snapshot.
+
 POST   /api/apps/<appId>/move-space                                Set which space a digital human starts new work in
      # note: reversible — can be undone or corrected afterward.
      curl -sX POST "$HALO_API_URL/api/apps/<appId>/move-space" \
@@ -207,7 +219,7 @@ PATCH  /api/apps/<appId>/overrides                                 Merge-patch p
           -d '{"notificationLevel":"important"}'
      # body: {"notificationLevel": "important"}
      # out: {success:true}
-     # note: Other fields you can set the same way: modelSourceId, modelId. JSON Merge Patch semantics: send null to clear a field (e.g. {"modelSourceId":null} to fall back to the global model). The run schedule is NOT set here — use POST /:appId/frequency.
+     # note: Other fields you can set the same way: modelSourceId, modelId, spaceMemoryAccess (true lets the digital human read its space's memory topics), memory ({enabled, autoConsolidate, cadence: "diligent"|"balanced"|"economical"} — sent as a whole object). JSON Merge Patch semantics: send null to clear a field (e.g. {"modelSourceId":null} to fall back to the global model). The run schedule is NOT set here — use POST /:appId/frequency.
 
 POST   /api/apps/<appId>/pause                                     Pause a digital human (stops scheduling)
      # note: reversible — can be undone or corrected afterward.

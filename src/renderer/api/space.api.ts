@@ -9,6 +9,7 @@ import {
 import type {
   ApiResponse,
 } from './_shared'
+import type { MemorySettings, MemoryStatus } from '../../shared/types/memory'
 
 export const spaceApi = {
   // ===== Space =====
@@ -94,6 +95,7 @@ export const spaceApi = {
         artifactRailExpanded?: boolean
         chatWidth?: number
       }
+      memory?: MemorySettings
     }
   ): Promise<ApiResponse> => {
     if (isElectron()) {
@@ -108,6 +110,20 @@ export const spaceApi = {
       return window.halo.getSpacePreferences(spaceId)
     }
     return httpRequest('GET', `/api/spaces/${spaceId}/preferences`)
+  },
+
+  getSpaceMemoryStatus: async (spaceId: string): Promise<ApiResponse<MemoryStatus>> => {
+    if (isElectron()) {
+      return window.halo.getSpaceMemoryStatus(spaceId)
+    }
+    return httpRequest('GET', `/api/spaces/${spaceId}/memory`)
+  },
+
+  consolidateSpaceMemory: async (spaceId: string): Promise<ApiResponse<{ started: boolean; reason?: string }>> => {
+    if (isElectron()) {
+      return window.halo.consolidateSpaceMemory(spaceId)
+    }
+    return httpRequest('POST', `/api/spaces/${spaceId}/memory/consolidate`)
   },
 
   // Reorder spaces (persist user-defined display order)

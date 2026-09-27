@@ -23,4 +23,7 @@ export const agentRpc = {
   listToolsets: rawRpcMethod('agent:toolsets-list'),
   openToolset: rawRpcMethod('agent:toolsets-open'),
   closeToolset: rawRpcMethod('agent:toolsets-close'),
+  // Conversation goal (engines with features.goal)
+  getGoal: rawRpcMethod('agent:goal-get'),
+  setGoal: rawRpcMethod('agent:goal-set'),
 }

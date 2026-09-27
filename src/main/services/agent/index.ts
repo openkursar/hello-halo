@@ -94,6 +94,9 @@ export {
   invalidateAllSessions
 } from './session-manager'
 
+// Conversation goal (engines with features.goal)
+export { getConversationGoal, setConversationGoal } from './goal'
+
 // ============================================
 // MCP Management
 // ============================================
@@ -114,7 +117,13 @@ export { createCanUseTool, resolveQuestion, rejectQuestion, rejectAllQuestions }
 export type { ToolGate } from './permission-handler'
 export { listToolsets, openToolsetByUser, closeToolsetByUser } from './toolsets'
 export type { ToolsetStatus, ToolsetsChangedEvent } from './toolsets'
-export { getWorkingDir, getApiCredentials } from './helpers'
+export { getWorkingDir, getApiCredentials, getApiCredentialsForConversation } from './helpers'
+/**
+ * The one way to add engine hooks to session options: merges event by event,
+ * so no concern that watches tool calls (the memory guard, a delegation audit,
+ * a file boundary) can drop another's by assigning `hooks`.
+ */
+export { addSdkHooks } from './sdk-config'
 export { parseSDKMessage, buildMessageContent, formatCanvasContext } from './message-utils'
 export { getOrCreateV2Session, activeSessions, v2Sessions, getConsumerHandle, SessionOptionsStaleError } from './session-manager'
 export type { SessionGates } from './session-manager'

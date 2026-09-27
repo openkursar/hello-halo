@@ -130,5 +130,13 @@ export const MODULE: RouteModuleMeta = {
     'POST /api/agent/toolsets/close': {
       expose: 'internal',
     },
+    // A set is recorded as the user's own change (source 'user'); an agent
+    // steers its own session through its Goal tool instead.
+    'POST /api/agent/goal/get': {
+      expose: 'internal',
+    },
+    'POST /api/agent/goal/set': {
+      expose: 'internal',
+    },
   },
 }

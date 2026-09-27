@@ -16,6 +16,16 @@ interface ConfirmDialogProps {
   variant?: 'danger' | 'warning' | 'default'
 }
 
+/**
+ * Whether Enter pressed on this element confirms. A focused control answers
+ * Enter itself — Enter on the focused Cancel button cancels.
+ */
+export function enterConfirms(target: Pick<HTMLElement, 'tagName' | 'isContentEditable'> | null): boolean {
+  if (!target) return true
+  if (target.isContentEditable) return false
+  return !['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A'].includes(target.tagName)
+}
+
 export function ConfirmDialog({
   title,
   message,
@@ -53,7 +63,9 @@ export function ConfirmDialog({
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        // The dialog owns Esc; window-level handlers (e.g. the canvas collapsing) must not also act on it.
         e.preventDefault()
+        e.stopPropagation()
         onCancel()
         return
       }
@@ -75,11 +87,7 @@ export function ConfirmDialog({
         return
       }
 
-      const target = e.target as HTMLElement
-      const isInputFocused = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable
-      if (isInputFocused) return
-
-      if (e.key === 'Enter') {
+      if (e.key === 'Enter' && enterConfirms(e.target as HTMLElement | null)) {
         onConfirm()
       }
     }

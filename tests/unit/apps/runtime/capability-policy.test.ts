@@ -10,6 +10,11 @@
 import { describe, it, expect } from 'vitest'
 import {
   ALL_BUILTIN_TOOLS,
+  DEFAULT_GUEST_ALLOWED_TOOLS,
+  allowsBuiltinAtCallTime,
+  capabilityPolicyFromPreset,
+  defaultGuestPolicy,
+  withGuestAccess,
   DELEGABLE_BUILTIN_TOOLS,
   allowsCapability,
   buildAllowedToolRules,
@@ -62,7 +67,9 @@ describe('built-in tool restriction', () => {
   })
 
   it('grants a guest nothing it was not explicitly given', () => {
-    expect(computeDisallowedBuiltins(undefined, 'strict').sort()).toEqual([...ALL_BUILTIN_TOOLS].sort())
+    // The task list is the one exception: it touches nothing outside the turn.
+    expect(computeDisallowedBuiltins(undefined, 'strict').sort())
+      .toEqual([...ALL_BUILTIN_TOOLS].filter(name => name !== 'TodoWrite').sort())
     expect(computeDisallowedBuiltins({ allowedTools: ['Read'] }, 'strict')).not.toContain('Read')
     expect(computeDisallowedBuiltins({ allowedTools: ['Read'] }, 'strict')).toContain('Bash')
   })
@@ -205,7 +212,7 @@ describe('how far the command tool reaches', () => {
     // "anything goes" — the safe reading of an unfinished decision.
     const access = resolveBashAccess({ allowedTools: ['Bash'], bashScope: 'listed' }, 'permissive')
     expect(access).toEqual({ scope: 'listed', rules: [] })
-    expect(buildAllowedToolRules({ allowedTools: ['Bash'], bashScope: 'listed' }, 'strict')).toEqual([])
+    expect(buildAllowedToolRules({ allowedTools: ['Bash'], bashScope: 'listed' }, 'strict')).toEqual(['TodoWrite'])
   })
 
   it('narrowing reach cannot resurrect a withheld tool', () => {
@@ -271,7 +278,7 @@ describe('when a policy is enforced at all', () => {
 
     expect(options.permissionMode).toBe('default')
     expect(options.extraArgs['dangerously-skip-permissions']).toBeUndefined()
-    expect(options.allowedTools).toEqual(['Read'])
+    expect(options.allowedTools).toEqual(['TodoWrite', 'Read'])
     expect(options.disallowedTools).toContain('Bash')
   })
 })
@@ -284,5 +291,46 @@ describe('where a request came from decides how silence reads', () => {
   it('does not put a lock between two of the owner’s own digital humans', () => {
     expect(resolveDelegationMode({ external: false })).toBe('permissive')
     expect(resolveDelegationMode({})).toBe('permissive')
+  })
+})
+
+describe('always-available tools', () => {
+  it('keeps the task list for every caller, whatever the policy', () => {
+    expect(computeDisallowedBuiltins({ allowedTools: [] }, 'strict')).not.toContain('TodoWrite')
+    expect(allowsBuiltinAtCallTime({ allowedTools: [] }, 'TodoWrite', 'strict')).toBe(true)
+    expect(DELEGABLE_BUILTIN_TOOLS.map(t => t.name)).not.toContain('TodoWrite')
+  })
+
+  it('defaults a newly opened guest access to looking at files', () => {
+    expect([...DEFAULT_GUEST_ALLOWED_TOOLS]).toEqual(['Read', 'Glob', 'Grep'])
+  })
+
+  it('a build default wins, an explicit empty list included', () => {
+    expect(defaultGuestPolicy(undefined)).toEqual({ allowedTools: ['Read', 'Glob', 'Grep'] })
+    expect(defaultGuestPolicy({})).toEqual({ allowedTools: ['Read', 'Glob', 'Grep'] })
+    expect(defaultGuestPolicy({ allowedTools: ['WebSearch'] })).toEqual({ allowedTools: ['WebSearch'] })
+    expect(defaultGuestPolicy({ allowedTools: [] })).toEqual({ allowedTools: [] })
+    // A copy: editing it never edits the default.
+    expect(defaultGuestPolicy(undefined).allowedTools).not.toBe(DEFAULT_GUEST_ALLOWED_TOOLS)
+  })
+
+  it('turning guest access off and on again restores the choices made', () => {
+    const chosen = { allowedTools: ['Read', 'WebFetch'], allowOcr: true }
+    const off = withGuestAccess({ id: 'x', guestPolicy: chosen }, false, { allowedTools: [] })
+    expect(off).toEqual({ id: 'x', guestPolicy: undefined, savedGuestPolicy: chosen })
+    const on = withGuestAccess(off, true, { allowedTools: [] })
+    expect(on).toEqual({ id: 'x', guestPolicy: chosen })
+    expect('savedGuestPolicy' in on).toBe(false)
+  })
+
+  it('a first turn-on starts from the build default', () => {
+    expect(withGuestAccess({ id: 'x', guestPolicy: undefined }, true, null).guestPolicy).toEqual({ allowedTools: ['Read', 'Glob', 'Grep'] })
+    expect(withGuestAccess({ id: 'x', guestPolicy: undefined }, true, { allowedTools: [] }).guestPolicy).toEqual({ allowedTools: [] })
+  })
+
+  it('the read-only preset grants viewing and the internet only', () => {
+    expect(capabilityPolicyFromPreset('read_only').allowedTools).toEqual(
+      DELEGABLE_BUILTIN_TOOLS.filter(t => t.group === 'file' || t.group === 'network').map(t => t.name)
+    )
   })
 })

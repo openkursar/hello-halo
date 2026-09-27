@@ -12,8 +12,12 @@ import {
   getSpaceWithPreferences as serviceGetSpaceWithPreferences,
   openSpaceFolder as serviceOpenSpaceFolder,
   updateSpace as serviceUpdateSpace,
-  reorderSpaces as serviceReorderSpaces
+  reorderSpaces as serviceReorderSpaces,
+  getSpacePreferences as serviceGetSpacePreferences,
+  updateSpacePreferences as serviceUpdateSpacePreferences
 } from '../services/space.service'
+import { getSpaceMemoryStatus as serviceGetSpaceMemoryStatus, consolidateSpaceMemoryNow } from '../services/memory-consolidation'
+import type { MemorySettings } from '../../shared/types/memory'
 import { getAppManager } from '../apps/manager'
 import { listAvailableSkills } from '../apps/skill-discovery'
 import { listConversations } from '../services/conversation.service'
@@ -127,6 +131,49 @@ export function updateSpace(
   } catch (error: unknown) {
     const err = error as Error
     return { success: false, error: err.message }
+  }
+}
+
+export function getSpacePreferences(spaceId: string): ControllerResponse {
+  try {
+    return { success: true, data: serviceGetSpacePreferences(spaceId) }
+  } catch (error: unknown) {
+    return { success: false, error: (error as Error).message }
+  }
+}
+
+/** Only the known preference groups are taken from the caller. */
+export function updateSpacePreferences(
+  spaceId: string,
+  body: { layout?: { artifactRailExpanded?: boolean; chatWidth?: number }; memory?: MemorySettings }
+): ControllerResponse {
+  try {
+    const preferences: { layout?: typeof body.layout; memory?: MemorySettings } = {}
+    if (body.layout && typeof body.layout === 'object') preferences.layout = body.layout
+    if (body.memory && typeof body.memory === 'object') preferences.memory = body.memory
+    const space = serviceUpdateSpacePreferences(spaceId, preferences)
+    return space ? { success: true, data: space } : { success: false, error: 'Failed to update space preferences' }
+  } catch (error: unknown) {
+    return { success: false, error: (error as Error).message }
+  }
+}
+
+export async function getSpaceMemoryStatus(spaceId: string): Promise<ControllerResponse> {
+  try {
+    const status = await serviceGetSpaceMemoryStatus(spaceId)
+    return status ? { success: true, data: status } : { success: false, error: 'Space not found' }
+  } catch (error: unknown) {
+    return { success: false, error: (error as Error).message }
+  }
+}
+
+export function consolidateSpaceMemory(spaceId: string): ControllerResponse {
+  try {
+    const result = consolidateSpaceMemoryNow(spaceId)
+    console.log(`[Space] Memory consolidation requested for ${spaceId}: started=${result.started}${result.reason ? ` (${result.reason})` : ''}`)
+    return { success: true, data: result }
+  } catch (error: unknown) {
+    return { success: false, error: (error as Error).message }
   }
 }
 

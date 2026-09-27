@@ -39,6 +39,8 @@ import { appTypeLabel } from './appTypeUtils'
 import { sanitizeCommandName } from './skill-import-utils'
 import { SystemPromptEditor } from './SystemPromptEditor'
 import { Switch } from '../ui/Switch'
+import { MemorySettingsPanel } from '../memory/MemorySettingsPanel'
+import { resolveMemorySettings, type MemoryStatus } from '../../../shared/types/memory'
 import { HttpTriggerCard } from '../common/HttpTriggerCard'
 import { SchedulePicker } from './SchedulePicker'
 import {
@@ -430,6 +432,20 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart, onRestartAgen
 
   // Type-narrowed helpers for automation-specific fields
   const isAutomation = app.spec.type === 'automation'
+
+  const [savingMemory, setSavingMemory] = useState(false)
+  const [memoryError, setMemoryError] = useState<string | null>(null)
+
+  const loadMemoryStatus = useCallback(async (): Promise<MemoryStatus | null> => {
+    const res = await api.appGetMemoryStatus(appId)
+    return res.success ? res.data ?? null : null
+  }, [appId])
+
+  const consolidateMemoryNow = useCallback(async () => {
+    const res = await api.appConsolidateMemory(appId)
+    return res.success ? res.data ?? null : null
+  }, [appId])
+
   const specSystemPromptValue = app.spec.type === 'automation' ? app.spec.system_prompt : ''
   const specSubscriptions = app.spec.type === 'automation' ? (app.spec.subscriptions ?? []) : []
   const specRecommendedModel = app.spec.type === 'automation' ? app.spec.recommended_model : undefined
@@ -1091,6 +1107,51 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart, onRestartAgen
             </div>
           </div>
         </div>
+
+        {/* ── Memory: this digital human's own memory, and read-only access
+            to what its workspace has learned. ── */}
+        {isAutomation && (
+          <div className="space-y-3">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              {t('Memory')}
+            </h3>
+            <MemorySettingsPanel
+              settings={resolveMemorySettings(app.userOverrides.memory)}
+              onChange={async (next) => {
+                // One change at a time: a second click before the first is
+                // saved would be computed from settings that are about to change.
+                setSavingMemory(true)
+                setMemoryError(null)
+                const ok = await updateAppOverrides(appId, { memory: next })
+                setSavingMemory(false)
+                if (!ok) setMemoryError(t('Memory settings could not be saved. Please try again.'))
+              }}
+              disabled={savingMemory}
+              loadStatus={loadMemoryStatus}
+              consolidateNow={consolidateMemoryNow}
+            />
+            {memoryError && <p className="text-xs text-destructive">{memoryError}</p>}
+            {app.spaceId && (
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm text-foreground">{t('Use workspace memory')}</div>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {resolveMemorySettings(app.userOverrides.memory).enabled
+                      ? t('Let this digital human read the topics its workspace has learned, read-only, in every conversation it has. Applies to new conversations.')
+                      : t('Turn memory on to use this.')}
+                  </p>
+                </div>
+                <Switch
+                  checked={app.userOverrides.spaceMemoryAccess === true}
+                  disabled={!resolveMemorySettings(app.userOverrides.memory).enabled}
+                  onCheckedChange={async (checked) => {
+                    await updateAppOverrides(appId, { spaceMemoryAccess: checked ? true : undefined })
+                  }}
+                />
+              </div>
+            )}
+          </div>
+        )}
 
         {/* ── Runtime Control: escape hatch for restarting the agent. Not in
             Danger Zone because restart is non-destructive (no data loss). ── */}

@@ -13,6 +13,7 @@ import type { SessionInitInfo } from '../../types/slash-command'
 import { PULSE_READ_GRACE_PERIOD_MS } from '../../types'
 import { canvasLifecycle } from '../../services/canvas-lifecycle'
 import type { StoreApi } from 'zustand'
+import type { GoalInput } from '../../../shared/types/goal'
 
 // LRU cache size limit
 export const CONVERSATION_CACHE_SIZE = 10
@@ -20,6 +21,11 @@ export const CONVERSATION_CACHE_SIZE = 10
 // Store-level timer for pulseReadAt cleanup (independent of UI components)
 
 // Per-space state (conversations metadata belong to a space)
+export interface SendMessageOptions {
+  /** Set as the conversation goal before this message runs. */
+  goal?: GoalInput
+}
+
 export interface SpaceState {
   conversations: ConversationMeta[]  // Lightweight metadata, no messages
   currentConversationId: string | null
@@ -196,7 +202,11 @@ export interface ChatState {
   detachKnowledgeBase: (spaceId: string, conversationId: string, kbId: string) => Promise<void>
 
   // Messaging
-  sendMessage: (content: string, images?: ImageAttachment[], thinkingEnabled?: boolean) => Promise<void>
+  /**
+   * Resolves false when main refused the message before recording it; the
+   * optimistic bubble is then withdrawn so the caller can restore the draft.
+   */
+  sendMessage: (content: string, images?: ImageAttachment[], thinkingEnabled?: boolean, options?: SendMessageOptions) => Promise<boolean>
   stopGeneration: (conversationId?: string) => Promise<void>
   injectMessage: (conversationId: string, message: string) => Promise<void>
 

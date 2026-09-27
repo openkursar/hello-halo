@@ -65,5 +65,6 @@ export const CODEX_CAPABILITIES: EngineCapabilities = {
     multimodalImage: true,
     contextCompaction: true,
     askUserQuestion: true,
+    goal: false,
   },
 }

@@ -17,6 +17,7 @@ import { useTranslation } from '../../i18n'
 import type { ImChannelInstanceConfig } from '../../../shared/types/im-channel'
 import { CapabilityPolicyFields } from '../capability/CapabilityPolicyFields'
 import { Switch } from '../ui/Switch'
+import { withGuestAccess } from '../../../shared/apps/capability-policy'
 
 /** Product-level permission defaults (from IPC). Mirrors auth-loader.ImChannelsPermissionDefaults. */
 export interface ImPermissionDefaults {
@@ -77,11 +78,7 @@ export function ImInstancePermissionSection({
   }
 
   const handleGuestAccessToggle = () => {
-    if (guestAccessEnabled) {
-      onChange({ ...instance, guestPolicy: undefined })
-    } else {
-      onChange({ ...instance, guestPolicy: { allowedTools: [] } })
-    }
+    onChange(withGuestAccess(instance, !guestAccessEnabled, permissionDefaults?.defaultGuestPolicy))
   }
 
   // ── Render ──
@@ -150,7 +147,7 @@ export function ImInstancePermissionSection({
             <div className="flex items-center gap-2 rounded-lg bg-amber-500/10 border border-amber-500/30 px-3 py-2">
               <MessageSquare className="w-4 h-4 text-amber-600 dark:text-amber-500 shrink-0" />
               <p className="text-xs text-amber-600 dark:text-amber-500">
-                {t('No owner set. The first user to direct-message this bot is bound as the owner — enter your own ID above to claim it first. Until then, everyone is a guest with no tool access.')}
+                {t('No owner set. The first user to direct-message this bot is bound as the owner — enter your own ID above to claim it first. Until then, everyone is a guest who can only chat and use memory.')}
               </p>
             </div>
           )}
@@ -175,7 +172,7 @@ export function ImInstancePermissionSection({
                   <p className="text-xs text-muted-foreground/70">
                     {guestAccessEnabled
                       ? t('Guests have limited access to selected tools below')
-                      : t('Guests have no tool access — chat only')}
+                      : t('Guests can only chat and use memory')}
                   </p>
                 </div>
                 <Switch checked={guestAccessEnabled} onCheckedChange={handleGuestAccessToggle} />
@@ -189,12 +186,7 @@ export function ImInstancePermissionSection({
                   <CapabilityPolicyFields
                     policy={guestPolicy}
                     mode="strict"
-                    groupLabels={{
-                      file: t('File Read'),
-                      network: t('Network'),
-                      other: t('Other'),
-                      advanced: t('Advanced'),
-                    }}
+                    audience="guest"
                     onChange={(next) => onChange({ ...instance, guestPolicy: next })}
                   />
                 </div>

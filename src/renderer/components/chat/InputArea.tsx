@@ -20,7 +20,7 @@
  */
 
 import { useState, useRef, useEffect, useMemo, useCallback, KeyboardEvent, ClipboardEvent, DragEvent } from 'react'
-import { Plus, ImagePlus, Loader2, AlertCircle, Atom, Lightbulb, MessageSquare, Bot } from 'lucide-react'
+import { Plus, ImagePlus, Loader2, AlertCircle, Atom, Lightbulb, MessageSquare, Bot, Target } from 'lucide-react'
 import { useAppStore } from '../../stores/app.store'
 import { useChatStore } from '../../stores/chat.store'
 import { useOnboardingStore } from '../../stores/onboarding.store'
@@ -43,6 +43,7 @@ import { decideConversationMentionCandidates } from './mentionMenuDecision'
 import { formatConversationReference } from '../../../shared/conversation-reference'
 import { DigitalHumanSelector, type DigitalHumanSelectorConfig } from './DigitalHumanSelector'
 import { AutomationAvatar } from '../apps/AutomationAvatar'
+import type { GoalComposerConfig } from '../goal'
 
 // ── mention helpers ──
 //
@@ -199,6 +200,12 @@ interface InputAreaProps {
    * when the key changes — drafts are read once, at mount, via lazy useState.
    */
   draftKey?: string
+  /**
+   * Conversation goal: the "+" menu row, goal mode, and the shelf above the
+   * card. Only the space conversation board sets this, and only for engines
+   * that keep goals.
+   */
+  goal?: GoalComposerConfig
 }
 
 // Draft attachments stay in memory; image data must not fill browser storage.
@@ -211,9 +218,9 @@ const draftRecoverySubscribers = new Map<string, Set<(draft: InputDraft) => void
 const MAX_IMAGE_SIZE = 20 * 1024 * 1024  // 20MB max per image (before compression)
 const MAX_IMAGES = 10  // Max images per message
 
-// Number of actions offered by the "+" control. With only one, the toolbar
-// shows it directly instead of hiding it behind a popover — bump this when an
-// action is added or removed.
+// Number of always-present actions offered by the "+" control. With only one,
+// the toolbar shows it directly instead of hiding it behind a popover — bump
+// this when an action is added or removed. Optional rows add to it at render.
 const ATTACH_ACTION_COUNT: number = 3
 
 // Error message type
@@ -222,7 +229,7 @@ interface ImageError {
   message: string
 }
 
-export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder, isCompact = false, toolbarSlot, draftKey, slashCommands = [], mentionArtifacts = [], mentionConversations = [], hideToolsetControls = false, hideKnowledgeControls = false, standalone = false, digitalHumanSelector }: InputAreaProps) {
+export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder, isCompact = false, toolbarSlot, draftKey, slashCommands = [], mentionArtifacts = [], mentionConversations = [], hideToolsetControls = false, hideKnowledgeControls = false, standalone = false, digitalHumanSelector, goal }: InputAreaProps) {
   const { t } = useTranslation()
   const sendKeyMode = useAppStore(state => state.config?.chat?.sendKeyMode ?? 'enter')
 
@@ -284,6 +291,11 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
   const [cursorPos, setCursorPos] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const goalMode = !!goal?.active
+
+  useEffect(() => {
+    if (goalMode) textareaRef.current?.focus()
+  }, [goalMode])
 
   // Consume a composer prefill requested for this space (e.g. a skill's slash
   // command from the store's "Use" action, or SkillsTab's row click): fill
@@ -742,6 +754,8 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
   }
 
   const handleSlashSelect = (item: SlashCommandItem) => {
+    // A command is not a goal.
+    if (goalMode) goal?.exit()
     const newContent = item.command + ' '
     setContent(newContent)
     setSlashMenuOpen(false)
@@ -763,7 +777,7 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
   const handleSend = () => {
     const textToSend = isOnboardingSendStep ? onboardingPrompt : content.trim()
 
-    if (isGenerating) {
+    if (isGenerating && !goalMode) {
       // Mid-turn inject: text only (no images, no thinking toggle)
       if (textToSend && onInject) {
         onInject(textToSend)
@@ -776,10 +790,14 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
       return
     }
 
-    const hasContent = textToSend || images.length > 0
+    const hasContent = goalMode ? goal!.canSubmit(textToSend) : (textToSend || images.length > 0)
     if (hasContent) {
-      const sentImages = images
-      const result = onSend(textToSend, sentImages.length > 0 ? sentImages : undefined, thinkingEnabled)
+      // A goal set mid-turn goes to the running turn, not a new message, so attachments wait for the next one.
+      const keepImages = goalMode && isGenerating
+      const sentImages = keepImages ? [] : images
+      const result = goalMode
+        ? goal!.submit(textToSend, sentImages.length > 0 ? sentImages : undefined, thinkingEnabled)
+        : onSend(textToSend, sentImages.length > 0 ? sentImages : undefined, thinkingEnabled)
       if (draftKey) inputDrafts.delete(draftKey)
       if (draftKey && result instanceof Promise) {
         const restoreDraft = () => {
@@ -803,7 +821,7 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
       if (!isOnboardingSendStep) {
         setContent('')
         if (draftKey) useChatStore.getState().clearComposerDraft(draftKey)
-        setImages([])  // Clear images after send
+        if (!keepImages) setImages([])  // Clear images after send
         handleMentionClose()
         handleSlashClose()
         // Don't reset thinkingEnabled - user might want to keep it on
@@ -889,6 +907,15 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
     }
     // ─────────────────────────────────────────────────────────────────────────
 
+    // Leaving goal mode keeps the text as an ordinary draft. Esc here never
+    // stops a running turn; a second Esc, outside goal mode, does.
+    if (goalMode && (e.key === 'Escape' || (e.key === 'Backspace' && content === ''))) {
+      e.preventDefault()
+      e.stopPropagation()
+      goal?.exit()
+      return
+    }
+
     // Mobile: send via button only
     // PC: respect sendKeyMode setting
     if (!isMobile()) {
@@ -918,11 +945,14 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
   // During generation (inject mode): only plain text is allowed, no images
   // Normal mode: text or images, not currently processing
   const canSend = isOnboardingSendStep ||
-    (isGenerating
-      ? (content.trim().length > 0 && !!onInject)
-      : ((content.trim().length > 0 || images.length > 0) && !isProcessingImages)
+    (goalMode
+      ? (goal!.canSubmit(content) && !isProcessingImages)
+      : isGenerating
+        ? (content.trim().length > 0 && !!onInject)
+        : ((content.trim().length > 0 || images.length > 0) && !isProcessingImages)
     )
   const hasImages = images.length > 0
+  const goalHint = goalMode ? goal!.hint(content) : null
 
   return (
     <div className={`
@@ -953,6 +983,9 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
         {/* Live AI sessions — capsule tab adhered to the input's top-left edge.
             Sibling above the input card; the input box itself is untouched. */}
         <LiveSessionsHeader />
+
+        {/* Inset past the card's corner radius so the shelf sits on its straight top edge. */}
+        {goal && <div className={standalone ? 'mx-6' : 'mx-5'}>{goal.shelf}</div>}
 
         {/* Input container — radius kept at the prototype's literal values
             (its own core visual feature, not on the 8/10/12/16 scale):
@@ -1088,6 +1121,8 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
             </div>
           )}
 
+          {goalMode && goal.chip}
+
           {/* Textarea area */}
           <div className="px-4 pt-3.5">
             <textarea
@@ -1147,7 +1182,7 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
               // redundancy the docked (post-first-message) state inherits
               // the same placeholder for, since it's the same InputArea
               // instance either way.
-              placeholder={placeholder || t('@ for digital humans, files and conversations, / for skills and commands')}
+              placeholder={goalMode ? goal.placeholder : placeholder || t('@ for digital humans, files and conversations, / for skills and commands')}
               readOnly={isOnboardingSendStep}
               rows={1}
               className={`w-full bg-transparent resize-none text-[15px] leading-[1.5]
@@ -1157,6 +1192,13 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
               style={{ maxHeight: '180px' }}
             />
           </div>
+
+          {goalMode && (
+            <p className={`px-4 pt-1 text-[11px] leading-4 text-subtle-foreground ${content ? 'hidden sm:block' : ''}`}>
+              <span className="hidden sm:inline">{goalHint!.full}</span>
+              <span className="sm:hidden">{goalHint!.short}</span>
+            </p>
+          )}
 
           {/* Bottom toolbar - always visible, industry standard layout */}
           <InputToolbar
@@ -1188,6 +1230,8 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
             hideToolsetControls={hideToolsetControls}
             hideKnowledgeControls={hideKnowledgeControls}
             digitalHumanSelector={digitalHumanSelector}
+            goalMenuItem={goal?.menuItem}
+            sendTitle={goalMode ? goal.sendTitle : undefined}
           />
         </div>
       </div>
@@ -1227,6 +1271,10 @@ interface InputToolbarProps {
   hideToolsetControls: boolean
   hideKnowledgeControls: boolean
   digitalHumanSelector?: DigitalHumanSelectorConfig
+  /** Optional first row of the "+" menu. */
+  goalMenuItem?: GoalComposerConfig['menuItem']
+  /** Overrides the Send tooltip, e.g. while Send sets a goal. */
+  sendTitle?: string
 }
 
 function InputToolbar({
@@ -1251,9 +1299,12 @@ function InputToolbar({
   visionEnabled,
   hideToolsetControls,
   hideKnowledgeControls,
-  digitalHumanSelector
+  digitalHumanSelector,
+  goalMenuItem,
+  sendTitle
 }: InputToolbarProps) {
   const { t } = useTranslation()
+  const attachActionCount = ATTACH_ACTION_COUNT + (goalMenuItem ? 1 : 0)
   return (
     <div className="flex flex-nowrap items-center justify-between gap-1 px-4 pb-2.5 mt-2">
       {/* Left section, ordered by how often a control is reached for:
@@ -1271,7 +1322,7 @@ function InputToolbar({
             instead of hiding behind a "+" popover; the popover form only
             earns its keep once a second action exists. */}
         {!isGenerating && !isOnboarding && (
-          ATTACH_ACTION_COUNT === 1 ? (
+          attachActionCount === 1 ? (
             <button
               type="button"
               onClick={onImageClick}
@@ -1311,6 +1362,19 @@ function InputToolbar({
               </PopoverTrigger>
 
               <PopoverContent side="top" align="start" sideOffset={8} className="py-1.5 rounded-xl min-w-[160px]">
+                {goalMenuItem && (
+                  <button
+                    onClick={() => {
+                      onAttachMenuChange(false)
+                      goalMenuItem.onSelect()
+                    }}
+                    title={goalMenuItem.title}
+                    className="w-full px-3 py-2 flex items-center gap-3 text-sm text-foreground hover:bg-muted/50 transition-colors duration-150"
+                  >
+                    <Target size={16} className="text-muted-foreground" />
+                    <span>{goalMenuItem.label}</span>
+                  </button>
+                )}
                 <button
                   onClick={onImageClick}
                   disabled={imageCount >= maxImages}
@@ -1429,7 +1493,8 @@ function InputToolbar({
               }
             `}
             title={
-              isGenerating
+              sendTitle ? sendTitle
+              : isGenerating
                 ? t('Add to queue')
                 : sendKeyMode === 'ctrl-enter'
                   ? (thinkingEnabled ? t('Send (Deep Thinking) — Ctrl+Enter') : t('Send — Ctrl+Enter'))

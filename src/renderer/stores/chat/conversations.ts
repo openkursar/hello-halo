@@ -4,6 +4,8 @@
 import type { ChatSlice, ChatState } from './internal'
 import { CONVERSATION_CACHE_SIZE, api, createEmptySessionState, createEmptySpaceState } from './internal'
 import type { Conversation, ConversationMeta, Thought, Question } from './internal'
+import { useGoalStore } from '../goal.store'
+import { useGoalUiStore } from '../goal-ui.store'
 
 /**
  * Optimistically write a conversation's knowledgeBaseIds into the cache, then
@@ -427,6 +429,8 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'loadConver
             pulseReadAt: newPulseReadAt
           }
         })
+        useGoalStore.getState().forget(conversationId)
+        useGoalUiStore.getState().forget(conversationId)
 
         // Deleting the last conversation would leave the space with no current
         // conversation — every consumer (sendMessage, toolsets, KB) degrades to

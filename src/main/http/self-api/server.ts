@@ -13,6 +13,7 @@ import { isDeveloperMode } from '../../foundation/logging'
 import { issueSelfApiToken } from './token-store'
 import { redactResponses } from './redact'
 import { rejectNonApi, selfApiAuthMiddleware, selfApiErrorHandler } from './middleware'
+import { rejectWithheldFields } from './withheld-fields'
 
 /** Distinct from the public listener's 3847 so the two never contend for a port. */
 const DEFAULT_PORT = 4791
@@ -52,6 +53,7 @@ function buildApp(): Express {
   app.use(rejectNonApi)
   app.use(redactResponses)
   app.use('/api', selfApiAuthMiddleware)
+  app.use('/api', rejectWithheldFields)
   registerApiRoutes(app)
   app.use(selfApiErrorHandler)
   return app

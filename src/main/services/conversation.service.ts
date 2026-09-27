@@ -22,6 +22,7 @@ import { v4 as uuidv4 } from 'uuid'
 import type { FileChangesSummary } from '../../shared/file-changes'
 import type { KBSource } from '../../shared/types/tlon'
 import type { ImageAttachment } from '../../shared/types/image-attachment'
+import type { GoalInput } from '../../shared/types/goal'
 
 // Re-export for existing consumers
 export type { FileChangesSummary } from '../../shared/file-changes'
@@ -107,6 +108,8 @@ export interface Message {
     teamName?: string
     fromMemberName?: string | null
     teamTriggerKind?: string
+    /** The goal the user set with this message (user messages only). */
+    goal?: GoalInput
   }
   error?: string  // Error message when assistant response failed (e.g., 429 rate limit)
   source?: string  // How the message entered the conversation (e.g., 'injection', 'cross-conversation')

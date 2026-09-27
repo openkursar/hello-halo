@@ -7,6 +7,8 @@ import type { RpcContract, RpcClient } from '../shared/rpc/define'
 import type { CatalogModelCapability, ModelCapabilityOverride } from '../shared/types/model-capabilities'
 import type { EscalationResponse } from '../shared/apps/app-types'
 import type { UpdaterChannel, UpdaterStatusPayload } from '../shared/types/updater'
+import type { GoalInput } from '../shared/types/goal'
+import type { MemorySettings, MemoryStatus } from '../shared/types/memory'
 import { modelCapabilitiesRpc } from '../shared/rpc/contracts/model-capabilities.contract'
 import { onboardingRpc } from '../shared/rpc/contracts/onboarding.contract'
 import { securityRpc } from '../shared/rpc/contracts/security.contract'
@@ -131,8 +133,11 @@ export interface HaloAPI {
       artifactRailExpanded?: boolean
       chatWidth?: number
     }
+    memory?: MemorySettings
   }) => Promise<IpcResponse>
   getSpacePreferences: (spaceId: string) => Promise<IpcResponse>
+  getSpaceMemoryStatus: (spaceId: string) => Promise<IpcResponse<MemoryStatus>>
+  consolidateSpaceMemory: (spaceId: string) => Promise<IpcResponse<{ started: boolean; reason?: string }>>
   reorderSpaces: (spaceIds: string[]) => Promise<IpcResponse>
   listSpaceSummaries: () => Promise<IpcResponse>
   forgetSpace: (spaceId: string) => Promise<IpcResponse>
@@ -184,6 +189,7 @@ export interface HaloAPI {
     }>
     thinkingEnabled?: boolean  // Enable extended thinking mode
     knowledgeBaseId?: string  // Chat-with-knowledge-base turn
+    goal?: GoalInput  // Set as the conversation goal before this message runs
     canvasContext?: {  // Canvas context for AI awareness
       isOpen: boolean
       tabCount: number
@@ -218,6 +224,8 @@ export interface HaloAPI {
   listToolsets: (data: { spaceId: string; conversationId: string }) => Promise<IpcResponse>
   openToolset: (data: { spaceId: string; conversationId: string; toolsetId: string }) => Promise<IpcResponse>
   closeToolset: (data: { spaceId: string; conversationId: string; toolsetId: string }) => Promise<IpcResponse>
+  getGoal: (data: { spaceId: string; conversationId: string }) => Promise<IpcResponse>
+  setGoal: (data: { spaceId: string; conversationId: string; goal: GoalInput | null }) => Promise<IpcResponse>
 
   // Terminal (derived from terminalRpc contract)
   listTerminals: () => Promise<IpcResponse>
@@ -246,6 +254,7 @@ export interface HaloAPI {
   onAgentAskQuestion: (callback: (data: unknown) => void) => () => void
   onAgentSessionInfo: (callback: (data: unknown) => void) => () => void
   onAgentTurnStart: (callback: (data: unknown) => void) => () => void
+  onAgentGoalUpdated: (callback: (data: unknown) => void) => () => void
   onToolsetsChanged: (callback: (data: unknown) => void) => () => void
   onToolsetsRequested: (callback: (data: unknown) => void) => () => void
 
@@ -581,6 +590,8 @@ export interface HaloAPI {
   appGetDataPath: (appId: string) => Promise<IpcResponse<{ path: string }>>
   appOpenDataFolder: (appId: string) => Promise<IpcResponse>
   appClearMemory: (appId: string) => Promise<IpcResponse<{ filesRemoved: number }>>
+  appGetMemoryStatus: (appId: string) => Promise<IpcResponse<MemoryStatus>>
+  appConsolidateMemory: (appId: string) => Promise<IpcResponse<{ started: boolean; reason?: string }>>
   appMoveSpace: (input: { appId: string; newSpaceId: string | null }) => Promise<IpcResponse>
 
   // App Chat
@@ -866,6 +877,7 @@ const api: HaloAPI = {
   onAgentAskQuestion: (callback) => createEventListener('agent:ask-question', callback),
   onAgentSessionInfo: (callback) => createEventListener('agent:session-info', callback),
   onAgentTurnStart: (callback) => createEventListener('agent:turn-start', callback),
+  onAgentGoalUpdated: (callback) => createEventListener('agent:goal-updated', callback),
   onToolsetsChanged: (callback) => createEventListener('toolsets:changed', callback),
   onToolsetsRequested: (callback) => createEventListener('toolsets:requested', callback),
 

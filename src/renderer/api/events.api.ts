@@ -19,6 +19,7 @@ import {
   subscribeToConversation,
   unsubscribeFromConversation,
 } from './_shared'
+import type { GoalUpdatedEvent } from '../../shared/types/goal'
 
 export const eventsApi = {
   // ===== Event Listeners =====
@@ -46,6 +47,8 @@ export const eventsApi = {
     onEvent('agent:session-info', callback),
   onAgentTurnStart: (callback: (data: unknown) => void) =>
     onEvent('agent:turn-start', callback),
+  onAgentGoalUpdated: (callback: (data: GoalUpdatedEvent) => void) =>
+    onEvent<GoalUpdatedEvent>('agent:goal-updated', callback),
   onToolsetsChanged: (callback: (data: unknown) => void) =>
     onEvent('toolsets:changed', callback),
   onToolsetsRequested: (callback: (data: unknown) => void) =>

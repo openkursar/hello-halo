@@ -20,8 +20,7 @@ import { getAppManager, type InstalledApp } from '../manager'
 import { resolveExecutionEnvironment, validateExecutionEnvironment, validateEnvironmentConnections } from './execution-environment'
 import { createPersonContextMcpServer, personContextPrompt } from './person-context-tool'
 import { resolvePermission } from '../../../shared/apps/app-types'
-import type { MemoryService, MemoryCallerScope } from '../../platform/memory'
-import { createMemoryStatusMcpServer } from '../../platform/memory/snapshot'
+import { createMemoryStatusMcpServer, resolveMemoryLayout, type MemoryService, type MemoryCallerScope } from '../../platform/memory'
 import type { ActivityStore } from './store'
 import type {
   TriggerContext,
@@ -43,6 +42,7 @@ import { getImSessionRegistry } from './im-session-registry'
 import { autoSyncRunResult } from './im-auto-sync'
 import { getApiCredentials, getApiCredentialsForSource, getHeadlessElectronPath, getMcpServersForRequires } from '../../services/agent/helpers'
 import { resolveCredentialsForSdk, buildBaseSdkOptions } from '../../services/agent/sdk-config'
+import { toEngineSystemPrompt } from '../../services/agent/system-prompt'
 import { applyReasoningEffort } from '../../services/agent/reasoning-effort'
 import { getOrCreateV2Session } from '../../services/agent/session-manager'
 import { createAIBrowserMcpServer, createScopedBrowserContext } from '../../services/ai-browser'
@@ -54,7 +54,15 @@ import { createOfficialDocsSession } from '../../services/official-docs-mcp'
 import { createEmailMcpServer } from '../../services/email-mcp'
 import { getConfig, resolveClaudeConfigDir } from '../../foundation/config.service'
 import { openSessionWriter, type SessionWriter } from './session-store'
-import { prepareMemoryForTurn, finalizeMemoryAfterTurn, type CompactionCredentialsProvider } from './turn/memory-lifecycle'
+import {
+  prepareMemoryForTurn,
+  finalizeMemoryAfterTurn,
+  memoryPromptOptions,
+  loadSpaceTopicsForTurn,
+  appMemoryGuard,
+  appMemorySettings,
+} from './turn/memory-lifecycle'
+import { appConsolidationInputs } from './memory-control'
 import { registerActiveRun, unregisterActiveRun } from './active-runs'
 import { describeSelfInstance, formatInstanceTag, listLiveInstances } from './live-instances'
 
@@ -289,7 +297,10 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     )
 
     // ── 2. Build system prompt ─────────────────────────────
-    const memoryInstructions = memory.getPromptInstructions('run')
+    const memorySettings = appMemorySettings(app)
+    const memoryInstructions = memorySettings.enabled
+      ? memory.getPromptInstructions('run', memoryPromptOptions(app.id, app.spec))
+      : ''
     const usesAIBrowser = resolvePermission(app, 'ai-browser')
     const usesTerminal = resolvePermission(app, 'ai-terminal') && isTerminalAvailable()
     const usesEmail = resolvePermission(app, 'email') // gated on channel config below
@@ -352,17 +363,17 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     )
 
     // ── 3. Build initial message ───────────────────────────
-    //    Build memory snapshot + pre-insert History heading.
+    //    Build memory snapshot + pre-insert History heading. With memory off
+    //    the run neither reads nor writes it.
     const selfTag = formatInstanceTag(selfInstance)
-    const { snapshot: memorySnapshot, runTimestamp } = await prepareMemoryForTurn(memoryScope, {
-      byLabel: selfTag,
-    })
-    console.log(
-      `[Runtime][${runTag}] Memory snapshot: exists=${memorySnapshot.exists}, ` +
-      `lines=${memorySnapshot.totalLines}, size=${memorySnapshot.sizeBytes}B, ` +
-      `headers=${memorySnapshot.headers.length}, archive=${memorySnapshot.archiveTotalCount}`
-    )
-    console.log(`[Runtime][${runTag}] Pre-inserted History heading: ## ${runTimestamp}  [by: ${selfTag}]`)
+    const memorySnapshot = memorySettings.enabled
+      ? (await prepareMemoryForTurn(memoryScope, { byLabel: selfTag })).snapshot
+      : null
+    const freshRun = trigger.type !== 'continue_followup' && !(trigger.type === 'escalation_followup' && existingRunId && trigger.escalation)
+    // Only a fresh run opens with memory; a resumed one already holds it.
+    const spaceTopics = memorySnapshot && freshRun
+      ? await loadSpaceTopicsForTurn(memoryScope, { enabledForApp: app.userOverrides?.spaceMemoryAccess === true })
+      : null
 
     // Resuming runs (continue or escalation follow-up) send minimal messages
     // so the model can resume naturally from its restored session context.
@@ -376,6 +387,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
             userConfig: mergedConfig,
             appName: app.spec.name,
             memorySnapshot,
+            spaceTopics,
             selfInstance,
             liveInstances: listLiveInstances(app.id, selfInstance.id),
           })
@@ -396,7 +408,9 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     // ── 4. Create MCP servers ──────────────────────────────
     //    Register the lightweight memory_status tool (structural metadata only).
     //    The AI uses native Read/Edit/Write on memory.md directly.
-    const memoryMcpServer = createMemoryStatusMcpServer(memoryScope)
+    const memoryMcpServer = memorySettings.enabled
+      ? createMemoryStatusMcpServer(resolveMemoryLayout(memoryScope, 'app'))
+      : null
 
     // Resolve plans directory for file-based data_path guidance in report_to_user.
     // Uses the same CC config directory that the SDK session uses for consistency.
@@ -481,10 +495,11 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       stderrHandler: (data: string) => {
         console.error(`[Runtime][${app.id}] CLI stderr:`, data)
       },
+      memoryGuard: appMemoryGuard(memoryScope, runTag, memorySettings),
       // Built-in server ids below are mirrored in shared/apps/builtin-mcp.ts — keep in sync.
       mcpServers: {
         ...requiredMcpServers,              // declared MCP dependencies
-        'halo-memory': memoryMcpServer,     // built-in: persistent memory
+        ...(memoryMcpServer ? { 'halo-memory': memoryMcpServer } : {}), // built-in: persistent memory
         'halo-report': reportMcpServer,     // built-in: completion signal
         'halo-notify': notifyMcpServer,     // built-in: user notification
         'halo-docs': docsMcpServer,         // built-in: Halo's own documentation
@@ -503,7 +518,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     })
 
     // Override SDK options for automation context
-    sdkOptions.systemPrompt = systemPrompt
+    sdkOptions.systemPrompt = toEngineSystemPrompt(systemPrompt)
     sdkOptions.maxTurns = config.agent?.maxTurns ?? DEFAULT_MAX_TURNS
     // Token-level partials OFF: a run is headless and emits no renderer events,
     // so there is no live consumer for token frames. processStream persists one
@@ -756,7 +771,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       finalText: streamResult.finalText,
       escalation: !!escalationEntryId,
       runTag,
-    }, buildCompactionCreds(app))
+    }, appConsolidationInputs(app, selfInstance.id))
 
     return {
       appId: app.id,
@@ -818,7 +833,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       finalText: `Error: ${errorMessage}`,
       escalation: false,
       runTag,
-    }, buildCompactionCreds(app), { saveSessionSummary: true, compact: false })
+    }, appConsolidationInputs(app, selfInstance.id), { saveSessionSummary: true, consolidate: false })
 
     return {
       appId: app.id,
@@ -939,6 +954,7 @@ async function processStream(
 
       if (msgType === 'result') {
         const m = sdkMessage as any
+        // On the halo engine `usage` already includes sub-agents' tokens.
         if (m.usage) {
           result.totalTokens = (m.usage.input_tokens || 0) + (m.usage.output_tokens || 0)
         }
@@ -988,26 +1004,4 @@ async function processStream(
   )
 
   return result
-}
-
-// ── Compaction credentials ───────────────────────────────────────────────────
-
-function buildCompactionCreds(app: InstalledApp): CompactionCredentialsProvider {
-  return async () => {
-    const config = getConfig()
-    const credentials = app.userOverrides?.modelSourceId
-      ? await getApiCredentialsForSource(config, app.userOverrides.modelSourceId, app.userOverrides.modelId)
-      : await getApiCredentials(config)
-    const resolved = await resolveCredentialsForSdk(credentials)
-    return {
-      anthropicApiKey: resolved.anthropicApiKey,
-      anthropicBaseUrl: resolved.anthropicBaseUrl,
-      sdkModel: resolved.sdkModel,
-      provider: credentials.provider,
-      oauthProvider: credentials.oauthProvider,
-      delegatedAuth: credentials.delegatedAuth,
-      delegatedRoutingHeader: resolved.delegatedRoutingHeader,
-      capabilities: resolved.capabilities,
-    }
-  }
 }

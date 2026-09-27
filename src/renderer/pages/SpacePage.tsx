@@ -31,6 +31,7 @@ import { QuotaPill } from '../components/layout/QuotaPill'
 import { MobileOverflowMenu } from '../components/layout/MobileOverflowMenu'
 import { HeaderMoreMenu } from '../components/layout/HeaderMoreMenu'
 import { CanvasTableOpener, ContentCanvas, TerminalCloseGuard } from '../components/canvas'
+import { GoalCanvasSupport } from '../components/goal'
 import { GitBashWarningBanner } from '../components/setup/GitBashWarningBanner'
 import { api } from '../api'
 import { useLayoutPreferences } from '../hooks/useLayoutPreferences'
@@ -343,6 +344,7 @@ export function SpacePage() {
             active for closeAll/space-switch teardown even when the canvas is
             collapsed. Renders its prompt via a portal; no layout footprint. */}
         <TerminalCloseGuard />
+        <GoalCanvasSupport />
 
         {/*
           ChatCapsule overlay is now managed via IPC to render above BrowserView.

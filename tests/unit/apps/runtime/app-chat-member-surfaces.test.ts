@@ -13,7 +13,7 @@
  * subprocess; the session layer is a fake whose send() settles the round.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 // ============================================
 // Mocks (must be declared before importing app-chat)
@@ -114,11 +114,18 @@ vi.mock('../../../../src/main/apps/runtime/team/team-tools', () => ({
 vi.mock('../../../../src/main/apps/conversation-mcp', () => ({
   createHaloAppsMcpServer,
 }))
-vi.mock('../../../../src/main/platform/memory/snapshot', () => ({
+vi.mock('../../../../src/main/platform/memory', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../../src/main/platform/memory')>()),
   createMemoryStatusMcpServer,
 }))
 
 const { buildBaseSdkOptions } = vi.hoisted(() => ({ buildBaseSdkOptions: vi.fn(() => ({})) }))
+const { getEngineCapabilities } = vi.hoisted(() => ({ getEngineCapabilities: vi.fn((): unknown => null) }))
+vi.mock('../../../../src/main/services/agent/resolved-sdk', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../../src/main/services/agent/resolved-sdk')>()),
+  getEngineCapabilities,
+}))
+
 vi.mock('../../../../src/main/services/agent/sdk-config', () => ({
   resolveCredentialsForSdk: vi.fn(async () => ({
     displayModel: 'test-model',
@@ -128,6 +135,12 @@ vi.mock('../../../../src/main/services/agent/sdk-config', () => ({
     capabilities: {},
   })),
   buildBaseSdkOptions,
+  // The real merge: what is under test here is that app-chat goes through it.
+  addSdkHooks: (options: Record<string, any>, hooks: Record<string, unknown[]>) => {
+    const merged: Record<string, unknown[]> = { ...(options.hooks ?? {}) }
+    for (const [event, list] of Object.entries(hooks)) merged[event] = [...(merged[event] ?? []), ...list]
+    options.hooks = merged
+  },
 }))
 vi.mock('../../../../src/main/services/agent/reasoning-effort', () => ({
   applyReasoningEffort: () => 0,
@@ -263,8 +276,27 @@ vi.mock('../../../../src/main/apps/runtime/index', () => ({
   getActivityStore: () => activityStore,
 }))
 vi.mock('../../../../src/main/apps/runtime/turn/memory-lifecycle', () => ({
-  prepareMemoryForTurn: vi.fn(async () => ({ snapshot: { exists: false, memoryFilePath: '/tmp/memory.md', totalLines: 0, sizeBytes: 0, fullContent: null, headers: [], firstSection: null } })),
-  checkAndCompactMemory: vi.fn(async () => {}),
+  prepareMemoryForTurn: vi.fn(async () => ({
+    snapshot: {
+      exists: false, totalLines: 0, sizeBytes: 0, nowBytes: 0, fullContent: null, headers: [], firstSection: null,
+      layout: { file: '/tmp/memory.md', dataDir: '/tmp/memory', topicsDir: '/tmp/memory/topics', runDir: '/tmp/memory/run', archiveDir: '/tmp/memory/archive', snapshotsDir: '/tmp/memory/.snapshots', consolidationDir: '/tmp/memory/.consolidation', stateFile: '/tmp/memory/.state.json' },
+      topics: { root: '/tmp/memory/topics', children: [], topicCount: 0, totalBytes: 0, truncated: false },
+      runFiles: [], runTotalCount: 0, archiveCount: 0, lastModified: null,
+    },
+  })),
+  requestAppMemoryConsolidation: vi.fn(),
+  memoryPromptOptions: vi.fn(() => ({})),
+  loadSpaceTopicsForTurn: vi.fn(async () => null),
+  appMemoryGuard: vi.fn(() => ({ writable: [], readOnly: [], label: 'test' })),
+  appMemorySettings: vi.fn(() => ({ enabled: true, autoConsolidate: true, cadence: 'diligent' })),
+  appTurnFileAccess: vi.fn(() => ({
+    cwd: '/tmp', memoryWritable: [], memoryReadable: [], attachedFiles: [],
+    workspaceRoots: ['/tmp'], closed: [], hookGuarded: [], memorySystemPaths: [],
+  })),
+}))
+
+vi.mock('../../../../src/main/services/memory-consolidation', () => ({
+  requestConsolidation: vi.fn(),
 }))
 
 // ============================================
@@ -272,7 +304,8 @@ vi.mock('../../../../src/main/apps/runtime/turn/memory-lifecycle', () => ({
 // ============================================
 
 import { sendAppChatMessage } from '../../../../src/main/apps/runtime/app-chat'
-import { checkAndCompactMemory } from '../../../../src/main/apps/runtime/turn/memory-lifecycle'
+import { getOrCreateV2Session } from '../../../../src/main/services/agent/session-manager'
+import { requestAppMemoryConsolidation } from '../../../../src/main/apps/runtime/turn/memory-lifecycle'
 import { buildTeamSessionKey } from '../../../../src/shared/apps/team-types'
 
 const TEAM_ID = 'team-1'
@@ -280,7 +313,7 @@ const EPOCH_ID = 'epoch-1'
 const CONVERSATION = buildTeamSessionKey(app.id, TEAM_ID, EPOCH_ID)
 
 /** The turn as the runtime dispatches it: a teammate's message to this member. */
-function memberTurn(): Parameters<typeof sendAppChatMessage>[0] {
+function memberTurn(opts: { external?: boolean } = {}): Parameters<typeof sendAppChatMessage>[0] {
   return {
     appId: app.id,
     spaceId: 'space-1',
@@ -294,6 +327,7 @@ function memberTurn(): Parameters<typeof sendAppChatMessage>[0] {
       fromAppId: 'app-coordinator',
       wait: false,
       correlationId: 'corr-1',
+      ...(opts.external ? { external: true } : {}),
     },
   }
 }
@@ -343,7 +377,7 @@ describe('a temporary collaboration member mounts no memory and no digital-human
     getPromptInstructions.mockClear()
     createMemoryStatusMcpServer.mockClear()
     createHaloAppsMcpServer.mockClear()
-    vi.mocked(checkAndCompactMemory).mockClear()
+    vi.mocked(requestAppMemoryConsolidation).mockClear()
     disposableMemberContext()
   })
 
@@ -367,7 +401,7 @@ describe('a temporary collaboration member mounts no memory and no digital-human
     await sendAppChatMessage(memberTurn())
     const sent = (sink.writeUserMessage as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0] as string
     expect(sent).not.toContain('## Memory')
-    expect(checkAndCompactMemory).not.toHaveBeenCalled()
+    expect(requestAppMemoryConsolidation).not.toHaveBeenCalled()
   })
 
   it('still gives the member the rest of its turn — the team channel and its work tools', async () => {
@@ -385,7 +419,7 @@ describe('a digital human with a life beyond the work keeps both', () => {
     getPromptInstructions.mockClear()
     createMemoryStatusMcpServer.mockClear()
     createHaloAppsMcpServer.mockClear()
-    vi.mocked(checkAndCompactMemory).mockClear()
+    vi.mocked(requestAppMemoryConsolidation).mockClear()
     keptMemberContext()
   })
 
@@ -396,6 +430,61 @@ describe('a digital human with a life beyond the work keeps both', () => {
     expect(Object.keys(mcpServers)).toContain('halo-apps')
     expect(getPromptInstructions).toHaveBeenCalled()
     expect(systemPrompt).toContain(MEMORY_INSTRUCTIONS)
-    expect(checkAndCompactMemory).toHaveBeenCalled()
+    expect(requestAppMemoryConsolidation).toHaveBeenCalled()
+  })
+})
+
+describe('a restricted borrowed turn keeps every tool-call watcher', () => {
+  const guardSentinel = { matcher: 'Write', hooks: [async () => ({})] }
+
+  beforeEach(() => {
+    keptMemberContext()
+    getDelegatedPolicy.mockReturnValue({ allowedTools: ['Read'] } as never)
+    getEngineCapabilities.mockReturnValue({ features: { permissionRules: true, hooks: true } })
+    buildBaseSdkOptions.mockReset()
+    // What sdk-config installs for memoryGuard before the policy is applied.
+    buildBaseSdkOptions.mockImplementation(() => ({ hooks: { PreToolUse: [guardSentinel] } }) as never)
+  })
+
+  afterEach(() => {
+    getDelegatedPolicy.mockReturnValue(undefined as never)
+    getEngineCapabilities.mockReturnValue(null)
+    buildBaseSdkOptions.mockReset()
+    buildBaseSdkOptions.mockImplementation(() => ({}) as never)
+  })
+
+  it('on an engine that cannot enforce a policy (Codex), a restricted turn does not start at all', async () => {
+    getEngineCapabilities.mockReturnValue({ features: { permissionRules: false, hooks: false } })
+    vi.mocked(getOrCreateV2Session).mockClear()
+    await expect(sendAppChatMessage(memberTurn())).rejects.toThrow(/cannot hold/)
+    expect(getOrCreateV2Session).not.toHaveBeenCalled()
+  })
+
+  const fileBoundaryMatchers = ['Read', 'Glob', 'Grep', 'Edit', 'MultiEdit', 'NotebookEdit']
+
+  it('a teammate from this machine gets the audit and the memory guard, but no path boundary', async () => {
+    await sendAppChatMessage(memberTurn())
+    const options = buildBaseSdkOptions.mock.results.at(-1)!.value as {
+      hooks: Record<string, Array<{ matcher?: string }>>
+    }
+    expect(options.hooks.PreToolUse).toEqual([guardSentinel])
+    expect(options.hooks.PostToolUse).toHaveLength(1)
+    expect(options.hooks.PostToolUse[0].matcher).toBeUndefined()
+  })
+
+  it('a request from another machine adds the audit and the file boundary without dropping the memory guard', async () => {
+    await sendAppChatMessage(memberTurn({ external: true }))
+    const call = buildBaseSdkOptions.mock.calls.at(-1) as unknown as [{ memoryGuard?: unknown }]
+    expect(call[0].memoryGuard).toBeDefined()
+    const options = buildBaseSdkOptions.mock.results.at(-1)!.value as {
+      hooks: Record<string, Array<{ matcher?: string }>>
+      disallowedTools: string[]
+    }
+    expect(options.hooks.PreToolUse[0]).toBe(guardSentinel)
+    expect(options.hooks.PreToolUse.map(h => h.matcher)).toEqual(
+      expect.arrayContaining(['Write', ...fileBoundaryMatchers])
+    )
+    expect(options.hooks.PostToolUse.map(h => h.matcher)).toEqual(expect.arrayContaining([undefined, 'Grep', 'Glob']))
+    expect(options.disallowedTools).toContain('Bash')
   })
 })

@@ -51,6 +51,7 @@ import {
   deliverExternalMessage,
 } from '../services/conversation-interop'
 import { setConversationInteropFactory } from '../services/agent/toolsets/broker'
+import { initSpaceMemoryConsolidation, disposeSpaceMemoryConsolidation } from '../services/memory-consolidation'
 import { markExtendedServicesReady } from './state'
 import { getMainWindow, sendToRenderer } from '../foundation/window.service'
 import { initializeHealthSystem, setSessionCleanupFn } from '../services/health'
@@ -198,6 +199,11 @@ async function initPlatformAndApps(): Promise<void> {
   // No DB/store dependency — dormant until the halo-conversations toolset
   // (services/agent/toolsets/broker.ts) actually registers a wait.
   initConversationInterop()
+
+  // Space memory consolidation: subscribes to onAgentEvent turn ends and, when
+  // a space's memory has grown past its threshold, reorganises it in the
+  // background (services/memory-consolidation/space-trigger.ts).
+  initSpaceMemoryConsolidation()
 
   // Wire the toolset broker's dependency-inversion seam (mirrors
   // setSessionInvalidator/setActiveTeamRuntime/setMemorySdk): broker.ts must
@@ -1546,6 +1552,7 @@ export async function cleanupExtendedServices(): Promise<void> {
 
   // Cross-Conversation Interop: drop the onAgentEvent subscription.
   disposeConversationInterop()
+  disposeSpaceMemoryConsolidation()
 
   // Team: Tear down the service + runtime accessor and the data layer before
   // the App Manager goes away (the service holds an App Manager reference).

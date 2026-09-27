@@ -58,6 +58,7 @@ import {
   Cpu,
   HardDrive,
   Pencil,
+  Target,
   type LucideIcon
 } from 'lucide-react'
 
@@ -81,6 +82,7 @@ export const toolIconMap: Record<string, LucideIcon> = {
 
   // Task management
   TodoWrite: ListTodo,
+  Goal: Target,
 
   // Agent
   Task: Zap,

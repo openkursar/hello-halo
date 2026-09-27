@@ -80,17 +80,18 @@ Primary source:
 
 Module: `src/main/platform/memory`.
 
-Resolved paths (`src/main/platform/memory/paths.ts`):
+Resolved paths (`src/main/platform/memory/paths.ts`, `resolveMemoryLayout`):
 
-- user: `{haloDir}/user-memory.md` and `{haloDir}/user-memory/`
+- user: `{haloDir}/user-memory.md` and `{haloDir}/user-memory/` (reserved, not yet wired)
 - space: `{spacePath}/.halo/memory.md` and `{spacePath}/.halo/memory/`
-- app: `{spacePath}/apps/{appId}/memory.md` and `{spacePath}/apps/{appId}/memory/`
+- app: `{appDataPath}/memory.md` and `{appDataPath}/memory/` (default `{spacePath}/.halo/apps/{appId}`)
 
-Tools:
+Inside `memory/`: `topics/` (agent-written wiki), `run/` (run records), `archive/`
+(memory.md before each consolidation), `.snapshots/` (restorable memory.md + topics),
+`.consolidation/` (a running consolidation's private copy).
 
-- `memory_read`
-- `memory_write`
-- `memory_list`
+The agent edits memory with its own Read/Edit/Write; the only memory MCP tool is
+`memory_status` (structure, no content).
 
 ## 5) Shared Type Contracts (Renderer-safe)
 

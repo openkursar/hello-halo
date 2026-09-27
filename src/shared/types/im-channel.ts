@@ -227,6 +227,12 @@ export interface ImChannelInstanceConfig {
    * When undefined, guests have no tool or path access (deny-all default).
    */
   guestPolicy?: GuestPolicy
+
+  /**
+   * The guest policy as it was when guest access was last turned off, so
+   * turning it back on restores the owner's choices. Never enforced.
+   */
+  savedGuestPolicy?: GuestPolicy
 }
 
 // ============================================

@@ -11,6 +11,7 @@ import {
 import type {
   ApiResponse,
 } from './_shared'
+import type { Goal, GoalInput } from '../../shared/types/goal'
 
 export const agentApi = {
   // ===== Agent =====
@@ -29,6 +30,7 @@ export const agentApi = {
     }>
     thinkingEnabled?: boolean  // Enable extended thinking mode
     knowledgeBaseId?: string  // Chat-with-knowledge-base turn
+    goal?: GoalInput  // Set as the conversation goal before this message runs
     canvasContext?: {  // Canvas context for AI awareness
       isOpen: boolean
       tabCount: number
@@ -181,6 +183,23 @@ export const agentApi = {
       return window.halo.closeToolset({ spaceId, conversationId, toolsetId })
     }
     return httpRequest('POST', '/api/agent/toolsets/close', { spaceId, conversationId, toolsetId })
+  },
+
+  // ===== Conversation goal (engines with features.goal) =====
+  // data: the goal, or null when the conversation has none
+  getGoal: async (spaceId: string, conversationId: string): Promise<ApiResponse<Goal | null>> => {
+    if (isElectron()) {
+      return window.halo.getGoal({ spaceId, conversationId }) as Promise<ApiResponse<Goal | null>>
+    }
+    return httpRequest<Goal | null>('POST', '/api/agent/goal/get', { spaceId, conversationId })
+  },
+
+  // Set, replace, or clear (goal: null) on the user's behalf. Starts no turn.
+  setGoal: async (spaceId: string, conversationId: string, goal: GoalInput | null): Promise<ApiResponse<Goal | null>> => {
+    if (isElectron()) {
+      return window.halo.setGoal({ spaceId, conversationId, goal }) as Promise<ApiResponse<Goal | null>>
+    }
+    return httpRequest<Goal | null>('POST', '/api/agent/goal/set', { spaceId, conversationId, goal })
   },
 
   // ===== Terminal (user-facing viewer operations) =====

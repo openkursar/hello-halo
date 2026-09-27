@@ -6,6 +6,7 @@
  */
 
 import type { ReasoningEffortSetting } from '../../../shared/constants/reasoning-effort'
+import type { Goal, GoalInput } from '../../../shared/types/goal'
 
 // ============================================
 // API Credentials
@@ -151,6 +152,7 @@ export interface AgentRequest {
   canvasContext?: CanvasContext  // Current canvas state for AI awareness
   knowledgeBaseId?: string         // When set, run as a "chat with this knowledge base" turn:
                               // working dir = the KB's wiki dir, that KB injected into the prompt
+  goal?: GoalInput            // Set as the conversation goal before this message runs (engines with features.goal)
 }
 
 // ============================================
@@ -253,6 +255,10 @@ export type V2SDKSession = {
   // Optional because alternate engines may not expose them — callers must guard.
   setMaxThinkingTokens?: (maxThinkingTokens: number | null) => Promise<void>
   setPermissionMode?: (mode: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan') => Promise<void>
+  // Session goal — present on engines advertising `features.goal`.
+  getGoal?: () => Goal | null
+  /** Throws TypeError on a blank objective. */
+  setGoal?: (goal: GoalInput | null) => Goal | null
 }
 
 /**

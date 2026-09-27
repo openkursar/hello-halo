@@ -16,6 +16,7 @@ import type { ActivityEntry, AutomationAppState, AvailableSkill, EscalationAnswe
 import type { CapabilityInventory } from '../../shared/apps/capability-inventory'
 import type { AppSpaceChangePreview } from '../../shared/apps/app-environment'
 import type { ImageAttachment } from '../../shared/types/image-attachment'
+import type { MemoryStatus } from '../../shared/types/memory'
 
 export const appsApi = {
   appStartRun: async (appId: string): Promise<ApiResponse<import('../../shared/apps/app-types').AppRunStartInfo>> => {
@@ -366,6 +367,20 @@ export const appsApi = {
       return window.halo.appClearMemory(appId)
     }
     return httpRequest('POST', `/api/apps/${appId}/clear-memory`)
+  },
+
+  appGetMemoryStatus: async (appId: string): Promise<ApiResponse<MemoryStatus>> => {
+    if (isElectron()) {
+      return window.halo.appGetMemoryStatus(appId)
+    }
+    return httpRequest('GET', `/api/apps/${appId}/memory`)
+  },
+
+  appConsolidateMemory: async (appId: string): Promise<ApiResponse<{ started: boolean; reason?: string }>> => {
+    if (isElectron()) {
+      return window.halo.appConsolidateMemory(appId)
+    }
+    return httpRequest('POST', `/api/apps/${appId}/memory/consolidate`)
   },
 
   appMoveSpace: async (appId: string, newSpaceId: string | null): Promise<ApiResponse> => {

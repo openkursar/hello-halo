@@ -48,6 +48,7 @@ import { WecomScanAuthDialog } from './WecomScanAuthDialog'
 import { FeishuInstanceCard } from './FeishuInstanceCard'
 import { FeishuScanAuthDialog } from './FeishuScanAuthDialog'
 import { ImInstancePermissionSection } from './ImInstancePermissionSection'
+import { defaultGuestPolicy } from '../../../shared/apps/capability-policy'
 import type { ImPermissionDefaults } from './ImInstancePermissionSection'
 import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
 
@@ -1171,9 +1172,7 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
       replyScope: 'all', // Default to all messages
       permissionEnabled: pd?.defaultEnabled ?? false,
       ...(pd?.defaultEnabled ? {
-        guestPolicy: pd.defaultGuestAccess
-          ? { allowedTools: pd.defaultGuestPolicy?.allowedTools ?? [] }
-          : undefined,
+        guestPolicy: pd.defaultGuestAccess ? defaultGuestPolicy(pd.defaultGuestPolicy) : undefined,
       } : {}),
     }
     const newInstances = [...instances, newInstance]
@@ -1236,9 +1235,7 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
       replyScope: 'all',
       permissionEnabled: pd?.defaultEnabled ?? false,
       ...(pd?.defaultEnabled ? {
-        guestPolicy: pd.defaultGuestAccess
-          ? { allowedTools: pd.defaultGuestPolicy?.allowedTools ?? [] }
-          : undefined,
+        guestPolicy: pd.defaultGuestAccess ? defaultGuestPolicy(pd.defaultGuestPolicy) : undefined,
       } : {}),
     }
     saveInstances([...instances, newInstance])

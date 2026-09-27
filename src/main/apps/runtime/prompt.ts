@@ -13,7 +13,7 @@
  */
 
 import type { AutomationSpec } from '../spec'
-import type { MemorySnapshot } from '../../platform/memory/snapshot'
+import { renderMemorySection, MEMORY_SECTION_LIMITS, type MemorySnapshot, type TopicsTree } from '../../platform/memory'
 import type { EscalationResponse, EscalationQuestion } from './types'
 import { formatEscalationAnswer } from '../../../shared/apps/app-types'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
@@ -254,7 +254,8 @@ export interface AppPromptOptions {
  * Build the complete system prompt for an automation App session.
  *
  * Structure:
- * 1. Full main Agent system prompt (identity, tools, coding guidelines, env)
+ * 1. Host system prompt: the full main-Agent prompt, or on the halo engine only
+ *    the Halo context appended to the engine's own default prompt
  * 2. Automation context overlay (headless mode, report_to_user, escalation)
  * 3. App-specific system_prompt (from spec)
  * 4. Memory instructions (from memory service)
@@ -352,7 +353,10 @@ export function buildInitialMessage(options: {
   triggerContext: string
   userConfig?: Record<string, unknown>
   appName: string
-  memorySnapshot: MemorySnapshot
+  /** null when this digital human's memory is turned off */
+  memorySnapshot: MemorySnapshot | null
+  /** The space's topics, offered read-only; null when not offered */
+  spaceTopics?: TopicsTree | null
   selfInstance: LiveInstance
   liveInstances: LiveInstance[]
 }): string {
@@ -362,7 +366,7 @@ export function buildInitialMessage(options: {
   parts.push(`## Trigger\n\nWhat initiated this run.\n\n${options.triggerContext}`)
 
   // ── Memory ─────────────────────────────────────────────────────────────
-  parts.push(buildMemorySection(options.memorySnapshot))
+  if (options.memorySnapshot) parts.push(buildMemorySection(options.memorySnapshot, options.spaceTopics))
   parts.push(buildLiveInstancesSection(options.selfInstance, options.liveInstances))
 
   // ── User Configuration ─────────────────────────────────────────────────
@@ -371,12 +375,17 @@ export function buildInitialMessage(options: {
   }
 
   // ── Instructions ───────────────────────────────────────────────────────
+  const steps = options.memorySnapshot
+    ? [
+        'Update memory (`# now`, `# History`, and topics where knowledge settled) — internal housekeeping, do not mention this in your report',
+        'Report results via `mcp__halo-report__report_to_user`',
+      ]
+    : ['Report results via `mcp__halo-report__report_to_user`']
   parts.push(
     `## Instructions\n\n` +
     `Strictly follow the "${options.appName}" task requirements defined in your App Instructions (system prompt).\n` +
     `Complete this run based on the trigger above, then:\n` +
-    `1. Update memory (\`# now\` and \`# History\`) — internal housekeeping, do not mention this in your report\n` +
-    `2. Report results via \`mcp__halo-report__report_to_user\``
+    steps.map((step, i) => `${i + 1}. ${step}`).join('\n')
   )
 
   return parts.join('\n\n')
@@ -482,93 +491,32 @@ function formatClockTime(epochMs: number): string {
 }
 
 /**
- * Build the ## Memory section for the initial message.
+ * Offered below the digital human's own topics when its owner let it consult
+ * the space's memory. Called memory, never knowledge: a knowledge base is a
+ * separate thing the agent may also be given in the same turn.
+ */
+const SPACE_TOPICS_TITLE = "Space memory topics (read-only) — generated from the space's topic files"
+const SPACE_TOPICS_NOTE = `
+Topics from this space's shared memory, written by its conversations. Read them
+when their description fits; they are not yours to edit. Refer to them by path
+when you need them again — do not copy them into your own memory. If they
+disagree with your own memory, your memory wins.
+`.trim()
+
+
+/**
+ * The `## Memory` block for a run or a session.
  *
- * Three variants based on memory state:
- * - No file: guidance to create one
- * - Small file (≤30 lines): full content inline
- * - Large file (>30 lines): first section + structural outline
- *
- * Exported for app-chat, which injects the same section at the start of a team
+ * Exported for app-chat, which injects the same section at the start of a
  * session — the digital human is the same one either way, so it must meet its
  * memory in the same shape whether the turn came from a schedule or a teammate.
  */
-export function buildMemorySection(snapshot: MemorySnapshot): string {
-  const lines: string[] = []
-  lines.push('## Memory')
-  lines.push('')
-  lines.push('Your persistent memory from previous work. Read it to maintain continuity and avoid repeating work.')
-  lines.push('')
-
-  // Only where there is content to misread: a digital human with no memory yet
-  // has no first-person line to mistake for its own.
-  if (snapshot.exists) {
-    lines.push(MEMORY_AUTHORSHIP_FRAMING)
-    lines.push('')
-  }
-
-  if (!snapshot.exists) {
-    // ── No memory file ─────────────────────────────────────────────────
-    lines.push(`**File**: \`${snapshot.memoryFilePath}\``)
-    lines.push('')
-    lines.push('No memory file exists yet. Create it with Write using the `# now` / `# History` structure.')
-    lines.push('Put your most important state under `# now` — it will be auto-loaded next run.')
-  } else if (snapshot.fullContent !== null) {
-    // ── Small memory: inject full content ──────────────────────────────
-    const sizeKB = (snapshot.sizeBytes / 1024).toFixed(1)
-    lines.push(`**File**: \`${snapshot.memoryFilePath}\``)
-    lines.push(`**Size**: ${snapshot.totalLines} lines, ${sizeKB}KB`)
-    lines.push('')
-    lines.push('### Content (full):')
-    lines.push('')
-    lines.push(snapshot.fullContent)
-  } else {
-    // ── Large memory: first section + outline ──────────────────────────
-    const sizeKB = (snapshot.sizeBytes / 1024).toFixed(1)
-    lines.push(`**File**: \`${snapshot.memoryFilePath}\``)
-    lines.push(`**Size**: ${snapshot.totalLines} lines, ${sizeKB}KB`)
-
-    if (snapshot.firstSection) {
-      lines.push('')
-      lines.push('### Working Memory (# now, auto-loaded):')
-      lines.push('')
-      lines.push(snapshot.firstSection)
-    }
-
-    if (snapshot.headers.length > 0) {
-      lines.push('')
-      lines.push('### Structure:')
-      for (const h of snapshot.headers) {
-        const loadedTag = h === snapshot.headers[0] && snapshot.firstSection
-          ? ' ← loaded above'
-          : ''
-        lines.push(`  L${h.line}: ${h.heading} (${h.lineCount} lines)${loadedTag}`)
-      }
-    }
-
-    lines.push('')
-    lines.push(`Use \`Read("${snapshot.memoryFilePath}")\` to see full content or specific sections.`)
-  }
-
-  // ── Archive info ─────────────────────────────────────────────────────
-  if (snapshot.archiveTotalCount > 0 || snapshot.compactionArchiveCount > 0) {
-    lines.push('')
-
-    if (snapshot.archiveTotalCount > 0) {
-      lines.push(`**Run History** (\`${snapshot.memoryArchiveDir}\`, ${snapshot.archiveTotalCount} files):`)
-      for (const f of snapshot.archiveFiles) {
-        lines.push(`  - ${f}`)
-      }
-      if (snapshot.archiveTotalCount > snapshot.archiveFiles.length) {
-        lines.push(`  ... and ${snapshot.archiveTotalCount - snapshot.archiveFiles.length} more`)
-      }
-    }
-
-    if (snapshot.compactionArchiveCount > 0) {
-      const compactDir = snapshot.memoryArchiveDir.replace(/\/run$/, '')
-      lines.push(`**Compaction Archives** (\`${compactDir}\`, ${snapshot.compactionArchiveCount} files)`)
-    }
-  }
-
-  return lines.join('\n')
+export function buildMemorySection(snapshot: MemorySnapshot, spaceTopics?: TopicsTree | null): string {
+  return renderMemorySection(snapshot, {
+    ...MEMORY_SECTION_LIMITS['digital-human'],
+    framing: MEMORY_AUTHORSHIP_FRAMING,
+    readOnlyTopics: spaceTopics
+      ? { title: SPACE_TOPICS_TITLE, note: SPACE_TOPICS_NOTE, tree: spaceTopics }
+      : undefined,
+  })
 }

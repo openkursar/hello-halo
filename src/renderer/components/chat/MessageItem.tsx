@@ -35,6 +35,7 @@ import type { Message, Thought, ThoughtsSummary } from '../../types'
 import { useTranslation } from '../../i18n'
 import { useChatStore } from '../../stores/chat.store'
 import { SourceChips } from './SourceChips'
+import { GoalSetBadge } from '../goal'
 
 interface MessageItemProps {
   message: Message
@@ -341,6 +342,8 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
           <span className="text-xs text-muted-foreground/70">{t('Halo is working')}</span>
         </div>
       )}
+
+      {isUser && message.metadata?.goal && <GoalSetBadge />}
 
       {/* User message images (displayed before text) */}
       {isUser && message.images && message.images.length > 0 && (

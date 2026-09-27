@@ -196,6 +196,10 @@ export function getToolFriendlyFormat(
     case 'NotebookEdit':
       return typeof toolInput.notebook_path === 'string' ? toolInput.notebook_path : ''
 
+    case 'Goal':
+      if (typeof toolInput.objective === 'string') return toolInput.objective
+      return typeof toolInput.note === 'string' ? toolInput.note : ''
+
     default:
       // Fallback: show first non-empty string value
       for (const value of Object.values(toolInput)) {
