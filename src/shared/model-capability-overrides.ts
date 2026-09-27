@@ -12,8 +12,7 @@ export const MODEL_CAPABILITY_OVERRIDE_KEYS = [
   'maxOutputTokens',
   'vision',
   'thinking',
-  'reasoningEffort',
-  'extendedContext'
+  'reasoningEffort'
 ] as const
 
 const keySet = new Set<string>(MODEL_CAPABILITY_OVERRIDE_KEYS)
@@ -79,13 +78,6 @@ export function validateModelCapabilityOverride(
     }
     result.reasoningEffort = value.reasoningEffort.trim()
   }
-  if (value.extendedContext !== undefined) {
-    if (typeof value.extendedContext !== 'boolean') {
-      return { valid: false, error: 'invalid-value', ignoredKeys }
-    }
-    result.extendedContext = value.extendedContext
-  }
-
   return { valid: true, value: result, ignoredKeys }
 }
 
@@ -108,10 +100,6 @@ export function normalizeModelCapabilityOverride(
   for (const key of MODEL_CAPABILITY_OVERRIDE_KEYS) {
     const value = override[key]
     if (value === undefined) continue
-    if (key === 'extendedContext') {
-      if (value === true) result.extendedContext = true
-      continue
-    }
     if (value !== base[key as keyof ModelCapability]) {
       Object.assign(result, { [key]: value })
     }

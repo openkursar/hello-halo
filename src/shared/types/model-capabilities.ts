@@ -58,8 +58,6 @@ export interface UserModelSettings {
    * on. Absent = Halo's default level.
    */
   reasoningEffort?: ReasoningEffortSetting
-  /** Allow Halo to opt the SDK-facing model into context above 200K. */
-  extendedContext?: boolean
 }
 
 /** Provider-reported numeric limits from a model catalog. */

@@ -1118,7 +1118,7 @@ function serializeModelOverridesForSignature(
   return ids
     .map(id => {
       const v = overrides[id] || {}
-      return `${id}:${v.maxOutputTokens ?? ''}:${v.contextWindow ?? ''}:${v.reasoningEffort ?? ''}:${v.extendedContext ?? ''}`
+      return `${id}:${v.maxOutputTokens ?? ''}:${v.contextWindow ?? ''}:${v.reasoningEffort ?? ''}`
     })
     .join(';')
 }

@@ -4,13 +4,13 @@
  * 'file' | 'wecom' triggers become EventRouter subscriptions (the same
  * multi-subscriber path the app runtime uses). Both converge on runTeam().
  *
- * Overlapping runs are guarded by the team's currentEpochId, checked both in the
+ * Overlapping runs are guarded by the team's live run epoch, checked both in the
  * scheduler due handler and in each event subscription before runTeam().
  */
 
 import type { SchedulerService, Schedule, SchedulerJob, RunOutcome } from '../../../platform/scheduler'
 import type { TeamStore } from '../../team'
-import type { TeamTrigger, TeamScheduleConfig, TeamRunTrigger } from '../../../../shared/apps/team-types'
+import type { TeamTrigger, TeamTriggerConfig, TeamScheduleConfig, TeamRunTrigger } from '../../../../shared/apps/team-types'
 import type { EventRouter, Unsubscribe } from '../event-router'
 import type { AutomationEvent } from '../event-types'
 import { sourceConfigToEventFilter } from '../event-filter-mapping'
@@ -23,7 +23,9 @@ function jobId(teamId: string, triggerId: string): string {
   return `team:${teamId}:${triggerId}`
 }
 
-function toSchedule(config: TeamScheduleConfig | Record<string, unknown>): Schedule | null {
+function toSchedule(config: TeamTriggerConfig | Record<string, unknown>): Schedule | null {
+  // Only ever called for a 'schedule' trigger, so the schedule-shaped read of
+  // the config is safe; the parameter is as wide as TeamTrigger.config itself.
   const cfg = config as TeamScheduleConfig
   if (cfg.cron && cfg.cron.trim()) return { kind: 'cron', cron: cfg.cron.trim() }
   if (cfg.every && cfg.every.trim()) return { kind: 'every', every: cfg.every.trim() }
@@ -36,6 +38,13 @@ export interface TeamTriggerSchedulerDeps {
   /** Routes 'webhook' | 'file' | 'wecom' triggers; the event-kind counterpart of scheduler. */
   eventRouter: EventRouter
   runTeam: (teamId: string, trigger: TeamRunTrigger) => Promise<void>
+  /**
+   * The run epoch the team is executing right now, or null — the reentrancy
+   * guard both trigger kinds ask before starting a run. Deliberately not
+   * `team.currentEpochId`: that pointer survives a crash, and a team that reads
+   * "already running" forever stops being triggered at all.
+   */
+  activeRunEpochId: (teamId: string) => string | null
 }
 
 export interface TeamTriggerScheduler {
@@ -46,7 +55,7 @@ export interface TeamTriggerScheduler {
 }
 
 export function createTeamTriggerScheduler(deps: TeamTriggerSchedulerDeps): TeamTriggerScheduler {
-  const { scheduler, store, eventRouter, runTeam } = deps
+  const { scheduler, store, eventRouter, runTeam, activeRunEpochId } = deps
 
   /** EventRouter unsubscribers per team — the event-kind parallel of scheduler jobs. */
   const eventUnsubs = new Map<string, Unsubscribe[]>()
@@ -110,8 +119,9 @@ export function createTeamTriggerScheduler(deps: TeamTriggerSchedulerDeps): Team
       // gone or already running an epoch.
       const team = store.getTeamById(trigger.teamId)
       if (!team) return
-      if (team.currentEpochId) {
-        console.log(`${LOG_TAG} team ${trigger.teamId} already running (epoch=${team.currentEpochId}); skip event ${event.type}`)
+      const activeEpochId = activeRunEpochId(trigger.teamId)
+      if (activeEpochId) {
+        console.log(`${LOG_TAG} team ${trigger.teamId} already running (epoch=${activeEpochId}); skip event ${event.type}`)
         return
       }
       try {
@@ -155,8 +165,9 @@ export function createTeamTriggerScheduler(deps: TeamTriggerSchedulerDeps): Team
           scheduler.removeJob(job.id)
           return 'skipped'
         }
-        if (team.currentEpochId) {
-          console.log(`${LOG_TAG} team ${teamId} already running (epoch=${team.currentEpochId}); skip`)
+        const activeEpochId = activeRunEpochId(teamId)
+        if (activeEpochId) {
+          console.log(`${LOG_TAG} team ${teamId} already running (epoch=${activeEpochId}); skip`)
           return 'skipped'
         }
 

@@ -209,7 +209,6 @@ function resolveCapabilitiesFromSource(
     maxOutputTokens: resolved.maxOutputTokens,
     contextWindow: resolved.contextWindow,
     reasoningEffort: resolved.reasoningEffort,
-    extendedContext: resolved.extendedContext === true,
     // Whether the number above came from somewhere that actually knows this
     // model. When nothing does, the caller leaves CLAUDE_CODE_MAX_OUTPUT_TOKENS
     // unset so CC applies its own default rather than Halo's guess.

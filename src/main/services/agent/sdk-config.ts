@@ -134,6 +134,10 @@ function clampInt(value: number, min: number, max: number): number {
  * id encoded into the API key stays clean so non-Anthropic upstreams never
  * see the synthetic suffix. Threshold is strict `>` to avoid opening
  * unaudited CC `[1m]` branches for models that don't need them.
+ *
+ * The effective window is the only input: Model Config shows no separate
+ * opt-in, so gating on anything else would leave a window the user can read
+ * on screen silently capped at the intrinsic default.
  */
 export function applyCC1mContextUnlock(
   sdkModel: string,
@@ -141,7 +145,7 @@ export function applyCC1mContextUnlock(
 ): string {
   if (!sdkModel) return sdkModel
   if (/\[1m\]$/i.test(sdkModel)) return sdkModel
-  if (!capabilities || capabilities.extendedContext !== true) return sdkModel
+  if (!capabilities) return sdkModel
   if (!Number.isFinite(capabilities.contextWindow)) return sdkModel
   if (capabilities.contextWindow <= CC_INTRINSIC_DEFAULT_CONTEXT) return sdkModel
   return `${sdkModel}[1m]`

@@ -25,8 +25,6 @@ export interface ResolvedModelCapabilities {
   maxOutputTokens: number
   contextWindow: number
   reasoningEffort?: ReasoningEffortSetting
-  /** User opted this model into a window above CC's 200K intrinsic. */
-  extendedContext?: boolean
   /**
    * False when `maxOutputTokens` is only Halo's blanket fallback — no preset,
    * no catalog entry, no user value. Required rather than optional so every
