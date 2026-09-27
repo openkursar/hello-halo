@@ -56,14 +56,25 @@ export class Semaphore {
    * Acquire a slot. Resolves immediately if available,
    * otherwise waits in queue until released.
    */
-  async acquire(): Promise<void> {
+  async acquire(signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) throw new Error('Queued execution cancelled')
     if (this.current < this.max) {
       this.current++
       return
     }
 
     return new Promise<void>((resolve, reject) => {
-      this.queue.push({ resolve, reject })
+      const waiter: QueuedWaiter = {
+        resolve: () => { signal?.removeEventListener('abort', abort); resolve() },
+        reject: error => { signal?.removeEventListener('abort', abort); reject(error) },
+      }
+      const abort = (): void => {
+        const index = this.queue.indexOf(waiter)
+        if (index !== -1) this.queue.splice(index, 1)
+        waiter.reject(new Error('Queued execution cancelled'))
+      }
+      this.queue.push(waiter)
+      signal?.addEventListener('abort', abort, { once: true })
     })
   }
 

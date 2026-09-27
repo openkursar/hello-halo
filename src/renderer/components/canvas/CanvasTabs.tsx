@@ -24,7 +24,7 @@
  */
 
 import { useState, useRef, useCallback, useEffect, forwardRef } from 'react'
-import { X, Loader2, AlertCircle, Plus, XCircle, Maximize2, Minimize2, RefreshCw } from 'lucide-react'
+import { X, Loader2, AlertCircle, Plus, XCircle, Maximize2, Minimize2, RefreshCw, Target } from 'lucide-react'
 import { type TabState } from '../../services/canvas-lifecycle'
 import { useCanvasLifecycle } from '../../hooks/useCanvasLifecycle'
 import { useCanvasStore } from '../../stores/canvas.store'
@@ -429,6 +429,8 @@ const TabItem = forwardRef<HTMLDivElement, TabItemProps>(function TabItem({
           <Loader2 className="w-4 h-4 animate-spin text-primary" />
         ) : tab.error ? (
           <AlertCircle className="w-4 h-4 text-destructive" />
+        ) : tab.type === 'goal' ? (
+          <Target className="w-4 h-4 text-primary" />
         ) : (
           <FileIcon
             extension={extension}
@@ -439,7 +441,7 @@ const TabItem = forwardRef<HTMLDivElement, TabItemProps>(function TabItem({
       </div>
 
       {/* Title */}
-      <span className="canvas-tab-title">
+      <span className="canvas-tab-title" title={tab.title}>
         {tab.title}
       </span>
 

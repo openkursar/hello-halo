@@ -13,6 +13,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import type { Response as ExpressResponse } from 'express'
+import { CLAUDE_CODE_USER_AGENT } from '../../../src/main/openai-compat-router/utils/claude-code-identity'
 
 const runInterceptors = vi.fn()
 vi.mock('../../../src/main/openai-compat-router/interceptors', () => ({
@@ -51,17 +52,17 @@ vi.mock('../../../src/main/services/proxy-fetch', () => ({
   proxyFetch: (...a: unknown[]) => proxyFetch(...a),
 }))
 
-const applyProviderAdapter = vi.fn(() => null)
+const applyProviderAdapter = vi.fn((..._args: unknown[]) => null)
 vi.mock('../../../src/main/openai-compat-router/server/provider-adapters', () => ({
   applyProviderAdapter: (...a: unknown[]) => applyProviderAdapter(...a),
 }))
 
 // Run the queued fn inline so conversion-path assertions stay synchronous.
 // api-type: real-ish behavior driven per test via mockReturnValue.
-const getApiTypeFromUrl = vi.fn(() => 'chat_completions')
-const isValidEndpointUrl = vi.fn(() => true)
-const getEndpointUrlError = vi.fn(() => 'bad url')
-const shouldForceStream = vi.fn(() => false)
+const getApiTypeFromUrl = vi.fn((..._args: unknown[]) => 'chat_completions')
+const isValidEndpointUrl = vi.fn((..._args: unknown[]) => true)
+const getEndpointUrlError = vi.fn((..._args: unknown[]) => 'bad url')
+const shouldForceStream = vi.fn((..._args: unknown[]) => false)
 vi.mock('../../../src/main/openai-compat-router/server/api-type', () => ({
   getApiTypeFromUrl: (...a: unknown[]) => getApiTypeFromUrl(...a),
   isValidEndpointUrl: (...a: unknown[]) => isValidEndpointUrl(...a),
@@ -69,14 +70,14 @@ vi.mock('../../../src/main/openai-compat-router/server/api-type', () => ({
   shouldForceStream: (...a: unknown[]) => shouldForceStream(...a),
 }))
 
-const isNativeAnthropicHost = vi.fn(() => false)
-const normalizeSystemPrompt = vi.fn((request: unknown) => ({ request, modified: false }))
+const isNativeAnthropicHost = vi.fn((..._args: unknown[]) => false)
+const normalizeSystemPrompt = vi.fn((request: unknown, ..._args: unknown[]) => ({ request, modified: false }))
 vi.mock('../../../src/main/openai-compat-router/utils', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/main/openai-compat-router/utils')>()
   return {
     ...actual,
     isNativeAnthropicHost: (...a: unknown[]) => isNativeAnthropicHost(...a),
-    normalizeSystemPrompt: (...a: unknown[]) => normalizeSystemPrompt(...a),
+    normalizeSystemPrompt: (request: unknown, ...args: unknown[]) => normalizeSystemPrompt(request, ...args),
   }
 })
 
@@ -379,14 +380,38 @@ describe('anthropic passthrough header merge', () => {
     expect(headers['anthropic-beta']).toBe('context-management, shared, oauth')
   })
 
-  it('collapses content-type to a single value regardless of casing', async () => {
+  it('collapses content-type casing and gives provider headers precedence', async () => {
     const headers = await runPassthrough({
       sdkHeaders: { 'content-type': 'application/json' },
-      customHeaders: { 'Content-Type': 'application/json' },
+      customHeaders: { 'Content-Type': 'application/json; charset=utf-8' },
     })
     const ctKeys = Object.keys(headers).filter((k) => k.toLowerCase() === 'content-type')
     expect(ctKeys).toHaveLength(1)
-    expect(headers[ctKeys[0]]).toBe('application/json')
+    expect(headers[ctKeys[0]]).toBe('application/json; charset=utf-8')
+  })
+
+  it('overrides an older Claude Code user-agent with the compatibility identity', async () => {
+    const headers = await runPassthrough({
+      sdkHeaders: { 'User-Agent': 'claude-cli/2.1.89 (external, cli)' },
+    })
+    const userAgentKeys = Object.keys(headers).filter((k) => k.toLowerCase() === 'user-agent')
+    expect(userAgentKeys).toHaveLength(1)
+    expect(headers[userAgentKeys[0]]).toBe(CLAUDE_CODE_USER_AGENT)
+  })
+
+  it('gives a provider-owned user-agent precedence over the SDK identity', async () => {
+    const headers = await runPassthrough({
+      sdkHeaders: { 'user-agent': 'claude-cli/2.1.89 (external, cli)' },
+      customHeaders: { 'User-Agent': 'GitHubCopilotChat/0.39.1' },
+    })
+    const userAgentKeys = Object.keys(headers).filter((k) => k.toLowerCase() === 'user-agent')
+    expect(userAgentKeys).toHaveLength(1)
+    expect(headers[userAgentKeys[0]]).toBe('GitHubCopilotChat/0.39.1')
+  })
+
+  it('injects the Claude Code compatibility identity when user-agent is absent', async () => {
+    const headers = await runPassthrough({})
+    expect(headers['user-agent']).toBe(CLAUDE_CODE_USER_AGENT)
   })
 
   it('skips x-api-key when the provider supplies an Authorization header', async () => {

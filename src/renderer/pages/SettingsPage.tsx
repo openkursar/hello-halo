@@ -4,7 +4,7 @@
  */
 
 import { useState, useCallback } from 'react'
-import { ArrowLeft } from 'lucide-react'
+import { ChevronLeft } from 'lucide-react'
 import { useAppStore } from '../stores/app.store'
 import { api } from '../api'
 import type { HaloConfig } from '../types'
@@ -29,7 +29,7 @@ import {
 
 export function SettingsPage() {
   const { t } = useTranslation()
-  const { config, setConfig, goBack } = useAppStore()
+  const { config, setConfig, navigateBack } = useAppStore()
   const isMobile = useIsMobile()
   const isRemoteMode = api.isRemoteMode()
 
@@ -42,25 +42,18 @@ export function SettingsPage() {
     scrollToSection(sectionId)
   }, [])
 
-  // Handle back - return to previous view
-  const handleBack = () => {
-    goBack()
-  }
-
   return (
     <div className="h-full w-full flex flex-col">
       {/* Header */}
       <Header
         left={
-          <>
-            <button
-              onClick={handleBack}
-              className="p-1.5 hover:bg-secondary rounded-lg transition-colors"
-            >
-              <ArrowLeft className="w-5 h-5" />
-            </button>
-            <span className="font-medium text-sm">{t('Settings')}</span>
-          </>
+          <button
+            onClick={() => navigateBack('space')}
+            className="flex items-center gap-1.5 text-sm font-medium hover:text-muted-foreground transition-colors"
+          >
+            <ChevronLeft className="w-4 h-4" />
+            {t('Settings')}
+          </button>
         }
       />
 

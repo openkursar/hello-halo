@@ -89,7 +89,10 @@ try {
     assert(messages.some(message => message.role === 'user' && message.metadata?.teamTriggerKind === 'human_message'))
     assert.equal((await history(taskA.epochId, observer)).length, 0)
   })
-  if (!humanReady) throw new Error('Live model prerequisite failed; dependent generation checks were not run.')
+  if (!humanReady) {
+    await completionDiagnostics(taskA.epochId, lead)
+    throw new Error('Live model prerequisite failed; dependent generation checks were not run.')
+  }
 
   await check('direct human chat with a member does not wake the lead', async () => {
     const before = await history(taskA.epochId, lead)

@@ -41,6 +41,7 @@ import {
   type ParsedSkill,
 } from './skill-import-utils'
 import { FileImportZone } from './FileImportZone'
+import { getCapabilityDraft, saveCapabilityDraft, clearCapabilityDraft } from '../../stores/capability-drafts'
 
 // Lazy-load CodeMirrorEditor to keep initial bundle small
 const CodeMirrorEditor = lazy(() =>
@@ -239,11 +240,18 @@ function ImportDropZone({ imported, onImported, onClear, onError }: ImportDropZo
 
 export interface SkillInstallDialogProps {
   onClose: () => void
+  initialSpaceId?: string | null
+  draftKey?: string
+  initialMode?: SkillMode
+  onInstalled?: (appId: string) => void | Promise<void>
 }
 
-export function SkillInstallDialog({ onClose }: SkillInstallDialogProps) {
+export function SkillInstallDialog({ onClose, initialSpaceId, initialMode, onInstalled, draftKey }: SkillInstallDialogProps) {
   const { t } = useTranslation()
   const { installApp, loadApps } = useAppsStore()
+  const cacheKey = `skill:${draftKey ?? 'library'}:${initialSpaceId ?? 'global'}`
+  const [draft] = useState(() => getCapabilityDraft<{ form: VisualForm; mode: SkillMode; mdContent: string; imported: ImportedSkill | null; spaceId: string }>(cacheKey))
+  const completed = useRef(false)
 
   // Spaces
   const currentSpace = useSpaceStore(state => state.currentSpace)
@@ -257,27 +265,31 @@ export function SkillInstallDialog({ onClose }: SkillInstallDialogProps) {
     ]
     if (haloSpace) result.push({ id: haloSpace.id, name: haloSpace.name })
     result.push(...spaces.map(s => ({ id: s.id, name: s.name })))
-    return result
-  }, [haloSpace, spaces, t])
+    return initialSpaceId === undefined ? result : result.filter(space => !space.id || space.id === initialSpaceId)
+  }, [haloSpace, spaces, t, initialSpaceId])
 
   // Default: current space if any, else global
-  const [selectedSpaceId, setSelectedSpaceId] = useState(currentSpace?.id ?? '')
+  const [selectedSpaceId, setSelectedSpaceId] = useState(draft?.spaceId ?? (initialSpaceId === undefined ? currentSpace?.id ?? '' : initialSpaceId ?? ''))
 
   // Mode
-  const [mode, setMode] = useState<SkillMode>('visual')
+  const [mode, setMode] = useState<SkillMode>(draft?.mode ?? initialMode ?? 'visual')
 
   // Visual form state
-  const [form, setForm] = useState<VisualForm>({ ...INITIAL_FORM })
+  const [form, setForm] = useState<VisualForm>(draft?.form ?? { ...INITIAL_FORM })
 
   // MD editor state
-  const [mdContent, setMdContent] = useState(buildMdFromForm(INITIAL_FORM))
+  const [mdContent, setMdContent] = useState(draft?.mdContent ?? buildMdFromForm(INITIAL_FORM))
 
   // Import state
-  const [imported, setImported] = useState<ImportedSkill | null>(null)
+  const [imported, setImported] = useState<ImportedSkill | null>(draft?.imported ?? null)
 
   // UI state
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const requestClose = () => { if (!loading) onClose() }
+  useEffect(() => {
+    if (!completed.current) saveCapabilityDraft(cacheKey, { form, mode, mdContent, imported, spaceId: selectedSpaceId })
+  }, [cacheKey, form, mode, mdContent, imported, selectedSpaceId])
 
   // Once the user edits the command name it stops tracking the authored name —
   // otherwise their choice would be overwritten on the next keystroke.
@@ -413,14 +425,23 @@ export function SkillInstallDialog({ onClose }: SkillInstallDialogProps) {
       }
 
       const spaceId = selectedSpaceId || null
+      const duplicate = useAppsStore.getState().apps.find(app => app.status !== 'uninstalled' && app.spaceId === spaceId && app.spec.type === 'skill' && app.spec.name === fullSpec.name)
+      if (duplicate) {
+        setError(t('A skill with this name already exists in this scope. Choose another command name, or edit the existing skill from the library.'))
+        return
+      }
       const appId = await installApp(spaceId, fullSpec)
       if (appId) {
         await loadApps()
+        await onInstalled?.(appId)
+        completed.current = true
+        clearCapabilityDraft(cacheKey)
         onClose()
       } else {
         setError(t('Installation failed. Check the skill content and try again.'))
       }
     } catch (err) {
+      console.warn('[SkillInstallDialog] Skill installation failed; draft retained')
       setError(err instanceof Error ? err.message : t('Installation failed'))
     } finally {
       setLoading(false)
@@ -435,13 +456,13 @@ export function SkillInstallDialog({ onClose }: SkillInstallDialogProps) {
         : form.name.trim().length > 0
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+    <div role="dialog" aria-modal="true" aria-label={t('Add Skill')} className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/30">
       <div
         className="relative w-full max-w-2xl mx-4 bg-background border border-border rounded-xl shadow-xl flex flex-col max-h-[90vh]"
         onMouseDown={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-b border-border flex-shrink-0">
           <div className="flex items-center gap-3">
             <h2 className="text-sm font-semibold">{t('Add Skill')}</h2>
 
@@ -465,7 +486,7 @@ export function SkillInstallDialog({ onClose }: SkillInstallDialogProps) {
                     : 'text-muted-foreground hover:text-foreground'
                 }`}
               >
-                MD
+                {t('Markdown')}
               </button>
               <button
                 onClick={() => { setError(null); setMode('import') }}
@@ -481,7 +502,8 @@ export function SkillInstallDialog({ onClose }: SkillInstallDialogProps) {
           </div>
 
           <button
-            onClick={onClose}
+            onClick={requestClose}
+            disabled={loading}
             className="p-1 text-muted-foreground hover:text-foreground rounded-md transition-colors"
           >
             <X className="w-4 h-4" />
@@ -628,6 +650,8 @@ export function SkillInstallDialog({ onClose }: SkillInstallDialogProps) {
             )}
           </div>
 
+          <p className="rounded-lg bg-secondary p-3 text-xs text-muted-foreground">{selectedSpaceId ? t('All digital humans in this workspace can discover this skill. It is not private to one digital human.') : t('Digital humans in every workspace can discover this global skill. A workspace skill with the same name takes precedence.')}</p>
+
           {/* Error */}
           {error && (
             <div className="flex items-start gap-2 px-3 py-2 bg-destructive/10 border border-destructive/20 rounded-lg">
@@ -640,10 +664,11 @@ export function SkillInstallDialog({ onClose }: SkillInstallDialogProps) {
         {/* Footer */}
         <div className="flex justify-end gap-2 px-4 py-3 border-t border-border flex-shrink-0">
           <button
-            onClick={onClose}
+            onClick={requestClose}
+            disabled={loading}
             className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
           >
-            {t('Cancel')}
+            {t('Close and keep draft')}
           </button>
           <button
             onClick={handleInstall}

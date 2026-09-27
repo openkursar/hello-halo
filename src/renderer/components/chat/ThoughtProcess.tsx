@@ -43,6 +43,7 @@ void function _i18nActionKeys(t: (k: string) => string) {
   t('Editing {{file}}...'); t('Searching {{pattern}}...'); t('Matching {{pattern}}...');
   t('Executing {{command}}...'); t('Fetching {{url}}...'); t('Searching {{query}}...');
   t('Updating tasks...'); t('Executing {{task}}...'); t('Waiting for user response...');
+  t('Setting goal...'); t('Updating goal...'); t('Completing goal...'); t('Abandoning goal...');
   t('Processing...'); t('Thinking...');
 }
 
@@ -76,6 +77,7 @@ function getActionSummaryData(thoughts: Thought[]): { key: string; params?: Reco
           return { key: 'Executing {{task}}...', params: { task: extractSearchTerm(input?.description) } }
         case 'NotebookEdit': return { key: 'Editing {{file}}...', params: { file: extractFileName(input?.notebook_path) } }
         case 'AskUserQuestion': return { key: 'Waiting for user response...' }
+        case 'Goal': return { key: goalActionKey(input?.action) }
         default: return { key: 'Processing...' }
       }
     }
@@ -85,6 +87,15 @@ function getActionSummaryData(thoughts: Thought[]): { key: string; params?: Reco
     }
   }
   return { key: 'Thinking...' }
+}
+
+function goalActionKey(action: unknown): string {
+  switch (action) {
+    case 'update': return 'Updating goal...'
+    case 'complete': return 'Completing goal...'
+    case 'abandon': return 'Abandoning goal...'
+    default: return 'Setting goal...'
+  }
 }
 
 // Extract filename from path (e.g., "/foo/bar/config.json" -> "config.json")
@@ -120,10 +131,15 @@ function extractUrl(url: unknown): string {
 }
 
 
-// Static elapsed time — only mounted after thinking completes
-function TimerDisplay({ startTime }: { startTime: number | null }) {
-  const elapsed = startTime ? ((Date.now() - startTime) / 1000).toFixed(1) : '0.0'
-  return <span>{elapsed}s</span>
+// How long the finished reasoning took, measured between its first and last
+// step. Derived from the steps themselves rather than from the clock at render
+// time: a duration read off `Date.now()` keeps growing every time the panel
+// re-renders, so a long-finished turn silently inflates on screen.
+function elapsedSeconds(thoughts: Thought[]): string {
+  if (thoughts.length === 0) return '0.0'
+  const first = new Date(thoughts[0].timestamp).getTime()
+  const last = new Date(thoughts[thoughts.length - 1].timestamp).getTime()
+  return Math.max(0, (last - first) / 1000).toFixed(1)
 }
 
 // Individual thought item (for non-special tools)
@@ -385,14 +401,15 @@ export function ThoughtProcess({ thoughts, isThinking }: ThoughtProcessProps) {
     }
   }, [thoughts.length])
 
-  // Calculate elapsed time from first thought's timestamp
-  // This is more reliable than tracking component mount time
-  const startTime = useMemo(() => {
-    if (thoughts.length > 0) {
-      return new Date(thoughts[0].timestamp).getTime()
-    }
-    return null
-  }, [thoughts.length > 0 ? thoughts[0]?.timestamp : null])
+  // Header summary of what the agent is doing right now. Recomputed per render
+  // without this memo — a backwards scan of the whole step list, on the hottest
+  // render path in the app.
+  const actionSummary = useMemo(
+    () => (isThinking ? getActionSummaryData(thoughts) : null),
+    [isThinking, thoughts]
+  )
+
+  const elapsed = useMemo(() => elapsedSeconds(thoughts), [thoughts])
 
   // Get latest todo data (only render one TodoCard at bottom)
   const latestTodos = useMemo(() => {
@@ -421,11 +438,16 @@ export function ThoughtProcess({ thoughts, isThinking }: ThoughtProcessProps) {
   }, [thoughts])
 
   // Smart auto-scroll: only scrolls when user is at bottom
-  // Stops auto-scroll when user scrolls up to read history
+  // Stops auto-scroll when user scrolls up to read history.
+  // `behavior: 'auto'` is not a preference — steps arrive faster than a smooth
+  // scroll can finish, so an animated scroll was being retargeted mid-flight on
+  // every step and the panel never came to rest. Instant follow matches the
+  // team session view, which tails the same kind of stream.
   const { handleScroll } = useSmartScroll({
     containerRef: contentRef,
     threshold: 50,
-    deps: [thoughts, isExpanded]
+    deps: [thoughts, isExpanded],
+    behavior: 'auto',
   })
 
   // Don't render if no thoughts and not thinking
@@ -439,62 +461,81 @@ export function ThoughtProcess({ thoughts, isThinking }: ThoughtProcessProps) {
 
   // Check if there's content to show in the scrollable area
   const hasDisplayContent = displayThoughts.length > 0
+  // A turn shows "thinking" before its first step exists, and some turns never
+  // emit one — gate the expand affordance so the header isn't clickable into
+  // an empty body.
+  const hasBodyContent = hasDisplayContent || (latestTodos?.length ?? 0) > 0
+
+  const header = (
+    <>
+      {/* Status indicator */}
+      {isThinking ? (
+        <Loader2 size={16} className="text-primary animate-spin" />
+      ) : (
+        <CheckCircle2
+          size={16}
+          className={errorCount > 0 ? 'text-destructive' : 'text-primary'}
+        />
+      )}
+
+      {/* Title: action summary when thinking, "Thought process" when done */}
+      <span className={`text-sm font-medium ${isThinking ? 'text-primary' : 'text-foreground'}`}>
+        {actionSummary ? t(actionSummary.key, actionSummary.params) : t('Already thought')}
+      </span>
+
+      {/* Stats: only show elapsed time when thinking is complete */}
+      {!isThinking && (
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground/60">
+          <span>{elapsed}s</span>
+        </div>
+      )}
+
+      {/* Spacer */}
+      <div className="flex-1" />
+
+      {/* Expand icon */}
+      {hasBodyContent && (
+        <ChevronDown
+          size={16}
+          className={`text-muted-foreground transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`}
+        />
+      )}
+    </>
+  )
 
   return (
     <div className="animate-fade-in mb-4">
+      {/* `bg-card/80` in every state: fully translucent tints (the old
+          `bg-card/30`) were indistinguishable from `--background` in the
+          light theme, a percent of lightness apart — but fully opaque reads
+          identical to the reply bubble right below it. 80% keeps it visibly
+          lighter than the page while still reading as its own layer, not
+          the reply. State rides on the border. */}
       <div
         className={`
-          relative rounded-xl border overflow-hidden transition-all duration-300
+          relative rounded-xl border overflow-hidden transition-all duration-300 bg-card/80
           ${isThinking
-            ? 'border-primary/40 bg-primary/5'
+            ? 'border-primary/40'
             : errorCount > 0
-              ? 'border-destructive/30 bg-destructive/5'
-              : 'border-border/50 bg-card/30'
+              ? 'border-destructive/40'
+              : 'border-border/50'
           }
         `}
       >
         {/* Header */}
-        <button
-          onClick={() => setIsExpanded(!isExpanded)}
-          className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-white/5 transition-colors"
-        >
-          {/* Status indicator */}
-          {isThinking ? (
-            <Loader2 size={16} className="text-primary animate-spin" />
-          ) : (
-            <CheckCircle2
-              size={16}
-              className={errorCount > 0 ? 'text-destructive' : 'text-primary'}
-            />
-          )}
-
-          {/* Title: action summary when thinking, "Thought process" when done */}
-          <span className={`text-sm font-medium ${isThinking ? 'text-primary' : 'text-foreground'}`}>
-            {isThinking ? (() => {
-              const data = getActionSummaryData(thoughts)
-              return t(data.key, data.params)
-            })() : t('Already thought')}
-          </span>
-
-          {/* Stats: only show elapsed time when thinking is complete */}
-          {!isThinking && (
-            <div className="flex items-center gap-1.5 text-xs text-muted-foreground/60">
-              <TimerDisplay startTime={startTime} />
-            </div>
-          )}
-
-          {/* Spacer */}
-          <div className="flex-1" />
-
-          {/* Expand icon */}
-          <ChevronDown
-            size={16}
-            className={`text-muted-foreground transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`}
-          />
-        </button>
+        {hasBodyContent ? (
+          <button
+            onClick={() => setIsExpanded(!isExpanded)}
+            className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-secondary/60 transition-colors"
+          >
+            {header}
+          </button>
+        ) : (
+          <div className="w-full flex items-center gap-3 px-4 py-3 text-left">{header}</div>
+        )}
 
         {/* Content */}
-        {isExpanded && (
+        {isExpanded && hasBodyContent && (
           <div className="border-t border-border/30 thought-content">
             {/* Scrollable thought items */}
             {hasDisplayContent && (

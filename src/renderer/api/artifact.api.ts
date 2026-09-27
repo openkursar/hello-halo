@@ -4,6 +4,7 @@
  */
 import {
   getAuthToken,
+  getRemoteServerUrl,
   httpRequest,
   isElectron,
   onEvent,
@@ -11,6 +12,7 @@ import {
 import type {
   ApiResponse,
 } from './_shared'
+import { MAX_PREVIEW_DOCUMENT_SIZE, formatPreviewSize } from '../../shared/constants/artifact-preview'
 
 export const artifactApi = {
   // ===== Artifact =====
@@ -136,6 +138,85 @@ export const artifactApi = {
     return httpRequest('GET', `/api/artifacts/content?path=${encodeURIComponent(filePath)}`)
   },
 
+  /**
+   * Read a document as raw bytes for the Canvas office/PDF viewers.
+   *
+   * Both transports are native end to end — IPC structured clone on desktop,
+   * the browser's own decoder on the download route in remote mode — so no
+   * base64 string is ever built and the main thread never runs a decode loop.
+   *
+   * The remote half enforces MAX_PREVIEW_DOCUMENT_SIZE here rather than at the
+   * route: /api/artifacts/download exists to serve files of any size, so the
+   * preview caller is the only place the preview's own ceiling belongs.
+   */
+  readArtifactBytes: async (filePath: string): Promise<ApiResponse<Uint8Array>> => {
+    if (isElectron()) {
+      const response = await window.halo.readArtifactBytes(filePath)
+      if (!response.success || !response.data) {
+        return { success: false, error: response.error || 'Failed to read file' }
+      }
+      return { success: true, data: response.data }
+    }
+    const baseUrl = getRemoteServerUrl()
+    if (!baseUrl) {
+      return { success: false, error: 'Server URL not configured' }
+    }
+    const token = getAuthToken()
+    const tooLarge = (size?: number): ApiResponse<Uint8Array> => ({
+      success: false,
+      error: size === undefined
+        ? `File too large to preview (limit ${formatPreviewSize(MAX_PREVIEW_DOCUMENT_SIZE)})`
+        : `File too large to preview: ${formatPreviewSize(size)} ` +
+          `(limit ${formatPreviewSize(MAX_PREVIEW_DOCUMENT_SIZE)})`,
+    })
+
+    try {
+      const res = await fetch(`${baseUrl}/api/artifacts/download?path=${encodeURIComponent(filePath)}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      })
+      if (!res.ok) {
+        // Failures come back as the standard JSON envelope, not file bytes.
+        const detail = await res.json().catch(() => null)
+        return { success: false, error: detail?.error || `Failed to read file (${res.status})` }
+      }
+
+      // Our route sets Content-Length, so an oversized file is normally rejected
+      // before a single byte moves.
+      const declared = Number(res.headers.get('content-length'))
+      if (Number.isFinite(declared) && declared > MAX_PREVIEW_DOCUMENT_SIZE) {
+        return tooLarge(declared)
+      }
+
+      // A proxy that re-encodes the response drops Content-Length, so the limit
+      // cannot rely on it: read incrementally and abort once the budget is gone.
+      // arrayBuffer() would have to buffer the whole body first, which is the
+      // thing the limit exists to prevent.
+      if (!res.body) return { success: true, data: new Uint8Array(await res.arrayBuffer()) }
+      const reader = res.body.getReader()
+      const chunks: Uint8Array[] = []
+      let received = 0
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        received += value.byteLength
+        if (received > MAX_PREVIEW_DOCUMENT_SIZE) {
+          await reader.cancel()
+          return tooLarge(Number.isFinite(declared) && declared > 0 ? declared : undefined)
+        }
+        chunks.push(value)
+      }
+      const bytes = new Uint8Array(received)
+      let offset = 0
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset)
+        offset += chunk.byteLength
+      }
+      return { success: true, data: bytes }
+    } catch (error) {
+      return { success: false, error: (error as Error).message }
+    }
+  },
+
   // Save artifact content (CodeViewer edit mode)
   saveArtifactContent: async (filePath: string, content: string): Promise<ApiResponse> => {
     if (isElectron()) {
@@ -148,7 +229,7 @@ export const artifactApi = {
   detectFileType: async (filePath: string): Promise<ApiResponse<{
     isText: boolean
     canViewInCanvas: boolean
-    contentType: 'code' | 'markdown' | 'html' | 'image' | 'pdf' | 'text' | 'json' | 'csv' | 'binary'
+    contentType: 'code' | 'markdown' | 'html' | 'image' | 'pdf' | 'text' | 'json' | 'csv' | 'xlsx' | 'docx' | 'pptx' | 'binary'
     language?: string
     mimeType: string
   }>> => {

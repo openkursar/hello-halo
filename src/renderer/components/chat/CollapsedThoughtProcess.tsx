@@ -18,7 +18,6 @@ import {
 import { TodoCard, parseTodoInput } from '../tool/TodoCard'
 import { ToolResultViewer } from './tool-result'
 import { SubAgentTimeline } from './SubAgentTimeline'
-import { TeamSnapshotPanel } from './TeamPanel'
 import { ErrorContent } from './ErrorContent'
 import {
   getThoughtIcon,
@@ -226,14 +225,9 @@ export function CollapsedThoughtProcess({ thoughts, defaultExpanded = false, def
     })
   }, [thoughts])
 
-  // Check if there's anything to show
-  const hasContent = displayThoughts.length > 0 || (latestTodos && latestTodos.length > 0)
-  if (!hasContent) return null
-
-  // Only count system-level errors, not tool execution failures
-  const errorCount = thoughts.filter(t => t.type === 'error').length
-
-  // Calculate duration from first to last thought
+  // Calculate duration from first to last thought.
+  // Must stay above the early return below: a hook after it would change the
+  // hook count the first time this panel gains content, which React rejects.
   const duration = useMemo(() => {
     if (thoughts.length < 1) return 0
     const first = new Date(thoughts[0].timestamp).getTime()
@@ -241,16 +235,23 @@ export function CollapsedThoughtProcess({ thoughts, defaultExpanded = false, def
     return (last - first) / 1000
   }, [thoughts])
 
+  // Check if there's anything to show
+  const hasContent = displayThoughts.length > 0 || (latestTodos && latestTodos.length > 0)
+  if (!hasContent) return null
+
+  // Only count system-level errors, not tool execution failures
+  const errorCount = thoughts.filter(t => t.type === 'error').length
+
   return (
     <div className="mb-2">
       <button
         onClick={() => setIsExpanded(!isExpanded)}
         className={`
           flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs
-          transition-all duration-200 w-full
+          transition-all duration-200 w-full border
           ${isExpanded
-            ? 'bg-primary/10 border border-primary/30'
-            : 'bg-muted/30 hover:bg-muted/50 border border-transparent'
+            ? 'bg-primary/[0.12] border-primary/25'
+            : 'bg-card/80 hover:bg-secondary/60 border-border/50'
           }
         `}
       >
@@ -278,15 +279,15 @@ export function CollapsedThoughtProcess({ thoughts, defaultExpanded = false, def
 
       {/* Expanded content */}
       {isExpanded && (
-        <div className="mt-1 py-2 bg-muted/20 rounded-lg border border-border/30 animate-slide-down thought-content">
+        <div className="mt-1 py-2 bg-card/80 rounded-lg border border-border/50 animate-slide-down thought-content">
           {/* Thought items — lazy-loaded: only items near the scroll viewport are rendered */}
           {displayThoughts.length > 0 && (
             <div ref={scrollContainerRef} className={`${isMaximized ? 'max-h-[80vh]' : 'max-h-[300px]'} scrollbar-overlay px-3 transition-all duration-200`}>
-              {displayThoughts.map((thought, index) => {
+              {displayThoughts.map((thought) => {
                 const isTaskThought = thought.type === 'tool_use' && (thought.toolName === 'Task' || thought.toolName === 'Agent')
                 return (
                   <LazyCollapsedThoughtItem
-                    key={`${thought.id}-${index}`}
+                    key={thought.id}
                     thought={thought}
                     scrollContainerRef={scrollContainerRef}
                     allThoughts={isTaskThought ? thoughts : undefined}
@@ -295,11 +296,6 @@ export function CollapsedThoughtProcess({ thoughts, defaultExpanded = false, def
               })}
             </div>
           )}
-
-          {/* Team snapshot — shown when agent team collaboration is detected in thoughts */}
-          <div className="px-3 mt-2">
-            <TeamSnapshotPanel thoughts={thoughts} />
-          </div>
 
           {/* TodoCard at bottom - only one instance */}
           {latestTodos && latestTodos.length > 0 && (
@@ -343,10 +339,14 @@ export function LazyCollapsedThoughtProcess({ thoughtsSummary, onLoadThoughts }:
   const [isLoading, setIsLoading] = useState(false)
 
   // Once loaded, render expanded — user explicitly clicked to load thoughts
-  if (loadedThoughts) {
+  if (loadedThoughts && loadedThoughts.length > 0) {
     return <CollapsedThoughtProcess thoughts={loadedThoughts} defaultExpanded />
   }
 
+  // Empty array is truthy: without the length check above, a message with
+  // saved-but-empty thoughts renders null and silently disappears instead of
+  // showing the unavailable state.
+  const unavailable = loadedThoughts !== null
   const duration = thoughtsSummary.duration
 
   const handleClick = async () => {
@@ -367,18 +367,20 @@ export function LazyCollapsedThoughtProcess({ thoughtsSummary, onLoadThoughts }:
     <div className="mb-2">
       <button
         onClick={handleClick}
-        disabled={isLoading}
-        className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs transition-all duration-200 w-full bg-muted/30 hover:bg-muted/50 border border-transparent"
+        disabled={isLoading || unavailable}
+        className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs transition-all duration-200 w-full bg-card/80 hover:bg-secondary/60 border border-border/50 disabled:hover:bg-card/80"
       >
         {isLoading ? (
           <Loader2 size={12} className="text-muted-foreground animate-spin" />
         ) : (
-          <ChevronRight size={12} className="text-muted-foreground" />
+          <ChevronRight size={12} className={unavailable ? 'text-muted-foreground/40' : 'text-muted-foreground'} />
         )}
-        <Lightbulb size={14} className="text-primary" />
-        <span className="text-muted-foreground">{t('Already thought')}</span>
+        <Lightbulb size={14} className={unavailable ? 'text-muted-foreground/40' : 'text-primary'} />
+        <span className="text-muted-foreground">
+          {unavailable ? t('Thought process was not saved for this message') : t('Already thought')}
+        </span>
         <div className="flex items-center gap-1.5 text-muted-foreground/60">
-          {duration != null && <span>{duration.toFixed(1)}s</span>}
+          {!unavailable && duration != null && <span>{duration.toFixed(1)}s</span>}
         </div>
       </button>
     </div>

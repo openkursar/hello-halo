@@ -45,6 +45,10 @@ export type { DatabaseManager, Migration }
 // Re-export createDatabaseManager for testing with :memory: databases
 export { createDatabaseManager }
 
+// Raised when this build is older than the data it was asked to open.
+// Startup must stop rather than write through a schema it does not know.
+export { SchemaAheadError, isSchemaAheadError } from './schema-guard'
+
 /** Name of the application-level database file. */
 const APP_DB_FILENAME = 'halo.db'
 

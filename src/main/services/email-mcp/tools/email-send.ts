@@ -7,7 +7,11 @@ import { tool } from '../../agent/resolved-sdk'
 import type { SmtpClient } from '../smtp-client'
 import { textResult } from '../helpers'
 
-export function createEmailSendTool(smtp: SmtpClient) {
+/**
+ * @param refuseAttachment - Why a local file may not be attached, or null;
+ *   read at send time (the caller's turn decides).
+ */
+export function createEmailSendTool(smtp: SmtpClient, refuseAttachment?: (filePath: string) => string | null) {
   return tool(
     'email_send',
     'Send a new email from the configured account. Supports plain text and HTML content, CC/BCC, and file attachments.\n\n' +
@@ -37,6 +41,10 @@ export function createEmailSendTool(smtp: SmtpClient) {
       ),
     },
     async (input) => {
+      for (const filePath of input.attachments ?? []) {
+        const refusal = refuseAttachment?.(filePath)
+        if (refusal) return textResult(`Failed to send email: cannot attach "${filePath}". ${refusal}`, true)
+      }
       try {
         const result = await smtp.send({
           to: input.to,

@@ -2,35 +2,33 @@
  * Unit tests for platform/memory
  *
  * Tests:
- * - Path resolution (getMemoryFilePath, getMemoryArchiveDir)
- * - Permission matrix (assertReadPermission, assertWritePermission)
- * - File operations (read, write, append, archive)
- * - Prompt instruction generation
+ * - Permission matrix (assertWritePermission)
+ * - File operations (read, History heading, list, size) and the memory lock
+ * - Prompt instruction generation (modes, owners, topics, tracked items)
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import path from 'path'
 import fs from 'fs'
 import {
-  assertReadPermission,
   assertWritePermission,
-  getReadableScopes,
-  getWritableScopes,
   MemoryPermissionError
 } from '../../../../src/main/platform/memory/permissions'
 import {
   readMemoryFile,
-  readMemoryHeadings,
-  readMemorySection,
-  readMemoryTail,
-  appendToMemoryFile,
-  replaceMemoryFile,
   insertHistoryHeading,
   listMemoryFiles,
-  archiveAndReplaceMemoryFile,
-  getFileSize
+  getFileSize,
+  acquireMemoryLock,
+  withMemoryLock,
+  ensureMemoryFile,
+  isBlankMemory,
+  memoryHasContent
 } from '../../../../src/main/platform/memory/file-ops'
-import { generatePromptInstructions } from '../../../../src/main/platform/memory/prompt'
+import { resolveMemoryLayout } from '../../../../src/main/platform/memory/paths'
+import { buildMemorySnapshot } from '../../../../src/main/platform/memory/snapshot'
+import { renderMemorySection } from '../../../../src/main/platform/memory/section'
+import { generatePromptInstructions, TOPIC_GUIDE } from '../../../../src/main/platform/memory/prompt'
 import type { MemoryCallerScope } from '../../../../src/main/platform/memory/types'
 
 // ============================================================================
@@ -51,72 +49,16 @@ describe('Permission Matrix', () => {
     appId: 'my-app'
   }
 
-  describe('assertReadPermission', () => {
-    it('user can read user and space scopes', () => {
-      expect(() => assertReadPermission(userCaller, 'user')).not.toThrow()
-      expect(() => assertReadPermission(userCaller, 'space')).not.toThrow()
-    })
-
-    it('user cannot read app scope', () => {
-      expect(() => assertReadPermission(userCaller, 'app')).toThrow(MemoryPermissionError)
-    })
-
-    it('app can read user, space, and own app scope', () => {
-      expect(() => assertReadPermission(appCaller, 'user')).not.toThrow()
-      expect(() => assertReadPermission(appCaller, 'space')).not.toThrow()
-      expect(() => assertReadPermission(appCaller, 'app')).not.toThrow()
-    })
+  it('user sessions write user and space memory, never app memory', () => {
+    expect(() => assertWritePermission(userCaller, 'user')).not.toThrow()
+    expect(() => assertWritePermission(userCaller, 'space')).not.toThrow()
+    expect(() => assertWritePermission(userCaller, 'app')).toThrow(MemoryPermissionError)
   })
 
-  describe('assertWritePermission', () => {
-    it('user can write (any mode) to user and space', () => {
-      expect(() => assertWritePermission(userCaller, 'user', 'append')).not.toThrow()
-      expect(() => assertWritePermission(userCaller, 'user', 'replace')).not.toThrow()
-      expect(() => assertWritePermission(userCaller, 'space', 'append')).not.toThrow()
-      expect(() => assertWritePermission(userCaller, 'space', 'replace')).not.toThrow()
-    })
-
-    it('user cannot write to app scope', () => {
-      expect(() => assertWritePermission(userCaller, 'app', 'append')).toThrow(MemoryPermissionError)
-    })
-
-    it('app cannot write to user scope', () => {
-      expect(() => assertWritePermission(appCaller, 'user', 'append')).toThrow(MemoryPermissionError)
-    })
-
-    it('app can only append to space scope', () => {
-      expect(() => assertWritePermission(appCaller, 'space', 'append')).not.toThrow()
-      expect(() => assertWritePermission(appCaller, 'space', 'replace')).toThrow(MemoryPermissionError)
-    })
-
-    it('app can read/write own app scope (both modes)', () => {
-      expect(() => assertWritePermission(appCaller, 'app', 'append')).not.toThrow()
-      expect(() => assertWritePermission(appCaller, 'app', 'replace')).not.toThrow()
-    })
-  })
-
-  describe('scope listings', () => {
-    it('user readable scopes are user + space', () => {
-      expect(getReadableScopes(userCaller)).toEqual(['user', 'space'])
-    })
-
-    it('app readable scopes are user + space + app', () => {
-      expect(getReadableScopes(appCaller)).toEqual(['user', 'space', 'app'])
-    })
-
-    it('user writable scopes include both modes', () => {
-      const writable = getWritableScopes(userCaller)
-      expect(writable).toHaveLength(2)
-      expect(writable.find(s => s.scope === 'user')?.modes).toEqual(['append', 'replace'])
-    })
-
-    it('app writable scopes enforce append-only for space', () => {
-      const writable = getWritableScopes(appCaller)
-      const space = writable.find(s => s.scope === 'space')
-      expect(space?.modes).toEqual(['append'])
-      const app = writable.find(s => s.scope === 'app')
-      expect(app?.modes).toEqual(['append', 'replace'])
-    })
+  it('a digital human writes only its own memory — space memory is read-only for it', () => {
+    expect(() => assertWritePermission(appCaller, 'app')).not.toThrow()
+    expect(() => assertWritePermission(appCaller, 'space')).toThrow(MemoryPermissionError)
+    expect(() => assertWritePermission(appCaller, 'user')).toThrow(MemoryPermissionError)
   })
 })
 
@@ -158,54 +100,68 @@ describe('File Operations', () => {
     })
   })
 
-  describe('appendToMemoryFile', () => {
-    it('should create file if it does not exist', async () => {
-      const filePath = path.join(testDir, 'sub', 'new-memory.md')
-      await appendToMemoryFile(filePath, 'Hello world', 'test')
+  describe('memory skeleton', () => {
+    const spaceLayout = () =>
+      resolveMemoryLayout({ type: 'user', spaceId: 's', spacePath: testDir }, 'space')
+    const appLayout = () =>
+      resolveMemoryLayout({ type: 'app', spaceId: 's', spacePath: testDir, appId: 'dh' }, 'app')
 
-      const content = fs.readFileSync(filePath, 'utf-8')
-      expect(content).toContain('Hello world')
-      expect(content).toContain('by test')
+    it('creates the sections a memory starts with — and nothing in them', async () => {
+      expect(await ensureMemoryFile(spaceLayout(), 'space')).toBe(true)
+      expect(fs.readFileSync(spaceLayout().file, 'utf-8')).toBe('# now\n\n# History\n')
+      expect(await ensureMemoryFile(appLayout(), 'digital-human')).toBe(true)
+      expect(fs.readFileSync(appLayout().file, 'utf-8')).toBe('# now\n\n## State\n\n# History\n')
     })
 
-    it('should append to existing file', async () => {
-      const filePath = path.join(testDir, 'existing.md')
-      fs.writeFileSync(filePath, '# Existing\n', 'utf-8')
+    it('never touches a memory that holds anything, and fills in a blank one', async () => {
+      const layout = spaceLayout()
+      fs.mkdirSync(path.dirname(layout.file), { recursive: true })
+      fs.writeFileSync(layout.file, '# now\n- build: pnpm\n')
+      expect(await ensureMemoryFile(layout, 'space')).toBe(false)
+      expect(fs.readFileSync(layout.file, 'utf-8')).toBe('# now\n- build: pnpm\n')
 
-      await appendToMemoryFile(filePath, 'New content', 'test')
-
-      const content = fs.readFileSync(filePath, 'utf-8')
-      expect(content).toContain('# Existing')
-      expect(content).toContain('New content')
+      fs.writeFileSync(layout.file, '  \n')
+      expect(await ensureMemoryFile(layout, 'space')).toBe(true)
+      expect(fs.readFileSync(layout.file, 'utf-8')).toBe('# now\n\n# History\n')
     })
 
-    it('should include timestamp metadata comment', async () => {
-      const filePath = path.join(testDir, 'meta.md')
-      await appendToMemoryFile(filePath, 'Content', 'app:my-app')
-
-      const content = fs.readFileSync(filePath, 'utf-8')
-      expect(content).toMatch(/<!-- \d{4}-\d{2}-\d{2}T.+ by app:my-app -->/)
-    })
-  })
-
-  describe('replaceMemoryFile', () => {
-    it('should create file with new content', async () => {
-      const filePath = path.join(testDir, 'replace.md')
-      await replaceMemoryFile(filePath, '# Fresh Content\n')
-
-      const content = fs.readFileSync(filePath, 'utf-8')
-      expect(content).toBe('# Fresh Content\n')
+    it('two first turns at once write the skeleton once', async () => {
+      const layout = spaceLayout()
+      const results = await Promise.all([ensureMemoryFile(layout, 'space'), ensureMemoryFile(layout, 'space')])
+      expect(results.filter(Boolean)).toHaveLength(1)
     })
 
-    it('should replace existing content entirely', async () => {
-      const filePath = path.join(testDir, 'old.md')
-      fs.writeFileSync(filePath, '# Old Content\n', 'utf-8')
+    it('tells a skeleton from a memory that records something', () => {
+      expect(isBlankMemory(null)).toBe(true)
+      expect(isBlankMemory('# now\n\n## State\n\n# History\n')).toBe(true)
+      expect(isBlankMemory('# now\n\n## State |\n\n# History\n')).toBe(true)
+      expect(isBlankMemory('# now\n\n## State | 3 items tracked\n\n# History\n')).toBe(false)
+      expect(isBlankMemory('# now\n\n# History\n\n## 2026-01-15-1430  [by: chat#a1b2]\n')).toBe(false)
+    })
 
-      await replaceMemoryFile(filePath, '# New Content\n')
+    it('counts content in memory.md or a topic, not the skeleton', async () => {
+      const layout = spaceLayout()
+      expect(memoryHasContent(layout)).toBe(false)
+      await ensureMemoryFile(layout, 'space')
+      expect(memoryHasContent(layout)).toBe(false)
+      fs.mkdirSync(layout.topicsDir, { recursive: true })
+      fs.writeFileSync(path.join(layout.topicsDir, '.gitkeep'), '')
+      expect(memoryHasContent(layout)).toBe(false)
+      fs.writeFileSync(path.join(layout.topicsDir, 'build.md'), '---\nname: Build\n---\n')
+      expect(memoryHasContent(layout)).toBe(true)
+      fs.rmSync(layout.topicsDir, { recursive: true })
+      fs.writeFileSync(layout.file, '# now\n- build: pnpm\n\n# History\n')
+      expect(memoryHasContent(layout)).toBe(true)
+    })
 
-      const content = fs.readFileSync(filePath, 'utf-8')
-      expect(content).toBe('# New Content\n')
-      expect(content).not.toContain('Old')
+    it('opens a turn on a skeleton as "nothing recorded yet", not as content', async () => {
+      const layout = spaceLayout()
+      await ensureMemoryFile(layout, 'space')
+      const section = renderMemorySection(await buildMemorySnapshot(layout), { framing: 'FRAMING' })
+      expect(section).toContain('Nothing recorded yet')
+      expect(section).not.toContain('### Content (full)')
+      expect(section).not.toContain('FRAMING')
+      expect(section).not.toContain('Create it with Write')
     })
   })
 
@@ -284,7 +240,7 @@ describe('File Operations', () => {
       const replacement = '# now\n\n## State | compacted\n\n# History\n'
       await Promise.all([
         insertHistoryHeading(filePath, '2026-01-15-1430'),
-        replaceMemoryFile(filePath, replacement),
+        withMemoryLock(filePath, async () => { fs.writeFileSync(filePath, replacement, 'utf-8') }),
       ])
 
       // Whichever ran second is the file on disk, whole — never a half-applied mix.
@@ -295,63 +251,6 @@ describe('File Operations', () => {
       } else {
         expect(content).toBe(replacement)
       }
-    })
-  })
-
-  describe('archiveAndReplaceMemoryFile', () => {
-    const summary = '# now\n\n## State | compacted\n\n# History\n'
-
-    it('should move the old file to the archive and put the summary in its place', async () => {
-      const filePath = path.join(testDir, 'memory.md')
-      const archiveDir = path.join(testDir, 'archive')
-      fs.writeFileSync(filePath, '# now\n\n## State | long history\n\n# History\n', 'utf-8')
-
-      const archived = await archiveAndReplaceMemoryFile(filePath, archiveDir, summary)
-
-      expect(fs.readFileSync(archived, 'utf-8')).toContain('long history')
-      expect(fs.readFileSync(filePath, 'utf-8')).toBe(summary)
-    })
-
-    it('should never let a lock-free reader see memory.md missing', async () => {
-      const filePath = path.join(testDir, 'memory.md')
-      const archiveDir = path.join(testDir, 'archive')
-      fs.writeFileSync(filePath, '# now\n\n## State | long history\n\n# History\n', 'utf-8')
-
-      // Snapshot building reads without the lock at the start of every turn. A
-      // reader that finds no file is told to Write a new one, and that write
-      // cannot be intercepted — so the path must never be absent.
-      let missing = 0
-      let stop = false
-      const poller = (async () => {
-        while (!stop) {
-          if (await readMemoryFile(filePath) === null) missing++
-          await new Promise(resolve => setImmediate(resolve))
-        }
-      })()
-
-      await archiveAndReplaceMemoryFile(filePath, archiveDir, summary)
-      stop = true
-      await poller
-
-      expect(missing).toBe(0)
-    })
-
-    it('should never leave memory.md without its state while an insert races it', async () => {
-      const filePath = path.join(testDir, 'memory.md')
-      const archiveDir = path.join(testDir, 'archive')
-      fs.writeFileSync(filePath, '# now\n\n## State | long history\n\n# History\n', 'utf-8')
-
-      await Promise.all([
-        archiveAndReplaceMemoryFile(filePath, archiveDir, summary),
-        insertHistoryHeading(filePath, '2026-01-15-1430', 'run#one'),
-      ])
-
-      const content = fs.readFileSync(filePath, 'utf-8')
-      expect(content).toContain('# now')
-      expect(content).toContain('## State |')
-      // The insert either landed in the file that got archived, or on top of the
-      // summary — either way the summary is what memory.md holds now.
-      expect(content).toContain('## State | compacted')
     })
   })
 
@@ -391,162 +290,51 @@ describe('File Operations', () => {
     })
   })
 
-  // ── V2 Read Modes ──────────────────────────────────────────────────────
+})
 
-  describe('readMemoryHeadings', () => {
-    it('should return null for non-existent file', async () => {
-      expect(await readMemoryHeadings(path.join(testDir, 'nope.md'))).toBeNull()
+// ============================================================================
+// Lock
+// ============================================================================
+
+describe('memory lock', () => {
+  it('serializes writers of one memory in arrival order', async () => {
+    const order: string[] = []
+    const slow = withMemoryLock('/m/memory.md', async () => {
+      await new Promise(r => setTimeout(r, 20))
+      order.push('first')
     })
-
-    it('should return message when no headings found', async () => {
-      const filePath = path.join(testDir, 'no-headings.md')
-      fs.writeFileSync(filePath, 'Just some text\nwithout any headings', 'utf-8')
-
-      const result = await readMemoryHeadings(filePath)
-      expect(result).toBe('(No markdown headings found in memory file)')
-    })
-
-    it('should extract headings with line numbers', async () => {
-      const filePath = path.join(testDir, 'structured.md')
-      fs.writeFileSync(filePath, [
-        '# State',
-        'Some state data',
-        '',
-        '## Tracked Items',
-        '- item 1',
-        '- item 2',
-        '',
-        '## Patterns',
-        'Some patterns',
-        '',
-        '# Config',
-        'key: value',
-      ].join('\n'), 'utf-8')
-
-      const result = await readMemoryHeadings(filePath)
-      expect(result).toBe([
-        'L1: # State',
-        'L4: ## Tracked Items',
-        'L8: ## Patterns',
-        'L11: # Config',
-      ].join('\n'))
-    })
-
-    it('should handle all heading levels', async () => {
-      const filePath = path.join(testDir, 'levels.md')
-      fs.writeFileSync(filePath, [
-        '# H1',
-        '## H2',
-        '### H3',
-        '#### H4',
-        '##### H5',
-        '###### H6',
-      ].join('\n'), 'utf-8')
-
-      const result = await readMemoryHeadings(filePath)
-      expect(result).toContain('L1: # H1')
-      expect(result).toContain('L6: ###### H6')
-    })
+    const fast = withMemoryLock('/m/memory.md', async () => { order.push('second') })
+    await Promise.all([slow, fast])
+    expect(order).toEqual(['first', 'second'])
   })
 
-  describe('readMemorySection', () => {
-    const sampleContent = [
-      '# State',
-      'Current state info',
-      '',
-      '## Tracked Items',
-      '- item A',
-      '- item B',
-      '',
-      '## Patterns',
-      'Pattern 1: always do X',
-      'Pattern 2: never do Y',
-      '',
-      '# Config',
-      'timeout: 30s',
-    ].join('\n')
-
-    it('should return null for non-existent file', async () => {
-      expect(await readMemorySection(path.join(testDir, 'nope.md'), 'State')).toBeNull()
-    })
-
-    it('should return null for non-existent section', async () => {
-      const filePath = path.join(testDir, 'sections.md')
-      fs.writeFileSync(filePath, sampleContent, 'utf-8')
-
-      expect(await readMemorySection(filePath, 'Nonexistent')).toBeNull()
-    })
-
-    it('should extract section by heading text (case-insensitive)', async () => {
-      const filePath = path.join(testDir, 'sections.md')
-      fs.writeFileSync(filePath, sampleContent, 'utf-8')
-
-      const result = await readMemorySection(filePath, 'tracked')
-      expect(result).toContain('## Tracked Items')
-      expect(result).toContain('- item A')
-      expect(result).toContain('- item B')
-      // Should NOT contain the next section
-      expect(result).not.toContain('Pattern 1')
-    })
-
-    it('should extract top-level section including subsections', async () => {
-      const filePath = path.join(testDir, 'sections.md')
-      fs.writeFileSync(filePath, sampleContent, 'utf-8')
-
-      const result = await readMemorySection(filePath, 'State')
-      expect(result).toContain('# State')
-      expect(result).toContain('Current state info')
-      expect(result).toContain('## Tracked Items')
-      expect(result).toContain('## Patterns')
-      // Should stop at the next H1
-      expect(result).not.toContain('# Config')
-    })
-
-    it('should handle section at end of file', async () => {
-      const filePath = path.join(testDir, 'sections.md')
-      fs.writeFileSync(filePath, sampleContent, 'utf-8')
-
-      const result = await readMemorySection(filePath, 'Config')
-      expect(result).toContain('# Config')
-      expect(result).toContain('timeout: 30s')
-    })
+  it('refuses a waiter past its timeout without breaking the queue behind it', async () => {
+    const release = (await acquireMemoryLock('/m2/memory.md'))!
+    const timedOut = await acquireMemoryLock('/m2/memory.md', { timeoutMs: 10 })
+    expect(timedOut).toBeNull()
+    const later = acquireMemoryLock('/m2/memory.md')
+    release()
+    const releaseLater = await later
+    expect(releaseLater).toBeTypeOf('function')
+    releaseLater!()
   })
 
-  describe('readMemoryTail', () => {
-    it('should return null for non-existent file', async () => {
-      expect(await readMemoryTail(path.join(testDir, 'nope.md'))).toBeNull()
-    })
+  it('keeps a holder exclusive after the last waiter behind it timed out', async () => {
+    const holder = (await acquireMemoryLock('/m4/memory.md'))!
+    expect(await acquireMemoryLock('/m4/memory.md', { timeoutMs: 10 })).toBeNull()
+    // Before the fix the timed-out waiter emptied the queue, and this got in.
+    expect(await acquireMemoryLock('/m4/memory.md', { timeoutMs: 30 })).toBeNull()
+    holder()
+    const next = await acquireMemoryLock('/m4/memory.md', { timeoutMs: 100 })
+    expect(next).toBeTypeOf('function')
+    next!()
+  })
 
-    it('should return entire file when shorter than limit', async () => {
-      const filePath = path.join(testDir, 'short.md')
-      fs.writeFileSync(filePath, 'line 1\nline 2\nline 3', 'utf-8')
-
-      const result = await readMemoryTail(filePath, 50)
-      expect(result).toBe('line 1\nline 2\nline 3')
-    })
-
-    it('should return last N lines for long files', async () => {
-      const filePath = path.join(testDir, 'long.md')
-      const lines = Array.from({ length: 100 }, (_, i) => `line ${i + 1}`)
-      fs.writeFileSync(filePath, lines.join('\n'), 'utf-8')
-
-      const result = await readMemoryTail(filePath, 5)
-      expect(result).toContain('showing last 5 of 100 lines')
-      expect(result).toContain('line 96')
-      expect(result).toContain('line 100')
-      expect(result).not.toContain('line 95')
-    })
-
-    it('should default to 50 lines', async () => {
-      const filePath = path.join(testDir, 'default.md')
-      const lines = Array.from({ length: 200 }, (_, i) => `entry ${i + 1}`)
-      fs.writeFileSync(filePath, lines.join('\n'), 'utf-8')
-
-      const result = await readMemoryTail(filePath)
-      expect(result).toContain('showing last 50 of 200 lines')
-      expect(result).toContain('entry 151')
-      expect(result).toContain('entry 200')
-    })
+  it('gives a lease back on its own when the holder never does', async () => {
+    await acquireMemoryLock('/m3/memory.md', { leaseMs: 15 })
+    const next = await acquireMemoryLock('/m3/memory.md', { timeoutMs: 500 })
+    expect(next).toBeTypeOf('function')
+    next!()
   })
 })
 
@@ -597,5 +385,84 @@ describe('generatePromptInstructions', () => {
     for (const mode of MODES) {
       expect(generatePromptInstructions(mode)).not.toContain('One entry per meaningful outcome')
     }
+  })
+})
+
+describe('generatePromptInstructions — owners, topics, tracked items', () => {
+  it('teaches the topic wiki and that its index is generated', () => {
+    const text = generatePromptInstructions('run')
+    expect(text).toContain('### Topics')
+    expect(text).toContain('The index is generated')
+    expect(text).toContain('description: <WHEN to read it')
+  })
+
+  it('renders memory_schema as what this memory tracks, and nothing when absent', () => {
+    const text = generatePromptInstructions('run', {
+      tracks: [{ name: 'faq_cache', type: 'object', description: 'cached answers' }],
+    })
+    expect(text).toContain('### What this memory tracks')
+    expect(text).toContain('- `faq_cache` (object): cached answers')
+    // A declared list adds focus; it does not narrow what else is remembered.
+    expect(text).toContain('on top of everything else worth remembering')
+    expect(generatePromptInstructions('run')).not.toContain('What this memory tracks')
+  })
+
+  it('gives a space the compact manual — under 2KB — and only how to start when it is empty', () => {
+    const full = generatePromptInstructions('session', { owner: 'space' })
+    expect(Buffer.byteLength(full)).toBeLessThanOrEqual(2048)
+    expect(full).toContain('shared by all its conversations')
+    expect(full).toContain('Most conversations')
+    expect(full).toContain('description:')
+    expect(full).not.toContain('One memory, many instances')
+    expect(full).not.toContain('{{')
+
+    const empty = generatePromptInstructions('session', { owner: 'space', empty: true })
+    expect(Buffer.byteLength(empty)).toBeLessThan(Buffer.byteLength(full))
+    expect(empty).toContain('nothing is recorded yet')
+    expect(empty).toContain('Edit it in')
+    expect(empty).not.toMatch(/create `memory\.md`/i)
+  })
+
+  it('gives team guidance only to a digital human in a team, and by default', () => {
+    for (const mode of ['run', 'session'] as const) {
+      const solo = generatePromptInstructions(mode, { inTeam: false })
+      const team = generatePromptInstructions(mode, { inTeam: true })
+      expect(generatePromptInstructions(mode)).toBe(team)
+      expect(team).toContain('Never copy team state into memory')
+      expect(team).toContain('a turn inside a team')
+      expect(team).toContain('use the team tools')
+      expect(team).toContain('team-board state')
+      expect(solo).not.toMatch(/team/i)
+      expect(solo).toContain('an IM conversation. You cannot')
+      expect(solo).toContain('do not wait on one.\n')
+      expect(solo).toContain('progress on the current task, credentials')
+      for (const text of [solo, team]) expect(text).not.toContain('{{')
+    }
+  })
+
+  it('says what a digital human is shown of # now, and what sets consolidation off', () => {
+    const text = generatePromptInstructions('run')
+    expect(text).not.toContain('loaded in full every time')
+    expect(text).toContain('only its')
+    expect(text).toContain('History getting long')
+  })
+
+  it('tells a digital human its memory.md always exists, so it is edited, never written whole', () => {
+    const text = generatePromptInstructions('session')
+    expect(text).toContain('`memory.md` always exists')
+    expect(text).not.toContain('first-time creation')
+  })
+
+  it('keeps topic examples out of the standing instructions and points at memory_status for them', () => {
+    const text = generatePromptInstructions('run')
+    expect(text).not.toContain('customer base responds well to')
+    expect(text).toContain('call `memory_status`')
+    expect(TOPIC_GUIDE).toContain('customer base responds well to')
+  })
+
+  it('tells a digital human, in one sentence, to keep sensitive memory from guests', () => {
+    const text = generatePromptInstructions('session')
+    expect(text).toContain('do not reveal sensitive')
+    expect(text).not.toMatch(/unverified/i)
   })
 })

@@ -41,11 +41,12 @@ import {
   McpCommandBlockedError,
 } from './errors'
 import { isMcpCommandBlocked } from '../../services/security-policy'
-import { seedAppKnowledgeBases } from '../../services/tlon'
+import { seedAppKnowledgeBases, unbindAppFromAllKBs } from '../../services/tlon'
 import type { McpAppChange } from '../../services/app-bridge'
 import { syncSkillToFilesystem, removeSkillFromFilesystem } from './skill-sync'
 import { withSkillMdName } from '../../../shared/skill-frontmatter'
 import { isBuiltinApp } from './types'
+import { sanitizeMemorySettings } from '../../../shared/types/memory'
 
 // ============================================
 // MCP Apps Change Event
@@ -216,6 +217,8 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
    * Global: {haloDir}/apps/{appId}/
    */
   function resolveWorkDir(appId: string, spaceId: string | null): string {
+    const app = store.getById(appId)
+    if (app?.dataPath) return app.dataPath
     if (spaceId === null) {
       return join(getGlobalAppDir(), 'apps', appId)
     }
@@ -564,9 +567,11 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       store.updateUninstalledAt(appId, null)
       notifyStatusChange(appId, oldStatus, newStatus)
 
-      // Re-sync skill file to filesystem on reinstall
+      // Re-sync skill file to filesystem on reinstall. `app` is the
+      // pre-transition snapshot, so hand the sync the new status — it refuses to
+      // write for a record that still reads 'uninstalled'.
       if (app.spec.type === 'skill') {
-        syncSkillToFilesystem(app, getSpacePath)
+        syncSkillToFilesystem({ ...app, status: newStatus }, getSpacePath)
       }
 
       // Notify session-manager to invalidate affected sessions
@@ -602,6 +607,11 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       if (app.spec.type === 'skill') {
         removeSkillFromFilesystem(app, getSpacePath)
       }
+
+      // The row is gone after this, so any KB still bound to it would be a
+      // dangling reference. Only done here (not on soft uninstall) — see
+      // unbindAppFromAllKBs's doc comment.
+      unbindAppFromAllKBs(appId)
 
       // Hard-delete the database record
       store.delete(appId)
@@ -661,9 +671,11 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       store.updateStatus(appId, newStatus, null, null)
       notifyStatusChange(appId, oldStatus, newStatus)
 
-      // Restore the skill file so the SDK picks it up again.
+      // Restore the skill file so the SDK picks it up again. `app` is the
+      // pre-transition snapshot, so hand the sync the new status — it refuses to
+      // write for a record that still reads 'paused'.
       if (app.spec.type === 'skill') {
-        syncSkillToFilesystem(app, getSpacePath)
+        syncSkillToFilesystem({ ...app, status: newStatus }, getSpacePath)
       }
 
       // MCP resumed = available again in sessions
@@ -774,7 +786,11 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         if (value == null) {
           delete merged[key]
         } else {
-          merged[key] = value
+          // Memory settings merge field by field, so a change to one never
+          // resets another that a concurrent change just saved.
+          merged[key] = key === 'memory'
+            ? { ...(merged.memory as object | undefined), ...sanitizeMemorySettings(value) }
+            : value
         }
       }
       store.updateOverrides(appId, merged as InstalledApp['userOverrides'])
@@ -911,6 +927,11 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
 
       const oldSpaceId = app.spaceId
 
+      // Freeze identity storage before the default environment can change.
+      if (app.spec.type === 'automation') {
+        store.pinDataPath(appId, resolveWorkDir(appId, oldSpaceId))
+      }
+
       // For skill apps: remove from the old FS location before updating the DB.
       // If the DB update fails below, the skill file is already gone — this is
       // acceptable because the DB is authoritative; a re-sync can restore the file.
@@ -963,6 +984,12 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
     getApp(appId: string): InstalledApp | null {
       return store.getById(appId)
     },
+
+    getStudioSummary(language, excludeIds) { return store.getStudioSummary(language, excludeIds) },
+
+    listPeopleDirectory(filter) { return store.listPeopleDirectory(filter) },
+
+    listPersonIdsByStatus(statuses) { return store.listPersonIdsByStatus(statuses) },
 
     listApps(filter?: AppListFilter): InstalledApp[] {
       return store.list(filter)
@@ -1019,6 +1046,11 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
     getAppWorkDir(appId: string): string {
       const app = requireApp(appId)
       const workDir = resolveWorkDir(appId, app.spaceId)
+
+      if (app.dataPath && !existsSync(workDir)) {
+        console.warn('[AppManager] Pinned digital human storage is unavailable', { appId })
+        throw new Error('The digital human memory directory is unavailable. Restore it before continuing.')
+      }
 
       // Auto-create if missing (contract: returned path always exists)
       ensureDir(workDir)

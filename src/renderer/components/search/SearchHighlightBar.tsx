@@ -28,7 +28,13 @@ export function SearchHighlightBar() {
     openSearch
   } = useSearchStore()
 
-  const { currentConversationId } = useChatStore()
+  // The open conversation lives on the active space's state, not at the top
+  // level of the chat store — reading it as a top-level field yielded
+  // undefined, so the "results in this conversation first" behaviour below
+  // never applied and the bar always navigated the whole result set.
+  const currentConversationId = useChatStore(s =>
+    (s.currentSpaceId ? s.spaceStates.get(s.currentSpaceId)?.currentConversationId : null) ?? null
+  )
 
   // Debounce timer for navigation to prevent rapid switches
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null)

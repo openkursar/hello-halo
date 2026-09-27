@@ -25,7 +25,8 @@ export const SIDECAR_NAME = '.build-identity.json'
 
 /**
  * Directory holding the artifact the harness actually launches.
- * `getAppEntryPath()` resolves `out/main/index.mjs`, so that is the default;
+ * `getAppEntryPath()` resolves the package.json `main` entry under `out/main`,
+ * so that is the default;
  * `PERF_ARTIFACT_DIR` is for a run pointed at a packaged build instead.
  *
  * This is deliberately a single directory rather than "whichever sidecar

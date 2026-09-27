@@ -1122,6 +1122,17 @@ describe('AppManager', () => {
   // ===========================================================================
 
   describe('moveToSpace', () => {
+    it('keeps automation identity memory at its original location across moves and reloads', async () => {
+      const appId = await service.install(TEST_SPACE_ID, createTestSpec({ name: 'stable-person' }))
+      const originalPath = service.getAppWorkDir(appId)
+      await service.moveToSpace(appId, TEST_SPACE_ID_2)
+      expect(service.getApp(appId)?.spaceId).toBe(TEST_SPACE_ID_2)
+      expect(service.getApp(appId)?.dataPath).toBe(originalPath)
+      expect(service.getAppWorkDir(appId)).toBe(originalPath)
+      await service.moveToSpace(appId, TEST_SPACE_ID)
+      expect(service.getAppWorkDir(appId)).toBe(originalPath)
+    })
+
     it('should update spaceId from one space to another', async () => {
       const spec  = createTestSpec({ name: 'movable-app', type: 'skill' })
       const appId = await service.install(TEST_SPACE_ID, spec)
@@ -1358,6 +1369,32 @@ describe('AppManager', () => {
 
     it('ensureKnowledgeSeeded throws AppNotFoundError for an unknown app', () => {
       expect(() => service.ensureKnowledgeSeeded('missing')).toThrow(AppNotFoundError)
+    })
+
+    it('deleteApp unbinds the app from every KB it was mounted to', async () => {
+      const kb = createKB({ name: 'Mounted KB' })
+      setDefaultKB(kb.id)
+
+      const appId = await service.install(TEST_SPACE_ID, createTestSpec())
+      expect(listKBsForApp(appId).map(k => k.id)).toEqual([kb.id])
+
+      await service.uninstall(appId)
+      await service.deleteApp(appId)
+
+      expect(listKBsForApp(appId)).toEqual([])
+      expect(getKB(kb.id)!.appIds).toEqual([])
+    })
+
+    it('soft uninstall alone does not unbind the app from its KBs', async () => {
+      const kb = createKB({ name: 'Mounted KB' })
+      setDefaultKB(kb.id)
+
+      const appId = await service.install(TEST_SPACE_ID, createTestSpec())
+      await service.uninstall(appId)
+
+      // Reversible: a reinstall must not need to re-seed to get its KB back,
+      // since knowledgeSeeded is a one-shot flag that never re-fires.
+      expect(listKBsForApp(appId).map(k => k.id)).toEqual([kb.id])
     })
   })
 

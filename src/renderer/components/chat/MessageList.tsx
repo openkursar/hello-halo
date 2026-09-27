@@ -15,7 +15,7 @@
  * @see docs/streaming-scroll-animation.md for detailed implementation notes
  */
 
-import { useEffect, useRef, useMemo, useCallback, forwardRef, useImperativeHandle } from 'react'
+import { useEffect, useRef, useMemo, useCallback, useSyncExternalStore, forwardRef, useImperativeHandle } from 'react'
 import type { ReactNode } from 'react'
 import { Virtuoso, VirtuosoHandle } from 'react-virtuoso'
 import { MessageRow } from './MessageRow'
@@ -25,8 +25,11 @@ import { useTerminalToolCalls, type TerminalToolCall } from './useTerminalToolCa
 import { CompactNotice } from './CompactNotice'
 import { InterruptedBubble } from './InterruptedBubble'
 import type { Message, Thought, CompactInfo, AgentErrorType, PendingQuestion } from '../../types'
-import { useTranslation } from '../../i18n'
+import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { useChatStore } from '../../stores/chat.store'
+import { useAppsStore } from '../../stores/apps.store'
+import { isAppChatKey } from '../../../shared/apps/im-keys'
+import { resolveSpecI18n } from '../../utils/spec-i18n'
 
 export interface MessageListProps {
   /**
@@ -48,6 +51,8 @@ export interface MessageListProps {
   errorType?: AgentErrorType | null  // Special error type for custom UI handling
   onContinue?: () => void  // Callback to continue after interrupt (for InterruptedBubble)
   isCompact?: boolean  // Compact mode when Canvas is open
+  /** Side padding for the transcript; defaults to the main chat's. */
+  sidePadClassName?: string
   textBlockVersion?: number  // Increments on each new text block (for StreamingBubble reset)
   pendingQuestion?: PendingQuestion | null  // Active question from AskUserQuestion tool
   onAnswerQuestion?: (answers: Record<string, string>) => void  // Callback when user answers
@@ -77,14 +82,19 @@ export interface MessageListProps {
   /**
    * Slot rendered at the end of the footer. The shell stays domain-agnostic — callers
    * inject surface-specific affordances (Continue, live indicator, clear, ...) here.
+   * Re-creating this element on every render is safe: it is published to the footer
+   * through a slot that does not participate in the footer's identity.
    */
   footerExtra?: ReactNode
 }
 
 /** Handle exposed to parent for scroll control */
+/** Virtuoso supports 'auto' and 'smooth' only — 'instant' is not scrollable by it. */
+type ScrollMotion = 'auto' | 'smooth'
+
 export interface MessageListHandle {
-  scrollToIndex: (index: number, behavior?: ScrollBehavior) => void
-  scrollToBottom: (behavior?: ScrollBehavior) => void
+  scrollToIndex: (index: number, behavior?: ScrollMotion) => void
+  scrollToBottom: (behavior?: ScrollMotion) => void
 }
 
 /**
@@ -108,10 +118,12 @@ function StreamingFooterContent({
   conversationId,
   showBrowserViewButton,
   revisionRef,
+  senderName,
 }: {
   conversationId: string
   showBrowserViewButton: boolean
   revisionRef: React.RefObject<StreamingRevision>
+  senderName?: string
 }) {
   // Subscribe to this conversation's session so the footer re-renders when
   // thoughts/streaming/queued update. Data is read from the ref (always fresh);
@@ -136,8 +148,47 @@ function StreamingFooterContent({
       pendingQuestion={rev.pendingQuestion}
       onAnswerQuestion={rev.onAnswerQuestion}
       queuedMessages={queuedMessages}
+      senderName={senderName}
     />
   )
+}
+
+/**
+ * Publishes the caller's `footerExtra` node without making it a dependency of
+ * the Footer callback.
+ *
+ * Virtuoso treats `components.Footer` as a component type: a new identity
+ * unmounts and remounts the whole footer subtree — which during a turn is the
+ * live streaming section, so the thought panel would collapse, its lazy items
+ * would fall back to placeholders and the scroll position would jump. Callers
+ * legitimately build `footerExtra` inline from their own state, so its identity
+ * changes on every parent render. Routing it through an external store keeps
+ * Footer stable and re-renders only the slot.
+ */
+function useFooterExtraSlot(node: ReactNode) {
+  const nodeRef = useRef(node)
+  const listeners = useRef(new Set<() => void>())
+
+  const store = useMemo(() => ({
+    subscribe: (onChange: () => void) => {
+      listeners.current.add(onChange)
+      return () => { listeners.current.delete(onChange) }
+    },
+    getSnapshot: () => nodeRef.current,
+  }), [])
+
+  useEffect(() => {
+    if (nodeRef.current === node) return
+    nodeRef.current = node
+    for (const onChange of listeners.current) onChange()
+  })
+
+  return store
+}
+
+function FooterExtraSlot({ store }: { store: ReturnType<typeof useFooterExtraSlot> }) {
+  const node = useSyncExternalStore(store.subscribe, store.getSnapshot)
+  return <>{node}</>
 }
 
 export const MessageList = forwardRef<MessageListHandle, MessageListProps>(function MessageList({
@@ -153,6 +204,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   errorType = null,
   onContinue,
   isCompact = false,
+  sidePadClassName,
   textBlockVersion = 0,
   pendingQuestion = null,
   onAnswerQuestion,
@@ -164,6 +216,20 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   footerExtra,
 }, ref) {
   const { t } = useTranslation()
+
+  // Reply-sender name — derived from conversationId, not stored on
+  // the message. Not app-chat → "Halo"; app-chat → the digital human's own
+  // resolved display name (falls back to appId while the apps list hasn't
+  // loaded yet, mirroring DigitalHumansTab's own fallback).
+  const apps = useAppsStore(s => s.apps)
+  const senderName = useMemo(() => {
+    if (!conversationId || !isAppChatKey(conversationId)) return t('Halo')
+    const appId = conversationId.split(':')[1]
+    const app = apps.find(a => a.id === appId)
+    if (!app) return appId
+    return resolveSpecI18n(app.spec, getCurrentLanguage()).name || appId
+  }, [conversationId, apps, t])
+
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   // Native DOM scroll container — captured via Virtuoso's scrollerRef prop
   const scrollerRef = useRef<HTMLElement | null>(null)
@@ -177,10 +243,10 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
 
   // Expose scroll control to parent (ChatView)
   useImperativeHandle(ref, () => ({
-    scrollToIndex: (index: number, behavior: ScrollBehavior = 'smooth') => {
+    scrollToIndex: (index: number, behavior: ScrollMotion = 'smooth') => {
       virtuosoRef.current?.scrollToIndex({ index, behavior, align: 'center' })
     },
-    scrollToBottom: (behavior: ScrollBehavior = 'smooth') => {
+    scrollToBottom: (behavior: ScrollMotion = 'smooth') => {
       const el = scrollerRef.current
       if (el) {
         el.scrollTo({ top: el.scrollHeight, behavior })
@@ -256,6 +322,23 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'auto' })
   }, [])
 
+  /**
+   * Snap to bottom at most once per frame. Streaming fires far faster than the
+   * display refreshes — and with a team running, several members' turns land in
+   * the same frame — so the unthrottled form queued one scroll write per event.
+   */
+  const pendingScrollFrame = useRef(0)
+  const scheduleScrollToEnd = useCallback(() => {
+    if (pendingScrollFrame.current) return
+    pendingScrollFrame.current = requestAnimationFrame(() => {
+      pendingScrollFrame.current = 0
+      scrollToEnd()
+    })
+  }, [scrollToEnd])
+  useEffect(() => () => {
+    if (pendingScrollFrame.current) cancelAnimationFrame(pendingScrollFrame.current)
+  }, [])
+
   // --- Native DOM auto-scroll (replaces Virtuoso followOutput) ---
 
   // 1. Mount scroll: wait for Virtuoso to finish initial layout, then snap to bottom.
@@ -268,8 +351,8 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   // 2. Streaming scroll: follow content growth while AI is generating
   useEffect(() => {
     if (!isAtBottomRef.current || !isGenerating) return
-    requestAnimationFrame(scrollToEnd)
-  }, [streamingContent, thoughts.length, isThinking, isGenerating, pendingQuestion, scrollToEnd])
+    scheduleScrollToEnd()
+  }, [streamingContent, thoughts.length, isThinking, isGenerating, pendingQuestion, scheduleScrollToEnd])
 
   // 3. New-message scroll: when user sends a message (displayMessages grows)
   const prevDisplayCountRef = useRef(displayMessages.length)
@@ -277,18 +360,22 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     const prev = prevDisplayCountRef.current
     prevDisplayCountRef.current = displayMessages.length
     if (displayMessages.length > prev && isAtBottomRef.current) {
-      requestAnimationFrame(scrollToEnd)
+      scheduleScrollToEnd()
     }
-  }, [displayMessages.length, scrollToEnd])
+  }, [displayMessages.length, scheduleScrollToEnd])
 
-  // Content width class — applied per-item so Virtuoso scroll container stays full-width
-  // (keeps scrollbar at the window edge, not next to message bubbles)
-  const contentWidthClass = isCompact ? 'max-w-full' : 'max-w-3xl mx-auto'
+  // Width and side padding are applied per-item so Virtuoso's scroll container
+  // stays full-width, keeping the scrollbar at the pane edge. Padding cannot go
+  // on the scroller itself: Virtuoso's inner viewport is 100% wide and would
+  // overflow it sideways.
+  const contentWidthClass = isCompact ? 'max-w-full' : 'max-w-chat mx-auto'
+  const sidePadClass = sidePadClassName ?? (isCompact ? 'px-3' : 'px-6')
 
   // Render a single message item (called by Virtuoso)
   const itemContent = useCallback((index: number, message: Message) => {
     const previousCost = previousCostMap.get(index) ?? 0
     return (
+      <div className={sidePadClass}>
       <MessageRow
         message={message}
         previousCost={previousCost}
@@ -303,9 +390,11 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
         hideBrowserViewButton={hideBrowserViewButton}
         injectionMessages={injectionMap.get(message.id)}
         className={contentWidthClass}
+        senderName={message.role === 'assistant' ? senderName : undefined}
       />
+      </div>
     )
-  }, [previousCostMap, thoughtsLoader, hideBrowserViewButton, defaultThoughtsExpanded, defaultThoughtsMaximized, injectionMap, contentWidthClass])
+  }, [previousCostMap, thoughtsLoader, hideBrowserViewButton, defaultThoughtsExpanded, defaultThoughtsMaximized, injectionMap, contentWidthClass, sidePadClass, senderName])
 
   // Ref for onContinue — keeps Footer callback stable when parent re-renders
   const onContinueRef = useRef(onContinue)
@@ -322,17 +411,21 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   const streamingRevisionRef = useRef(streamingRevision)
   streamingRevisionRef.current = streamingRevision
 
-  // Footer: stable callback — only depends on low-frequency values
-  // High-frequency streaming updates are handled by StreamingFooterContent internally
+  // Footer: stable callback — only depends on low-frequency values.
+  // High-frequency streaming updates are handled by StreamingFooterContent, and
+  // the caller's slot by FooterExtraSlot; neither may enter this dep array.
+  const footerExtraStore = useFooterExtraSlot(footerExtra)
+  const hasFooterExtra = footerExtra !== undefined && footerExtra !== null
   const Footer = useCallback(() => {
     // Keep the footer mounted for an active question independently of isGenerating:
     // a recovered question can be paused on the answer with isGenerating false, and
     // gating on it alone would drop the card and deadlock the conversation.
     const hasActiveQuestion = pendingQuestion?.status === 'active'
-    const hasFooterContent = isGenerating || hasActiveQuestion || (!isGenerating && error) || compactInfo || footerExtra
+    const hasFooterContent = isGenerating || hasActiveQuestion || (!isGenerating && error) || compactInfo || hasFooterExtra
     if (!hasFooterContent) return <div className="pb-6" />
 
     return (
+      <div className={sidePadClass}>
       <div className={contentWidthClass}>
         {/* Streaming area — isolated component reads from refs, re-renders independently */}
         {(isGenerating || hasActiveQuestion) && (
@@ -340,6 +433,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
             conversationId={conversationId}
             showBrowserViewButton={!hideBrowserViewButton}
             revisionRef={streamingRevisionRef}
+            senderName={senderName}
           />
         )}
 
@@ -376,22 +470,55 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
         )}
 
         {/* Surface-specific footer slot (Continue / live indicator / clear / ...) */}
-        {footerExtra}
+        {hasFooterExtra && <FooterExtraSlot store={footerExtraStore} />}
 
         {/* Bottom padding to match original py-6 spacing */}
         <div className="pb-6" />
+      </div>
       </div>
     )
   }, [
     isGenerating,
     pendingQuestion,
     error, errorType,
-    compactInfo, t, contentWidthClass,
-    conversationId, hideBrowserViewButton, footerExtra,
+    compactInfo, t, contentWidthClass, sidePadClass,
+    conversationId, hideBrowserViewButton,
+    hasFooterExtra, footerExtraStore,
+    senderName,
   ])
 
   // Top padding spacer — matches original py-6
   const Header = useCallback(() => <div className="pt-6" />, [])
+
+  /**
+   * Self-report a footer that is being rebuilt during a turn.
+   *
+   * A new `Footer` identity remounts the live streaming area: the thought
+   * panel collapses, its items fall back to placeholders, the scroll jumps.
+   * A few rebuilds per turn are legitimate (an error surfaces, the context is
+   * compressed, a question arrives); hundreds mean something volatile reached
+   * the dependency list, which is invisible on screen except as flicker and
+   * was shipped that way once already. Nothing recovers automatically, so this
+   * only reports — once per turn, with the count.
+   */
+  const footerRebuilds = useRef(0)
+  const footerAlarmed = useRef(false)
+  useEffect(() => {
+    if (!isGenerating) {
+      footerRebuilds.current = 0
+      footerAlarmed.current = false
+      return
+    }
+    footerRebuilds.current += 1
+    if (footerRebuilds.current > 8 && !footerAlarmed.current) {
+      footerAlarmed.current = true
+      console.warn(
+        `[MessageList] Streaming footer remounted ${footerRebuilds.current} times in one turn ` +
+        `(conversation ${conversationId || 'unknown'}). Something volatile is in the Footer ` +
+        `dependency list — the thought panel and scroll position are being reset mid-turn.`
+      )
+    }
+  }, [Footer, isGenerating, conversationId])
 
   // Stable components object — avoids Virtuoso re-initializing on every render
   const components = useMemo(() => ({ Header, Footer }), [Header, Footer])

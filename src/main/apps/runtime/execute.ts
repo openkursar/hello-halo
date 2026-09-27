@@ -16,10 +16,11 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { randomUUID } from 'crypto'
 import { createSession } from '../../services/agent/resolved-sdk'
-import type { InstalledApp } from '../manager'
+import { getAppManager, type InstalledApp } from '../manager'
+import { resolveExecutionEnvironment, validateExecutionEnvironment, validateEnvironmentConnections } from './execution-environment'
+import { createPersonContextMcpServer, personContextPrompt } from './person-context-tool'
 import { resolvePermission } from '../../../shared/apps/app-types'
-import type { MemoryService, MemoryCallerScope } from '../../platform/memory'
-import { createMemoryStatusMcpServer } from '../../platform/memory/snapshot'
+import { createMemoryStatusMcpServer, resolveMemoryLayout, type MemoryService, type MemoryCallerScope } from '../../platform/memory'
 import type { ActivityStore } from './store'
 import type {
   TriggerContext,
@@ -39,8 +40,9 @@ import { createNotifyToolServer } from './notify-tool'
 import { FileExportGate } from './file-export-gate'
 import { getImSessionRegistry } from './im-session-registry'
 import { autoSyncRunResult } from './im-auto-sync'
-import { getApiCredentials, getApiCredentialsForSource, getHeadlessElectronPath, getWorkingDir, getMcpServersForRequires } from '../../services/agent/helpers'
+import { getApiCredentials, getApiCredentialsForSource, getHeadlessElectronPath, getMcpServersForRequires } from '../../services/agent/helpers'
 import { resolveCredentialsForSdk, buildBaseSdkOptions } from '../../services/agent/sdk-config'
+import { toEngineSystemPrompt } from '../../services/agent/system-prompt'
 import { applyReasoningEffort } from '../../services/agent/reasoning-effort'
 import { getOrCreateV2Session } from '../../services/agent/session-manager'
 import { createAIBrowserMcpServer, createScopedBrowserContext } from '../../services/ai-browser'
@@ -51,9 +53,16 @@ import { createApiRefMcpServer, HALO_API_TOOLSET_ID } from '../../services/api-r
 import { createOfficialDocsSession } from '../../services/official-docs-mcp'
 import { createEmailMcpServer } from '../../services/email-mcp'
 import { getConfig, resolveClaudeConfigDir } from '../../foundation/config.service'
-import { getSpace, getSpaceDir } from '../../services/space.service'
 import { openSessionWriter, type SessionWriter } from './session-store'
-import { prepareMemoryForTurn, finalizeMemoryAfterTurn, type CompactionCredentialsProvider } from './turn/memory-lifecycle'
+import {
+  prepareMemoryForTurn,
+  finalizeMemoryAfterTurn,
+  memoryPromptOptions,
+  loadSpaceTopicsForTurn,
+  appMemoryGuard,
+  appMemorySettings,
+} from './turn/memory-lifecycle'
+import { appConsolidationInputs } from './memory-control'
 import { registerActiveRun, unregisterActiveRun } from './active-runs'
 import { describeSelfInstance, formatInstanceTag, listLiveInstances } from './live-instances'
 
@@ -178,13 +187,15 @@ const SESSION_KEY_PREFIX = 'app-run'
  * @throws RunExecutionError on unrecoverable failure
  */
 export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResult> {
-  const { app, trigger, store, memory, abortSignal, emitEntry, existingRunId, existingSessionKey, onRunStarted } = options
+  const { trigger, store, memory, abortSignal, emitEntry, existingRunId, existingSessionKey, onRunStarted } = options
+  let app = options.app
 
   // Guard: executeRun is only valid for automation apps.
   // This narrows app.spec to AutomationSpec for the rest of the function.
   if (app.spec.type !== 'automation') {
     throw new RunExecutionError('unknown', 'unknown', `executeRun called for non-automation app type: ${app.spec.type}`)
   }
+  const appSpec = app.spec
 
   // For continue_followup and escalation_followup (with existingRunId), reuse the
   // existing run record. For all other triggers, generate a new run ID and insert fresh.
@@ -193,6 +204,16 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
   const runId = existingRunId ?? randomUUID()
   const sessionKey = existingSessionKey ?? `${SESSION_KEY_PREFIX}-${runId.slice(0, 8)}`
   const startedAt = Date.now()
+
+  const manager = getAppManager()
+  if (!manager) throw new RunExecutionError(app.id, runId, 'App manager is unavailable')
+  const originalEnvironment = existingRunId ? store.getRun(existingRunId)?.environment : undefined
+  if (existingRunId && !originalEnvironment) {
+    throw new RunExecutionError(app.id, runId, 'The original execution environment is unavailable; restore it before continuing')
+  }
+  const environment = originalEnvironment ?? resolveExecutionEnvironment(app, manager)
+  if (existingRunId) store.pinRunEnvironment(existingRunId, environment)
+  app = { ...app, spaceId: environment.spaceId }
 
   const runTag = runId.slice(0, 8)
   const selfInstance = describeSelfInstance(app.id, {
@@ -217,6 +238,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       triggerType: trigger.type,
       triggerData: trigger.eventPayload ?? (trigger.escalation ? { escalation: trigger.escalation } : undefined),
       startedAt,
+      environment,
     })
   }
 
@@ -246,11 +268,18 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     spaceId: app.spaceId!, // Automation apps always have a spaceId
     // Use space.path (not workingDir) to match the directory layout that
     // AppManager creates: {space.path}/.halo/apps/{appId}/memory/
-    spacePath: getSpace(app.spaceId!)?.path ?? '',
+    spacePath: environment.spacePath,
     appId: app.id,
+    appDataPath: environment.memoryDir,
   }
 
   try {
+    if ((trigger.type === 'continue_followup' || trigger.type === 'escalation_followup') &&
+      (!existingRunId || !existingSessionKey || !(trigger.continue?.sessionId || trigger.escalation?.sessionId))) {
+      throw new Error('The original execution context is unavailable; no replacement task was started')
+    }
+    validateExecutionEnvironment(environment)
+    validateEnvironmentConnections(environment, app, manager)
     // ── 1. Resolve credentials and working directory ─────
     //    (needed early: workDir feeds into system prompt,
     //     modelInfo feeds into base prompt's model display)
@@ -260,7 +289,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       : await getApiCredentials(config)
     const resolvedCreds = await resolveCredentialsForSdk(credentials)
     const electronPath = getHeadlessElectronPath()
-    const workDir = getWorkingDir(app.spaceId!)
+    const workDir = environment.workDir
 
     console.log(
       `[Runtime][${runTag}] Credentials resolved: provider=${credentials.provider}, ` +
@@ -268,7 +297,10 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     )
 
     // ── 2. Build system prompt ─────────────────────────────
-    const memoryInstructions = memory.getPromptInstructions('run')
+    const memorySettings = appMemorySettings(app)
+    const memoryInstructions = memorySettings.enabled
+      ? memory.getPromptInstructions('run', memoryPromptOptions(app.id, app.spec))
+      : ''
     const usesAIBrowser = resolvePermission(app, 'ai-browser')
     const usesTerminal = resolvePermission(app, 'ai-terminal') && isTerminalAvailable()
     const usesEmail = resolvePermission(app, 'email') // gated on channel config below
@@ -306,7 +338,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
 
     const systemPrompt = buildAppSystemPrompt({
       appId: app.id,
-      appSpec: app.spec,
+      appSpec,
       memoryInstructions,
       triggerContext: trigger.description,
       userConfig: mergedConfig,
@@ -322,7 +354,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
         imContactsAvailable: notifyAvail.imContactsAvailable,
       }) ?? undefined,
       notifyToolsAvailable: notifyAvail.anyNotifyToolAvailable,
-    })
+    }) + '\n\n' + personContextPrompt({ authority: 'owner', appId: app.id })
 
     console.log(
       `[Runtime][${runTag}] ── SYSTEM PROMPT ──────────────────────────\n` +
@@ -331,17 +363,17 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     )
 
     // ── 3. Build initial message ───────────────────────────
-    //    Build memory snapshot + pre-insert History heading.
+    //    Build memory snapshot + pre-insert History heading. With memory off
+    //    the run neither reads nor writes it.
     const selfTag = formatInstanceTag(selfInstance)
-    const { snapshot: memorySnapshot, runTimestamp } = await prepareMemoryForTurn(memoryScope, {
-      byLabel: selfTag,
-    })
-    console.log(
-      `[Runtime][${runTag}] Memory snapshot: exists=${memorySnapshot.exists}, ` +
-      `lines=${memorySnapshot.totalLines}, size=${memorySnapshot.sizeBytes}B, ` +
-      `headers=${memorySnapshot.headers.length}, archive=${memorySnapshot.archiveTotalCount}`
-    )
-    console.log(`[Runtime][${runTag}] Pre-inserted History heading: ## ${runTimestamp}  [by: ${selfTag}]`)
+    const memorySnapshot = memorySettings.enabled
+      ? (await prepareMemoryForTurn(memoryScope, { byLabel: selfTag })).snapshot
+      : null
+    const freshRun = trigger.type !== 'continue_followup' && !(trigger.type === 'escalation_followup' && existingRunId && trigger.escalation)
+    // Only a fresh run opens with memory; a resumed one already holds it.
+    const spaceTopics = memorySnapshot && freshRun
+      ? await loadSpaceTopicsForTurn(memoryScope, { enabledForApp: app.userOverrides?.spaceMemoryAccess === true })
+      : null
 
     // Resuming runs (continue or escalation follow-up) send minimal messages
     // so the model can resume naturally from its restored session context.
@@ -355,6 +387,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
             userConfig: mergedConfig,
             appName: app.spec.name,
             memorySnapshot,
+            spaceTopics,
             selfInstance,
             liveInstances: listLiveInstances(app.id, selfInstance.id),
           })
@@ -375,7 +408,9 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     // ── 4. Create MCP servers ──────────────────────────────
     //    Register the lightweight memory_status tool (structural metadata only).
     //    The AI uses native Read/Edit/Write on memory.md directly.
-    const memoryMcpServer = createMemoryStatusMcpServer(memoryScope)
+    const memoryMcpServer = memorySettings.enabled
+      ? createMemoryStatusMcpServer(resolveMemoryLayout(memoryScope, 'app'))
+      : null
 
     // Resolve plans directory for file-based data_path guidance in report_to_user.
     // Uses the same CC config directory that the SDK session uses for consistency.
@@ -406,7 +441,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     // cwd) + tmpdir. memoryScope.spacePath is intentionally NOT reused here:
     // memory lives under space.path (internal storage), while exportable
     // files live under workingDir||path — see getSpaceDir().
-    const exportGate = new FileExportGate([getSpaceDir(app.spaceId!), tmpdir()])
+    const exportGate = new FileExportGate([environment.workDir, tmpdir()])
     const notifyMcpServer = createNotifyToolServer({
       appId: app.id,
       appName: app.spec.name,
@@ -460,13 +495,15 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       stderrHandler: (data: string) => {
         console.error(`[Runtime][${app.id}] CLI stderr:`, data)
       },
+      memoryGuard: appMemoryGuard(memoryScope, runTag, memorySettings),
       // Built-in server ids below are mirrored in shared/apps/builtin-mcp.ts — keep in sync.
       mcpServers: {
         ...requiredMcpServers,              // declared MCP dependencies
-        'halo-memory': memoryMcpServer,     // built-in: persistent memory
+        ...(memoryMcpServer ? { 'halo-memory': memoryMcpServer } : {}), // built-in: persistent memory
         'halo-report': reportMcpServer,     // built-in: completion signal
         'halo-notify': notifyMcpServer,     // built-in: user notification
         'halo-docs': docsMcpServer,         // built-in: Halo's own documentation
+        'halo-person-context': createPersonContextMcpServer({ authority: 'owner', appId: app.id, environmentSpaceId: app.spaceId!, capabilityMode: 'automation' }),
         'web-search': createWebSearchMcpServer(), // built-in: web search
         'ocr': createOcrMcpServer(),              // built-in: on-device image OCR
         ...(usesAIBrowser ? { 'ai-browser': createAIBrowserMcpServer(scopedBrowserCtx, workDir) } : {}),
@@ -481,7 +518,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     })
 
     // Override SDK options for automation context
-    sdkOptions.systemPrompt = systemPrompt
+    sdkOptions.systemPrompt = toEngineSystemPrompt(systemPrompt)
     sdkOptions.maxTurns = config.agent?.maxTurns ?? DEFAULT_MAX_TURNS
     // Token-level partials OFF: a run is headless and emits no renderer events,
     // so there is no live consumer for token frames. processStream persists one
@@ -530,15 +567,12 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
         workDir
       )
     } else {
-      if (trigger.type === 'continue_followup') {
-        console.warn(`[Runtime][${runTag}] continue_followup has no sessionId — starting fresh session`)
-      }
       session = await createSession(sdkOptions)
     }
     console.log(`[Runtime][${runTag}] V2 session created, sending initial message`)
 
     // ── 5b. Open session writer for "View process" ────────
-    const spacePath = getSpace(app.spaceId!)?.path ?? ''
+    const spacePath = environment.spacePath
     let sessionWriter: SessionWriter | undefined
     if (spacePath) {
       sessionWriter = openSessionWriter(spacePath, app.id, runId)
@@ -737,7 +771,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       finalText: streamResult.finalText,
       escalation: !!escalationEntryId,
       runTag,
-    }, buildCompactionCreds(app))
+    }, appConsolidationInputs(app, selfInstance.id))
 
     return {
       appId: app.id,
@@ -799,7 +833,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       finalText: `Error: ${errorMessage}`,
       escalation: false,
       runTag,
-    }, buildCompactionCreds(app), { saveSessionSummary: true, compact: false })
+    }, appConsolidationInputs(app, selfInstance.id), { saveSessionSummary: true, consolidate: false })
 
     return {
       appId: app.id,
@@ -920,6 +954,7 @@ async function processStream(
 
       if (msgType === 'result') {
         const m = sdkMessage as any
+        // On the halo engine `usage` already includes sub-agents' tokens.
         if (m.usage) {
           result.totalTokens = (m.usage.input_tokens || 0) + (m.usage.output_tokens || 0)
         }
@@ -969,26 +1004,4 @@ async function processStream(
   )
 
   return result
-}
-
-// ── Compaction credentials ───────────────────────────────────────────────────
-
-function buildCompactionCreds(app: InstalledApp): CompactionCredentialsProvider {
-  return async () => {
-    const config = getConfig()
-    const credentials = app.userOverrides?.modelSourceId
-      ? await getApiCredentialsForSource(config, app.userOverrides.modelSourceId, app.userOverrides.modelId)
-      : await getApiCredentials(config)
-    const resolved = await resolveCredentialsForSdk(credentials)
-    return {
-      anthropicApiKey: resolved.anthropicApiKey,
-      anthropicBaseUrl: resolved.anthropicBaseUrl,
-      sdkModel: resolved.sdkModel,
-      provider: credentials.provider,
-      oauthProvider: credentials.oauthProvider,
-      delegatedAuth: credentials.delegatedAuth,
-      delegatedRoutingHeader: resolved.delegatedRoutingHeader,
-      capabilities: resolved.capabilities,
-    }
-  }
 }

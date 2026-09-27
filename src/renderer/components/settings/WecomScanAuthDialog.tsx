@@ -33,10 +33,15 @@ export interface WecomScanAuthDialogProps {
   /** Called when the dialog is dismissed (cancel button, backdrop, or after success). */
   onClose: () => void
   /**
-   * Called after a successful scan + auto-assistant creation.
-   * Receives the bot credentials and the bound app metadata; the parent is
-   * responsible for appending the resulting instance to imChannels.instances
-   * and persisting the config.
+   * Bind the scanned bot to this digital human instead of minting a new one.
+   * Omit it for the cold-start path, where the user has no digital human yet.
+   */
+  targetAppId?: string
+  /** Display name for targetAppId, used in the success message. */
+  targetAppName?: string
+  /**
+   * Called after a successful scan. Receives the bot credentials and the bound
+   * app metadata; the parent is responsible for persisting the instance.
    */
   onComplete: (result: {
     botId: string
@@ -85,7 +90,7 @@ function ScanQrCode({ value }: { value: string }) {
 // Component
 // ============================================
 
-export function WecomScanAuthDialog({ open, onClose, onComplete }: WecomScanAuthDialogProps) {
+export function WecomScanAuthDialog({ open, onClose, onComplete, targetAppId, targetAppName }: WecomScanAuthDialogProps) {
   const { t } = useTranslation()
   const [state, setState] = useState<DialogState>({ kind: 'idle' })
   const [now, setNow] = useState(() => Date.now())
@@ -179,21 +184,29 @@ export function WecomScanAuthDialog({ open, onClose, onComplete }: WecomScanAuth
         return
       }
 
-      // Got credentials — install the default assistant before exposing them.
       setState({ kind: 'finalizing' })
       const { botId, secret } = pollRes.data
-      const createRes = await api.wecomBotScanAuthCreateAssistant({
-        botIdPrefix: botId.slice(0, 8),
-      })
-      if (!createRes.success || !createRes.data) {
-        setState({
-          kind: 'error',
-          message: createRes.error || t('Failed to create default digital human'),
-        })
-        return
-      }
 
-      const { appId, appName } = createRes.data
+      let appId: string
+      let appName: string
+      if (targetAppId) {
+        appId = targetAppId
+        appName = targetAppName ?? ''
+      } else {
+        // Cold start: no digital human to bind to, so mint one.
+        const createRes = await api.wecomBotScanAuthCreateAssistant({
+          botIdPrefix: botId.slice(0, 8),
+        })
+        if (!createRes.success || !createRes.data) {
+          setState({
+            kind: 'error',
+            message: createRes.error || t('Failed to create default digital human'),
+          })
+          return
+        }
+        appId = createRes.data.appId
+        appName = createRes.data.appName
+      }
       try {
         await onCompleteRef.current({ botId, secret, appId, appName })
       } catch (err) {
@@ -217,7 +230,7 @@ export function WecomScanAuthDialog({ open, onClose, onComplete }: WecomScanAuth
         message: err instanceof Error ? err.message : String(err),
       })
     }
-  }, [cancelActiveScan, t, onClose])
+  }, [cancelActiveScan, t, onClose, targetAppId, targetAppName])
 
   // Kick off the scan automatically when the dialog opens — saves a click and
   // matches the "scan once" user mental model. Errors land in the error state

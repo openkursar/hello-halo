@@ -6,7 +6,7 @@
  */
 
 import type { RunOutcome, AppStatus } from '../manager'
-import type { TeamContext } from '../../../shared/apps/team-types'
+import type { AppRunStartInfo } from '../../../shared/apps/app-types'
 
 // ============================================
 // Trigger Types
@@ -83,19 +83,18 @@ export interface AppRunResult {
  * `queued` carries no runId because the run row is only created once a global
  * concurrency slot is granted.
  */
-export interface AppRunStartInfo {
-  outcome: 'started' | 'queued'
-  runId?: string
-  sessionKey?: string
-  startedAt?: number
-}
+export type { AppRunStartInfo } from '../../../shared/apps/app-types'
 
 // ============================================
 // Automation Run (DB record)
 // ============================================
 
 /** Persistent record of an automation run */
+export type { ExecutionEnvironment } from '../../../shared/apps/app-types'
+import type { ExecutionEnvironment } from '../../../shared/apps/app-types'
+
 export interface AutomationRun {
+  environment?: ExecutionEnvironment
   runId: string
   appId: string
   sessionKey: string
@@ -111,128 +110,54 @@ export interface AutomationRun {
   sessionId?: string
 }
 
+/**
+ * An AutomationRun with its last activity entry's summary attached — for the
+ * run-history list, which needs "what did this run produce" without an N+1
+ * query per row. `summary` is joined from the run's most recent activity_entries
+ * row of any type; the caller falls back to `errorMessage` when `status === 'error'`.
+ */
+export interface AutomationRunWithSummary extends AutomationRun {
+  summary?: string
+}
+
+/** Aggregate run outcomes over a recent window, for the digital-human overview. */
+export interface RunStats {
+  total: number
+  ok: number
+  error: number
+  skipped: number
+  totalTokens: number
+  avgDurationMs: number
+}
+
 // ============================================
 // Activity Entries
 // ============================================
 
-/** Types of activity entries written by the AI via report_to_user */
-export type ActivityEntryType =
-  | 'run_complete'
-  | 'run_skipped'
-  | 'run_error'
-  | 'milestone'
-  | 'escalation'
-  | 'output'
+export type {
+  ActivitySource, ActivityEntryType, ActivityEntryContent, EscalationQuestion,
+  EscalationAnswer, EscalationResponse, ActivityEntry, AutomationAppState,
+  ActivityQueryOptions, EscalationContinuation, PendingDecisionQuery,
+} from '../../../shared/apps/app-types'
+import type {
+  ActivityEntry, ActivityEntryType, ActivityQueryOptions, PendingDecisionQuery, AutomationAppState,
+  EscalationQuestion, EscalationResponse,
+} from '../../../shared/apps/app-types'
 
-/** Content of an activity entry */
-export interface ActivityEntryContent {
-  resolution?: { reason: 'task_closed'; ts: number }
-  /** Human-readable summary (required, written by AI) */
-  summary: string
-  /** Run status indicator */
-  status?: 'ok' | 'error' | 'skipped'
-  /** Run duration in milliseconds */
-  durationMs?: number
-  /** Error message */
-  error?: string
-  /** Next retry time (for run_error) */
-  nextRetryMs?: number
-  /** Structured output data (tables, lists, short inline markdown) */
-  data?: unknown
-  /** Absolute path to a markdown file written by AI (replaces inline data for large content) */
-  dataPath?: string
-  /** Question for the user (escalation only) */
-  question?: string
-  /** Preset choices for escalation */
-  choices?: string[]
-  /**
-   * The decisions asked, when an escalation asks for more than one. `summary`
-   * then frames why they are being asked and `choices` does not apply. A
-   * single-decision escalation leaves this empty and carries its question in
-   * `summary`. Read it through `getEscalationQuestions`, never directly.
-   */
-  questions?: EscalationQuestion[]
-  /** File URL for output type */
-  outputUrl?: string
-  /** Persisted in content_json; avoids a separate column for team aggregation. */
-  teamContext?: TeamContext
-}
-
-/** One decision an escalation asks the user to make. */
-export interface EscalationQuestion {
-  question: string
-  /** Preset answers; the user may still type their own. */
-  choices?: string[]
-}
-
-/** The user's answer to a single question. */
-export interface EscalationAnswer {
-  choice?: string
-  text?: string
-}
-
-/** User response to an escalation */
-export interface EscalationResponse {
-  ts: number
-  choice?: string
-  text?: string
-  /** One answer per `content.questions`, in the same order. */
-  answers?: EscalationAnswer[]
-}
-
-/** A single Activity Thread entry */
-export interface ActivityEntry {
-  id: string
-  appId: string
-  runId: string
-  type: ActivityEntryType
-  ts: number
-  sessionKey?: string
-  content: ActivityEntryContent
-  userResponse?: EscalationResponse
-}
-
-// ============================================
-// App Runtime State
-// ============================================
-
-/** Real-time state of an automation App (for UI display) */
-export interface AutomationAppState {
-  /**
-   * - running:      Actively executing a run right now
-   * - queued:       Manually triggered; waiting for a global concurrency slot
-   * - idle:         Active and scheduled, no run in progress
-   * - paused:       User paused the app; subscriptions inactive
-   * - waiting_user: AI escalated; awaiting user decision
-   * - error:        Consecutive failures hit threshold; auto-disabled
-   */
-  status: 'running' | 'queued' | 'idle' | 'paused' | 'waiting_user' | 'error'
-  nextRunAtMs?: number
-  runningAtMs?: number
-  /** Run ID of the currently executing run (only set when status === 'running') */
-  runningRunId?: string
-  /** Session key of the currently executing run (only set when status === 'running') */
-  runningSessionKey?: string
-  lastRunAtMs?: number
-  lastStatus?: 'ok' | 'error' | 'skipped'
-  lastError?: string
-  lastDurationMs?: number
-  consecutiveErrors?: number
-  pendingEscalationId?: string
-}
-
-// ============================================
-// Query Options
-// ============================================
-
-/** Options for querying activity entries */
-export interface ActivityQueryOptions {
-  teamId?: string
-  epochId?: string
+/** Options for querying run history */
+export interface RunQueryOptions {
   limit?: number
   offset?: number
-  type?: ActivityEntryType
-  since?: number
+}
+
+/** Per-app snapshot for the digital-human card wall's batched first paint. */
+export interface AppOverviewEntry {
+  appId: string
+  state: AutomationAppState
+  /** Most recent run_complete/output activity entry, if any. */
+  latestSummary?: { type: ActivityEntryType; summary: string; ts: number }
+  /** Most recent run statuses, oldest first, capped at 7. */
+  recentRunStatuses: RunStatus[]
 }
 
 // ============================================
@@ -379,6 +304,8 @@ export interface AppRuntimeService {
    * Combines manager state with runtime scheduling info.
    */
   getAppState(appId: string): AutomationAppState
+  getAllAppStates(): Record<string, AutomationAppState>
+  getDirectoryRuntimeSnapshot(): import('../../../shared/apps/people-directory').DirectoryRuntimeSnapshot
 
   // ── Escalation ──────────────────────────────
 
@@ -386,11 +313,19 @@ export interface AppRuntimeService {
    * Respond to an escalation: triggers a follow-up run with
    * the escalation context and user's response.
    */
+  retryEscalationContinuation(appId: string, entryId: string): Promise<void>
+  confirmEscalationDeadline(appId: string, entryId: string, deadlineAt: number | null): void
+  /** Decline ONE unanswered request; the run it belongs to keeps going. */
+  dismissEscalation(appId: string, entryId: string): Promise<void>
+  closeRun(appId: string, runId: string): Promise<void>
+  stopRun(appId: string, runId: string): Promise<void>
+  getPendingEntries(appId: string, options?: PendingDecisionQuery): ActivityEntry[]
+  getPendingInbox(options?: PendingDecisionQuery): import('../../../shared/apps/app-types').PendingDecisionInbox
   respondToEscalation(
     appId: string,
     entryId: string,
     response: EscalationResponse
-  ): Promise<void>
+  ): Promise<ActivityEntry>
 
   /**
    * User-initiated continue for a run that ended prematurely (LLM stopped without
@@ -419,6 +354,7 @@ export interface AppRuntimeService {
 
   /** Get activity entries for an App */
   getActivityEntries(appId: string, options?: ActivityQueryOptions): ActivityEntry[]
+  getActivityEntry(appId: string, entryId: string): ActivityEntry | null
 
   /** Get the activity entries a single run produced, newest first */
   getEntriesForRun(runId: string): ActivityEntry[]
@@ -428,6 +364,19 @@ export interface AppRuntimeService {
 
   /** Get runs for an App */
   getRunsForApp(appId: string, limit?: number): AutomationRun[]
+
+  /** Get runs for an App with each row's last activity summary attached, for the run-history list. */
+  getRunsForAppWithSummary(appId: string, options?: RunQueryOptions): AutomationRunWithSummary[]
+
+  /** Aggregate outcome/token/duration stats over an App's most recent runs (default window: 30). */
+  getRunStats(appId: string, window?: number): RunStats
+
+  /**
+   * Batched first-paint data for the digital-human card wall: runtime state,
+   * latest output summary, and recent run statuses for every automation App
+   * (optionally scoped to one space), in a single call.
+   */
+  getOverview(spaceId?: string): AppOverviewEntry[]
 
   // ── Lifecycle ───────────────────────────────
 

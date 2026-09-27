@@ -617,6 +617,9 @@ interface HaloConfig {
   system: {
     autoLaunch: boolean
   }
+  notifications?: {
+    taskComplete: boolean
+  }
   // Agent behavior configuration
   agent?: {
     maxTurns: number
@@ -625,6 +628,7 @@ interface HaloConfig {
     customConfigDir?: string
     /** Experimental: switch agent engine. 'anthropic' = Claude Code SDK (default), 'halo' = Halo SDK, 'codex' = Codex SDK adapter. */
     sdkEngine?: 'anthropic' | 'halo' | 'codex'
+    /** Legacy setting retained for migration; native CC Teams are disabled. */
     enableTeams?: boolean
     /** Enable Digital Humans MCP tools (automation app management) */
     enableDigitalHumans?: boolean
@@ -703,7 +707,6 @@ interface HaloConfig {
   analytics?: AnalyticsConfig
   // Global layout preferences (panel sizes and visibility)
   layout?: {
-    sidebarOpen?: boolean
     sidebarWidth?: number
     artifactRailWidth?: number
   }

@@ -13,15 +13,17 @@
 | SDK invocation & configuration | `sdk-config.ts`, `resolved-sdk.ts`, `codex/` | Provider selection, model resolution, SDK option assembly. Alternate SDK engines are loaded only through `resolved-sdk.ts`; Codex-specific translation is isolated under `codex/`. |
 | Thinking depth → engine options | `reasoning-effort.ts` | Combines the per-request Deep Thinking toggle with the per-model effort level into `effort` / `maxThinkingTokens` / Codex `model_reasoning_effort`. Every SDK call site goes through `applyReasoningEffort`. See §9. |
 | Engine availability probe | `engine-availability.ts` | Detects which engine runtimes shipped in this build (manifest + entry file + platform binary for Codex) so `resolved-sdk.ts` can fall back instead of crashing at startup. Result is cached per process; exposed via `agent:get-engine-availability`. |
-| System prompt composition | `system-prompt.ts` | Space context, conversation context, tool availability injection. `buildKnowledgeSection` is exported separately for creation-time append. |
+| System prompt composition | `system-prompt.ts` | Space context, conversation context, tool availability injection. `buildKnowledgeSection` is exported separately for creation-time append. On the `halo` engine the Claude Code-derived template is not used: `buildSystemPrompt` yields only Halo's product context, and every site that sets `sdkOptions.systemPrompt` wraps it with `toEngineSystemPrompt` into the engine's `{ preset: 'default', append }`. Code that later extends or reads the prompt goes through `appendToSystemPrompt` / `hostSystemPromptText`, never assumes a string. |
 | Knowledge context resolution | `knowledge-context.ts` | Conversation `knowledgeBaseIds` → injectable `KBReference[]` (agent→tlon dependency collector). Cheap id-only variant feeds the session knowledge fingerprint. |
+| Space memory | `space-memory.ts` | Space chat's shared memory (platform/memory, scope `space`, per-space settings): compact instructions appended to the Halo system prompt (a short form while the memory is empty) and the write guard at session setup, the bounded memory block on a new conversation's first message. Whether memory was on is passed as `SessionGates.creationContext`, so a session warmed before the setting flipped is rebuilt. Every concern that watches tool calls adds its hooks with `addSdkHooks` (sdk-config) — never by assigning `hooks`. Consolidation is not here — `services/memory-consolidation` listens for turn ends. |
 | Subagent orchestration | `subagent-handler.ts` | Nested agent invocations — Halo supports agents spawning agents. |
-| Permission gating | `permission-handler.ts` | AskUserQuestion, tool approval, permission mode resolution. |
+| Permission gating | `permission-handler.ts` | AskUserQuestion, and the optional `ToolGate` a caller supplies for calls the engine left undecided. Knows nothing about what a policy says — only whom to ask. |
 | MCP server routing | `mcp-manager.ts` | Registration, discovery, per-session MCP bindings. Owns the shared status cache (`agent:mcp-status` broadcast). |
 | MCP connection probe | `mcp-probe.ts` | Native initialize+tools/list handshake via `@modelcontextprotocol/sdk` — no agent session, no token cost. Classifies failures (401→needs-auth, refused/timeout→failed + `errorDetail`). Triggered by app lifecycle events (install/resume/spec-update, wired in `apps/runtime`), by SDK-reported `failed`/`needs-auth` (stream-processor follow-up), and manually via `agent:probe-mcp` IPC. A probe that connects also clears the server's CC auth record. |
 | CC MCP auth state | `mcp-auth-state.ts` | Removes stale OAuth records CC persists under `CLAUDE_CONFIG_DIR` after any 4xx from a URL-based MCP server. Such a record has no expiry and makes CC skip the server entirely, so it is cleared before session creation and after a successful probe. Mirrors CC-internal formats; a mismatch degrades to a no-op. |
 | External message injection | `inject-message.ts` | Entry point for IM inbound / programmatic triggers to push messages into a session. |
 | Session control | `control.ts` | Interrupt / pause / switch-model mid-session. |
+| Conversation goal | `goal/` | Reads/sets the engine session's goal on the user's behalf (engines with `features.goal`; halo only). The engine owns and persists it; `goal/index.ts` routes to the live session (starting it like a conversation switch), `goal/draft.ts` holds the goal of a conversation with no recorded engine session id and `session-manager` seeds it into each fresh session (`goal` option). Model-side changes arrive as `system`/`goal_updated` frames, forwarded by `stream-processor` as `agent:goal-updated`. `agent:goal-set` starts no turn; a `goal` on the send request (space chat only) is set on the session right before that message is sent. |
 | Outbound message composition | `send-message.ts`, `message-utils.ts` | User message assembly, attachment handling, token counting. |
 | Non-vision image fallback | `image-attachments.ts` | For models without vision: persists pasted images into the space's `attachments/` dir (content-addressed, mirrors the conversation-dir layout) and replaces the outbound image blocks with a `<halo_attachments>` path block for the `ocr_image` tool. Vision models bypass it entirely. Broker-free by design — ensuring ocr_image is present is the caller's concern: `send-message.ts` auto-opens the OCR toolset (opener `system`, before session creation so the rebuild seeds the same turn); app chat (`apps/runtime/app-chat.ts`) seeds the OCR MCP server unconditionally. |
 | Session consumption loop | `session-consumer.ts` | Persistent per-session loop over SDK turns; dispatches into stream-processor. Surface-agnostic — see §3.1. |
@@ -147,6 +149,7 @@ behavior do not inject — they go through the normal send path and queue.
 | If you need to... | Start here |
 |---|---|
 | Change how the SDK is invoked or configured | `sdk-config.ts` / `resolved-sdk.ts` |
+| Change what identity the host puts on outgoing requests | `request-identity-factory.ts` (see §10) |
 | Change how hard a model thinks | `reasoning-effort.ts` (never set `effort` / `maxThinkingTokens` at a call site) |
 | Change engine bundling detection / startup fallback | `engine-availability.ts` / `resolved-sdk.ts` |
 | Change how SDK events become thoughts | `stream-processor.ts` |
@@ -159,6 +162,7 @@ behavior do not inject — they go through the normal send path and queue.
 | Register a new MCP server source | `mcp-manager.ts` |
 | Change MCP connectivity checks / failure classification | `mcp-probe.ts` |
 | Touch CC's credential store / MCP auth records | `mcp-auth-state.ts` (never inline elsewhere) |
+| Change how an engine resolves a file tool's path argument (`~`, env vars, drive letters) or prints search results | also `foundation/path-containment.ts` `resolveToolPath` and `apps/runtime/turn-file-access.ts` `filterSearchOutput`, which mirror it for file boundaries |
 
 ## 8) Hard Rules
 
@@ -169,6 +173,42 @@ behavior do not inject — they go through the normal send path and queue.
 5. **Mirrors of CC-internal formats stay in one module and fail closed.** `mcp-auth-state.ts` reproduces CC's entry-key derivation and keychain naming; a CC upgrade that changes either must make the lookup miss, never make it match the wrong record. Revalidate when bumping `@anthropic-ai/claude-agent-sdk`.
 6. **Guard every `mainWindow` access** in async callbacks with `!mainWindow.isDestroyed()`.
 7. **Every engine clamps the effort ladder to its own enum.** See §9.
+8. **An option a caller relies on as a restriction must be honoured or refused, never ignored.**
+   `features.permissionRules` states whether an engine enforces `allowedTools` /
+   `disallowedTools` / `canUseTool` at all (Codex does not: `thread/start` takes
+   no tool lists and routes no call through the gate). A caller restricting a
+   turn on someone else's behalf must check it and refuse — a restriction the
+   engine accepts and ignores reads as protection while the request runs with
+   everything. Adding an engine means answering this flag honestly.
+9. **Session reuse must not outlive the options a caller depends on.**
+   `computeSessionInputsFingerprint` covers `allowedTools` as well as
+   `disallowedTools` / `permissionMode` / the skip-permissions flag, because the
+   auto-allow rules decide which calls the engine settles by itself. Reuse
+   normally DEFERS a rebuild while the session is busy and returns the existing
+   session — correct for a model or knowledge change, wrong when the options are
+   a restriction. `SessionGates.requireFreshInputs` makes that case throw
+   (`SessionOptionsStaleError`) instead: the request is reported as not started
+   rather than run with the previous caller's permissions. The gate also covers
+   the in-flight sharing point: a concurrent creation is shared with a gated
+   caller only when its inputs fingerprint matches; otherwise the caller waits
+   the creation out and re-evaluates against the finished session, where the
+   same stale check applies.
+10. **Bash rule matching is the engine's semantics, never re-derived in Halo.**
+    A `Bash(...)` whitelist rule handed over via `allowedTools` is evaluated
+    entirely inside the Claude Code engine, which splits a compound command
+    (`&&`, `;`, `|`, `$()`, backticks, newlines, wrappers like `bash -c`) on
+    every shell separator and requires each part to match a rule on its own.
+    This is an EXTERNAL assumption: the matcher lives in the bundled CLI
+    (currently `@anthropic-ai/claude-agent-sdk` 0.2.89) and cannot be unit
+    tested offline from this repo. Halo deliberately runs no pattern test of
+    its own — a second matcher would drift from the engine's and clear what it
+    refused. The dependence is fail-closed by construction: any call the
+    engine's rules do not auto-allow reaches the per-call gate
+    (`apps/runtime/delegation-gate.ts`), which under a whitelist refuses
+    unconditionally. An engine build that stopped splitting compound commands
+    would therefore degrade the whitelist to whole-string matching — narrower
+    than intended, never wider, never full access. Revalidate the splitting
+    behavior when bumping the SDK (same ritual as hard rule 5).
 
 ## 9) Reasoning Effort
 
@@ -217,3 +257,55 @@ a value there is always something the user typed, which is what makes
 forwarding an unrecognized one safe. A change to it is part of the aiSources
 signature (`config.service.ts`), so it invalidates sessions like any other
 credential change — the toggle does not, since it is not config.
+
+## 10) Request Identity (halo engine only)
+
+When the active engine is `halo`, `buildBaseSdkOptions` attaches a
+`requestIdentity` to the SDK options. The SDK is identity-agnostic — it has a
+`RequestIdentity` seam and forwards whatever it is handed; every
+provider-specific constant and algorithm lives host-side in
+`request-identity-factory.ts` — except the reported Claude Code version, its
+user-agent and its attribution line, which live in
+`openai-compat-router/utils/claude-code-identity.ts` (read through the
+router's index). The router applies the same
+fixed version to every request it forwards on its Anthropic passthrough path,
+in both the header and the system prompt.
+
+What the factory produces, per request:
+
+| Field | Effect |
+|---|---|
+| `headers` | Client identity (`user-agent`, `x-app`, `x-stainless-*`), plus `x-claude-code-session-id` when a session id is supplied |
+| `headersForAttempt` | Retry counter |
+| `systemPrefix` | A text block prepended to the system array, carrying a per-request fingerprint derived from the first user message |
+| `metadata.user_id` | Device id, optionally account uuid and session id |
+| `betaQueryParam` | Beta features advertised by query parameter |
+| `contextManagement` | Thinking-retention policy for long sessions — see below |
+
+**`contextManagement` is the one field with a behavior effect, not just a wire
+effect.** It sends `edits: [{ type: 'clear_thinking_20251015', keep: 'all' }]`,
+which sets how much prior thinking is retained as a session grows. This is a
+deliberate choice, confirmed by the product owner alongside the identity work
+as a whole; it is also why the field is listed here rather than left implicit —
+it changes existing long sessions, so it does not belong in a commit that
+claims to be identity-only.
+
+**Gated on the engine.** The block only runs when `getActiveEngine() === 'halo'`;
+the default engine is `anthropic`, so a user who never switches engines is
+unaffected.
+
+**Session id comes from the conversation.** `sdk-config.ts` passes
+`conversationId` (a uuid) as `sessionId`, which is what populates both the
+session header and `metadata.user_id.session_id`. Dropping it silently halves
+the payload — as it did while the parameter went unpassed.
+
+**A failure here is degraded, not fatal.** The factory is built inside a
+`try/catch`: on failure the request still goes out, only without the identity
+headers. The catch logs the drop with the conversation id, because a silently
+unidentified session is indistinguishable from a correctly-identified one in
+every downstream log.
+
+**This is deliberate product behavior**, chosen so hallucination-prone gateway
+paths see the same shape as a first-party client. It is not an accident of
+bundling — it is why the SDK itself carries no provider identity. Do not
+"clean it up" out of the host without a product decision.

@@ -10,12 +10,13 @@
  */
 
 import { useEffect, useState } from 'react'
-import { SlidersHorizontal, Globe, TerminalSquare, ScanText, Settings2 } from 'lucide-react'
+import { Wrench, Globe, TerminalSquare, ScanText, Settings2, Users } from 'lucide-react'
 import { useToolsetsStore, type ToolsetStatus } from '../../stores/toolsets.store'
 import { useChatStore } from '../../stores/chat.store'
 import { useSpaceStore } from '../../stores/space.store'
 import { useTranslation } from '../../i18n'
 import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
+import { Switch } from '../ui/Switch'
 
 /** Icon per known toolset id; falls back to a generic tools glyph. */
 function toolsetIcon(id: string, size = 15) {
@@ -28,8 +29,10 @@ function toolsetIcon(id: string, size = 15) {
       return <ScanText size={size} />
     case 'halo-api-ref':
       return <Settings2 size={size} />
+    case 'halo-team':
+      return <Users size={size} />
     default:
-      return <SlidersHorizontal size={size} />
+      return <Wrench size={size} />
   }
 }
 
@@ -48,6 +51,8 @@ function toolsetLabel(t: (key: string) => string, ts: ToolsetStatus): string {
       return t('Text Extraction (OCR)')
     case 'halo-api-ref':
       return t('Operate Halo')
+    case 'halo-team':
+      return t('Team Collaboration')
     default:
       return ts.displayName
   }
@@ -68,6 +73,8 @@ function toolsetDescription(t: (key: string) => string, ts: ToolsetStatus): stri
       return t('Let AI read text from images')
     case 'halo-api-ref':
       return t('Let AI manage Halo itself: spaces, digital humans, knowledge bases and settings')
+    case 'halo-team':
+      return t('Let AI assemble a team to work in parallel and delegate to saved teams')
     default:
       return ts.summary
   }
@@ -143,14 +150,14 @@ export function ToolsetControls() {
       <Popover open={menuOpen} onOpenChange={setMenuOpen}>
         <PopoverTrigger
           title={t('Tools')}
-          className={`h-8 shrink-0 flex items-center gap-1.5 px-2.5 rounded-lg cursor-pointer transition-colors duration-200
+          className={`h-8 shrink-0 flex items-center gap-[5px] px-[9px] rounded-sm cursor-pointer transition-colors ease-halo
             ${menuOpen || openList.length > 0
-              ? 'bg-primary/10 text-primary'
-              : 'text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50'
+              ? 'bg-primary/[0.12] text-accent-on-dark'
+              : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
             }`}
         >
-          <SlidersHorizontal size={15} />
-          <span className="text-xs">{t('Tools')}</span>
+          <Wrench size={17} />
+          <span className="text-xs whitespace-nowrap">{t('Tools')}</span>
           {/* Enabled toolsets surfaced inline (icons only) — keeps the toolbar
               compact instead of rendering a separate pill per open toolset. */}
           {openList.length > 0 && (
@@ -166,10 +173,22 @@ export function ToolsetControls() {
 
         <PopoverContent side="top" align="start" sideOffset={8} className="py-1.5 rounded-xl min-w-[260px]">
           {list.map((ts) => (
-            <button
+            // Row is the primary toggle; the Switch below is a nested control,
+            // so this can't be a native <button> (no nested buttons) — same
+            // role="button" pattern KnowledgeBaseButton uses for its rows.
+            <div
               key={ts.id}
+              role="button"
+              tabIndex={0}
               onClick={() => handleToggle(ts)}
-              className={`w-full px-3 py-2 flex items-start gap-3 text-left hover:bg-muted/50 transition-colors
+              onKeyDown={(e) => {
+                if (e.target !== e.currentTarget) return
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  handleToggle(ts)
+                }
+              }}
+              className={`w-full px-3 py-2 flex items-start gap-3 text-left hover:bg-secondary cursor-pointer transition-colors
                 ${aiRequested?.has(ts.id) && !ts.open ? 'animate-pulse-highlight rounded-lg' : ''}`}
             >
               <span className="mt-0.5 text-muted-foreground">{toolsetIcon(ts.id)}</span>
@@ -179,17 +198,10 @@ export function ToolsetControls() {
                   {toolsetDescription(t, ts)}
                 </span>
               </span>
-              {/* Switch */}
-              <span
-                className={`mt-0.5 shrink-0 w-8 h-[18px] rounded-full transition-colors duration-200 relative
-                  ${ts.open ? 'bg-primary' : 'bg-muted-foreground/25'}`}
-              >
-                <span
-                  className={`absolute top-[2px] left-[2px] w-[14px] h-[14px] rounded-full bg-background
-                    shadow transition-transform duration-200 ${ts.open ? 'translate-x-[14px]' : ''}`}
-                />
+              <span className="mt-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+                <Switch checked={ts.open} onCheckedChange={() => handleToggle(ts)} size="sm" />
               </span>
-            </button>
+            </div>
           ))}
         </PopoverContent>
       </Popover>

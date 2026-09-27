@@ -9,10 +9,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const trackEvent = vi.fn()
 const storeGetAppDetail = vi.fn()
 
+// The two listeners below are never exercised here. They exist because the
+// page store now reaches app.store, which pulls in the chat store and its
+// canvas lifecycle, and that subscribes the moment it is imported.
 vi.mock('../../../src/renderer/api', () => ({
   api: {
     trackEvent,
     storeGetAppDetail: (slug: string) => storeGetAppDetail(slug),
+    onBrowserStateChange: () => () => {},
+    onArtifactChanged: () => () => {},
   },
 }))
 

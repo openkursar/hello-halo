@@ -74,7 +74,7 @@ export function SkillFileTree({ paths }: { paths: string[] }) {
   const { t } = useTranslation()
   const tree = useMemo(() => buildTree(paths), [paths])
   return (
-    <div className="rounded-[10px] border border-border/60 bg-background p-3.5 space-y-2.5">
+    <div className="rounded-[10px] border border-border/60 bg-card p-3.5 space-y-2.5">
       <h4 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
         {t('File structure')}
       </h4>

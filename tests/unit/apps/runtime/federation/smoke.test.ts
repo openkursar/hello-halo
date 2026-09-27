@@ -280,6 +280,7 @@ function makeAuthoritySession(
       teamStore.listMembersByTeam(OFFICE).find((m) => m.appId === appId)?.ownerNodeId ?? SELF_NODE_ID,
     getRemoteSpaceId: (appId) => node.manager.getRemoteMemberSpaceId(appId),
     sendWake: (p) => node.manager.sendWakeToMember(p),
+    sendStop: () => Promise.resolve(false),
     registerTurnComplete: (corr, cb) => node.manager.registerTurnComplete(corr, cb),
   })
 }
@@ -291,6 +292,7 @@ function inertLocal(): OrchestrationSessionDeps {
     isSessionActive: () => false,
     injectIntoSession: () => false,
     closeTeamSession: async () => {},
+    stopTeamSession: async () => false,
     getMemberSpaceId: () => 'local-space',
   }
 }

@@ -51,10 +51,18 @@ const SPACE = 'space-a'
 
 function seedTeam(
   store: TeamStore,
-  opts?: { collabMode?: Team['collabMode']; escalationRouting?: Team['escalationRouting']; epochId?: string | null }
+  opts?: {
+    collabMode?: Team['collabMode']
+    escalationRouting?: Team['escalationRouting']
+    epochId?: string | null
+    ephemeral?: boolean
+    /** Whether the team built its members (AI-provisioned) or they were added. */
+    aiProvisioned?: boolean
+  }
 ): void {
   const now = Date.now()
   const collabMode = opts?.collabMode ?? 'structured'
+  const aiProvisioned = opts?.aiProvisioned ?? false
   const team: Team = {
     id: TEAM_ID,
     name: 'Research Team',
@@ -68,12 +76,13 @@ function seedTeam(
     currentEpochId: opts?.epochId ?? null,
     createdAt: now,
     updatedAt: now,
+    ...(opts?.ephemeral ? { ephemeral: true, coordinatorConversationId: 'conv-1' } : {}),
   }
   store.insertTeam(team)
   const members: TeamMember[] = [
-    { teamId: TEAM_ID, appId: LEAD_APP, memberName: 'lead', role: 'Lead', isLead: true, aiProvisioned: false, addedAt: now },
-    { teamId: TEAM_ID, appId: RESEARCHER_APP, memberName: 'researcher', role: 'Research', isLead: false, aiProvisioned: false, addedAt: now },
-    { teamId: TEAM_ID, appId: TESTER_APP, memberName: 'tester', role: 'QA', isLead: false, aiProvisioned: false, addedAt: now },
+    { teamId: TEAM_ID, appId: LEAD_APP, memberName: 'lead', role: 'Lead', isLead: true, aiProvisioned, addedAt: now },
+    { teamId: TEAM_ID, appId: RESEARCHER_APP, memberName: 'researcher', role: 'Research', isLead: false, aiProvisioned, addedAt: now },
+    { teamId: TEAM_ID, appId: TESTER_APP, memberName: 'tester', role: 'QA', isLead: false, aiProvisioned, addedAt: now },
   ]
   for (const m of members) store.addMember(m)
   if (collabMode === 'structured') {
@@ -97,6 +106,7 @@ function makeSession(options: { acceptMidTurn?: boolean } = {}) {
   ])
   const active = new Set<string>()
   const cleared: Array<{ appId: string; teamId: string }> = []
+  const stopped: Array<{ appId: string; teamId: string }> = []
   // What was handed to a turn already running, in the form the member reads it.
   const injected: Array<{ sessionKey: string; message: string }> = []
   type Pending = {
@@ -137,9 +147,16 @@ function makeSession(options: { acceptMidTurn?: boolean } = {}) {
     closeTeamSession: vi.fn(async (appId, teamId, _epochId) => {
       cleared.push({ appId, teamId })
     }),
+    stopTeamSession: vi.fn(async (appId, teamId, epochId) => {
+      const sessionKey = buildTeamSessionKey(appId, teamId, epochId)
+      const wasRunning = active.has(sessionKey)
+      active.delete(sessionKey)
+      stopped.push({ appId, teamId })
+      return wasRunning
+    }),
     getMemberSpaceId: (appId) => spaceByApp.get(appId) ?? null,
   }
-  return { deps, pendings, cleared, active, injected }
+  return { deps, pendings, cleared, stopped, active, injected }
 }
 
 // ============================================
@@ -1276,6 +1293,53 @@ describe('TeamOrchestration', () => {
       expect(orch.getMemberStatus(RESEARCHER_APP)).toBe('working')
     })
 
+    it('restores the escalating turn\u2019s external origin on the resume wake', async () => {
+      // The sticky origin map does not survive a restart; the resume trigger is
+      // rebuilt from the persisted escalation record, so the flag must travel
+      // through resumeFromEscalation or the resumed turn runs permissive.
+      seedTeam(store, { collabMode: 'free', escalationRouting: 'user' })
+      const epoch = makeEpoch(store)
+      const { deps, pendings } = makeSession()
+      const orch = build(deps)
+
+      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, to: 'researcher', message: 'go', wait: false })
+      orch.captureReport(pendings[0].teamContext.correlationId, { kind: 'escalation', content: 'need a decision' })
+      pendings[0].resolve()
+      await flush()
+
+      const before = pendings.length
+      const ok = await orch.resumeFromEscalation({
+        teamId: TEAM_ID, epochId: epoch.id, appId: RESEARCHER_APP, response: 'skip it', external: true,
+      })
+      expect(ok).toBe(true)
+      await flush()
+
+      const resumeWake = pendings.slice(before).find((p) => p.conversationId === buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, epoch.id))
+      expect(resumeWake).toBeTruthy()
+      expect(resumeWake!.teamContext.external).toBe(true)
+    })
+
+    it('leaves a local escalation\u2019s resume wake unstamped', async () => {
+      seedTeam(store, { collabMode: 'free', escalationRouting: 'user' })
+      const epoch = makeEpoch(store)
+      const { deps, pendings } = makeSession()
+      const orch = build(deps)
+
+      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, to: 'researcher', message: 'go', wait: false })
+      orch.captureReport(pendings[0].teamContext.correlationId, { kind: 'escalation', content: 'need a decision' })
+      pendings[0].resolve()
+      await flush()
+
+      const before = pendings.length
+      expect(await orch.resumeFromEscalation({
+        teamId: TEAM_ID, epochId: epoch.id, appId: RESEARCHER_APP, response: 'skip it',
+      })).toBe(true)
+      await flush()
+
+      const resumeWake = pendings.slice(before).find((p) => p.conversationId === buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, epoch.id))
+      expect(resumeWake!.teamContext.external).toBeUndefined()
+    })
+
     it('the resume wake quotes the question it answers', async () => {
       seedTeam(store, { collabMode: 'free', escalationRouting: 'user' })
       const epoch = makeEpoch(store)
@@ -1472,6 +1536,28 @@ describe('TeamOrchestration', () => {
       const contactable = leadCtx.roster.filter((m) => m.contactable).map((m) => m.memberName).sort()
       expect(contactable).toEqual(['researcher', 'tester'])
     })
+
+    // What app-chat withholds memory and the digital-human tools on. True only
+    // when BOTH halves hold: a temporary team does not by itself make a member
+    // disposable — one the person installed survives the team's end.
+    describe('selfIsDisposable', () => {
+      const make = () => build(makeSession().deps)
+
+      it('is true for a member the temporary collaboration built', () => {
+        seedTeam(store, { ephemeral: true, aiProvisioned: true, collabMode: 'free' })
+        expect(make().buildPromptContext(TEAM_ID, RESEARCHER_APP)!.selfIsDisposable).toBe(true)
+      })
+
+      it('is false for a digital human the person installed, even in a temporary collaboration', () => {
+        seedTeam(store, { ephemeral: true, aiProvisioned: false, collabMode: 'free' })
+        expect(make().buildPromptContext(TEAM_ID, RESEARCHER_APP)!.selfIsDisposable).toBe(false)
+      })
+
+      it('is false for an AI-built member of a persistent team — the team outlives the work', () => {
+        seedTeam(store, { aiProvisioned: true })
+        expect(make().buildPromptContext(TEAM_ID, RESEARCHER_APP)!.selfIsDisposable).toBe(false)
+      })
+    })
   })
 
   describe('getObservableStatus', () => {
@@ -1571,6 +1657,36 @@ describe('TeamOrchestration', () => {
       await flush()
       return buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, epochId)
     }
+
+    it('defers a durable answer without putting it in a transient mailbox, then acknowledges its own turn', async () => {
+      seedTeam(store, { collabMode: 'free', escalationRouting: 'user' })
+      const epoch = makeEpoch(store)
+      const { deps, pendings, injected } = makeSession({ acceptMidTurn: true })
+      const orch = build(deps)
+      await startResearcherTurn(epoch.id)
+      const onDeferred = vi.fn()
+      const onStarted = vi.fn()
+      const onSettled = vi.fn()
+      const params = { teamId: TEAM_ID, epochId: epoch.id, appId: RESEARCHER_APP, response: 'go ahead',
+        continuationId: 'saved-answer', onDeferred, onStarted, onSettled }
+      expect(await orch.resumeFromEscalation(params)).toBe(true)
+      expect(onDeferred).toHaveBeenCalledTimes(1)
+      expect(onStarted).not.toHaveBeenCalled()
+      expect(injected).toHaveLength(0)
+      expect(bus.hasBufferedMessages(epoch.id)).toBe(false)
+      pendings[0].resolve('done')
+      await flush()
+      await orch.resumeFromEscalation(params)
+      await flush()
+      expect(onStarted).toHaveBeenCalledTimes(1)
+      await orch.resumeFromEscalation(params)
+      const answerTurn = pendings.find(p => p.teamContext.correlationId === 'decision:saved-answer')!
+      expect(answerTurn).toBeTruthy()
+      answerTurn.resolve('continued')
+      await flush()
+      expect(onSettled).toHaveBeenCalledTimes(1)
+      expect(onSettled).toHaveBeenCalledWith(undefined)
+    })
 
     it('buffers an escalation resume and delivers it when the current turn ends', async () => {
       seedTeam(store, { collabMode: 'free', escalationRouting: 'user' })

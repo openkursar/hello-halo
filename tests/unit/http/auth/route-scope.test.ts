@@ -18,6 +18,7 @@ describe('matchOfficeScope', () => {
       ['GET', '/api/teams/abc123/epochs/ep1/board'],
       ['GET', '/api/teams/abc123/epochs/ep1/artifacts'],
       ['POST', '/api/teams/abc123/members/m1/send'],
+      ['POST', '/api/teams/abc123/members/m1/stop'],
     ]
     for (const [method, path] of allowed) {
       it(`allows ${method} ${path}`, () => {
@@ -43,9 +44,10 @@ describe('matchOfficeScope', () => {
       ['POST', '/api/teams/x/triggers'],
       ['POST', '/api/teams/abc123'],
       ['POST', '/api/teams/abc123/epochs/ep1/board'],
-      // Only the send sub-route is admitted on a member; other member POSTs deny.
+      // Only the dispatch sub-routes are admitted on a member; others deny.
       ['POST', '/api/teams/abc123/members/m1'],
       ['GET', '/api/teams/abc123/members/m1/send'],
+      ['GET', '/api/teams/abc123/members/m1/stop'],
       ['GET', '/api/system/info'],
       ['GET', '/api/space/current'],
       ['GET', '/api/remote/status'],
@@ -65,9 +67,10 @@ describe('matchOfficeScope', () => {
   })
 
   it('exposes the raw allowlist for introspection', () => {
-    expect(OFFICE_READ_ROUTES.length).toBe(8)
-    // The read family is GET; the lone write is the member-dispatch POST.
+    expect(OFFICE_READ_ROUTES.length).toBe(9)
+    // The read family is GET; the writes are the member-dispatch POSTs (send,
+    // and the stop that interrupts it — gated identically at the route).
     expect(OFFICE_READ_ROUTES.filter((r) => r.method === 'GET')).toHaveLength(7)
-    expect(OFFICE_READ_ROUTES.filter((r) => r.method === 'POST')).toHaveLength(1)
+    expect(OFFICE_READ_ROUTES.filter((r) => r.method === 'POST')).toHaveLength(2)
   })
 })

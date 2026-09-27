@@ -37,6 +37,11 @@ sdkLog.transports.file.level = 'info'
 // 20 MB per file, electron-log auto-rotates to .old
 sdkLog.transports.file.maxSize = 20 * 1024 * 1024
 
+/** Re-point this transport's file path — see `isolateHttpLogPath` for why. */
+export function isolateSdkLogPath(resolvePathFn: (variables: { fileName?: string }) => string): void {
+  sdkLog.transports.file.resolvePathFn = resolvePathFn
+}
+
 // ============================================================================
 // Level management
 // ============================================================================

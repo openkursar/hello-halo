@@ -42,7 +42,7 @@ function extractFailures(data: unknown): CredentialFailure[] {
 export function CredentialAlertBanner({ topOffset = 0 }: CredentialAlertBannerProps) {
   const { t } = useTranslation()
   const platform = usePlatform()
-  const setView = useAppStore((s) => s.setView)
+  const navigate = useAppStore((s) => s.navigate)
   const [failures, setFailures] = useState<CredentialFailure[]>([])
   const [dismissed, setDismissed] = useState(false)
 
@@ -108,7 +108,7 @@ export function CredentialAlertBanner({ topOffset = 0 }: CredentialAlertBannerPr
       {/* Interactive controls must opt out of the drag region to stay clickable. */}
       <div className="no-drag flex items-center gap-2 flex-shrink-0">
         <button
-          onClick={() => setView('settings')}
+          onClick={() => navigate('settings')}
           className="text-sm font-medium text-foreground hover:underline"
         >
           {t('Open Settings')}

@@ -30,12 +30,23 @@ Services Layer (src/main/services)
   - domain services: agent, ai-browser, ai-sources, space, conversation,
     artifact, analytics, remote, etc.
   - app-bridge.ts   : DI seam so services reach Apps data without importing up
+  - memory-consolidation: background agent that reorganises an oversized memory
+                    (digital human or space) into topics; space turns reach it
+                    via the onAgentEvent turn-end signal, never from services/agent
+  - openai-compat-router (src/main/openai-compat-router) sits in this tier:
+    services/agent starts it and encodes backend configs through its index;
+    it depends on services only through the standalone proxy-fetch utility,
+    never through a domain service. It owns the Claude Code identity sent
+    upstream (utils/claude-code-identity), which services/agent reads
+    through the router's index.
 
 Platform Layer (src/main/platform)
   - store       : SQLite manager + migrations foundation
   - scheduler   : persistent job engine
   - event       : event routing/filter/dedup
-  - memory      : scoped memory tools + files (SDK primitives injected via memory/sdk)
+  - memory      : memory.md + topic wiki per owner (digital human, space): layouts,
+                  turn rendering, write lock + engine-hook write guard, file side
+                  of consolidation (SDK primitives injected via memory/sdk)
   - background  : keep-alive + tray + daemon browser
   - turn-gate   : generic "one turn per session key" lock + FIFO mailbox
                   (shared by apps/runtime/team and services/agent; see its DESIGN.md)
@@ -43,6 +54,7 @@ Platform Layer (src/main/platform)
 Foundation Layer (src/main/foundation)  ← bedrock, zero upward deps
   - config.service, config-encryption, crypto-envelope, credential-safety
   - secure-storage, window, protocol, logging/, product-config
+  - path-containment (how file-tool path arguments resolve; containment checks)
 ```
 
 ## 2) Dependency Direction (Must Hold)
@@ -88,7 +100,8 @@ src/
 │   ├── foundation/                    # Bedrock tier (zero upward deps): config.service,
 │   │                                  #   config-encryption, crypto-envelope,
 │   │                                  #   credential-safety, secure-storage, window,
-│   │                                  #   protocol, logging/, product-config
+│   │                                  #   protocol, logging/, product-config,
+│   │                                  #   path-containment (file-tool path boundaries)
 │   ├── controllers/                   # Business logic shared by IPC & HTTP
 │   ├── http/                          # Remote Access: Express + WebSocket
 │   │   ├── routes/                    #   Per-domain route modules (*.routes.ts) +
@@ -143,9 +156,13 @@ src/
 │       ├── remote/                     # Remote Access: HTTP-server + Cloudflare tunnel coordination (service + tunnel + issuer-client)
 │       ├── stealth/                   # Anti-detection evasions
 │       ├── web-search/                # Web search MCP server
+│       ├── updater/                   # Auto-update. Two paths behind one surface:
+│       │                              #   electron-updater (mac/linux/win installer) and
+│       │                              #   the Windows staged path (background unpack +
+│       │                              #   directory swap). See updater/DESIGN.md
 │       └── *.service.ts + utilities   # Domain singletons: config, conversation, space,
 │                                      #   artifact, artifact-cache, search,
-│                                      #   window, overlay, onboarding, updater, notification,
+│                                      #   window, overlay, onboarding, notification,
 │                                      #   announcement (static-feed poll → toast; the only
 │                                      #     server→client push that is not version-coupled),
 │                                      #   protocol, api-validator, model-capabilities,
@@ -162,7 +179,8 @@ src/
 │   │                                  #   and teammates; enforced in apps/runtime/capability-policy)
 │   └── constants/                     # providers, ignore-patterns, display-scale,
 │                                      #   model-capabilities (wire-id → capability
-│                                      #   inference), model-runtime-limits,
+│                                      #   inference), model-pricing (wire-id → list
+│                                      #   price; data in shared/data), model-runtime-limits,
 │                                      #   reasoning-effort
 │
 ├── preload/
@@ -174,10 +192,12 @@ src/
     ├── pages/                         # **All full-screen views** (one file per renderView case):
     │   │                              #   Convention: every case in App.tsx renderView()
     │   │                              #   must correspond to a file in pages/.
-    │   ├── HomePage.tsx               #   Main conversation view
     │   ├── SpacePage.tsx              #   Space/project view
+    │   ├── SpacesPage.tsx             #   Workspace management (cards; rename/delete/reorder)
     │   ├── SettingsPage.tsx           #   App settings
     │   ├── AppsPage.tsx              #   Digital humans management
+    │   ├── StorePage.tsx              #   Marketplace browse/detail
+    │   ├── TlonPage.tsx               #   Knowledge base management
     │   ├── SplashPage.tsx             #   Startup splash screen
     │   ├── SetupPage.tsx              #   First-time login flow
     │   ├── GitBashSetupPage.tsx       #   Windows Git Bash installer
@@ -219,8 +239,11 @@ src/
 ```
 
 Outside `src/`: `gateway/` is a standalone Go module (the federation relay gateway —
-a dumb frame router for off-LAN offices; see §24), and `tests/decentralized/` is the
-cluster regression tier that boots REAL multi-process nodes (see its README.md).
+a dumb frame router for off-LAN offices; see §24), `win-update-helper/` is a standalone
+Go module shipping two binaries (the Windows update helper that performs the directory
+swap, and the packer that builds update archives — see `services/updater/DESIGN.md`),
+and `tests/decentralized/` is the cluster regression tier that boots REAL multi-process
+nodes (see its README.md).
 
 ## 5) Data Types
 
@@ -430,8 +453,53 @@ ContentCanvas.tsx          # Main container + tab switching
     ├── JsonViewer.tsx     # Format/minify
     ├── CsvViewer.tsx      # Table view
     ├── TextViewer.tsx
-    └── BrowserViewer.tsx  # Live web pages
+    ├── BrowserViewer.tsx  # Live web pages
+    ├── XlsxViewer.tsx     # SheetJS parse in a Web Worker + virtualized table
+    ├── DocxViewer.tsx     # docx-preview
+    ├── PdfViewer.tsx      # pdfjs-dist; remote/web only (desktop uses BrowserView)
+    ├── PptxViewer.tsx     # Placeholder — no renderer; open externally / download
+    └── OfficeFallback.tsx # Shared unreadable/unsupported state with escape hatches
 ```
+
+The four document viewers are `React.lazy` chunks (SheetJS / docx-preview / pdfjs
+are large) behind `ViewerSuspense`, which pairs Suspense with a scoped
+ErrorBoundary — a chunk that fails to load must cost one pane, not the window.
+They are also the only viewers keyed on `tab.id`, because this switch reuses one
+component instance per type and their per-document state (page, zoom, active
+sheet) would otherwise bleed across tabs.
+
+### Two content channels per tab
+
+`TabState` carries either `content` (text, or base64 for images) **or** `bytes`
+(`Uint8Array`), never both. `canvas-lifecycle` picks by tab type:
+
+| Channel | Method | Desktop | Remote / web |
+|---|---|---|---|
+| Text / base64 | `readArtifactContent` | IPC | `GET /api/artifacts/content` (JSON) |
+| Raw bytes (xlsx/docx/pdf) | `readArtifactBytes` | IPC — a `Buffer` crosses as a `Uint8Array` via structured clone | `GET /api/artifacts/download`, read incrementally |
+
+The bytes channel exists because base64 is not viable at document sizes: it costs
+an encoded string in main, a second copy of it in the IPC clone, and a decode on
+the renderer's main thread that has no cheap form — an isolated renderer has no
+`Buffer`, and Chromium 122 has no one-shot base64 primitive. Both bytes
+transports are native end to end, and both read the same paths the text channel
+already reaches, so neither grants the renderer new reach.
+
+Documents are capped at `MAX_PREVIEW_DOCUMENT_SIZE`, well below the generic binary
+limit: the viewer parses the whole file before anything paints and holds the bytes
+for the life of the tab. Past the cap the viewer's fallback — open externally /
+download — is the better answer.
+
+**The two transports enforce that cap in different processes**, which is why the
+constant lives in `shared/constants/artifact-preview.ts` rather than beside either
+one. Desktop refuses the read in the main process. Remote cannot: it goes through
+the generic download route, and that route must keep serving files of any size —
+serving a large file is its entire purpose — so the ceiling is the preview
+caller's to hold. `readArtifactBytes` therefore rejects on `Content-Length` when
+the server declares one, and otherwise reads the body incrementally and aborts
+once the budget is spent, because a proxy that re-encodes the response removes
+`Content-Length` and `arrayBuffer()` would buffer the whole body first — the exact
+thing the cap exists to prevent.
 
 ### Layout Modes
 
@@ -639,6 +707,23 @@ Notes:
    - Failures are logged as warnings and never interrupt the queue or the process.
    - Implemented in `src/main/bootstrap/idle-queue.ts` (`registerIdleTask`, `startIdleDrain`).
 
+### The first-screen cue (do not gate deferred work on first paint alone)
+
+`ready-to-show` fires on first paint, and the window is created hidden, so it
+doubles as "reveal the window" and "start the deferred tier". Both uses assume
+Windows will give the process a paint — which is false for a launch that has no
+foreground context: the installer's "run when finished" checkbox, or the
+updater relaunching after a swap. That process then runs with no window, no
+tray, no database and no automation while its processes sit in Task Manager,
+and the user's only recourse is launching it again, which merely reveals the
+window that was there all along.
+
+`createWindow` therefore drives a single `firstScreen` cue off three signals —
+first paint, page loaded (after a short grace period so a normal start is not
+revealed unpainted), and an absolute deadline — and `registerFirstScreenListener`
+is what the deferred tier subscribes to. Keep the two on the same cue: a launch
+that reaches one and not the other is worse than one that reaches neither.
+
 ### Shutdown behavior
 
 - `before-quit` calls `cleanupExtendedServices()` via bootstrap shutdown flow.
@@ -740,6 +825,7 @@ See `quick.md §4` for the current list. Keep the two documents in sync when clo
 
 When touching a module, read its design doc first:
 - `src/main/services/agent/DESIGN.md` — Agent engine (largest subsystem, read this before any agent-related change)
+- `src/main/services/updater/DESIGN.md` — Auto-update: the two apply paths, why staged update descriptions are signed at build time, and the reversal contract with the native helper
 - `src/main/services/agent/toolsets/DESIGN.md` — Toolset Broker (on-demand in-process MCP loading; how tool capabilities enter a session, including the self-API switch — see §17.1)
 - `src/main/services/ai-terminal/DESIGN.md` — AI Terminal (pty + xterm headless, MCP tools, xterm.js viewer)
 - `src/main/apps/spec/DESIGN.md`
@@ -766,6 +852,8 @@ Halo targets **dozens** of IM platforms (WeCom Bot, WeChat ilink, Feishu, DingTa
 ImChannelProvider  — type-level driver (one per IM brand)
   ├── type, displayName, description, direction
   ├── configFields, defaultConfig        # drives settings UI
+  ├── hotUpdatableConfigKeys?            # applied without reconnecting
+  ├── credentialId?(config) → string     # what makes two instances "the same bot"
   ├── createInstance(id, config) → Instance
   └── validateConfig(config) → string | null
 
@@ -861,7 +949,7 @@ model and where things are:
 
 | Piece | Location | Role |
 |---|---|---|
-| Coordination kernel | `apps/runtime/team/` | message-bus (send/wait/turn-complete), blackboard (tasks/findings/activity), board-digest (what a member missed, rendered into its turn input), orchestration, artifact-read (location-transparent `team_read_artifact`). **Never imports the federation transport** — cross-node behavior arrives only through bootstrap-injected seams. |
+| Coordination kernel | `apps/runtime/team/` | message-bus (send/wait/turn-complete), blackboard (tasks/findings/activity), board-digest (what a member missed, rendered into its turn input), orchestration, artifact-read (location-transparent `team_read_artifact` for agents, and the opener behind a person clicking a shared file — one resolution for both). **Never imports the federation transport** — cross-node behavior arrives only through bootstrap-injected seams. |
 | Team persistence | `apps/team/` | teams/members (incl. per-team duty + delegated capability policy)/edges/epochs/triggers/checks/activity (SQLite, `app_team`) + published-ref semantics SSOT (`artifact-refs.ts`, shared with the federation owner-serve gate) |
 | Federation runtime | `apps/runtime/federation/` | join/presence coordinator, per-node manager (host+joiner roles), M2 authority (election/replication/handover), activity relay |
 | Feed substrate | `apps/runtime/federation/log/` + `ctrl-feed.ts` + `session-feed.ts` | per-author append-only feeds: durable ctrl outbox (effectively-once wake/turn-complete) + multi-replica session transcripts (local-first history) |

@@ -394,7 +394,7 @@ export const StoreMetadataSchema = z.object({
    * Older records may not carry this field; treat 'undefined' as 'store' for
    * backwards-compatibility purposes.
    */
-  install_source: z.enum(['store', 'builtin', 'manual']).optional(),
+  install_source: z.enum(['store', 'builtin', 'manual', 'bundled']).optional(),
 }).optional()
 
 // ============================================

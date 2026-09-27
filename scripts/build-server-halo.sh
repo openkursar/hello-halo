@@ -59,14 +59,16 @@ cp server.product.json product.json
 log "preparing linux native binaries..."
 node scripts/prepare-binaries.mjs --platform linux
 
-# 2) Build the app (main/preload/renderer).
-if [ "${SKIP_NPM_BUILD:-}" = "1" ] && [ -f out/main/index.mjs ]; then
+# 2) Build the app (main/preload/renderer). electron-vite has emitted both
+#    entry extensions across versions, so accept either.
+has_app_entry() { [ -f out/main/index.cjs ] || [ -f out/main/index.mjs ]; }
+if [ "${SKIP_NPM_BUILD:-}" = "1" ] && has_app_entry; then
   log "SKIP_NPM_BUILD=1 — reusing existing out/"
 else
   log "building app (electron-vite)..."
   npm run build
 fi
-[ -f out/main/index.mjs ] || die "build produced no out/main/index.mjs"
+has_app_entry || die "build produced no out/main/index.{cjs,mjs}"
 
 # 3) Cross-build the linux-x64 unpacked app (afterPack swaps in linux natives).
 log "packaging linux-x64 (electron-builder)..."

@@ -1,17 +1,17 @@
 {
-  "totalRoutes": 213,
+  "totalRoutes": 258,
   "expose": {
-    "ai": 146,
+    "ai": 153,
     "wrapped": 11,
-    "internal": 56,
+    "internal": 94,
     "unlabeled": 0
   },
   "groups": {
     "conversation": 12,
-    "workspace": 22,
-    "digital-human": 44,
+    "workspace": 26,
+    "digital-human": 46,
     "knowledge-base": 21,
-    "channels": 19,
+    "channels": 20,
     "settings": 17,
     "store": 27,
     "terminal": 6
@@ -29,6 +29,7 @@
     "apps",
     "team",
     "store",
-    "tlon"
+    "tlon",
+    "task"
   ]
 }

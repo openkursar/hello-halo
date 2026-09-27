@@ -8,7 +8,7 @@ not here:
   running shell commands in the working directory -> terminal
 
 operations on this page:
-  POST   /api/apps/<appId>/move-space                                Move a digital human to a different space (or make it global)
+  POST   /api/apps/<appId>/move-space                                Set which space a digital human starts new work in
   GET    /api/artifacts/content                                      Read one file from a space
   GET    /api/artifacts/detect-type                                  Detect whether a file is text or binary and how it would be viewed
   POST   /api/artifacts/save                                         Overwrite a file's content
@@ -26,20 +26,24 @@ operations on this page:
   POST   /api/spaces/$HALO_SPACE_ID/artifacts/reconcile              Resync the file list with what is actually on disk
   POST   /api/spaces/$HALO_SPACE_ID/artifacts/rename                 Rename a file or folder
   GET    /api/spaces/$HALO_SPACE_ID/artifacts/tree                   Get the full lazy-loadable file tree for a space
+  GET    /api/spaces/$HALO_SPACE_ID/memory                           Read the state of a space's memory
+  POST   /api/spaces/$HALO_SPACE_ID/memory/consolidate               Consolidate a space's memory now
   POST   /api/spaces/$HALO_SPACE_ID/open                             Get a space working directory path
+  GET    /api/spaces/$HALO_SPACE_ID/preferences                      Read a space's preferences (layout, memory settings)
+  PUT    /api/spaces/$HALO_SPACE_ID/preferences                      Change a space's preferences, e.g. turn its shared memory on or off
   GET    /api/spaces/default-path                                    Read the directory new spaces are created under
   GET    /api/spaces/halo                                            Read the built-in temporary space
   PUT    /api/spaces/reorder                                         Set the display order of spaces
 
-POST   /api/apps/<appId>/move-space                                Move a digital human to a different space (or make it global)
+POST   /api/apps/<appId>/move-space                                Set which space a digital human starts new work in
      # note: reversible — can be undone or corrected afterward.
      curl -sX POST "$HALO_API_URL/api/apps/<appId>/move-space" \
           -H "Authorization: Bearer $HALO_API_TOKEN" \
           -H "Content-Type: application/json" \
           -d '{"newSpaceId":"<spaceId — a uuid from GET /api/spaces>"}'
      # body: {"newSpaceId": "<spaceId — a uuid from GET /api/spaces>"}
-     # out: {success:true,data:{activationWarning?:string}}
-     # note: Send {"newSpaceId": null} to make it global (available in every space). 404 if appId does not exist; 400 if newSpaceId is an empty string.
+     # out: {success:true,data:{}}
+     # note: Changes the default only: work already running, existing chat sessions and team work keep the environment they started in. A digital human must belong to a space, so newSpaceId is required — null is rejected. Nothing is stopped or restarted. 404 if appId does not exist; 400 if newSpaceId is an empty string.
 
 GET    /api/artifacts/content                                      Read one file from a space
      curl -s "$HALO_API_URL/api/artifacts/content?path=/absolute/path/inside/the/space" -H "Authorization: Bearer $HALO_API_TOKEN"
@@ -173,10 +177,35 @@ GET    /api/spaces/$HALO_SPACE_ID/artifacts/tree                   Get the full 
      # out: {"success":true,"data":{"workspaceRoot":"/…","nodes":[{"id":"…","name":"src","type":"folder","childrenLoaded":false}]}}
      # note: Folder nodes may have childrenLoaded:false — call POST /api/spaces/:spaceId/artifacts/children to load their contents.
 
+GET    /api/spaces/$HALO_SPACE_ID/memory                           Read the state of a space's memory
+     curl -s "$HALO_API_URL/api/spaces/$HALO_SPACE_ID/memory" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {"success":true,"data":{"exists":true,"totalBytes":48213,"topicCount":7,"lastConsolidatedAt":"2026-09-26T08:00:00.000Z","lastAttempt":{"at":"…","outcome":"committed"},"consolidating":false}}
+
+POST   /api/spaces/$HALO_SPACE_ID/memory/consolidate               Consolidate a space's memory now
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/spaces/$HALO_SPACE_ID/memory/consolidate" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {"success":true,"data":{"started":true}}
+     # note: Returns once started; the work runs in the background and uses the model. started:false with reason "already-running" or "empty". Every consolidation keeps a restorable snapshot.
+
 POST   /api/spaces/$HALO_SPACE_ID/open                             Get a space working directory path
      curl -sX POST "$HALO_API_URL/api/spaces/$HALO_SPACE_ID/open" -H "Authorization: Bearer $HALO_API_TOKEN"
      # out: {"success":true,"data":{"path":"/Users/me/HaloSpaces/work"}}
      # note: Returns the path only. It opens nothing — use this to find where a space keeps its files.
+
+GET    /api/spaces/$HALO_SPACE_ID/preferences                      Read a space's preferences (layout, memory settings)
+     curl -s "$HALO_API_URL/api/spaces/$HALO_SPACE_ID/preferences" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {"success":true,"data":{"memory":{"enabled":true,"autoConsolidate":true,"cadence":"diligent"}}}
+     # note: Absent memory fields mean the defaults: memory on, auto-consolidation on, cadence "diligent".
+
+PUT    /api/spaces/$HALO_SPACE_ID/preferences                      Change a space's preferences, e.g. turn its shared memory on or off
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX PUT "$HALO_API_URL/api/spaces/$HALO_SPACE_ID/preferences" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"memory":{"enabled":false}}'
+     # body: {"memory":{"enabled":false}}
+     # out: {"success":true,"data":{...updated space}}
+     # note: Merged into what is stored. memory.enabled turns the memory shared by the space's conversations on/off (files are kept); memory.autoConsolidate turns automatic consolidation on/off; memory.cadence is "diligent", "balanced" or "economical". Applies to new conversations.
 
 GET    /api/spaces/default-path                                    Read the directory new spaces are created under
      curl -s "$HALO_API_URL/api/spaces/default-path" -H "Authorization: Bearer $HALO_API_TOKEN"

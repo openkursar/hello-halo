@@ -3,6 +3,22 @@ import type { RouteModuleMeta } from './_meta-types'
 export const MODULE: RouteModuleMeta = {
   file: 'apps',
   routes: {
+    'GET /api/apps/states': { expose: 'internal' },
+    'GET /api/apps/pending-inbox': { expose: 'internal' },
+    'GET /api/apps/:appId/activity/:entryId': { expose: 'internal' },
+    'GET /api/apps/studio-summary': { expose: 'internal' },
+    'GET /api/apps/people': { expose: 'internal' },
+    'GET /api/apps/capability-inventory': { expose: 'internal' },
+    'GET /api/apps/:appId/pending-entries': { expose: 'internal' },
+    'POST /api/apps/:appId/space-preview': { expose: 'internal' },
+    'POST /api/apps/:appId/escalation/:entryId/retry': { expose: 'internal' },
+    'POST /api/apps/:appId/escalation/:entryId/deadline': { expose: 'internal' },
+    // Declining a request is the user's call about their own decision, never
+    // the AI's — an agent able to dismiss it would be answering for them.
+    'POST /api/apps/:appId/escalation/:entryId/dismiss': { expose: 'internal' },
+    'POST /api/apps/:appId/runs/:runId/close': { expose: 'internal' },
+    'POST /api/apps/:appId/runs/:runId/stop': { expose: 'internal' },
+    'POST /api/apps/:appId/runs/start': { expose: 'internal' },
     // ── Listing / reading ─────────────────────────────────────────────
     // Full InstalledApp includes userConfig (raw config_schema values — no
     // 'password' input type exists, so credential fields are plain strings)
@@ -189,13 +205,27 @@ export const MODULE: RouteModuleMeta = {
       returns: '{success:true,data:{filesRemoved:number}}',
       impact: 'irreversible',
     },
+    'GET /api/apps/:appId/memory': {
+      expose: 'ai',
+      group: 'digital-human',
+      summary: "Read the state of a digital human's memory",
+      returns: '{success:true,data:{exists,totalBytes,topicCount,lastConsolidatedAt,lastAttempt,consolidating}}',
+    },
+    'POST /api/apps/:appId/memory/consolidate': {
+      expose: 'ai',
+      group: 'digital-human',
+      summary: "Consolidate a digital human's memory now",
+      returns: '{success:true,data:{started:boolean,reason?:"already-running"|"empty"|"not-found"}}',
+      impact: 'reversible',
+      notes: 'Returns once started; runs in the background with the digital human\'s model. Keeps a restorable snapshot.',
+    },
     'POST /api/apps/:appId/move-space': {
       expose: 'ai',
       group: ['digital-human', 'workspace'],
-      summary: 'Move a digital human to a different space (or make it global)',
+      summary: 'Set which space a digital human starts new work in',
       body: '{"newSpaceId": "<spaceId — a uuid from GET /api/spaces>"}',
-      returns: '{success:true,data:{activationWarning?:string}}',
-      notes: 'Send {"newSpaceId": null} to make it global (available in every space). 404 if appId does not exist; 400 if newSpaceId is an empty string.',
+      returns: '{success:true,data:{}}',
+      notes: 'Changes the default only: work already running, existing chat sessions and team work keep the environment they started in. A digital human must belong to a space, so newSpaceId is required — null is rejected. Nothing is stopped or restarted. 404 if appId does not exist; 400 if newSpaceId is an empty string.',
       impact: 'reversible',
     },
 
@@ -215,7 +245,7 @@ export const MODULE: RouteModuleMeta = {
       summary: 'Merge-patch per-installation overrides (notification level, model)',
       body: '{"notificationLevel": "important"}',
       returns: '{success:true}',
-      notes: 'Other fields you can set the same way: modelSourceId, modelId. JSON Merge Patch semantics: send null to clear a field (e.g. {"modelSourceId":null} to fall back to the global model). The run schedule is NOT set here — use POST /:appId/frequency.',
+      notes: 'Other fields you can set the same way: modelSourceId, modelId, spaceMemoryAccess (true lets the digital human read its space\'s memory topics), memory ({enabled, autoConsolidate, cadence: "diligent"|"balanced"|"economical"} — sent as a whole object). JSON Merge Patch semantics: send null to clear a field (e.g. {"modelSourceId":null} to fall back to the global model). The run schedule is NOT set here — use POST /:appId/frequency.',
       impact: 'reversible',
     },
     'POST /api/apps/:appId/frequency': {
@@ -304,7 +334,7 @@ export const MODULE: RouteModuleMeta = {
       summary: "Stop a digital human's in-progress chat reply",
       body: '{"conversationId": "<conversationId — a uuid from GET /api/spaces/$HALO_SPACE_ID/conversations>"}',
       returns: '{success:true}',
-      notes: 'conversationId is optional — omit it (or send {}) to stop every session of this app',
+      notes: 'Name the session to stop. Stopping every session at once is a much bigger act, so it must be asked for explicitly: send {"all": true}. Sending neither returns 400 rather than guessing.',
     },
     'GET /api/apps/:appId/chat/status': {
       expose: 'ai',
@@ -407,5 +437,10 @@ export const MODULE: RouteModuleMeta = {
       ].join('\n'),
       impact: 'irreversible',
     },
+    'GET /api/apps/overview': { expose: 'internal' },
+    'GET /api/spaces/:spaceId/available-skills': { expose: 'internal' },
+    'GET /api/spaces/:spaceId/effective-mcp-apps': { expose: 'internal' },
+    'GET /api/apps/:appId/runs': { expose: 'internal' },
+    'GET /api/apps/:appId/run-stats': { expose: 'internal' },
   },
 }

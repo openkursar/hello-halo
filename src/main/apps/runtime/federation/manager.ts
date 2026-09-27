@@ -34,6 +34,7 @@ import type { FederationStore, OfficeCredentialLike } from './deps'
 import type { TeamStore, BlackboardTask } from '../../team'
 import { createOfficeAuthority, type OfficeAuthority } from './authority/office-authority'
 import type { ReadMemberHistory } from './authority/history-fetch'
+import { STOP_ERR_OWNER_UNREACHABLE, type StopMemberTurn } from './authority/stop-turn'
 import type { OwnerStatus } from './authority/reconcile'
 import type { MemberWriteRecord } from './authority/replication'
 import type { OutboundBlackboardWrite } from './authority/location-aware-blackboard'
@@ -281,6 +282,12 @@ export interface FederationManagerDeps {
    */
   readMemberHistory?: ReadMemberHistory
   /**
+   * Owner-side: abort an owned member's running turn. Injected by bootstrap from
+   * app-chat (the federation layer never imports app-chat). Absent → this node
+   * stops nothing.
+   */
+  stopMemberTurn?: StopMemberTurn
+  /**
    * Owner-side: the same transcript read without the request-scoped seam, used
    * by the session-feed plane to proactively replicate an owned member's
    * transcript to every office node. Absent → no proactive replication (the
@@ -501,6 +508,19 @@ export interface FederationManager {
     /** Highest seq the viewer already holds; owner returns only the newer tail. */
     sinceSeq?: number
   }): Promise<HistoryFetchResult>
+  /**
+   * Abort the turn a remotely-owned member is running, on the node that OWNS it.
+   * A turn lives in its owner's process, so this is the only way a stop pressed
+   * here reaches one running there. Resolves with whether a turn was actually
+   * running; rejects when the office is not present here, has M2 off, or the
+   * owner refuses / cannot be reached.
+   */
+  stopMemberTurn(params: {
+    officeId: string
+    ownerNodeId: NodeId
+    appId: string
+    epochId: string
+  }): Promise<boolean>
   /**
    * Viewer: pull a published artifact's bytes from the node that OWNS it, on
    * demand. The owner serves only PUBLISHED team artifacts it owns; a fetch for a
@@ -799,6 +819,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       onPausedChange: (paused) => deps.onOfficePaused?.(officeId, paused),
       resolveArtifactBytes: (ref) => deps.resolveArtifactBytes?.(ref) ?? Promise.resolve(null),
       readMemberHistory: deps.readMemberHistory,
+      stopMemberTurn: deps.stopMemberTurn,
       onReplicaApplied: deps.onReplicaApplied,
     })
   }
@@ -2728,6 +2749,42 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     return authority.artifact.fetch(params.ref)
   }
 
+  function stopMemberTurn(params: {
+    officeId: string
+    ownerNodeId: NodeId
+    appId: string
+    epochId: string
+  }): Promise<boolean> {
+    const authority = getOfficeAuthority(params.officeId)
+    if (!authority) {
+      return Promise.reject(new Error(`stop: office not present or M2 off office=${params.officeId}`))
+    }
+    // Fail fast on a known-dead owner rather than holding the button's deadline:
+    // an owner that is offline is also not running the turn the user can see.
+    // Logged with its entity context because the button's own error path only
+    // carries a code: without this line a stop that never left the machine
+    // leaves no record of WHOSE turn, in which office, went unanswered.
+    const ownerNode = deps.federationStore.getNode(params.officeId, params.ownerNodeId)
+    const host = hosted.get(params.officeId)
+    const noHostRoute =
+      host !== undefined &&
+      !host.nodeToClient.has(params.ownerNodeId) &&
+      !host.nodeToGateway.has(params.ownerNodeId)
+    if (ownerNode?.status === 'offline' || ownerNode?.status === 'suspect' || noHostRoute) {
+      console.warn(
+        `${LOG_TAG} stop not sent office=${params.officeId} app=${params.appId} ` +
+          `owner=${params.ownerNodeId} status=${ownerNode?.status ?? 'unknown'} route=${noHostRoute ? 'none' : 'ok'}`
+      )
+      return Promise.reject(new Error(STOP_ERR_OWNER_UNREACHABLE))
+    }
+    return authority.stopTurn.stop({
+      ownerNodeId: params.ownerNodeId,
+      teamId: params.officeId,
+      appId: params.appId,
+      epochId: params.epochId,
+    })
+  }
+
   function fetchMemberHistory(params: {
     officeId: string
     ownerNodeId: NodeId
@@ -2969,6 +3026,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     projectMemberRemoved,
     projectOfficeDissolved,
     fetchMemberHistory,
+    stopMemberTurn,
     fetchArtifact,
     repointLink,
     redialToAuthority,
@@ -3015,6 +3073,8 @@ function resolveFromNode(frame: FederationMessage): NodeId | null {
     case 'office-dissolved':
     case 'history-request':
     case 'history-response':
+    case 'stop-turn-request':
+    case 'stop-turn-response':
     case 'member-leave':
       return frame.fromNode
     default:

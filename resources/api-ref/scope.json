@@ -72,6 +72,22 @@
     "path": "/api/spaces/:spaceId"
   },
   {
+    "method": "GET",
+    "path": "/api/spaces/:spaceId/preferences"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/spaces/:spaceId/preferences"
+  },
+  {
+    "method": "GET",
+    "path": "/api/spaces/:spaceId/memory"
+  },
+  {
+    "method": "POST",
+    "path": "/api/spaces/:spaceId/memory/consolidate"
+  },
+  {
     "method": "DELETE",
     "path": "/api/spaces/:spaceId"
   },
@@ -212,6 +228,10 @@
     "path": "/api/wecom-bot/reconnect"
   },
   {
+    "method": "POST",
+    "path": "/api/feishu-bot/reachability"
+  },
+  {
     "method": "GET",
     "path": "/api/im-channels/status"
   },
@@ -294,6 +314,14 @@
   {
     "method": "POST",
     "path": "/api/apps/:appId/clear-memory"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/:appId/memory"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/memory/consolidate"
   },
   {
     "method": "POST",

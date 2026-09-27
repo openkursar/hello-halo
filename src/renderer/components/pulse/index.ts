@@ -1,3 +1,2 @@
-export { PulseList, navigateToConversation } from './PulseList'
-export { PulseSidebarSection } from './PulseSidebarSection'
+export { PulseList } from './PulseList'
 export { TaskStatusDot } from './TaskStatusDot'

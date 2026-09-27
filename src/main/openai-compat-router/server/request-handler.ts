@@ -25,7 +25,7 @@ import {
   streamAnthropicPassthrough,
   pipeAnthropicPassthrough
 } from '../stream'
-import { isNativeAnthropicHost, normalizeSystemPrompt, safeJsonParse, pickSessionAffinityHeaders, pickSessionId, inlineToolSchemaRefs } from '../utils'
+import { isNativeAnthropicHost, normalizeClaudeCodeAttribution, normalizeSystemPrompt, resolveClaudeCodeUserAgent, safeJsonParse, pickSessionAffinityHeaders, pickSessionId, inlineToolSchemaRefs } from '../utils'
 import { proxyFetch } from '../../services/proxy-fetch'
 import { getApiTypeFromUrl, isValidEndpointUrl, getEndpointUrlError, shouldForceStream } from './api-type'
 import { runInterceptors } from '../interceptors'
@@ -155,6 +155,13 @@ function linkAbortSignal(controller: AbortController, signal?: AbortSignal): voi
   signal.addEventListener('abort', () => controller.abort(), { once: true })
 }
 
+function getHeaderValue(
+  headers: Record<string, string> | undefined,
+  name: string
+): string | undefined {
+  return Object.entries(headers || {}).find(([key]) => key.toLowerCase() === name)?.[1]
+}
+
 /**
  * Make upstream request with OpenAI-style Authorization header
  */
@@ -243,8 +250,8 @@ async function fetchAnthropicUpstream(
     // management, etc.) and the provider adds its own (oauth, interleaved-
     // thinking). Both must be present — overwriting drops one side's betas,
     // causing API rejections.
-    const sdkBeta = Object.entries(sdkHeaders || {}).find(([k]) => k.toLowerCase() === 'anthropic-beta')?.[1]
-    const customBeta = Object.entries(customHeaders || {}).find(([k]) => k.toLowerCase() === 'anthropic-beta')?.[1]
+    const sdkBeta = getHeaderValue(sdkHeaders, 'anthropic-beta')
+    const customBeta = getHeaderValue(customHeaders, 'anthropic-beta')
     let mergedBeta: string | undefined
     if (sdkBeta && customBeta) {
       const seen = new Set<string>()
@@ -270,20 +277,22 @@ async function fetchAnthropicUpstream(
       ...(!hasAuthHeader && apiKey && { 'x-api-key': apiKey }),
     }
 
-    // Deduplicate content-type: sdkHeaders (lowercase from Express) and customHeaders
-    // (user-defined, any casing) may both contain content-type. When a plain object
-    // with two differently-cased keys like 'content-type' and 'Content-Type' is passed
-    // to fetch, undici normalizes both to the same header and joins the values with
-    // ", " — producing "application/json, application/json" which upstream APIs reject.
-    const contentTypeValue = Object.entries(headers).find(
-      ([k]) => k.toLowerCase() === 'content-type'
-    )?.[1]
+    // Provider headers explicitly override SDK headers. Remove every casing variant
+    // before restoring one canonical key, otherwise undici joins duplicate values.
+    const contentTypeValue = getHeaderValue(customHeaders, 'content-type')
+      ?? getHeaderValue(sdkHeaders, 'content-type')
+    const userAgentValue = getHeaderValue(customHeaders, 'user-agent')
+      ?? getHeaderValue(sdkHeaders, 'user-agent')
     for (const key of Object.keys(headers)) {
-      if (key.toLowerCase() === 'content-type') {
+      const normalizedKey = key.toLowerCase()
+      if (normalizedKey === 'content-type' || normalizedKey === 'user-agent') {
         delete headers[key]
       }
     }
     headers['content-type'] = contentTypeValue || 'application/json'
+    // Some Anthropic models gate access on the reported Claude Code version; its
+    // in-prompt counterpart is handled by normalizeClaudeCodeAttribution.
+    headers['user-agent'] = resolveClaudeCodeUserAgent(userAgentValue)
 
     return await proxyFetch(targetUrl, {
       method: 'POST',
@@ -744,9 +753,12 @@ export async function handleMessagesRequest(
 
   // Route based on apiType
   if (configApiType === 'anthropic_passthrough') {
-    return handleAnthropicPassthrough(request, config, res, {
+    // The version gate lives upstream of this path only (see
+    // utils/claude-code-attribution.ts).
+    const { request: attributed, modified: attributionNormalized } = normalizeClaudeCodeAttribution(request)
+    return handleAnthropicPassthrough(attributed, config, res, {
       ...options,
-      requestModified
+      requestModified: requestModified || attributionNormalized
     })
   }
 

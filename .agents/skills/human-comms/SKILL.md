@@ -85,6 +85,25 @@ works once you know how this repo is built explains nothing.
 
 **One screen.** If it does not fit, you have not decided what matters yet.
 
+## Explaining a behavior
+
+Whenever the question is how the product behaves, or what a change does to that
+behavior, open with a scenario table before any mechanism:
+
+| What the user does | What they see (concrete values) | Same before and after? |
+|---|---|---|
+| Clicks "Restart" on the update prompt | Reopens in ~3 s on 3.2 | Yes |
+| Quits without clicking, reopens | Still 3.1, prompt shows again | Yes |
+
+- **Every sentence has an actor.** Say who does it — the user, the app, the
+  installer, the server. "It is off for the whole run" makes the reader guess
+  what is off and who turned it off.
+- **Say how often a path happens before describing it.** Lead with what happens
+  every day; label a rare fallback as rare. Describing the rare path first makes
+  the reader take it for the normal one.
+- **Mechanism only when asked.** The table usually answers the question. Explain
+  why only if they ask why.
+
 ## When it is not landing
 
 If they say they do not understand, do not re-explain in more detail — detail is

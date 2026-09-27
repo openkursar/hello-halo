@@ -374,8 +374,10 @@ function buildNotifyBotTool(context: NotifyToolContext) {
           if (err instanceof FileExportDeniedError) {
             console.warn(`[Runtime][${runTag}] File export denied: "${input.file}"`)
             return errorWithContext(
-              `file export denied: "${input.file}" is outside the allowed directory. ` +
-              'Only files within the app workspace or temp directory can be sent.'
+              err.reason
+                ? `file export denied: "${input.file}". ${err.reason}`
+                : `file export denied: "${input.file}" is outside the allowed directory. ` +
+                  'Only files within the app workspace or temp directory can be sent.'
             )
           }
           // File not found or other sanction error

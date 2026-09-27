@@ -6,6 +6,7 @@
  */
 
 import type { AppSpec, AppType } from '../spec'
+import { isBuiltinApp } from '../../../shared/apps/app-types'
 
 // ============================================
 // App Status
@@ -50,6 +51,9 @@ export interface InstalledApp {
   /** Space this App is installed in (null = global, available in all spaces) */
   spaceId: string | null
 
+  /** Stable identity storage root, retained when the default space changes. */
+  dataPath?: string
+
   /** Full AppSpec (initially set at install time, updatable via updateSpec) */
   spec: AppSpec
 
@@ -74,6 +78,13 @@ export interface InstalledApp {
     modelSourceId?: string
     /** Override model within the selected AI source. Used together with modelSourceId. */
     modelId?: string
+    /**
+     * Offer this digital human its space's memory topics, read-only, in every
+     * turn. Off by default.
+     */
+    spaceMemoryAccess?: boolean
+    /** This digital human's memory: on/off, auto-consolidation, cadence. */
+    memory?: import('../../../shared/types/memory').MemorySettings
   }
 
   /** Permission grants and denials */
@@ -194,12 +205,10 @@ export interface DeleteAppOptions {
  *   - are protected from permanent deletion (deleteApp is rejected)
  *   - honor user pause / soft-uninstall persistently across boots
  *
- * The marker lives on `spec.store.install_source === 'builtin'` so it survives
- * round-trips through SQLite (spec_json column) and IPC.
+ * Re-exported from shared/apps/app-types so renderer and main share one
+ * implementation of the `install_source === 'builtin'` check.
  */
-export function isBuiltinApp(app: InstalledApp): boolean {
-  return app.spec.store?.install_source === 'builtin'
-}
+export { isBuiltinApp }
 
 /**
  * App Manager Service -- lifecycle management for installed Apps.
@@ -434,6 +443,16 @@ export interface AppManagerService {
    * List installed Apps with optional filtering.
    * Supports filtering by spaceId, status, and App type.
    */
+  getStudioSummary(language?: string, excludeIds?: string[]): import('../../../shared/apps/people-directory').StudioSummary
+  listPeopleDirectory(filter: import('../../../shared/apps/people-directory').PersonDirectoryFilter): { items: import('../../../shared/apps/people-directory').PersonDirectoryRecord[]; total: number; offset: number; limit: number }
+
+  /**
+   * Ids of digital humans currently in one of the given statuses, without
+   * loading their records. For callers that need set membership before they
+   * paginate, such as the directory's "needs you" filter.
+   */
+  listPersonIdsByStatus(statuses: readonly AppStatus[]): string[]
+
   listApps(filter?: AppListFilter): InstalledApp[]
 
   /**
@@ -462,7 +481,7 @@ export interface AppManagerService {
 
   /**
    * Get the work directory path for an App.
-   * Ensures the directory exists (auto-creates if missing).
+   * Creates initial storage; an unavailable persisted data path blocks instead of recreating memory.
    *
    * @returns Absolute path to `{space.path}/.halo/apps/{appId}/`
    * @throws AppNotFoundError if the App does not exist

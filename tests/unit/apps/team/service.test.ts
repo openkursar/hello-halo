@@ -451,7 +451,7 @@ describe('TeamService', () => {
       const team = await ctx.service.createTeam(manualInput())
       await ctx.service.runTeam(team.id)
       // Defaults to a manual run trigger when none is given.
-      expect(ctx.runtime.startEpoch).toHaveBeenCalledWith(team.id, { type: 'manual' })
+      expect(ctx.runtime.startEpoch).toHaveBeenCalledWith(team.id, { type: 'manual' }, undefined)
     })
 
     it('pauseTeam seals the epoch with reason "stopped"', async () => {

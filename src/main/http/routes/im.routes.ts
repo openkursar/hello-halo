@@ -5,8 +5,13 @@
 import type { Express, Request, Response } from 'express'
 import {
   ILINK_BASE_URL,
+  FeishuScanAuthError,
   WecomScanAuthError,
   buildDefaultAssistantSpec,
+  buildFeishuAssistantSpec,
+  feishuBeginRegistration,
+  feishuPollRegistration,
+  readFeishuReachability,
   disconnectIlink,
   dispatchInboundMessage,
   fetchJson,
@@ -14,10 +19,22 @@ import {
   getImChannelManager,
   getImSessionRegistry,
   getServiceConfig,
+  renameChatSession,
   saveIlinkToken,
   wecomGenerateScode,
   wecomPollResult,
 } from './_shared'
+
+/**
+ * Map a scan-auth failure to the response body. `kind` is what lets the client
+ * tell "regenerate the QR code" apart from "something is wrong".
+ */
+function feishuErrorBody(error: unknown): { success: false; error: string; kind?: string } {
+  if (error instanceof FeishuScanAuthError) {
+    return { success: false, error: error.message, kind: error.kind }
+  }
+  return { success: false, error: (error as Error).message }
+}
 
 export function registerImRoutes(app: Express): void {
   // ===== WeCom Bot Routes (legacy compat — delegates to ImChannelManager) =====
@@ -138,6 +155,119 @@ export function registerImRoutes(app: Express): void {
   })
 
 
+  // ===== Feishu Bot — Scan-Auth Routes (QR device flow that creates the app) =====
+  // Implementation lives in src/main/apps/runtime/im-channels/feishu-bot-scan-auth.ts.
+  // Same split as the WeCom flow above, and for the same reason: the session map
+  // holding each device code's AbortController is per-transport, because a client
+  // only ever sees one transport at a time for a given device code. The Feishu
+  // session additionally carries the issuing host and the server-advertised
+  // cadence/deadline, which the poll must reuse.
+  const feishuScanAuthHttpSessions = new Map<string, {
+    abort: AbortController
+    host: string
+    intervalMs: number
+    expiresInMs: number
+  }>()
+
+  app.post('/api/feishu-bot/scan-auth/start', async (_req: Request, res: Response) => {
+    try {
+      const begun = await feishuBeginRegistration()
+      const existing = feishuScanAuthHttpSessions.get(begun.deviceCode)
+      if (existing) existing.abort.abort()
+      feishuScanAuthHttpSessions.set(begun.deviceCode, {
+        abort: new AbortController(),
+        host: begun.host,
+        intervalMs: begun.intervalMs,
+        expiresInMs: begun.expiresInMs,
+      })
+      res.json({
+        success: true,
+        data: {
+          deviceCode: begun.deviceCode,
+          authUrl: begun.authUrl,
+          expiresInMs: begun.expiresInMs,
+        },
+      })
+    } catch (error) {
+      res.json(feishuErrorBody(error))
+    }
+  })
+
+  app.post('/api/feishu-bot/scan-auth/poll', async (req: Request, res: Response) => {
+    const deviceCode = req.body?.deviceCode as string | undefined
+    if (!deviceCode) {
+      res.json({ success: false, error: 'Missing device code' })
+      return
+    }
+    const session = feishuScanAuthHttpSessions.get(deviceCode)
+    if (!session) {
+      res.json({ success: false, error: 'No active scan session', kind: 'expired' })
+      return
+    }
+    try {
+      const creds = await feishuPollRegistration(deviceCode, {
+        signal: session.abort.signal,
+        host: session.host,
+        intervalMs: session.intervalMs,
+        timeoutMs: session.expiresInMs,
+      })
+      res.json({ success: true, data: creds })
+    } catch (error) {
+      res.json(feishuErrorBody(error))
+    } finally {
+      feishuScanAuthHttpSessions.delete(deviceCode)
+    }
+  })
+
+  app.post('/api/feishu-bot/scan-auth/cancel', async (req: Request, res: Response) => {
+    const deviceCode = req.body?.deviceCode as string | undefined
+    if (deviceCode) {
+      const session = feishuScanAuthHttpSessions.get(deviceCode)
+      if (session) {
+        session.abort.abort()
+        feishuScanAuthHttpSessions.delete(deviceCode)
+      }
+    }
+    res.json({ success: true })
+  })
+
+  app.post('/api/feishu-bot/scan-auth/create-assistant', async (req: Request, res: Response) => {
+    try {
+      const manager = getAppManager()
+      if (!manager) {
+        res.status(503).json({ success: false, error: 'AppManager not initialized' })
+        return
+      }
+      const suffix = String(req.body?.appIdSuffix ?? '').slice(0, 8) || 'bot'
+      const spec = buildFeishuAssistantSpec(suffix)
+      const appId = await manager.install('halo-temp', spec)
+      res.json({ success: true, data: { appId, appName: spec.name } })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+
+  app.post('/api/feishu-bot/reachability', async (req: Request, res: Response) => {
+    const instanceId = req.body?.instanceId as string | undefined
+    if (!instanceId) {
+      res.json({ success: false, error: 'Missing instanceId' })
+      return
+    }
+    const manager = getImChannelManager()
+    if (!manager) {
+      res.status(503).json({ success: false, error: 'ImChannelManager not initialized' })
+      return
+    }
+    const reachability = readFeishuReachability(manager.getInstance(instanceId))
+    if (!reachability) {
+      res.json({ success: false, error: 'No running Feishu instance with that id' })
+      return
+    }
+    res.json({ success: true, data: reachability })
+  })
+
+
   // ===== IM Channel Routes (multi-instance) =====
 
   // GET /api/im-channels/status — all instance statuses, or single instance when ?instanceId= is provided
@@ -216,6 +346,37 @@ export function registerImRoutes(app: Express): void {
         defaultConfig: p.defaultConfig,
       })) ?? []
       res.json({ success: true, data: providers })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/im-channels/set-instance-app — rebind an instance to a digital human
+  app.post('/api/im-channels/set-instance-app', async (req: Request, res: Response) => {
+    try {
+      const { setInstanceApp } = await import('../../apps/runtime/im-channels/binding')
+      const { instanceId, appId } = req.body ?? {}
+      res.json(setInstanceApp(String(instanceId ?? ''), String(appId ?? '')))
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/im-channels/create-instance — add an instance already bound to a digital human
+  app.post('/api/im-channels/create-instance', async (req: Request, res: Response) => {
+    try {
+      const { createInstance } = await import('../../apps/runtime/im-channels/binding')
+      res.json(createInstance(req.body?.instance))
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/im-channels/unbind-instance — detach an instance from its digital human
+  app.post('/api/im-channels/unbind-instance', async (req: Request, res: Response) => {
+    try {
+      const { unbindInstance } = await import('../../apps/runtime/im-channels/binding')
+      res.json(unbindInstance(String(req.body?.instanceId ?? '')))
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }
@@ -400,19 +561,13 @@ export function registerImRoutes(app: Express): void {
   // POST /api/im-sessions/set-custom-name — set custom display name for a session
   app.post('/api/im-sessions/set-custom-name', async (req: Request, res: Response) => {
     try {
-      const registry = getImSessionRegistry()
-      if (!registry) {
-        res.status(503).json({ success: false, error: 'IM session registry not initialized' })
-        return
-      }
       const { appId, channel, chatId, name } = req.body as {
         appId: string
         channel: string
         chatId: string
         name: string
       }
-      const updated = registry.setCustomName(appId, channel, chatId, name)
-      if (!updated) {
+      if (!renameChatSession(appId, channel, chatId, name)) {
         res.status(404).json({ success: false, error: 'Session not found' })
         return
       }

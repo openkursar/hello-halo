@@ -202,10 +202,10 @@ async function performResolution(
 
     if (updatedChatIds.length === 0) return
 
-    // One event for the whole batch, not one per resolved id — a listener
-    // reacting to this (e.g. ImSessionPanel) re-fetches its full session
-    // list per event, so firing per-id would mean up to 20 redundant
-    // full-list refetches for a single directory fetch.
+    // One event for the whole batch, not one per resolved id — session list
+    // consumers re-fetch their full list per event, so firing per-id would
+    // mean up to 20 redundant full-list refetches for a single directory
+    // fetch.
     const payload = { appId, channel, instanceId }
     sendToRenderer('app:im-session-updated', payload)
     broadcastToAll('app:im-session-updated', payload)

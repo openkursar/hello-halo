@@ -1,17 +1,18 @@
 {
   "name": "halo",
-  "version": "2.1.16-dev.0-rc.5",
+  "version": "2.1.16-dev.0-rc.30",
   "description": "AI that gets things done",
   "type": "module",
-  "main": "./out/main/index.mjs",
+  "main": "./out/main/index.cjs",
   "author": "Halo Team",
   "license": "MIT",
   "scripts": {
     "dev": "npm run bundle:builtin && node scripts/gen-api-ref.mjs && cross-env HALO_DATA_DIR=~/.halo-dev electron-vite dev",
     "build": "electron-vite build",
-    "prebuild": "node scripts/sync-builtin-apps.mjs && node scripts/gen-api-ref.mjs",
+    "prebuild": "node scripts/sync-builtin-apps.mjs && node scripts/gen-api-ref.mjs && node scripts/prepare-office-runtime.mjs",
     "bundle:builtin": "node scripts/sync-builtin-apps.mjs --interactive",
     "sync:ai-guides": "node scripts/sync-ai-guides.mjs",
+    "icons": "node scripts/generate-icons.mjs",
     "product": "node scripts/select-product.mjs",
     "start": "electron-vite preview",
     "postinstall": "node scripts/postinstall.mjs",
@@ -26,14 +27,14 @@
     "build:mac-x64": "node scripts/build-mac-local.cjs --x64",
     "build:linux": "npm run bump-rc && node scripts/prepare-binaries.mjs --platform linux && npm run build && electron-builder --linux --config electron-builder.cjs",
     "build:server": "bash scripts/build-server-halo.sh",
-    "icons": "bash scripts/generate-icons.sh",
     "release": "npm run prepare:all && npm run build && electron-builder --mac --win --publish always",
     "release:mac": "npm run prepare:all && npm run build && electron-builder --mac --publish always",
     "release:win": "node scripts/prepare-binaries.mjs --platform win && npm run build && electron-builder --win --publish always",
     "release:linux": "node scripts/prepare-binaries.mjs --platform linux && npm run build && electron-builder --linux --publish always",
-    "test": "npm run test:check && npm run test:check:signing && npm run test:api-ref && npm run test:unit",
+    "test": "npm run test:check && npm run test:check:signing && npm run test:check:office && npm run test:api-ref && npm run test:unit",
     "test:check": "node tests/check/binaries.mjs",
     "test:check:signing": "node --test tests/check/mac-local-signing.test.cjs",
+    "test:check:office": "node scripts/prepare-office-runtime.mjs && node tests/check/office-skills.mjs",
     "test:api-ref": "node scripts/gen-api-ref.mjs --check",
     "test:check:mac-arm64": "node tests/check/binaries.mjs --platform mac-arm64",
     "test:check:mac-x64": "node tests/check/binaries.mjs --platform mac-x64",
@@ -66,7 +67,8 @@
     "build:android:debug": "npm run cap:sync && ANDROID_HOME=$HOME/Library/Android/sdk ./android/gradlew -p android assembleDebug",
     "release:android": "npm run cap:sync && ANDROID_HOME=$HOME/Library/Android/sdk ./android/gradlew -p android assembleRelease && node -e \"const v=require('./package.json').version; const fs=require('fs'); fs.mkdirSync('dist',{recursive:true}); fs.copyFileSync('android/app/build/outputs/apk/release/app-release.apk','dist/Halo-'+v+'.apk'); console.log('Output: dist/Halo-'+v+'.apk')\"",
     "cap:open:ios": "npx cap open ios",
-    "cap:run:ios": "npm run cap:sync && npx cap run ios"
+    "cap:run:ios": "npm run cap:sync && npx cap run ios",
+    "build:update-helper": "node scripts/build-update-helper.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.2.89",
@@ -110,6 +112,7 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@electron-toolkit/preload": "^3.0.0",
     "@electron-toolkit/utils": "^3.0.0",
+    "@larksuiteoapi/node-sdk": "^1.74.0",
     "@lezer/highlight": "^1.2.3",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@openai/codex": "0.128.0",
@@ -131,6 +134,7 @@
     "croner": "^10.0.1",
     "cronstrue": "^3.14.0",
     "diff": "^8.0.2",
+    "docx-preview": "^0.4.1",
     "electron-log": "^5.4.3",
     "electron-updater": "^6.6.2",
     "express": "^5.1.0",
@@ -150,6 +154,7 @@
     "node-pty": "^1.1.0",
     "nodemailer": "^8.0.1",
     "open": "^10.2.0",
+    "pdfjs-dist": "^6.3.289",
     "pinyin-pro": "^3.28.1",
     "proxy-agent": "^7.0.0",
     "qrcode": "^1.5.4",
@@ -173,6 +178,7 @@
     "unpdf": "^1.6.2",
     "uuid": "^13.0.0",
     "ws": "^8.18.3",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "yaml": "^2.8.2",
     "zod": "^3.24.1",
     "zustand": "^4.5.0"
@@ -224,6 +230,7 @@
       "resources/**/*",
       "!resources/ocr/**/*",
       "!resources/git-bash/**/*",
+      "!resources/office-runtime/**/*",
       "product.json",
       "halo-local/dist/**/*",
       "!node_modules/better-sqlite3/prebuilds",
@@ -236,6 +243,10 @@
       {
         "from": "resources/ocr",
         "to": "ocr"
+      },
+      {
+        "from": "resources/office-runtime",
+        "to": "office-runtime"
       }
     ],
     "asarUnpack": [
@@ -306,6 +317,10 @@
         {
           "from": "resources/git-bash",
           "to": "git-bash"
+        },
+        {
+          "from": "resources/update-helper",
+          "to": "update-helper"
         }
       ],
       "target": [

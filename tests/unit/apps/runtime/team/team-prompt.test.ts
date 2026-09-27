@@ -25,6 +25,7 @@ function makeCtx(overrides: Partial<TeamPromptContext> = {}): TeamPromptContext 
     selfMemberName: 'lead',
     selfRole: 'Lead',
     selfIsLead: true,
+    selfIsDisposable: false,
     roster: [],
     ...overrides,
   }
@@ -106,6 +107,17 @@ describe('buildTeamEntry — no per-turn content', () => {
     const out = buildTeamEntry(makeCtx({ roster: [localMate] }))
     expect(out).not.toContain('This turn was started by')
     expect(out).not.toContain('waiting for your reply')
+  })
+
+  // app-chat reads selfIsDisposable directly; if it leaked into the prompt too,
+  // the two turns would differ and rebuild the session for no reason the
+  // teammate should see.
+  it('never mentions whether the member is disposable', () => {
+    const ctx = makeCtx({ roster: [localMate] })
+    const disposable = buildTeamEntry({ ...ctx, selfIsDisposable: true })
+    expect(disposable).toBe(buildTeamEntry(ctx))
+    expect(buildTeamConstraints({ ...ctx, selfIsDisposable: true }))
+      .toEqual(buildTeamConstraints(ctx))
   })
 })
 

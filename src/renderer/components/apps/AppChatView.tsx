@@ -25,10 +25,13 @@ import { ScrollToBottomButton } from '../chat/ScrollToBottomButton'
 import { InputArea } from '../chat/InputArea'
 import { useRemoteSubscription } from '../../hooks/useRemoteSubscription'
 import { useWsRecovery } from '../../hooks/useWsRecovery'
-import { useTranslation } from '../../i18n'
+import { useTranslation, getCurrentLanguage } from '../../i18n'
+import { useAppsStore } from '../../stores/apps.store'
+import { resolveSpecI18n } from '../../utils/spec-i18n'
 import type { Message, ImageAttachment, Artifact } from '../../types'
 import type { SlashCommandItem } from '../../types/slash-command'
 import { getAppChatConversationId } from '../../../shared/apps/im-keys'
+import type { DigitalHumanSelectorConfig } from '../chat/DigitalHumanSelector'
 
 interface AppChatViewProps {
   /** App ID */
@@ -42,13 +45,28 @@ interface AppChatViewProps {
    * (key={conversationId}) on session switch, so per-session state stays clean.
    */
   conversationId?: string
+  /**
+   * Passed straight through to InputArea — only the main conversation board
+   * sets this when it renders this view for its digital-human mode. The
+   * digital-human detail page's own Chat tab usage omits it.
+   */
+  digitalHumanSelector?: DigitalHumanSelectorConfig
+  /** Passed straight through to InputArea. */
+  /** Overrides the conversation-derived draft key when the caller owns draft identity. */
+  draftKey?: string
 }
 
 type LoadState = 'loading' | 'loaded' | 'error' | 'empty'
 
-export function AppChatView({ appId, spaceId, conversationId: conversationIdProp }: AppChatViewProps) {
+export function AppChatView({ appId, spaceId, conversationId: conversationIdProp, digitalHumanSelector, draftKey }: AppChatViewProps) {
   const { t } = useTranslation()
   const conversationId = conversationIdProp ?? getAppChatConversationId(appId)
+
+  // Addressed by name once the app is loaded; the generic wording covers the
+  // moment before that.
+  const appSpec = useAppsStore(s => s.apps.find(app => app.id === appId)?.spec)
+  const appName = appSpec ? resolveSpecI18n(appSpec, getCurrentLanguage()).name : undefined
+  const composerPlaceholder = appName ? t('Chat with {{name}}...', { name: appName }) : t('Chat with this App...')
 
   // ── Subscribe to agent events (remote/Capacitor clients use WebSocket) ──
   useRemoteSubscription(conversationId)
@@ -284,12 +302,14 @@ export function AppChatView({ appId, spaceId, conversationId: conversationIdProp
         </div>
         <div className="shrink-0 p-4">
           <InputArea
+            draftKey={draftKey ?? conversationId}
             onSend={handleSend}
             onStop={handleStop}
             isGenerating={false}
-            placeholder={t('Chat with this App...')}
+            placeholder={composerPlaceholder}
             hideToolsetControls
             hideKnowledgeControls
+            digitalHumanSelector={digitalHumanSelector}
           />
         </div>
       </div>
@@ -309,12 +329,14 @@ export function AppChatView({ appId, spaceId, conversationId: conversationIdProp
         </div>
         <div className="shrink-0 p-4">
           <InputArea
+            draftKey={draftKey ?? conversationId}
             onSend={handleSend}
             onStop={handleStop}
             isGenerating={false}
-            placeholder={t('Chat with this App...')}
+            placeholder={composerPlaceholder}
             hideToolsetControls
             hideKnowledgeControls
+            digitalHumanSelector={digitalHumanSelector}
           />
         </div>
       </div>
@@ -330,12 +352,15 @@ export function AppChatView({ appId, spaceId, conversationId: conversationIdProp
       <div className="flex-1 relative overflow-hidden">
         {showEmptyHint ? (
           <div className="h-full flex items-center justify-center px-4">
-            <p className="text-sm text-muted-foreground">{t('Send a message to start chatting with this App')}</p>
+            <p className="text-sm text-muted-foreground">{appName
+              ? t('Send a message to start chatting with {{name}}', { name: appName })
+              : t('Send a message to start chatting with this App')}</p>
           </div>
         ) : (
-          <div className="h-full px-4">
+          <div className="h-full">
             <MessageList
               ref={messageListRef}
+              sidePadClassName="px-4"
               conversationId={conversationId}
               messages={messages}
               streamingContent={streamingContent}
@@ -396,14 +421,16 @@ export function AppChatView({ appId, spaceId, conversationId: conversationIdProp
           </div>
         )}
         <InputArea
+            draftKey={draftKey ?? conversationId}
           onSend={handleSend}
           onStop={handleStop}
           isGenerating={isGenerating}
-          placeholder={t('Chat with this App...')}
+          placeholder={composerPlaceholder}
           hideToolsetControls
           hideKnowledgeControls
           slashCommands={slashCommands}
           mentionArtifacts={mentionArtifacts}
+          digitalHumanSelector={digitalHumanSelector}
         />
       </div>
     </div>

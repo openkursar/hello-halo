@@ -64,8 +64,8 @@ const components = {
     <strong className="font-semibold">{children}</strong>
   ),
   // Colours are deliberately inherited rather than themed: this renderer is
-  // dropped into surfaces that set their own foreground (the toast card paints
-  // its own dark background), so anything absolute would break on one of them.
+  // dropped into surfaces that set their own foreground (a toast body is muted,
+  // a banner is not), so anything absolute would break on one of them.
   code: ({ children }: { children?: React.ReactNode }) => (
     <code className="font-mono text-[0.9em]">{children}</code>
   ),

@@ -1,17 +1,24 @@
 /**
  * useLiveSessions — aggregates the AI's live, human-viewable background resources
- * into one source-agnostic model for the LiveSessionsHeader.
+ * into one source-agnostic model for the LiveSessionsHeader, and exposes the
+ * reveal/stop controls the tray invokes on them.
  *
  * A "live session" is a long-lived resource the AI drives that has its own
  * surface in the Canvas and a lifecycle decoupled from whether that surface is
  * open (terminal pty sessions today; AI browser views next). This hook is the
  * seam that lets a single tray perceive, reveal, and stop every kind of
  * autonomous AI work through one consistent control — regardless of source.
+ *
+ * Revealing navigates as well as reads, because the tray lives in the chat
+ * composer and the Canvas it reveals into belongs to the Space view. Keeping
+ * that with the session model means the reveal contract sits where session
+ * identity does, rather than being restated by each caller.
  */
 
 import { useTerminalStore } from '../stores/terminal.store'
 import { useAIBrowserStore } from '../stores/ai-browser.store'
 import { useSpaceStore } from '../stores/space.store'
+import { useAppStore } from '../stores/app.store'
 import { canvasLifecycle } from '../services/canvas-lifecycle'
 import { api } from '../api'
 import { useTranslation } from '../i18n'
@@ -32,8 +39,16 @@ export interface LiveSessionsApi {
   sessions: LiveSession[]
   /** Whether any session is being actively driven right now. */
   busy: boolean
-  /** Reveal a session's surface in the Canvas. */
-  open: (session: LiveSession) => void
+  /**
+   * Reveal a session's surface in the Canvas, navigating to the Space view
+   * first when the click came from elsewhere.
+   *
+   * Resolves true only once the surface is actually open. False means no space
+   * could be resolved to land in; callers must say so rather than drop it —
+   * a click that does nothing visible is the symptom this control exists to
+   * avoid.
+   */
+  open: (session: LiveSession) => Promise<boolean>
   /** Stop the underlying resource (terminates the process/view). */
   stop: (session: LiveSession) => Promise<void>
 }
@@ -48,8 +63,8 @@ export function useLiveSessions(): LiveSessionsApi {
 
   // The terminal registry is process-global (all spaces), but the tray belongs
   // to the space you're in — an AI terminal kept alive in another space must not
-  // leak into this one's tray (it reappears when you return). Browser stays as
-  // the single active view (destroyed on space switch), so it needs no filter.
+  // leak into this one's tray (it reappears when you return). The AI browser is
+  // a single process-global view carrying no spaceId, so it needs no filter.
   const currentSpaceId = useSpaceStore(s => s.currentSpace?.id)
 
   // AI browser: the interactive singleton drives one active view at a time.
@@ -92,13 +107,27 @@ export function useLiveSessions(): LiveSessionsApi {
     .sort((a, b) => b.lastActivityAt - a.lastActivityAt)
   const busy = sessions.some(s => s.busy)
 
-  const open = (session: LiveSession) => {
+  const open = async (session: LiveSession): Promise<boolean> => {
+    // The Canvas lives in the Space view, so a click from Apps or Settings has
+    // to land somewhere first. currentSpace is null on pages that never mount
+    // SpaceSelector, and after a space is deleted; halo-temp always exists, so
+    // it is the fallback rather than a full selectDefaultSpace() lookup.
+    const spaceStore = useSpaceStore.getState()
+    const target = spaceStore.currentSpace ?? spaceStore.haloSpace
+    if (!target) return false
+    if (spaceStore.currentSpace?.id !== target.id) spaceStore.setCurrentSpace(target)
+    useAppStore.getState().navigate('space')
+
+    // Settle the Canvas's space identity before adding a tab, so teardown from
+    // a previous space cannot run over the tab opened next.
+    await canvasLifecycle.enterSpace(target.id)
     if (session.kind === 'terminal') {
-      openTerminalInCanvas(session.id, session.title)
+      await openTerminalInCanvas(session.id, session.title)
     } else {
       // Attach the exact AI-driven BrowserView (same WebContents).
-      void canvasLifecycle.attachAIBrowserView(session.id, aiUrl || '', session.title)
+      await canvasLifecycle.attachAIBrowserView(session.id, aiUrl || '', session.title)
     }
+    return true
   }
 
   const stop = async (session: LiveSession) => {

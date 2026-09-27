@@ -17,7 +17,7 @@
  */
 
 import { getConfig } from '../../foundation/config.service'
-import { addMessage } from '../conversation.service'
+import { addMessage, updateMessageById } from '../conversation.service'
 import { buildCreationTimeServers, openToolset } from './toolsets/broker'
 import { buildToolsetSection } from './toolsets/capability-index'
 import { getOpenToolsets } from './toolsets/state'
@@ -48,8 +48,10 @@ import {
 } from './message-utils'
 import { prepareNonVisionImageFallback, OCR_TOOLSET_ID } from './image-attachments'
 import { resolveCredentialsForSdk, buildBaseSdkOptions } from './sdk-config'
+import { resolveSpaceMemorySession, buildSpaceMemoryPreamble } from './space-memory'
 import { applyReasoningEffort } from './reasoning-effort'
 import { createConversationSink } from './conversation-sink'
+import { prepareGoalInput, setGoalForTurn } from './goal'
 import { flushToolStats } from './stream-processor'
 import { analytics } from '../analytics/analytics.service'
 import { AnalyticsEvents } from '../analytics/types'
@@ -78,6 +80,8 @@ export async function sendMessage(
     thinkingEnabled,
     canvasContext
   } = request
+  // Validated before the message is recorded, so a refused goal leaves no trace.
+  const turnGoal = request.goal ? prepareGoalInput(request.goal) : null
 
   console.log(`[Agent] sendMessage: conv=${conversationId}${images && images.length > 0 ? `, images=${images.length}` : ''}${thinkingEnabled ? ', thinking=ON' : ''}${canvasContext?.isOpen ? `, canvas tabs=${canvasContext.tabCount}` : ''}`)
 
@@ -114,11 +118,13 @@ export async function sendMessage(
   // Add user message to conversation (with images if provided).
   // Assistant placeholder is NOT created here — it is created by the session
   // consumer when CC emits system:init (unified for user + autonomous turns).
-  addMessage(spaceId, conversationId, {
+  const userMessage = addMessage(spaceId, conversationId, {
     role: 'user',
     content: message,
-    images: images
+    images: images,
+    ...(turnGoal ? { metadata: { goal: turnGoal } } : {})
   })
+  let goalApplied = false
 
   try {
     // Load the conversation first: it carries both the resume sessionId and the
@@ -181,6 +187,9 @@ export async function sendMessage(
       ? [kbChatCtx.reference]
       : resolveConversationKnowledgeBases(conversation)
 
+    // Space memory — not for a KB-chat turn, which works on one KB's documents.
+    const spaceMemory = kbChatCtx ? null : resolveSpaceMemorySession(spaceId, conversationId)
+
     // Build base SDK options
     const sdkOptions = await buildBaseSdkOptions({
       // Same switch that loads the halo_api_ref tool: a session without the
@@ -204,6 +213,8 @@ export async function sendMessage(
       disabledTools: config.agent?.disabledTools,
       digitalHumansEnabled,
       toolsetIndex: buildToolsetSection(spaceId, conversationId),
+      memoryInstructions: spaceMemory?.instructions,
+      memoryGuard: spaceMemory?.guard,
     })
 
     // Apply dynamic configurations (Thinking mode)
@@ -224,7 +235,8 @@ export async function sendMessage(
       },
       resolvedKbIds,
       buildMcpServers,
-      resolveKnowledgeBases
+      resolveKnowledgeBases,
+      { creationContext: spaceMemory?.contextKey }
     )
 
     sessionObtained = true
@@ -249,11 +261,21 @@ export async function sendMessage(
     }
     console.log(`[Agent][${conversationId}] ⏱️ V2 session ready: ${Date.now() - t0}ms`)
 
+    if (turnGoal) {
+      setGoalForTurn(spaceId, conversationId, v2Session, turnGoal, Boolean(sessionId))
+      goalApplied = true
+    }
+
     // Prepare message content (canvas context prefix + multi-modal images).
     // With the non-vision fallback active, image blocks are replaced by the
     // injected attachment-paths block.
     const canvasPrefix = formatCanvasContext(canvasContext)
-    const messageWithContext = canvasPrefix + (imageFallback?.contextBlock ?? '') + message
+    // The space's memory opens a new conversation only: a resumed one carries
+    // it forward in its own transcript.
+    const memoryPreamble = spaceMemory && !sessionId
+      ? await buildSpaceMemoryPreamble(spaceMemory.layout, conversationId)
+      : ''
+    const messageWithContext = memoryPreamble + canvasPrefix + (imageFallback?.contextBlock ?? '') + message
     const messageContent = buildMessageContent(messageWithContext, imageFallback ? undefined : images)
 
     // Send to CC's REPL — consumer handles the response. Mark the dispatch
@@ -281,6 +303,13 @@ export async function sendMessage(
     }
 
     console.error(`[Agent][${conversationId}] Error during send:`, error)
+
+    // The message's goal badge must not claim a goal the turn never set.
+    if (turnGoal && !goalApplied) {
+      const { goal: _goal, ...metadata } = userMessage.metadata ?? {}
+      updateMessageById(spaceId, conversationId, userMessage.id, { metadata })
+      console.warn(`[Agent][${conversationId}] Send failed before its goal was set; dropped the goal from the message`)
+    }
 
     // Extract detailed error message
     let errorMessage = err.message || 'Unknown error. Check logs in Settings > System > Logs.'

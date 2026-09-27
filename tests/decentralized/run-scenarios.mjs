@@ -795,30 +795,41 @@ async function categoryK(host, joiners, hasModel) {
       await apiOk(host, 'POST', `/api/teams/${off.officeId}/run`)
       await sleep(2000)
       const remote = (await members(host, off.officeId)).find((m) => m.origin === 'remote')
+      // Read the RUN's transcript explicitly. A bare read resolves "the open run
+      // epoch", and this run seals while the poll below is still waiting.
+      const runEpochId = (await apiOk(host, 'GET', `/api/teams/${off.officeId}/epochs`)).find((e) => e.lifecycle === 'run')?.id
       const N = 50
       const t0 = Date.now()
       const sends = await Promise.all(
         Array.from({ length: N }, (_, i) => api(host, 'POST', `/api/teams/${off.officeId}/members/${remote.appId}/send`, { message: `concurrent #${i}` })),
       )
       const elapsedMs = Date.now() - t0
-      // Burst semantics (verified against owner logs): concurrent sends to one
-      // member COALESCE into the active turn on the owner — every message text
-      // is delivered/injected, ONE (or few) reply is produced, and the other
-      // waits resolve fast and empty instead of hanging. The invariants are:
-      // no transport error, no hang, at least one real reply, no message loss.
+      // Concurrent sends to one member coalesce into the turn already running:
+      // each is delivered or queued behind it, and a queued send gets a null
+      // finalMessage rather than blocking for a reply it didn't cause. Zero
+      // per-send replies is expected; the invariants are no transport error,
+      // no hang, every send accepted, no message lost.
       const transportOk = sends.every((s) => s.status === 200)
-      const replied = sends.filter((s) => s.json?.data?.ok && s.json?.data?.finalMessage).length
+      const accepted = sends.filter((s) => s.json?.data?.ok).length
       const alive = (await api(host, 'GET', '/api/teams')).status === 200
-      const transcript = await pollUntil(async () => {
-        const chats = await chatOnAll([host], off.officeId, remote.appId)
-        const text = JSON.stringify(chats[0].messages ?? [])
-        const delivered = Array.from({ length: N }, (_, i) => text.includes(`concurrent #${i}`)).filter(Boolean).length
-        return delivered === N ? delivered : null
+      // Not "all N reach the transcript": whatever is still queued when the
+      // run seals gets discarded by design (see runtime/team/DESIGN.md). The
+      // invariant under concurrency is that every node agrees on what landed.
+      let last = -1
+      const settled = await pollUntil(async () => {
+        const chats = await chatOnAll([host, joiners[0]], off.officeId, remote.appId, runEpochId)
+        const sigs = chats.map((c) => JSON.stringify((c.messages ?? []).map((m) => [m.role, m.content])))
+        const consistent = sigs.every((sig) => sig === sigs[0])
+        const delivered = Array.from({ length: N }, (_, i) => sigs[0].includes(`concurrent #${i}`)).filter(Boolean).length
+        const stable = delivered === last && delivered > 0
+        last = delivered
+        return stable && consistent ? { delivered, consistent } : null
       }, { timeoutMs: 120_000, intervalMs: 5000 })
-      const ok = transportOk && alive && replied >= 1 && transcript === N
-      reporter[ok ? 'pass' : 'partial']('K1',
-        `${N} concurrent sends: transportOk=${transportOk} repliedWithContent=${replied} deliveredInTranscript=${transcript ?? '<N'}/${N} ` +
-        `elapsed=${elapsedMs}ms alive=${alive} (coalescing per-send-reply semantics flagged in RESULTS for product review)`)
+      const ok = transportOk && alive && accepted === N && !!settled
+      reporter[ok ? 'pass' : 'fail']('K1',
+        `${N} concurrent sends: transportOk=${transportOk} accepted=${accepted}/${N} ` +
+        `deliveredAndAgreedAcrossNodes=${settled ? `${settled.delivered}/${N}` : 'never settled'} ` +
+        `(the remainder is discarded at run seal by design) elapsed=${elapsedMs}ms alive=${alive}`)
     }
   }
   if (want('K2')) {

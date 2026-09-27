@@ -296,6 +296,21 @@ export async function chatOnAll(nodes, teamId, appId, epochId) {
   return results
 }
 
+/**
+ * The built app entry the suite spawns directly (revive/restore paths).
+ * electron-vite has emitted both extensions across versions; take whichever the
+ * current build produced, and fail loudly when neither exists — spawning
+ * Electron with an undefined entry produces an unrelated, confusing error.
+ */
+export function appEntryPath() {
+  const candidates = ['index.cjs', 'index.mjs'].map((name) => path.join(PROJECT_ROOT, 'out/main', name))
+  const appEntry = candidates.find((candidate) => fs.existsSync(candidate))
+  if (!appEntry) {
+    throw new Error(`Built app not found (checked ${candidates.join(', ')}). Run "npm run build" first.`)
+  }
+  return appEntry
+}
+
 // ── Fault injection (process level) ──────────────────────────────────────────
 
 export function killNode(node) {
@@ -315,7 +330,7 @@ export function killNode(node) {
  * Returns the new pid (the node object's pid is updated in place).
  */
 export async function reviveNode(node, clusterDir = '.cluster') {
-  const appEntry = path.join(PROJECT_ROOT, 'out/main/index.mjs')
+  const appEntry = appEntryPath()
   const nodeDir = path.resolve(PROJECT_ROOT, clusterDir, `node-${node.index}`)
   const out = fs.openSync(node.logFile ?? path.join(nodeDir, 'node.log'), 'a')
   const electronBinary = (await import('electron')).default

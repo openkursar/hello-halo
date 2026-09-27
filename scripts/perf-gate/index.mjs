@@ -40,7 +40,7 @@
 
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   ALLOWED_SKIPS,
@@ -56,7 +56,11 @@ import {
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 const PROJECT_ROOT = resolve(__dirname, '../..')
 const BUILD_SIDECAR = join(PROJECT_ROOT, 'out/main/.build-identity.json')
-const BUILD_ARTIFACT = join(PROJECT_ROOT, 'out/main/index.mjs')
+// electron-vite has emitted both extensions across versions; take whichever
+// the current build produced. Undefined when nothing is built.
+const BUILD_ARTIFACT = ['index.cjs', 'index.mjs']
+  .map((name) => join(PROJECT_ROOT, 'out/main', name))
+  .find((candidate) => existsSync(candidate))
 const SOURCE_DIR = join(PROJECT_ROOT, 'src')
 
 const FROZEN_PASS = join(PROJECT_ROOT, 'tests/perf/results/final-frozen')
@@ -195,12 +199,12 @@ function assertFreshBuild(resultDir, failures) {
     fail(`the measured build is ${sidecar.sha} but HEAD is ${head} — these results describe different code`)
   }
 
-  if (!existsSync(BUILD_ARTIFACT)) return fail(`out/main/index.mjs is missing — nothing was built`)
+  if (!BUILD_ARTIFACT) return fail(`out/main/index.{cjs,mjs} is missing — nothing was built`)
   const builtAt = statSync(BUILD_ARTIFACT).mtimeMs
   const newestSource = newestMtimeUnder(SOURCE_DIR)
   if (newestSource > builtAt) {
     fail(
-      `src/ has changed since out/main/index.mjs was built — the results measure the previous build. ` +
+      `src/ has changed since out/main/${basename(BUILD_ARTIFACT)} was built — the results measure the previous build. ` +
         `Run 'npm run build' again.`
     )
   }

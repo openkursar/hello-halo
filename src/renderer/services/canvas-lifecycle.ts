@@ -28,11 +28,15 @@
  */
 
 import { api } from '../api'
+import i18n from '../i18n'
 import { isBinaryExtension } from '../constants/file-types'
 
 // ============================================
 // Types
 // ============================================
+
+/** Tab types whose viewer parses raw bytes rather than text (see TabState.bytes). */
+const DOCUMENT_TYPES = new Set(['xlsx', 'docx', 'pdf'])
 
 export type ContentType =
   | 'code'
@@ -43,8 +47,13 @@ export type ContentType =
   | 'text'
   | 'json'
   | 'csv'
+  | 'xlsx'
+  | 'docx'
+  | 'pptx'
   | 'browser'
   | 'terminal'
+  | 'team'
+  | 'goal'
 
 export interface BrowserState {
   isLoading: boolean
@@ -66,6 +75,12 @@ export interface TabState {
   path?: string
   url?: string
   content?: string
+  /**
+   * Raw file bytes for the document viewers (xlsx/docx/pdf), filled instead of
+   * `content` — those parsers want bytes, and base64 in `content` would cost a
+   * main-thread decode per tab. Released with the tab on close.
+   */
+  bytes?: Uint8Array
   language?: string
   mimeType?: string
   isDirty: boolean
@@ -76,6 +91,18 @@ export interface TabState {
   browserState?: BrowserState
   isEditMode?: boolean // For markdown tabs - switches between preview and editor
   terminalSessionId?: string // For terminal tabs - the pty session id
+  /** Persistent Halo team rendered by the Team workbench. */
+  teamId?: string
+  /** Conversation whose goal the goal editor edits. */
+  goal?: { spaceId: string; conversationId: string }
+  /**
+   * Whether the Canvas owns the BrowserView's lifecycle.
+   * true  — created via createBrowserView (openUrl/openPdf): destroy on close.
+   * false — attached via attachAIBrowserView: the AI drives a single view whose
+   *         WebContents outlives any tab, so closing detaches rather than
+   *         destroys. Destroying it would end the AI's live browser session.
+   */
+  browserViewOwned?: boolean
 }
 
 // Callback types
@@ -271,6 +298,13 @@ function detectContentType(path: string): { type: ContentType; language?: string
       return { type: 'json', language: 'json' }
     case 'csv':
       return { type: 'csv' }
+    case 'xlsx':
+    case 'xls':
+      return { type: 'xlsx' }
+    case 'docx':
+      return { type: 'docx' }
+    case 'pptx':
+      return { type: 'pptx' }
     case 'png':
     case 'jpg':
     case 'jpeg':
@@ -349,6 +383,16 @@ class CanvasLifecycle {
     confirmSingleClose: (sessionId: string) => Promise<boolean>
     disposeOnBulkClose: (sessionId: string) => Promise<void>
   } | null = null
+
+  /**
+   * Content type -> prompt shown before a user closes a tab of that type with
+   * unsaved changes. Registered by the domain that owns the editor; it resolves
+   * false to keep the tab open. Types with no guard close without asking.
+   */
+  private dirtyCloseGuards = new Map<ContentType, (tab: TabState) => Promise<boolean>>()
+
+  /** Content type -> reload for tabs whose content is neither a file nor a view. */
+  private refreshHandlers = new Map<ContentType, (tab: TabState) => Promise<void>>()
 
   // ============================================
   // Initialization
@@ -514,8 +558,10 @@ class CanvasLifecycle {
       }
     }
 
-    // PDF files are opened via BrowserView (Chromium native PDF renderer)
-    if (type === 'pdf') {
+    // PDF files are opened via BrowserView (Chromium native PDF renderer) on
+    // desktop. Remote clients have no BrowserView — fall through to a content
+    // tab whose base64 bytes are rendered by the pdfjs-based PdfViewer.
+    if (type === 'pdf' && !api.isRemoteMode()) {
       return this.openPdf(path, title)
     }
 
@@ -580,20 +626,36 @@ class CanvasLifecycle {
   }
 
   /**
-   * Load file content asynchronously
+   * Documents take the bytes channel; everything else takes the text/base64
+   * one. Splitting here rather than in the viewers keeps every tab holding
+   * exactly one representation of its file.
    */
   private async loadFileContent(tabId: string, path: string, type: ContentType): Promise<void> {
     const tab = this.tabs.get(tabId)
     if (!tab) return
 
-    // Images use halo-file:// protocol directly (no content loading needed)
-    if (type === 'image') {
+    // Images use halo-file:// protocol directly (no content loading needed).
+    // pptx has no in-canvas renderer, so its placeholder needs no bytes either.
+    if (type === 'image' || type === 'pptx') {
       tab.isLoading = false
       this.notifyTabsChange()
       return
     }
 
     try {
+      if (DOCUMENT_TYPES.has(type)) {
+        const response = await api.readArtifactBytes(path)
+        if (!this.tabs.has(tabId)) return
+        if (!response.success || !response.data) {
+          throw new Error(response.error || 'Failed to read file')
+        }
+        tab.bytes = response.data
+        tab.isLoading = false
+        tab.error = undefined
+        this.notifyTabsChange()
+        return
+      }
+
       const response = await api.readArtifactContent(path)
 
       // Tab might have been closed during async operation
@@ -705,6 +767,7 @@ class CanvasLifecycle {
       isDirty: false,
       isLoading: false, // Already loaded by AI
       browserViewId: viewId, // Reference to existing view
+      browserViewOwned: false, // AI singleton — detach on close, do not destroy
       browserState: {
         isLoading: false,
         canGoBack: false,
@@ -750,6 +813,68 @@ class CanvasLifecycle {
     this.notifyTabsChange()
     await this.switchTab(tabId)
     return tabId
+  }
+
+  /** Open the existing Team workbench inside the Content Canvas. */
+  async openTeam(teamId: string, title?: string): Promise<string> {
+    for (const [tabId, tab] of this.tabs) {
+      if (tab.type === 'team' && tab.teamId === teamId) {
+        this.setOpen(true)
+        await this.switchTab(tabId)
+        return tabId
+      }
+    }
+
+    const tabId = generateTabId()
+    const tab: TabState = {
+      id: tabId,
+      type: 'team',
+      title: title || i18n.t('Team'),
+      teamId,
+      isDirty: false,
+      isLoading: false,
+    }
+
+    this.tabs.set(tabId, tab)
+    this.setOpen(true)
+    this.notifyTabsChange()
+    await this.switchTab(tabId)
+    return tabId
+  }
+
+  /** Open the goal editor for a conversation, reusing its tab if one is open. */
+  async openGoal(spaceId: string, conversationId: string): Promise<string> {
+    for (const [tabId, tab] of this.tabs) {
+      if (tab.type === 'goal' && tab.goal?.conversationId === conversationId) {
+        this.setOpen(true)
+        await this.switchTab(tabId)
+        return tabId
+      }
+    }
+
+    const tabId = generateTabId()
+    const tab: TabState = {
+      id: tabId,
+      type: 'goal',
+      title: i18n.t('Goal'),
+      goal: { spaceId, conversationId },
+      isDirty: false,
+      isLoading: false,
+    }
+
+    this.tabs.set(tabId, tab)
+    this.setOpen(true)
+    this.notifyTabsChange()
+    await this.switchTab(tabId)
+    return tabId
+  }
+
+  /** Rename a tab, e.g. when what it shows is renamed elsewhere. */
+  setTabTitle(tabId: string, title: string): void {
+    const tab = this.tabs.get(tabId)
+    if (!tab || tab.title === title) return
+    tab.title = title
+    this.notifyTabsChange()
   }
 
   /** Update a terminal tab's title (from lifecycle title events). */
@@ -808,11 +933,29 @@ class CanvasLifecycle {
   }
 
   /**
+   * Register the prompt asked before a dirty tab of `type` is closed by the
+   * user, one tab at a time or all at once. Returns an unsubscribe function.
+   * Space-switch teardown never asks.
+   */
+  setDirtyCloseGuard(type: ContentType, guard: (tab: TabState) => Promise<boolean>): () => void {
+    this.dirtyCloseGuards.set(type, guard)
+    return () => {
+      if (this.dirtyCloseGuards.get(type) === guard) this.dirtyCloseGuards.delete(type)
+    }
+  }
+
+  /**
    * Close a tab
    */
   async closeTab(tabId: string): Promise<void> {
     const tab = this.tabs.get(tabId)
     if (!tab) return
+
+    const dirtyGuard = tab.isDirty ? this.dirtyCloseGuards.get(tab.type) : undefined
+    if (dirtyGuard && !(await dirtyGuard(tab))) {
+      console.log(`[CanvasLifecycle] Close of dirty tab ${tabId} cancelled by user`)
+      return
+    }
 
     console.log(`[CanvasLifecycle] Closing tab: ${tabId}`)
 
@@ -823,10 +966,11 @@ class CanvasLifecycle {
       if (!proceed) return
     }
 
-    // Destroy BrowserView if this is a browser/pdf tab
+    // Tear the tab's view down per ownership: an AI-attached view is only
+    // hidden, so the session it belongs to survives losing its tab.
     const hasBrowserView = (tab.type === 'browser' || tab.type === 'pdf') && tab.browserViewId
     if (hasBrowserView) {
-      await this.destroyBrowserView(tab.browserViewId!)
+      await this.releaseBrowserView(tab)
     }
 
     // Remove tab
@@ -847,14 +991,35 @@ class CanvasLifecycle {
     this.notifyTabsChange()
   }
 
+  /** Register how tabs of `type` reload on Refresh. Returns an unsubscribe function. */
+  setRefreshHandler(type: ContentType, handler: (tab: TabState) => Promise<void>): () => void {
+    this.refreshHandlers.set(type, handler)
+    return () => {
+      if (this.refreshHandlers.get(type) === handler) this.refreshHandlers.delete(type)
+    }
+  }
+
   /**
-   * Close all tabs
+   * Close all tabs. `confirmDirty` is for a close the user asked for: each
+   * dirty tab with a guard asks first, and one "keep" cancels the whole close.
    */
-  async closeAll(): Promise<void> {
+  async closeAll(options?: { confirmDirty?: boolean }): Promise<void> {
+    if (options?.confirmDirty) {
+      for (const tab of [...this.tabs.values()]) {
+        const dirtyGuard = tab.isDirty ? this.dirtyCloseGuards.get(tab.type) : undefined
+        if (!dirtyGuard || !this.tabs.has(tab.id)) continue
+        await this.switchTab(tab.id)
+        if (!(await dirtyGuard(tab))) {
+          console.log(`[CanvasLifecycle] Close all cancelled by user at dirty tab ${tab.id}`)
+          return
+        }
+      }
+    }
+
     console.log('[CanvasLifecycle] Closing all tabs')
 
-    // Tear down each tab's underlying resource. Browser/pdf views are destroyed
-    // (their WebContents is tab-bound). Terminals defer to the bulk disposal
+    // Tear down each tab's underlying resource. Browser/pdf views go by
+    // ownership (see releaseBrowserView). Terminals defer to the bulk disposal
     // policy — non-interactive, so no per-tab prompts: the user's own terminals
     // are terminated, AI-operated ones are kept alive in the tray. Also drives
     // space-switch teardown (enterSpace → closeAll).
@@ -862,7 +1027,7 @@ class CanvasLifecycle {
     for (const [, tab] of this.tabs) {
       const hasBrowserView = (tab.type === 'browser' || tab.type === 'pdf') && tab.browserViewId
       if (hasBrowserView) {
-        await this.destroyBrowserView(tab.browserViewId!)
+        await this.releaseBrowserView(tab)
       } else if (tab.type === 'terminal' && tab.terminalSessionId && this.terminalClosePolicy) {
         terminalDisposals.push(this.terminalClosePolicy.disposeOnBulkClose(tab.terminalSessionId))
       }
@@ -893,15 +1058,17 @@ class CanvasLifecycle {
     const previousTabId = this.activeTabId
     const previousTab = previousTabId ? this.tabs.get(previousTabId) : null
 
-    // 1. Hide previous BrowserView if it exists (browser or pdf types)
+    // 1. Publish the new active tab before the hide await, so a caller that
+    // arrives mid-switch reads where we are going rather than where we were.
+    // The hide below targets the previous tab by captured id, so it is unaffected.
+    this.activeTabId = tabId
+
+    // 2. Hide previous BrowserView if it exists (browser or pdf types)
     const prevNeedsBrowserView = previousTab?.type === 'browser' || previousTab?.type === 'pdf'
     if (prevNeedsBrowserView && previousTab.browserViewId && previousTabId !== tabId) {
       console.log(`[CanvasLifecycle] Hiding previous BrowserView: ${previousTab.browserViewId}`)
       await api.hideBrowserView(previousTab.browserViewId)
     }
-
-    // 2. Update activeTabId
-    this.activeTabId = tabId
 
     // 3. Create a BrowserView for browser/pdf tabs that lack one. Showing is
     // deliberately left out: this runs before notifyActiveTabChange(), so
@@ -995,6 +1162,7 @@ class CanvasLifecycle {
 
       if (result.success) {
         tab.browserViewId = viewId
+        tab.browserViewOwned = true
         this.notifyTabsChange()
 
         // Show the view
@@ -1100,6 +1268,22 @@ class CanvasLifecycle {
   }
 
   /**
+   * Give up a tab's BrowserView, destroying it only if the Canvas owns it.
+   *
+   * The single place both close paths go through, so a tab can never be
+   * removed one way and leak (or kill) its view the other way.
+   */
+  private async releaseBrowserView(tab: TabState): Promise<void> {
+    if (!tab.browserViewId) return
+    if (tab.browserViewOwned) {
+      await this.destroyBrowserView(tab.browserViewId)
+      return
+    }
+    console.log(`[CanvasLifecycle] Detaching BrowserView: ${tab.browserViewId}`)
+    await this.hideBrowserView(tab.browserViewId)
+  }
+
+  /**
    * Update bounds of active BrowserView (called on resize)
    * Uses resizeBrowserView instead of showBrowserView to avoid
    * expensive addBrowserView calls during animation
@@ -1196,6 +1380,8 @@ class CanvasLifecycle {
       this.notifyTabsChange()
 
       await this.loadFileContent(tabId, tab.path, tab.type)
+    } else {
+      await this.refreshHandlers.get(tab.type)?.(tab)
     }
   }
 
@@ -1335,18 +1521,35 @@ class CanvasLifecycle {
   }
 
   /**
-   * Called when entering a space - clears tabs if switching to different space
+   * Called when entering a space - clears tabs if switching to different space.
    * This is the single point of control for Space isolation of Canvas state.
-   * Returns true if tabs were cleared
+   * Returns true if tabs were cleared.
+   *
+   * The new space id is published before the teardown is awaited, so a second
+   * caller arriving for the same space during it — SpacePage's mount effect
+   * while a tray reveal is still awaiting — matches and short-circuits, instead
+   * of re-entering teardown and wiping the tab the reveal is about to open.
    */
-  enterSpace(spaceId: string): boolean {
+  async enterSpace(spaceId: string): Promise<boolean> {
     const previousSpaceId = this.currentSpaceId
 
     if (previousSpaceId && previousSpaceId !== spaceId && this.tabs.size > 0) {
       // Switching to different space with existing tabs - clear all
       console.log(`[CanvasLifecycle] Space switch: clearing ${this.tabs.size} tabs`)
-      this.closeAll()
       this.currentSpaceId = spaceId
+      try {
+        await this.closeAll()
+      } catch (err) {
+        // A rejected teardown can leave tabs behind, and the id now published
+        // says they belong to the space being entered. Drop them rather than
+        // let the next space inherit the previous one's tabs.
+        console.error('[CanvasLifecycle] Space-switch teardown failed, dropping tabs:', err)
+        this.tabs.clear()
+        this.activeTabId = null
+        this.setOpen(false)
+        this.notifyTabsChange()
+        this.notifyActiveTabChange()
+      }
       return true
     }
 

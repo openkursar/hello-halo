@@ -54,20 +54,26 @@ export type ImChannelType = typeof IM_CHANNEL_TYPES[number]
 /**
  * Origin of a digital-human external session.
  *
- *   'im'    — a bidirectional IM channel session (WeCom, Feishu, ...). Has a
- *             live channel instance, so it can be proactively pushed to
- *             (notify_bot / auto-sync).
- *   'http'  — an external session created via the HTTP API. Read/write only
- *             through HTTP; there is no IM adapter, so it is NOT pushable.
- *   'local' — a native client-side chat session the desktop user created in
- *             the digital human's own chat window (multiple named sessions per
- *             app). Fully interactive, but not pushable and never auto-evicted
- *             (unlike 'http', which a backend can mint unboundedly).
+ *   'im'     — a bidirectional IM channel session (WeCom, Feishu, ...). Has a
+ *              live channel instance, so it can be proactively pushed to
+ *              (notify_bot / auto-sync).
+ *   'http'   — an external session created via the HTTP API. Read/write only
+ *              through HTTP; there is no IM adapter, so it is NOT pushable.
+ *   'local'  — a native client-side chat session the desktop user created in
+ *              the digital human's own chat window (multiple named sessions per
+ *              app). Fully interactive, but not pushable and never auto-evicted
+ *              (unlike 'http', which a backend can mint unboundedly).
+ *   'native' — the app's single default chat session ("app-chat:{appId}"),
+ *              registered here purely so the main conversation board can read
+ *              its message-activity summary (messageCount/lastMessage/
+ *              lastActiveAt) without loading the full JSONL transcript. Not an
+ *              external session in any sense — never pushable, never evicted,
+ *              and excluded from the global IM-session management UI.
  *
  * Stored explicitly rather than inferred from key shape: HTTP, IM, and local
  * keys share the same 5-segment format, so segment count cannot tell them apart.
  */
-export type SessionSource = 'im' | 'http' | 'local'
+export type SessionSource = 'im' | 'http' | 'local' | 'native'
 
 /**
  * Channel value used for external sessions created via the HTTP API.
@@ -85,17 +91,59 @@ export const HTTP_SESSION_CHANNEL = 'http'
 export const LOCAL_SESSION_CHANNEL = 'local'
 
 /**
+ * Channel value used for the app's single native default chat session
+ * ("app-chat:{appId}", the 2-segment form that {@link parseAppChatKey}
+ * deliberately returns null for). Registered under a synthetic
+ * {chatId: NATIVE_DEFAULT_CHAT_ID} so it can carry a message-activity summary
+ * in the same registry as every other session kind.
+ */
+export const NATIVE_SESSION_CHANNEL = 'native'
+
+/** Synthetic chatId for the native default session's registry record. */
+export const NATIVE_DEFAULT_CHAT_ID = 'default'
+
+/**
  * Classify a session's source from its channel value.
  *
  * Conservative: only channels explicitly registered in {@link IM_CHANNEL_TYPES}
- * are treated as IM (pushable). The native {@link LOCAL_SESSION_CHANNEL} is its
- * own source so it is exempt from HTTP eviction bounds. Everything else — the
- * HTTP channel and any unknown/future channel — is classified as 'http', so a
- * non-IM session can never accidentally leak into IM push paths.
+ * are treated as IM (pushable). {@link LOCAL_SESSION_CHANNEL} and
+ * {@link NATIVE_SESSION_CHANNEL} are their own sources so they are exempt from
+ * HTTP eviction bounds. Everything else — the HTTP channel and any
+ * unknown/future channel — is classified as 'http', so a non-IM session can
+ * never accidentally leak into IM push paths.
  */
 export function classifySessionSource(channel: string): SessionSource {
+  if (channel === NATIVE_SESSION_CHANNEL) return 'native'
   if (channel === LOCAL_SESSION_CHANNEL) return 'local'
   return (IM_CHANNEL_TYPES as readonly string[]).includes(channel) ? 'im' : 'http'
+}
+
+/**
+ * Which config field carries a built-in provider's credential identity.
+ * Single source of truth for {@link imCredentialId}; types absent here have no
+ * form-entered credential (e.g. weixin-ilink's token comes from a QR flow),
+ * so they never participate in duplicate-credential checks.
+ */
+const IM_CREDENTIAL_FIELDS: Partial<Record<ImChannelType, string>> = {
+  'wecom-bot': 'botId',
+  'feishu-bot': 'appId',
+}
+
+/**
+ * Credential identity of an instance config — what makes two instances "the
+ * same bot". The one implementation behind ImChannelProvider.credentialId for
+ * built-in providers AND the renderer's inline duplicate warning, so the
+ * per-brand field knowledge exists exactly once. Returns undefined when the
+ * type has no form credential or the field is still empty (half-filled form).
+ */
+export function imCredentialId(
+  type: ImChannelType,
+  config: Record<string, unknown> | undefined,
+): string | undefined {
+  const field = IM_CREDENTIAL_FIELDS[type]
+  if (!field) return undefined
+  const value = String(config?.[field] ?? '').trim()
+  return value || undefined
 }
 
 /**
@@ -179,6 +227,12 @@ export interface ImChannelInstanceConfig {
    * When undefined, guests have no tool or path access (deny-all default).
    */
   guestPolicy?: GuestPolicy
+
+  /**
+   * The guest policy as it was when guest access was last turned off, so
+   * turning it back on restores the owner's choices. Never enforced.
+   */
+  savedGuestPolicy?: GuestPolicy
 }
 
 // ============================================
@@ -232,6 +286,22 @@ export interface ImChannelProvider {
    * is connection-relevant (the default, safe behavior).
    */
   readonly hotUpdatableConfigKeys?: string[]
+
+  /**
+   * Identity of the credential a config points at — what makes two instances
+   * "the same bot". Used to refuse binding one bot to two digital humans, which
+   * would split or duplicate its inbound traffic.
+   *
+   * Only the provider knows which of its fields carries that identity (`botId`,
+   * `appId`, an account handle, ...), so generic code must ask rather than guess.
+   * Return undefined when the config names no credential yet (a half-filled
+   * form). Providers that omit this get the legacy `config.botId` comparison.
+   *
+   * Built-in providers delegate to {@link imCredentialId} so the renderer's
+   * inline duplicate warning reads the same knowledge without a provider
+   * instance.
+   */
+  credentialId?(config: Record<string, unknown>): string | undefined
 
   /**
    * Create a running instance from persisted config.
@@ -573,6 +643,14 @@ export interface ImSessionRecord {
   lastSender?: string
   /** Most recent message preview (truncated to 50 chars) */
   lastMessage?: string
+  /**
+   * Total number of messages exchanged in this session. Incremented on every
+   * {@link ImSessionRegistry.register} call (one per inbound turn); absent on
+   * records persisted before this field existed (treat as unknown, not zero).
+   * Lets conversation-list UIs show an activity count without loading the
+   * full JSONL transcript.
+   */
+  messageCount?: number
   /**
    * When true, the run's final assistant text response is auto-pushed to
    * this contact at run completion (apps/runtime/im-auto-sync.ts). The AI

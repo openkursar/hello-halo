@@ -21,7 +21,7 @@ const path = require('path');
  *
  * Why: Without updateConfig, the download button in the update notification
  * silently does nothing (getDownloadPageUrl returns empty string).
- * See: src/main/services/updater.service.ts
+ * See: src/main/services/updater/
  */
 function checkUpdateConfig(config) {
   if (!config.updateConfig) {

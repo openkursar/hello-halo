@@ -31,9 +31,15 @@ export function registerSpaceRoutes(app: Express): void {
     res.json(result)
   })
 
+  // Must be before :spaceId route to avoid matching "summaries" as an id
+  app.get('/api/spaces/summaries', async (req: Request, res: Response) => {
+    const result = await spaceController.listSpaceSummaries()
+    res.json(result)
+  })
+
   app.post('/api/spaces', async (req: Request, res: Response) => {
-    const { name, icon, customPath } = req.body
-    const result = spaceController.createSpace({ name, icon, customPath })
+    const { name, icon, color, customPath } = req.body
+    const result = spaceController.createSpace({ name, icon, color, customPath })
     res.json(result)
   })
 
@@ -54,8 +60,32 @@ export function registerSpaceRoutes(app: Express): void {
     res.json(result)
   })
 
+  // Preferences (layout, memory settings) — mirrors space:get/update-preferences
+  app.get('/api/spaces/:spaceId/preferences', async (req: Request, res: Response) => {
+    res.json(spaceController.getSpacePreferences(req.params.spaceId))
+  })
+
+  app.put('/api/spaces/:spaceId/preferences', async (req: Request, res: Response) => {
+    res.json(spaceController.updateSpacePreferences(req.params.spaceId, req.body ?? {}))
+  })
+
+  // Space memory: size, last consolidation, and "consolidate now"
+  app.get('/api/spaces/:spaceId/memory', async (req: Request, res: Response) => {
+    res.json(await spaceController.getSpaceMemoryStatus(req.params.spaceId))
+  })
+
+  app.post('/api/spaces/:spaceId/memory/consolidate', async (req: Request, res: Response) => {
+    res.json(spaceController.consolidateSpaceMemory(req.params.spaceId))
+  })
+
   app.delete('/api/spaces/:spaceId', async (req: Request, res: Response) => {
     const result = await spaceController.deleteSpace(req.params.spaceId)
+    res.json(result)
+  })
+
+  // Remove an unreachable space's registry entry (does not touch disk)
+  app.post('/api/spaces/:spaceId/forget', async (req: Request, res: Response) => {
+    const result = spaceController.forgetSpace(req.params.spaceId)
     res.json(result)
   })
 

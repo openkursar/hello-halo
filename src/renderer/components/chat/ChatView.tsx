@@ -10,13 +10,19 @@
  */
 
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import type { ReactNode } from 'react'
+import { SquareCheckBig, Code, Bot, FileText, BookOpen } from 'lucide-react'
+import logoOnDark from '../../assets/brand/halo-logo-icon-on-dark.svg'
+import logoOnLight from '../../assets/brand/halo-logo-icon-on-light.svg'
 import { useSpaceStore } from '../../stores/space.store'
 import { useChatStore } from '../../stores/chat.store'
 import { useOnboardingStore } from '../../stores/onboarding.store'
+import { useTaskPanelStore } from '../../stores/taskPanel.store'
 import { MessageList } from './MessageList'
 import type { MessageListHandle } from './MessageList'
 import { InputArea } from './InputArea'
 import { useConversationMentionCandidates } from './cross-conversation'
+import { TeamCollabPanel } from './team-collab'
 import { ScrollToBottomButton } from './ScrollToBottomButton'
 import { Sparkles } from '../icons/ToolIcons'
 import {
@@ -28,8 +34,15 @@ import {
 import { api } from '../../api'
 import type { ImageAttachment, Artifact } from '../../types'
 import type { SlashCommandItem } from '../../types/slash-command'
-import { useTranslation } from '../../i18n'
-import { pickEmptyStateSuggestions } from './emptyStateSuggestions'
+import { useTranslation, getCurrentLanguage } from '../../i18n'
+import { AppChatView } from '../apps/AppChatView'
+import { useSpaceDigitalHumans } from '../../hooks/useSpaceDigitalHumans'
+import { resolveSpecI18n } from '../../utils/spec-i18n'
+import { getAppChatConversationId } from '../../api/_shared'
+import type { DigitalHumanSelectorConfig } from './DigitalHumanSelector'
+import { useGoalComposer } from '../goal'
+import { showsMessageList } from './conversation-body'
+import type { GoalInput } from '../../../shared/types/goal'
 
 interface ChatViewProps {
   isCompact?: boolean
@@ -38,19 +51,40 @@ interface ChatViewProps {
 export function ChatView({ isCompact = false }: ChatViewProps) {
   const { t } = useTranslation()
   const { currentSpace } = useSpaceStore()
-  const {
-    getCurrentConversation,
-    getCurrentConversationId,
-    getCurrentSession,
-    sessionInitInfo,
-    sendMessage,
-    stopGeneration,
-    injectMessage,
-    continueAfterInterrupt,
-    answerQuestion,
-    loadMessageThoughts,
-    currentSpaceId
-  } = useChatStore()
+  // Subscriptions are per field on purpose. The chat store is the shared
+  // real-time bus for every conversation in the app — digital humans and team
+  // members included — so subscribing to the whole store would re-render this
+  // whole page on every token of every background turn. Actions are stable
+  // references; only the fields read below can trigger a render, and the live
+  // turn arrives through `session` further down.
+  const getCurrentConversationId = useChatStore(s => s.getCurrentConversationId)
+  const getSession = useChatStore(s => s.getSession)
+  const sessionInitInfo = useChatStore(s => s.sessionInitInfo)
+  const sendMessage = useChatStore(s => s.sendMessage)
+  const stopGeneration = useChatStore(s => s.stopGeneration)
+  const injectMessage = useChatStore(s => s.injectMessage)
+  const continueAfterInterrupt = useChatStore(s => s.continueAfterInterrupt)
+  const answerQuestion = useChatStore(s => s.answerQuestion)
+  const loadMessageThoughts = useChatStore(s => s.loadMessageThoughts)
+  const currentSpaceId = useChatStore(s => s.currentSpaceId)
+  const selectAppChatConversation = useChatStore(s => s.selectAppChatConversation)
+  const clearAppChatSelection = useChatStore(s => s.clearAppChatSelection)
+
+  // ── Digital-human selection ──
+  const selectedAppChat = useChatStore(
+    s => (currentSpaceId ? s.spaceStates.get(currentSpaceId)?.selectedAppChat ?? null : null)
+  )
+  // The roster, not the conversation list: a digital human you have never
+  // talked to has no conversation rows but still has to be selectable.
+  const spaceDigitalHumans = useSpaceDigitalHumans(currentSpaceId ?? null)
+  const digitalHumanOptions = useMemo(
+    () => spaceDigitalHumans.map(app => ({
+      appId: app.id,
+      name: resolveSpecI18n(app.spec, getCurrentLanguage()).name || app.id,
+      status: app.status ?? 'active',
+    })),
+    [spaceDigitalHumans]
+  )
 
   // Onboarding state
   const {
@@ -249,8 +283,13 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
   }, [])
 
   // Get current conversation and its session state
-  const currentConversation = getCurrentConversation()
-  const { isLoadingConversation } = useChatStore()
+  const currentConversationId = useChatStore(s =>
+    (s.currentSpaceId ? s.spaceStates.get(s.currentSpaceId)?.currentConversationId : null) ?? null
+  )
+  const currentConversation = useChatStore(s =>
+    currentConversationId ? s.conversationCache.get(currentConversationId) ?? null : null
+  )
+  const isLoadingConversation = useChatStore(s => s.isLoadingConversation)
 
   // Lazy loader for a message's separated thoughts, bound to the active
   // space + conversation ids. Passed to MessageList's thoughtsLoader prop.
@@ -261,8 +300,47 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
         : Promise.resolve([]),
     [loadMessageThoughts, currentSpaceId, currentConversation?.id]
   )
-  const session = getCurrentSession()
+  // The live turn of the conversation on screen. `getSession('')` is the store's
+  // own empty-session constant — a stable identity for "no session yet", so the
+  // fallback does not look like a change to anything downstream.
+  const session = useChatStore(s => s.sessions.get(currentConversationId ?? '')) ?? getSession('')
   const { isGenerating, streamingContent, isStreaming, thoughts, isThinking, compactInfo, error, errorType, textBlockVersion, pendingQuestion } = session
+
+  // ── Digital-human selector wiring ──
+  // The active conversation is whichever link the selector points at; locking
+  // reads that link's own session so switching is blocked mid-reply no matter
+  // which side (Halo or a digital human) is currently generating.
+  const activeConversationId = selectedAppChat ? selectedAppChat.conversationId : currentConversation?.id ?? null
+  const digitalHumanSelectorLocked = useChatStore(s => {
+    const active = s.sessions.get(activeConversationId ?? '')
+    return !!active && (active.isGenerating || active.queuedMessages.length > 0)
+  })
+  const digitalHumanSelector: DigitalHumanSelectorConfig | undefined = currentSpaceId ? {
+    current: selectedAppChat?.appId ?? null,
+    options: digitalHumanOptions,
+    locked: digitalHumanSelectorLocked,
+    onChange: (appId, conversationId) => {
+      if (!currentSpaceId) return
+      if (appId === null) {
+        void clearAppChatSelection(currentSpaceId)
+      } else {
+        selectAppChatConversation(currentSpaceId, appId, conversationId ?? getAppChatConversationId(appId))
+      }
+    },
+  } : undefined
+
+  const sendWithGoal = useCallback(
+    (content: string, images: ImageAttachment[] | undefined, thinkingEnabled: boolean, goal: GoalInput) =>
+      sendMessage(content, images, thinkingEnabled, { goal }),
+    [sendMessage]
+  )
+  const goalComposer = useGoalComposer({
+    spaceId: currentSpaceId,
+    conversationId: currentConversationId,
+    draftKey: activeConversationId ?? undefined,
+    isGenerating,
+    send: sendWithGoal,
+  })
 
   // Build the slash-command list for the autocomplete menu.
   // Only reads from SDK slash_commands array.
@@ -362,7 +440,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
     // Can send if has text OR has images
     if ((!content.trim() && (!images || images.length === 0)) || isGenerating) return
 
-    await sendMessage(content, images, thinkingEnabled)
+    return sendMessage(content, images, thinkingEnabled)
   }
 
   // Handle stop - stops the current conversation's generation
@@ -392,7 +470,12 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
   const displayIsGenerating = isMockAnimating || isGenerating
   const displayIsThinking = isMockThinking || isThinking
   const displayIsStreaming = isStreaming  // Only real streaming (not mock)
-  const hasMessages = displayMessages.length > 0 || displayStreamingContent || displayIsThinking
+  const hasMessages = showsMessageList({
+    messageCount: displayMessages.length,
+    streamingContent: displayStreamingContent,
+    isThinking: displayIsThinking,
+    error,
+  })
 
   // Track previous compact state for smooth transitions
   const prevCompactRef = useRef(isCompact)
@@ -401,6 +484,72 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
   useEffect(() => {
     prevCompactRef.current = isCompact
   }, [isCompact])
+
+  // ── Digital-human mode: delegate to AppChatView ──
+  // AppChatView already fully implements "chat with a digital human" (its own
+  // message loading, send/stop, mentions, WS recovery) — reusing it here keeps
+  // that logic in one place instead of re-deriving it inside ChatView. Only the
+  // input row is shared in spirit: the same DigitalHumanSelector config is
+  // threaded through so the control never visually resets when switching.
+  if (selectedAppChat && currentSpace) {
+    return (
+      <AppChatView
+        key={selectedAppChat.conversationId}
+        appId={selectedAppChat.appId}
+        spaceId={currentSpace.id}
+        conversationId={selectedAppChat.conversationId}
+        digitalHumanSelector={digitalHumanSelector}
+        draftKey={activeConversationId ?? undefined}
+      />
+    )
+  }
+
+  // Full-takeover empty state: composer and suggestions centered on screen,
+  // no docked input below — matches the prototype, where the composer only
+  // sinks to a bottom dock once the first message is sent. Loading and
+  // compact (canvas-open) states keep the normal docked-input layout.
+  const isFullTakeoverEmpty = !isCompact && !hasMessages && !isLoadingConversation
+
+  // Built once and handed to whichever position needs it (docked at the
+  // bottom, or centered inline in the full-takeover empty state) — only one
+  // of those two ever mounts at a time, so there's no duplicate instance,
+  // just two possible slots for the same props.
+  const inputArea = (
+    <InputArea
+      key={activeConversationId ?? 'none'}
+      onSend={handleSend}
+      onInject={(content) => {
+        const conversationId = getCurrentConversationId()
+        if (conversationId) injectMessage(conversationId, content)
+      }}
+      onStop={handleStop}
+      isGenerating={isGenerating}
+      placeholder={isCompact ? t('Continue conversation...') : (currentSpace?.isTemp ? t('Say something to Halo...') : undefined)}
+      isCompact={isCompact}
+      slashCommands={slashCommands}
+      mentionArtifacts={mentionArtifacts}
+      mentionConversations={mentionConversations}
+      standalone={isFullTakeoverEmpty}
+      digitalHumanSelector={digitalHumanSelector}
+      draftKey={activeConversationId ?? undefined}
+      goal={goalComposer}
+    />
+  )
+
+  if (isFullTakeoverEmpty) {
+    return (
+      <div className="flex-1 flex flex-col h-full bg-background">
+        <EmptyState
+          // Prototype's chips fill the composer, they don't send — the user
+          // reviews/edits the canned prompt before deciding to send it.
+          onSuggestion={(prompt) => {
+            if (currentSpaceId) useChatStore.setState({ pendingComposerInput: { spaceId: currentSpaceId, text: prompt } })
+          }}
+          composer={inputArea}
+        />
+      </div>
+    )
+  }
 
   return (
     <div
@@ -412,21 +561,22 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
     >
       {/* Messages area wrapper - relative for button positioning */}
       <div className="flex-1 relative overflow-hidden">
-        {/* Virtuoso manages its own scroll container */}
+        {/* Virtuoso manages its own scroll container. This wrapper itself
+            isn't remounted on conversation switch (only its children are,
+            via MessageList's own `key`), so the entrance animation plays
+            once when the chat page first mounts — not on every switch — and
+            never touches Virtuoso's own scroll measurements (transform on an
+            ancestor doesn't affect its internal scrollHeight/clientHeight). */}
         <div
           className={`
-            h-full
-            transition-[padding] duration-300 ease-out
-            ${isCompact ? 'px-3' : 'px-4'}
+            h-full animate-fade-up
+            ${isLoadingConversation || !hasMessages ? (isCompact ? 'px-3' : 'px-6') : ''}
           `}
         >
           {isLoadingConversation ? (
             <LoadingState />
           ) : !hasMessages ? (
-            <EmptyState
-              isCompact={isCompact}
-              onSuggestion={(prompt) => handleSend(prompt)}
-            />
+            <EmptyState isCompact />
           ) : (
             <MessageList
               key={currentConversation?.id ?? 'empty'}
@@ -448,6 +598,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
               pendingQuestion={pendingQuestion}
               onAnswerQuestion={currentConversation ? (answers) => answerQuestion(currentConversation.id, answers) : undefined}
               onAtBottomStateChange={handleAtBottomStateChange}
+              footerExtra={<TeamCollabPanel conversationId={currentConversation?.id} />}
             />
           )}
         </div>
@@ -460,20 +611,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
       </div>
 
       {/* Input area */}
-      <InputArea
-        onSend={handleSend}
-        onInject={(content) => {
-          const conversationId = getCurrentConversationId()
-          if (conversationId) injectMessage(conversationId, content)
-        }}
-        onStop={handleStop}
-        isGenerating={isGenerating}
-        placeholder={isCompact ? t('Continue conversation...') : (currentSpace?.isTemp ? t('Say something to Halo...') : t('Continue conversation...'))}
-        isCompact={isCompact}
-        slashCommands={slashCommands}
-        mentionArtifacts={mentionArtifacts}
-        mentionConversations={mentionConversations}
-      />
+      {inputArea}
     </div>
   )
 }
@@ -489,17 +627,23 @@ function LoadingState() {
   )
 }
 
+// Fixed hover/press treatment shared by every suggestion chip below.
+const CHIP_CLASS = 'group flex items-center gap-[7px] h-[34px] px-3.5 rounded-full border border-border bg-card text-[13px] text-muted-foreground transition-colors ease-halo hover:text-foreground hover:border-primary hover:bg-secondary'
+const CHIP_ICON_CLASS = 'w-[15px] h-[15px] text-subtle-foreground transition-colors ease-halo group-hover:text-primary'
+
 // Empty state component - adapts to compact mode
 function EmptyState({
   isCompact = false,
   onSuggestion,
+  composer,
 }: {
   isCompact?: boolean
   onSuggestion?: (prompt: string) => void
+  /** Centered composer, only rendered in the full (non-compact) takeover. */
+  composer?: ReactNode
 }) {
   const { t } = useTranslation()
-  // Stable random draw per mount; re-drawn on next empty state
-  const [suggestions] = useState(() => pickEmptyStateSuggestions(t, 4))
+  const openTaskPanel = useTaskPanelStore(s => s.open)
 
   // Compact mode shows minimal UI
   if (isCompact) {
@@ -516,31 +660,60 @@ function EmptyState({
   return (
     // Outer scroll container keeps content reachable on short viewports
     <div className="h-full overflow-y-auto px-6 sm:px-8">
-      <div className="min-h-full flex flex-col items-center justify-center text-center py-8">
-        {/* Icon */}
-        <Sparkles className="w-12 h-12 text-primary" />
+      <div className="min-h-full flex flex-col items-center justify-center text-center py-8 animate-fade-up">
+        {/* Brand mark — same asset as the NavRail logo, not a generic icon.
+            No border-radius: these are transparent ring icons, not the
+            prototype's solid rounded-square badge, so the prototype's
+            `.empty-logo{radius:12px}` has nothing to apply to here. */}
+        <img src={logoOnDark} alt="" aria-hidden="true" className="brand-mark-dark w-11 h-11 mb-4" />
+        <img src={logoOnLight} alt="" aria-hidden="true" className="brand-mark-light w-11 h-11 mb-4" />
 
-        {/* Title - concise and warm */}
-        <h2 className="mt-6 text-xl font-medium">
-          Halo
+        {/* Title */}
+        <h2 className="text-2xl font-semibold tracking-[-0.01em]">
+          {t('What do you want to do today?')}
         </h2>
-        <p className="mt-2 text-muted-foreground">
-          {t('Not just chat, help you get things done')}
-        </p>
 
-        {/* Clickable suggestions - random sample of Halo capabilities */}
-        <div className="mt-8 w-full max-w-md flex flex-col gap-2">
-          {suggestions.map(({ icon: Icon, prompt }, index) => (
-            <button
-              key={prompt}
-              onClick={() => onSuggestion?.(prompt)}
-              style={{ animationDelay: `${index * 60}ms`, animationFillMode: 'backwards' }}
-              className="animate-fade-in group flex items-center gap-3 px-4 py-2.5 sm:py-3 rounded-xl border border-border text-sm text-muted-foreground text-left transition-colors hover:text-foreground hover:border-primary/40 hover:bg-secondary/50 active:scale-[0.98]"
-            >
-              <Icon className="w-4 h-4 shrink-0 text-primary/60 transition-colors duration-200 group-hover:text-primary" />
-              <span className="truncate">{prompt}</span>
-            </button>
-          ))}
+        {/* Composer — centered here until the first message is sent, then
+            it docks to the bottom instead (see ChatView's render). Matches
+            the docked composer's own width (InputArea.tsx's non-standalone
+            `max-w-chat`) so it doesn't visibly narrow once the first
+            message sends it to the bottom. */}
+        {/* text-left stops the empty state's centering (meant for the logo,
+            title and chips) from reaching into the composer, whose menus and
+            hints are ordinary left-reading UI. */}
+        {composer && (
+          <div className="mt-7 w-full max-w-chat text-left">
+            {composer}
+          </div>
+        )}
+
+        {/* Fixed set of entry points into Halo's capabilities. Wider cap than
+            the composer above: English labels ("Continue recent task",
+            "Create digital human", ...) run noticeably longer than the
+            Chinese originals and wrapped to two lines at 640px. flex-wrap
+            still handles narrow viewports — this only matters once the
+            viewport has the room to use it. */}
+        <div className="mt-[18px] w-full max-w-[900px] flex flex-wrap items-center justify-center gap-2">
+          <button onClick={openTaskPanel} className={CHIP_CLASS}>
+            <SquareCheckBig className={CHIP_ICON_CLASS} strokeWidth={1.8} />
+            {t('Continue recent task')}
+          </button>
+          <button onClick={() => onSuggestion?.(t('Help me generate code'))} className={CHIP_CLASS}>
+            <Code className={CHIP_ICON_CLASS} strokeWidth={1.8} />
+            {t('Generate code')}
+          </button>
+          <button onClick={() => onSuggestion?.(t('Help me create a digital human'))} className={CHIP_CLASS}>
+            <Bot className={CHIP_ICON_CLASS} strokeWidth={1.8} />
+            {t('Create digital human')}
+          </button>
+          <button onClick={() => onSuggestion?.(t('Help me analyze this document'))} className={CHIP_CLASS}>
+            <FileText className={CHIP_ICON_CLASS} strokeWidth={1.8} />
+            {t('Analyze document')}
+          </button>
+          <button onClick={() => onSuggestion?.(t('Mount my knowledge base'))} className={CHIP_CLASS}>
+            <BookOpen className={CHIP_ICON_CLASS} strokeWidth={1.8} />
+            {t('Mount knowledge base')}
+          </button>
         </div>
       </div>
     </div>

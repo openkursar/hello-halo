@@ -55,7 +55,7 @@ export function QuotaPopover({ snapshot, stale, onClose }: QuotaPopoverProps) {
       <div className="fixed inset-0 z-40" onClick={onClose} />
 
       <div
-        className="absolute right-0 mt-2 z-50 w-[min(20rem,calc(100vw-2rem))] bg-card border border-border rounded-xl shadow-lg p-4"
+        className="absolute right-0 mt-2 z-50 w-[min(20rem,calc(100vw-2rem))] bg-card border border-border rounded-lg shadow-pop p-4"
         onClick={(e) => e.stopPropagation()}
       >
         {stale && (
@@ -91,7 +91,7 @@ export function QuotaPopover({ snapshot, stale, onClose }: QuotaPopoverProps) {
           <div className="flex flex-wrap gap-x-3 gap-y-1 mt-3 text-xs text-muted-foreground">
             {segments.map((seg, i) => (
               <span key={i} className="flex items-center gap-1.5">
-                <span className={`w-2 h-2 rounded-sm ${SEGMENT_SWATCHES[i % SEGMENT_SWATCHES.length]}`} />
+                <span className={`w-2 h-2 rounded-[2px] ${SEGMENT_SWATCHES[i % SEGMENT_SWATCHES.length]}`} />
                 {localized(seg.label)} <span className="tabular-nums text-foreground">{formatQuotaValue(seg.value, snapshot)}</span>
               </span>
             ))}
@@ -99,7 +99,7 @@ export function QuotaPopover({ snapshot, stale, onClose }: QuotaPopoverProps) {
         )}
 
         {typeof nextResetTime === 'number' && (
-          <div className="flex items-center gap-1.5 mt-3 px-2.5 py-1.5 rounded-lg bg-secondary/50 border border-border text-xs text-muted-foreground">
+          <div className="flex items-center gap-1.5 mt-3 px-2.5 py-1.5 rounded-sm bg-secondary border border-border text-[11px] text-muted-foreground">
             <Clock className="w-3.5 h-3.5 shrink-0" />
             <span>
               {t('Time until reset:')} {formatCountdown(nextResetTime)}
@@ -111,7 +111,7 @@ export function QuotaPopover({ snapshot, stale, onClose }: QuotaPopoverProps) {
           <button
             type="button"
             onClick={() => { void api.openExternal(detailsUrl) }}
-            className="w-full mt-3 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-primary text-primary-foreground text-sm btn-primary"
+            className="w-full h-[34px] mt-3 flex items-center justify-center gap-1.5 rounded-sm border border-border bg-secondary text-accent-on-dark text-xs font-medium transition-colors ease-halo hover:bg-surface-hover hover:border-primary"
           >
             {localized(detailsLabel, t('Manage quota'))}
             <ExternalLink className="w-3.5 h-3.5" />

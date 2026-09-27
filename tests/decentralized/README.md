@@ -58,6 +58,7 @@ npm run build                        # once per code change (suites run the buil
 
 npm run test:team                    # print the suite catalog + prerequisites
 npm run test:team -- workbench       # task conversation, collaboration, archive/resume and decisions
+npm run test:team -- people          # independent decisions, workspace retention and self-awareness
 npm run test:team -- single          # §1 single-machine fundamentals
 npm run test:team -- federation      # §3 federation, all 62 scenarios (writes RESULTS.md)
 npm run test:team -- upgrade         # §4 upgrade/migration
@@ -77,7 +78,7 @@ Rules that keep results trustworthy:
    isolation (`run-scenarios.mjs --only <IDs>`) before treating it as real.
 2. **Model config** comes from `.env.local` (`HALO_TEST_API_KEY/URL/MODEL/PROVIDER`);
    protocol-only scenarios run without a key and are marked `[no-model-ok]`.
-3. **Stale nodes hold ports.** If a prior run died, `pkill -f out/main/index.mjs`
+3. **Stale nodes hold ports.** If a prior run died, `pkill -f "out/main/index"`
    before starting (launch-nodes `stop` only kills pids in the current manifest).
 4. `.cluster*/` dirs contain node data + the seeded model key — never commit.
 

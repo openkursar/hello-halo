@@ -58,6 +58,7 @@ function makeSession(active: Set<string>): OrchestrationSessionDeps {
     // the wake/mailbox path these tests are about.
     injectIntoSession: () => false,
     closeTeamSession: vi.fn(async () => {}),
+    stopTeamSession: async () => false,
     getMemberSpaceId: () => SPACE,
   }
 }

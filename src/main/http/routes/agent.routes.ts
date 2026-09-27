@@ -10,7 +10,7 @@ import {
 export function registerAgentRoutes(app: Express): void {
   // ===== Agent Routes =====
   app.post('/api/agent/message', async (req: Request, res: Response) => {
-    const { spaceId, conversationId, message, resumeSessionId, images, thinkingEnabled, knowledgeBaseId } = req.body
+    const { spaceId, conversationId, message, resumeSessionId, images, thinkingEnabled, knowledgeBaseId, goal } = req.body
     const result = await agentController.sendMessage({
       spaceId,
       conversationId,
@@ -18,7 +18,8 @@ export function registerAgentRoutes(app: Express): void {
       resumeSessionId,
       images,  // Pass images for multi-modal messages (remote access)
       thinkingEnabled,  // Pass thinking mode for extended thinking (remote access)
-      knowledgeBaseId  // Chat-with-knowledge-base turn (remote access)
+      knowledgeBaseId,  // Chat-with-knowledge-base turn (remote access)
+      goal  // Conversation goal set before this message runs (remote access)
     })
     res.json(result)
   })
@@ -139,6 +140,26 @@ export function registerAgentRoutes(app: Express): void {
       const { closeToolsetByUser } = await import('../../services/agent')
       const result = await closeToolsetByUser(req.body.spaceId, req.body.conversationId, req.body.toolsetId)
       res.json(result.ok ? { success: true } : { success: false, error: result.error })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // ===== Conversation goal — mirrors ipc/agent.ts =====
+  app.post('/api/agent/goal/get', async (req: Request, res: Response) => {
+    try {
+      const { getConversationGoal } = await import('../../services/agent')
+      res.json({ success: true, data: await getConversationGoal(req.body.spaceId, req.body.conversationId) })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  app.post('/api/agent/goal/set', async (req: Request, res: Response) => {
+    try {
+      const { setConversationGoal } = await import('../../services/agent')
+      const goal = await setConversationGoal(req.body.spaceId, req.body.conversationId, req.body.goal ?? null)
+      res.json({ success: true, data: goal })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }

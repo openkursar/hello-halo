@@ -9,6 +9,7 @@
 
 import { useEffect } from 'react'
 import { SearchScope } from '@/components/search'
+import { useSearchStore } from '@/stores/search.store'
 
 interface UseSearchShortcutsOptions {
   enabled?: boolean
@@ -19,6 +20,13 @@ export function useSearchShortcuts({
   enabled = true,
   onSearch
 }: UseSearchShortcutsOptions = {}) {
+  // ⌘K specifically toggles (prototype: `open ? closeCmdk() : openCmdk()`),
+  // rather than always re-opening — otherwise pressing it while the panel
+  // is already open (e.g. to close it) would instead reset searchScope
+  // back to 'global', discarding whatever scope the user had picked.
+  const isSearchOpen = useSearchStore(state => state.isSearchOpen)
+  const closeSearch = useSearchStore(state => state.closeSearch)
+
   useEffect(() => {
     if (!enabled || !onSearch) return
 
@@ -32,10 +40,11 @@ export function useSearchShortcuts({
 
       const metaKey = isMac ? e.metaKey : e.ctrlKey
 
-      // Cmd+K / Ctrl+K - Global search
+      // Cmd+K / Ctrl+K - toggle global search
       if (metaKey && e.key === 'k' && !e.shiftKey) {
         e.preventDefault()
-        onSearch('global')
+        if (isSearchOpen) closeSearch()
+        else onSearch('global')
         return
       }
 
@@ -61,5 +70,5 @@ export function useSearchShortcuts({
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [enabled, onSearch])
+  }, [enabled, onSearch, isSearchOpen, closeSearch])
 }

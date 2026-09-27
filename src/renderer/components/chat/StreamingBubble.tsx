@@ -160,18 +160,28 @@ export function StreamingBubble({
    */
   const heightMeasureRef = useRef<number>(0)
   useEffect(() => {
-    if (currentRef.current) {
-      // Throttle: only measure every 100ms
-      const now = Date.now()
-      if (now - heightMeasureRef.current < 100) return
-      heightMeasureRef.current = now
+    if (!currentRef.current) return
 
+    const measure = () => {
+      heightMeasureRef.current = Date.now()
       requestAnimationFrame(() => {
         if (currentRef.current) {
           setCurrentHeight(currentRef.current.scrollHeight)
         }
       })
     }
+
+    // Throttle to one measurement per 100ms, but always keep a trailing one:
+    // dropping the skipped measurement outright left the viewport sized to
+    // stale content whenever the last chunk landed inside the window, which
+    // clips the tail of the reply until something else changes.
+    const wait = 100 - (Date.now() - heightMeasureRef.current)
+    if (wait <= 0) {
+      measure()
+      return
+    }
+    const timer = setTimeout(measure, wait)
+    return () => clearTimeout(timer)
   }, [content, segments.length])
 
   /**
@@ -208,8 +218,10 @@ export function StreamingBubble({
 
   const containerHeight = currentHeight > 0 ? currentHeight : 'auto'
 
+  // Typography and radius must match the settled bubble in MessageItem — this
+  // bubble is swapped out for that one the instant the run ends.
   return (
-    <div className="rounded-2xl px-4 py-3 message-assistant message-working w-full overflow-hidden">
+    <div className="rounded-lg px-4 py-3 message-assistant message-working w-full overflow-hidden">
       {/* Working indicator */}
       <div className="flex items-center gap-1.5 mb-2 pb-2 border-b border-border/30 working-indicator-fade">
         <span className="text-xs text-muted-foreground/70">{t('Halo is working')}</span>

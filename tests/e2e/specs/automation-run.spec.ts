@@ -22,13 +22,14 @@ import type { Page } from '@playwright/test'
 /** Live runs work with either an API key or a configured OAuth source. */
 const hasCredentials = (): boolean => hasApiKey() || !!process.env.HALO_TEST_OAUTH_SOURCE
 
-/** Whether at least one digital human is present in the sidebar list.
- *  The empty-state TITLE ("No digital humans yet") is the only reliable signal —
- *  the "Create Digital Human" CTA also renders in the sidebar bottom bar when
- *  apps DO exist, so it cannot be used to detect emptiness. */
-async function hasDigitalHuman(window: Page): Promise<boolean> {
-  const emptyTitle = await window.$('text=/No digital humans yet|还没有数字人/i')
-  return !emptyTitle
+async function openFirstDigitalHuman(window: Page): Promise<boolean> {
+  await expect(window.getByRole('textbox', { name: /Search digital humans|搜索数字人/ })).toBeVisible()
+  await window.locator('article').first().or(window.getByRole('heading', { name: /No digital humans yet|还没有数字人/ })).first().waitFor()
+  const card = window.locator('article').first()
+  if (!await card.count()) return false
+  await card.getByRole('button').first().click()
+  await expect(window.getByRole('button', { name: /Work activity|工作动态/, exact: true })).toBeVisible()
+  return true
 }
 
 test.describe('Automation Run — entry points (UI only)', () => {
@@ -49,12 +50,12 @@ test.describe('Automation Run — entry points (UI only)', () => {
 
     // The view is valid if ANY of these markers appears within the timeout:
     //  - empty state title (no digital humans installed)
-    //  - the create CTA (sidebar)
-    //  - the Activity tab or select prompt (a digital human is selected/seeded)
+    //  - the create CTA in the directory
+    //  - the work activity tab (a digital human is selected/seeded)
     const markers = [
       'text=/No digital humans yet|还没有数字人/i',
       'text=/Create Digital Human|创建数字人/i',
-      'text=/^Activity$|^活动$/i',
+      'text=/^Work activity$|^工作动态$/i',
       'text=/Select a digital human to view details|选择.*数字人/i',
     ]
     const found = await Promise.any(
@@ -69,13 +70,13 @@ test.describe('Automation Run — entry points (UI only)', () => {
     await navigateToApps(window)
     await window.waitForTimeout(500)
 
-    if (!(await hasDigitalHuman(window))) {
+    if (!(await openFirstDigitalHuman(window))) {
       test.skip(true, 'No digital human installed — nothing to open')
       return
     }
 
     // Go to the Activity tab and try to open a run's process view.
-    const activityTab = await window.$('text=/^Activity$|^活动$/i')
+    const activityTab = await window.$('text=/^Work activity$|^工作动态$/i')
     if (activityTab) {
       await activityTab.click()
       await window.waitForTimeout(400)
@@ -112,25 +113,25 @@ test.describe('Automation Run — live trigger + mid-run injection', () => {
     await navigateToApps(window)
     await window.waitForTimeout(500)
 
-    if (!(await hasDigitalHuman(window))) {
+    if (!(await openFirstDigitalHuman(window))) {
       test.skip(true, 'Requires a pre-seeded runnable digital human')
       return
     }
 
-    // Trigger a run (idle apps expose a "Run now" button in the header).
+    // Trigger a run (idle apps expose a "Run once" button in the header).
     const runNow = await window.waitForSelector(
-      'button[title="Run now"], button[title="Resume and run now"]',
+      'button:has-text("Run once"), button:has-text("执行一次")',
       { timeout: 8000 }
     ).catch(() => null)
     if (!runNow) {
-      test.skip(true, 'Run-now button not available (app busy or not runnable)')
+      test.skip(true, 'Run-once button not available (app busy or not runnable)')
       return
     }
     await runNow.click()
 
     // The run goes live: open its process view from the Activity thread.
     await window.waitForTimeout(800)
-    const activityTab = await window.$('text=/^Activity$|^活动$/i')
+    const activityTab = await window.$('text=/^Work activity$|^工作动态$/i')
     if (activityTab) {
       await activityTab.click()
       await window.waitForTimeout(400)

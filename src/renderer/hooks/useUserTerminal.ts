@@ -41,7 +41,7 @@ export function useUserTerminal(): UserTerminal {
     setCreating(true)
     try {
       const info = await createSession(spaceId)
-      if (info) openInCanvas(info.id, info.title)
+      if (info) await openInCanvas(info.id, info.title)
     } finally {
       setCreating(false)
     }

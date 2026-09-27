@@ -16,7 +16,7 @@ import fs from 'fs'
 import path from 'path'
 import { spawn } from 'child_process'
 import {
-  clusterStart, clusterStop, apiOk, api, pollUntil, sleep, Reporter, PROJECT_ROOT,
+  clusterStart, clusterStop, apiOk, api, pollUntil, sleep, Reporter, PROJECT_ROOT, appEntryPath,
 } from './_lib.mjs'
 
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a)
@@ -159,7 +159,8 @@ try {
     const { ELECTRON_RUN_AS_NODE: _ignored, ...cleanEnv } = process.env
     const logPath = path.join(restoreRoot, 'restored.log')
     const out = fs.openSync(logPath, 'a')
-    const child = spawn(electronBinary, [path.join(PROJECT_ROOT, 'out/main/index.mjs')], {
+    const appEntry = appEntryPath()
+    const child = spawn(electronBinary, [appEntry], {
       cwd: PROJECT_ROOT, detached: true, stdio: ['ignore', out, out],
       env: { ...cleanEnv, HOME: restoreRoot, USERPROFILE: restoreRoot, HALO_DATA_DIR: path.join(restoreRoot, '.halo'), HALO_E2E_TEST: '1', ELECTRON_DISABLE_GPU: '1' },
     })

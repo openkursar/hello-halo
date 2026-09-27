@@ -4,6 +4,20 @@
  * so the worker can import them without touching Electron or main-process code.
  */
 
+/**
+ * Both transports answer "that session is not in the registry" with this code,
+ * so a caller can tell "already gone" — often the outcome it wanted — from a
+ * real failure without matching on message text.
+ */
+export const TERMINAL_NOT_FOUND = 'TERMINAL_NOT_FOUND'
+
+/** The one response both transports return for a session not in the registry. */
+export const NO_SUCH_TERMINAL_SESSION = {
+  success: false as const,
+  error: 'No such terminal session',
+  code: TERMINAL_NOT_FOUND,
+}
+
 /** How a terminal session was created */
 export type TerminalOwner = 'ai' | 'user'
 

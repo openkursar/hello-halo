@@ -152,8 +152,13 @@ vi.mock('../../../../src/main/apps/runtime/dispatch-inbound', () => ({
 }))
 
 // Memory snapshot — used at module load.
-vi.mock('../../../../src/main/platform/memory/snapshot', () => ({
+vi.mock('../../../../src/main/platform/memory', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../../src/main/platform/memory')>()),
   createMemoryStatusMcpServer: vi.fn(),
+}))
+
+vi.mock('../../../../src/main/services/memory-consolidation', () => ({
+  requestConsolidation: vi.fn(),
 }))
 
 // ============================================

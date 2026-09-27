@@ -1,7 +1,7 @@
 /**
  * S1 — Cold start: launch -> first screen interactive.
  *
- * Launches the same way the e2e suite does — `out/main/index.mjs` (the
+ * Launches the same way the e2e suite does — the `out/main` entry (the
  * electron-vite production build) via the e2e fixture's own env prep
  * (isolated HOME/HALO_DATA_DIR, product.json path rewrite, OAuth source
  * loading, SDK symlink). Not the shared `perf-electron` `test.extend`

@@ -29,7 +29,6 @@ import {
   forkNativeChatSession,
   deleteNativeChatSession,
   patchTouchesMcp,
-  readSessionMessages,
   rejectIfRemoteMcpForbidden,
   restartAppChat,
   sendAppChatMessage,
@@ -50,6 +49,16 @@ import type {
 import { resolveAppChatTarget, type AppChatTarget } from '../../controllers/app-chat-target.controller'
 import type { EscalationAnswerPayload } from '../../../shared/apps/app-types'
 import type { ImageAttachment } from '../../../shared/types/image-attachment'
+import { getStudioSummary, listPeopleDirectory, getAppCapabilityInventory, getAppSpaceChangePreview, moveAppDefaultSpace, readAppRunMessages, getDigitalHumanMemoryStatus, consolidateDigitalHumanMemoryNow } from '../../apps/runtime'
+
+async function respondOperation(res: Response, name: string, operation: () => unknown | Promise<unknown>): Promise<void> {
+  try {
+    res.json({ success: true, data: await operation() })
+  } catch (error) {
+    console.error(`[HTTP][Apps] ${name} failed:`, error)
+    res.json({ success: false, error: error instanceof Error ? error.message : String(error) })
+  }
+}
 
 export function registerAppsRoutes(app: Express): void {
   // ===== Apps Routes =====
@@ -83,6 +92,87 @@ export function registerAppsRoutes(app: Express): void {
     }
     return runtime
   }
+
+  app.get('/api/apps/states', async (_req: Request, res: Response) => {
+    const runtime = getRuntimeOrFail(res)
+    if (!runtime) return
+    await respondOperation(res, 'states', () => runtime.getAllAppStates())
+  })
+  app.get('/api/apps/studio-summary', async (req: Request, res: Response) => {
+    await respondOperation(res, 'studio-summary', () => getStudioSummary(typeof req.query.language === 'string' ? req.query.language : undefined))
+  })
+  app.get('/api/apps/people', async (req: Request, res: Response) => {
+    await respondOperation(res, 'list-people', () => listPeopleDirectory({
+      q: typeof req.query.q === 'string' ? req.query.q : undefined,
+      language: typeof req.query.language === 'string' ? req.query.language : undefined,
+      spaceId: typeof req.query.spaceId === 'string' ? req.query.spaceId : undefined,
+      teamId: typeof req.query.teamId === 'string' ? req.query.teamId : undefined,
+      attention: req.query.attention === 'true', removed: req.query.removed === 'true',
+      limit: req.query.limit === undefined ? undefined : Number(req.query.limit),
+      offset: req.query.offset === undefined ? undefined : Number(req.query.offset),
+    }))
+  })
+  app.get('/api/apps/pending-inbox', async (req: Request, res: Response) => {
+    const runtime = getRuntimeOrFail(res)
+    if (!runtime) return
+    await respondOperation(res, 'pending-inbox', () => runtime.getPendingInbox({
+      limit: req.query.limit !== undefined ? Number(req.query.limit) : undefined,
+      afterTs: req.query.afterTs !== undefined ? Number(req.query.afterTs) : undefined,
+      afterId: typeof req.query.afterId === 'string' ? req.query.afterId : undefined,
+    }))
+  })
+  app.get('/api/apps/capability-inventory', async (_req: Request, res: Response) => {
+    const manager = getManagerOrFail(res)
+    if (!manager) return
+    await respondOperation(res, 'capability-inventory', () => getAppCapabilityInventory())
+  })
+  app.get('/api/apps/:appId/pending-entries', async (req: Request, res: Response) => {
+    const runtime = getRuntimeOrFail(res)
+    if (!runtime) return
+    await respondOperation(res, 'pending-entries', () => runtime.getPendingEntries(req.params.appId, {
+      limit: req.query.limit !== undefined ? Number(req.query.limit) : undefined,
+      afterTs: req.query.afterTs !== undefined ? Number(req.query.afterTs) : undefined,
+      afterId: typeof req.query.afterId === 'string' ? req.query.afterId : undefined,
+    }))
+  })
+  app.get('/api/apps/:appId/activity/:entryId', async (req: Request, res: Response) => {
+    const runtime = getRuntimeOrFail(res)
+    if (!runtime) return
+    await respondOperation(res, 'activity-entry', () => runtime.getActivityEntry(req.params.appId, req.params.entryId))
+  })
+  app.post('/api/apps/:appId/space-preview', async (req: Request, res: Response) => {
+    await respondOperation(res, 'space-preview', () => getAppSpaceChangePreview(req.params.appId, req.body.newSpaceId))
+  })
+  app.post('/api/apps/:appId/escalation/:entryId/retry', async (req: Request, res: Response) => {
+    const runtime = getRuntimeOrFail(res)
+    if (!runtime) return
+    await respondOperation(res, 'retry-continuation', () => runtime.retryEscalationContinuation(req.params.appId, req.params.entryId))
+  })
+  app.post('/api/apps/:appId/escalation/:entryId/deadline', async (req: Request, res: Response) => {
+    const runtime = getRuntimeOrFail(res)
+    if (!runtime) return
+    await respondOperation(res, 'confirm-deadline', () => runtime.confirmEscalationDeadline(req.params.appId, req.params.entryId, req.body.deadlineAt))
+  })
+  app.post('/api/apps/:appId/escalation/:entryId/dismiss', async (req: Request, res: Response) => {
+    const runtime = getRuntimeOrFail(res)
+    if (!runtime) return
+    await respondOperation(res, 'dismiss-escalation', () => runtime.dismissEscalation(req.params.appId, req.params.entryId))
+  })
+  app.post('/api/apps/:appId/runs/:runId/close', async (req: Request, res: Response) => {
+    const runtime = getRuntimeOrFail(res)
+    if (!runtime) return
+    await respondOperation(res, 'close-run', () => runtime.closeRun(req.params.appId, req.params.runId))
+  })
+  app.post('/api/apps/:appId/runs/start', async (req: Request, res: Response) => {
+    const runtime = getRuntimeOrFail(res)
+    if (!runtime) return
+    await respondOperation(res, 'start-run', () => runtime.startManually(req.params.appId))
+  })
+  app.post('/api/apps/:appId/runs/:runId/stop', async (req: Request, res: Response) => {
+    const runtime = getRuntimeOrFail(res)
+    if (!runtime) return
+    await respondOperation(res, 'stop-run', () => runtime.stopRun(req.params.appId, req.params.runId))
+  })
 
   // GET /api/apps — list all installed Apps, optional ?spaceId= and ?status=
   app.get('/api/apps', async (req: Request, res: Response) => {
@@ -149,6 +239,22 @@ export function registerAppsRoutes(app: Express): void {
     res.status(status).json(result)
   })
 
+  // GET /api/apps/overview — batched card-wall first paint (state + latest
+  // summary + recent runs per automation App). Registered before the
+  // single-segment /api/apps/:appId route below so "overview" is never
+  // captured as an appId.
+  app.get('/api/apps/overview', async (req: Request, res: Response) => {
+    try {
+      const runtime = getRuntimeOrFail(res)
+      if (!runtime) return
+      const spaceId = typeof req.query.spaceId === 'string' ? req.query.spaceId : undefined
+      const overview = runtime.getOverview(spaceId)
+      res.json({ success: true, data: overview })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
   // GET /api/apps/:appId — get a single App
   app.get('/api/apps/:appId', async (req: Request, res: Response) => {
     try {
@@ -182,6 +288,38 @@ export function registerAppsRoutes(app: Express): void {
         return
       }
       res.json({ success: true, data: listAvailableSkills(appData.spaceId) })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/spaces/:spaceId/available-skills — same disk scan, keyed by space
+  // directly (space resource rail has a space, not a digital human, in hand).
+  app.get('/api/spaces/:spaceId/available-skills', async (req: Request, res: Response) => {
+    try {
+      const { spaceId } = req.params
+      if (!spaceId) {
+        res.status(400).json({ success: false, error: 'Missing spaceId' })
+        return
+      }
+      res.json({ success: true, data: listAvailableSkills(spaceId) })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/spaces/:spaceId/effective-mcp-apps — space-scoped ∪ global MCP
+  // apps, for read-only display (not one digital human's declared deps).
+  app.get('/api/spaces/:spaceId/effective-mcp-apps', async (req: Request, res: Response) => {
+    try {
+      const { spaceId } = req.params
+      if (!spaceId) {
+        res.status(400).json({ success: false, error: 'Missing spaceId' })
+        return
+      }
+      const manager = getManagerOrFail(res)
+      if (!manager) return
+      res.json({ success: true, data: manager.listEffectiveMcpApps(spaceId) })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }
@@ -279,35 +417,15 @@ export function registerAppsRoutes(app: Express): void {
         return
       }
 
-      // For automation apps that are active: deactivate before moving so the
-      // scheduler and event router don't hold stale space references, then
-      // re-activate after the move completes.
-      const isAutomation = appData.spec.type === 'automation'
-      const wasActive = appData.status === 'active'
-      const runtime = getAppRuntime()
-
-      if (isAutomation && wasActive && runtime) {
-        await runtime.deactivate(appId).catch((err: Error) => {
-          console.warn(`[HTTP] POST /api/apps/:appId/move-space -- runtime deactivate failed (non-fatal): ${err.message}`)
-        })
-      }
-
-      await manager.moveToSpace(appId, newSpaceId ?? null)
-
-      // Re-activate automation apps that were running before the move
-      let activationWarning: string | undefined
-      if (isAutomation && wasActive && runtime) {
-        try {
-          await runtime.activate(appId)
-        } catch (err) {
-          const errMsg = err instanceof Error ? err.message : String(err)
-          console.warn(`[HTTP] POST /api/apps/:appId/move-space -- runtime activate failed: ${errMsg}`)
-          activationWarning = errMsg
-        }
+      if (appData.spec.type === 'automation') {
+        if (!newSpaceId) throw new Error('Digital humans require a work space')
+        await moveAppDefaultSpace(appId, newSpaceId)
+      } else {
+        await manager.moveToSpace(appId, newSpaceId ?? null)
       }
 
       console.log('[HTTP] POST /api/apps/%s/move-space: newSpaceId=%s', appId, newSpaceId ?? 'global')
-      res.json({ success: true, data: { activationWarning } })
+      res.json({ success: true, data: {} })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }
@@ -327,6 +445,27 @@ export function registerAppsRoutes(app: Express): void {
       const filesRemoved = manager.clearAppMemory(appId)
       console.log('[HTTP] POST /api/apps/%s/clear-memory: filesRemoved=%d', appId, filesRemoved)
       res.json({ success: true, data: { filesRemoved } })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/apps/:appId/memory — memory size, last consolidation, whether one is running
+  app.get('/api/apps/:appId/memory', async (req: Request, res: Response) => {
+    try {
+      const status = await getDigitalHumanMemoryStatus(req.params.appId)
+      res.json(status ? { success: true, data: status } : { success: false, error: 'App not found' })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/apps/:appId/memory/consolidate — consolidate now (returns once started)
+  app.post('/api/apps/:appId/memory/consolidate', async (req: Request, res: Response) => {
+    try {
+      const result = consolidateDigitalHumanMemoryNow(req.params.appId)
+      console.log('[HTTP] POST /api/apps/%s/memory/consolidate: started=%s', req.params.appId, result.started)
+      res.json({ success: true, data: result })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }
@@ -442,6 +581,7 @@ export function registerAppsRoutes(app: Express): void {
       const options: ActivityQueryOptions = {}
       if (req.query.limit) options.limit = Number(req.query.limit)
       if (req.query.before) options.since = Number(req.query.before)
+      if (typeof req.query.beforeId === 'string') options.beforeId = req.query.beforeId
       if (req.query.offset) options.offset = Number(req.query.offset)
       const entryTypes = ['run_complete', 'run_skipped', 'run_error', 'milestone', 'escalation', 'output']
       if (typeof req.query.type === 'string' && entryTypes.includes(req.query.type)) options.type = req.query.type as ActivityQueryOptions['type']
@@ -449,6 +589,44 @@ export function registerAppsRoutes(app: Express): void {
       if (typeof req.query.epochId === 'string') options.epochId = req.query.epochId
       const entries = runtime.getActivityEntries(appId, options)
       res.json({ success: true, data: entries })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/apps/:appId/runs — run history, with each run's last activity summary
+  app.get('/api/apps/:appId/runs', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      const runtime = getRuntimeOrFail(res)
+      if (!runtime) return
+      const options: { limit?: number; offset?: number } = {}
+      if (req.query.limit) options.limit = Number(req.query.limit)
+      if (req.query.offset) options.offset = Number(req.query.offset)
+      const runs = runtime.getRunsForAppWithSummary(appId, options)
+      res.json({ success: true, data: runs })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/apps/:appId/run-stats — aggregate outcome/token/duration stats
+  app.get('/api/apps/:appId/run-stats', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      const runtime = getRuntimeOrFail(res)
+      if (!runtime) return
+      const window = req.query.window ? Number(req.query.window) : undefined
+      const stats = runtime.getRunStats(appId, window)
+      res.json({ success: true, data: stats })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }
@@ -471,9 +649,9 @@ export function registerAppsRoutes(app: Express): void {
         text,
         ...(answers ? { answers } : {}),
       }
-      await runtime.respondToEscalation(appId, entryId, response)
+      const entry = await runtime.respondToEscalation(appId, entryId, response)
       console.log('[HTTP] POST /api/apps/%s/escalation/%s/respond', appId, entryId)
-      res.json({ success: true })
+      res.json({ success: true, data: entry })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }
@@ -533,13 +711,7 @@ export function registerAppsRoutes(app: Express): void {
         return
       }
 
-      const space = appData.spaceId ? getSpace(appData.spaceId) : null
-      if (!space?.path) {
-        res.status(404).json({ success: false, error: `Space not found for app: ${appId}` })
-        return
-      }
-
-      const messages = readSessionMessages(space.path, appId, runId)
+      const messages = readAppRunMessages(appId, runId)
       res.json({ success: true, data: messages })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
@@ -1030,8 +1202,10 @@ export function registerAppsRoutes(app: Express): void {
       }
       const space = getSpace(appData.spaceId ?? spaceId)
       if (!space?.path) {
-        console.warn('[AppsHTTP] IM history space unavailable', { appId, spaceId: appData.spaceId ?? spaceId })
-        res.status(404).json({ success: false, error: 'Conversation workspace is unavailable' })
+        // No space yet means nothing was ever transcribed here, which is an
+        // empty history — not a failure the caller has to handle separately.
+        console.warn('[AppsHTTP] IM history space unavailable; reporting empty history', { appId, spaceId: appData.spaceId ?? spaceId })
+        res.json({ success: true, data: [] })
         return
       }
       const messages = loadImChatMessages(space.path, appId, channel, chatType, chatId)

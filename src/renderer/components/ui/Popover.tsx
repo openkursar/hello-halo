@@ -212,8 +212,8 @@ export function PopoverContent({
       ref={contentRef}
       role="dialog"
       className={cn(
-        'fixed z-50 rounded-lg border border-border bg-popover text-popover-foreground shadow-lg outline-none',
-        ready ? 'animate-scale-in' : 'opacity-0',
+        'fixed z-50 rounded-lg border border-border bg-popover text-popover-foreground shadow-pop outline-none',
+        ready ? 'animate-pop-in' : 'opacity-0',
         className,
       )}
       style={{ top: pos.top, left: pos.left }}

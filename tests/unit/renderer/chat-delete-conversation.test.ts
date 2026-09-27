@@ -14,6 +14,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { create } from 'zustand'
 import type { Conversation, ConversationMeta } from '../../../src/renderer/types'
+import type { Goal } from '../../../src/shared/types/goal'
 
 const apiMock = vi.hoisted(() => ({
   createConversation: vi.fn(),
@@ -153,5 +154,25 @@ describe('deleteConversation — last-conversation deletion (#294)', () => {
 
     expect(apiMock.createConversation).not.toHaveBeenCalled()
     expect(useStore.getState().getCurrentConversationId()).toBeNull()
+  })
+})
+
+describe('deleteConversation — goal state', () => {
+  it("drops a deleted conversation's goal and goal UI state", async () => {
+    const { useGoalStore } = await import('../../../src/renderer/stores/goal.store')
+    const { useGoalUiStore } = await import('../../../src/renderer/stores/goal-ui.store')
+    const goal: Goal = { objective: 'Ship', doneWhen: [], status: 'active', updatedBy: 'user', updatedAt: 't' }
+    useGoalStore.setState({ byConversation: new Map<string, Goal | null>([['gone', goal], ['kept', goal]]) })
+    useGoalUiStore.getState().setExpanded('gone', true)
+    useGoalUiStore.getState().setExpanded('kept', true)
+
+    apiMock.deleteConversation.mockResolvedValue({ success: true })
+    const useStore = buildStore([makeConversation('gone'), makeConversation('kept')], 'kept')
+    expect(await useStore.getState().deleteConversation('space-1', 'gone')).toBe(true)
+
+    expect(useGoalStore.getState().byConversation.has('gone')).toBe(false)
+    expect(useGoalStore.getState().byConversation.has('kept')).toBe(true)
+    expect(useGoalUiStore.getState().expanded.has('gone')).toBe(false)
+    expect(useGoalUiStore.getState().expanded.has('kept')).toBe(true)
   })
 })

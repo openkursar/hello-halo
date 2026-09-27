@@ -6,7 +6,7 @@
  */
 
 import { test, expect } from '../fixtures/electron'
-import { navigateToApps, waitForHomePage } from '../fixtures/helpers'
+import { navigateToApps } from '../fixtures/helpers'
 
 test.describe('Apps Page', () => {
   test.setTimeout(30000)
@@ -14,16 +14,8 @@ test.describe('Apps Page', () => {
   test('renders with correct tab bar', async ({ window }) => {
     await navigateToApps(window)
 
-    // Tab bar has four tabs (supports EN/CN). Tabs were restructured:
-    // "My Apps" split into "My Skills" + "My MCP"; "App Store" renamed to "Marketplace".
-    const digitalHumansTab = await window.$('text=/My Digital Humans|我的数字人/i')
-    expect(digitalHumansTab).toBeTruthy()
-
-    const skillsTab = await window.$('text=/My Skills|我的技能/i')
-    expect(skillsTab).toBeTruthy()
-
-    const mcpTab = await window.$('text=/My MCP|我的MCP/i')
-    expect(mcpTab).toBeTruthy()
+    await expect(window.getByRole('button', { name: /My Digital Humans|我的数字人/i }).first()).toBeVisible()
+    await expect(window.getByRole('button', { name: /Capability library|能力库/i })).toBeVisible()
 
     const storeTab = await window.$('text=/Marketplace|市场/i')
     expect(storeTab).toBeTruthy()
@@ -31,19 +23,15 @@ test.describe('Apps Page', () => {
     await window.screenshot({ path: 'tests/e2e/results/apps-tabs.png' })
   })
 
-  test('can switch to My Skills tab', async ({ window }) => {
+  test('capability library exposes skill and MCP categories', async ({ window }) => {
     await navigateToApps(window)
-
-    // Click My Skills tab (replaces the old "My Apps" tab after the split)
-    const skillsTab = await window.waitForSelector(
-      'button:has-text("My Skills"), button:has-text("我的技能")',
-      { timeout: 5000 }
-    )
-    await skillsTab.click()
-    await window.waitForTimeout(300)
-
-    // Tab should be active (has active styling)
-    await window.screenshot({ path: 'tests/e2e/results/apps-my-skills-tab.png' })
+    await window.getByRole('button', { name: /Capability library|能力库/i }).click()
+    await expect(window.getByRole('heading', { name: /Skills|技能/i })).toBeVisible()
+    await window.getByRole('button', { name: /MCP connections|MCP连接|MCP 连接/i, exact: true }).click()
+    await expect(window.getByRole('heading', { name: /MCP connections|MCP连接|MCP 连接/i })).toBeVisible()
+    await window.getByRole('button', { name: /Skills|技能/i, exact: true }).click()
+    await expect(window.getByRole('heading', { name: /Skills|技能/i })).toBeVisible()
+    await window.screenshot({ path: 'tests/e2e/results/apps-capability-library.png' })
   })
 
   test('can switch to Marketplace tab', async ({ window }) => {
@@ -64,14 +52,9 @@ test.describe('Apps Page', () => {
   test('My Digital Humans shows empty state or app list', async ({ window }) => {
     await navigateToApps(window)
 
-    // Either shows an app list or an empty state
-    // Wait for content to load
-    await window.waitForTimeout(500)
-
-    // Check for empty state or app list items
-    const bodyText = await window.evaluate(() => document.body.innerText)
-    const hasContent = bodyText.length > 50 // Some meaningful content should exist
-    expect(hasContent).toBe(true)
+    await expect(window.getByRole('textbox', { name: /Search digital humans|搜索数字人/i })).toBeVisible()
+    await expect(window.getByRole('button', { name: /Card view|卡片视图/i })).toBeVisible()
+    await expect(window.getByRole('button', { name: /List view|列表视图/i })).toBeVisible()
 
     await window.screenshot({ path: 'tests/e2e/results/apps-digital-humans.png' })
   })
@@ -81,7 +64,7 @@ test.describe('Apps Page', () => {
 
     // Find back button (ChevronLeft + text)
     const backButton = await window.waitForSelector(
-      'button:has(svg)',
+      'button:has-text("Back"), button:has-text("返回")',
       { timeout: 5000 }
     )
     await backButton.click()
@@ -99,13 +82,7 @@ test.describe('Apps Page', () => {
       { timeout: 5000 }
     ).catch(() => null)
 
-    // Fallback: last button with SVG in header area
-    if (!settingsButton) {
-      const buttons = await window.$$('button:has(svg)')
-      expect(buttons.length).toBeGreaterThan(0)
-    } else {
-      expect(settingsButton).toBeTruthy()
-    }
+    expect(settingsButton).toBeTruthy()
   })
 })
 

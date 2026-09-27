@@ -23,6 +23,8 @@ import { homedir } from 'os'
 import type { App } from 'electron'
 import log from 'electron-log/main.js'
 import { getDataFolderName, DEFAULT_DATA_FOLDER_NAME } from '../product-config'
+import { isolateHttpLogPath } from './http-transport'
+import { isolateSdkLogPath } from './sdk-transport'
 
 export function isolateLogPath(app: App): void {
   const customDataDir = process.env.HALO_DATA_DIR
@@ -48,7 +50,12 @@ export function isolateLogPath(app: App): void {
 
 function applyLogsPath(app: App, logsPath: string, reason: string): void {
   app.setPath('logs', logsPath)
-  log.transports.file.resolvePathFn = (variables) =>
+  const resolvePathFn = (variables: { fileName?: string }) =>
     join(logsPath, variables.fileName ?? 'main.log')
+  log.transports.file.resolvePathFn = resolvePathFn
+  // log.create() instances (http-raw.log, halo-sdk.log) don't inherit the
+  // default logger's resolvePathFn, so they need isolating explicitly too.
+  isolateHttpLogPath(resolvePathFn)
+  isolateSdkLogPath(resolvePathFn)
   console.log(`[Main] logs isolated (${reason}): ${logsPath}`)
 }

@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 /**
  * i18n Configuration for Halo
  *
@@ -41,10 +42,14 @@ export type LocaleCode = keyof typeof SUPPORTED_LOCALES
 const LOCALE_STORAGE_KEY = 'halo-locale'
 
 /**
- * Detect system language and map to supported locale
+ * Detect system language and map to supported locale.
+ *
+ * `navigator` is absent outside a DOM, and this module is reached at import
+ * time from stores that also load under plain Node — a bare read would throw
+ * before any test or headless caller gets a chance to run.
  */
 function detectLanguage(): LocaleCode {
-  const lang = navigator.language || 'en'
+  const lang = (typeof navigator === 'undefined' ? '' : navigator.language) || 'en'
 
   // Exact match
   if (lang in SUPPORTED_LOCALES) {

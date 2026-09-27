@@ -11,6 +11,7 @@
  */
 
 import { getImSessionRegistry } from '../apps/runtime/im-session-registry'
+import { renameChatSession } from '../apps/runtime/app-chat'
 import { imSessionsRpc } from '../../shared/rpc/contracts/im-sessions.contract'
 import { registerRawRpcHandlers } from './rpc'
 
@@ -63,12 +64,7 @@ export function registerImSessionHandlers(): void {
     // Set a custom display name for a session
     imSessionsSetCustomName: async (input: { appId: string; channel: string; chatId: string; name: string }) => {
       try {
-        const registry = getImSessionRegistry()
-        if (!registry) {
-          return { success: false, error: 'IM session registry not initialized' }
-        }
-        const updated = registry.setCustomName(input.appId, input.channel, input.chatId, input.name)
-        if (!updated) {
+        if (!renameChatSession(input.appId, input.channel, input.chatId, input.name)) {
           return { success: false, error: 'Session not found' }
         }
         return { success: true }

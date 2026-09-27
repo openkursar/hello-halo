@@ -86,6 +86,10 @@
     "group": "workspace"
   },
   {
+    "method": "GET",
+    "path": "/api/spaces/summaries"
+  },
+  {
     "method": "POST",
     "path": "/api/spaces",
     "group": "workspace"
@@ -106,9 +110,33 @@
     "group": "workspace"
   },
   {
+    "method": "GET",
+    "path": "/api/spaces/:spaceId/preferences",
+    "group": "workspace"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/spaces/:spaceId/preferences",
+    "group": "workspace"
+  },
+  {
+    "method": "GET",
+    "path": "/api/spaces/:spaceId/memory",
+    "group": "workspace"
+  },
+  {
+    "method": "POST",
+    "path": "/api/spaces/:spaceId/memory/consolidate",
+    "group": "workspace"
+  },
+  {
     "method": "DELETE",
     "path": "/api/spaces/:spaceId",
     "group": "workspace"
+  },
+  {
+    "method": "POST",
+    "path": "/api/spaces/:spaceId/forget"
   },
   {
     "method": "POST",
@@ -226,6 +254,14 @@
   {
     "method": "POST",
     "path": "/api/agent/toolsets/close"
+  },
+  {
+    "method": "POST",
+    "path": "/api/agent/goal/get"
+  },
+  {
+    "method": "POST",
+    "path": "/api/agent/goal/set"
   },
   {
     "method": "GET",
@@ -367,6 +403,27 @@
     "path": "/api/wecom-bot/scan-auth/create-assistant"
   },
   {
+    "method": "POST",
+    "path": "/api/feishu-bot/scan-auth/start"
+  },
+  {
+    "method": "POST",
+    "path": "/api/feishu-bot/scan-auth/poll"
+  },
+  {
+    "method": "POST",
+    "path": "/api/feishu-bot/scan-auth/cancel"
+  },
+  {
+    "method": "POST",
+    "path": "/api/feishu-bot/scan-auth/create-assistant"
+  },
+  {
+    "method": "POST",
+    "path": "/api/feishu-bot/reachability",
+    "group": "channels"
+  },
+  {
     "method": "GET",
     "path": "/api/im-channels/status",
     "group": "channels"
@@ -385,6 +442,18 @@
     "method": "GET",
     "path": "/api/im-channels/providers",
     "group": "channels"
+  },
+  {
+    "method": "POST",
+    "path": "/api/im-channels/set-instance-app"
+  },
+  {
+    "method": "POST",
+    "path": "/api/im-channels/create-instance"
+  },
+  {
+    "method": "POST",
+    "path": "/api/im-channels/unbind-instance"
   },
   {
     "method": "GET",
@@ -445,6 +514,62 @@
   },
   {
     "method": "GET",
+    "path": "/api/apps/states"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/studio-summary"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/people"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/pending-inbox"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/capability-inventory"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/:appId/pending-entries"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/:appId/activity/:entryId"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/space-preview"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/escalation/:entryId/retry"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/escalation/:entryId/deadline"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/escalation/:entryId/dismiss"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/runs/:runId/close"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/runs/start"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/runs/:runId/stop"
+  },
+  {
+    "method": "GET",
     "path": "/api/apps",
     "group": "digital-human"
   },
@@ -455,6 +580,10 @@
   },
   {
     "method": "GET",
+    "path": "/api/apps/overview"
+  },
+  {
+    "method": "GET",
     "path": "/api/apps/:appId",
     "group": "digital-human"
   },
@@ -462,6 +591,14 @@
     "method": "GET",
     "path": "/api/apps/:appId/available-skills",
     "group": "digital-human"
+  },
+  {
+    "method": "GET",
+    "path": "/api/spaces/:spaceId/available-skills"
+  },
+  {
+    "method": "GET",
+    "path": "/api/spaces/:spaceId/effective-mcp-apps"
   },
   {
     "method": "GET",
@@ -489,6 +626,16 @@
     "group": "digital-human"
   },
   {
+    "method": "GET",
+    "path": "/api/apps/:appId/memory",
+    "group": "digital-human"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/memory/consolidate",
+    "group": "digital-human"
+  },
+  {
     "method": "DELETE",
     "path": "/api/apps/:appId/permanent",
     "group": "digital-human"
@@ -512,6 +659,14 @@
     "method": "GET",
     "path": "/api/apps/:appId/activity",
     "group": "digital-human"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/:appId/runs"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/:appId/run-stats"
   },
   {
     "method": "POST",
@@ -660,6 +815,14 @@
   },
   {
     "method": "GET",
+    "path": "/api/teams/collab-for-conversation/:conversationId"
+  },
+  {
+    "method": "POST",
+    "path": "/api/teams/:teamId/save-collab"
+  },
+  {
+    "method": "GET",
     "path": "/api/teams/:teamId"
   },
   {
@@ -673,6 +836,10 @@
   {
     "method": "POST",
     "path": "/api/teams/:teamId/members/:appId/send"
+  },
+  {
+    "method": "POST",
+    "path": "/api/teams/:teamId/members/:appId/stop"
   },
   {
     "method": "GET",
@@ -1007,5 +1174,25 @@
     "method": "GET",
     "path": "/api/tlon/:kbId/ingest-status",
     "group": "knowledge-base"
+  },
+  {
+    "method": "GET",
+    "path": "/api/task-state"
+  },
+  {
+    "method": "POST",
+    "path": "/api/task-state/mark-unseen"
+  },
+  {
+    "method": "POST",
+    "path": "/api/task-state/mark-read"
+  },
+  {
+    "method": "POST",
+    "path": "/api/task-state/set-kept"
+  },
+  {
+    "method": "POST",
+    "path": "/api/task-state/remove"
   }
 ]

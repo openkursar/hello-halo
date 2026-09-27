@@ -29,6 +29,7 @@ import { WsFederationClient } from '../../../../../src/main/apps/runtime/federat
 import { GatewayAttachClient } from '../../../../../src/main/apps/runtime/federation/gateway-attach'
 import type { FederationMessage } from '../../../../../src/main/apps/runtime/federation/types'
 import { createDatabaseManager } from '../../../../../src/main/platform/store/database-manager'
+import { DEFAULT_OFFICE_SCOPE } from '../../../../../src/main/apps/federation/types'
 import { FederationStore } from '../../../../../src/main/apps/federation/store'
 import { AuthorityStore } from '../../../../../src/main/apps/federation/authority-store'
 import {
@@ -101,6 +102,7 @@ describe.skipIf(!hasGo())('gateway interop (real Go binary)', () => {
   let workDir: string
   let gateway: ChildProcess | null = null
   let baseUrl: string
+  let gatewayLog = ''
 
   beforeAll(async () => {
     workDir = mkdtempSync(path.join(tmpdir(), 'halo-gw-interop-'))
@@ -115,7 +117,9 @@ describe.skipIf(!hasGo())('gateway interop (real Go binary)', () => {
 
     const port = await pickFreePort()
     baseUrl = `http://127.0.0.1:${port}`
-    gateway = spawn(bin, ['-listen', `127.0.0.1:${port}`, '-log-level', 'warn'], { stdio: 'inherit' })
+    gateway = spawn(bin, ['-listen', `127.0.0.1:${port}`, '-log-level', 'info'], { stdio: ['ignore', 'pipe', 'pipe'] })
+    gateway.stdout?.on('data', chunk => { gatewayLog += chunk.toString() })
+    gateway.stderr?.on('data', chunk => { gatewayLog += chunk.toString() })
 
     // Readiness: poll /healthz until the gateway serves.
     const deadline = Date.now() + 10_000
@@ -358,7 +362,7 @@ describe.skipIf(!hasGo())('gateway interop (real Go binary)', () => {
         federationStore,
         teamStore,
         authorityStore,
-        verifyCredential: (token) => (token === TOKEN ? { officeId } : null),
+        verifyCredential: (token) => (token === TOKEN ? { officeId, scope: DEFAULT_OFFICE_SCOPE } : null),
         getLocalNodeId: () => identity.id,
         getGatewayUrl: () => baseUrl,
         makeAuthProof: (nonce) => makeProof(identity, nonce),
@@ -386,6 +390,9 @@ describe.skipIf(!hasGo())('gateway interop (real Go binary)', () => {
 
     try {
       hostNode.manager.hostOffice(officeId)
+      // Hosting opens the relay asynchronously; admission requires an attached host.
+      await waitFor(() => gatewayLog.split('\n').some(line =>
+        line.includes('host attached') && line.includes(officeId)))
       const joined = await memberNode.manager.joinOffice({
         officeId,
         serverUrl: baseUrl,

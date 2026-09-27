@@ -8,7 +8,7 @@
  */
 
 import { useState, useRef, useEffect } from 'react'
-import { ChevronDown, Plus, Sparkles, X, Check, RefreshCw } from 'lucide-react'
+import { Brain, ChevronDown, Plus, Sparkles, X, Check, RefreshCw } from 'lucide-react'
 import { useAppStore } from '../../stores/app.store'
 import { useChatStore } from '../../stores/chat.store'
 import { api } from '../../api'
@@ -53,7 +53,7 @@ function useCurrentConversation(): Conversation | null {
  */
 function ModelList({ onDone }: { onDone: () => void }) {
   const { t } = useTranslation()
-  const { config, setConfig, setView } = useAppStore()
+  const { config, setConfig, navigate } = useAppStore()
   const [isRefreshing, setIsRefreshing] = useState(false)
 
   const aiSources = useAiSources()
@@ -131,7 +131,7 @@ function ModelList({ onDone }: { onDone: () => void }) {
   // Handle add source
   const handleAddSource = () => {
     onDone()
-    setView('settings')
+    navigate('settings')
   }
 
   // Refresh model lists for all sources from remote APIs
@@ -233,8 +233,8 @@ function ModelList({ onDone }: { onDone: () => void }) {
                     <button
                       key={modelId}
                       onClick={() => handleSelectModel(source.id, modelId)}
-                      className={`w-full px-3 py-3 text-left text-sm hover:bg-secondary/80 transition-colors flex items-center gap-2 pl-8 ${
-                        isSelected ? 'text-primary' : 'text-foreground'
+                      className={`w-full rounded-sm px-2.5 py-2 text-left text-sm transition-colors ease-halo hover:bg-secondary flex items-center gap-2 pl-8 ${
+                        isSelected ? 'text-accent-on-dark' : 'text-foreground'
                       }`}
                     >
                       {isSelected ? <Check className="w-3 h-3" /> : <span className="w-3" />}
@@ -406,16 +406,23 @@ export function ModelSelector() {
 
   return (
     <div className="relative" ref={dropdownRef}>
-      {/* Trigger Button - icon only on mobile, text on desktop */}
+      {/* Trigger Button - icon only on mobile, text on desktop.
+          Prototype `.model-btn`: 32px height, 10px horizontal padding, 6px
+          gap, 8px radius, bordered surface, 12px full-color text, hover
+          border tints to accent — not the borderless muted-text pill this
+          used to be. */}
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 rounded-lg transition-colors"
+        className="h-8 flex items-center gap-1.5 px-2.5 rounded-sm border border-border bg-card text-xs text-foreground hover:border-primary transition-colors ease-halo"
         title={currentModelName}
       >
         {/* Mobile: show Sparkles icon */}
         <Sparkles className="w-4 h-4 sm:hidden" />
-        {/* Desktop: show model name */}
-        <span className="hidden sm:inline max-w-[140px] truncate">{currentModelName}</span>
+        {/* Desktop: Brain icon + model name */}
+        <div className="hidden sm:flex items-center gap-1.5 min-w-0">
+          <Brain className="w-3.5 h-3.5 shrink-0 translate-y-px" />
+          <span className="truncate max-w-[140px]">{currentModelName}</span>
+        </div>
         <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
       </button>
 
@@ -424,7 +431,7 @@ export function ModelSelector() {
         isMobile ? (
           <ModelSelectSheet onClose={() => setIsOpen(false)} />
         ) : (
-          <div className="absolute right-0 top-full mt-1 w-64 bg-card border border-border rounded-xl shadow-lg z-50 py-1 max-h-[60vh] overflow-y-auto">
+          <div className="absolute right-0 top-full mt-1 w-64 bg-card border border-border rounded-xl shadow-pop z-50 py-1 max-h-[60vh] overflow-y-auto">
             <ModelList onDone={() => setIsOpen(false)} />
           </div>
         )

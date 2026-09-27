@@ -70,6 +70,40 @@ export const MODULE: RouteModuleMeta = {
       impact: 'reversible',
     },
 
+    'GET /api/spaces/:spaceId/preferences': {
+      expose: 'ai',
+      group: 'workspace',
+      summary: 'Read a space\'s preferences (layout, memory settings)',
+      returns: '{"success":true,"data":{"memory":{"enabled":true,"autoConsolidate":true,"cadence":"diligent"}}}',
+      notes: 'Absent memory fields mean the defaults: memory on, auto-consolidation on, cadence "diligent".',
+    },
+
+    'PUT /api/spaces/:spaceId/preferences': {
+      expose: 'ai',
+      group: 'workspace',
+      summary: 'Change a space\'s preferences, e.g. turn its shared memory on or off',
+      body: '{"memory":{"enabled":false}}',
+      returns: '{"success":true,"data":{...updated space}}',
+      impact: 'reversible',
+      notes: 'Merged into what is stored. memory.enabled turns the memory shared by the space\'s conversations on/off (files are kept); memory.autoConsolidate turns automatic consolidation on/off; memory.cadence is "diligent", "balanced" or "economical". Applies to new conversations.',
+    },
+
+    'GET /api/spaces/:spaceId/memory': {
+      expose: 'ai',
+      group: 'workspace',
+      summary: 'Read the state of a space\'s memory',
+      returns: '{"success":true,"data":{"exists":true,"totalBytes":48213,"topicCount":7,"lastConsolidatedAt":"2026-09-26T08:00:00.000Z","lastAttempt":{"at":"…","outcome":"committed"},"consolidating":false}}',
+    },
+
+    'POST /api/spaces/:spaceId/memory/consolidate': {
+      expose: 'ai',
+      group: 'workspace',
+      summary: 'Consolidate a space\'s memory now',
+      returns: '{"success":true,"data":{"started":true}}',
+      impact: 'reversible',
+      notes: 'Returns once started; the work runs in the background and uses the model. started:false with reason "already-running" or "empty". Every consolidation keeps a restorable snapshot.',
+    },
+
     'DELETE /api/spaces/:spaceId': {
       expose: 'ai',
       group: 'workspace',
@@ -162,5 +196,7 @@ export const MODULE: RouteModuleMeta = {
       returns: '{"success":true}',
       impact: 'reversible',
     },
+    'GET /api/spaces/summaries': { expose: 'internal' },
+    'POST /api/spaces/:spaceId/forget': { expose: 'internal' },
   },
 }

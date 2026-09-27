@@ -16,7 +16,7 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import {
   Mail, MessageSquare, Bell, Webhook, Loader2,
   CheckCircle, XCircle, ChevronDown, RefreshCw,
-  Plus, Trash2, MoreVertical, Smartphone, Info,
+  Plus, Trash2, MoreVertical, Smartphone, Send,
   QrCode, ExternalLink, UserCheck, Eye, EyeOff,
 } from 'lucide-react'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
@@ -32,9 +32,10 @@ import type {
   NotificationChannelsConfig,
   NotifyChannelsProductConfig,
 } from '../../../shared/types/notification-channels'
-import type {
-  ImChannelInstanceConfig,
-  ImChannelInstanceStatus,
+import {
+  imCredentialId,
+  type ImChannelInstanceConfig,
+  type ImChannelInstanceStatus,
 } from '../../../shared/types/im-channel'
 import { ChannelBackendSelect, ChannelBackendName } from './ChannelBackendSelect'
 import type {
@@ -44,17 +45,12 @@ import type {
 } from './ChannelBackendSelect'
 import { WeixinIlinkInstanceCard } from './WeixinIlinkInstanceCard'
 import { WecomScanAuthDialog } from './WecomScanAuthDialog'
+import { FeishuInstanceCard } from './FeishuInstanceCard'
+import { FeishuScanAuthDialog } from './FeishuScanAuthDialog'
+import { ImInstancePermissionSection } from './ImInstancePermissionSection'
+import { defaultGuestPolicy } from '../../../shared/apps/capability-policy'
+import type { ImPermissionDefaults } from './ImInstancePermissionSection'
 import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
-import { CapabilityPolicyFields } from '../capability/CapabilityPolicyFields'
-import { Switch } from '../ui/Switch'
-
-/** Product-level permission defaults (from IPC). Mirrors auth-loader.ImChannelsPermissionDefaults. */
-interface PermissionDefaults {
-  defaultEnabled?: boolean
-  defaultGuestAccess?: boolean
-  defaultGuestPolicy?: { allowedTools?: string[] }
-  ownerIdHint?: string
-}
 
 // ============================================
 // Types
@@ -408,12 +404,14 @@ interface InstanceCardProps {
   isExpanded: boolean
   onToggle: () => void
   onChange: (instance: ImChannelInstanceConfig) => void
+  /** Rebinding goes through main so its validation applies to both binding surfaces. */
+  onRebind: (appId: string) => void
   onDelete: () => void
   onReconnect: () => void
   /** Warning message when this instance's Bot ID conflicts with another instance */
   duplicateWarning?: string
   /** Product-level permission defaults */
-  permissionDefaults?: PermissionDefaults | null
+  permissionDefaults?: ImPermissionDefaults | null
 }
 
 function InstanceCard({
@@ -424,6 +422,7 @@ function InstanceCard({
   isExpanded,
   onToggle,
   onChange,
+  onRebind,
   onDelete,
   onReconnect,
   duplicateWarning,
@@ -512,7 +511,11 @@ function InstanceCard({
   const handleTargetChange = (target: ChannelBackendValue) => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     setDraft(null)
-    onChange({ ...instance, ...target })
+    // A digital-human target goes through main's rebind, which rejects a target
+    // that would silently swallow inbound messages. A team target has no such
+    // validator yet, so it takes the plain config write.
+    if (target.teamId) onChange({ ...instance, ...target })
+    else onRebind(target.appId)
   }
 
   const handleStreamingChange = () => {
@@ -796,7 +799,7 @@ function InstanceCard({
           </div>
 
           {/* ── Permission Control ── */}
-          <PermissionSection instance={instance} onChange={onChange} onDebouncedChange={scheduleChange} permissionDefaults={permissionDefaults} />
+          <ImInstancePermissionSection instance={instance} onChange={onChange} onDebouncedChange={scheduleChange} permissionDefaults={permissionDefaults} />
 
           {/* Connection status */}
           {isEnabled && (
@@ -824,165 +827,6 @@ function InstanceCard({
                 <span>{isConnected ? t('Connected') : t('Disconnected')}</span>
               </div>
             )
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ============================================
-// Permission Section (permissionEnabled + owners + guestPolicy)
-// ============================================
-
-interface PermissionSectionProps {
-  instance: ImChannelInstanceConfig
-  /** Immediate save (for toggles) */
-  onChange: (instance: ImChannelInstanceConfig) => void
-  /** Debounced save (for text fields — 500ms delay, same as config fields) */
-  onDebouncedChange: (instance: ImChannelInstanceConfig) => void
-  /** Product-level permission defaults (for owner ID hint, etc.) */
-  permissionDefaults?: PermissionDefaults | null
-}
-
-function PermissionSection({ instance, onChange, onDebouncedChange, permissionDefaults }: PermissionSectionProps) {
-  const { t } = useTranslation()
-  const permissionEnabled = instance.permissionEnabled ?? false
-  const owners = instance.owners ?? []
-  const hasOwners = owners.length > 0
-  const guestPolicy = instance.guestPolicy
-  const guestAccessEnabled = hasOwners && guestPolicy !== undefined
-
-  // Local draft state for text fields (avoids cursor jumping during debounce)
-  const [ownersDraft, setOwnersDraft] = useState<string | null>(null)
-
-  const ownersDisplay = ownersDraft ?? owners.join(', ')
-
-  // ── Handlers ──
-
-  const handlePermissionToggle = () => {
-    onChange({ ...instance, permissionEnabled: !permissionEnabled })
-  }
-
-  const handleOwnersChange = (value: string) => {
-    setOwnersDraft(value)
-    const parsed = value
-      .split(/[,\n]/)
-      .map(s => s.trim())
-      .filter(Boolean)
-    onDebouncedChange({
-      ...instance,
-      owners: parsed.length > 0 ? parsed : undefined,
-    })
-  }
-
-  const handleOwnersBlur = () => {
-    setOwnersDraft(null)
-  }
-
-  const handleGuestAccessToggle = () => {
-    if (guestAccessEnabled) {
-      onChange({ ...instance, guestPolicy: undefined })
-    } else {
-      onChange({ ...instance, guestPolicy: { allowedTools: [] } })
-    }
-  }
-
-
-  // ── Render ──
-
-  return (
-    <div className="space-y-2">
-      {/* Master toggle */}
-      <div className="flex items-center justify-between">
-        <div className="space-y-0.5">
-          <p className="text-sm text-muted-foreground">{t('Permission Control')}</p>
-          <p className="text-xs text-muted-foreground/70">
-            {permissionEnabled
-              ? t('Restrict access by owner/guest roles')
-              : t('Everyone has full access')}
-          </p>
-        </div>
-        <Switch checked={permissionEnabled} onCheckedChange={handlePermissionToggle} />
-      </div>
-
-      {/* Permission details (only when enabled) */}
-      {permissionEnabled && (
-        <div className="space-y-3 pl-1 animate-in slide-in-from-top-1 duration-150">
-          {/* Owners */}
-          <div className="space-y-1">
-            <label className="text-sm text-muted-foreground">
-              {t('Owner User IDs')}
-            </label>
-            <textarea
-              value={ownersDisplay}
-              onChange={(e) => handleOwnersChange(e.target.value)}
-              onBlur={handleOwnersBlur}
-              placeholder={permissionDefaults?.ownerIdHint || t('Fill in your own user ID. Ask the bot "what is my user ID" to get it.')}
-              rows={2}
-              className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary resize-none"
-            />
-            <p className="text-xs text-muted-foreground">
-              {t('Owners always have full access and are not restricted by the guest settings below.')}
-            </p>
-          </div>
-
-          {/* No owners yet — auto-claim is active, so this is an expected
-              interim state rather than a misconfiguration. */}
-          {!hasOwners && (
-            <div className="flex items-center gap-2 rounded-lg bg-primary/10 border border-primary/30 px-3 py-2">
-              <Info className="w-4 h-4 text-primary shrink-0" />
-              <p className="text-xs text-foreground/80">
-                {t('No owner bound yet. The first user to send this bot a direct message will be bound as the owner automatically. Until then, all users are deny-all guests.')}
-              </p>
-            </div>
-          )}
-
-          {/* Guest section divider — makes the owner/guest boundary visually explicit */}
-          {hasOwners && (
-            <div className="flex items-center gap-2 pt-1">
-              <div className="flex-1 border-t border-border/60" />
-              <span className="text-[10px] uppercase tracking-widest text-muted-foreground/50 px-1">
-                {t('Guest Permissions')}
-              </span>
-              <div className="flex-1 border-t border-border/60" />
-            </div>
-          )}
-
-          {/* Guest access toggle (only when owners are set) */}
-          {hasOwners && (
-            <>
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <p className="text-sm text-muted-foreground">{t('Guest Access')}</p>
-                  <p className="text-xs text-muted-foreground/70">
-                    {guestAccessEnabled
-                      ? t('Guests have limited access to selected tools below')
-                      : t('Guests have no tool access — chat only')}
-                  </p>
-                </div>
-                <Switch checked={guestAccessEnabled} onCheckedChange={handleGuestAccessToggle} />
-              </div>
-
-              {guestAccessEnabled && (
-                <div className="space-y-2">
-                  <label className="text-sm text-muted-foreground">
-                    {t('Guest Allowed Tools')}
-                  </label>
-                  <CapabilityPolicyFields
-                    policy={guestPolicy}
-                    mode="strict"
-                    groupLabels={{
-                      file: t('File Read'),
-                      network: t('Network'),
-                      other: t('Other'),
-                      advanced: t('Advanced'),
-                    }}
-                    onChange={(next) => onChange({ ...instance, guestPolicy: next })}
-                  />
-                </div>
-              )}
-            </>
           )}
         </div>
       )}
@@ -1179,9 +1023,10 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
   const [testingChannel, setTestingChannel] = useState<string | null>(null)
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({})
   const [imStatuses, setImStatuses] = useState<ImChannelInstanceStatus[]>([])
-  const [permissionDefaults, setPermissionDefaults] = useState<PermissionDefaults | null>(null)
+  const [permissionDefaults, setPermissionDefaults] = useState<ImPermissionDefaults | null>(null)
   const [notifyProductConfig, setNotifyProductConfig] = useState<NotifyChannelsProductConfig | null>(null)
   const [scanDialogOpen, setScanDialogOpen] = useState(false)
+  const [feishuScanDialogOpen, setFeishuScanDialogOpen] = useState(false)
 
   // Load automation apps for the digital human selector
   const { apps, loadApps } = useAppsStore()
@@ -1201,8 +1046,8 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
   useEffect(() => {
     api.imChannelsPermissionDefaults()
       .then((res) => {
-        // Untyped IPC payload — PermissionDefaults is the renderer's mirror of it.
-        if (res.success && res.data) setPermissionDefaults(res.data as PermissionDefaults)
+        // Untyped IPC payload — ImPermissionDefaults is the renderer's mirror of it.
+        if (res.success && res.data) setPermissionDefaults(res.data as ImPermissionDefaults)
       })
       .catch(() => { /* defaults stay null — no restrictions */ })
   }, [])
@@ -1260,7 +1105,7 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
   }, [setConfig])
 
   // ── IM Channel instances from config ────────────────────────────
-  const instances = config?.imChannels?.instances ?? []
+  const instances: ImChannelInstanceConfig[] = config?.imChannels?.instances ?? []
 
   const saveInstances = useCallback(async (newInstances: ImChannelInstanceConfig[]) => {
     if (!config) return
@@ -1280,16 +1125,19 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
    * Returns a warning message if duplicate found, undefined otherwise.
    */
   const getDuplicateWarning = useCallback((instance: ImChannelInstanceConfig, allInstances: ImChannelInstanceConfig[]): string | undefined => {
-    const botId = (instance.config.botId as string)?.trim()
-    if (!botId || !instance.enabled) return undefined
+    // Which field identifies the bot is per-provider knowledge, shared with
+    // the main-process enforcement (im-channels/binding.ts) via imCredentialId.
+    // This is the inline warning, shown before the user leaves the field.
+    const credential = imCredentialId(instance.type, instance.config)
+    if (!credential || !instance.enabled) return undefined
     const duplicate = allInstances.find(
       other => other.id !== instance.id
         && other.type === instance.type
         && other.enabled
-        && (other.config.botId as string)?.trim() === botId
+        && imCredentialId(other.type, other.config) === credential
     )
     if (duplicate) {
-      return t('This Bot ID is already in use by another instance. Each Bot can only be bound to one digital human.')
+      return t('This bot is already in use by another instance. Each bot can only be bound to one digital human.')
     }
     return undefined
   }, [t])
@@ -1298,6 +1146,19 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
     const newInstances = instances.map(i => i.id === updated.id ? updated : i)
     saveInstances(newInstances)
   }, [instances, saveInstances])
+
+  // Rebinding is owned by main (see im-channels/binding.ts): it validates the
+  // target and re-applies the connection, which a plain config write cannot do.
+  const handleRebindInstance = useCallback(async (instanceId: string, appId: string) => {
+    if (!config) return
+    const res = await api.imChannelsSetInstanceApp(instanceId, appId)
+    if (!res.success) {
+      console.error('[MessageChannels] rebind failed:', res.error)
+      return
+    }
+    const patched = instances.map(i => i.id === instanceId ? { ...i, appId } : i)
+    setConfig({ ...config, imChannels: { ...config.imChannels, instances: patched } } as HaloConfig)
+  }, [config, instances, setConfig])
 
   const handleAddInstance = useCallback(() => {
     // Apply product-level permission defaults for new instances
@@ -1311,9 +1172,7 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
       replyScope: 'all', // Default to all messages
       permissionEnabled: pd?.defaultEnabled ?? false,
       ...(pd?.defaultEnabled ? {
-        guestPolicy: pd.defaultGuestAccess
-          ? { allowedTools: pd.defaultGuestPolicy?.allowedTools ?? [] }
-          : undefined,
+        guestPolicy: pd.defaultGuestAccess ? defaultGuestPolicy(pd.defaultGuestPolicy) : undefined,
       } : {}),
     }
     const newInstances = [...instances, newInstance]
@@ -1361,6 +1220,66 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
     setExpandedChannels(prev => {
       const next = new Set(prev)
       next.add('im-wecom-bot')
+      return next
+    })
+  }, [instances, saveInstances, loadApps])
+
+  const handleAddFeishuInstance = useCallback(() => {
+    const pd = permissionDefaults
+    const newInstance: ImChannelInstanceConfig = {
+      id: generateId(),
+      type: 'feishu-bot',
+      enabled: false,
+      appId: '',
+      config: { appId: '', appSecret: '', domain: 'feishu', requireMention: true, quoteReply: true },
+      replyScope: 'all',
+      permissionEnabled: pd?.defaultEnabled ?? false,
+      ...(pd?.defaultEnabled ? {
+        guestPolicy: pd.defaultGuestAccess ? defaultGuestPolicy(pd.defaultGuestPolicy) : undefined,
+      } : {}),
+    }
+    saveInstances([...instances, newInstance])
+    setExpandedInstances(prev => new Set(prev).add(newInstance.id))
+  }, [instances, saveInstances, permissionDefaults])
+
+  /**
+   * Persist the app the user just created by scanning.
+   *
+   * Permission control is forced on for the scan path: the device flow returns
+   * the scanner's open_id but not the id the bot will see on an inbound message,
+   * so owner binding is left to the generic auto-claim on the first direct
+   * message. That intentionally overrides product-level permissionDefaults,
+   * because an app created this way is a personal bot.
+   */
+  const handleFeishuScanComplete = useCallback(async (result: {
+    appId: string
+    appSecret: string
+    tenantBrand: 'feishu' | 'lark'
+    assistantAppId: string
+    assistantAppName: string
+  }) => {
+    const newInstance: ImChannelInstanceConfig = {
+      id: generateId(),
+      type: 'feishu-bot',
+      enabled: true,
+      appId: result.assistantAppId,
+      config: {
+        appId: result.appId,
+        appSecret: result.appSecret,
+        domain: result.tenantBrand,
+        requireMention: true,
+        quoteReply: true,
+      },
+      replyScope: 'all',
+      permissionEnabled: true,
+    }
+    await saveInstances([...instances, newInstance])
+    // Refresh the apps list so the newly-installed assistant shows up in the
+    // digital-human selector inside the new instance card.
+    loadApps().catch(() => {})
+    setExpandedChannels(prev => {
+      const next = new Set(prev)
+      next.add('im-feishu-bot')
       return next
     })
   }, [instances, saveInstances, loadApps])
@@ -1432,6 +1351,8 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
   const wecomInstances = (instances as ImChannelInstanceConfig[]).filter(i => i.type === 'wecom-bot')
   const weixinIlinkInstances = (instances as ImChannelInstanceConfig[]).filter(i => i.type === 'weixin-ilink-bot')
 
+  const feishuInstances = (instances as ImChannelInstanceConfig[]).filter(i => i.type === 'feishu-bot')
+
   const wecomConnectedCount = imStatuses.filter(s => s.type === 'wecom-bot' && s.connected).length
   const wecomStandbyCount = imStatuses.filter(s => s.type === 'wecom-bot' && s.state === 'standby').length
   const weixinConnectedCount = imStatuses.filter(s => s.type === 'weixin-ilink-bot' && s.connected).length
@@ -1464,6 +1385,21 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
       ? 'bg-green-500'
       : 'bg-amber-500'
 
+  const feishuConnectedCount = imStatuses.filter(s => s.type === 'feishu-bot' && s.connected).length
+
+  const feishuStatusSummary = feishuInstances.length === 0
+    ? t('Not configured')
+    : feishuConnectedCount > 0
+      ? `${feishuConnectedCount} ${t('connected')}`
+      : t('Disconnected')
+
+  const feishuStatusColor = feishuInstances.length === 0
+    ? 'bg-muted-foreground/30'
+    : feishuConnectedCount > 0
+      ? 'bg-green-500'
+      : 'bg-amber-500'
+
+  const isFeishuExpanded = expandedChannels.has('im-feishu-bot')
   const isImExpanded = expandedChannels.has('im-wecom-bot')
   const isWeixinExpanded = expandedChannels.has('im-weixin-ilink-bot')
 
@@ -1538,6 +1474,7 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
                   isExpanded={expandedInstances.has(inst.id)}
                   onToggle={() => toggleInstanceExpanded(inst.id)}
                   onChange={handleInstanceChange}
+                  onRebind={(appId) => handleRebindInstance(inst.id, appId)}
                   onDelete={() => handleDeleteInstance(inst.id)}
                 />
               ))}
@@ -1551,6 +1488,88 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
                 <Plus className="w-4 h-4" />
                 {t('Add Bot')}
               </button>
+            </div>
+          )}
+        </div>
+
+        {/* ── Feishu Bot (multi-instance) ─────────────────────────────── */}
+        <div className="border border-border rounded-lg overflow-hidden">
+          {/* Provider card header */}
+          <button
+            type="button"
+            onClick={() => toggleExpanded('im-feishu-bot')}
+            className="w-full flex items-center justify-between px-4 py-3 hover:bg-muted/30 transition-colors"
+          >
+            <div className="flex items-center gap-3 min-w-0">
+              <Send className="w-5 h-5 text-muted-foreground flex-shrink-0" />
+              <div className="text-left min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="font-medium text-sm">{t('Feishu Bot')}</p>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-primary/10 text-primary">
+                    {t('Bidirectional')}
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5 hidden sm:block">
+                  {t('Bidirectional messaging via Feishu/Lark long connection')}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
+              <span className="text-xs text-muted-foreground hidden sm:inline">{feishuStatusSummary}</span>
+              <div className={`w-2 h-2 rounded-full ${feishuStatusColor}`} />
+              <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform duration-200 ${isFeishuExpanded ? 'rotate-180' : ''}`} />
+            </div>
+          </button>
+
+          {/* Instance list */}
+          {isFeishuExpanded && (
+            <div className="px-4 pb-4 pt-2 border-t border-border space-y-2.5 animate-in slide-in-from-top-1 duration-150">
+              {feishuInstances.length === 0 && (
+                <p className="text-sm text-muted-foreground py-2 text-center">
+                  {t('No Bot instances configured. Click the button below to add one.')}
+                </p>
+              )}
+
+              {feishuInstances.map(inst => (
+                <FeishuInstanceCard
+                  key={inst.id}
+                  instance={inst}
+                  status={imStatuses.find(s => s.id === inst.id)}
+                  automationApps={automationApps}
+                  teams={teams}
+                  isExpanded={expandedInstances.has(inst.id)}
+                  onToggle={() => toggleInstanceExpanded(inst.id)}
+                  onChange={handleInstanceChange}
+                  onRebind={(appId) => handleRebindInstance(inst.id, appId)}
+                  onDelete={() => handleDeleteInstance(inst.id)}
+                  onReconnect={() => handleReconnectInstance(inst.id)}
+                  duplicateWarning={getDuplicateWarning(inst, instances)}
+                  permissionDefaults={permissionDefaults}
+                />
+              ))}
+
+              {/* Add instance — scan QR (primary) + manual setup (secondary) */}
+              <div className="flex flex-col sm:flex-row items-stretch gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setFeishuScanDialogOpen(true)}
+                  className="flex-1 flex items-center justify-center gap-2 px-3 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors font-medium"
+                >
+                  <QrCode className="w-4 h-4" />
+                  {t('Scan to add')}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleAddFeishuInstance}
+                  className="flex items-center justify-center gap-2 px-3 py-2 text-sm border border-border rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
+                >
+                  <Plus className="w-4 h-4" />
+                  {t('Manual setup')}
+                </button>
+              </div>
+              <p className="text-[11px] text-muted-foreground text-center pt-0.5">
+                {t('Scanning creates the Feishu app for you — no developer console, no permission setup.')}
+              </p>
             </div>
           )}
         </div>
@@ -1603,6 +1622,7 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
                   isExpanded={expandedInstances.has(inst.id)}
                   onToggle={() => toggleInstanceExpanded(inst.id)}
                   onChange={handleInstanceChange}
+                  onRebind={(appId) => handleRebindInstance(inst.id, appId)}
                   onDelete={() => handleDeleteInstance(inst.id)}
                   onReconnect={() => handleReconnectInstance(inst.id)}
                   duplicateWarning={getDuplicateWarning(inst, instances)}
@@ -1658,6 +1678,13 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
         open={scanDialogOpen}
         onClose={() => setScanDialogOpen(false)}
         onComplete={handleScanComplete}
+      />
+
+      {/* Feishu scan-to-create dialog (portal-style overlay) */}
+      <FeishuScanAuthDialog
+        open={feishuScanDialogOpen}
+        onClose={() => setFeishuScanDialogOpen(false)}
+        onComplete={handleFeishuScanComplete}
       />
     </section>
   )

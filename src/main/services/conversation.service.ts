@@ -22,6 +22,7 @@ import { v4 as uuidv4 } from 'uuid'
 import type { FileChangesSummary } from '../../shared/file-changes'
 import type { KBSource } from '../../shared/types/tlon'
 import type { ImageAttachment } from '../../shared/types/image-attachment'
+import type { GoalInput } from '../../shared/types/goal'
 
 // Re-export for existing consumers
 export type { FileChangesSummary } from '../../shared/file-changes'
@@ -63,6 +64,8 @@ interface TokenUsage {
 interface ThoughtsSummary {
   count: number
   types: Partial<Record<ThoughtType, number>>
+  /** Wall-clock seconds between the first and last thought; absent for a single thought. */
+  duration?: number
 }
 
 export interface Message {
@@ -94,6 +97,19 @@ export interface Message {
      */
     correlationId?: string
     forwardDepth?: number
+    /**
+     * Present on a message delivered by a team member to the space
+     * conversation coordinating its collaboration (role:'system',
+     * source:'team-message'). fromMemberName is null for system-authored
+     * notices (turn-end reports).
+     */
+    teamId?: string
+    epochId?: string
+    teamName?: string
+    fromMemberName?: string | null
+    teamTriggerKind?: string
+    /** The goal the user set with this message (user messages only). */
+    goal?: GoalInput
   }
   error?: string  // Error message when assistant response failed (e.g., 429 rate limit)
   source?: string  // How the message entered the conversation (e.g., 'injection', 'cross-conversation')
@@ -1040,6 +1056,21 @@ export function getMessageThoughts(
 }
 
 /**
+ * Observers of conversation deletion. Registered from bootstrap (dependency
+ * inversion — upper tiers own resources keyed by a conversation, e.g. the
+ * team collaboration a space conversation coordinates, and must release them
+ * when it goes). Notified after the files are gone; failures are logged and
+ * never break the deletion.
+ */
+type ConversationDeletedListener = (spaceId: string, conversationId: string) => void
+const conversationDeletedListeners = new Set<ConversationDeletedListener>()
+
+export function onConversationDeleted(listener: ConversationDeletedListener): () => void {
+  conversationDeletedListeners.add(listener)
+  return () => conversationDeletedListeners.delete(listener)
+}
+
+/**
  * Delete a conversation and its associated thoughts file.
  */
 export function deleteConversation(spaceId: string, conversationId: string): boolean {
@@ -1077,6 +1108,14 @@ export function deleteConversation(spaceId: string, conversationId: string): boo
     const pending = pendingIndexWrites.get(conversationsDir)
     if (pending) pending.entries.delete(conversationId)
     updateIndexEntry(conversationsDir, spaceId, conversationId, null)
+
+    for (const listener of conversationDeletedListeners) {
+      try {
+        listener(spaceId, conversationId)
+      } catch (error) {
+        console.error(`[Conversation] deletion listener failed for ${conversationId}:`, error)
+      }
+    }
 
     return true
   }

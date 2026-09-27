@@ -14,6 +14,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   utimesSync,
   writeFileSync,
 } from 'fs'
@@ -61,6 +62,53 @@ describe('stageMediaFile', () => {
     expect(second.localPath).not.toBe(first.localPath)
     expect(readFileSync(first.localPath).toString()).toBe('one')
     expect(basename(first.localPath).endsWith('photo.jpg')).toBe(true)
+  })
+
+  // Permission bits are POSIX-only; on Windows fs modes are advisory.
+  it.skipIf(process.platform === 'win32')(
+    'restricts the staging dir and file to the owner',
+    async () => {
+      const dir = join(root, 'staged')
+      const staged = await stageMediaFile(dir, 'secret.png', Buffer.from('bytes'))
+
+      expect(statSync(dir).mode & 0o777).toBe(0o700)
+      expect(statSync(staged.localPath).mode & 0o777).toBe(0o600)
+    },
+  )
+
+  it.skipIf(process.platform === 'win32')(
+    'tightens a pre-existing staging dir created with looser modes',
+    async () => {
+      const dir = join(root, 'staged')
+      mkdirSync(dir, { recursive: true, mode: 0o755 })
+
+      await stageMediaFile(dir, 'a.bin', Buffer.alloc(1))
+      expect(statSync(dir).mode & 0o777).toBe(0o700)
+    },
+  )
+
+  it('prunes expired files when given a max age, keeping the fresh ones', async () => {
+    const dir = join(root, 'staged')
+    const old = await stageMediaFile(dir, 'old.bin', Buffer.alloc(1))
+    const longAgo = new Date(Date.now() - 48 * 60 * 60 * 1000)
+    utimesSync(old.localPath, longAgo, longAgo)
+    const fresh = await stageMediaFile(dir, 'fresh.bin', Buffer.alloc(1))
+
+    const next = await stageMediaFile(dir, 'next.bin', Buffer.alloc(1), 24 * 60 * 60 * 1000)
+
+    expect(existsSync(old.localPath)).toBe(false)
+    expect(existsSync(fresh.localPath)).toBe(true)
+    expect(existsSync(next.localPath)).toBe(true)
+  })
+
+  it('does not prune when no max age is given', async () => {
+    const dir = join(root, 'staged')
+    const old = await stageMediaFile(dir, 'old.bin', Buffer.alloc(1))
+    const longAgo = new Date(Date.now() - 48 * 60 * 60 * 1000)
+    utimesSync(old.localPath, longAgo, longAgo)
+
+    await stageMediaFile(dir, 'next.bin', Buffer.alloc(1))
+    expect(existsSync(old.localPath)).toBe(true)
   })
 })
 

@@ -158,7 +158,7 @@ export function SettingsNav({ isRemoteMode, activeSection, onSectionChange }: Se
 
   // Desktop sidebar
   return (
-    <nav className="w-48 shrink-0 border-r border-border bg-card overflow-y-auto">
+    <nav className="w-48 shrink-0 border-r border-border bg-background overflow-y-auto">
       <div className="py-2">
         {navItems.map((item) => (
           <NavButton

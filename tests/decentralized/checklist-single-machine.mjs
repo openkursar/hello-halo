@@ -346,7 +346,17 @@ try {
     const rested = await waitIdle(team.id, 200_000)
     const d = await detail(team.id)
     const bob = d.members.find((m) => m.memberName === 'Bob')
-    const bobHistory = await apiOk(node, 'GET', `/api/teams/${team.id}/chat-messages?appId=${bob.appId}`)
+    // Read the RUN's transcript explicitly: without ?epochId the route resolves
+    // "the currently open run epoch", which no longer exists once the run has
+    // rested — whether the unqualified read races the seal is model timing, not
+    // the behavior under test (peer-to-peer team_send delivery).
+    const epochs = await apiOk(node, 'GET', `/api/teams/${team.id}/epochs`)
+    const runEpoch = epochs.find((e) => e.lifecycle === 'run')
+    const bobHistory = await apiOk(
+      node,
+      'GET',
+      `/api/teams/${team.id}/chat-messages?appId=${bob.appId}&epochId=${runEpoch?.id ?? ''}`,
+    )
     const received = JSON.stringify(bobHistory).includes('HELLO-FROM-ALICE')
     mark(rested && received ? 'PASS' : 'FAIL', `rested=${!!rested} received=${received}`)
   })
@@ -439,7 +449,13 @@ try {
     const owner = activityPerMember.find(({ activity }) => (activity ?? []).some((e) => e.type === 'escalation'))
     if (!owner) { mark('FAIL', `no escalation activity entry found on any member; noSaveFailure=${noSaveFailure}`); return }
     const entry = owner.activity.find((e) => e.type === 'escalation')
-    const respond = await apiOk(node, 'POST', `/api/apps/${owner.appId}/escalation/${entry.id}/respond`, { text: 'Use a plain markdown report.' })
+    // acceptDecision rejects a bare text reply when the entry has structured
+    // questions; it requires one answer per question instead.
+    const questions = entry.content?.questions
+    const payload = questions?.length
+      ? { answers: questions.map(() => ({ text: 'Use a plain markdown report.' })) }
+      : { text: 'Use a plain markdown report.' }
+    const respond = await apiOk(node, 'POST', `/api/apps/${owner.appId}/escalation/${entry.id}/respond`, payload)
     const resumed = await pollUntil(async () => {
       const d = await detail(team.id)
       return d.team.status !== 'waiting_user' ? d : null

@@ -68,6 +68,8 @@ export interface ScheduleCheckInput {
   createdByAppId: string
   targetAppId: string
   instruction: string
+  /** The turn setting this check was driven from another machine (see TeamCheck.external). */
+  external?: boolean
   schedule: TeamCheckSchedule
 }
 
@@ -89,6 +91,8 @@ export interface TeamChecksDeps {
     appId: string
     body: string
     onBusy: BusyDisposition
+    /** The check was set by a member somebody else owns. */
+    external?: boolean
   }) => Promise<WakeDisposition>
   /** True while the target is mid-turn — a due check is skipped, never queued. */
   isBusy: (teamId: string, epochId: string, appId: string) => boolean
@@ -238,6 +242,7 @@ export function createTeamChecks(deps: TeamChecksDeps): TeamChecks {
       targetAppId: input.targetAppId,
       createdByAppId: input.createdByAppId,
       instruction,
+      external: input.external ?? false,
       schedule: input.schedule,
       runCount: 0,
       createdAt: ts,
@@ -411,6 +416,13 @@ export function createTeamChecks(deps: TeamChecksDeps): TeamChecks {
       appId: check.targetAppId,
       body: renderCheckWake(attempt, memberName(check.teamId, check.createdByAppId)),
       onBusy: oneShot ? 'buffer' : 'skip',
+      // A check is a standing instruction from whoever set it, and it rings long
+      // after they set it. What the target may do while carrying it out is
+      // decided by whose instruction it is, not by who happens to own the clock:
+      // a remote creator, or a local one whose own turn was externally driven.
+      external:
+        !!check.external ||
+        isRemoteMember(deps.store.getMember(check.teamId, check.createdByAppId) ?? { origin: 'local' }),
     })
     if (disposition === 'skipped') {
       console.log(`${LOG_TAG} wake skipped, round not counted: id=${check.id}`)

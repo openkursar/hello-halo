@@ -13,9 +13,11 @@
 export { ImChannelManager } from './manager'
 export { WecomBotProvider } from './wecom-bot.provider'
 export { WeixinIlinkBotProvider } from './weixin-ilink.provider'
+export { FeishuBotProvider } from './feishu-bot.provider'
 
 import { cleanupWecomTempFiles } from './wecom-bot.provider'
 import { cleanupWeixinIlinkTempFiles } from './weixin-ilink.provider'
+import { cleanupFeishuTempFiles } from './feishu-bot.provider'
 import type { ImChannelManager } from './manager'
 
 /**
@@ -28,7 +30,8 @@ import type { ImChannelManager } from './manager'
 export function cleanupImChannelTempFiles(): void {
   cleanupWecomTempFiles()
   cleanupWeixinIlinkTempFiles()
-  // Future: cleanupFeishuTempFiles(), cleanupDingTalkTempFiles()
+  cleanupFeishuTempFiles()
+  // Future: cleanupDingTalkTempFiles()
 }
 
 // ============================================

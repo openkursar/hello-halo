@@ -18,8 +18,9 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import type { AppChatRequest } from '../../../../src/main/apps/runtime/app-chat'
 import type { InboundMessage, ReplyHandle } from '../../../../src/shared/types/inbound-message'
-import type { ImSessionRecord } from '../../../../src/shared/types/im-channel'
+import type { ImChannelInstance, ImSessionRecord } from '../../../../src/shared/types/im-channel'
 
 // ============================================
 // Mocks (must be declared before importing dispatch-inbound)
@@ -36,17 +37,17 @@ const { resolveInboundIdentity } = vi.hoisted(() => ({
 }))
 
 const { sendAppChatMessage, isAppChatConversationGenerating } = vi.hoisted(() => ({
-  sendAppChatMessage: vi.fn(async () => {}),
+  sendAppChatMessage: vi.fn<[AppChatRequest], Promise<void>>(async () => {}),
   isAppChatConversationGenerating: vi.fn(() => false),
 }))
 
 const { findSessionMock, registerMock } = vi.hoisted(() => ({
-  findSessionMock: vi.fn(() => undefined as unknown),
+  findSessionMock: vi.fn<[string, string, string], ImSessionRecord | undefined>(() => undefined),
   registerMock: vi.fn(),
 }))
 
 const { getInstanceMock } = vi.hoisted(() => ({
-  getInstanceMock: vi.fn(() => ({ identityCapability: { fetchIdentityDirectory: vi.fn() } })),
+  getInstanceMock: vi.fn<[], Pick<ImChannelInstance, 'identityCapability'>>(() => ({ identityCapability: { fetchIdentityDirectory: vi.fn() } })),
 }))
 
 vi.mock('../../../../src/main/apps/runtime/im-channels/identity-resolve', () => ({
@@ -57,7 +58,7 @@ vi.mock('../../../../src/main/apps/runtime/im-channels/identity-resolve', () => 
 }))
 
 vi.mock('../../../../src/main/apps/runtime/app-chat', () => ({
-  sendAppChatMessage: (...args: unknown[]) => {
+  sendAppChatMessage: (...args: [AppChatRequest]) => {
     callOrder.push('sendAppChatMessage')
     return sendAppChatMessage(...args)
   },
@@ -102,6 +103,14 @@ vi.mock('../../../../src/main/foundation/window.service', () => ({ sendToRendere
 vi.mock('../../../../src/main/http/websocket', () => ({ broadcastToAll: vi.fn() }))
 vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({ analytics: { track: vi.fn() } }))
 vi.mock('../../../../src/main/services/analytics/types', () => ({ AnalyticsEvents: {} }))
+vi.mock('../../../../src/main/apps/team', () => ({ getTeamStore: vi.fn(() => null) }))
+vi.mock('../../../../src/main/apps/runtime/team', () => ({ getActiveTeamRuntime: vi.fn(() => null) }))
+
+vi.mock('../../../../src/main/foundation/config.service', () => ({
+  getConfig: vi.fn(() => ({})),
+  onAgentConfigChange: vi.fn(),
+}))
+
 vi.mock('../../../../src/main/foundation/product-config', () => ({
   getImChannelsPermissionDefaults: vi.fn(() => ({})),
 }))
@@ -138,7 +147,7 @@ function makeMsg(overrides: Partial<InboundMessage> = {}): InboundMessage {
 }
 
 function makeReply(): ReplyHandle {
-  return { send: vi.fn(async () => true) }
+  return { channel: 'wecom-bot', chatId: 'user-1', send: vi.fn(async () => {}) }
 }
 
 function fakeSession(overrides: Partial<ImSessionRecord> = {}): ImSessionRecord {
@@ -157,7 +166,7 @@ function fakeSession(overrides: Partial<ImSessionRecord> = {}): ImSessionRecord 
 }
 
 function sentPayload(): { message: string; senderIdentity?: { id: string; name: string } } {
-  return sendAppChatMessage.mock.calls[0][0] as { message: string; senderIdentity?: { id: string; name: string } }
+  return sendAppChatMessage.mock.calls[0][0]
 }
 
 beforeEach(() => {

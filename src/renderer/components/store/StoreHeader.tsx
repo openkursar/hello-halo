@@ -40,7 +40,7 @@ function PublishButton({ onClick }: { onClick: () => void }) {
   return (
     <button
       onClick={onClick}
-      className="flex flex-shrink-0 items-center gap-1.5 px-3 py-2 text-[13px] border border-border/60 bg-background text-muted-foreground rounded-lg hover:text-foreground hover:border-border transition-colors"
+      className="flex flex-shrink-0 items-center gap-1.5 px-3 py-2 text-[13px] border border-border/60 bg-card text-muted-foreground rounded-lg hover:text-foreground hover:border-border transition-colors"
       title={t('Publish your Digital Human or Skill to the store')}
       aria-label={t('Publish App')}
     >
@@ -69,7 +69,7 @@ export function StoreHeader() {
 
   const [showShareDialog, setShowShareDialog] = useState(false)
   // Pre-selection carried from a detail page's Share action.
-  const [publishPreselect, setPublishPreselect] = useState<{ type: AppType; appId: string } | null>(null)
+  const [publishPreselect, setPublishPreselect] = useState<{ type: Extract<AppType, 'automation' | 'skill'>; appId: string } | null>(null)
 
   // A detail page's Share routed here — open the publish dialog pre-selected on
   // that app (consume the one-shot intent so it doesn't re-fire).
@@ -131,7 +131,7 @@ export function StoreHeader() {
   }, [setStoreTypeFilter, setStoreCategory, setStoreSearch, loadStoreApps, revalidateStore])
 
   return (
-    <div className="flex flex-col gap-3 px-4 pt-3 flex-shrink-0 border-b border-border/60">
+    <div className="flex flex-col gap-3 mx-6 sm:mx-10 pt-3 flex-shrink-0">
       {/* Search + Refresh row */}
       <div className="flex items-center gap-2">
         <div className="relative flex-1">
@@ -141,7 +141,7 @@ export function StoreHeader() {
             value={storeSearchQuery}
             onChange={e => handleSearchChange(e.target.value)}
             placeholder={t('Search Digital Humans / Skills / MCP')}
-            className="w-full pl-9 pr-3 py-2 text-[13px] bg-muted/20 border border-border/60 rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground placeholder:text-muted-foreground/50"
+            className="w-full pl-9 pr-3 py-2 text-[13px] bg-card border border-border/60 rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground placeholder:text-muted-foreground/50"
           />
         </div>
         <button
@@ -158,7 +158,7 @@ export function StoreHeader() {
         {capabilities?.identity === 'account' && (
           <button
             onClick={() => setStoreMineOpen(true)}
-            className="flex flex-shrink-0 items-center gap-1 px-3.5 py-2 text-[13px] border border-border/60 bg-background text-muted-foreground hover:text-foreground hover:border-border rounded-lg transition-colors"
+            className="flex flex-shrink-0 items-center gap-1 px-3.5 py-2 text-[13px] border border-border/60 bg-card text-muted-foreground hover:text-foreground hover:border-border rounded-lg transition-colors"
             title={t('My Publications')}
           >
             <span>{t('Mine')}</span>
@@ -167,19 +167,20 @@ export function StoreHeader() {
         )}
       </div>
 
-      {/* Main tabs — underline style: the active tab carries its own 2px accent
-          rule; there is no full-width divider under the row. */}
-      <div className="flex items-center gap-1 overflow-x-auto overflow-y-hidden">
+      {/* Main tabs — underline style, matching AppsPage's `.tabs` row: the
+          active tab carries its own 2px accent rule on top of the shared
+          bottom divider (prototype `.tabs{border-bottom:1px solid border}`). */}
+      <div className="flex items-center gap-1 overflow-x-auto overflow-y-hidden border-b border-border">
         {MAIN_TABS.map(tab => {
           const active = tab === 'discover' ? storeTypeFilter === null : storeTypeFilter === tab
           return (
             <button
               key={tab}
               onClick={() => handleTabClick(tab)}
-              className={`flex-shrink-0 px-3 sm:px-4 py-2 text-[13px] border-b-2 -mb-px transition-colors ${
+              className={`flex-shrink-0 h-[34px] px-3.5 border-b-2 -mb-px text-[13px] font-medium transition-colors ease-halo ${
                 active
-                  ? 'border-primary text-primary font-semibold'
-                  : 'border-transparent text-muted-foreground hover:text-foreground'
+                  ? 'border-primary text-foreground'
+                  : 'border-transparent text-subtle-foreground hover:text-foreground'
               }`}
             >
               {tabLabel(t, tab)}

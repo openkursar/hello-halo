@@ -1,6 +1,7 @@
 {
   "compilerOptions": {
     "noEmit": true,
+    "jsx": "react-jsx",
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",

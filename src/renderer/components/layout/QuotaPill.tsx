@@ -52,22 +52,22 @@ export function QuotaPill({ sourceId }: QuotaPillProps) {
         onClick={toggle}
         title={t('Remaining quota')}
         aria-expanded={open}
-        className={`flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-full border text-xs transition-colors ${
+        className={`flex h-[26px] items-center gap-[5px] px-[9px] rounded-full border text-[11px] transition-colors ease-halo ${
           low
-            ? 'bg-amber-500/10 border-amber-500/30 hover:border-amber-500/50'
-            : 'bg-primary/10 border-primary/20 hover:border-primary/40'
+            ? 'bg-amber-500/[0.12] border-amber-500/[0.35] hover:border-amber-500'
+            : 'bg-primary/[0.12] border-primary/[0.18] hover:border-primary'
         }`}
       >
-        <Cloud className={`w-3.5 h-3.5 shrink-0 ${low ? 'text-amber-500' : 'text-primary'}`} />
-        <span className={`font-semibold tabular-nums ${low ? 'text-amber-600 dark:text-amber-500' : 'text-primary'}`}>
+        <Cloud className={`w-3.5 h-3.5 shrink-0 ${low ? 'text-amber-500' : 'text-accent-on-dark'}`} />
+        <span className={`font-bold tabular-nums ${low ? 'text-amber-600 dark:text-amber-500' : 'text-accent-on-dark'}`}>
           {symbol}{formatQuotaNumber(remaining)}
         </span>
         {/* Unit + mini progress bar — desktop only to keep the mobile header tight */}
         {unitLabel && <span className="hidden sm:inline text-muted-foreground">{unitLabel}</span>}
         {hasBar && (
-          <span className="hidden sm:block w-12 h-1 rounded-full bg-secondary overflow-hidden">
+          <span className="hidden sm:block w-[46px] h-1 rounded-[2px] bg-surface-hover overflow-hidden">
             <span
-              className={`block h-full rounded-full ${low ? 'bg-amber-500' : 'bg-primary'}`}
+              className={`block h-full rounded-[2px] ${low ? 'bg-amber-500' : 'bg-primary'}`}
               style={{ width: `${ratio * 100}%` }}
             />
           </span>

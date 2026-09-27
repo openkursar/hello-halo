@@ -28,9 +28,12 @@ import { getTeamStore } from '../apps/team'
 import { getLocalIdentity } from './identity/index'
 import { getMainWindow as getMainWindowFromService } from '../foundation/window.service'
 
-// Vite dev server URL
-const VITE_DEV_SERVER = 'http://localhost:5173'
-const VITE_DEV_HOST = 'localhost'
+// Vite dev server URL. Pinned to 127.0.0.1, not 'localhost': electron.vite.config.ts
+// binds Vite to 127.0.0.1 only (see its comment), but Node 17+ on macOS resolves
+// 'localhost' to ::1 first — proxying through the hostname hit ECONNREFUSED
+// ::1:5173 even though Vite itself was up and reachable on IPv4.
+const VITE_DEV_SERVER = 'http://127.0.0.1:5173'
+const VITE_DEV_HOST = '127.0.0.1'
 const VITE_DEV_PORT = 5173
 
 // Server state

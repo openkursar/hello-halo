@@ -30,7 +30,7 @@ export function LoginNoticeBar({ browserLogin, onDismiss, onOpenBrowser }: Login
   if (isSingle) {
     const entry = browserLogin[0]
     return (
-      <div className="flex-shrink-0 mx-4 mt-3 mb-0">
+      <div className="flex-shrink-0 mx-4 sm:mx-10 mt-3 mb-0">
         <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg border-l-2 border-amber-500 bg-amber-500/10">
           <Globe className="w-4 h-4 text-amber-600 dark:text-amber-400 flex-shrink-0" />
           <span className="text-sm text-amber-700 dark:text-amber-400 flex-1 min-w-0 truncate">
@@ -55,7 +55,7 @@ export function LoginNoticeBar({ browserLogin, onDismiss, onOpenBrowser }: Login
 
   // Multi-site layout
   return (
-    <div className="flex-shrink-0 mx-4 mt-3 mb-0">
+    <div className="flex-shrink-0 mx-4 sm:mx-10 mt-3 mb-0">
       <div className="px-3 py-2.5 rounded-lg border-l-2 border-amber-500 bg-amber-500/10">
         <div className="flex items-center justify-between gap-2 mb-2">
           <div className="flex items-center gap-2 min-w-0">

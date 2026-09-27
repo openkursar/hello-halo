@@ -12,17 +12,28 @@
  * `services/security-policy.ts`; both read their slice from here.
  */
 
-import { join } from 'path'
+import { dirname, join } from 'path'
 import { existsSync } from 'fs'
 import { app } from 'electron'
 import { type AuthProviderConfig } from '../../shared/types'
 import type { CategoryTaxonomy, RegistrySource } from '../../shared/store/store-types'
 import type { NotifyChannelsProductConfig } from '../../shared/types/notification-channels'
+import type { UpdaterChannel } from '../../shared/types/updater'
 
 // AuthProviderConfig is defined in src/shared/types/ai-sources.ts so the main
 // loader and the renderer setup UI share one source of truth. Re-exported here
 // for ergonomic local imports from this module.
 export { type AuthProviderConfig }
+
+/**
+ * How Windows applies an update that has finished downloading.
+ *
+ * - 'legacy': hand the file to the NSIS installer on exit. Extraction and file
+ *   replacement happen after the user clicks, which is the wait they feel.
+ * - 'staged': unpack the new version beside the current one while the app is
+ *   still running, so applying is a rename and a relaunch.
+ */
+export type WindowsUpdateMode = 'legacy' | 'staged'
 
 /**
  * Update configuration for auto-updater
@@ -36,6 +47,19 @@ export interface UpdateConfig {
   owner?: string
   /** GitHub repository name (for github provider) */
   repo?: string
+  /** Release feed this build belongs to. Omitted → 'stable'. */
+  channel?: UpdaterChannel
+  /** Windows apply strategy. Omitted or unrecognized → 'legacy'. */
+  windowsMode?: WindowsUpdateMode
+  /**
+   * Base64 Ed25519 public key that staged update descriptions must verify against.
+   *
+   * A staged update unpacks an archive and then runs it, so the description
+   * naming that archive has to be provably ours. The internal feed is plain
+   * HTTP, which authenticates nobody — this key is what does. Without it,
+   * staged mode is refused and the build stays on the installer.
+   */
+  manifestPublicKey?: string
 }
 
 /**
@@ -409,6 +433,25 @@ export interface ProductConfig {
   federation?: {
     gatewayUrl?: string
   }
+
+  /**
+   * Custom system tray icon directory (optional), relative to product.json
+   * (same resolution rule as `authProviders[].path` — see
+   * `resolveProviderPath` in auth-loader.ts). Lets a brand build ship its
+   * own tray icon set without the core tray code knowing any vendor names.
+   * Omitted → falls back to the built-in `resources/tray`.
+   */
+  trayIconDir?: string
+
+  /**
+   * Path to the macOS (1024px, Apple safe-area) app icon PNG, relative to
+   * product.json. Only used to preview the correct Dock icon in unpackaged
+   * dev builds — packaged builds get their icon baked in via electron-builder
+   * (`mac.icon` in package.json#build / the vendor's electron-builder overlay)
+   * and ignore this. Omitted → falls back to the built-in
+   * `resources/icon-macos-1024.png`.
+   */
+  macIcon?: string
 }
 
 // ============================================================================
@@ -484,6 +527,54 @@ export function getDataFolderName(): string {
  */
 export function getServiceDefaults(): ServiceDefaults | undefined {
   return loadProductConfig().serviceDefaults
+}
+
+/**
+ * Release feed this build belongs to.
+ *
+ * Anything other than an explicit 'experience' reads as stable, so a typo in a
+ * variant file can only ever move a build toward the more conservative feed.
+ */
+export function getUpdateChannel(): UpdaterChannel {
+  return loadProductConfig().updateConfig?.channel === 'experience' ? 'experience' : 'stable'
+}
+
+/**
+ * Windows apply strategy for this build, after safety fallbacks.
+ *
+ * Staged mode is withheld unless it was asked for *and* a verification key
+ * shipped with it. A build configured to unpack-and-run archives it cannot
+ * authenticate is worse than one that keeps using the installer, so the two
+ * settings are resolved together rather than trusted separately.
+ */
+export function getWindowsUpdateMode(): WindowsUpdateMode {
+  const update = loadProductConfig().updateConfig
+  if (!update || update.windowsMode === undefined) return 'legacy'
+
+  if (update.windowsMode !== 'staged' && update.windowsMode !== 'legacy') {
+    console.error(
+      `[ProductConfig] Unrecognized updateConfig.windowsMode "${String(update.windowsMode)}" — using legacy`
+    )
+    return 'legacy'
+  }
+  if (update.windowsMode === 'legacy') return 'legacy'
+
+  if (!update.manifestPublicKey?.trim()) {
+    console.error(
+      '[ProductConfig] updateConfig.windowsMode is "staged" but manifestPublicKey is missing — ' +
+        'staged updates cannot be authenticated, falling back to legacy'
+    )
+    return 'legacy'
+  }
+  return 'staged'
+}
+
+/**
+ * Base64 Ed25519 key that staged update descriptions must verify against.
+ * Undefined when this build ships no key (and therefore cannot stage).
+ */
+export function getUpdateManifestPublicKey(): string | undefined {
+  return loadProductConfig().updateConfig?.manifestPublicKey?.trim() || undefined
 }
 
 /**
@@ -582,6 +673,35 @@ export function getProductFederationGatewayUrl(): string | undefined {
  */
 export function getAnalyticsConfig(): ProductConfig['analytics'] | undefined {
   return loadProductConfig().analytics
+}
+
+/**
+ * Resolve the system tray icon directory for the active build.
+ *
+ * `trayIconDir`, when set, is resolved relative to product.json's own
+ * directory (same rule `resolveProviderPath` uses for `authProviders[].path`)
+ * so it works both unpacked (dev) and inside app.asar (packaged). Falls back
+ * to the built-in `resources/tray` when the field is absent.
+ */
+export function getTrayIconDir(): string {
+  const configured = loadProductConfig().trayIconDir?.trim()
+  const configDir = dirname(getProductConfigPath())
+  if (!configured) return join(configDir, 'resources', 'tray')
+  const cleanPath = configured.startsWith('./') ? configured.slice(2) : configured
+  return join(configDir, cleanPath)
+}
+
+/**
+ * Resolve the macOS app icon path used to preview the Dock icon in
+ * unpackaged dev builds (see `macIcon` on ProductConfig). Same resolution
+ * rule as `getTrayIconDir`.
+ */
+export function getMacIconPath(): string {
+  const configured = loadProductConfig().macIcon?.trim()
+  const configDir = dirname(getProductConfigPath())
+  if (!configured) return join(configDir, 'resources', 'icon-macos-1024.png')
+  const cleanPath = configured.startsWith('./') ? configured.slice(2) : configured
+  return join(configDir, cleanPath)
 }
 
 /**

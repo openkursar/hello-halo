@@ -80,13 +80,29 @@ export function getSkillDir(
 
 /**
  * Write a skill's content to the appropriate filesystem location.
- * Called on install/reinstall of a skill app.
+ *
+ * Enforces the invariant the file on disk *is* the enable switch: the SDK loads
+ * whatever it finds, so pausing removes the file and there is no other way to
+ * stop injection. Callers that write while the record is paused or uninstalled
+ * would silently re-enable it — a spec refresh (e.g. a built-in skill whose
+ * version moved with a release) must not undo the user's pause. Guarding here
+ * rather than at each call site keeps the one rule in the one place that writes.
+ *
+ * Callers that write as part of a status transition must pass the record with
+ * its new status, not the pre-transition snapshot.
  */
 export function syncSkillToFilesystem(
   appRecord: InstalledApp,
   getSpacePath: (spaceId: string) => string | null
 ): void {
   if (appRecord.spec.type !== 'skill') return
+
+  if (appRecord.status === 'paused' || appRecord.status === 'uninstalled') {
+    console.log(
+      `[SkillSync] Skill '${appRecord.specId}' is ${appRecord.status}; leaving it off disk`
+    )
+    return
+  }
 
   const spec = appRecord.spec as SkillSpec
 

@@ -23,6 +23,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { EventEmitter } from 'events'
 
 // ── Mock external side-effect dependency (desktop notification) ──
+// The provider now resolves Halo's outbound route before opening the socket,
+// so a machine that only reaches WeCom through a proxy connects at all.
+vi.mock('../../../../../src/main/services/proxy-fetch', () => ({
+  resolveProxyAgent: async () => undefined,
+}))
+
 const notifyAppEventMock = vi.fn()
 vi.mock('../../../../../src/main/services/notification.service', () => ({
   notifyAppEvent: (...args: unknown[]) => notifyAppEventMock(...args),
@@ -129,6 +135,16 @@ function latestClient(): FakeWSClient {
   return createdClients[createdClients.length - 1]
 }
 
+/**
+ * Let the provider's asynchronous socket open settle.
+ *
+ * Fake timers are active, so advancing by zero is what drains the microtask
+ * queue the proxy lookup parks on.
+ */
+async function settleOpen(): Promise<void> {
+  await vi.advanceTimersByTimeAsync(0)
+}
+
 /** Drive the active-mode supersede storm until the instance yields to standby. */
 function forceYield(client: FakeWSClient): void {
   // Default arbiter threshold is 3 supersedes within the window.
@@ -153,9 +169,10 @@ describe('WecomBotInstance connMode state machine', () => {
     vi.useRealTimers()
   })
 
-  it('(c) reports standby while yielding and connecting once probing', () => {
+  it('(c) reports standby while yielding and connecting once probing', async () => {
     const inst = makeInstance()
     inst.start()
+    await settleOpen()
     const client = latestClient()
     client.goAuthenticated()
     expect(inst.getConnectionState()).toBe('online')
@@ -169,9 +186,10 @@ describe('WecomBotInstance connMode state machine', () => {
     expect(notifyAppEventMock).toHaveBeenCalledTimes(1)
   })
 
-  it('(d) marks in-flight stream sessions broken on active-mode disconnect', () => {
+  it('(d) marks in-flight stream sessions broken on active-mode disconnect', async () => {
     const inst = makeInstance()
     inst.start()
+    await settleOpen()
     const client = latestClient()
     client.goAuthenticated()
 
@@ -186,14 +204,16 @@ describe('WecomBotInstance connMode state machine', () => {
     expect(inst.connMode).toBe('active')
   })
 
-  it('(b) recovers to active after a probe survives the confirm window, flushing pending pushes', () => {
+  it('(b) recovers to active after a probe survives the confirm window, flushing pending pushes', async () => {
     const inst = makeInstance()
     inst.start()
+    await settleOpen()
     forceYield(latestClient())
     expect(inst.connMode).toBe('yielding')
 
     // Advance to fire the scheduled probe → a fresh client connects.
     vi.runOnlyPendingTimers()
+    await settleOpen()
     const probeClient = latestClient()
     expect(probeClient.connectCount).toBe(1)
 
@@ -216,18 +236,21 @@ describe('WecomBotInstance connMode state machine', () => {
 
     // Confirm window elapses without a supersede → recoverToActive + flush.
     vi.runOnlyPendingTimers()
+    await settleOpen()
     expect(inst.connMode).toBe('active')
     expect(probeClient.sendMessage).toHaveBeenCalledTimes(1)
     expect(probeClient.sendMessage.mock.calls[0][0]).toBe('chat-1')
   })
 
-  it('(a) probe drop mid-confirm reschedules the probe and does NOT recover', () => {
+  it('(a) probe drop mid-confirm reschedules the probe and does NOT recover', async () => {
     const inst = makeInstance()
     inst.start()
+    await settleOpen()
     forceYield(latestClient())
 
     // Fire the first probe.
     vi.runOnlyPendingTimers()
+    await settleOpen()
     const probeClient = latestClient()
 
     // Probe authenticates → confirm timer armed.
@@ -247,6 +270,7 @@ describe('WecomBotInstance connMode state machine', () => {
 
     // Fire the rescheduled probe → a NEW client is opened, still yielding.
     vi.runOnlyPendingTimers()
+    await settleOpen()
     expect(createdClients.length).toBe(clientsBefore + 1)
     expect(inst.connMode).toBe('yielding')
 
@@ -255,12 +279,14 @@ describe('WecomBotInstance connMode state machine', () => {
     expect(inst.connMode).toBe('yielding')
   })
 
-  it('does not recover if the confirm timer fires after leaving yielding mode', () => {
+  it('does not recover if the confirm timer fires after leaving yielding mode', async () => {
     // Guard: recoverToActive is gated on connMode still being 'yielding'.
     const inst = makeInstance()
     inst.start()
+    await settleOpen()
     forceYield(latestClient())
     vi.runOnlyPendingTimers()
+    await settleOpen()
     const probeClient = latestClient()
     probeClient.goAuthenticated()
     expect(inst.confirmTimer).not.toBeNull()

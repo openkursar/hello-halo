@@ -30,6 +30,7 @@ import type {
   RosterBusyEntry,
   TeamCheck,
   TeamActivity,
+  TeamToolAudit,
 } from '../../../shared/apps/team-types'
 
 // Re-export the frozen domain contract for apps/team consumers.
@@ -42,6 +43,7 @@ export type {
   TeamActivity,
   TeamActivityKind,
   TeamActivityStatus,
+  TeamToolAudit,
   TeamDelegatedPolicy,
   UpdateTeamMemberInput,
   TeamEdge,
@@ -84,6 +86,10 @@ export interface TeamRow {
   updated_at: number
   /** Office authority; added in migration v6 (null = hosted here). */
   host_node_id: string | null
+  /** Temporary space collaboration flag; added in migration v18. */
+  ephemeral: number
+  /** Coordinating space conversation of an ephemeral team; migration v18. */
+  coordinator_conversation_id: string | null
 }
 
 /** Row shape from the `team_members` table. */
@@ -94,6 +100,7 @@ export interface TeamMemberRow {
   role: string
   is_lead: number
   ai_provisioned: number
+  is_system_coordinator: number
   added_at: number
   /** Owning node; added in migration v5 (default 'SELF' for local members). */
   owner_node_id: string
@@ -123,6 +130,8 @@ export interface TeamCheckRow {
   target_app_id: string
   created_by_app_id: string
   instruction: string
+  /** Set from an external-origin turn; added in migration v19. */
+  external: number
   schedule_json: string
   run_count: number
   created_at: number
@@ -178,6 +187,21 @@ export interface TeamActivityRow {
   ref_id: string | null
   correlation_id: string | null
   status: string | null
+  created_at: number
+}
+
+/** Row shape from the `team_tool_audit` table (migration v17). */
+export interface TeamToolAuditRow {
+  id: string
+  team_id: string
+  epoch_id: string
+  app_id: string
+  actor_app_id: string | null
+  external: number
+  tool_name: string
+  detail: string
+  decision: string
+  reason: string | null
   created_at: number
 }
 
@@ -266,6 +290,12 @@ export interface TeamStore {
   updateTeamStatus(teamId: string, status: TeamStatus): void
   updateTeamLeadAppId(teamId: string, leadAppId: string | null): void
   updateTeamCurrentEpoch(teamId: string, epochId: string | null): void
+  /** Promote an ephemeral collaboration to a persistent team ("save as team"). */
+  clearEphemeral(teamId: string): void
+  /** Bind/unbind the space conversation that coordinates a collaboration. */
+  setCoordinatorConversation(teamId: string, conversationId: string | null): void
+  /** The ephemeral collaboration coordinated by a space conversation, or null. */
+  getCollabTeamByConversation(conversationId: string): Team | null
   deleteTeam(teamId: string): boolean
 
   // ── team_members ──────────────────────────────
@@ -282,6 +312,7 @@ export interface TeamStore {
   getMemberByName(teamId: string, memberName: string): TeamMember | null
   getMember(teamId: string, appId: string): TeamMember | null
   listMembersByAppId(appId: string): TeamMember[]
+  listDirectoryMemberships(): import('../../../shared/apps/people-directory').DirectoryMembership[]
 
   // ── joined-office projection ──────────────────
   /**
@@ -358,6 +389,17 @@ export interface TeamStore {
    * that knows its own blind spot and one that mistakes a window for the whole.
    */
   countActivityByEpoch(teamId: string, epochId: string): number
+
+  // ── team_tool_audit ───────────────────────────
+  /**
+   * Note one tool call a member made while somebody else was driving it.
+   * Idempotent by id like the activity log, and equally immutable.
+   */
+  insertToolAudit(entry: TeamToolAudit): void
+  /** Newest first; `appId` narrows to one member. */
+  listToolAudit(teamId: string, options?: { appId?: string; limit?: number }): TeamToolAudit[]
+  /** Drop rows older than a cutoff; returns how many went. */
+  pruneToolAudit(olderThan: number): number
 
   // ── team_epochs ───────────────────────────────
   updateWorkItem(epochId: string, patch: Partial<Pick<import('../../../shared/apps/team-types').TeamWorkItem, 'title' | 'status' | 'createdBy' | 'entryAppId'>>): void

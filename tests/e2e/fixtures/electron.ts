@@ -16,7 +16,7 @@ import { _electron as electron } from 'playwright'
 import path from 'path'
 import fs from 'fs'
 import crypto from 'crypto'
-import { fileURLToPath } from 'url'
+import { fileURLToPath, pathToFileURL } from 'url'
 
 // ESM compatibility: __dirname is not available in ES modules
 const __filename = fileURLToPath(import.meta.url)
@@ -50,14 +50,18 @@ interface ElectronFixtures {
 
 /**
  * Get the app entry point path.
- * Requires "npm run build" to produce out/main/index.mjs.
+ *
+ * Read from package.json's `main` rather than hard-coded: the bundle's module
+ * format is a build setting (electron.vite.config.ts) and the app's own entry
+ * field is the only thing that must agree with the launcher.
  */
 export function getAppEntryPath(): string {
   const projectRoot = path.resolve(__dirname, '../../..')
-  const appEntryPath = path.join(projectRoot, 'out/main/index.mjs')
+  const main = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf-8')).main as string
+  const appEntryPath = path.resolve(projectRoot, main)
 
   if (!fs.existsSync(appEntryPath)) {
-    throw new Error('Built app not found. Run "npm run build" first.')
+    throw new Error(`Built app not found at ${appEntryPath}. Run "npm run build" first.`)
   }
 
   // Ensure product.json exists in out/main/ so auth-loader can find providers.
@@ -162,7 +166,7 @@ export function createTestConfigDir(appPath: string): string {
       sources.push(oauthSource)
       console.log(`[E2E] Loaded OAuth source: ${oauthSource.provider}`)
     } catch (err) {
-      console.warn('[E2E] Failed to parse HALO_TEST_OAUTH_SOURCE:', err.message)
+      console.warn('[E2E] Failed to parse HALO_TEST_OAUTH_SOURCE:', err instanceof Error ? err.message : String(err))
     }
   }
 
@@ -261,8 +265,14 @@ export async function launchElectronApp(appEntryPath: string, testConfigDir: str
   // but Playwright needs Electron in full app mode to connect via CDP.
   const { ELECTRON_RUN_AS_NODE: _, ...cleanEnv } = process.env
 
-  return electron.launch({
-    args: [appEntryPath],
+  const bootstrap = path.join(path.dirname(appEntryPath), `.e2e-bootstrap-${crypto.randomUUID()}.cjs`)
+  const appData = path.join(testConfigDir, 'electron-data')
+  const userData = path.join(appData, 'user')
+  fs.mkdirSync(userData, { recursive: true })
+  // macOS resolves appData independently of HOME. Isolate browser storage before main imports.
+  fs.writeFileSync(bootstrap, `const { app } = require('electron');\napp.setPath('appData', ${JSON.stringify(appData)});\napp.setPath('userData', ${JSON.stringify(userData)});\nimport(${JSON.stringify(pathToFileURL(appEntryPath).href)});\n`)
+  const instance = await electron.launch({
+    args: [bootstrap],
     env: {
       ...cleanEnv,
       // Use test-specific config directory
@@ -277,7 +287,9 @@ export async function launchElectronApp(appEntryPath: string, testConfigDir: str
       // Mark as E2E test
       HALO_E2E_TEST: '1'
     }
-  })
+  }).catch(error => { fs.rmSync(bootstrap, { force: true }); throw error })
+  instance.once('close', () => fs.rmSync(bootstrap, { force: true }))
+  return instance
 }
 
 /**

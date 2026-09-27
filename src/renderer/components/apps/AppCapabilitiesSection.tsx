@@ -41,9 +41,9 @@ interface AppCapabilitiesSectionProps {
 
 /** Jump to Settings > Message Channels and scroll it into view. */
 function useGoToChannels() {
-  const { setView } = useAppStore()
+  const { navigate } = useAppStore()
   return () => {
-    setView('settings')
+    navigate('settings')
     setTimeout(() => {
       const el = document.getElementById('message-channels')
       el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
@@ -122,10 +122,6 @@ export function AppCapabilitiesSection({ app, appId, onRequireRestart }: AppCapa
 
   return (
     <div className="space-y-4">
-      <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        {t('Capabilities')}
-      </h3>
-
       {/* AI Browser */}
       <ToggleRow
         icon={Globe}

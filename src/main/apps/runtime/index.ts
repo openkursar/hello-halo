@@ -32,7 +32,12 @@
  */
 
 import type { DatabaseManager } from '../../platform/store'
-import type { AppManagerService } from '../manager'
+import { getAppManager, type AppManagerService } from '../manager'
+import { previewAppSpaceChange, changeAppDefaultSpace, retainAppEnvironments } from './space-change'
+import { readSessionMessages } from './session-store'
+import { buildAppCapabilityInventory } from './capability-inventory'
+import { buildPeopleDirectory } from './people-directory'
+import { getTeamStore } from '../team'
 import type { SchedulerService } from '../../platform/scheduler'
 import type { MemoryService } from '../../platform/memory'
 import type { BackgroundService } from '../../platform/background'
@@ -47,7 +52,7 @@ import { MIGRATION_NAMESPACE, migrations } from './migrations'
 import { createEventRouter, type EventRouter } from './event-router'
 import { FileWatcherSource } from './sources/file-watcher.source'
 import { WebhookSource, type WebhookSecretResolver } from './sources/webhook.source'
-import { ImChannelManager, WecomBotProvider, WeixinIlinkBotProvider, setActiveImChannelManager } from './im-channels'
+import { ImChannelManager, WecomBotProvider, WeixinIlinkBotProvider, FeishuBotProvider, setActiveImChannelManager } from './im-channels'
 import { ImSessionRegistry, setImSessionRegistry } from './im-session-registry'
 import { PendingRelayStore, setPendingRelayStore, getPendingRelayStore } from './pending-relays'
 import { dispatchInboundMessage, clearSupplementBuffersForInstance } from './dispatch-inbound'
@@ -55,10 +60,11 @@ import { clearAllImPermissionContexts } from './im-permission-registry'
 import { clearAllImStreamHandles } from './im-stream-registry'
 import { getConfig } from '../../foundation/config.service'
 import { getDataFolderName } from '../../foundation/product-config'
-import { getAppManager } from '../manager'
 import { onMcpAppsChange } from '../manager/service'
-import { createHaloAppsMcpServer } from '../conversation-mcp'
+import { createHaloAppsMcpServer, createSpaceTeamMcpServer, TEAM_TOOLSET_GUIDE } from '../conversation-mcp'
+import { TEAM_MCP_SERVER_NAME } from '../../../shared/apps/team-types'
 import { registerAppBridge } from '../../services/app-bridge'
+import { registerToolset } from '../../services/agent/toolsets/registry'
 import { handleMcpAppsChange } from '../../services/agent/session-manager'
 import { handleMcpAppsChangeForStatus } from '../../services/agent/mcp-probe'
 import type { AppRuntimeService } from './types'
@@ -67,13 +73,21 @@ import type { AppRuntimeService } from './types'
 export type {
   AppRuntimeService,
   AppRunResult,
+  AppOverviewEntry,
   AppRunStartInfo,
   AutomationAppState,
   AutomationRun,
+  AutomationRunWithSummary,
+  ExecutionEnvironment,
+  ActivitySource,
+  EscalationContinuation,
   ActivityEntry,
   ActivityEntryContent,
   ActivityEntryType,
   ActivityQueryOptions,
+  PendingDecisionQuery,
+  RunQueryOptions,
+  RunStats,
   EscalationResponse,
   TriggerContext,
   TriggerType,
@@ -92,6 +106,7 @@ export {
 
 // Re-export concurrency for testing
 export { Semaphore } from './concurrency'
+export { createPersonContextTool } from './person-context-tool'
 
 // Re-export app chat functions
 export {
@@ -114,6 +129,7 @@ export {
   createNativeChatSession,
   forkNativeChatSession,
   deleteNativeChatSession,
+  renameChatSession,
 } from './app-chat'
 export type { AppChatRequest, NativeSessionResult } from './app-chat'
 
@@ -143,6 +159,9 @@ export {
 // Re-export IM session registry accessor
 export { getImSessionRegistry } from './im-session-registry'
 export { ImSessionRegistry } from './im-session-registry'
+
+// Digital-human memory as its owner sees it from settings (called by IPC/HTTP)
+export { getDigitalHumanMemoryStatus, consolidateDigitalHumanMemoryNow } from './memory-control'
 
 // Re-export IM session invalidation (called by IPC reload handler)
 export { invalidateImSessions } from '../../services/agent/session-manager'
@@ -223,6 +242,24 @@ export async function initAppRuntime(
   // the MCP-apps-change event from this side.
   registerAppBridge({ getAppManager, createHaloAppsMcpServer, onMcpAppsChange })
   onMcpAppsChange(handleMcpAppsChange)
+  // Team collaboration is an opt-in toolset, not an always-on server: its tool
+  // surface (and usage guide) enters a space conversation only when the user
+  // flips the switch, the same shape as ai-browser / ai-terminal. Registered
+  // from the apps tier because the team service lives here; the registry is a
+  // downward import.
+  registerToolset({
+    id: TEAM_MCP_SERVER_NAME,
+    displayName: 'Team Collaboration',
+    summary: 'Assemble a team of AI members to work in parallel, coordinate them, and delegate to saved teams.',
+    usageGuide: TEAM_TOOLSET_GUIDE,
+    isAvailable: () => true,
+    createServer: (scope) =>
+      createSpaceTeamMcpServer({
+        spaceId: scope.spaceId,
+        conversationId: scope.conversationId,
+        workDir: scope.workDir,
+      }),
+  })
   // Keep the shared MCP status cache honest: probe on enable/install/update,
   // drop stale entries on pause/uninstall.
   onMcpAppsChange(handleMcpAppsChangeForStatus)
@@ -278,6 +315,16 @@ export async function initAppRuntime(
   setImSessionRegistry(registry)
   imSessionRegistryInstance = registry
 
+  for (const app of deps.appManager.listApps({ type: 'automation' })) {
+    if (app.status === 'uninstalled' || store.getSessionEnvironment(`environment-backfill:${app.id}`)) continue
+    try {
+      retainAppEnvironments(deps.appManager, store, app)
+    } catch (error) {
+      console.warn('[Runtime] Legacy environment backfill blocked; original storage must be restored', { appId: app.id, error })
+    }
+  }
+
+
   // ── Pending Relay Spool ─────────────────────────────────────────────
   // Records notify_bot pushes against their target sessions so the target's
   // AI regains awareness of them on its next inbound message.
@@ -297,7 +344,7 @@ export async function initAppRuntime(
   // Register built-in providers
   imChannelManager.registerProvider(new WecomBotProvider())
   imChannelManager.registerProvider(new WeixinIlinkBotProvider())
-  // Future: imChannelManager.registerProvider(new FeishuBotProvider())
+  imChannelManager.registerProvider(new FeishuBotProvider())
   // Future: imChannelManager.registerProvider(new DingTalkBotProvider())
 
   // Clean up supplement buffers when an instance is torn down
@@ -381,6 +428,50 @@ export function getAppMemoryService(): MemoryService | null {
  */
 export function getActivityStore(): ActivityStore | null {
   return activityStoreRef
+}
+
+function spaceChangeDependencies() {
+  const manager = getAppManager()
+  if (!manager || !activityStoreRef || !runtimeService) throw new Error('App services are not initialized')
+  return { manager, store: activityStoreRef, runtime: runtimeService }
+}
+
+export function getStudioSummary(language?: string) {
+  const manager = getAppManager()
+  if (!manager) throw new Error('App manager is not initialized')
+  // Must exclude exactly what the directory listing excludes, or the summary
+  // counts disagree with the rows underneath them.
+  const ephemeral = getTeamStore()?.listDirectoryMemberships()
+    .filter(member => member.ephemeral)
+    .map(member => member.appId) ?? []
+  return manager.getStudioSummary(language, ephemeral)
+}
+
+export function listPeopleDirectory(query: import('../../../shared/apps/people-directory').PeopleDirectoryQuery = {}) {
+  const deps = spaceChangeDependencies()
+  return buildPeopleDirectory(deps.manager, deps.store, deps.runtime, getTeamStore()?.listDirectoryMemberships() ?? [], query)
+}
+
+export function getAppCapabilityInventory() {
+  const manager = getAppManager()
+  if (!manager || !activityStoreRef) throw new Error('App services are not initialized')
+  return buildAppCapabilityInventory(manager, activityStoreRef)
+}
+
+export function getAppSpaceChangePreview(appId: string, newSpaceId: string) {
+  return previewAppSpaceChange(spaceChangeDependencies(), appId, newSpaceId)
+}
+
+export async function moveAppDefaultSpace(appId: string, newSpaceId: string): Promise<void> {
+  await changeAppDefaultSpace(spaceChangeDependencies(), appId, newSpaceId)
+}
+
+export function readAppRunMessages(appId: string, runId: string) {
+  const run = activityStoreRef?.getRun(runId)
+  if (!run || run.appId !== appId) throw new Error('Execution is unavailable for this digital human')
+  const spacePath = run.environment?.spacePath
+  if (!spacePath) throw new Error('The original execution environment is unavailable')
+  return readSessionMessages(spacePath, appId, runId)
 }
 
 /**

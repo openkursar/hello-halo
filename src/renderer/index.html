@@ -27,6 +27,12 @@
         if (navigator.userAgent.indexOf('Windows') !== -1) {
           document.documentElement.classList.add('platform-win');
         }
+        // Real desktop window (not a browser tab, not the mobile shell) — lets
+        // CSS draw window-edge chrome the OS would otherwise own.
+        var isNative = window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform();
+        if (navigator.userAgent.indexOf('Electron') !== -1 && !isNative) {
+          document.documentElement.classList.add('platform-desktop');
+        }
       })();
     </script>
     <!-- Baidu Tongji Analytics SDK -->

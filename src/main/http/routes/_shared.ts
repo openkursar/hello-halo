@@ -13,6 +13,7 @@ import { Readable } from 'stream'
 import * as agentController from '../../controllers/agent.controller'
 import * as spaceController from '../../controllers/space.controller'
 import * as conversationController from '../../controllers/conversation.controller'
+import * as taskController from '../../controllers/task.controller'
 import * as configController from '../../controllers/config.controller'
 import * as tlonController from '../../controllers/tlon.controller'
 import { getEnabledAuthProviderConfigs, getAISourceManager } from '../../services/ai-sources'
@@ -38,11 +39,10 @@ import { getSpace, getAllSpacePaths } from '../../services/space.service'
 import { getTlonRoot } from '../../services/tlon'
 import { getAppManager } from '../../apps/manager'
 import { AppAlreadyInstalledError, McpCommandBlockedError } from '../../apps/manager/errors'
-import { getAppRuntime, getImChannelManager, sendAppChatMessage, stopAppChat, stopAppChatConversation, isAppChatGenerating, isAppChatConversationGenerating, loadAppChatMessages, loadImChatMessages, loadChatMessagesForConversation, getAppChatSessionState, getAppChatConversationId, clearAppChat, clearImSession, stopImSession, restartAppChat, createNativeChatSession, forkNativeChatSession, deleteNativeChatSession, dispatchInboundMessage } from '../../apps/runtime'
+import { getAppRuntime, getImChannelManager, sendAppChatMessage, stopAppChat, stopAppChatConversation, isAppChatGenerating, isAppChatConversationGenerating, loadAppChatMessages, loadImChatMessages, loadChatMessagesForConversation, getAppChatSessionState, getAppChatConversationId, clearAppChat, clearImSession, stopImSession, restartAppChat, createNativeChatSession, forkNativeChatSession, deleteNativeChatSession, renameChatSession, dispatchInboundMessage } from '../../apps/runtime'
 import { buildDefaultAssistantSpec } from '../../apps/runtime/im-channels/wecom-bot-default-spec'
 import type { AppListFilter, UninstallOptions, InstalledApp } from '../../apps/manager'
 import type { ActivityQueryOptions, EscalationResponse, AppChatRequest } from '../../apps/runtime'
-import { readSessionMessages } from '../../apps/runtime/session-store'
 import { getImSessionRegistry } from '../../apps/runtime/im-session-registry'
 import { listAvailableSkills } from '../../apps/skill-discovery'
 import { deriveSkillCommandName } from '../../apps/spec/skill-identity'
@@ -107,6 +107,13 @@ import {
   pollResult as wecomPollResult,
   ScanAuthError as WecomScanAuthError,
 } from '../../apps/runtime/im-channels/wecom-bot-scan-auth'
+import {
+  beginRegistration as feishuBeginRegistration,
+  pollRegistration as feishuPollRegistration,
+  FeishuScanAuthError,
+} from '../../apps/runtime/im-channels/feishu-bot-scan-auth'
+import { buildFeishuAssistantSpec } from '../../apps/runtime/im-channels/feishu-bot-default-spec'
+import { readFeishuReachability } from '../../apps/runtime/im-channels/feishu-bot.provider'
 
 // Helper: get working directory for a space
 export function getWorkingDir(spaceId: string): string {
@@ -221,6 +228,7 @@ export {
   McpCommandBlockedError,
   Readable,
   WecomScanAuthError,
+  FeishuScanAuthError,
   agentController,
   analytics,
   RENDERER_ALLOWED_EVENTS,
@@ -228,9 +236,14 @@ export {
   basename,
   broadcastToAll,
   buildDefaultAssistantSpec,
+  buildFeishuAssistantSpec,
+  feishuBeginRegistration,
+  feishuPollRegistration,
+  readFeishuReachability,
   clearAllTokenCaches,
   clearAppChat,
   clearImSession,
+  renameChatSession,
   createNativeChatSession,
   forkNativeChatSession,
   deleteNativeChatSession,
@@ -281,7 +294,6 @@ export {
   moveArtifact,
   patchTouchesMcp,
   readArtifactContent,
-  readSessionMessages,
   readdirSync,
   realpathSync,
   reconcileArtifacts,
@@ -300,6 +312,7 @@ export {
   statSync,
   stopAppChat,
   storeController,
+  taskController,
   testChannel,
   tlonController,
   trashArtifact,

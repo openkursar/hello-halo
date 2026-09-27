@@ -18,8 +18,8 @@ import { ChevronRight, Send, ExternalLink } from 'lucide-react'
 import type { Message } from '../../../types'
 import { useTranslation } from '../../../i18n'
 import { useChatStore } from '../../../stores/chat.store'
-import { navigateToConversation } from '../../pulse'
-import { formatTimeAgo } from '../../../utils/time'
+import { navigateToConversation } from '../../../utils/conversation-navigation'
+import { formatTimeAgo } from '../../../utils/format-time'
 import { readProvenance } from './message-source'
 
 /**

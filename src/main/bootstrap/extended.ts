@@ -42,13 +42,16 @@ import { registerPerfHandlers } from '../ipc/perf'
 import { registerGitBashHandlers, initializeGitBashOnStartup } from '../ipc/git-bash'
 import { cleanupAllCaches } from '../services/artifact-cache.service'
 import { flushSpaceActivity } from '../services/space.service'
+import { onConversationDeleted } from '../services/conversation.service'
 import { disposeSearchContext } from '../services/web-search'
 import {
   initConversationInterop,
   disposeConversationInterop,
   createConversationInteropMcpServer,
+  deliverExternalMessage,
 } from '../services/conversation-interop'
 import { setConversationInteropFactory } from '../services/agent/toolsets/broker'
+import { initSpaceMemoryConsolidation, disposeSpaceMemoryConsolidation } from '../services/memory-consolidation'
 import { markExtendedServicesReady } from './state'
 import { getMainWindow, sendToRenderer } from '../foundation/window.service'
 import { initializeHealthSystem, setSessionCleanupFn } from '../services/health'
@@ -56,8 +59,10 @@ import { closeAllV2Sessions } from '../services/agent/session-manager'
 import { registerHealthHandlers } from '../ipc/health'
 import { initBackground, shutdownBackground, getBackgroundService, setDaemonStealthInjector } from '../platform/background'
 import { injectStealthScripts } from '../services/stealth'
-import { initStore, shutdownStore } from '../platform/store'
+import { initStore, shutdownStore, isSchemaAheadError } from '../platform/store'
 import type { DatabaseManager } from '../platform/store'
+import { refuseNewerData } from './schema-refusal'
+import { initTaskState } from '../platform/task-state'
 import { initScheduler, shutdownScheduler } from '../platform/scheduler'
 import { initMemory } from '../platform/memory'
 import { setMemorySdk } from '../platform/memory/sdk'
@@ -71,13 +76,13 @@ import { recoverPersistedOffices } from './office-recovery'
 import { initIdentity, getLocalIdentity, getLocalPublicKeyPem, signWithLocalKey } from '../http/identity'
 import { verifyOfficeCredential } from '../http/auth'
 import { setFederationInbound, sendFederationFrameToClient, listOfficeClientIds, broadcastToAll, getSessionIdentity } from '../http/websocket'
-import { createFederationManager, setFederationManager, getFederationManager, makeLocationAwareSessionDeps, withOwnerResolvedSpace, createRelayCapture, createLocationAwareBlackboard, WsFederationClient, classifyArtifactFetchFailure } from '../apps/runtime/federation'
+import { createFederationManager, setFederationManager, getFederationManager, makeLocationAwareSessionDeps, withOwnerResolvedSpace, withExternalOrigin, createRelayCapture, createLocationAwareBlackboard, WsFederationClient, classifyArtifactFetchFailure } from '../apps/runtime/federation'
 import { getRemoteAccessStatus } from '../services/remote'
 import type { OwnerStatus, MemberWriteRecord, ArtifactRef } from '../apps/runtime/federation'
 import { SELF_NODE_ID, TEAM_EVENTS, buildTeamSessionKey } from '../../shared/apps/team-types'
 import type { BlackboardTask, BlackboardFinding, TaskStatus, TeamActivity, TeamUpdatedEvent, TeamEpoch, TeamCheck } from '../../shared/apps/team-types'
 import { parseTeamSessionKey, parseTeamChatKey } from '../../shared/apps/im-keys'
-import { createTeamRuntime, setActiveTeamRuntime, getActiveTeamRuntime, createTeamTriggerScheduler, createDefaultSessionDeps, createTeamArtifactReader, createLocalArtifactResolver, RemoteArtifactError } from '../apps/runtime/team'
+import { createTeamRuntime, setActiveTeamRuntime, getActiveTeamRuntime, createTeamTriggerScheduler, createDefaultSessionDeps, createTeamArtifactReader, createTeamArtifactOpener, createLocalArtifactResolver, createLocalArtifactPathResolver, RemoteArtifactError, pruneSharedFileCopies, defaultSharedCopyRoot } from '../apps/runtime/team'
 import { readTeamMemberMessages, isAppChatConversationGenerating } from '../apps/runtime/app-chat'
 import type { TeamTriggerScheduler } from '../apps/runtime/team'
 import { createSpace, deleteSpace, getSpace, getSpaceDir } from '../services/space.service'
@@ -87,9 +92,11 @@ import { runStartupSnapshot } from '../services/analytics/snapshot'
 import { analytics } from '../services/analytics/analytics.service'
 import { registerAppHandlers } from '../ipc/app'
 import { registerTeamIpc } from '../ipc/team'
+import { registerTaskHandlers } from '../ipc/task'
 import { registerAnalyticsHandlers } from '../ipc/analytics'
 import { registerNotificationChannelHandlers } from '../ipc/notification-channels'
 import { registerWecomBotHandlers } from '../ipc/wecom-bot'
+import { registerFeishuBotHandlers } from '../ipc/feishu-bot'
 import { registerImChannelHandlers } from '../ipc/im-channels'
 import { registerImSessionHandlers } from '../ipc/im-sessions'
 import { registerStoreHandlers } from '../ipc/store'
@@ -112,7 +119,12 @@ import { cleanupImChannelTempFiles, getActiveImChannelManager } from '../apps/ru
 import { registerIdleTask, startIdleDrain } from './idle-queue'
 import { seedDefaultAppIfNeeded } from '../apps/manager/seed'
 import { loadBuiltinApps } from '../apps/manager/builtin-loader'
+import { seedBuiltinSkills } from '../apps/manager/builtin-skills'
+import { verifyOfficeRuntime } from '../services/office-runtime'
 import { backfillKnowledgeSeeds } from '../apps/manager/knowledge-backfill'
+
+/** Age past which a local copy of a teammate's shared file is removed at startup. */
+const SHARED_COPY_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 
 // Module-level reference to db for cleanup
 let platformDb: DatabaseManager | null = null
@@ -121,6 +133,7 @@ let platformDb: DatabaseManager | null = null
 let disposeRelayCapture: { dispose(): void } | null = null
 let flushRelayCapture: (() => void) | null = null
 let onSystemResume: (() => void) | null = null
+let taskStateService: Awaited<ReturnType<typeof initTaskState>> | null = null
 
 /**
  * Initialize platform (store, scheduler, memory) and apps
@@ -149,6 +162,7 @@ async function initPlatformAndApps(): Promise<void> {
   // Note: SDK is initialized earlier in index.ts (before essential services)
   const db = await initStore()
   platformDb = db
+  taskStateService = await initTaskState({ db })
 
   // ── Phase 1: Platform services (parallel) ───────────────────────────────
   // Dispatch-layer concurrency cap for the scheduler. The runtime execution
@@ -185,6 +199,11 @@ async function initPlatformAndApps(): Promise<void> {
   // No DB/store dependency — dormant until the halo-conversations toolset
   // (services/agent/toolsets/broker.ts) actually registers a wait.
   initConversationInterop()
+
+  // Space memory consolidation: subscribes to onAgentEvent turn ends and, when
+  // a space's memory has grown past its threshold, reorganises it in the
+  // background (services/memory-consolidation/space-trigger.ts).
+  initSpaceMemoryConsolidation()
 
   // Wire the toolset broker's dependency-inversion seam (mirrors
   // setSessionInvalidator/setActiveTeamRuntime/setMemorySdk): broker.ts must
@@ -581,8 +600,14 @@ async function initPlatformAndApps(): Promise<void> {
           const run = async () => {
             notifyLocalBoard()
             try {
+              // Two corrections a wake needs on arrival, both because every
+              // field on it was written by the sender: the member's real space
+              // here, and the fact that this request came from another machine.
               return await localSessionDeps.sendAppChatMessage(
-                withOwnerResolvedSpace(request, (appId) => localSessionDeps.getMemberSpaceId(appId))
+                withOwnerResolvedSpace(
+                  withExternalOrigin(request),
+                  (appId) => localSessionDeps.getMemberSpaceId(appId)
+                )
               )
             } finally {
               notifyLocalBoard()
@@ -677,6 +702,13 @@ async function initPlatformAndApps(): Promise<void> {
         // member, diverging from how the same member reads on its own node.
         readMemberHistory: ({ teamId, appId, epochId }) =>
           serializeTeamTranscript(teamId, appId, epochId),
+        // Owner-side turn abort: a stop pressed on a viewer's machine lands here,
+        // in the only process where that member's turn actually runs. Routed
+        // through the LOCAL session deps — the same call a stop pressed on this
+        // machine makes — so a teammate stops identically whichever keyboard the
+        // button was pressed on.
+        stopMemberTurn: ({ teamId, appId, epochId }) =>
+          localSessionDeps.stopTeamSession(appId, teamId, epochId),
         // The same read without the request-scoped seam, driving the session-feed
         // plane's proactive replication of owned transcripts to every office node.
         readOwnedTranscript: (teamId, appId, epochId) =>
@@ -824,6 +856,13 @@ async function initPlatformAndApps(): Promise<void> {
           // undefined → `unregister()` threw → the remote wake promise never
           // resolved → 30-min hang + "no waiter; dropping").
           registerTurnComplete: (corr, cb) => fedManager.registerTurnComplete(corr, cb),
+          sendStop: (p) =>
+            fedManager.stopMemberTurn({
+              officeId: p.officeId,
+              ownerNodeId: p.ownerNodeId,
+              appId: p.appId,
+              epochId: p.epochId,
+            }),
         })
       : localSessionDeps
 
@@ -835,31 +874,47 @@ async function initPlatformAndApps(): Promise<void> {
     // Last board-discard notice per office (see onWriteDiscarded coalescing).
     const boardDiscardNoticeAt = new Map<string, number>()
 
+    // Pull a remote producer's bytes from its owner node, with federation error
+    // codes translated into the typed contract apps/runtime/team declares — so
+    // raw transport strings never reach an agent message or a person's screen.
+    // Shared by the agent reader and the person opener below, which must agree
+    // on where a ref's bytes come from.
+    const fetchRemoteArtifact = fedManager
+      ? {
+          fetchRemote: async ({ teamId, epochId, ref, ownerNodeId }: { teamId: string; epochId: string; ref: string; ownerNodeId: string }) => {
+            try {
+              return (
+                (await getFederationManager()?.fetchArtifact({
+                  officeId: teamId,
+                  ref: { ownerNodeId, teamId, epochId, ref },
+                })) ?? null
+              )
+            } catch (err) {
+              const msg = (err as Error).message
+              throw new RemoteArtifactError(classifyArtifactFetchFailure(msg), msg)
+            }
+          },
+        }
+      : {}
+
     // Location-transparent artifact reader powering `team_read_artifact` (logic
     // in apps/runtime/team/artifact-read). Bootstrap only bridges: local bytes
-    // via the shared resolver, remote bytes via the federation manager with its
-    // fetch failures translated into the reader's typed contract — so raw
-    // transport codes never leak into agent-facing messages.
+    // via the shared resolver, remote bytes via the fetch above.
     const readTeamArtifact = createTeamArtifactReader({
       store: teamStore,
       readLocalBytes: readLocalArtifactBytes,
-      ...(fedManager
-        ? {
-            fetchRemote: async ({ teamId, epochId, ref, ownerNodeId }) => {
-              try {
-                return (
-                  (await getFederationManager()?.fetchArtifact({
-                    officeId: teamId,
-                    ref: { ownerNodeId, teamId, epochId, ref },
-                  })) ?? null
-                )
-              } catch (err) {
-                const msg = (err as Error).message
-                throw new RemoteArtifactError(classifyArtifactFetchFailure(msg), msg)
-              }
-            },
-          }
-        : {}),
+      ...fetchRemoteArtifact,
+    })
+
+    // The same resolution for a person clicking a shared file: a path the OS can
+    // open, with a teammate's file copied here read-only first.
+    const openTeamArtifact = createTeamArtifactOpener({
+      store: teamStore,
+      resolveLocalPath: createLocalArtifactPathResolver({
+        store: teamStore,
+        getWorkDirForApp: resolveAppWorkDir,
+      }),
+      ...fetchRemoteArtifact,
     })
 
     // Human name for an IM chatKey ("{instanceId}:{chatType}:{chatId}"): resolve
@@ -964,6 +1019,26 @@ async function initPlatformAndApps(): Promise<void> {
         },
         // See `TurnReportDeps.isLeadGenerating` for the contract this fills.
         isLeadGenerating: isAppChatConversationGenerating,
+        // A space coordinator's "inbox" is its space conversation: member
+        // replies and turn-end notices land there through the conversation
+        // delivery layer (wake when idle, queue behind a busy turn). A full
+        // mailbox or a vanished conversation reads as undelivered — loud, so
+        // the sending member is told instead of waiting forever.
+        deliverToSpaceCoordinator: async (request) => {
+          const result = await deliverExternalMessage({
+            spaceId: request.spaceId,
+            toConversationId: request.conversationId,
+            turnInput: request.turnInput,
+            persist: {
+              content: request.persist.content,
+              source: 'team-message',
+              metadata: request.persist.metadata,
+            },
+          })
+          if (!result.ok) {
+            throw new Error(`Could not reach the coordinating conversation (${result.reason})`)
+          }
+        },
         onBlackboardWrite: (record) => getFederationManager()?.routeAuthorityWrite(record),
         // Auto-seal (quiescence) / breach end a run without going through the
         // service-level pauseTeam, so they must also push the rested run-state to
@@ -1051,6 +1126,7 @@ async function initPlatformAndApps(): Promise<void> {
         resolveWorkDir: (spaceId) => getSpaceDir(spaceId) || null,
       },
       listArtifacts: (spaceId) => listArtifacts(spaceId),
+      openArtifact: openTeamArtifact,
       // Decisions waiting on the user (survive a run seal, P0-5) + IM chat naming
       // for the conversation list — share the same reads as the runtime.
       getPendingEscalations: () => readPendingEscalations(),
@@ -1114,6 +1190,29 @@ async function initPlatformAndApps(): Promise<void> {
       teamTriggerScheduler.rehydrate()
     } else if (teamService && !eventRouter) {
       console.warn('[Bootstrap] EventRouter unavailable; team trigger scheduler not initialized')
+    }
+
+    // A space conversation that coordinated a temporary collaboration is that
+    // collaboration's whole reason to exist: deleting the conversation
+    // dissolves an ephemeral team (member apps cleaned up) and unbinds a saved
+    // one, so hidden member apps can never outlive the work they were made for.
+    if (teamService) {
+      onConversationDeleted((_spaceId, conversationId) => {
+        try {
+          const collabTeam = teamStore.getCollabTeamByConversation(conversationId)
+          if (!collabTeam) return
+          if (collabTeam.ephemeral) {
+            console.log(`[Bootstrap] conversation deleted → dissolving collaboration team=${collabTeam.id}`)
+            void teamService.dissolveTeam(collabTeam.id).catch((err) =>
+              console.error('[Bootstrap] collaboration cleanup failed:', err)
+            )
+          } else {
+            teamStore.setCoordinatorConversation(collabTeam.id, null)
+          }
+        } catch (err) {
+          console.error('[Bootstrap] collaboration cleanup failed:', err)
+        }
+      })
     }
 
     // Periodic checks share the scheduler and the same pre-start window — their
@@ -1208,6 +1307,11 @@ async function initPlatformAndApps(): Promise<void> {
   registerIdleTask('seed-default-app', () => seedDefaultAppIfNeeded(appManager))
   registerIdleTask('startup-snapshot', () => runStartupSnapshot(appManager, runtime))
   registerIdleTask('backfill-knowledge-seeds', () => backfillKnowledgeSeeds(appManager))
+  // Copies of teammates' files are only a way to open them; the original is
+  // fetched again on the next click, so a week-old copy is dead weight.
+  registerIdleTask('prune-shared-file-copies', () => pruneSharedFileCopies(defaultSharedCopyRoot(), SHARED_COPY_MAX_AGE_MS))
+  registerIdleTask('seed-builtin-skills', () => seedBuiltinSkills(appManager))
+  registerIdleTask('verify-office-runtime', () => verifyOfficeRuntime())
   startIdleDrain()
 
   const dt = performance.now() - t0
@@ -1360,12 +1464,17 @@ export function initializeExtendedServices(): void {
 
   // Digital Team IPC handlers (team:list, team:create, team:run, etc.)
   registerTeamIpc()
+  // Task panel bookkeeping IPC handlers (task:list-state, task:mark-read, etc.)
+  registerTaskHandlers()
 
   // Notification channel IPC handlers (notify-channels:test, etc.)
   registerNotificationChannelHandlers()
 
   // WeCom Bot IPC handlers — legacy compat, delegates to ImChannelManager
   registerWecomBotHandlers()
+
+  // Feishu Bot IPC handlers — QR device flow that creates the Feishu app
+  registerFeishuBotHandlers()
 
   // IM Channel IPC handlers (multi-instance: im-channels:status, im-channels:reconnect, etc.)
   registerImChannelHandlers()
@@ -1413,6 +1522,12 @@ export function initializeExtendedServices(): void {
   // Platform + Apps: Store, Scheduler, Memory, AppManager, AppRuntime
   // Runs fully asynchronously -- does not block the UI or extended-ready event.
   initPlatformAndApps().catch((err) => {
+    // Data written by a newer build is not a failure to log past — the app
+    // must stop before anything writes through a schema it cannot read.
+    if (isSchemaAheadError(err)) {
+      refuseNewerData(err)
+      return
+    }
     console.error('[Bootstrap] Platform+Apps initialization failed:', err)
   })
 
@@ -1452,6 +1567,7 @@ export async function cleanupExtendedServices(): Promise<void> {
 
   // Cross-Conversation Interop: drop the onAgentEvent subscription.
   disposeConversationInterop()
+  disposeSpaceMemoryConsolidation()
 
   // Team: Tear down the service + runtime accessor and the data layer before
   // the App Manager goes away (the service holds an App Manager reference).
@@ -1491,6 +1607,8 @@ export async function cleanupExtendedServices(): Promise<void> {
   await shutdownScheduler().catch(err => console.error('[Bootstrap] Scheduler shutdown error:', err))
 
   // Platform: Close database connections
+  taskStateService?.dispose()
+  taskStateService = null
   if (platformDb) {
     await shutdownStore(platformDb).catch(err => console.error('[Bootstrap] Store shutdown error:', err))
     platformDb = null

@@ -257,6 +257,34 @@ function cleanNodePtyPrebuilds(context) {
     console.log(`[afterPack] ${key}: removed ${removed.length} non-target node-pty prebuild(s): ${removed.join(', ')}`);
   }
   console.log(`[afterPack] ${key}: keeping node-pty prebuilds/${targetDir}`);
+
+  // The ConPTY runtime ships one directory per Windows architecture; only the
+  // target's is ever loaded.
+  const conptyRoot = path.join(unpackedDir, 'node_modules', 'node-pty', 'third_party', 'conpty');
+  if (platform === 'win32' && fs.existsSync(conptyRoot)) {
+    for (const release of fs.readdirSync(conptyRoot)) {
+      const releaseDir = path.join(conptyRoot, release);
+      if (!fs.statSync(releaseDir).isDirectory()) continue;
+      for (const archDir of fs.readdirSync(releaseDir)) {
+        if (archDir === `win10-${archStr}`) continue;
+        fs.rmSync(path.join(releaseDir, archDir), { recursive: true });
+        console.log(`[afterPack] ${key}: removed non-target node-pty conpty/${release}/${archDir}`);
+      }
+    }
+  }
+
+  // build/ and bin/ hold binaries compiled for the build host. node-pty tries
+  // build/ before prebuilds/, so in a package for another platform or chip they
+  // are dead weight that fails to load before the matching prebuild is found.
+  const hostKey = `${process.platform}-${process.arch}`;
+  if (hostKey !== key) {
+    for (const dir of ['build', 'bin']) {
+      const hostBuilt = path.join(unpackedDir, 'node_modules', 'node-pty', dir);
+      if (!fs.existsSync(hostBuilt)) continue;
+      fs.rmSync(hostBuilt, { recursive: true });
+      console.log(`[afterPack] ${key}: removed node-pty/${dir} (compiled for build host ${hostKey})`);
+    }
+  }
 }
 
 /**
@@ -772,14 +800,38 @@ function validateProductConfig(pkg) {
     `[afterPack] product.json present (dataFolderName=${product.dataFolderName ?? 'halo'}, ` +
     `authProviders=${product.authProviders.length})`
   );
+  return product;
+}
+
+/**
+ * A staged Windows build without its helper does not fail: the runtime quietly
+ * falls back to the installer path, so nobody notices the fast path is gone.
+ * The helper arrives via win.extraResources, which copies nothing — silently —
+ * when the helper was never compiled. Mirrors getWindowsUpdateMode's rule for
+ * when staged is actually in effect.
+ */
+function validateUpdateHelper(context, product) {
+  if (context.electronPlatformName !== 'win32') return;
+  const update = product.updateConfig ?? {};
+  if (update.windowsMode !== 'staged' || !update.manifestPublicKey?.trim()) return;
+
+  const helperPath = path.join(getResourcesDir(context), 'update-helper', 'halo-update-helper.exe');
+  if (!fs.existsSync(helperPath)) {
+    throw new Error(
+      '[afterPack] product.json enables staged Windows updates but update-helper/halo-update-helper.exe ' +
+      'is missing from resources. Fix: node scripts/build-update-helper.mjs'
+    );
+  }
+  console.log('[afterPack] Windows update helper present');
 }
 
 function validatePackagedArtifact(context) {
   console.log('[afterPack] Validating packaged artifact...');
   const pkg = createPackageReader(context);
   validateEngineRuntimes(pkg);
-  validateProductConfig(pkg);
+  const product = validateProductConfig(pkg);
   validateUpdaterConfig(context);
+  validateUpdateHelper(context, product);
   console.log('[afterPack] Packaged artifact validation passed');
 }
 

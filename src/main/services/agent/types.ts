@@ -6,6 +6,7 @@
  */
 
 import type { ReasoningEffortSetting } from '../../../shared/constants/reasoning-effort'
+import type { Goal, GoalInput } from '../../../shared/types/goal'
 
 // ============================================
 // API Credentials
@@ -32,6 +33,8 @@ export interface ResolvedModelCapabilities {
    * guess on the wire for exactly the models Halo knows nothing about.
    */
   maxOutputTokensConfigured: boolean
+  /** The model thinks adaptively instead of against a token budget. */
+  adaptiveThinking?: boolean
 }
 
 /**
@@ -147,6 +150,7 @@ export interface AgentRequest {
   canvasContext?: CanvasContext  // Current canvas state for AI awareness
   knowledgeBaseId?: string         // When set, run as a "chat with this knowledge base" turn:
                               // working dir = the KB's wiki dir, that KB injected into the prompt
+  goal?: GoalInput            // Set as the conversation goal before this message runs (engines with features.goal)
 }
 
 // ============================================
@@ -249,6 +253,10 @@ export type V2SDKSession = {
   // Optional because alternate engines may not expose them — callers must guard.
   setMaxThinkingTokens?: (maxThinkingTokens: number | null) => Promise<void>
   setPermissionMode?: (mode: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan') => Promise<void>
+  // Session goal — present on engines advertising `features.goal`.
+  getGoal?: () => Goal | null
+  /** Throws TypeError on a blank objective. */
+  setGoal?: (goal: GoalInput | null) => Goal | null
 }
 
 /**
@@ -336,6 +344,8 @@ export interface McpServerStatusInfo {
   errorDetail?: string
   /** Epoch ms of the last probe/SDK report that produced this entry */
   lastCheckedAt?: number
+  /** Round-trip time of the last native probe, in milliseconds. */
+  latencyMs?: number
 }
 
 // ============================================

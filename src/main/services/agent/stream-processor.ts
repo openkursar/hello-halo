@@ -24,6 +24,7 @@ import type {
   SingleCallUsage,
   SessionState
 } from './types'
+import type { Goal, GoalChangeSource } from '../../../shared/types/goal'
 import { emitAgentEvent } from './events'
 import { parseSDKMessage } from './message-utils'
 import {
@@ -42,7 +43,7 @@ import {
   handleTaskNotification,
   type SubAgentContext
 } from './subagent-handler'
-import { TRANSPARENT_TOOLS } from './constants'
+import { isTransparentTool } from './constants'
 import { isAppChatKey, parseAppChatKey } from '../../../shared/apps/im-keys'
 import { analytics } from '../analytics/analytics.service'
 import { AnalyticsEvents } from '../analytics/types'
@@ -443,8 +444,8 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
   // AI sometimes splits its final reply across consecutive text blocks. We merge them.
   // A "substantive" tool_use breaks continuity — text before it is transitional
   // ("let me do X…") and should not appear in the final bubble.
-  // TRANSPARENT_TOOLS are bookkeeping/coordination-only and do NOT break continuity.
-  // See services/agent/constants.ts for the authoritative list.
+  // Transparent tools are bookkeeping/coordination-only and do NOT break continuity.
+  // See isTransparentTool() in services/agent/constants.ts.
   //
   // When true, the next text block overwrites; when false, it appends.
   let hadSubstantiveToolSinceLastText = false
@@ -699,7 +700,7 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
         const thoughtId = `thought-tool-${Date.now()}-${blockIndex}`
 
         // Mark substantive tool — breaks text continuity (transparent tools like TodoWrite do not)
-        if (!TRANSPARENT_TOOLS.has(toolName)) {
+        if (!isTransparentTool(toolName)) {
           hadSubstantiveToolSinceLastText = true
         }
 
@@ -996,7 +997,7 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
           })
         } else if (thought.type === 'tool_use') {
           // Mark substantive tool — breaks text continuity
-          if (!TRANSPARENT_TOOLS.has(thought.toolName || '')) {
+          if (!isTransparentTool(thought.toolName || '')) {
             hadSubstantiveToolSinceLastText = true
           }
           // Send tool call event
@@ -1063,6 +1064,15 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
             preTokens: compactMetadata.pre_tokens
           })
         }
+      }
+
+      // Session goal changed (engines with features.goal). A user-side change
+      // is echoed here once the engine hands it to the model.
+      if (subtype === 'goal_updated') {
+        const goal = (msg.goal ?? null) as Goal | null
+        const source: GoalChangeSource = msg.source === 'user' ? 'user' : 'agent'
+        console.log(`[Agent][${conversationId}] Goal updated by ${source}: ${goal ? goal.status : 'removed'}`)
+        emitAgentEvent('agent:goal-updated', spaceId, conversationId, { goal, source, seenByModel: true })
       }
 
       // Extract MCP server status and tools list from system message

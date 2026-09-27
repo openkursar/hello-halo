@@ -8,14 +8,22 @@
 import type Database from 'better-sqlite3'
 import type {
   AutomationRun,
+  AutomationRunWithSummary,
+  ExecutionEnvironment,
+  EscalationContinuation,
   ActivityEntry,
   ActivityEntryContent,
   ActivityEntryType,
   ActivityQueryOptions,
+  PendingDecisionQuery,
   EscalationResponse,
+  RunQueryOptions,
+  RunStats,
   RunStatus,
   TriggerType,
 } from './types'
+import type { AppStatus } from '../manager'
+import { BLOCKED_STATUSES, blockedReason } from './app-state'
 
 // ============================================
 // Internal Row Types (flat DB shape)
@@ -34,6 +42,20 @@ interface RunRow {
   tokens_used: number | null
   error_message: string | null
   session_id: string | null
+  environment_json: string | null
+}
+
+interface RunRowWithSummary extends RunRow {
+  last_entry_content_json: string | null
+}
+
+interface RunStatsRow {
+  total: number
+  ok: number
+  error: number
+  skipped: number
+  totalTokens: number | null
+  avgDurationMs: number | null
 }
 
 interface EntryRow {
@@ -65,6 +87,18 @@ function rowToRun(row: RunRow): AutomationRun {
     tokensUsed: row.tokens_used ?? undefined,
     errorMessage: row.error_message ?? undefined,
     sessionId: row.session_id ?? undefined,
+    environment: row.environment_json ? JSON.parse(row.environment_json) : undefined,
+  }
+}
+
+function rowToRunWithSummary(row: RunRowWithSummary): AutomationRunWithSummary {
+  const run = rowToRun(row)
+  if (!row.last_entry_content_json) return run
+  try {
+    const content = JSON.parse(row.last_entry_content_json) as ActivityEntryContent
+    return { ...run, summary: content.summary }
+  } catch {
+    return run
   }
 }
 
@@ -103,6 +137,10 @@ export class ActivityStore {
   private readonly stmtInsertRun: Database.Statement
   private readonly stmtGetRun: Database.Statement
   private readonly stmtGetRunsForApp: Database.Statement
+  private readonly stmtGetRunsForAppWithSummary: Database.Statement
+  private readonly stmtGetRunStats: Database.Statement
+  private readonly stmtGetRecentRunStatuses: Database.Statement
+  private readonly stmtGetLatestOutputEntry: Database.Statement
   private readonly stmtUpdateRunStatus: Database.Statement
   private readonly stmtUpdateRunComplete: Database.Statement
   private readonly stmtInsertEntry: Database.Statement
@@ -116,8 +154,6 @@ export class ActivityStore {
   private readonly stmtGetEntriesForRun: Database.Statement
   private readonly stmtUpdateRunSessionId: Database.Statement
   private readonly stmtReopenRun: Database.Statement
-  private readonly stmtCloseOrphanEscalations: Database.Statement
-  private readonly stmtCloseOrphanEscalationsAll: Database.Statement
 
   constructor(db: Database.Database) {
     this.db = db
@@ -126,8 +162,8 @@ export class ActivityStore {
 
     this.stmtInsertRun = db.prepare(`
       INSERT INTO automation_runs
-        (run_id, app_id, session_key, status, trigger_type, trigger_data_json, started_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+        (run_id, app_id, session_key, status, trigger_type, trigger_data_json, started_at, environment_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `)
 
     this.stmtGetRun = db.prepare(`
@@ -136,6 +172,47 @@ export class ActivityStore {
 
     this.stmtGetRunsForApp = db.prepare(`
       SELECT * FROM automation_runs WHERE app_id = ? ORDER BY started_at DESC LIMIT ?
+    `)
+
+    // Correlated subquery pulls each run's most recent activity entry (any
+    // type) — the run-history list's "what happened" column. Uses idx_entries_run.
+    this.stmtGetRunsForAppWithSummary = db.prepare(`
+      SELECT r.*,
+        (SELECT e.content_json FROM activity_entries e
+         WHERE e.run_id = r.run_id ORDER BY e.ts DESC LIMIT 1) AS last_entry_content_json
+      FROM automation_runs r
+      WHERE r.app_id = ?
+      ORDER BY r.started_at DESC
+      LIMIT ? OFFSET ?
+    `)
+
+    // Aggregates over the most recent `window` runs (by recency, not a time range).
+    this.stmtGetRunStats = db.prepare(`
+      SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END) AS ok,
+        SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS error,
+        SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END) AS skipped,
+        SUM(COALESCE(tokens_used, 0)) AS totalTokens,
+        AVG(duration_ms) AS avgDurationMs
+      FROM (
+        SELECT * FROM automation_runs WHERE app_id = ? ORDER BY started_at DESC LIMIT ?
+      ) AS recent
+    `)
+
+    // Lean projection (status only) for the overview's recent-run dot strip —
+    // avoids hydrating full run rows across every automation app on cold start.
+    this.stmtGetRecentRunStatuses = db.prepare(`
+      SELECT status FROM automation_runs WHERE app_id = ? ORDER BY started_at DESC LIMIT ?
+    `)
+
+    // Most recent run_complete/output entry — the overview card's "latest
+    // output" line. Deliberately excludes run_error/milestone/escalation:
+    // those are surfaced through AutomationAppState.lastError / pendingEscalationId.
+    this.stmtGetLatestOutputEntry = db.prepare(`
+      SELECT * FROM activity_entries
+      WHERE app_id = ? AND type IN ('run_complete', 'output')
+      ORDER BY ts DESC LIMIT 1
     `)
 
     this.stmtUpdateRunStatus = db.prepare(`
@@ -191,25 +268,6 @@ export class ActivityStore {
       LIMIT 1
     `)
 
-    // Close orphan escalation entries for an app, excluding a specific active entry.
-    // Orphans are pending escalations that no longer correspond to the app's
-    // current pendingEscalationId (e.g. created before a pause/resume cycle).
-    this.stmtCloseOrphanEscalations = db.prepare(`
-      UPDATE activity_entries
-      SET user_response_json = ?
-      WHERE app_id = ? AND type = 'escalation' AND user_response_json IS NULL AND json_extract(content_json, '$.resolution') IS NULL
-        AND json_extract(content_json, '$.teamContext.epochId') IS NULL AND id != ?
-    `)
-
-    // Close ALL pending escalation entries for an app (used when leaving waiting_user
-    // state without resolving — e.g. pause, manual trigger from error).
-    this.stmtCloseOrphanEscalationsAll = db.prepare(`
-      UPDATE activity_entries
-      SET user_response_json = ?
-      WHERE app_id = ? AND type = 'escalation' AND user_response_json IS NULL AND json_extract(content_json, '$.resolution') IS NULL
-        AND json_extract(content_json, '$.teamContext.epochId') IS NULL
-    `)
-
     this.stmtGetEntriesForRun = db.prepare(`
       SELECT * FROM activity_entries WHERE run_id = ? ORDER BY ts DESC
     `)
@@ -224,7 +282,7 @@ export class ActivityStore {
     // ("this part is wrong, fix it"). A run already 'running' is never reopened.
     this.stmtReopenRun = db.prepare(`
       UPDATE automation_runs
-      SET status = 'running', finished_at = NULL, duration_ms = NULL, error_message = NULL
+      SET status = 'running', finished_at = NULL, duration_ms = NULL, error_message = NULL, stopped_at = NULL
       WHERE run_id = ? AND status IN ('error', 'waiting_user', 'ok')
     `)
   }
@@ -240,6 +298,7 @@ export class ActivityStore {
     triggerType: TriggerType
     triggerData?: Record<string, unknown>
     startedAt: number
+    environment?: ExecutionEnvironment
   }): void {
     this.stmtInsertRun.run(
       run.runId,
@@ -248,7 +307,8 @@ export class ActivityStore {
       run.status,
       run.triggerType,
       run.triggerData ? JSON.stringify(run.triggerData) : null,
-      run.startedAt
+      run.startedAt,
+      run.environment ? JSON.stringify(run.environment) : null
     )
   }
 
@@ -262,6 +322,39 @@ export class ActivityStore {
   getRunsForApp(appId: string, limit = 50): AutomationRun[] {
     const rows = this.stmtGetRunsForApp.all(appId, limit) as RunRow[]
     return rows.map(rowToRun)
+  }
+
+  /** Get runs for an App with each row's last activity summary attached. */
+  getRunsForAppWithSummary(appId: string, options?: RunQueryOptions): AutomationRunWithSummary[] {
+    const limit = options?.limit ?? 20
+    const offset = options?.offset ?? 0
+    const rows = this.stmtGetRunsForAppWithSummary.all(appId, limit, offset) as RunRowWithSummary[]
+    return rows.map(rowToRunWithSummary)
+  }
+
+  /** Aggregate outcome/token/duration stats over an App's most recent runs. */
+  getRunStats(appId: string, window = 30): RunStats {
+    const row = this.stmtGetRunStats.get(appId, window) as RunStatsRow
+    return {
+      total: row.total,
+      ok: row.ok,
+      error: row.error,
+      skipped: row.skipped,
+      totalTokens: row.totalTokens ?? 0,
+      avgDurationMs: row.avgDurationMs ?? 0,
+    }
+  }
+
+  /** Get an App's most recent run statuses, oldest first. */
+  getRecentRunStatuses(appId: string, limit = 7): RunStatus[] {
+    const rows = this.stmtGetRecentRunStatuses.all(appId, limit) as { status: string }[]
+    return rows.map(r => r.status as RunStatus).reverse()
+  }
+
+  /** Get an App's most recent run_complete/output activity entry, if any. */
+  getLatestOutputEntry(appId: string): ActivityEntry | null {
+    const row = this.stmtGetLatestOutputEntry.get(appId) as EntryRow | undefined
+    return row ? rowToEntry(row) : null
   }
 
   /** Update run status (without completion data) */
@@ -350,6 +443,22 @@ export class ActivityStore {
 
   /** Insert an activity entry */
   insertEntry(entry: ActivityEntry): void {
+    const team = entry.content.teamContext
+    const run = this.getRun(entry.runId)
+    entry.content.source ??= team?.teamId && team?.epochId
+      ? { kind: 'team', appId: entry.appId, teamId: team.teamId, epochId: team.epochId, taskId: team.taskId, memberId: entry.appId, sessionKey: entry.sessionKey }
+      : run
+        ? { kind: 'automation', appId: entry.appId, runId: run.runId, sessionKey: run.sessionKey }
+        : { kind: entry.sessionKey?.startsWith('app-chat:') ? 'chat' : 'unknown', appId: entry.appId, sessionKey: entry.sessionKey }
+    if (entry.type === 'run_error' && run) {
+      entry.content.stopped = this.wasRunStopped(run.runId) || undefined
+      entry.content.resumeAvailable = !!run.sessionId && !this.isRunClosed(run.runId) && !this.hasUnfinishedRunDecision(run.runId)
+    }
+    if (entry.type === 'escalation' && entry.content.deadlineAt === undefined && !team) {
+      const policy = this.db.prepare(`SELECT COALESCE(json_extract(a.spec_json, '$.escalation.timeout_hours'), l.timeout_hours) AS hours
+        FROM installed_apps a LEFT JOIN runtime_legacy_deadlines l ON l.app_id = a.id WHERE a.id = ?`).get(entry.appId) as { hours: number | null } | undefined
+      if (policy?.hours != null) entry.content.deadlineAt = entry.ts + policy.hours * 3600000
+    }
     this.stmtInsertEntry.run(
       entry.id,
       entry.appId,
@@ -365,7 +474,7 @@ export class ActivityStore {
   /** Get a single entry by ID */
   getEntry(entryId: string): ActivityEntry | null {
     const row = this.stmtGetEntry.get(entryId) as EntryRow | undefined
-    return row ? rowToEntry(row) : null
+    return row ? this.withContinuation(rowToEntry(row)) : null
   }
 
   /** Get entries for an App with optional filtering */
@@ -375,12 +484,20 @@ export class ActivityStore {
     const predicates = ['app_id = ?']
     const values: (string | number)[] = [appId]
     if (options?.type) { predicates.push('type = ?'); values.push(options.type) }
-    if (options?.since) { predicates.push('ts < ?'); values.push(options.since) }
+    if (options?.since !== undefined) {
+      if (options.beforeId) {
+        predicates.push('(ts < ? OR (ts = ? AND id < ?))')
+        values.push(options.since, options.since, options.beforeId)
+      } else {
+        predicates.push('ts < ?')
+        values.push(options.since)
+      }
+    }
     if (options?.teamId) { predicates.push("json_extract(content_json, '$.teamContext.teamId') = ?"); values.push(options.teamId) }
     if (options?.epochId) { predicates.push("json_extract(content_json, '$.teamContext.epochId') = ?"); values.push(options.epochId) }
     const rows = this.db.prepare(`SELECT * FROM activity_entries WHERE ${predicates.join(' AND ')} ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?`).all(...values, limit, offset) as EntryRow[]
 
-    return rows.map(rowToEntry)
+    return rows.map(row => this.withContinuation(rowToEntry(row)))
   }
 
   /** Update an entry with a user response (for escalation) */
@@ -391,19 +508,70 @@ export class ActivityStore {
   /** Get a pending (unanswered) escalation entry */
   getPendingEscalation(appId: string, entryId: string): ActivityEntry | null {
     const row = this.stmtGetPendingEscalation.get(appId, entryId) as EntryRow | undefined
-    return row ? rowToEntry(row) : null
+    return row ? this.withContinuation(rowToEntry(row)) : null
   }
 
   /** Get all activity entries for a specific run */
   getEntriesForRun(runId: string): ActivityEntry[] {
     const rows = this.stmtGetEntriesForRun.all(runId) as EntryRow[]
-    return rows.map(rowToEntry)
+    return rows.map(row => this.withContinuation(rowToEntry(row)))
   }
 
-  /** Get all pending (unanswered) escalation entries across all apps, oldest first */
+  /**
+   * Everything waiting on the owner across all apps: unanswered escalations
+   * oldest first, plus the people that stopped and cannot restart themselves.
+   *
+   * The second half is unpaginated on purpose — a stopped person produces one
+   * row and stays stopped until the owner acts, so the set is naturally small
+   * and a cursor over it would only hide a backlog that should be visible.
+   */
+  getPendingInbox(options?: PendingDecisionQuery): import('../../../shared/apps/app-types').PendingDecisionInbox {
+    const limit = Math.min(500, Math.max(1, Math.floor(options?.limit ?? 100)))
+    const filter = `e.type = 'escalation' AND e.user_response_json IS NULL
+      AND json_extract(e.content_json, '$.resolution') IS NULL
+      AND a.status != 'uninstalled' AND a.uninstalled_at IS NULL`
+    const cursor = options?.afterTs !== undefined && options.afterId
+      ? 'AND (e.ts > ? OR (e.ts = ? AND e.id > ?))' : ''
+    const values: (string | number)[] = []
+    if (cursor) values.push(options!.afterTs!, options!.afterTs!, options!.afterId!)
+    values.push(limit)
+    const rows = this.db.prepare(`SELECT e.*, json_extract(a.spec_json, '$.name') AS app_name FROM activity_entries e JOIN installed_apps a ON a.id = e.app_id
+      WHERE ${filter} ${cursor} ORDER BY e.ts, e.id LIMIT ?`).all(...values) as (EntryRow & { app_name: string | null })[]
+    const total = (this.db.prepare(`SELECT COUNT(*) AS count FROM activity_entries e JOIN installed_apps a ON a.id = e.app_id
+      WHERE ${filter}`).get() as { count: number }).count
+    const blocked = (this.db.prepare(`SELECT id, status, error_message AS message,
+      json_extract(spec_json, '$.name') AS name FROM installed_apps
+      WHERE json_extract(spec_json, '$.type') = 'automation'
+        AND status IN (SELECT value FROM json_each(?)) ORDER BY id`)
+      .all(JSON.stringify(BLOCKED_STATUSES)) as Array<{ id: string; status: AppStatus; message: string | null; name: string | null }>)
+      .flatMap(row => {
+        const reason = blockedReason(row.status)
+        return reason ? [{ appId: row.id, name: row.name ?? row.id, reason, ...(row.message ? { message: row.message } : {}) }] : []
+      })
+    return {
+      entries: rows.map(rowToEntry),
+      total: total + blocked.length,
+      names: Object.fromEntries(rows.flatMap(row => row.app_name ? [[row.app_id, row.app_name]] : [])),
+      blocked,
+    }
+  }
+
+  getPendingEntries(appId: string, options?: PendingDecisionQuery): ActivityEntry[] {
+    const limit = Math.min(500, Math.max(1, Math.floor(options?.limit ?? 100)))
+    const cursor = options?.afterTs !== undefined && options.afterId
+      ? 'AND (ts > ? OR (ts = ? AND id > ?))' : ''
+    const values: (string | number)[] = [appId]
+    if (cursor) values.push(options!.afterTs!, options!.afterTs!, options!.afterId!)
+    values.push(limit)
+    const rows = this.db.prepare(`SELECT * FROM activity_entries WHERE app_id = ? AND type = 'escalation'
+      AND user_response_json IS NULL AND json_extract(content_json, '$.resolution') IS NULL ${cursor}
+      ORDER BY ts, id LIMIT ?`).all(...values) as EntryRow[]
+    return rows.map(row => this.withContinuation(rowToEntry(row)))
+  }
+
   getAllPendingEscalations(): ActivityEntry[] {
     const rows = this.stmtGetAllPendingEscalations.all() as EntryRow[]
-    return rows.map(rowToEntry)
+    return rows.map(row => this.withContinuation(rowToEntry(row)))
   }
 
   /**
@@ -427,43 +595,245 @@ export class ActivityStore {
   }
 
   closeTaskEscalations(teamId: string, epochId: string): ActivityEntry[] {
-    const resolution = JSON.stringify({ reason: 'task_closed', ts: Date.now() })
-    const rows = this.db.prepare(`UPDATE activity_entries
-      SET content_json = json_set(content_json, '$.resolution', json(?))
-      WHERE type = 'escalation' AND user_response_json IS NULL
-        AND json_extract(content_json, '$.resolution') IS NULL
-        AND json_extract(content_json, '$.teamContext.teamId') = ?
-        AND json_extract(content_json, '$.teamContext.epochId') = ?
-      RETURNING *`).all(resolution, teamId, epochId) as EntryRow[]
-    return rows.map(rowToEntry)
+    return this.db.transaction(() => {
+      const ids = this.db.prepare(`SELECT id FROM activity_entries WHERE json_extract(content_json, '$.teamContext.teamId') = ?
+        AND json_extract(content_json, '$.teamContext.epochId') = ?`).all(teamId, epochId) as { id: string }[]
+      return ids.map(({ id }) => this.closeDecision(id)).filter((entry): entry is ActivityEntry => !!entry)
+    })()
+  }
+
+  private withContinuation(entry: ActivityEntry): ActivityEntry {
+    const row = this.db.prepare('SELECT * FROM decision_continuations WHERE entry_id = ?').get(entry.id) as
+      { status: EscalationContinuation['status']; attempts: number; updated_at: number; error: string | null } | undefined
+    if (row) entry.continuation = { status: row.status, attempts: row.attempts, updatedAt: row.updated_at, error: row.error ?? undefined }
+    return entry
+  }
+
+  acceptDecision(appId: string, entryId: string, response: EscalationResponse): ActivityEntry {
+    return this.db.transaction(() => {
+      const entry = this.getEntry(entryId)
+      if (!entry || entry.appId !== appId || entry.type !== 'escalation') throw new Error('Decision not found')
+      if (entry.userResponse) {
+        const answer = (value: EscalationResponse) => JSON.stringify({ choice: value.choice, text: value.text, answers: value.answers })
+        if (answer(entry.userResponse) !== answer(response)) throw new Error('This decision has already been answered differently')
+        return entry
+      }
+      if (entry.content.resolution || this.isRunClosed(entry.runId)) throw new Error('This decision is closed')
+      if (entry.content.deadlineReviewRequired) throw new Error('Confirm the historical deadline before answering')
+      if (entry.content.deadlineAt !== undefined && entry.content.deadlineAt <= Date.now()) throw new Error('This decision has expired')
+      const questions = entry.content.questions
+      if (questions?.length && (response.answers?.length !== questions.length || response.answers.some(answer => !answer.choice?.trim() && !answer.text?.trim()))) {
+        throw new Error('Answer every question before submitting')
+      }
+      if (!questions?.length && !response.choice?.trim() && !response.text?.trim()) throw new Error('An answer is required')
+      const now = Date.now()
+      this.stmtUpdateEntryResponse.run(JSON.stringify({ ...response, ts: now }), entryId)
+      this.db.prepare(`INSERT INTO decision_continuations(entry_id, app_id, status, updated_at) VALUES (?, ?, 'queued', ?)`).run(entryId, appId, now)
+      return this.getEntry(entryId)!
+    })()
+  }
+
+  getQueuedContinuations(): ActivityEntry[] {
+    const rows = this.db.prepare(`SELECT e.* FROM activity_entries e JOIN decision_continuations c ON c.entry_id = e.id
+      WHERE c.status = 'queued' ORDER BY c.updated_at, e.id`).all() as EntryRow[]
+    return rows.map(row => this.withContinuation(rowToEntry(row)))
+  }
+
+  updateContinuation(entryId: string, status: EscalationContinuation['status'], error?: string): void {
+    this.db.prepare(`UPDATE decision_continuations SET status = ?, error = ?, updated_at = ?,
+      attempts = attempts + CASE WHEN ? = 'running' THEN 1 ELSE 0 END
+      WHERE entry_id = ? AND status != 'cancelled'`).run(status, error ?? null, Date.now(), status, entryId)
+  }
+
+  needsDecisionReceipt(entryId: string): boolean {
+    return !!this.db.prepare('SELECT 1 FROM decision_continuations WHERE entry_id = ? AND receipt_published = 0').get(entryId)
+  }
+
+  markDecisionReceiptPublished(entryId: string): void {
+    this.db.prepare('UPDATE decision_continuations SET receipt_published = 1 WHERE entry_id = ?').run(entryId)
+  }
+
+  getContinuationSummary(): Record<string, number> {
+    return Object.fromEntries((this.db.prepare('SELECT status, COUNT(*) AS count FROM decision_continuations GROUP BY status').all() as { status: string; count: number }[]).map(row => [row.status, row.count]))
+  }
+
+  recoverContinuations(): number {
+    return this.db.prepare(`UPDATE decision_continuations SET status = 'queued', updated_at = ?
+      WHERE status = 'running'`).run(Date.now()).changes
+  }
+
+  getDirectoryDecisionCounts(): Record<string, { pending: number; solo: number; continuations: number }> {
+    const result: Record<string, { pending: number; solo: number; continuations: number }> = {}
+    const pending = this.db.prepare(`SELECT app_id, COUNT(*) AS pending,
+      SUM(CASE WHEN json_extract(content_json, '$.teamContext.epochId') IS NULL THEN 1 ELSE 0 END) AS solo
+      FROM activity_entries WHERE type = 'escalation' AND user_response_json IS NULL
+      AND json_extract(content_json, '$.resolution') IS NULL GROUP BY app_id`).all() as Array<{ app_id: string; pending: number; solo: number }>
+    for (const row of pending) result[row.app_id] = { pending: row.pending, solo: row.solo, continuations: 0 }
+    const continuations = this.db.prepare(`SELECT app_id, COUNT(*) AS count FROM decision_continuations
+      WHERE status IN ('queued', 'running') GROUP BY app_id`).all() as Array<{ app_id: string; count: number }>
+    for (const row of continuations) (result[row.app_id] ??= { pending: 0, solo: 0, continuations: 0 }).continuations = row.count
+    return result
+  }
+
+  getDirectoryRecentRuns(appIds: string[]): Array<{ appId: string; runId: string; sessionKey: string; startedAt: number; durationMs?: number; status: string; stopped: number; closed: number }> {
+    if (appIds.length > 100) throw new Error('Directory batch exceeds 100 people')
+    return this.db.prepare(`SELECT r.app_id AS appId, r.run_id AS runId, r.session_key AS sessionKey,
+      r.started_at AS startedAt, r.duration_ms AS durationMs, r.status, r.stopped_at IS NOT NULL AS stopped,
+      EXISTS(SELECT 1 FROM runtime_closed_runs closed WHERE closed.run_id = r.run_id) AS closed FROM json_each(?) person JOIN automation_runs r
+      ON r.run_id IN (SELECT run_id FROM automation_runs WHERE app_id = person.value ORDER BY started_at DESC, run_id DESC LIMIT 5)
+      ORDER BY r.started_at DESC, r.run_id DESC`).all(JSON.stringify(appIds)) as Array<{ appId: string; runId: string; sessionKey: string; startedAt: number; durationMs?: number; status: string; stopped: number; closed: number }>
+  }
+
+  getDecisionCounts(appId: string): { pending: number; solo: number; continuations: number } {
+    const counts = this.db.prepare(`SELECT COUNT(*) AS pending,
+      COALESCE(SUM(CASE WHEN json_extract(content_json, '$.teamContext.epochId') IS NULL THEN 1 ELSE 0 END), 0) AS solo
+      FROM activity_entries WHERE app_id = ? AND type = 'escalation' AND user_response_json IS NULL
+      AND json_extract(content_json, '$.resolution') IS NULL`).get(appId) as { pending: number; solo: number }
+    const continuation = this.db.prepare(`SELECT COUNT(*) AS count FROM decision_continuations WHERE app_id = ? AND status IN ('queued', 'running')`).get(appId) as { count: number }
+    return { ...counts, continuations: continuation.count }
+  }
+
+  hasQueuedSoloContinuation(appId: string): boolean {
+    return !!this.db.prepare(`SELECT 1 FROM decision_continuations c JOIN activity_entries e ON e.id = c.entry_id
+      WHERE c.app_id = ? AND c.status IN ('queued', 'running') AND json_extract(e.content_json, '$.teamContext') IS NULL LIMIT 1`).get(appId)
+  }
+
+  confirmDeadline(appId: string, entryId: string, deadlineAt: number | null): ActivityEntry {
+    const entry = this.getPendingEscalation(appId, entryId)
+    if (!entry) throw new Error('Decision no longer pending')
+    if (deadlineAt !== null && (!Number.isFinite(deadlineAt) || deadlineAt <= Date.now())) throw new Error('Choose a future deadline')
+    if (entry.content.deadlineReviewRequired && entry.content.deadlineAt !== undefined) {
+      entry.content.deadlineReview = {
+        originalDeadlineAt: entry.content.deadlineReview?.originalDeadlineAt ?? entry.content.deadlineAt,
+        confirmedAt: Date.now(), deadlineAt,
+      }
+    }
+    entry.content.deadlineAt = deadlineAt ?? undefined
+    entry.content.deadlineReviewRequired = undefined
+    this.db.prepare('UPDATE activity_entries SET content_json = ? WHERE id = ?').run(JSON.stringify(entry.content), entryId)
+    console.log('[Runtime] Decision deadline confirmed', { appId, entryId, deadlineAt })
+    return entry
+  }
+
+  expireDecisions(now: number): ActivityEntry[] {
+    const rows = this.db.prepare(`UPDATE activity_entries SET content_json = json_set(content_json, '$.resolution', json(?))
+      WHERE type = 'escalation' AND user_response_json IS NULL AND json_extract(content_json, '$.resolution') IS NULL
+      AND COALESCE(json_extract(content_json, '$.deadlineReviewRequired'), 0) = 0
+      AND json_extract(content_json, '$.deadlineAt') <= ? RETURNING *`).all(JSON.stringify({ reason: 'expired', ts: now }), now) as EntryRow[]
+    return rows.map(row => this.withContinuation(rowToEntry(row)))
+  }
+
+  private closeDecision(entryId: string, reason: 'task_closed' | 'dismissed' = 'task_closed'): ActivityEntry | null {
+    const entry = this.getEntry(entryId)
+    if (!entry || entry.type !== 'escalation') return null
+    const canCancelContinuation = entry.continuation && ['queued', 'running', 'failed'].includes(entry.continuation.status)
+    if ((entry.userResponse || entry.content.resolution) && !canCancelContinuation) return null
+    if (canCancelContinuation) this.updateContinuation(entryId, 'cancelled')
+    if (!entry.userResponse && !entry.content.resolution) {
+      entry.content.resolution = { reason, ts: Date.now() }
+      delete entry.content.deadlineReviewRequired
+      this.db.prepare('UPDATE activity_entries SET content_json = ? WHERE id = ?').run(JSON.stringify(entry.content), entryId)
+    }
+    return this.getEntry(entryId)
   }
 
   /**
-   * Close orphan escalation entries for an app.
-   *
-   * An "orphan" is a pending escalation entry (user_response_json IS NULL) that
-   * does not match the app's current active escalation. Orphans are produced when
-   * the app leaves `waiting_user` state without the escalation being resolved
-   * (e.g. user pauses then resumes the app).
-   *
-   * @param appId - The app ID to clean up.
-   * @param activeEntryId - The currently active escalation entry ID to keep open.
-   *                        If omitted, ALL pending escalation entries for this app are closed.
-   * @returns Number of entries closed.
+   * Close one unanswered request without answering it. The run stays open, so
+   * this is the only exit for a request whose work outlives it — a team
+   * member's conversation epoch never ends on its own.
    */
-  closeOrphanEscalations(appId: string, activeEntryId?: string): number {
-    const responseJson = JSON.stringify({
-      ts: Date.now(),
-      text: '[Auto-closed] Escalation orphaned by app state change.',
-    })
+  dismissDecision(entryId: string): ActivityEntry | null {
+    return this.closeDecision(entryId, 'dismissed')
+  }
 
-    if (activeEntryId) {
-      const result = this.stmtCloseOrphanEscalations.run(responseJson, appId, activeEntryId)
-      return result.changes
-    } else {
-      const result = this.stmtCloseOrphanEscalationsAll.run(responseJson, appId)
-      return result.changes
+  closeRun(runId: string): ActivityEntry[] {
+    return this.db.transaction(() => {
+      this.db.prepare('INSERT OR IGNORE INTO runtime_closed_runs VALUES (?, ?)').run(runId, Date.now())
+      return this.getEntriesForRun(runId).map(entry => this.closeDecision(entry.id)).filter((entry): entry is ActivityEntry => !!entry)
+    })()
+  }
+
+  hasUnfinishedRunDecision(runId: string): boolean {
+    return !!this.db.prepare(`SELECT 1 FROM activity_entries e LEFT JOIN decision_continuations c ON c.entry_id = e.id
+      WHERE e.run_id = ? AND e.type = 'escalation' AND (
+        (e.user_response_json IS NULL AND json_extract(e.content_json, '$.resolution') IS NULL)
+        OR json_extract(e.content_json, '$.resolution.reason') = 'expired'
+        OR c.status IN ('queued', 'running', 'failed')) LIMIT 1`).get(runId)
+  }
+
+  markRunStopped(runId: string): void {
+    this.db.prepare('UPDATE automation_runs SET stopped_at = ? WHERE run_id = ?').run(Date.now(), runId)
+  }
+
+  wasRunStopped(runId: string): boolean {
+    return !!this.db.prepare('SELECT 1 FROM automation_runs WHERE run_id = ? AND stopped_at IS NOT NULL').get(runId)
+  }
+
+  isRunClosed(runId: string): boolean {
+    return !!this.db.prepare('SELECT 1 FROM runtime_closed_runs WHERE run_id = ?').get(runId)
+  }
+
+  pinRunEnvironments(appId: string, environment: ExecutionEnvironment): void {
+    this.db.prepare('UPDATE automation_runs SET environment_json = ? WHERE app_id = ? AND environment_json IS NULL').run(JSON.stringify(environment), appId)
+  }
+
+  pinRunEnvironment(runId: string, environment: ExecutionEnvironment): void {
+    this.db.prepare('UPDATE automation_runs SET environment_json = ? WHERE run_id = ? AND environment_json IS NULL')
+      .run(JSON.stringify(environment), runId)
+  }
+
+  getSessionEnvironment(sessionKey: string): ExecutionEnvironment | undefined {
+    const row = this.db.prepare('SELECT environment_json FROM app_session_environments WHERE session_key = ?').get(sessionKey) as { environment_json: string } | undefined
+    return row ? JSON.parse(row.environment_json) : undefined
+  }
+
+  pinSessionEnvironment(sessionKey: string, appId: string, environment: ExecutionEnvironment): ExecutionEnvironment {
+    this.db.prepare('INSERT OR IGNORE INTO app_session_environments VALUES (?, ?, ?)').run(sessionKey, appId, JSON.stringify(environment))
+    return this.getSessionEnvironment(sessionKey)!
+  }
+
+  deleteSessionEnvironment(sessionKey: string): void {
+    this.db.prepare('DELETE FROM app_session_environments WHERE session_key = ?').run(sessionKey)
+  }
+
+  countSessionEnvironments(appId: string): number {
+    const sessions = this.listSessionEnvironments(appId)
+    const storageKeys = new Set<string>()
+    for (const session of sessions) {
+      const legacyPrefix = `legacy-file:${appId}:`
+      const chatPrefix = `app-chat:${appId}`
+      if (!session.sessionKey.startsWith(chatPrefix) && !session.sessionKey.startsWith(legacyPrefix)) continue
+      const runId = session.sessionKey.startsWith(legacyPrefix) ? session.sessionKey.slice(legacyPrefix.length)
+        : session.sessionKey === chatPrefix ? 'chat' : `chat-${session.sessionKey.slice(chatPrefix.length + 1).replace(/:/g, '-')}`
+      if (runId !== 'chat' && !runId.startsWith('chat-')) continue
+      storageKeys.add(JSON.stringify([session.environment.spacePath, runId]))
     }
+    return storageKeys.size
+  }
+
+  listRetainedCapabilityEnvironments(): Array<{ appId: string; sessionKey?: string; environment: ExecutionEnvironment }> {
+    const sessions = this.db.prepare(`SELECT app_id, session_key, environment_json FROM app_session_environments
+      WHERE session_key LIKE 'app-chat:%' OR session_key LIKE 'legacy-file:%'`).all() as Array<{ app_id: string; session_key: string; environment_json: string }>
+    const runs = this.db.prepare(`SELECT app_id, environment_json FROM automation_runs WHERE run_id IN (
+      SELECT run_id FROM automation_runs WHERE status IN ('running', 'waiting_user') AND stopped_at IS NULL
+      UNION SELECT e.run_id FROM activity_entries e
+        WHERE e.type = 'escalation' AND e.user_response_json IS NULL
+          AND (json_extract(e.content_json, '$.resolution') IS NULL OR json_extract(e.content_json, '$.resolution.reason') = 'expired')
+      UNION SELECT e.run_id FROM decision_continuations c JOIN activity_entries e ON e.id = c.entry_id
+        WHERE c.status IN ('queued', 'running', 'failed')
+      ) AND environment_json IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM runtime_closed_runs closed WHERE closed.run_id = automation_runs.run_id
+      )`).all() as Array<{ app_id: string; environment_json: string }>
+    return [
+      ...sessions.map(row => ({ appId: row.app_id, sessionKey: row.session_key, environment: JSON.parse(row.environment_json) })),
+      ...runs.map(row => ({ appId: row.app_id, environment: JSON.parse(row.environment_json) })),
+    ]
+  }
+
+  listSessionEnvironments(appId: string): Array<{ sessionKey: string; environment: ExecutionEnvironment }> {
+    const rows = this.db.prepare('SELECT session_key, environment_json FROM app_session_environments WHERE app_id = ?')
+      .all(appId) as Array<{ session_key: string; environment_json: string }>
+    return rows.map(row => ({ sessionKey: row.session_key, environment: JSON.parse(row.environment_json) }))
   }
 
   // ── Data Lifecycle ──────────────────────────
@@ -489,12 +859,17 @@ export class ActivityStore {
         WHERE run_id IN (
           SELECT run_id FROM automation_runs
           WHERE started_at < ? AND status NOT IN ('running', 'waiting_user')
+          AND NOT EXISTS (SELECT 1 FROM activity_entries e WHERE e.run_id = automation_runs.run_id AND e.type = 'escalation'
+            AND e.user_response_json IS NULL AND json_extract(e.content_json, '$.resolution') IS NULL)
+          AND NOT EXISTS (SELECT 1 FROM decision_continuations c JOIN activity_entries e ON e.id = c.entry_id
+            WHERE e.run_id = automation_runs.run_id AND c.status IN ('queued', 'running', 'failed'))
         )
       `).run(cutoff)
       const result = this.db.prepare(`
         DELETE FROM automation_runs
         WHERE started_at < ?
           AND status NOT IN ('running', 'waiting_user')
+          AND NOT EXISTS (SELECT 1 FROM activity_entries e WHERE e.run_id = automation_runs.run_id)
       `).run(cutoff)
       return result.changes
     })()

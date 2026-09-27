@@ -51,6 +51,7 @@ export type {
 
 // Re-export helpers
 export { isBuiltinApp } from './types'
+export { getCapabilityInventory, getPersonConnectionAccess } from './capability-inventory'
 
 // Re-export error types
 export {

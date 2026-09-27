@@ -1,16 +1,19 @@
 /**
  * Agent Module - Permission Handler
  *
- * canUseTool callback is only invoked for tools that require user interaction
- * (e.g. AskUserQuestion, ExitPlanMode). Regular tools (Bash, Read, etc.) never
- * reach this callback — they are controlled at the SDK level via:
- *   - allowedTools:    whitelist of tools visible to the model (incl. MCP tools)
- *   - disallowedTools: hard blacklist that cannot be bypassed (alwaysDenyRules)
+ * canUseTool is reached only by a tool call the engine did not already settle:
+ *   - allowedTools:    rules that auto-allow (a bare tool name, or a command
+ *                      pattern like `Bash(npm run:*)`, which the engine matches
+ *                      against every part of a compound command)
+ *   - disallowedTools: removed from the model's pool entirely
+ * A session running with permissions bypassed settles everything up front, so
+ * only the interactive tools arrive here.
  *
- * Guest session tool restrictions are applied in app-chat.ts before session creation.
- *
- * Special case: AskUserQuestion tool pauses execution and waits for user answers
- * via IPC, then returns the answers as updatedInput.
+ * Two things therefore happen in this callback: AskUserQuestion pauses the turn
+ * and waits for an answer over IPC, and — when the caller supplied a `gate` —
+ * anything the engine left undecided is put to that gate. The gate is how a
+ * turn driven by somebody other than the owner is held to what the owner
+ * granted; this module never learns what the policy says, only whom to ask.
  */
 
 import { emitAgentEvent } from './events'
@@ -33,6 +36,18 @@ type CanUseToolFn = (
   options: { signal: AbortSignal }
 ) => Promise<PermissionResult>
 
+/**
+ * The owner's answer for one tool call, asked per call rather than per session.
+ *
+ * Supplied by whoever knows what "allowed" means for this turn (apps/runtime's
+ * delegation gate). Returning `allow: false` refuses the call and tells the
+ * model why, so it reads as a closed door rather than a tool failure to retry.
+ */
+export type ToolGate = (
+  toolName: string,
+  input: Record<string, unknown>
+) => { allow: boolean; reason?: string }
+
 interface CanUseToolDeps {
   spaceId: string
   conversationId: string
@@ -44,6 +59,14 @@ interface CanUseToolDeps {
    * prompts — IM channels, scheduled runs, headless API calls, etc.
    */
   nonInteractive?: boolean
+  /**
+   * Consulted for every tool call the engine did not auto-allow. Absent = the
+   * historical behaviour (auto-allow), which is what an owner's own session
+   * runs with. A session that MAY host a borrowed turn installs one; the gate
+   * itself stays inert until a turn registers a policy, so installing it costs
+   * an unrestricted turn nothing.
+   */
+  gate?: ToolGate
 }
 
 // ============================================
@@ -156,8 +179,16 @@ export function createCanUseTool(deps?: CanUseToolDeps): CanUseToolFn {
     input: Record<string, unknown>,
     options: { signal: AbortSignal }
   ): Promise<PermissionResult> => {
-    // Non-AskUserQuestion tools: auto-allow
+    // Anything but AskUserQuestion is a call the engine left undecided: put it
+    // to the gate when there is one, and otherwise keep the owner's fast path.
     if (toolName !== 'AskUserQuestion') {
+      const verdict = deps?.gate?.(toolName, input)
+      if (verdict && !verdict.allow) {
+        return {
+          behavior: 'deny' as const,
+          message: verdict.reason || `"${toolName}" is not available for this request.`,
+        }
+      }
       return { behavior: 'allow' as const, updatedInput: input }
     }
 

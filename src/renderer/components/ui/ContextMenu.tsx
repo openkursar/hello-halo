@@ -22,9 +22,14 @@ export interface ContextMenuItem {
 interface ContextMenuProps {
   children: React.ReactNode
   items: ContextMenuItem[]
+  /** Applied to the trigger wrapper div. Needed when a child relies on a
+   * percentage height (e.g. `h-full`) — percentage heights only resolve
+   * against a direct parent with a definite height, so callers in a
+   * fixed-height slot (like a virtualized row) must pass `h-full` here too. */
+  className?: string
 }
 
-export function ContextMenu({ children, items }: ContextMenuProps) {
+export function ContextMenu({ children, items, className }: ContextMenuProps) {
   const [isOpen, setIsOpen] = useState(false)
   const [position, setPosition] = useState({ x: 0, y: 0 })
   const menuRef = useRef<HTMLDivElement>(null)
@@ -97,7 +102,7 @@ export function ContextMenu({ children, items }: ContextMenuProps) {
 
   return (
     <>
-      <div ref={triggerRef} onContextMenu={handleContextMenu}>
+      <div ref={triggerRef} onContextMenu={handleContextMenu} className={className}>
         {children}
       </div>
 

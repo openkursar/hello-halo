@@ -2,15 +2,13 @@
  * useLayoutPreferences Hook
  *
  * Manages layout preferences for a space with the following priority:
- * 1. Maximized mode override (highest priority)
- * 2. User's real-time interaction (current session)
- * 3. Persisted space preferences (meta.json)
- * 4. System defaults (lowest priority)
+ * 1. User's real-time interaction (current session)
+ * 2. Persisted space preferences (meta.json)
+ * 3. System defaults (lowest priority)
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSpaceStore } from '../stores/space.store'
-import { useCanvasIsOpen } from '../stores/canvas.store'
 import type { SpaceLayoutPreferences } from '../types'
 
 // Default values
@@ -20,7 +18,8 @@ const LAYOUT_DEFAULTS = {
   chatWidthMax: 800,
   chatWidthMaxWhenMaximized: 800,
   chatWidthMinWhenMaximized: 320,
-  artifactRailExpanded: false, // Default: collapsed when canvas is open
+  // Rail default; see `effectiveRailExpanded`'s priority 3.
+  artifactRailExpanded: false,
 }
 
 interface UseLayoutPreferencesReturn {
@@ -48,7 +47,6 @@ export function useLayoutPreferences(
   isMaximized: boolean = false
 ): UseLayoutPreferencesReturn {
   const { getSpacePreferences, updateSpacePreferences, currentSpace } = useSpaceStore()
-  const isCanvasOpen = useCanvasIsOpen()
 
   // Get persisted preferences
   const preferences = spaceId ? getSpacePreferences(spaceId) : undefined
@@ -90,17 +88,15 @@ export function useLayoutPreferences(
       return userRailOverride
     }
 
-    // Priority 2: If canvas is not open, default to expanded
-    if (!isCanvasOpen) {
-      return true
-    }
-
-    // Priority 3: Persisted preference
+    // Priority 2: Persisted preference
     if (layoutPrefs?.artifactRailExpanded !== undefined) {
       return layoutPrefs.artifactRailExpanded
     }
 
-    // Priority 4: Default (collapsed when canvas open)
+    // Priority 3: Default — collapsed. Opening is event-driven: the rail
+    // auto-opens only when the conversation actually writes/edits files
+    // (SpacePage's touched-files effect), never merely because messages
+    // exist.
     return LAYOUT_DEFAULTS.artifactRailExpanded
   })()
 

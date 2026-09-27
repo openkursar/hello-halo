@@ -118,7 +118,7 @@ describe('report routing (§5.3)', () => {
     // Falls through to the normal path: an ordinary (audit) entry is written.
     expect(entries).toHaveLength(1)
     expect(entries[0].content.summary).toBe('T1 done')
-    expect(entries[0].content.teamContext).toBeUndefined()
+    expect(entries[0].content.teamContext).toMatchObject({ teamId: 'team-1', epochId: 'epoch-1' })
     expect(res.content[0].text).toMatch(/report saved/i)
   })
 
@@ -292,7 +292,7 @@ describe('report routing (§5.3)', () => {
     expect(entries).toHaveLength(1)
     expect(res.content[0].text).toMatch(/escalation sent to user/i)
     expect(log).toHaveBeenCalledWith(
-      '[Runtime] Decision request could not be added to shared task history',
+      '[Runtime] Report could not be added to shared task history',
       expect.objectContaining({ appId: 'app-researcher', teamId: 'team-1', epochId: 'epoch-1' })
     )
     log.mockRestore()

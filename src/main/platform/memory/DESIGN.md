@@ -1,406 +1,306 @@
 # platform/memory -- Design Document
 
-> Date: 2026-02-23
-> Status: V3 Implementation
+> Status: V4.2 — topics, space memory, agent consolidation with deterministic merge, write guard, owner settings
 
 ---
 
-## 1. Architecture Overview
+## 1. Model
 
-The memory module provides persistent, cross-session memory for AI agents in Halo.
+Memory is plain markdown on disk, edited by the agent with its own file tools
+(Read/Edit/Write/Grep). It has three parts, mirroring how a person remembers:
 
-**V3 core changes from V2:**
+| Part | Like a person's | Answers | Where | At turn start the agent sees |
+|---|---|---|---|---|
+| `# now` | working memory | what is true right now | `memory.md` | full text |
+| `# History` + archives | episodic memory | what happened, when, by whom | `memory.md`, `memory/run/`, `memory/archive/` | headings |
+| Topics | knowledge | what is known about one subject | `memory/topics/` | a generated index |
 
-- AI uses native Claude Code tools (Read/Edit/Write) instead of custom MCP tools
-- `memory.md` is pre-injected into the trigger message (push-based, not pull-based)
-- Only one MCP tool remains: `memory_status` for structural metadata checks
-- `memory.md` uses a two-tier structure: `# now` (working memory) + `# History` (timeline)
-- Session summaries move to `memory/run/` subfolder
-- System pre-inserts timestamp headings in `# History` before each run
+`memory_schema` (digital-human spec) sits beside this: it says *what* a digital
+human should track, not how memory is organised. It is rendered into the memory
+instructions as "What this memory tracks".
+
+Owners:
+
+| Owner | Scope | Written by | Read-only for |
+|---|---|---|---|
+| Digital human | `app` | its runs, chats, IM threads, team turns | — |
+| Space | `space` | every conversation in the space | digital humans (opt-in per digital human, every turn) |
+| User | `user` | reserved; resolvable, not wired | — |
+
+Each memory has owner settings (`shared/types/memory.ts`): on/off, automatic
+consolidation on/off, and a cadence (`diligent` default, `balanced`,
+`economical`). A space keeps them in its preferences, a digital human in its
+overrides; both are edited from settings screens that also show the memory's
+size, its last consolidation, and a "consolidate now" button.
+
+This module is the file side of all of it. It never calls a model and knows
+nothing of runs, chats or apps beyond the owner kind its prompt is phrased for.
+The consolidating agent lives in `services/memory-consolidation`.
 
 ---
 
-## 2. memory.md Structure
+## 2. Layout
 
-### 2.1 Two-tier layout: `# now` + `# History`
+`resolveMemoryLayout(caller, scope)` is the only place a memory path is composed.
+
+```
+memory.md                 # now + # History
+memory/
+  topics/                 topic wiki (agent-written)
+    visitor-faq.md
+    halo-product/
+      index.md            category: front matter only
+      migration.md
+  run/                    one record per automation run (system)
+  archive/                memory.md before each consolidation (system)
+  .snapshots/             memory.md + topics/ before each consolidation (system)
+    initial/              the first one, kept for good
+  .consolidation/         a running consolidation's private copy (system)
+  .state.json             last consolidation, last attempt, cooldown (system)
+```
+
+Base directory: app → `appDataPath` (default `{spacePath}/.halo/apps/{appId}`);
+space → `{spacePath}/.halo` (the space's data directory, never its working
+directory, so memory stays out of the user's project files). Compaction archives
+written before `archive/` existed remain directly in `memory/`.
+
+---
+
+## 3. memory.md
 
 ```markdown
 # now
-
-## State | brief one-line summary of current state
-- runs_completed: 84
-- alerts_sent: 5
-- last_result: AirPods ¥1199, no change
-
-## AirPods Pro (JD.com)
-- current_price: ¥1199
-- lowest_seen: ¥1099 (2026-01-08)
-- last_change: 2026-01-10, ¥1299→¥1199
-- trend: stable (5 days)
-
-## MacBook Air M3 (Taobao)
-- current_price: ¥7999
-- lowest_seen: ¥7499 (2026-01-12)
-- last_change: 2026-01-13, ¥7499→¥7999
-- trend: rising
-
+## State | one-line summary          ← always first
+- key: value
+## [Entity]
 ## Patterns
-- prices are lowest on weekday mornings, highest on weekends
-- price drops >10% are usually flash sales, revert within 48h
-- user prefers notification only when price drops below previous lowest
-
 ## Errors
-- JD anti-bot: switch to mobile User-Agent header
-- Taobao layout changed 2026-01-11: use selector .price-current
+- JD scraping: stable on mobile → topic scraping/jd.md   ← pointer into a topic
 
 # History
-
-## 2026-01-15-1430 | routine check, no change
-
-## 2026-01-15-1400 | MacBook ¥7999↑, alerted user
-### Details
-- MacBook Air: ¥7499→¥7999
-- exceeded previous highest, sent notification
-
-## 2026-01-15-1330 | routine check, no change
-...
+## 2026-01-15-1430 | summary  [topic: scraping/jd.md]  [by: schedule#a1b2]
+### details
 ```
 
-### 2.2 `# now` — Working Memory
-
-The AI's current state. Organized into `##` sections by purpose:
-
-| Section | Purpose | Growth |
-|---------|---------|--------|
-| `## State \| description` | Counters, current status, last result | Values change, field set stable |
-| `## [Entity Name]` | Per-entity tracking (e.g., per product) | Add/remove sections as needed |
-| `## Patterns` | Learned rules that improve performance | Accumulates, periodically consolidated |
-| `## Errors` | Lessons from past failures | One-liner per resolved issue |
-
-**`## State` must always be first** — it is auto-loaded via snapshot injection.
-
-The `| description` after `## State` is a one-line summary written by the AI.
-It appears in the snapshot heading list, giving instant context.
-
-### 2.3 `# History` — Timeline
-
-Chronological log of significant events, newest at the top.
-
-Each entry is a `##` heading with format:
-`## YYYY-MM-DD-HHmm | summary  [by: origin#id]`
-
-The trailing `[by: ...]` names the execution that opened the entry. One digital
-human is executed many times over — a scheduled run, a chat with its owner, an
-IM thread, a turn inside a team — and several of those can be alive at once,
-all sharing this one first-person file. Without a signature, a line another
-execution wrote about itself reads to the next one as a description of itself,
-which is how an execution ends up believing it is mid-way through work that
-belongs to someone else.
-
-The tag is written by the system, never by the model, and only for the
-execution being opened. Entries predating this carry no tag and are **not**
-backfilled: who wrote them is not recoverable, and a guessed attribution is
-worse than none. Both the memory instructions and the compaction prompt say so,
-so neither the model nor the compactor invents one.
-
-The `[by: ...]` goes last so the timestamp and summary — the parts a person
-reads — come first, and so nothing that parses the heading has to change.
-
-- **Important events** get a `### sub-heading` + detailed content
-- **Routine events** are a single heading line
-
-The timestamp in `# History` corresponds directly to run files in `memory/run/`:
-- `## 2026-01-15-1400` → `memory/run/2026-01-15-1400-run.md`
-
-**System pre-inserts** the `## YYYY-MM-DD-HHmm` heading at the top of `# History`
-before each run. The AI only needs to Edit in the summary (after `|`) and
-optionally add detail lines below.
-
-### 2.4 Time format
-
-Unified across the system: **`YYYY-MM-DD-HHmm`** (local time, no colons).
-
-Used in:
-- `# History` headings in `memory.md`
-- Run file names in `memory/run/`
-- Compaction archive file names in `memory/`
+- Timestamps are `YYYY-MM-DD-HHmm`, local time. Automation runs get their heading
+  pre-inserted by the system; sessions write their own.
+- `[by: origin#id]` is stamped by the system (runs) or given to the agent
+  (sessions) and names the execution that wrote the entry. Many executions share
+  one memory; the tag is how a reader tells a colleague's note from its own work.
+  Untagged legacy entries are never backfilled.
+- `[topic: path]` is optional and links an event to the topic it belongs to.
+- `memory.md` never lists topics. The index is generated (§4).
 
 ---
 
-## 3. Snapshot Injection
+## 4. Topics
 
-### 3.1 Trigger-time injection
+A topic file opens with front matter:
 
-Before each run, `buildMemorySnapshot()` reads `memory.md` and the system
-injects it into the initial user message. This replaces the V2 pattern where
-the AI had to call `memory_read` as its first action.
-
-### 3.2 Three injection variants
-
-| Condition | Injected Content |
-|-----------|-----------------|
-| No file exists | Path + guidance to create with Write |
-| Small file (≤30 lines) | Full content |
-| Large file (>30 lines) | `# now` block (full) + `# History` headings (structure only) |
-
-**Key**: `firstSection` in `snapshot.ts` extracts from the first `#`-level heading
-to the next `#`-level heading. With `# now` / `# History`, this naturally captures
-the entire `# now` block.
-
-The `# History` headings appear in the `### Structure` outline, so the AI can see
-the recent timeline without loading full content.
-
-### 3.3 What the AI sees (large file)
-
+```markdown
+---
+name: Moving a digital human
+description: a visitor asks how to move a digital human to another machine or edition
+---
 ```
-## Memory
 
-**File**: `/path/to/memory.md`
-**Size**: 150 lines, 8.5KB
+`description` states **when** to read the page, not what it contains — it is all
+a future reader sees before deciding to open it. A category is a folder whose
+`index.md` holds only that front matter; its contents are never listed by hand.
 
-### Current State (auto-loaded):
+**The index is generated** (`scanTopics` + `renderTopicIndexLines`) from the files
+at every turn start and never written anywhere. A stored list would drift from
+the files, and a consolidation could drop a line and orphan a topic.
 
-# now
-## State | AirPods ¥1199 stable, MacBook ¥7999↑
-- runs_completed: 84
-- alerts_sent: 5
-...
-## Patterns
-- prices lowest on weekday mornings
-...
+- Categories first, then files; files carry `.md`, folders `/`; sizes shown.
+- Breadth-first within a 6KB budget: the whole top level always, deeper levels
+  while the budget lasts, the rest folded into `… N more in <folder>/` or a topic
+  count. The budget bounds the prompt, not the wiki.
+- Missing front matter / `index.md` is flagged in the index for the agent to fix.
+- When folded, the agent is told to enter folders or `Grep "^description:"`.
 
-### Structure:
-  L1: # now (28 lines) ← loaded above
-  L29: # History (120 lines)
-    L30: ## 2026-01-15-1430 | routine check (1 lines)
-    L31: ## 2026-01-15-1400 | MacBook ¥7999↑ (5 lines)
-    ...
-
-**Archive** (`memory/run/`, 42 files):
-  - 2026-01-15-1430-run.md
-  - 2026-01-15-1400-run.md
-  ...
-```
+There is no limit on topic count or size. Growth is steered by the instructions
+(search before creating, one subject per page, link rather than copy, group into
+categories) and by consolidation.
 
 ---
 
-## 4. Memory File Structure on Disk
+## 5. A turn
 
 ```
-{spacePath}/.halo/apps/{appId}/
-  memory.md              -- Active memory (# now + # History)
-  memory/
-    run/                 -- Per-run session summaries (auto-generated)
-      2026-01-15-1430-run.md
-      2026-01-15-1400-run.md
-      ...
-    2026-01-10-0000.md   -- Compaction archives (old memory.md backups)
-    ...
+start   ensureMemoryFile(layout, owner) — the skeleton, when memory.md is missing
+          or blank (a run's pre-inserted heading creates it the same way)
+        buildMemorySnapshot(layout) → renderMemorySection(snapshot, opts)
+          # now (up to a limit, cut at a `##` boundary with a note) ·
+          History as "N entries" + the newest few titles ·
+          generated topic index (6KB budget, shared with any read-only topics)
+        instructions: generatePromptInstructions(mode, { owner, tracks, empty, inTeam })
+work    agent Reads/Edits memory.md and topics; memory_status for structure
+          and for topic-writing examples (not sent every turn)
+end     run record (automation only) · requestConsolidation (services)
 ```
 
-- **`memory/run/`**: One file per execution, named `YYYY-MM-DD-HHmm-run.md`.
-  Contains: trigger type, outcome, duration, tokens, AI output summary.
-  AI can read these to recall detailed history of a specific run.
+| Caller | Instructions | Memory block |
+|---|---|---|
+| Automation run (`apps/runtime/execute.ts`) | full manual, `run` (~11KB) | trigger message; `# now` ≤16KB, 8 History titles; heading pre-inserted |
+| Digital-human chat / IM / team (`apps/runtime/app-chat.ts`) | full manual, `session` | first message of the session, same limits |
+| Space chat (`services/agent/space-memory.ts`) | compact, ≤2KB; ~0.5KB while the memory is empty | first message of a new conversation; `# now` ≤8KB, 3 History titles |
 
-- **`memory/`** (root): Compaction archives. When `memory.md` exceeds 100KB,
-  it is renamed to `memory/YYYY-MM-DD-HHmm.md` and a new compact `memory.md`
-  is generated by LLM.
+The skeleton is the sections and nothing in them (`# now` / `# History`, plus
+`## State` for a digital human), created on first use rather than when a space
+or app is created, and never over a file that holds anything. The agent's first
+write is therefore an Edit under the writers' lock, like every later one, and
+the instructions never teach creating the file. A memory is *empty*
+(`memoryHasContent`, `snapshot.blank`) while memory.md holds at most its
+skeleton and there are no topics; an empty memory is rendered as "nothing
+recorded yet" instead of its headings.
+
+A digital human is one long-lived persona and leans on continuity; a space is
+many unrelated conversations, so it gets the current facts and the index and
+reads the rest on demand. With memory turned off, none of this happens: no
+instructions, no block, no heading, no run record, no consolidation; the guard
+makes the memory read-only.
+
+The team guidance in a digital human's manual (never copy team state into
+memory; the team tools) is given by membership (`inTeam`, from any team), not
+by whether the turn is a team turn: every turn shares the memory, and a chat
+with the owner can copy team state into it as easily.
+
+A digital human may be offered its space's topics read-only (setting
+`spaceMemoryAccess`, default off) — in every turn, guests' included. They are
+listed one level deep after its own topics, from what is left of the shared
+budget, with a note to refer to them by path rather than copy them into its own
+memory, so knowledge is not held twice.
+
+**Guests and other restricted turns.** Guests read and write the same memory as
+everyone else; their History entries are signed `im-guest#xxxx`, and the
+instructions ask, in one sentence, not to reveal sensitive memory content to
+them. What "memory" means for a restricted turn is its content only
+(`memoryContentPaths`: memory.md + topics — never run records, archives,
+snapshots or state), plus the space's topics when both "use workspace memory"
+and the space's memory are on. The file boundary around it — memory always,
+workspace files only with a granted tool, the space data folder closed — is
+`apps/runtime/turn-file-access.ts`.
 
 ---
 
-## 5. AI Read/Write Pattern (V3)
+## 6. Concurrency
 
-### 5.1 Tools
+**One lock per memory**, keyed by its `memory.md` path, covering the file and the
+data directory (`acquireMemoryLock` / `withMemoryLock`). Every writer takes it:
 
-AI uses **native Claude Code tools** for all memory operations:
+- this module's writers (History headings, consolidation swap, History trim);
+- the agent's file tools, through the **write guard** (`guard.ts`): engine hooks
+  around `Write`, `Edit`, `MultiEdit`, `NotebookEdit` — one matcher entry per
+  tool, because the Halo engine matches names exactly or by `prefix*`, never as
+  an `A|B` alternation. A write into a memory takes the lock before the tool runs
+  and releases it after (PostToolUse / failure / denial). A call refused after
+  the guard ran never reaches a post hook, so the same agent's next write
+  releases it; a 15s lease covers the rest. A writer that waits 30s is refused
+  with a reason, never left hanging.
+- A waiter that times out gives up its place without emptying the queue: the
+  entry is cleared only once everyone ahead has released.
 
-| Tool | Memory Use |
-|------|-----------|
-| Read | Load specific sections of `memory.md`, or files in `memory/run/` |
-| Edit | Update individual fields in `# now`, add summary to `# History` |
-| Write | First-time creation, or full restructure after consolidation |
+`hooks` is one engine option shared by every concern that watches tool calls;
+all of them add through `addSdkHooks` (services/agent/sdk-config), which merges
+event by event.
 
-One MCP tool remains:
-- **`memory_status`** — Returns structural metadata (path, size, headings, archive info).
-  No content. Useful for re-checking structure after multiple edits.
+All path comparisons — here, in the consolidation workspace confinement and in
+a restricted turn's file boundary — go through `foundation/path-containment`:
+a path argument read as the engines read it (`resolveToolPath`: `~` expanded, no
+environment variables), then compared with links resolved (a path not created
+yet through its nearest existing ancestor) and case folded where the filesystem
+ignores case (`canonicalPath` / `isPathWithin`). A Glob pattern reaches the
+folder up to the last separator before its first wildcard (`globSearchRoot`).
 
-### 5.2 Per-run lifecycle
+The guard also refuses writes into system-managed paths (`run/`, `archive/`,
+`.snapshots/`, `.consolidation/`, `.state.json`) and into memories the session
+may only read (space memory for digital humans; its own memory when turned off).
 
-```
-Pre-run (system)
-  │
-  ├─ buildMemorySnapshot()                    ← Read memory.md + archive listing
-  ├─ insertHistoryHeading(ts, byLabel)        ← "## ts  [by: origin#id]" into # History
-  └─ Inject into trigger message              ← AI sees # now + structure + who else runs
-  │
-AI Run
-  │
-  ├─ (# now is already in context)            ← No tool call needed
-  ├─ Execute task...
-  ├─ Edit # now: update State fields          ← Precise field-level updates
-  ├─ Edit # History: add summary to heading   ← summary goes BEFORE the [by: ...] tag
-  │   └─ Optionally add ### details below
-  └─ report_to_user                           ← Send results to user
-  │
-Post-run (system)
-  │
-  ├─ saveRunSessionSummary()                  ← Write to memory/run/{ts}-{slug}.md
-  └─ needsCompaction() check
-       ├─ Under 100KB → skip
-       └─ Over 100KB → read → LLM summary → compact(summary)
-            ├─ Archive the file as it stands to memory/YYYY-MM-DD-HHmm.md
-            └─ Put the summary in its place, under one lock
-```
+Staleness — editing over content someone changed since reading it — is left to
+the engine: its Edit/Write refuse a file modified since the agent last read it,
+and the lock makes that check race-free. The instructions tell the agent to
+re-read and merge on such a refusal.
 
-### 5.3 Compaction behavior with new structure
+Engines without hooks (Codex) degrade: no lock and no read-only boundary for the
+agent's tools, logged once per process; the instructions still ask for
+edit-don't-rewrite. Shell writes to memory files are out of scope.
 
-The compaction LLM prompt instructs:
-- Preserve `# now` structure (State, Entity, Patterns, Errors sections)
-- Distill `# now` fields to current essential values
-- Strip first-person process and role claims, and any copy of team-board state
-- Keep `[by: ...]` verbatim on retained entries; never invent one, never merge
-  entries carrying different tags
-- Keep only the last ~10 `# History` entries
-- Drop older History entries (they exist in `memory/run/` anyway)
-
-### 5.4 Concurrent executions and the file
-
-Every write this module makes is serialized per absolute path, and lands via
-write-to-temp-then-rename, so a reader never sees a torn file. Two properties
-follow, and both are deliberate:
-
-**The file is never absent**, and this is load-bearing in two places rather than
-one. Compaction generates its summary *before* anything moves, so the file is
-there for the minutes that takes; and the swap itself gives the archive a second
-name (a hard link, or a copy where links are refused) instead of moving the file
-out from under its own, so the path still holds during the swap. The accepted
-cost is that entries written during generation are in the archive but not in the
-summary — losing a line of History beats losing all of `# now`.
-
-Both halves are needed because of what a reader does with an absent file, not
-merely what it fails to read: `buildMemorySnapshot` reads without the lock at
-every turn start, and `exists: false` makes the trigger message say *"No memory
-file exists yet — create it with Write"* and suppresses the authorship framing.
-The agent's `Write` does not come through this module and cannot be stopped. So
-a reader landing in a gap is actively instructed to replace the digital human's
-memory with a blank one. A move-based swap left a gap of several awaited
-syscalls, which was wide enough to hit in practice.
-
-**The lock does not reach the model.** The agent edits `memory.md` with its own
-Read/Edit/Write inside its sandbox, which never enters this module. Nothing
-in-process can serialize that. It is why provenance and the injected liveness
-list exist at all: where the file cannot be locked, the readers are told enough
-not to misread it.
+**Readers never see a missing file**: writes are temp-then-rename, archives are
+hard links, and a consolidation never removes memory.md. A reader finding no file
+is told to create one, which would replace the memory — so absence must not occur.
 
 ---
 
-## 6. Key Design Decisions
+## 7. Consolidation
 
-### 6.1 Native tools over custom MCP tools (V3)
+**When** (`isConsolidationDue`): any threshold of the owner's cadence crossed,
+not cooling down, and not within the cadence's minimum interval since the last
+attempt —
 
-**Decision**: AI uses Read/Edit/Write instead of `memory_read`/`memory_write`.
+| Cadence | memory.md | `# now` | History entries | min interval |
+|---|---|---|---|---|
+| diligent (default) | 100KB | 8KB | 30 | 1h |
+| balanced | 200KB | 16KB | 60 | 4h |
+| economical | 400KB | 32KB | 120 | 12h |
 
-**Rationale**: The automation agent has the same toolset as the interactive agent.
-Edit enables precise field-level updates (change one value without rewriting
-the file), which is impossible with `memory_write(mode="replace")`.
-This reduces tokens, improves accuracy, and eliminates a class of bugs where
-the AI rewrites stale content.
+The `# now` threshold never exceeds the owner's injection limit
+(`MEMORY_SECTION_LIMITS`: space 8KB, digital human 16KB), so a `# now` too large
+to be shown whole is soon consolidated rather than cut every turn.
 
-### 6.2 Push-based injection over pull-based reads (V3)
+After an attempt that did not commit, automatic attempts wait until memory.md
+has grown: 20% after the first failure, doubling per consecutive failure up to
+3× (`consecutiveFailures`, `cooldownUntilBytes` in `.state.json`); a commit
+clears both. "Consolidate now" ignores thresholds, interval, cooldown and busy.
 
-**Decision**: `# now` is pre-injected into the trigger message.
+With automatic consolidation off, memory is not reorganised. Only History is
+kept bounded (`isArchiveDue`): over its entry limit, or the file over its total
+size — never because of `# now` — it is trimmed (archived first) to
+`historyKeepFor(cadence)` entries. That is recorded apart from attempts
+(`recordArchive`: `lastArchivedAt`), counts as no failure and sets no interval,
+so turning automatic consolidation back on acts at once. Only when the file is
+still over its size afterwards does archiving for size wait until it has grown
+20% (`archiveCooldownUntilBytes`); otherwise every new entry would archive it
+again.
 
-**Rationale**: V2 AI wasted one tool call every run to read memory.
-Pre-injection saves ~3 seconds and guarantees the AI sees current state.
+An agent (`services/memory-consolidation`) reorganises the memory; this module
+owns everything that must hold regardless of how the agent behaves:
 
-### 6.3 `# now` / `# History` structure (V3)
-
-**Decision**: memory.md has two `#`-level sections.
-
-**Rationale**: Combines two needs:
-- Stable working memory (`# now`) — edited in place, structure doesn't change
-- Timeline context (`# History`) — append-only, gives AI awareness of recent events
-
-The `#` level split enables `firstSection` extraction in `snapshot.ts` to
-naturally capture the entire `# now` block for injection.
-
-### 6.4 System-generated timestamps (V3)
-
-**Decision**: The system pre-inserts `## YYYY-MM-DD-HHmm` at the top of
-`# History` before each run.
-
-**Rationale**: Guarantees consistent time format. AI doesn't need to know
-or generate timestamps. AI only writes the semantic summary after `|`.
-
-### 6.5 `memory/run/` subfolder (V3)
-
-**Decision**: Session summaries go to `memory/run/` instead of `memory/`.
-
-**Rationale**: Separates two types of archives:
-- `memory/run/` = per-execution records (system-generated)
-- `memory/` = compaction backups (old memory.md snapshots)
-
-Clean separation allows AI to `Glob("memory/run/*.md")` for execution history.
-
-### 6.6 Compaction threshold: 100KB (unchanged from V2)
-
-**Decision**: File-size based, 100KB threshold.
-
-Post-compaction, the LLM produces a new memory.md that preserves `# now` /
-`# History` structure, keeping essential state and recent timeline entries.
-
-### 6.7 Mandatory memory update
-
-**Decision**: The Instructions section of the trigger message includes
-"Update memory before reporting" as a requirement, not a suggestion.
-
-**Rationale**: Memory is the core mechanism for long-term agent performance.
-Skipping updates degrades future runs. Making it mandatory ensures the AI
-always records what it learned.
+| Step | Here | Guarantees |
+|---|---|---|
+| prepare | repair a swap a crash interrupted; copy memory.md + topic files into `.consolidation/<id>/` under the lock, with a baseline (content, per-file stats and hashes) | the live memory stays fully usable for the minutes the agent takes |
+| moves | `moveWithinWorkspace` (the agent's `memory_move` tool) records every move/removal; removal requires `merged_into` | every required topic is accounted for |
+| validate | `# now` + `# History` present; no topic list in memory.md; every topic described; every required topic present or moved/merged; topic bytes (all non-hidden files, same measure as the baseline) not down >40%; History trimmed if over the cadence's limit. Failure reasons are written for the agent | structural soundness, no silent loss |
+| commit — merge | under the lock, before anything else: History entries the live file gained or rewrote are carried into the result (whatever else changed) — a rewritten entry replaces its old text where that still stands, matched in full; anything else goes in by timestamp; nothing is removed. Topics added, changed or removed live that the agent left untouched (same content as the baseline) are copied/removed in the workspace; a topic removed on both sides is agreement | nothing written meanwhile is lost, and nothing that can be decided mechanically is handed to the agent |
+| commit — conflict | memory.md outside History changed, or a topic both sides changed: the live memory is untouched; its full current content goes to `.incoming/` in the workspace and the result lists exactly what to merge — nothing truncated or omitted | the agent sees all of what it must merge |
+| rebase | when a conflict is handed to the agent, the live memory becomes the baseline at once; topics that appeared meanwhile become required, removed ones stop being required. From then on the next commit takes the workspace as the merge — completing it is the agent's part, which the harness keeps asking for until a result is accepted (services/memory-consolidation) | the next commit compares against what is really live |
+| swap | snapshot (`initial` kept forever, 3 rotating), topics/ first then memory.md (archived by hard link), hidden files of the old topics tree carried over; a failure restores both | memory.md never points at topics that did not arrive; every swap is restorable — topics only until 3 more consolidations have committed (memory.md also stays in `archive/`) |
+| fallback | when the agent runs out of rounds: History trimmed only if over its limit | History is bounded; `# now` and topics are never cut mechanically |
 
 ---
 
-## 7. File Organization (V3)
+## 8. Files
 
 ```
 src/main/platform/memory/
-  DESIGN.md          -- This file
-  types.ts           -- MemoryService interface, scope types, constants
-  paths.ts           -- Path resolution for all memory scopes
-  permissions.ts     -- Permission matrix enforcement
-  file-ops.ts        -- Low-level file I/O, per-path write lock, atomic writes,
-                        history-heading insertion, archive-and-replace
-  snapshot.ts        -- MemorySnapshot builder + memory_status MCP tool
-  prompt.ts          -- MEMORY_INSTRUCTIONS (system prompt fragment)
-  index.ts           -- initMemory(), MemoryService implementation, exports
-  tools.ts           -- Legacy MCP tools (memory_read/write/list) — kept for compatibility
+  index.ts          public surface; MemoryService (run records, instructions)
+  types.ts          scopes, MemoryService, CONSOLIDATION_THRESHOLD_BYTES
+  paths.ts          resolveMemoryLayout — the only path composer
+  permissions.ts    who may write which scope through this module
+  file-ops.ts       lock, atomic write, History heading, archive link
+  topics.ts         front matter, scan, generated index
+  snapshot.ts       buildMemorySnapshot, memory_status tool
+  section.ts        renderMemorySection — the block a turn opens with
+  prompt.ts         instructions (mode × owner × tracks), TOPIC_FILE_FORMAT
+  guard.ts          engine-hook write guard
+  consolidation.ts  file side of consolidation: assess, prepare, validate,
+                    commit/rebase, trim, .state.json
+  sdk.ts            injected agent-SDK primitives (seam; see ARCHITECTURE §2)
 
-src/main/apps/runtime/
-  prompt.ts          -- buildAppSystemPrompt(), buildInitialMessage(), buildMemorySection(),
-                        buildLiveInstancesSection()
-  prompt-chat.ts     -- Chat mode prompt (references native file tools)
-  live-instances.ts  -- Which execution this is, and which others are running.
-                        Derived from the run registry and the app-chat sinks;
-                        supplies the `[by: ...]` label this module writes.
-  execute.ts         -- Run lifecycle: snapshot → heading → run → session summary → compaction
-  turn/memory-lifecycle.ts
-                     -- Shared prepare/finalize + the compaction LLM call
-```
-
-This module knows nothing about runs, chats or teams. The signature it writes
-arrives as an opaque, already-rendered `byLabel` string; who produced it, and
-what an execution even is, belong to `apps/runtime`.
-
----
-
-## 8. Permission Matrix (unchanged)
-
-```
-                    space-memory   app-memory(A)   app-memory(B)   user-memory
-User Session read      YES            NO              NO              YES
-User Session write     YES            NO              NO              YES
-App A read             YES            YES             NO              YES (read-only)
-App A write            YES(append)    YES             NO              NO
-App B read             YES            NO              YES             YES (read-only)
-App B write            YES(append)    NO              YES             NO
+src/shared/types/memory.ts                settings, status, cadences (renderer-safe)
+src/main/services/memory-consolidation/   the consolidating agent, harness, scheduling, space controls
+src/main/services/agent/space-memory.ts   space chat wiring
+src/main/apps/runtime/turn/memory-lifecycle.ts   digital-human wiring
+src/main/apps/runtime/memory-control.ts          digital-human status / consolidate now
+src/renderer/components/memory/MemorySettingsPanel.tsx   the shared settings UI
 ```

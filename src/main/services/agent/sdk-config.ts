@@ -20,7 +20,7 @@ import {
 import type { ApiCredentials, ResolvedModelCapabilities } from './types'
 import { inferOpenAIWireApi, credentialsToBackendConfig, getHeadlessElectronPath } from './helpers'
 import { resolveModelId } from '../../../shared/types/ai-sources'
-import { buildSystemPrompt, DEFAULT_ALLOWED_TOOLS } from './system-prompt'
+import { buildSystemPrompt, DEFAULT_ALLOWED_TOOLS, hostSystemPromptText, toEngineSystemPrompt } from './system-prompt'
 import { createCanUseTool } from './permission-handler'
 import { DEFAULT_DISABLED_TOOLS, TEAM_TOOLS } from '../../../shared/constants/disabled-tools'
 import {
@@ -30,8 +30,12 @@ import {
   CONTEXT_WINDOW_HARD_MIN,
   CONTEXT_WINDOW_HARD_CAP,
 } from '../../../shared/constants/model-runtime-limits'
-import { getActiveEngine } from './resolved-sdk'
+import { getActiveEngine, getEngineCapabilities } from './resolved-sdk'
 import { getDeviceIdentity } from '../../foundation/device-identity'
+import { applyOfficeRuntimeEnv } from '../office-runtime'
+import { buildRequestIdentity } from './request-identity-factory'
+import { createMemoryWriteHooks, type MemoryWriteGuardConfig } from '../../platform/memory'
+import { buildModelPricingTable } from '../../../shared/constants/model-pricing'
 
 // ============================================
 // Configuration
@@ -92,7 +96,7 @@ export interface SdkEnvParams {
   configDirMode?: 'halo' | 'cc' | 'custom'
   /** Custom config dir path (when configDirMode === 'custom') */
   customConfigDir?: string
-  /** Enable Agent Teams (multi-agent collaboration) */
+  /** Legacy setting retained for config compatibility; Halo Team MCP is always used. */
   enableTeams?: boolean
   /**
    * Resolved per-model capability numbers (preset + user override merged).
@@ -237,7 +241,7 @@ export interface BaseSdkOptionsParams {
   configDirMode?: 'halo' | 'cc' | 'custom'
   /** Custom config dir path (when configDirMode === 'custom') */
   customConfigDir?: string
-  /** Enable Agent Teams (multi-agent collaboration) */
+  /** Legacy setting retained for config compatibility; native CC Teams are disabled. */
   enableTeams?: boolean
   /** Tools disabled by user (Extended Capabilities toggles) */
   disabledTools?: string[]
@@ -250,6 +254,40 @@ export interface BaseSdkOptionsParams {
    * override systemPrompt entirely after this builder returns.
    */
   toolsetIndex?: string
+  /**
+   * Memory instructions appended to the Halo system prompt (space chat). Callers
+   * that replace the system prompt afterwards (apps/runtime) carry their own.
+   */
+  memoryInstructions?: string
+  /**
+   * Memories this session writes or may only read. Enforced on the agent's file
+   * tools through engine hooks where the engine runs them; see
+   * platform/memory guard.ts.
+   */
+  memoryGuard?: MemoryWriteGuardConfig
+}
+
+// ============================================
+// Hooks
+// ============================================
+
+let guardDegradationLogged = false
+
+type SdkHookMatchers = Record<string, unknown[]>
+
+/**
+ * Add engine hooks to options that may already carry some, event by event.
+ *
+ * `hooks` is one option shared by every concern that watches tool calls (the
+ * memory guard set here, a caller's audit), so assigning it would silently
+ * drop whatever an earlier concern installed. Every writer goes through this.
+ */
+export function addSdkHooks(sdkOptions: Record<string, any>, hooks: SdkHookMatchers): void {
+  const merged: SdkHookMatchers = { ...(sdkOptions.hooks ?? {}) }
+  for (const [event, matchers] of Object.entries(hooks)) {
+    merged[event] = [...(merged[event] ?? []), ...matchers]
+  }
+  sdkOptions.hooks = merged
 }
 
 // ============================================
@@ -263,7 +301,7 @@ export interface BaseSdkOptionsParams {
  */
 function buildDisallowedTools(
   userDisabledTools?: string[],
-  enableTeams?: boolean
+  _enableTeams?: boolean
 ): string[] {
   const set = new Set<string>()
 
@@ -271,10 +309,9 @@ function buildDisallowedTools(
   const effectiveDisabled = userDisabledTools ?? [...DEFAULT_DISABLED_TOOLS]
   for (const tool of effectiveDisabled) set.add(tool)
 
-  // When Agent Teams is off, also disable team-related tools
-  if (!enableTeams) {
-    for (const tool of TEAM_TOOLS) set.add(tool)
-  }
+  // Native CC Teams are intentionally unavailable. Halo's Team MCP is the
+  // only supported collaboration surface and is mounted by the broker.
+  for (const tool of TEAM_TOOLS) set.add(tool)
 
   return Array.from(set)
 }
@@ -418,23 +455,35 @@ export function computeCredentialsFingerprint(sdkOptions: Record<string, any>): 
  * permission fields force a rebuild with the guest's restricted wiring.
  *
  * INVARIANT: every fingerprinted input must be stable across consecutive sends.
- * The system prompt currently varies only by calendar day (one rebuild per day
- * is acceptable); injecting anything higher-frequency into it — precise
+ * The system prompt varies at most by calendar day (Claude Code templates carry
+ * the date; the halo engine's append does not, the engine injects it per
+ * turn), and one rebuild per day is acceptable; injecting anything higher-frequency into it — precise
  * timestamps, live memory content, per-message state — would degrade this into
  * a session rebuild on EVERY message. Keep such content out of the prompt, or
  * exclude it here.
  */
 export function computeSessionInputsFingerprint(sdkOptions: Record<string, any>): string {
-  const mcpKeys = Object.keys(sdkOptions.mcpServers ?? {}).sort().join(',')
-  const prompt = typeof sdkOptions.systemPrompt === 'string' ? sdkOptions.systemPrompt : ''
+  // List fields are JSON-encoded, not joined: a rule like `Bash(echo a,b)`
+  // contains the would-be separator, and any bare join lets two different rule
+  // sets collapse into one material (['a,b'] vs ['a','b']) — a collision that
+  // reads as "inputs unchanged" and reuses a session built on other rules.
+  const mcpKeys = JSON.stringify(Object.keys(sdkOptions.mcpServers ?? {}).sort())
+  const prompt = hostSystemPromptText(sdkOptions.systemPrompt)
   const permissionMode = String(sdkOptions.permissionMode ?? '')
   const disallowed = Array.isArray(sdkOptions.disallowedTools)
-    ? [...sdkOptions.disallowedTools].sort().join(',')
+    ? JSON.stringify([...sdkOptions.disallowedTools].sort())
+    : ''
+  // The auto-allow rules decide which calls the engine settles by itself and
+  // which reach the permission gate — including the command patterns a borrowed
+  // turn runs under. Left out, a narrowed policy would keep the previous turn's
+  // rules for as long as the session was reused.
+  const allowed = Array.isArray(sdkOptions.allowedTools)
+    ? JSON.stringify([...sdkOptions.allowedTools].sort())
     : ''
   const skipPermissions = sdkOptions.extraArgs
     ? String(sdkOptions.extraArgs['dangerously-skip-permissions'] ?? '')
     : ''
-  const material = [mcpKeys, prompt, permissionMode, disallowed, skipPermissions].join('\u0000')
+  const material = [mcpKeys, prompt, permissionMode, disallowed, allowed, skipPermissions].join('\u0000')
   return createHash('sha256').update(material).digest('hex').slice(0, 16)
 }
 
@@ -659,9 +708,8 @@ export function buildSdkEnv(params: SdkEnvParams): Record<string, string | numbe
     // Performance: skip file snapshot I/O (Halo doesn't expose /rewind)
     CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING: '1',
 
-    // Enable Agent Teams (multi-agent collaboration with named teammates)
-    // Only set when explicitly enabled via Settings > Advanced
-    ...(params.enableTeams ? { CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1' } : {}),
+    // Native CC Agent Teams stay disabled. Halo teams are exposed through the
+    // broker's `halo-team` MCP server instead of the opaque CC protocol.
 
     // Per-model runtime limits resolved from preset + user override.
     // - CLAUDE_CODE_MAX_OUTPUT_TOKENS: caps the `max_tokens` request parameter
@@ -719,6 +767,10 @@ export function buildSdkEnv(params: SdkEnvParams): Record<string, string | numbe
     }
     console.log(`[SDK Config] Injected app proxy into subprocess env: ${appProxy}`)
   }
+
+  // Bundled Office runtime: make the halo-node shim resolvable on PATH. No-op
+  // (one log line) when the runtime bundle is absent.
+  applyOfficeRuntimeEnv(env)
 
   // Normalize proxy env vars: add http:// if protocol is missing.
   // Some Windows users (esp. with Clash/V2Ray) set HTTPS_PROXY=127.0.0.1:7890
@@ -840,6 +892,9 @@ function validateSpawnInputs(electronPath: string, cliPath: string, workDir: str
  * @param params - SDK options parameters
  * @returns Base SDK options object
  */
+/** Models already reported as unpriced; buildBaseSdkOptions runs on every send. */
+const unpricedModelsLogged = new Set<string>()
+
 export async function buildBaseSdkOptions(params: BaseSdkOptionsParams): Promise<Record<string, any>> {
   const {
     credentials,
@@ -897,20 +952,21 @@ export async function buildBaseSdkOptions(params: BaseSdkOptionsParams): Promise
     stderr: stderrHandler || ((data: string) => {
       console.error(`[Agent][${conversationId}] CLI stderr:`, data)
     }),
-    // Use Halo's custom system prompt instead of SDK's 'claude_code' preset.
-    // The capability index advertises optional toolsets (agent/toolsets) the AI
-    // can ask the user to enable; full tool schemas enter context only once the
+    // Halo's custom system prompt, or on the halo engine Halo's context appended
+    // to the engine's own default (see system-prompt.ts). The capability index
+    // advertises optional toolsets (agent/toolsets) the AI can ask the user to
+    // enable; full tool schemas enter context only once the
     // toolset is enabled and the session is rebuilt. AI Browser is one such
     // on-demand toolset here, so no aiBrowserEnabled branch. The Knowledge
     // section is appended at actual session creation (getOrCreateV2Session's
     // resolveKnowledgeBases) so a reused session never pays the index reads.
-    systemPrompt: buildSystemPrompt({
+    systemPrompt: toEngineSystemPrompt(buildSystemPrompt({
       workDir,
       modelInfo: credentials.displayModel,
       promptProfile: params.promptProfile,
       digitalHumansEnabled: params.digitalHumansEnabled,
       toolsetIndex: params.toolsetIndex
-    }),
+    }) + (params.memoryInstructions ? `\n\n${params.memoryInstructions}` : '')),
     maxTurns: params.maxTurns ?? 50,
     allowedTools: [...DEFAULT_ALLOWED_TOOLS],
     // Enable Skills loading from $CLAUDE_CONFIG_DIR/skills/ and <workspace>/.claude/skills/
@@ -929,8 +985,19 @@ export async function buildBaseSdkOptions(params: BaseSdkOptionsParams): Promise
     // This avoids CLI creating a temp file and chokidar watching the entire tmpdir.
   }
 
+  if (params.memoryGuard) {
+    if (getEngineCapabilities()?.features.hooks) {
+      addSdkHooks(sdkOptions, createMemoryWriteHooks(params.memoryGuard))
+    } else if (!guardDegradationLogged) {
+      // Degraded, not refused: memory still works, only without the lock and
+      // the read-only boundary; the prompt asks the agent to edit carefully.
+      guardDegradationLogged = true
+      console.warn(`[SDK Config] Engine ${getActiveEngine()} runs no hooks — memory write guard unavailable for its sessions`)
+    }
+  }
+
   // Build disallowed tools list from user config + implicit rules
-  const disallowedTools = buildDisallowedTools(params.disabledTools, params.enableTeams)
+  const disallowedTools = buildDisallowedTools(params.disabledTools, false)
   if (disallowedTools.length > 0) {
     sdkOptions.disallowedTools = disallowedTools
     console.log(`[SDK Config] Disallowed tools (${disallowedTools.length}): ${disallowedTools.join(', ')}`)
@@ -941,18 +1008,38 @@ export async function buildBaseSdkOptions(params: BaseSdkOptionsParams): Promise
     sdkOptions.mcpServers = mcpServers
   }
 
-  // CC-compatible client identity for halo engine (subscription gateway fingerprinting)
+  // Request identity — host-injected headers, system prefix and metadata
+  // (halo engine only).
   if (getActiveEngine() === 'halo') {
     try {
-      const ccPkg = require('@anthropic-ai/claude-code/package.json')
-      const sdkPkg = require('@anthropic-ai/sdk/package.json')
-      sdkOptions.clientIdentity = {
-        ccVersion: ccPkg.version,
-        sdkPackageVersion: sdkPkg.version,
+      sdkOptions.requestIdentity = buildRequestIdentity({
         deviceId: getDeviceIdentity().deviceId,
-      }
+        // Halo's conversation id is a uuid, which is what this field requires.
+        sessionId: conversationId,
+      })
     } catch (err) {
-      console.warn('[SDK Config] Failed to build clientIdentity:', (err as Error).message)
+      // Dropped, not fatal: the request still goes out, just without the
+      // identity headers.
+      console.warn(
+        `[Agent][${conversationId}] requestIdentity dropped — this session's requests carry no host identity headers:`,
+        (err as Error).message,
+      )
+    }
+
+    // The halo engine knows nothing about models on its own: every limit and
+    // thinking style comes from Halo's resolved capabilities. Undeclared
+    // values fall back to the engine's generic defaults.
+    const limits = resolveSdkRuntimeLimits(credentials.capabilities)
+    if (limits.maxOutputTokens !== undefined) sdkOptions.maxOutputTokens = limits.maxOutputTokens
+    if (limits.autoCompactWindow !== undefined) sdkOptions.contextWindow = limits.autoCompactWindow
+    if (credentials.capabilities?.adaptiveThinking) sdkOptions.adaptiveThinking = true
+
+    // The engine ships no prices and costs an unlisted model at zero.
+    const modelPricing = buildModelPricingTable([credentials.sdkModel])
+    sdkOptions.modelPricing = modelPricing
+    if (!modelPricing[credentials.sdkModel] && !unpricedModelsLogged.has(credentials.sdkModel)) {
+      unpricedModelsLogged.add(credentials.sdkModel)
+      console.log(`[SDK Config] No list price for model "${credentials.sdkModel}" — its cost is reported as $0`)
     }
   }
 

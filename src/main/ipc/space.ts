@@ -8,16 +8,18 @@ import {
   listSpaces,
   createSpace,
   deleteSpace,
+  forgetSpace,
   getSpaceWithPreferences,
   openSpaceFolder,
   updateSpace,
-  updateSpacePreferences,
-  getSpacePreferences,
   reorderSpaces
 } from '../services/space.service'
+import { listSpaceSummaries } from '../controllers/space.controller'
+import * as spaceController from '../controllers/space.controller'
 import { getSpacesDir } from '../foundation/config.service'
 import { spaceRpc } from '../../shared/rpc/contracts/space.contract'
 import { registerRawRpcHandlers } from './rpc'
+import type { MemorySettings } from '../../shared/types/memory'
 
 // Import types for preferences
 interface SpaceLayoutPreferences {
@@ -27,6 +29,7 @@ interface SpaceLayoutPreferences {
 
 interface SpacePreferences {
   layout?: SpaceLayoutPreferences
+  memory?: MemorySettings
 }
 
 export function registerSpaceHandlers(): void {
@@ -58,7 +61,7 @@ export function registerSpaceHandlers(): void {
     },
 
     // Create a new space
-    createSpace: async (input: { name: string; icon: string; customPath?: string }) => {
+    createSpace: async (input: { name: string; icon: string; color?: string; customPath?: string }) => {
       try {
         const space = createSpace(input)
         return { success: true, data: space }
@@ -102,7 +105,7 @@ export function registerSpaceHandlers(): void {
     },
 
     // Update space
-    updateSpace: async (spaceId: string, updates: { name?: string; icon?: string }) => {
+    updateSpace: async (spaceId: string, updates: { name?: string; icon?: string; color?: string }) => {
       try {
         const space = updateSpace(spaceId, updates)
         return { success: true, data: space }
@@ -143,27 +146,16 @@ export function registerSpaceHandlers(): void {
       }
     },
 
-    // Update space preferences (layout settings)
-    updateSpacePreferences: async (spaceId: string, preferences: Partial<SpacePreferences>) => {
-      try {
-        const space = updateSpacePreferences(spaceId, preferences)
-        return { success: true, data: space }
-      } catch (error: unknown) {
-        const err = error as Error
-        return { success: false, error: err.message }
-      }
-    },
+    // Preferences and memory go through the same controller as HTTP, so the two
+    // transports answer alike (including for a space that does not exist).
+    updateSpacePreferences: async (spaceId: string, preferences: Partial<SpacePreferences>) =>
+      spaceController.updateSpacePreferences(spaceId, preferences),
 
-    // Get space preferences
-    getSpacePreferences: async (spaceId: string) => {
-      try {
-        const preferences = getSpacePreferences(spaceId)
-        return { success: true, data: preferences }
-      } catch (error: unknown) {
-        const err = error as Error
-        return { success: false, error: err.message }
-      }
-    },
+    getSpacePreferences: async (spaceId: string) => spaceController.getSpacePreferences(spaceId),
+
+    getSpaceMemoryStatus: async (spaceId: string) => spaceController.getSpaceMemoryStatus(spaceId),
+
+    consolidateSpaceMemory: async (spaceId: string) => spaceController.consolidateSpaceMemory(spaceId),
 
     // Reorder spaces (persist user-defined display order)
     reorderSpaces: async (spaceIds: string[]) => {
@@ -177,6 +169,24 @@ export function registerSpaceHandlers(): void {
         return { success: false, error: err.message }
       }
     },
+
+    // Remove an unreachable space's registry entry (does not touch disk)
+    forgetSpace: async (spaceId: string) => {
+      try {
+        const result = forgetSpace(spaceId)
+        return { success: true, data: result }
+      } catch (error: unknown) {
+        const err = error as Error
+        return { success: false, error: err.message }
+      }
+    },
+
+    // Per-space asset counts for the workspace management page. Spans four
+    // domains (apps/skills/conversations/artifacts), so this delegates to
+    // the controller instead of a space.service function — the HTTP route
+    // needs the exact same aggregation, and the controller is the one place
+    // both already share.
+    listSpaceSummaries: async () => listSpaceSummaries(),
   })
 
 }

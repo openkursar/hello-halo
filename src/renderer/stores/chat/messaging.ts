@@ -4,20 +4,49 @@
 import type { ChatSlice } from './internal'
 import { api, canvasLifecycle, createEmptySessionState } from './internal'
 import type { CanvasContext, Message } from './internal'
+import i18n from '../../i18n'
 
 export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 'injectMessage' | 'approveTool' | 'rejectTool' | 'continueAfterInterrupt'> = (set, get) => ({
-  sendMessage: async (content, images, thinkingEnabled) => {
+  sendMessage: async (content, images, thinkingEnabled, options) => {
     const conversation = get().getCurrentConversation()
     const conversationMeta = get().getCurrentConversationMeta()
     const { currentSpaceId } = get()
 
     if ((!conversation && !conversationMeta) || !currentSpaceId) {
       console.error('[ChatStore] No conversation or space selected')
-      return
+      return false
     }
 
     const conversationId = conversationMeta?.id || conversation?.id
-    if (!conversationId) return
+    if (!conversationId) return false
+    const goal = options?.goal
+    let userMessage: Message | undefined
+
+    // Take back the optimistic bubble and end "generating" for a message no
+    // agent event will ever finish.
+    const withdraw = (error: string | null) => set((state) => {
+      const newSessions = new Map(state.sessions)
+      const session = newSessions.get(conversationId) || createEmptySessionState()
+      newSessions.set(conversationId, { ...session, error, isGenerating: false, isThinking: false })
+
+      const newCache = new Map(state.conversationCache)
+      const cached = newCache.get(conversationId)
+      if (cached && userMessage) {
+        newCache.set(conversationId, { ...cached, messages: cached.messages.filter((m) => m !== userMessage) })
+      }
+
+      const newSpaceStates = new Map(state.spaceStates)
+      const spaceState = newSpaceStates.get(currentSpaceId)
+      if (spaceState && userMessage) {
+        newSpaceStates.set(currentSpaceId, {
+          ...spaceState,
+          conversations: spaceState.conversations.map((c) =>
+            c.id === conversationId ? { ...c, messageCount: Math.max(0, c.messageCount - 1) } : c
+          )
+        })
+      }
+      return { sessions: newSessions, conversationCache: newCache, spaceStates: newSpaceStates }
+    })
 
     try {
       // Initialize/reset session state for this conversation
@@ -38,17 +67,19 @@ export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 
           pendingQuestion: null,
           queuedMessages: [],
           turnId: (prevSession?.turnId ?? 0) + 1,
+          turnStartedAt: Date.now(),
         })
         return { sessions: newSessions }
       })
 
       // Add user message to UI immediately (update cache if exists)
-      const userMessage: Message = {
+      userMessage = {
         id: `msg-${Date.now()}`,
         role: 'user',
         content,
         timestamp: new Date().toISOString(),
-        images: images  // Include images in message for display
+        images: images,  // Include images in message for display
+        ...(goal ? { metadata: { goal } } : {})
       }
 
       set((state) => {
@@ -58,7 +89,7 @@ export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 
         if (cached) {
           newCache.set(conversationId, {
             ...cached,
-            messages: [...cached.messages, userMessage],
+            messages: [...cached.messages, userMessage!],
             updatedAt: new Date().toISOString()
           })
         }
@@ -112,28 +143,45 @@ export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 
       }
 
       // Send to agent (with images, thinking mode, and canvas context)
-      await api.sendMessage({
+      const response = await api.sendMessage({
         spaceId: currentSpaceId,
         conversationId,
         message: content,
         images: images,  // Pass images to API
         thinkingEnabled,  // Pass thinking mode to API
-        canvasContext: buildCanvasContext()  // Pass canvas context for AI awareness
+        canvasContext: buildCanvasContext(),  // Pass canvas context for AI awareness
+        ...(goal ? { goal } : {})
       })
+      // A refusal comes back before main records the message or starts a turn,
+      // so no agent event will ever end this one.
+      if (response && response.success === false) {
+        console.error(`[ChatStore] Message refused for ${conversationId}: ${response.error ?? 'unknown error'}`)
+        // A goal send reports its own failure.
+        withdraw(goal ? null : i18n.t('Failed to send message'))
+        return false
+      }
+      return true
     } catch (error) {
       console.error('Failed to send message:', error)
+      // A goal send reports its own failure and rolls back the goal shown for
+      // it; its bubble goes too, since the composer hands the text back.
+      if (goal) {
+        withdraw(null)
+        return false
+      }
       // Update session error state
       set((state) => {
         const newSessions = new Map(state.sessions)
         const session = newSessions.get(conversationId) || createEmptySessionState()
         newSessions.set(conversationId, {
           ...session,
-          error: 'Failed to send message',
+          error: i18n.t('Failed to send message'),
           isGenerating: false,
           isThinking: false
         })
         return { sessions: newSessions }
       })
+      return true
     }
   },
 
@@ -141,7 +189,7 @@ export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 
   stopGeneration: async (conversationId?: string) => {
     const targetId = conversationId || get().getCurrentSpaceState().currentConversationId
     try {
-      await api.stopGeneration(targetId)
+      await api.stopGeneration(targetId ?? undefined)
 
       if (targetId) get().markSessionStopped(targetId)
     } catch (error) {

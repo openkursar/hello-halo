@@ -1,11 +1,14 @@
 /**
  * Apps Page Navigation Store
  *
- * Manages UI-level state within the AppsPage:
- * - Which app is selected
- * - Which detail panel is showing
- * - Install dialog visibility
- * - Store tab browsing state
+ * Manages UI-level state for AppsPage and StorePage:
+ * - Which app is selected (AppsPage)
+ * - Which detail panel is showing (AppsPage)
+ * - Install dialog visibility (AppsPage)
+ * - Store browsing state (StorePage — a separate top-level view, not an
+ *   AppsPage tab; kept in this store rather than a new one so the two
+ *   marketplace-opening actions below can carry filter state across the
+ *   navigation in one atomic set())
  *
  * Intentionally separate from apps.store.ts (data) so that
  * page navigation changes don't cause unnecessary data re-fetches.
@@ -14,13 +17,16 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { api } from '../api'
+import { useAppStore } from './app.store'
 import { getCurrentLanguage } from '../i18n'
 import { categoryTaxonomyResource, discoverPageResource } from '../lib/store-resources'
 import { findInstalledApp, findEntryUpdate } from '../utils/store-install-state'
 import { useAppsStore } from './apps.store'
 import type { RegistryEntry, StoreAppDetail, UpdateInfo, StoreQuery, StoreQueryResponse, StoreInstallProgress } from '../../shared/store/store-types'
 import type { AppType } from '../../shared/apps/spec-types'
-import type { ImSessionRecord } from '../../shared/types/im-channel'
+
+/** The app types the store accepts a publication for. */
+type PublishableAppType = Extract<AppType, 'automation' | 'skill'>
 
 let storeListRequestSeq = 0
 let storeDetailRequestSeq = 0
@@ -77,19 +83,21 @@ function reportDetailView(detail: StoreAppDetail, availableUpdates: UpdateInfo[]
 // Types
 // ============================================
 
-export type AppsDetailViewType = 'activity-thread' | 'session-detail' | 'app-chat' | 'app-config' | 'mcp-status' | 'skill-info' | 'uninstalled-detail'
+export type AppsDetailViewType = 'activity-thread' | 'session-detail' | 'app-config' | 'mcp-status' | 'skill-info' | 'uninstalled-detail' | 'app-teams' | 'app-sessions' | 'bot-sessions'
 
 export type AppsDetailView =
   | { type: 'activity-thread'; appId: string }
-  | { type: 'session-detail'; appId: string; runId: string; sessionKey: string }
-  | { type: 'app-chat'; appId: string; spaceId: string }
+  | { type: 'session-detail'; appId: string; runId: string; sessionKey?: string }
+  | { type: 'app-sessions'; appId: string }
+  | { type: 'bot-sessions'; appId: string; instanceId: string }
   | { type: 'app-config'; appId: string }
+  | { type: 'app-teams'; appId: string }
   | { type: 'mcp-status'; appId: string }
   | { type: 'skill-info'; appId: string }
   | { type: 'uninstalled-detail'; appId: string }
   | null
 
-export type AppsPageTab = 'my-digital-humans' | 'team' | 'my-skills' | 'my-mcp' | 'store'
+export type AppsPageTab = 'my-digital-humans' | 'team' | 'my-skills' | 'my-mcp' | 'inbox'
 
 /**
  * Map an app type to its owning AppsPage tab.
@@ -116,7 +124,7 @@ export function tabForAppType(type: AppType): AppsPageTab {
 }
 
 /** Which detail tab was last selected for automation apps (persisted to localStorage) */
-export type AutomationDetailTab = 'activity' | 'chat' | 'config'
+export type AutomationDetailTab = 'activity' | 'config' | 'teams' | 'sessions'
 
 // ============================================
 // State Interface
@@ -128,11 +136,26 @@ interface AppsPageState {
   /** Set externally (from badge/notification) before navigating to AppsPage */
   initialAppId: string | null
   showInstallDialog: boolean
+  /**
+   * Set by the task panel when a `waiting_user` digital-human item is
+   * clicked, so the activity thread can scroll to and highlight the
+   * specific EscalationCard instead of just landing on the feed's top.
+   * Consumed once (mirrors storeAutoInstall).
+   */
+  pendingActivityScrollId: string | null
+  /**
+   * Set by a detail surface so the Settings tab can scroll to and briefly
+   * highlight the settings group it summarizes (mirrors
+   * pendingActivityScrollId). Consumed once.
+   */
+  pendingConfigScrollId: string | null
 
   // ── Tab State ──────────────────────────────
   currentTab: AppsPageTab
   /** Remembers which automation detail tab the user last selected (persisted) */
   lastAutomationTab: AutomationDetailTab
+  /** The sibling list beside a detail page is folded to icons (persisted) */
+  switcherCollapsed: boolean
 
   // ── Store Tab State ────────────────────────
   storeApps: RegistryEntry[]
@@ -150,7 +173,7 @@ interface AppsPageState {
   /** Pending "open the publish dialog pre-selected on this installed app"
    * intent, carried across navigation from a detail page's Share action and
    * consumed once by the store header (mirrors storeAutoInstall). */
-  storePublishIntent: { type: AppType; appId: string } | null
+  storePublishIntent: { type: PublishableAppType; appId: string } | null
   storeSelectedDetail: StoreAppDetail | null
   storeDetailLoading: boolean
   storeDetailError: string | null
@@ -158,24 +181,27 @@ interface AppsPageState {
   // ── Update Info ────────────────────────────
   availableUpdates: UpdateInfo[]
 
-  // ── IM Session Panel ────────────────────────
-  imPanelOpen: boolean
-  selectedImSession: ImSessionRecord | null
-  imSessions: ImSessionRecord[]
-  imSessionsAppId: string | null
-
   // Actions
-  selectApp: (appId: string, appType?: string, spaceId?: string) => void
+  selectApp: (appId: string, appType?: string) => void
   clearSelection: () => void
   openActivityThread: (appId: string) => void
-  openSessionDetail: (appId: string, runId: string, sessionKey: string) => void
-  openAppChat: (appId: string, spaceId: string) => void
+  openSessionDetail: (appId: string, runId: string, sessionKey?: string) => void
+  /** Open the External sessions tab (instance picker + session browser). */
+  openAppSessions: (appId: string) => void
+  /** Open the session browser (list + read-only chat) for one bound bot instance. */
+  openBotSessions: (appId: string, instanceId: string) => void
   openAppConfig: (appId: string) => void
+  openAppTeams: (appId: string) => void
   setInitialAppId: (appId: string | null) => void
+  /** Navigate to an app's activity thread and scroll to a specific entry once there. */
+  openActivityThreadAt: (appId: string, entryId: string) => void
+  /** Consume the pending scroll-to-entry intent (returns it once, then clears). */
+  consumePendingActivityScrollId: () => string | null
+  /** Navigate to an app's Settings tab and scroll to a specific group once there. */
+  openAppConfigAt: (appId: string, groupId: string) => void
+  /** Consume the pending scroll-to-group intent (returns it once, then clears). */
+  consumePendingConfigScrollId: () => string | null
   setShowInstallDialog: (show: boolean) => void
-  toggleImPanel: () => void
-  selectImSession: (session: ImSessionRecord | null) => void
-  fetchImSessions: (appId: string) => Promise<void>
   reset: () => void
 
   // ── Store Actions ──────────────────────────
@@ -203,9 +229,9 @@ interface AppsPageState {
   consumeStoreAutoInstall: () => boolean
   /** Navigate to the store and request the publish dialog open pre-selected on
    * the given installed app (used by a detail page's Share action). */
-  openStorePublish: (type: AppType, appId: string) => void
+  openStorePublish: (type: PublishableAppType, appId: string) => void
   /** Consume the publish-dialog intent (returns it once, then clears). */
-  consumeStorePublishIntent: () => { type: AppType; appId: string } | null
+  consumeStorePublishIntent: () => { type: PublishableAppType; appId: string } | null
   installFromStore: (slug: string, spaceId: string | null, userConfig?: Record<string, unknown>, onProgress?: (progress: StoreInstallProgress) => void) => Promise<string | null>
   refreshStore: () => Promise<void>
   checkUpdates: () => Promise<void>
@@ -220,12 +246,15 @@ export const useAppsPageStore = create<AppsPageState>()(
     (set, get) => ({
   selectedAppId: null,
   detailView: null,
+  pendingActivityScrollId: null,
+  pendingConfigScrollId: null,
   initialAppId: null,
   showInstallDialog: false,
 
   // ── Tab State ──────────────────────────────
   currentTab: 'my-digital-humans',
   lastAutomationTab: 'activity',
+  switcherCollapsed: false,
 
   // ── Store Tab State ────────────────────────
   storeApps: [],
@@ -247,22 +276,26 @@ export const useAppsPageStore = create<AppsPageState>()(
   // ── Update Info ────────────────────────────
   availableUpdates: [],
 
-  // ── IM Session Panel ────────────────────────
-  imPanelOpen: true,
-  selectedImSession: null,
-  imSessions: [],
-  imSessionsAppId: null,
+  selectApp: (appId, appType) => {
+    // Looked up here rather than trusted from the caller: every card wall
+    // computes `appType` from `app.spec.type`, which doesn't change on
+    // uninstall (only `app.status` does) — so a caller-supplied type can
+    // never actually route to 'uninstalled-detail' on its own, no matter
+    // what card wall it's clicked from.
+    const isUninstalled = appType === 'uninstalled'
+      || useAppsStore.getState().apps.find(a => a.id === appId)?.status === 'uninstalled'
 
-  selectApp: (appId, appType, spaceId) => {
     let detailView: AppsDetailView = { type: 'activity-thread', appId }
-    if (appType === 'mcp') detailView = { type: 'mcp-status', appId }
+    if (isUninstalled) detailView = { type: 'uninstalled-detail', appId }
+    else if (appType === 'mcp') detailView = { type: 'mcp-status', appId }
     else if (appType === 'skill') detailView = { type: 'skill-info', appId }
     else if (appType === 'uninstalled') detailView = { type: 'uninstalled-detail', appId }
     else {
       // Automation apps: restore last selected tab
       const tab = get().lastAutomationTab
-      if (tab === 'chat' && spaceId) detailView = { type: 'app-chat', appId, spaceId }
-      else if (tab === 'config') detailView = { type: 'app-config', appId }
+      if (tab === 'config') detailView = { type: 'app-config', appId }
+      else if (tab === 'teams') detailView = { type: 'app-teams', appId }
+      else if (tab === 'sessions') detailView = { type: 'app-sessions', appId }
       // else default 'activity' → activity-thread (already set)
     }
     set({ selectedAppId: appId, detailView })
@@ -271,51 +304,54 @@ export const useAppsPageStore = create<AppsPageState>()(
   clearSelection: () => set({ selectedAppId: null, detailView: null }),
 
   openActivityThread: (appId) =>
-    set({ selectedAppId: appId, detailView: { type: 'activity-thread', appId }, lastAutomationTab: 'activity' }),
+    set({ selectedAppId: appId, detailView: { type: 'activity-thread', appId } }),
+
+  openActivityThreadAt: (appId, entryId) =>
+    set({ selectedAppId: appId, detailView: { type: 'activity-thread', appId }, pendingActivityScrollId: entryId }),
+
+  consumePendingActivityScrollId: () => {
+    const id = get().pendingActivityScrollId
+    if (id) set({ pendingActivityScrollId: null })
+    return id
+  },
 
   openSessionDetail: (appId, runId, sessionKey) =>
     set({ selectedAppId: appId, detailView: { type: 'session-detail', appId, runId, sessionKey } }),
 
-  openAppChat: (appId, spaceId) =>
-    set({ selectedAppId: appId, detailView: { type: 'app-chat', appId, spaceId }, lastAutomationTab: 'chat' }),
+  openAppSessions: (appId) =>
+    set({ selectedAppId: appId, detailView: { type: 'app-sessions', appId }, lastAutomationTab: 'sessions' }),
+
+  openBotSessions: (appId, instanceId) =>
+    set({ selectedAppId: appId, detailView: { type: 'bot-sessions', appId, instanceId } }),
 
   openAppConfig: (appId) =>
     set({ selectedAppId: appId, detailView: { type: 'app-config', appId }, lastAutomationTab: 'config' }),
 
+  openAppConfigAt: (appId, groupId) =>
+    set({ selectedAppId: appId, detailView: { type: 'app-config', appId }, pendingConfigScrollId: groupId }),
+
+  consumePendingConfigScrollId: () => {
+    const id = get().pendingConfigScrollId
+    if (id) set({ pendingConfigScrollId: null })
+    return id
+  },
+
+  openAppTeams: (appId) => set({ selectedAppId: appId, detailView: { type: 'app-teams', appId }, lastAutomationTab: 'teams' }),
+
   setInitialAppId: (appId) => set({ initialAppId: appId }),
 
   setShowInstallDialog: (show) => set({ showInstallDialog: show }),
-
-  toggleImPanel: () => set(s => ({ imPanelOpen: !s.imPanelOpen })),
-
-  selectImSession: (session) => set({ selectedImSession: session }),
-
-  fetchImSessions: async (appId) => {
-    try {
-      const res = await api.imSessionsList(appId)
-      if (res.success && Array.isArray(res.data)) {
-        const sorted = (res.data as ImSessionRecord[]).sort(
-          (a, b) => b.lastActiveAt - a.lastActiveAt
-        )
-        set({ imSessions: sorted, imSessionsAppId: appId })
-      }
-    } catch (err) {
-      console.error('[AppsPageStore] fetchImSessions error:', err)
-    }
-  },
 
   reset: () => {
     abandonStoreDetail()
     set({
       selectedAppId: null,
       detailView: null,
+      pendingActivityScrollId: null,
+      pendingConfigScrollId: null,
       initialAppId: null,
       showInstallDialog: false,
       currentTab: 'my-digital-humans',
-      imPanelOpen: true,
-      selectedImSession: null,
-      imSessions: [],
-      imSessionsAppId: null,
       storeApps: [],
       storeLoading: false,
       storeError: null,
@@ -517,10 +553,16 @@ export const useAppsPageStore = create<AppsPageState>()(
   setStoreMineOpen: (open) => set({ storeMineOpen: open }),
 
   openMarketplaceFilteredBy: async (type) => {
-    // Set filter + tab atomically before kicking off the fetch so the
-    // marketplace UI renders with the new filter already applied while
-    // the new list is loading.
-    set({ storeTypeFilter: type, currentTab: 'store' })
+    // Set the filter before kicking off the fetch so the marketplace UI
+    // renders with it already applied while the new list is loading, then
+    // navigate the shell to StorePage — a separate top-level view (store =
+    // getting something new, not one of "my-X" I already own). Cross-store
+    // call (apps-page.store -> app.store, new dependency edge, LAWS L3):
+    // every caller of this action wants the navigation, and a store action
+    // is the one place that can guarantee it happens instead of relying on
+    // each of the four call sites to remember to add it themselves.
+    set({ storeTypeFilter: type })
+    useAppStore.getState().navigate('store')
     await get().loadStoreApps()
   },
 
@@ -569,11 +611,13 @@ export const useAppsPageStore = create<AppsPageState>()(
   },
 
   openStorePublish: (type, appId) => {
-    // Surface the store tab's header (which owns the publish dialog): leave any
-    // detail/mine sub-view so StoreHeader renders and can consume the intent.
+    // Navigate to StorePage (same cross-store edge as openMarketplaceFilteredBy
+    // above, LAWS L3) and surface its header, which owns the publish dialog:
+    // leave any detail/mine sub-view so StoreHeader renders and can consume
+    // the intent.
     abandonStoreDetail()
+    useAppStore.getState().navigate('store')
     set({
-      currentTab: 'store',
       storeMineOpen: false,
       storeSelectedSlug: null,
       storePublishIntent: { type, appId },
@@ -641,9 +685,10 @@ export const useAppsPageStore = create<AppsPageState>()(
 }),
     {
       name: 'halo-apps-page',
-      // Only persist the user's last automation tab preference
+      // Only persist layout preferences
       partialize: (state) => ({
         lastAutomationTab: state.lastAutomationTab,
+        switcherCollapsed: state.switcherCollapsed,
       }),
     }
   )

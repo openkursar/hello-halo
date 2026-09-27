@@ -5,7 +5,9 @@ import { AutomationAvatar } from '../apps/AutomationAvatar'
 
 export function TeamList({ onNewTeam, onJoinOffice }: { onNewTeam: () => void; onJoinOffice: () => void }) {
   const { t } = useTranslation()
-  const teams = useTeamStore(s => s.teams)
+  // Ephemeral space collaborations are coordinated from their own conversation
+  // and watched in the Canvas — the Teams page lists only persistent teams.
+  const teams = useTeamStore(s => s.teams).filter(team => !team.ephemeral)
   const loading = useTeamStore(s => s.isLoadingList)
   const error = useTeamStore(s => s.error)
   const select = useTeamStore(s => s.selectTeam)

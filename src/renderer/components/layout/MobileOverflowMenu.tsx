@@ -8,12 +8,13 @@
  */
 
 import { useState } from 'react'
-import { MoreHorizontal, Sparkles, Search, Settings, ChevronRight, X } from 'lucide-react'
+import { MoreHorizontal, Sparkles, Search, Settings, ChevronRight, X, Globe, TerminalSquare, Loader2 } from 'lucide-react'
 import { useAppStore } from '../../stores/app.store'
 import { useChatStore } from '../../stores/chat.store'
 import { getModelDisplayName, type AISourcesConfig } from '../../types'
 import { useTranslation } from '../../i18n'
 import { ModelSelectSheet } from './ModelSelector'
+import { useSpaceQuickActions } from '../../hooks/useSpaceQuickActions'
 
 interface MobileOverflowMenuProps {
   onSearch: () => void
@@ -21,7 +22,7 @@ interface MobileOverflowMenuProps {
 
 export function MobileOverflowMenu({ onSearch }: MobileOverflowMenuProps) {
   const { t } = useTranslation()
-  const { config, setView } = useAppStore()
+  const { config, navigate } = useAppStore()
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const [isAnimatingOut, setIsAnimatingOut] = useState(false)
   const [isModelSheetOpen, setIsModelSheetOpen] = useState(false)
@@ -37,6 +38,8 @@ export function MobileOverflowMenu({ onSearch }: MobileOverflowMenuProps) {
   const currentModelName = getModelDisplayName(
     aiSources, currentConversation?.modelSourceId, currentConversation?.modelId
   )
+
+  const { canOpenBrowser, openBrowser, terminalAvailable, terminalCreating, openTerminal } = useSpaceQuickActions()
 
   const closeMenu = (after?: () => void) => {
     setIsAnimatingOut(true)
@@ -115,12 +118,37 @@ export function MobileOverflowMenu({ onSearch }: MobileOverflowMenuProps) {
               </button>
 
               <button
-                onClick={() => closeMenu(() => setView('settings'))}
+                onClick={() => closeMenu(() => navigate('settings'))}
                 className="w-full px-4 py-3 flex items-center gap-3 hover:bg-secondary/80 transition-colors"
               >
                 <Settings className="w-4 h-4 text-muted-foreground flex-shrink-0" />
                 <span className="text-sm text-foreground">{t('Settings')}</span>
               </button>
+
+              {canOpenBrowser && (
+                <button
+                  onClick={() => closeMenu(openBrowser)}
+                  className="w-full px-4 py-3 flex items-center gap-3 hover:bg-secondary/80 transition-colors"
+                >
+                  <Globe className="w-4 h-4 text-blue-500 flex-shrink-0" />
+                  <span className="text-sm text-foreground">{t('Open browser')}</span>
+                </button>
+              )}
+
+              {terminalAvailable && (
+                <button
+                  onClick={() => closeMenu(openTerminal)}
+                  disabled={terminalCreating}
+                  className="w-full px-4 py-3 flex items-center gap-3 hover:bg-secondary/80 transition-colors disabled:opacity-60"
+                >
+                  {terminalCreating ? (
+                    <Loader2 className="w-4 h-4 flex-shrink-0 animate-spin" />
+                  ) : (
+                    <TerminalSquare className="w-4 h-4 text-violet-500 flex-shrink-0" />
+                  )}
+                  <span className="text-sm text-foreground">{t('Open terminal')}</span>
+                </button>
+              )}
             </div>
           </div>
         </>

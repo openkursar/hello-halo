@@ -47,6 +47,14 @@ describe('computeSessionInputsFingerprint', () => {
     expect(computeSessionInputsFingerprint(before)).not.toBe(computeSessionInputsFingerprint(after))
   })
 
+  it('changes when the appended context of a preset prompt changes (halo engine)', () => {
+    const preset = (append: string) => ({ systemPrompt: { type: 'preset', preset: 'default', append } })
+    expect(computeSessionInputsFingerprint(preset('You are Ada.')))
+      .toBe(computeSessionInputsFingerprint(preset('You are Ada.')))
+    expect(computeSessionInputsFingerprint(preset('You are Ada.')))
+      .not.toBe(computeSessionInputsFingerprint(preset('You are Ada. Disabled: Email.')))
+  })
+
   it('ignores in-process server object identity (only names matter)', () => {
     const a = { systemPrompt: 'p', mcpServers: { 'ai-browser': { instance: {} } } }
     const b = { systemPrompt: 'p', mcpServers: { 'ai-browser': { instance: {}, other: 1 } } }
@@ -80,5 +88,39 @@ describe('computeSessionInputsFingerprint', () => {
     const owner = { systemPrompt: 'p', extraArgs: { 'dangerously-skip-permissions': true } }
     const guest = { systemPrompt: 'p', extraArgs: {} }
     expect(computeSessionInputsFingerprint(owner)).not.toBe(computeSessionInputsFingerprint(guest))
+  })
+
+  it('does not collapse a rule containing a comma into two rules', () => {
+    // Bash whitelist rules are user-authored text and commas are ordinary
+    // command characters; a bare ',' join hashed ['a,b'] and ['a','b'] the
+    // same, which reads as "inputs unchanged" and reuses a session built on
+    // different rules.
+    const one = computeSessionInputsFingerprint({ systemPrompt: 'p', allowedTools: ['a,b'] })
+    const two = computeSessionInputsFingerprint({ systemPrompt: 'p', allowedTools: ['a', 'b'] })
+    expect(one).not.toBe(two)
+  })
+
+  it('keeps element boundaries in disallowedTools as well', () => {
+    const one = computeSessionInputsFingerprint({ systemPrompt: 'p', disallowedTools: ['a,b'] })
+    const two = computeSessionInputsFingerprint({ systemPrompt: 'p', disallowedTools: ['a', 'b'] })
+    expect(one).not.toBe(two)
+  })
+
+  it('does not let content shift between adjacent list fields', () => {
+    // With bare joins, disallowed=['a','b'] + allowed=['c'] and
+    // disallowed=['a'] + allowed=['b','c'] would produce the same material.
+    const one = computeSessionInputsFingerprint({
+      systemPrompt: 'p', disallowedTools: ['a', 'b'], allowedTools: ['c'],
+    })
+    const two = computeSessionInputsFingerprint({
+      systemPrompt: 'p', disallowedTools: ['a'], allowedTools: ['b', 'c'],
+    })
+    expect(one).not.toBe(two)
+  })
+
+  it('is order-independent for the allowedTools rule set', () => {
+    const a = { systemPrompt: 'p', allowedTools: ['Bash(ls)', 'Read'] }
+    const b = { systemPrompt: 'p', allowedTools: ['Read', 'Bash(ls)'] }
+    expect(computeSessionInputsFingerprint(a)).toBe(computeSessionInputsFingerprint(b))
   })
 })

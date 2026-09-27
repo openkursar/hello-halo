@@ -110,10 +110,29 @@ export class ImChannelManager {
       }
     }
 
-    // 2. Create or update instances
+    // 2. Refuse duplicate credentials before anything starts. Two live
+    // connections on one bot credential would duplicate or randomly split
+    // inbound traffic; binding.ts blocks this on its own write paths, but
+    // configs can also arrive here from Settings saves and older persisted
+    // state, so the manager is the final gate.
+    const refusedDuplicates = this.findRefusedDuplicates(configs)
+
+    // 3. Create or update instances
     for (const cfg of configs) {
       const oldCfg = oldConfigMap.get(cfg.id)
       const existing = this.instances.get(cfg.id)
+
+      const refusalReason = refusedDuplicates.get(cfg.id)
+      if (refusalReason) {
+        // Also stops an already-running duplicate whose config is unchanged —
+        // the configEqual skip below must never keep one alive.
+        if (existing) {
+          this.stopInstance(cfg.id)
+        }
+        this.statusReasons.set(cfg.id, refusalReason)
+        console.warn(`[ImChannelManager] Instance "${cfg.id}" refused: ${refusalReason}`)
+        continue
+      }
 
       if (existing && oldCfg && this.configEqual(oldCfg, cfg)) {
         // No change — skip
@@ -356,6 +375,33 @@ export class ImChannelManager {
       }
       console.log(`[ImChannelManager] Instance stopped: id=${id}`)
     }
+  }
+
+  /**
+   * First-wins duplicate detection over the instances that would start
+   * (enabled + bound). Keyed on the provider-declared credential identity
+   * (`credentialId`), falling back to `botId` for providers that predate it —
+   * same contract as binding.ts. Instances with no resolvable credential are
+   * never treated as duplicates. Returns refused instance id → reason.
+   */
+  private findRefusedDuplicates(configs: ImChannelInstanceConfig[]): Map<string, string> {
+    const winners = new Map<string, string>()
+    const refused = new Map<string, string>()
+    for (const cfg of configs) {
+      if (!cfg.enabled || !cfg.appId) continue
+      const provider = this.providers.get(cfg.type)
+      const viaProvider = provider?.credentialId?.(cfg.config ?? {})
+      const credential = String(viaProvider ?? cfg.config?.botId ?? '').trim()
+      if (!credential) continue
+      const key = `${cfg.type}:${credential}`
+      const winner = winners.get(key)
+      if (winner === undefined) {
+        winners.set(key, cfg.id)
+      } else {
+        refused.set(cfg.id, `Bot credential is already in use by enabled instance "${winner}"`)
+      }
+    }
+    return refused
   }
 
   /**

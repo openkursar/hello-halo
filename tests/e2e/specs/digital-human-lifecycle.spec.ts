@@ -26,20 +26,17 @@ async function openSeededApp(window: Page, name: string) {
   await appEntry.click()
 }
 
-/** title="Run now" / "Resume and run now" — see AutomationHeader.tsx. */
-const RUN_NOW_SELECTOR = [
-  'button[title="Run now"]', 'button[title="立即执行"]',
-  'button[title="Resume and run now"]', 'button[title="立即恢复并运行"]',
-].join(', ')
+const RUN_ONCE_NAME = /^(Run once|执行一次)$/
 
 async function runNow(window: Page) {
-  const runNowButton = await window.waitForSelector(RUN_NOW_SELECTOR, { timeout: 10000 })
+  const runNowButton = window.getByRole('button', { name: RUN_ONCE_NAME })
+  await expect(runNowButton).toBeVisible({ timeout: 10000 })
   await runNowButton.click()
 }
 
 async function openLiveProcessView(window: Page) {
   await window.waitForTimeout(800)
-  const activityTab = await window.$('text=/^Activity$|^活动$/i')
+  const activityTab = await window.$('text=/^Work activity$|^工作动态$/i')
   if (activityTab) {
     await activityTab.click()
     await window.waitForTimeout(400)
@@ -73,9 +70,10 @@ test.describe('Digital Human — seeded install is reachable', () => {
     expect(scheduleHint).toBeTruthy()
   })
 
-  test('a "Run now" control is available for an idle active app', async ({ window, seededApp }) => {
+  test('a "Run once" control is available for an idle active app', async ({ window, seededApp }) => {
     await openSeededApp(window, seededApp.name)
-    const runNowButton = await window.waitForSelector(RUN_NOW_SELECTOR, { timeout: 10000 })
+    const runNowButton = window.getByRole('button', { name: RUN_ONCE_NAME })
+    await expect(runNowButton).toBeVisible({ timeout: 10000 })
     expect(runNowButton).toBeTruthy()
   })
 })
@@ -167,7 +165,7 @@ test.describe('Digital Human — live run, multi-turn chat, notification, MCP', 
       // Best-effort click, mirroring openLiveProcessView: the tab may already
       // be active by the time a real API round trip finishes, in which case
       // there is nothing to switch to.
-      const activityTab = await window.$('text=/^Activity$|^活动$/i')
+      const activityTab = await window.$('text=/^Work activity$|^工作动态$/i')
       if (activityTab) await activityTab.click()
 
       const completed = await window.waitForSelector(
@@ -195,7 +193,7 @@ test.describe('Digital Human — real scheduled trigger (no manual click)', () =
 
     await openSeededApp(window, seededApp.name)
 
-    const activityTab = await window.$('text=/^Activity$|^活动$/i')
+    const activityTab = await window.$('text=/^Work activity$|^工作动态$/i')
     if (activityTab) await activityTab.click()
 
     // No trigger click anywhere above — this waits purely on the scheduler's
@@ -237,7 +235,7 @@ test.describe('Digital Human — real OS-level desktop notification', () => {
     // The completed badge is DB-driven, independent of which notification
     // path fired, so it stays the reliable "run finished" signal even though
     // the window is blurred and the renderer may be throttled.
-    const activityTab = await window.$('text=/^Activity$|^活动$/i')
+    const activityTab = await window.$('text=/^Work activity$|^工作动态$/i')
     if (activityTab) await activityTab.click()
     await window.waitForSelector('text=/Completed|已完成/i', { timeout: 90000 }).catch(() => {})
 
@@ -251,10 +249,10 @@ test.describe('Digital Human — real OS-level desktop notification', () => {
 test.describe('Digital Human — notification preference UI', () => {
   test.setTimeout(30000)
 
-  test('the notification level control is reachable under the app\'s Settings tab', async ({ window, seededApp }) => {
+  test('the notification level control is reachable under the app\'s Capabilities and settings tab', async ({ window, seededApp }) => {
     await openSeededApp(window, seededApp.name)
 
-    const settingsTab = await window.waitForSelector('text=/^Settings$|^设置$/i', { timeout: 10000 })
+    const settingsTab = await window.waitForSelector('text=/^Capabilities and settings$|^能力与设置$/i', { timeout: 10000 })
     await settingsTab.click()
 
     // AppConfigPanel.tsx renders this section header plus one button per

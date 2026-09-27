@@ -11,16 +11,16 @@
  */
 
 import { api } from '../../api'
-import type { AISource, AISourcesConfig, HaloConfig, AppView } from '../../types'
+import type { AISource, AISourcesConfig, HaloConfig } from '../../types'
 
 interface FirstRunStore {
   config: HaloConfig | null
   setConfig: (config: HaloConfig) => void
-  setView: (view: AppView) => void
+  enterApp: () => Promise<void>
 }
 
 export async function saveFirstRunSource(source: AISource, store: FirstRunStore): Promise<void> {
-  const { config, setConfig, setView } = store
+  const { config, setConfig, enterApp } = store
 
   const legacyProvider: 'anthropic' | 'openai' =
     source.apiType === 'anthropic_passthrough' || source.provider === 'anthropic'
@@ -48,5 +48,5 @@ export async function saveFirstRunSource(source: AISource, store: FirstRunStore)
 
   await api.setConfig(newConfig)
   setConfig(newConfig as HaloConfig)
-  setView('home')
+  await enterApp()
 }

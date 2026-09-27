@@ -52,6 +52,15 @@ export interface TeamPromptContext {
   /** What YOU are responsible for in this team, written by your owner. */
   selfDuty?: string | null
   selfIsLead: boolean
+  /**
+   * The app running this turn exists for THIS collaboration alone (ephemeral
+   * team, AI-provisioned member). app-chat reads it to withhold the surfaces
+   * that only make sense for a digital human that outlives the work — its
+   * memory and digital-human management. Never rendered into the Entry.
+   * Flips only via "save as team", which rebuilds the session once — from then
+   * on the member does have a life to remember.
+   */
+  selfIsDisposable: boolean
   roster: TeamPromptRosterEntry[]
 }
 

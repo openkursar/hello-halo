@@ -10,11 +10,25 @@
 import { describe, it, expect } from 'vitest'
 import {
   ALL_BUILTIN_TOOLS,
+  DEFAULT_GUEST_ALLOWED_TOOLS,
+  allowsBuiltinAtCallTime,
+  capabilityPolicyFromPreset,
+  defaultGuestPolicy,
+  withGuestAccess,
   DELEGABLE_BUILTIN_TOOLS,
+  allowsCapability,
+  buildAllowedToolRules,
   computeDisallowedBuiltins,
   fullCapabilityPolicy,
+  isRestrictivePolicy,
+  resolveBashAccess,
 } from '../../../../src/shared/apps/capability-policy'
-import { filterMcpServersByPolicy, isBorrowedTeamTurn } from '../../../../src/main/apps/runtime/capability-policy'
+import {
+  applyCapabilityPolicy,
+  filterMcpServersByPolicy,
+  isBorrowedTeamTurn,
+  resolveDelegationMode,
+} from '../../../../src/main/apps/runtime/capability-policy'
 
 const ALL_MCP = {
   'web-search': {},
@@ -53,7 +67,9 @@ describe('built-in tool restriction', () => {
   })
 
   it('grants a guest nothing it was not explicitly given', () => {
-    expect(computeDisallowedBuiltins(undefined, 'strict').sort()).toEqual([...ALL_BUILTIN_TOOLS].sort())
+    // The task list is the one exception: it touches nothing outside the turn.
+    expect(computeDisallowedBuiltins(undefined, 'strict').sort())
+      .toEqual([...ALL_BUILTIN_TOOLS].filter(name => name !== 'TodoWrite').sort())
     expect(computeDisallowedBuiltins({ allowedTools: ['Read'] }, 'strict')).not.toContain('Read')
     expect(computeDisallowedBuiltins({ allowedTools: ['Read'] }, 'strict')).toContain('Bash')
   })
@@ -179,5 +195,142 @@ describe('who a delegated policy holds', () => {
   it('leaves an IM-backed turn to the IM hardening decision', () => {
     expect(isBorrowedTeamTurn('human_message', true)).toBe(false)
     expect(isBorrowedTeamTurn('message', true)).toBe(false)
+  })
+})
+
+describe('how far the command tool reaches', () => {
+  it('reads a policy written before command rules existed as before', () => {
+    // The whole compatibility question: 'Bash' granted and nothing said about
+    // its reach used to mean "any command", and must keep meaning that.
+    expect(resolveBashAccess({ allowedTools: ['Bash'] }, 'permissive')).toEqual({ scope: 'full', rules: [] })
+    expect(resolveBashAccess(undefined, 'permissive')).toEqual({ scope: 'full', rules: [] })
+    expect(resolveBashAccess(undefined, 'strict')).toEqual({ scope: 'none', rules: [] })
+  })
+
+  it('grants nothing when the whitelist is empty', () => {
+    // "I picked the whitelist and have not written a rule yet" must not read as
+    // "anything goes" — the safe reading of an unfinished decision.
+    const access = resolveBashAccess({ allowedTools: ['Bash'], bashScope: 'listed' }, 'permissive')
+    expect(access).toEqual({ scope: 'listed', rules: [] })
+    expect(buildAllowedToolRules({ allowedTools: ['Bash'], bashScope: 'listed' }, 'strict')).toEqual(['TodoWrite'])
+  })
+
+  it('narrowing reach cannot resurrect a withheld tool', () => {
+    expect(resolveBashAccess({ allowedTools: [], bashScope: 'full' }, 'strict').scope).toBe('none')
+  })
+
+  it('hands command patterns to the engine untouched', () => {
+    const policy = {
+      allowedTools: ['Read', 'Bash'],
+      bashScope: 'listed' as const,
+      bashRules: ['npm run:*', 'git log *', ' ', 'npm run:*'],
+    }
+    const rules = buildAllowedToolRules(policy, 'strict')
+
+    expect(rules).toContain('Read')
+    // Deduplicated and blank-stripped, but otherwise verbatim: the engine is
+    // what matches them, and it is the only thing that splits a chained command.
+    expect(rules.filter(r => r.startsWith('Bash('))).toEqual(['Bash(npm run:*)', 'Bash(git log *)'])
+  })
+
+  it('closes the terminal whenever commands are limited', () => {
+    // A terminal runs whatever is typed into it, so no command rule reaches it.
+    const listed = { allowedTools: ['Bash'], bashScope: 'listed' as const, bashRules: ['ls'], allowTerminal: true }
+    expect(allowsCapability(listed, 'allowTerminal', 'permissive')).toBe(false)
+    expect(filterMcpServersByPolicy(ALL_MCP, DB_MCP, listed, 'permissive', TEAM_CHANNEL))
+      .not.toHaveProperty('ai-terminal')
+  })
+})
+
+describe('when a policy is enforced at all', () => {
+  it('leaves a teammate turn on the engine fast path while nothing is withheld', () => {
+    expect(isRestrictivePolicy(undefined, 'permissive')).toBe(false)
+    expect(isRestrictivePolicy(fullCapabilityPolicy(), 'permissive')).toBe(false)
+
+    const options: Record<string, any> = { extraArgs: { 'dangerously-skip-permissions': null }, permissionMode: 'bypassPermissions' }
+    const applied = applyCapabilityPolicy(options, {
+      policy: fullCapabilityPolicy(),
+      mode: 'permissive',
+      mcpServers: ALL_MCP,
+      dbMcpServers: DB_MCP,
+      alwaysKeep: TEAM_CHANNEL,
+    })
+
+    expect(applied.enforced).toBe(false)
+    expect(options.permissionMode).toBe('bypassPermissions')
+    expect(options.extraArgs['dangerously-skip-permissions']).toBe(null)
+  })
+
+  it('always enforces for a caller whose silence means no', () => {
+    expect(isRestrictivePolicy(fullCapabilityPolicy(), 'strict')).toBe(true)
+  })
+
+  it('takes away BOTH ways of bypassing the permission engine', () => {
+    // Either one alone leaves the command rules unevaluated, so a whitelist
+    // would be accepted and silently ignored.
+    const options: Record<string, any> = { extraArgs: { 'dangerously-skip-permissions': null }, permissionMode: 'bypassPermissions' }
+    applyCapabilityPolicy(options, {
+      policy: { allowedTools: ['Read'] },
+      mode: 'strict',
+      mcpServers: ALL_MCP,
+      dbMcpServers: DB_MCP,
+    })
+
+    expect(options.permissionMode).toBe('default')
+    expect(options.extraArgs['dangerously-skip-permissions']).toBeUndefined()
+    expect(options.allowedTools).toEqual(['TodoWrite', 'Read'])
+    expect(options.disallowedTools).toContain('Bash')
+  })
+})
+
+describe('where a request came from decides how silence reads', () => {
+  it('holds a request that entered from another machine to what was granted', () => {
+    expect(resolveDelegationMode({ external: true })).toBe('strict')
+  })
+
+  it('does not put a lock between two of the owner’s own digital humans', () => {
+    expect(resolveDelegationMode({ external: false })).toBe('permissive')
+    expect(resolveDelegationMode({})).toBe('permissive')
+  })
+})
+
+describe('always-available tools', () => {
+  it('keeps the task list for every caller, whatever the policy', () => {
+    expect(computeDisallowedBuiltins({ allowedTools: [] }, 'strict')).not.toContain('TodoWrite')
+    expect(allowsBuiltinAtCallTime({ allowedTools: [] }, 'TodoWrite', 'strict')).toBe(true)
+    expect(DELEGABLE_BUILTIN_TOOLS.map(t => t.name)).not.toContain('TodoWrite')
+  })
+
+  it('defaults a newly opened guest access to looking at files', () => {
+    expect([...DEFAULT_GUEST_ALLOWED_TOOLS]).toEqual(['Read', 'Glob', 'Grep'])
+  })
+
+  it('a build default wins, an explicit empty list included', () => {
+    expect(defaultGuestPolicy(undefined)).toEqual({ allowedTools: ['Read', 'Glob', 'Grep'] })
+    expect(defaultGuestPolicy({})).toEqual({ allowedTools: ['Read', 'Glob', 'Grep'] })
+    expect(defaultGuestPolicy({ allowedTools: ['WebSearch'] })).toEqual({ allowedTools: ['WebSearch'] })
+    expect(defaultGuestPolicy({ allowedTools: [] })).toEqual({ allowedTools: [] })
+    // A copy: editing it never edits the default.
+    expect(defaultGuestPolicy(undefined).allowedTools).not.toBe(DEFAULT_GUEST_ALLOWED_TOOLS)
+  })
+
+  it('turning guest access off and on again restores the choices made', () => {
+    const chosen = { allowedTools: ['Read', 'WebFetch'], allowOcr: true }
+    const off = withGuestAccess({ id: 'x', guestPolicy: chosen }, false, { allowedTools: [] })
+    expect(off).toEqual({ id: 'x', guestPolicy: undefined, savedGuestPolicy: chosen })
+    const on = withGuestAccess(off, true, { allowedTools: [] })
+    expect(on).toEqual({ id: 'x', guestPolicy: chosen })
+    expect('savedGuestPolicy' in on).toBe(false)
+  })
+
+  it('a first turn-on starts from the build default', () => {
+    expect(withGuestAccess({ id: 'x', guestPolicy: undefined }, true, null).guestPolicy).toEqual({ allowedTools: ['Read', 'Glob', 'Grep'] })
+    expect(withGuestAccess({ id: 'x', guestPolicy: undefined }, true, { allowedTools: [] }).guestPolicy).toEqual({ allowedTools: [] })
+  })
+
+  it('the read-only preset grants viewing and the internet only', () => {
+    expect(capabilityPolicyFromPreset('read_only').allowedTools).toEqual(
+      DELEGABLE_BUILTIN_TOOLS.filter(t => t.group === 'file' || t.group === 'network').map(t => t.name)
+    )
   })
 })

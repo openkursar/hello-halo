@@ -8,26 +8,25 @@
 import type { Page } from '@playwright/test'
 
 /**
- * Wait for the app to finish loading and show the Home Page.
- * The Home Page has the Halo space card and Apps card.
+ * Wait for the app to finish loading and show its shell.
+ *
+ * The rail is the shell's persistent furniture on every view, so it is what a
+ * loaded app can be recognised by.
  */
 export async function waitForHomePage(window: Page) {
   await window.waitForSelector('#root', { timeout: 15000 })
   await window.waitForLoadState('networkidle')
-  // Wait for the Halo space card to appear (data-onboarding="halo-space")
-  await window.waitForSelector('[data-onboarding="halo-space"]', { timeout: 15000 })
+  await window.waitForSelector('nav button', { timeout: 15000 })
 }
 
 /**
- * Navigate from Home Page to Chat Interface (SpacePage) by clicking the Halo space card.
+ * Navigate to the chat interface through the rail's Conversation entry.
  * Waits for the textarea input to appear, indicating the chat is ready.
  */
 export async function navigateToChat(window: Page) {
   await waitForHomePage(window)
 
-  // Click the Halo space card
-  const haloCard = await window.waitForSelector('[data-onboarding="halo-space"]', { timeout: 10000 })
-  await haloCard.click()
+  await window.getByRole('button', { name: 'Conversation', exact: true }).first().click()
 
   // Wait for chat interface to load (textarea should appear)
   await window.waitForSelector('textarea', { timeout: 15000 })
@@ -52,19 +51,11 @@ export async function navigateToSettings(window: Page) {
   await window.waitForSelector('text=/Settings|设置/i', { timeout: 10000 })
 }
 
-/**
- * Navigate from Home Page to Apps Page by clicking the Studio card.
- * Card heading was renamed from "Apps" to "Studio" (zh: 工坊).
- */
+/** Navigate to the Apps page through the rail's Digital Humans entry. */
 export async function navigateToApps(window: Page) {
   await waitForHomePage(window)
 
-  // Click the Studio/Apps card heading (supports EN/CN, legacy "Apps")
-  const appsCard = await window.waitForSelector(
-    'text=/^Studio$|^工坊$|^Apps$/i',
-    { timeout: 10000 }
-  )
-  await appsCard.click()
+  await window.getByRole('button', { name: 'Digital Humans', exact: true }).first().click()
 
   // Wait for Apps page tab bar to render
   await window.waitForSelector(
@@ -88,8 +79,10 @@ export async function navigateToRemoteSettings(window: Page) {
   await settingsButton.click()
   await window.waitForTimeout(500)
 
-  // Scroll to bottom to find remote access section
-  await window.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
+  // Scroll to bottom to find remote access section. `globalThis`, not
+  // `window`: this callback runs in the page, but the enclosing parameter has
+  // the same name and would win in this scope.
+  await window.evaluate(() => globalThis.scrollTo(0, document.body.scrollHeight))
   await window.waitForTimeout(500)
 
   // Wait for remote access section (supports both EN and CN)

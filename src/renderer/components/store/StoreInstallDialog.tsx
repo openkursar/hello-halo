@@ -16,19 +16,19 @@ import { resolveSpecI18n } from '../../utils/spec-i18n'
 import { AppTypeIcon } from './AppTypeIcon'
 import type { StoreAppDetail, StoreInstallProgress } from '../../../shared/store/store-types'
 import type { InputDef } from '../../../shared/apps/spec-types'
-
-// Sentinel value used in <select> to represent spaceId = null (global)
-const GLOBAL_SCOPE = '__global__'
+import { GLOBAL_SCOPE } from '../../../shared/apps/scope'
 
 interface StoreInstallDialogProps {
   detail: StoreAppDetail
   onClose: () => void
-  onInstalled: (appId: string) => void
+  onInstalled: (appId: string) => void | Promise<void>
+  initialSpaceId?: string | null
+  lockScope?: boolean
   /** If true, adds "Global (all spaces)" as the first scope option */
   showGlobalOption?: boolean
 }
 
-export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOption }: StoreInstallDialogProps) {
+export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOption, initialSpaceId, lockScope }: StoreInstallDialogProps) {
   const { t } = useTranslation()
   const installFromStore = useAppsPageStore(state => state.installFromStore)
   // Install downloads spec+files from the registry; block it while offline so it
@@ -49,12 +49,12 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
   // The built-in Halo space is a default workspace, not one the user created —
   // label it so the selector reads clearly.
   const spaceLabel = (s: { id: string; name: string }) =>
-    s.id === haloSpace?.id ? `${s.name} (${t('Default space')})` : s.name
+    s.id === haloSpace?.id ? `${s.name} (${t('Default workspace')})` : s.name
 
   // Require an explicit choice. Only auto-select when there is a single space
   // and no dropdown is shown (nothing for the user to pick).
   const [selectedSpaceId, setSelectedSpaceId] = useState(
-    !showGlobalOption && allSpaces.length <= 1 ? (allSpaces[0]?.id ?? '') : ''
+    initialSpaceId !== undefined ? initialSpaceId ?? GLOBAL_SCOPE : !showGlobalOption && allSpaces.length <= 1 ? (allSpaces[0]?.id ?? '') : ''
   )
   // Spaces can resolve after mount; when there is exactly one space (the selector
   // is hidden and only a read-only label shows) adopt it, so Install is not left
@@ -66,6 +66,7 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
     }
   }, [showGlobalOption, allSpaces, selectedSpaceId])
   const [loading, setLoading] = useState(false)
+  const installedId = useRef<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [progress, setProgress] = useState<StoreInstallProgress | null>(null)
   // Required config keys flagged by a failed install; cleared as each is filled.
@@ -160,10 +161,9 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
         }
       }
 
-      // Map sentinel '__global__' back to null for global installs
       const resolvedSpaceId = selectedSpaceId === GLOBAL_SCOPE ? null : selectedSpaceId
 
-      const appId = await installFromStore(
+      const appId = installedId.current ?? await installFromStore(
         detail.entry.slug,
         resolvedSpaceId,
         Object.keys(userConfig).length > 0 ? userConfig : undefined,
@@ -171,7 +171,8 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
       )
 
       if (appId) {
-        onInstalled(appId)
+        installedId.current = appId
+        await onInstalled(appId)
       } else {
         setError(t('Installation failed. Please try again.'))
       }
@@ -225,9 +226,11 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
               <label className="block text-xs font-semibold text-muted-foreground">
                 {t('Install to')}
               </label>
-              {!showGlobalOption && allSpaces.length <= 1 ? (
+              {lockScope ? (
+                <p className="text-sm text-foreground">{initialSpaceId === null ? t('Global (all spaces)') : allSpaces.find(space => space.id === initialSpaceId)?.name ?? t('Unavailable workspace')}</p>
+              ) : !showGlobalOption && allSpaces.length <= 1 ? (
                 <p className="text-sm text-foreground">
-                  {allSpaces[0] ? spaceLabel(allSpaces[0]) : t('No spaces available')}
+                  {allSpaces[0] ? spaceLabel(allSpaces[0]) : t('No workspaces available')}
                 </p>
               ) : (
                 <SpaceSelect
@@ -242,8 +245,8 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
               {/* What the scope choice means */}
               <div className="rounded-lg border border-border/60 bg-muted/30 px-3.5 py-2.5 text-xs leading-relaxed text-muted-foreground">
                 {showGlobalOption
-                  ? t('Global installs it once and makes it available across every space. Installing into a single space keeps it available only there — pick a space to scope it to that workspace.')
-                  : t('The app is installed into the selected space and runs and is managed within that space; other spaces are not affected.')}
+                  ? t('Global installs it once and makes it available across every workspace. Installing into a single workspace keeps it available only there — pick which workspace to scope it to.')
+                  : t('The app is installed into the selected workspace and runs and is managed within that workspace; other workspaces are not affected.')}
               </div>
             </div>
           ) : groupFields ? (
@@ -383,9 +386,9 @@ function SpaceSelect({ value, onChange, haloSpace, spaces, showGlobalOption, inv
     }
   }, [open])
 
-  const haloLabel = haloSpace ? `${haloSpace.name} (${t('Default space')})` : ''
+  const haloLabel = haloSpace ? `${haloSpace.name} (${t('Default workspace')})` : ''
   const currentLabel =
-    value === GLOBAL_SCOPE ? t('Global (all spaces)')
+    value === GLOBAL_SCOPE ? t('Global (all workspaces)')
     : value && value === haloSpace?.id ? haloLabel
     : value ? (spaces.find(s => s.id === value)?.name ?? '')
     : ''
@@ -414,7 +417,7 @@ function SpaceSelect({ value, onChange, haloSpace, spaces, showGlobalOption, inv
         className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-sm bg-muted/40 border rounded-lg text-left focus:outline-none focus:ring-1 focus:ring-primary ${invalid ? 'border-red-400 ring-1 ring-red-400/40' : 'border-border/60'}`}
       >
         <span className={`truncate ${currentLabel ? 'text-foreground' : 'text-muted-foreground/50'}`}>
-          {currentLabel || t('Select a space')}
+          {currentLabel || t('Select a workspace')}
         </span>
         <ChevronDown className="w-4 h-4 flex-shrink-0 text-muted-foreground/60" />
       </button>
@@ -425,11 +428,11 @@ function SpaceSelect({ value, onChange, haloSpace, spaces, showGlobalOption, inv
           style={{ position: 'fixed', top: anchor.top, left: anchor.left, width: anchor.width }}
           className="z-[60] max-h-56 overflow-y-auto rounded-lg border border-border/60 bg-background shadow-lg py-1"
         >
-          {showGlobalOption && <Row id={GLOBAL_SCOPE} label={t('Global (all spaces)')} />}
+          {showGlobalOption && <Row id={GLOBAL_SCOPE} label={t('Global (all workspaces)')} />}
           {haloSpace && <Row id={haloSpace.id} label={haloLabel} />}
           {spaces.length > 0 && (
             <>
-              <div className="px-3 pt-1.5 pb-1 text-[11px] font-medium text-muted-foreground/60">{t('Dedicated spaces')}</div>
+              <div className="px-3 pt-1.5 pb-1 text-[11px] font-medium text-muted-foreground/60">{t('Dedicated workspaces')}</div>
               {spaces.map(s => <Row key={s.id} id={s.id} label={s.name} />)}
             </>
           )}

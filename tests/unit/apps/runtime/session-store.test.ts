@@ -20,6 +20,7 @@ import {
   readSessionMessages,
   type StoredEvent,
 } from '../../../../src/main/apps/runtime/session-store'
+import { TEAM_MCP_SERVER_NAME, TEAM_TOOL_NAMES } from '../../../../src/shared/apps/team-types'
 
 // ============================================
 // Test Helpers — Event Factories
@@ -302,6 +303,45 @@ describe('convertEventsToMessages', () => {
       expect(messages[0].thoughts!.some(t => t.type === 'tool_use' && t.toolName === 'TodoWrite')).toBe(true)
       // No demoted text thoughts
       expect(messages[0].thoughts!.filter(t => t.type === 'text')).toHaveLength(0)
+    })
+
+    it('concatenates text across a transparent MCP tool, which arrives prefixed', () => {
+      // The engine reports MCP tools as `mcp__<server>__<tool>`. Matching bare
+      // names only used to drop the agent's own summary before team_complete.
+      const events: StoredEvent[] = [
+        assistantText('# Report\n\nHere is what the team produced.'),
+        assistantToolUse(`mcp__${TEAM_MCP_SERVER_NAME}__${TEAM_TOOL_NAMES.complete}`, 'tool-1', {
+          summary: 'done',
+        }),
+        userToolResult('tool-1', 'Run will be sealed after this turn ends.'),
+        assistantText('The team has finished.'),
+      ]
+
+      const messages = convertEventsToMessages(events)
+
+      expect(messages).toHaveLength(1)
+      expect(messages[0].content).toBe(
+        '# Report\n\nHere is what the team produced.\n\nThe team has finished.'
+      )
+      expect(messages[0].thoughts!.filter(t => t.type === 'text')).toHaveLength(0)
+    })
+
+    it('replaces text when a substantive MCP tool is between texts', () => {
+      // Same prefixed shape, but reading an artifact IS the work the text
+      // before it announced — continuity must still break.
+      const events: StoredEvent[] = [
+        assistantText('Let me open the deliverable...'),
+        assistantToolUse(`mcp__${TEAM_MCP_SERVER_NAME}__${TEAM_TOOL_NAMES.readArtifact}`, 'tool-1', {
+          ref: 'brief.md',
+        }),
+        userToolResult('tool-1', 'file body'),
+        assistantText('The brief covers three competitors.'),
+      ]
+
+      const messages = convertEventsToMessages(events)
+
+      expect(messages).toHaveLength(1)
+      expect(messages[0].content).toBe('The brief covers three competitors.')
     })
 
     it('replaces text when a non-transparent tool follows a transparent tool', () => {

@@ -35,6 +35,7 @@ import type { Message, Thought, ThoughtsSummary } from '../../types'
 import { useTranslation } from '../../i18n'
 import { useChatStore } from '../../stores/chat.store'
 import { SourceChips } from './SourceChips'
+import { GoalSetBadge } from '../goal'
 
 interface MessageItemProps {
   message: Message
@@ -326,9 +327,13 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
     </div>
   ) : (
     <div
-      className={`rounded-2xl px-4 py-3 ${
-        isUser ? 'message-user' : 'message-assistant'
-      } ${isStreaming ? 'streaming-message' : ''} ${isWorking ? 'message-working' : ''} ${!isInContainer ? 'max-w-[85%]' : 'w-full'}`}
+      className={`rounded-lg ${
+        isUser ? 'message-user px-3.5 py-2.5' : 'message-assistant px-4 py-3'
+      } ${isStreaming ? 'streaming-message' : ''} ${isWorking ? 'message-working' : ''} ${
+        // Assistant bubbles hold the column width so the layout does not shift when
+        // the streaming bubble is replaced; user bubbles shrink to their content.
+        isInContainer ? 'w-full' : isUser ? 'max-w-[85%]' : 'w-[85%]'
+      }`}
     >
       {/* Working indicator - shows when AI is working */}
       {isWorking && !isUser && (
@@ -337,6 +342,8 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
           <span className="text-xs text-muted-foreground/70">{t('Halo is working')}</span>
         </div>
       )}
+
+      {isUser && message.metadata?.goal && <GoalSetBadge />}
 
       {/* User message images (displayed before text) */}
       {isUser && message.images && message.images.length > 0 && (

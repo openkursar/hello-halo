@@ -16,7 +16,7 @@ physical computers.
 ## TL;DR
 
 ```bash
-# 1. Build once (produces out/main/index.mjs)
+# 1. Build once (produces out/main/index.cjs)
 npm run build
 
 # 2. Configure the model in .env.local (gitignored) — see "Model config" below

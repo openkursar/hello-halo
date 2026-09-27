@@ -80,6 +80,16 @@ export interface OrchestrationSessionDeps {
    * sessionId so the run stays a retrievable, resumable history record.
    */
   closeTeamSession(appId: string, teamId: string, epochId: string): Promise<void>
+  /**
+   * Abort the turn this member is running right now, as a person pressing stop
+   * means it. Distinct from `closeTeamSession`, which reclaims a session the
+   * machinery is done with; this one interrupts work in progress. Resolves with
+   * whether a turn was actually running — false is an answer ("already
+   * finished"), not a failure. Rejects only when the request could not be put to
+   * the member at all, which for a member owned by another machine means its
+   * machine could not be reached.
+   */
+  stopTeamSession(appId: string, teamId: string, epochId: string): Promise<boolean>
   getMemberSpaceId(appId: string): string | null
 }
 
@@ -136,7 +146,8 @@ export interface Orchestration {
    */
   recoverInterruptedRuns(): Promise<number>
 
-  startEpoch(teamId: string, trigger?: TeamRunTrigger): Promise<TeamEpoch>
+  /** `instruction` is this run's concrete brief, appended to the lead's start wake. */
+  startEpoch(teamId: string, trigger?: TeamRunTrigger, instruction?: string): Promise<TeamEpoch>
   /**
    * Return the open 'conversation' epoch for a (team, chat), or create one. Used
    * by message-driven entries (IM): each chat gets its own long-lived epoch so
@@ -178,6 +189,8 @@ export interface Orchestration {
     appId: string
     body: string
     onBusy: BusyDisposition
+    /** The check was set by someone on another machine. */
+    external?: boolean
   }): Promise<WakeDisposition>
 
   captureReport(correlationId: string, outcome: TurnCompletion): void
@@ -214,6 +227,10 @@ export interface Orchestration {
    * false when the team/epoch is gone (caller must NOT fall back to a solo run).
    */
   resumeFromEscalation(params: {
+    continuationId?: string
+    onDeferred?: () => void
+    onStarted?: () => void
+    onSettled?: (error?: string) => void
     teamId: string
     epochId: string
     appId: string
@@ -225,6 +242,8 @@ export interface Orchestration {
      * wrong one.
      */
     question?: string
+    /** The escalating turn ran with external origin (persisted with the escalation). */
+    external?: boolean
   }): Promise<boolean>
 }
 
@@ -413,6 +432,18 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
   }
 
   // Only escalations are captured out-of-band; normal results come from onReply.
+  const decisionStarts = new Map<string, () => void>()
+  const decisionCompletions = new Map<string, (error?: string) => void>()
+  function settleDecision(correlationId: string, outcome: TurnCompletion): void {
+    const callback = decisionCompletions.get(correlationId)
+    if (!callback) return
+    decisionCompletions.delete(correlationId)
+    decisionStarts.delete(correlationId)
+    const error = outcome.kind === 'error' ? outcome.message : outcome.kind === 'undelivered' ? outcome.reason
+      : outcome.kind === 'timeout' ? 'The continuation timed out' : undefined
+    callback(error)
+  }
+
   const capturedEscalations = new Map<string, TurnCompletion>()
 
   // Deferred seal: applied after the lead's turn ends, never mid-turn.
@@ -499,6 +530,8 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       if (!canDeliverTurn(request.teamContext.teamId, request.teamContext.epochId, request.teamContext.kind)) {
         return { finalMessage: null, undelivered: { reason: 'Task ended before its notice could run' } }
       }
+      decisionStarts.get(request.teamContext.correlationId)?.()
+      decisionStarts.delete(request.teamContext.correlationId)
       return await session.sendAppChatMessage(request)
     } finally {
       turnSemaphore.release()
@@ -520,6 +553,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     const { sessionKey, appId, teamId, epochId, envelope, trigger } = params
     if (!canDeliverTurn(teamId, epochId, trigger.kind)) {
       bus.resetEpoch(epochId)
+      settleDecision(trigger.correlationId, { kind: 'undelivered', reason: 'Task closed before this wake could run' })
       bus.completeTurn({ sessionKey, trigger, outcome: { kind: 'undelivered', reason: 'Task closed before this wake could run' } })
       return
     }
@@ -536,6 +570,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
         requestSummary: envelope.body,
         requestFromAppId: envelope.fromAppId,
       })
+      settleDecision(trigger.correlationId, { kind: 'error', message: 'Member has no space' })
       bus.completeTurn({ sessionKey, trigger, outcome: { kind: 'error', message: 'Member has no space' } })
       return
     }
@@ -660,6 +695,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
         }
 
         busTurns.delete(sessionKey)
+        settleDecision(trigger.correlationId, outcome)
         bus.completeTurn({ sessionKey, trigger, outcome, ...(sealing ? { sealPending: true } : {}) })
 
         try {
@@ -678,6 +714,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
         // A `void`-ed chain that rejected would otherwise vanish, and the slot it
         // left behind would only be explained by the gate's watchdog, hours later.
         busTurns.delete(sessionKey)
+        settleDecision(trigger.correlationId, { kind: 'error', message: String(err) })
         console.error(`${LOG_TAG} turn-completion chain rejected: session=${sessionKey}`, err)
       })
   }
@@ -784,6 +821,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     appId: string
     body: string
     onBusy: BusyDisposition
+    external?: boolean
   }): Promise<WakeDisposition> {
     return wakeSelf({ ...params, kind: 'periodic_check' })
   }
@@ -801,6 +839,12 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     body: string
     kind: TeamTriggerContext['kind']
     onBusy: BusyDisposition
+    /**
+     * The standing instruction behind this wake was left by someone on another
+     * machine. A runtime wake has no sender to read it from, so whoever set the
+     * instruction has to say so when arming it.
+     */
+    external?: boolean
   }): Promise<WakeDisposition> {
     const { teamId, epochId, appId, body, kind, onBusy } = params
     const correlationId = randomUUID()
@@ -815,7 +859,15 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
         correlationId,
         createdAt: Date.now(),
       },
-      trigger: { teamId, epochId, correlationId, fromAppId: null, wait: false, kind },
+      trigger: {
+        teamId,
+        epochId,
+        correlationId,
+        fromAppId: null,
+        wait: false,
+        kind,
+        ...(params.external ? { external: true } : {}),
+      },
       onBusy,
     })
   }
@@ -1020,17 +1072,22 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
   // epoch automatically. Where the outcome goes from there is the member's call:
   // the member must explicitly `team_send` whoever is waiting for its answer.
   async function resumeFromEscalation(params: {
+    continuationId?: string
+    onDeferred?: () => void
+    onStarted?: () => void
+    onSettled?: (error?: string) => void
     teamId: string
     epochId: string
     appId: string
     taskId?: string
     response: string
     question?: string
+    external?: boolean
   }): Promise<boolean> {
     const { teamId, epochId, appId, taskId, response, question } = params
     const team = store.getTeamById(teamId)
     const epoch = store.getEpochById(epochId)
-    if (!team || !epoch || epoch.teamId !== teamId || !store.getMember(teamId, appId) || !session.getMemberSpaceId(appId)) {
+    if (!team || !epoch || epoch.endReason === 'cleared' || epoch.workItem?.status === 'completed' || epoch.teamId !== teamId || !store.getMember(teamId, appId) || !session.getMemberSpaceId(appId)) {
       console.warn(`${LOG_TAG} Decision resume rejected: team=${teamId} epoch=${epochId} app=${appId}`)
       return false
     }
@@ -1039,7 +1096,10 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     // Attributed to the lead so the member reads it as coming from its team,
     // not from nowhere.
     const fromAppId = isLeadSelf ? null : team.leadAppId ?? null
-    const correlationId = randomUUID()
+    const correlationId = params.continuationId ? `decision:${params.continuationId}` : randomUUID()
+    if (decisionCompletions.has(correlationId)) return true
+    if (params.onSettled) decisionCompletions.set(correlationId, params.onSettled)
+    if (params.onStarted) decisionStarts.set(correlationId, params.onStarted)
     // Written for two readers: the member, which needs the question to bind the
     // answer, and the person, for whom this is the member's visible transcript.
     const asked = question?.trim()
@@ -1070,6 +1130,11 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       wait: false,
       taskId,
       kind: 'message',
+      // Restore the escalating turn's origin from the persisted record: the
+      // in-memory stickiness (team/external-origin.ts) does not survive a
+      // restart, and an unstamped 'message' wake would resume a stranger's
+      // work with the owner's own reach.
+      ...(params.external ? { external: true } : {}),
     }
     ;(trigger as TeamTriggerContext & { forwardDepth?: number }).forwardDepth = 1
 
@@ -1077,8 +1142,18 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     // Buffered rather than dispatched when the member is mid-turn: losing this
     // wake would leave the digital human waiting on an answer it already got,
     // with nothing left to wake it again.
-    const disposition = await bus.deliverRuntimeWake({ envelope, trigger, onBusy: 'buffer' })
+    let disposition
+    try {
+      disposition = await bus.deliverRuntimeWake({ envelope, trigger, onBusy: params.continuationId ? 'skip' : 'buffer' })
+    } catch (error) {
+      decisionCompletions.delete(correlationId)
+      decisionStarts.delete(correlationId)
+      throw error
+    }
     if (disposition === 'skipped') {
+      decisionCompletions.delete(correlationId)
+      decisionStarts.delete(correlationId)
+      if (params.continuationId) { params.onDeferred?.(); return true }
       console.warn(`${LOG_TAG} Decision wake was not admitted: team=${teamId} epoch=${epochId} app=${appId}`)
       return false
     }
@@ -1124,7 +1199,11 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     ].join('\n')
   }
 
-  async function startEpoch(teamId: string, runTrigger: TeamRunTrigger = { type: 'manual' }): Promise<TeamEpoch> {
+  async function startEpoch(
+    teamId: string,
+    runTrigger: TeamRunTrigger = { type: 'manual' },
+    instruction?: string
+  ): Promise<TeamEpoch> {
     const team = store.getTeamById(teamId)
     if (!team) throw new Error(`Team not found: ${teamId}`)
     if (!team.leadAppId) throw new Error(`Team has no lead provisioned: ${teamId}`)
@@ -1160,7 +1239,10 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       kind: 'run_start',
     }
     const digest = buildRecentRunsDigest(teamId, epoch.id)
-    const startBody = 'The team run has started. Read the goal and the board, then decompose and dispatch the work.'
+    const brief = instruction?.trim()
+    const startBody =
+      'The team run has started. Read the goal and the board, then decompose and dispatch the work.' +
+      (brief ? `\n\nThis run's brief from the requester:\n${brief}` : '')
     const startEnvelope: TeamEnvelope = {
       id: randomUUID(),
       teamId,
@@ -1602,6 +1684,10 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       selfRole: self.role,
       selfDuty: self.duty ?? null,
       selfIsLead: self.isLead,
+      // Both halves are needed: a team that is merely temporary does not make a
+      // member disposable — one the person installed themselves survives its
+      // end (only AI-provisioned apps are cleaned up on dissolve).
+      selfIsDisposable: team.ephemeral === true && self.aiProvisioned,
       roster,
     }
   }

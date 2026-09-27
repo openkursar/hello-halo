@@ -17,6 +17,7 @@ export {
   type DeliverAndWaitParams,
 } from './delivery'
 export { deliverToConversationAndWait } from './delivery'
+export { deliverExternalMessage, type ExternalDeliverParams } from './delivery'
 export { circuitBreaker, DEFAULT_CIRCUIT_LIMITS } from './circuit-breaker'
 export type { CircuitLimits, CircuitBreachEvent, CircuitRejectReason } from './circuit-breaker'
 export type {

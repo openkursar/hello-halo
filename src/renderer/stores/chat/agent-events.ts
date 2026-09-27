@@ -122,12 +122,17 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
     const { spaceId, conversationId } = data
     console.log(`[ChatStore] handleAgentComplete [${conversationId}]`)
 
-    // Check if user is currently viewing this conversation
+    // Check if user is currently viewing this conversation. `document.hasFocus()`
+    // guards against the window being backgrounded (minimized, another app
+    // focused) while sitting on this conversation — otherwise a task that
+    // finishes while the user stepped away gets silently marked "seen" and
+    // never shows up in the task panel.
     const state = get()
     const currentSpaceState = state.currentSpaceId ? state.spaceStates.get(state.currentSpaceId) : null
     const isUserViewingThisConversation =
       state.currentSpaceId === spaceId &&
-      currentSpaceState?.currentConversationId === conversationId
+      currentSpaceState?.currentConversationId === conversationId &&
+      document.hasFocus()
 
     // Track unseen completion if user is not viewing this conversation.
     // Skip virtual sessions (digital-human chat, IM, automation runs): they are
@@ -157,6 +162,8 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
         newUnseenCompletions.set(conversationId, { spaceId, title })
         return { unseenCompletions: newUnseenCompletions }
       })
+      api.taskMarkUnseen(conversationId, spaceId, title).catch(err =>
+        console.error('[ChatStore] taskMarkUnseen error:', err))
     }
 
     // Capture turnId BEFORE any async work. If a new turn starts (sendMessage or
@@ -315,18 +322,19 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
     }
   },
 
-  // Handle thought for a specific conversation
+  // Handle thought for a specific conversation.
+  // Highest-frequency write in this store — every reasoning step of every
+  // running agent, including background digital humans and team members. Keep
+  // it allocation-free and unlogged.
   handleAgentThought: (data) => {
     const { conversationId, thought } = data
-    console.log(`[ChatStore] handleAgentThought [${conversationId}]:`, thought.type, thought.id)
 
     set((state) => {
       const newSessions = new Map(state.sessions)
       const session = newSessions.get(conversationId) || createEmptySessionState()
 
-      // Check if thought with same id already exists (avoid duplicates after recovery)
-      const existingIds = new Set(session.thoughts.map(t => t.id))
-      if (existingIds.has(thought.id)) {
+      // Skip a thought already recorded (can re-arrive after stream recovery)
+      if (session.thoughts.some(t => t.id === thought.id)) {
         console.log(`[ChatStore] Skipping duplicate thought: ${thought.id}`)
         return state // No change
       }
@@ -453,6 +461,7 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
         pendingQuestion: null,
         queuedMessages: [],
         turnId: (prevSession?.turnId ?? 0) + 1,
+        turnStartedAt: Date.now(),
       })
       return { sessions: newSessions }
     })

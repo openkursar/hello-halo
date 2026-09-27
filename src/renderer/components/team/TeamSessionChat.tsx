@@ -1,4 +1,4 @@
-import { invalidateTeamSessionHistory, loadTeamSessionHistory, matchesTeamHistory, retainTeamSessionHistory } from './session-history'
+import { invalidateTeamSessionHistory, loadTeamSessionHistory, matchesTeamHistory, peekTeamSessionHistory, retainTeamSessionHistory } from './session-history'
 /**
  * TeamSessionChat — the ONE team session surface, shared by the member panel and
  * the Conversation tab (spec §6.2: "must share one set of session components,
@@ -13,6 +13,7 @@ import { invalidateTeamSessionHistory, loadTeamSessionHistory, matchesTeamHistor
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Loader2, AlertCircle, LockKeyhole, MessageSquareMore } from 'lucide-react'
 import { api } from '../../api'
+import { usePeopleViewStore } from '../../stores/people-view.store'
 import { useChatStore } from '../../stores/chat.store'
 import { useSmartScroll } from '../../hooks/useSmartScroll'
 import { MessageRow } from '../chat/MessageRow'
@@ -81,8 +82,14 @@ export function TeamSessionChat({
 
   useRemoteSubscription(conversationId)
 
-  const [messages, setMessages] = useState<Message[]>([])
-  const [loadState, setLoadState] = useState<LoadState>('loading')
+  // Seeded from the transcript this session last showed (the member panel is
+  // remounted per member, so a switch would otherwise always start from blank).
+  const [messages, setMessages] = useState<Message[]>(
+    () => peekTeamSessionHistory(appId, spaceId, teamId, epochId ?? '') ?? []
+  )
+  const [loadState, setLoadState] = useState<LoadState>(
+    () => (peekTeamSessionHistory(appId, spaceId, teamId, epochId ?? '')?.length ? 'loaded' : 'loading')
+  )
   const [isStale, setIsStale] = useState(false)
   /**
    * A send that arrived but started no turn, so no reply is coming on this
@@ -93,6 +100,8 @@ export function TeamSessionChat({
    */
   const [deliveredNoReply, setDeliveredNoReply] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const restoredScroll = useRef(false)
+  const savedScroll = useRef(usePeopleViewStore.getState().scrolls[`team-chat:${conversationId}`])
 
   const session = useChatStore(s => s.getSession(conversationId))
   const resetSession = useChatStore(s => s.resetSession)
@@ -110,6 +119,15 @@ export function TeamSessionChat({
   })
 
   const streamingBrowserToolCalls = useBrowserToolCalls(thoughts)
+
+  useEffect(() => {
+    if (restoredScroll.current || (loadState !== 'loaded' && loadState !== 'empty') || !scrollRef.current) return
+    restoredScroll.current = true
+    if (savedScroll.current !== undefined) {
+      scrollRef.current.scrollTop = savedScroll.current
+      handleScroll()
+    }
+  }, [loadState, messages, handleScroll])
 
   const inputIdentity = useRef({ appId, epochId, key: draftKey ?? conversationId })
   if (inputIdentity.current.appId !== appId || inputIdentity.current.epochId !== epochId) {
@@ -138,11 +156,42 @@ export function TeamSessionChat({
 
   useEffect(() => retainTeamSessionHistory(appId, spaceId, teamId, epochId ?? ''), [appId, spaceId, teamId, epochId])
 
+  /** What this session last showed, still held by the shared source. */
+  const cachedHistory = useCallback(
+    () => peekTeamSessionHistory(appId, spaceId, teamId, epochId ?? '') ?? [],
+    [appId, spaceId, teamId, epochId]
+  )
+
+  /**
+   * A refresh that failed. With nothing on screen this is the error state and its
+   * retry; once a transcript is already painted, replacing it with an error page
+   * would throw away good messages — say they may be out of date instead.
+   */
+  const failedRefresh = useCallback(() => {
+    if (cachedHistory().length > 0) {
+      setLoadState('loaded')
+      setIsStale(true)
+    } else {
+      setLoadState('error')
+    }
+  }, [cachedHistory])
+
   const loadMessages = useCallback(async (silent = false) => {
     if (silent) invalidateTeamSessionHistory(appId, spaceId, teamId, epochId ?? '')
     const generation = historyGeneration.current
     const draftCommit = draftCommitRef.current
-    if (!silent && !draftCommit) setLoadState('loading')
+    if (!silent && !draftCommit) {
+      // Paint what this session last showed and refresh underneath it. A blank
+      // spinner here costs the full read every time — and mid-run, when a remote
+      // member's copy is coldest, that read is the slowest it ever gets.
+      const cached = cachedHistory()
+      if (cached.length > 0) {
+        setMessages(cached)
+        setLoadState('loaded')
+      } else {
+        setLoadState('loading')
+      }
+    }
     try {
       const cursor = seqCursorRef.current
       const incremental = silent && cursor > 0
@@ -195,14 +244,14 @@ export function TeamSessionChat({
         }
       } else {
         console.warn('[TeamSessionChat] History rejected', { teamId, appId, epochId, error: res.error })
-        if (!silent) setLoadState('error')
+        if (!silent) failedRefresh()
       }
     } catch (err) {
       console.error('[TeamSessionChat] load error:', err)
       if (generation !== historyGeneration.current) return
-      if (!silent) setLoadState('error')
+      if (!silent) failedRefresh()
     }
-  }, [appId, spaceId, teamId, epochId])
+  }, [appId, spaceId, teamId, epochId, cachedHistory, failedRefresh])
 
   useEffect(() => {
     historyGeneration.current++
@@ -340,13 +389,25 @@ export function TeamSessionChat({
   }, [appId, spaceId, teamId, conversationId, epochId, ensureEpochId, isRemote, ownerName, resetSession, scrollToBottom, markSendFailed, t])
 
   const handleStop = useCallback(async () => {
+    // Settle the UI first and unconditionally. The abort may be swallowed
+    // downstream (a killed subprocess emits no completion) or answered only
+    // after the drain timeout, and a stop button that stays spinning reads as a
+    // dead button. `markSessionStopped`, not `resetSession`: the latter wipes the
+    // messages and thoughts already on screen, which is not what stopping means.
+    useChatStore.getState().markSessionStopped(conversationId)
     try {
-      await api.appChatStop(appId, conversationId)
-      useChatStore.getState().resetSession(conversationId)
+      // A remote member's turn runs in ITS owner's process; the local app-chat
+      // abort would find no session here and report success while the member
+      // kept working. Same split as the send path above.
+      if (isRemote) {
+        await api.teamStopMember({ teamId, appId, ...(epochId ? { epochId } : {}) })
+      } else {
+        await api.appChatStop(appId, conversationId)
+      }
     } catch (err) {
       console.error('[TeamSessionChat] stop error:', err)
     }
-  }, [appId, conversationId])
+  }, [appId, teamId, epochId, conversationId, isRemote])
 
   const handleAnswerQuestion = useCallback((answers: Record<string, string>) => {
     answerQuestion(conversationId, answers)
@@ -398,7 +459,7 @@ export function TeamSessionChat({
           <span className="text-sm">{t('Loading chat...')}</span>
         </div>
       ) : (
-        <div ref={scrollRef} className="flex-1 overflow-y-auto" onScroll={handleScroll}>
+        <div ref={scrollRef} className="flex-1 overflow-y-auto" onScroll={event => { handleScroll(); if (restoredScroll.current) usePeopleViewStore.getState().saveScroll(`team-chat:${conversationId}`, event.currentTarget.scrollTop) }}>
           <div className="mx-auto max-w-3xl px-4 py-5">
             {topSlot}
 
@@ -500,7 +561,21 @@ export function TeamSessionChat({
       {readonly ? <div className="shrink-0 border-t border-border p-3">
         <div role="status" className="flex min-h-11 items-center gap-2 rounded-xl bg-secondary/60 px-3 py-2 text-xs text-muted-foreground">
           <LockKeyhole size={14} className="shrink-0" />
-          <span>{readonlyMessage ?? t('This conversation is read-only.')}</span>
+          <span className="min-w-0 flex-1">{readonlyMessage ?? t('This conversation is read-only.')}</span>
+          {/* Read-only means this person may not WRITE here, not that they may
+              not interrupt. A teammate's turn runs on its owner's machine and
+              this is the only screen that shows it, so without this the work
+              visibly running in front of someone cannot be stopped by anyone. */}
+          {isGenerating && (
+            <button
+              onClick={handleStop}
+              className="flex h-7 shrink-0 items-center gap-1.5 rounded-lg bg-destructive/10 px-2 text-destructive transition-colors hover:bg-destructive/20 active:bg-destructive/30"
+              title={t('Stop generation')}
+            >
+              <span className="h-2.5 w-2.5 rounded-sm border-2 border-current" />
+              <span className="hidden sm:inline">{t('Stop')}</span>
+            </button>
+          )}
         </div>
       </div> : reachability === 'offline' ? (
         <div className="shrink-0 border-t border-border p-3">

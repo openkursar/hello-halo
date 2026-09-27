@@ -55,6 +55,9 @@ export interface CodeMirrorEditorProps {
   scrollPosition?: number
   /** CSS class name for the container */
   className?: string
+  /** Tints the editor background to signal it's writable (prototype:
+   * `.canvas.editing .cc-code`) */
+  isEditing?: boolean
 }
 
 export interface CodeMirrorEditorRef {
@@ -90,6 +93,7 @@ export const CodeMirrorEditor = memo(
       onScroll,
       scrollPosition,
       className = '',
+      isEditing = false,
     },
     ref
   ) {
@@ -262,7 +266,7 @@ export const CodeMirrorEditor = memo(
     return (
       <div
         ref={containerRef}
-        className={`codemirror-container h-full w-full overflow-hidden ${className}`}
+        className={`codemirror-container h-full w-full overflow-hidden ${isEditing ? 'is-editing' : ''} ${className}`}
       />
     )
   })

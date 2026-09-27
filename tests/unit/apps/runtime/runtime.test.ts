@@ -171,6 +171,7 @@ vi.mock('../../../../src/main/services/agent/events', () => ({
 // Mock resolved-sdk (report-tool.ts imports tool/createSdkMcpServer from here)
 vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
   createSession: vi.fn(),
+  getActiveEngine: () => null,
   tool: vi.fn((name: string, description: string, schema: unknown, handler: unknown) => ({
     name,
     description,
@@ -600,6 +601,145 @@ describe('ActivityStore', () => {
       expect(latest!.startedAt).toBe(2000)
       expect(latest!.status).toBe('error')
     })
+
+    it('should attach each run\'s last activity entry summary', () => {
+      const runId = createTestRunId()
+      store.insertRun({
+        runId,
+        appId: testAppId,
+        sessionKey: 'sess-001',
+        status: 'ok',
+        triggerType: 'manual',
+        startedAt: 1000,
+      })
+      store.insertEntry(createTestEntry({
+        appId: testAppId,
+        runId,
+        type: 'milestone',
+        ts: 1100,
+        content: { summary: 'Earlier milestone' },
+      }))
+      store.insertEntry(createTestEntry({
+        appId: testAppId,
+        runId,
+        type: 'run_complete',
+        ts: 1200,
+        content: { summary: 'Final summary' },
+      }))
+
+      const runs = store.getRunsForAppWithSummary(testAppId)
+      expect(runs).toHaveLength(1)
+      expect(runs[0].summary).toBe('Final summary')
+    })
+
+    it('should leave summary undefined for a run with no activity entries', () => {
+      const runId = createTestRunId()
+      store.insertRun({
+        runId,
+        appId: testAppId,
+        sessionKey: 'sess-001',
+        status: 'running',
+        triggerType: 'manual',
+        startedAt: 1000,
+      })
+
+      const runs = store.getRunsForAppWithSummary(testAppId)
+      expect(runs).toHaveLength(1)
+      expect(runs[0].summary).toBeUndefined()
+    })
+
+    it('should paginate run history with limit/offset', () => {
+      for (let i = 0; i < 5; i++) {
+        store.insertRun({
+          runId: createTestRunId(),
+          appId: testAppId,
+          sessionKey: `sess-${i}`,
+          status: 'ok',
+          triggerType: 'schedule',
+          startedAt: 1000 + i * 100,
+        })
+      }
+
+      const page1 = store.getRunsForAppWithSummary(testAppId, { limit: 2, offset: 0 })
+      const page2 = store.getRunsForAppWithSummary(testAppId, { limit: 2, offset: 2 })
+      expect(page1.map(r => r.startedAt)).toEqual([1400, 1300])
+      expect(page2.map(r => r.startedAt)).toEqual([1200, 1100])
+    })
+
+    it('should aggregate run stats over the most recent window', () => {
+      store.insertRun({ runId: createTestRunId(), appId: testAppId, sessionKey: 's1', status: 'ok', triggerType: 'manual', startedAt: 1000 })
+      store.completeRun(store.getRunsForApp(testAppId, 1)[0].runId, { status: 'ok', finishedAt: 1100, durationMs: 100, tokensUsed: 10 })
+
+      store.insertRun({ runId: createTestRunId(), appId: testAppId, sessionKey: 's2', status: 'ok', triggerType: 'manual', startedAt: 2000 })
+      store.completeRun(store.getRunsForApp(testAppId, 1)[0].runId, { status: 'error', finishedAt: 2200, durationMs: 200, tokensUsed: 20 })
+
+      store.insertRun({ runId: createTestRunId(), appId: testAppId, sessionKey: 's3', status: 'ok', triggerType: 'manual', startedAt: 3000 })
+      store.completeRun(store.getRunsForApp(testAppId, 1)[0].runId, { status: 'skipped', finishedAt: 3050, durationMs: 50 })
+
+      const stats = store.getRunStats(testAppId)
+      expect(stats.total).toBe(3)
+      expect(stats.ok).toBe(1)
+      expect(stats.error).toBe(1)
+      expect(stats.skipped).toBe(1)
+      expect(stats.totalTokens).toBe(30)
+      expect(stats.avgDurationMs).toBeCloseTo((100 + 200 + 50) / 3)
+    })
+
+    it('should only aggregate stats within the requested window', () => {
+      for (let i = 0; i < 5; i++) {
+        const runId = createTestRunId()
+        store.insertRun({ runId, appId: testAppId, sessionKey: `s${i}`, status: 'ok', triggerType: 'manual', startedAt: 1000 + i * 100 })
+        store.completeRun(runId, { status: i === 4 ? 'error' : 'ok', finishedAt: 1000 + i * 100 + 10, durationMs: 10, tokensUsed: 1 })
+      }
+
+      const stats = store.getRunStats(testAppId, 2)
+      expect(stats.total).toBe(2)
+      // Window keeps only the 2 most recent runs (started at 1300, 1400) — the
+      // single error run at 1400 is included, the other 3 ok runs are not.
+      expect(stats.error).toBe(1)
+      expect(stats.ok).toBe(1)
+    })
+
+    it('should return recent run statuses oldest-first, capped at the limit', () => {
+      for (let i = 0; i < 10; i++) {
+        store.insertRun({
+          runId: createTestRunId(),
+          appId: testAppId,
+          sessionKey: `sess-${i}`,
+          status: i === 9 ? 'error' : 'ok',
+          triggerType: 'schedule',
+          startedAt: 1000 + i * 100,
+        })
+      }
+
+      const statuses = store.getRecentRunStatuses(testAppId)
+      expect(statuses).toHaveLength(7)
+      // Oldest-first: the most recent run (status 'error') is last.
+      expect(statuses[statuses.length - 1]).toBe('error')
+    })
+
+    it('should get the latest run_complete/output entry, ignoring other types', () => {
+      const runId = createTestRunId()
+      store.insertRun({
+        runId,
+        appId: testAppId,
+        sessionKey: 'sess-001',
+        status: 'ok',
+        triggerType: 'manual',
+        startedAt: 1000,
+      })
+      store.insertEntry(createTestEntry({ appId: testAppId, runId, type: 'run_complete', ts: 1100, content: { summary: 'Done' } }))
+      store.insertEntry(createTestEntry({ appId: testAppId, runId, type: 'milestone', ts: 1200, content: { summary: 'Later milestone' } }))
+
+      const latest = store.getLatestOutputEntry(testAppId)
+      expect(latest).not.toBeNull()
+      expect(latest!.type).toBe('run_complete')
+      expect(latest!.content.summary).toBe('Done')
+    })
+
+    it('should return null from getLatestOutputEntry when no output entries exist', () => {
+      expect(store.getLatestOutputEntry(testAppId)).toBeNull()
+    })
   })
 
   // ── Entry Operations ────────────────────────
@@ -974,181 +1114,6 @@ describe('ActivityStore', () => {
     })
   })
 
-  // ── Orphan Escalation Cleanup ──────────────────
-
-  describe('closeOrphanEscalations', () => {
-    it('keeps independent team questions when another question is answered or solo cleanup runs', () => {
-      const runId = createTestRunId()
-      store.insertRun({ runId, appId: testAppId, sessionKey: 'team-session', status: 'running', triggerType: 'manual', startedAt: 1000 })
-      for (const epochId of ['task-a', 'task-b']) {
-        store.insertEntry({ id: epochId, appId: testAppId, runId, type: 'escalation', ts: 1000,
-          content: { summary: epochId, question: epochId, teamContext: { teamId: 'team', epochId } } })
-      }
-      expect(store.closeOrphanEscalations(testAppId, 'task-b')).toBe(0)
-      store.updateEntryResponse('task-b', { ts: 2000, text: 'Approved B' })
-      expect(store.closeOrphanEscalations(testAppId)).toBe(0)
-      expect(store.getEntry('task-a')!.userResponse).toBeFalsy()
-      expect(store.getEntry('task-b')!.userResponse!.text).toBe('Approved B')
-    })
-
-    it('should close orphan entries while keeping the active entry open', () => {
-      const activeEntryId = randomUUID()
-      const orphanEntryId = randomUUID()
-      const runId1 = createTestRunId()
-      const runId2 = createTestRunId()
-
-      // Insert a run for each entry
-      store.insertRun({
-        runId: runId1,
-        appId: testAppId,
-        sessionKey: 'sess-1',
-        status: 'running',
-        triggerType: 'schedule',
-        startedAt: 1000,
-      })
-      store.insertRun({
-        runId: runId2,
-        appId: testAppId,
-        sessionKey: 'sess-2',
-        status: 'running',
-        triggerType: 'schedule',
-        startedAt: 2000,
-      })
-
-      // Orphan: old pending escalation from a previous run
-      store.insertEntry({
-        id: orphanEntryId,
-        appId: testAppId,
-        runId: runId1,
-        type: 'escalation',
-        ts: 1000,
-        content: { summary: 'Old question', question: 'Old?' },
-      })
-
-      // Active: current pending escalation
-      store.insertEntry({
-        id: activeEntryId,
-        appId: testAppId,
-        runId: runId2,
-        type: 'escalation',
-        ts: 2000,
-        content: { summary: 'Current question', question: 'Current?' },
-      })
-
-      const closed = store.closeOrphanEscalations(testAppId, activeEntryId)
-
-      expect(closed).toBe(1)
-      // Orphan should be closed (has user_response_json)
-      const orphan = store.getEntry(orphanEntryId)
-      expect(orphan!.userResponse).toBeDefined()
-      expect(orphan!.userResponse!.text).toContain('Auto-closed')
-      // Active should remain open
-      const active = store.getEntry(activeEntryId)
-      expect(active!.userResponse).toBeUndefined()
-    })
-
-    it('should close all pending entries when no activeEntryId is given', () => {
-      const entry1 = randomUUID()
-      const entry2 = randomUUID()
-      // Entries no longer require a parent run row (migration v4).
-      const runId = createTestRunId()
-
-      store.insertEntry({
-        id: entry1,
-        appId: testAppId,
-        runId,
-        type: 'escalation',
-        ts: 1000,
-        content: { summary: 'Q1', question: 'Q1?' },
-      })
-      store.insertEntry({
-        id: entry2,
-        appId: testAppId,
-        runId,
-        type: 'escalation',
-        ts: 2000,
-        content: { summary: 'Q2', question: 'Q2?' },
-      })
-
-      const closed = store.closeOrphanEscalations(testAppId)
-
-      expect(closed).toBe(2)
-      expect(store.getEntry(entry1)!.userResponse).toBeDefined()
-      expect(store.getEntry(entry2)!.userResponse).toBeDefined()
-    })
-
-    it('should not affect entries from other apps', () => {
-      const otherAppId = randomUUID()
-      const otherRunId = createTestRunId()
-      const runId = createTestRunId()
-
-      // Insert run for other app
-      // (Use raw db to insert a minimal installed_apps row for FK)
-      store['db'].exec(`INSERT INTO installed_apps (id, spec_id, space_id, spec_json, status, installed_at) VALUES ('${otherAppId}', 'spec-${otherAppId}', 'test-space', '{}', 'active', ${Date.now()})`)
-      store.insertRun({
-        runId: otherRunId,
-        appId: otherAppId,
-        sessionKey: 'sess-other',
-        status: 'running',
-        triggerType: 'schedule',
-        startedAt: 1000,
-      })
-
-      const ourEntry = randomUUID()
-      const otherEntry = randomUUID()
-
-      store.insertEntry({
-        id: ourEntry,
-        appId: testAppId,
-        runId,
-        type: 'escalation',
-        ts: 1000,
-        content: { summary: 'Ours', question: 'Ours?' },
-      })
-      store.insertEntry({
-        id: otherEntry,
-        appId: otherAppId,
-        runId: otherRunId,
-        type: 'escalation',
-        ts: 1000,
-        content: { summary: 'Theirs', question: 'Theirs?' },
-      })
-
-      const closed = store.closeOrphanEscalations(testAppId)
-
-      expect(closed).toBe(1)
-      // Our entry is closed
-      expect(store.getEntry(ourEntry)!.userResponse).toBeDefined()
-      // Other app's entry is untouched
-      expect(store.getEntry(otherEntry)!.userResponse).toBeUndefined()
-    })
-
-    it('should return 0 when there are no orphans', () => {
-      const closed = store.closeOrphanEscalations(testAppId)
-      expect(closed).toBe(0)
-    })
-
-    it('should not close already-responded entries', () => {
-      const respondedEntry = randomUUID()
-      const runId = createTestRunId()
-
-      store.insertEntry({
-        id: respondedEntry,
-        appId: testAppId,
-        runId,
-        type: 'escalation',
-        ts: 1000,
-        content: { summary: 'Answered', question: 'Answered?' },
-      })
-      store.updateEntryResponse(respondedEntry, { ts: Date.now(), text: 'User reply' })
-
-      const closed = store.closeOrphanEscalations(testAppId)
-
-      expect(closed).toBe(0)
-      // Response should still be the user's, not the auto-close marker
-      expect(store.getEntry(respondedEntry)!.userResponse!.text).toBe('User reply')
-    })
-  })
 })
 
 // ============================================
@@ -1299,12 +1264,12 @@ describe('Prompt Builder', () => {
       const prompt = buildAppSystemPrompt({
         appId: 'test-app-id',
         appSpec: createTestSpec(),
-        memoryInstructions: '## Memory\nUse memory_read to recall state.',
+        memoryInstructions: '## Memory\nUse memory_status to recall state.',
         triggerContext: 'Manual',
         workDir: '/tmp/test',
       })
 
-      expect(prompt).toContain('memory_read')
+      expect(prompt).toContain('memory_status')
     })
 
     it('should always include reporting rules', () => {
@@ -1435,23 +1400,36 @@ describe('Prompt Builder', () => {
     })
   })
 
-  describe('buildInitialMessage', () => {
-    /** Minimal no-memory snapshot — buildInitialMessage requires one. */
-    const memorySnapshot = {
-      exists: false,
+  const memorySectionBase = {
+      layout: {
+        file: '/tmp/test-memory.md',
+        dataDir: '/tmp/memory',
+        topicsDir: '/tmp/memory/topics',
+        runDir: '/tmp/memory/run',
+        archiveDir: '/tmp/memory/archive',
+        snapshotsDir: '/tmp/memory/.snapshots',
+        consolidationDir: '/tmp/memory/.consolidation',
+        stateFile: '/tmp/memory/.state.json',
+      },
+      // Template default, not an empty memory: the two content cases below
+      // need a `false` here to reach the branches that render inlined content.
+      blank: false,
       totalLines: 0,
       sizeBytes: 0,
       firstSection: null,
+      nowBytes: 0,
       headers: [],
       fullContent: null,
-      archiveFiles: [],
-      archiveTotalCount: 0,
-      compactionArchiveCount: 0,
-      memoryFilePath: '/tmp/test-memory.md',
-      memoryArchiveDir: '/tmp/memory/run',
+      topics: { root: '/tmp/memory/topics', children: [], topicCount: 0, totalBytes: 0, truncated: false },
+      runFiles: [],
+      runTotalCount: 0,
+      archiveCount: 0,
       lastModified: null,
-      rawContent: null,
     }
+
+  describe('buildInitialMessage', () => {
+    /** Minimal no-memory snapshot — buildInitialMessage requires one. */
+    const memorySnapshot = { ...memorySectionBase, exists: false }
 
     const selfInstance = {
       id: 'aaaabbbb',
@@ -1530,20 +1508,7 @@ describe('Prompt Builder', () => {
 
   // Shared with app-chat, which opens a team session with the same block.
   describe('buildMemorySection', () => {
-    const base = {
-      totalLines: 0,
-      sizeBytes: 0,
-      firstSection: null,
-      headers: [],
-      fullContent: null,
-      archiveFiles: [],
-      archiveTotalCount: 0,
-      compactionArchiveCount: 0,
-      memoryFilePath: '/tmp/test-memory.md',
-      memoryArchiveDir: '/tmp/memory/run',
-      lastModified: null,
-      rawContent: null,
-    }
+    const base = memorySectionBase
 
     it('should point at the file and ask for creation when none exists', () => {
       const section = buildMemorySection({ ...base, exists: false })
@@ -1577,6 +1542,20 @@ describe('Prompt Builder', () => {
 
       expect(section).toContain('## State | 3 items tracked')
       expect(section).toContain('# History')
+    })
+
+    it('should list the space topics read-only only when offered', () => {
+      const tree = {
+        root: '/tmp/space/.halo/memory/topics',
+        children: [{ kind: 'topic' as const, relPath: 'release.md', description: 'when shipping', sizeBytes: 900 }],
+        topicCount: 1,
+        totalBytes: 900,
+        truncated: false,
+      }
+      expect(buildMemorySection({ ...base, exists: false })).not.toContain('Space memory topics')
+      const section = buildMemorySection({ ...base, exists: false }, tree)
+      expect(section).toContain('### Space memory topics (read-only) — generated from the space\'s topic files')
+      expect(section).toContain('release.md (0.9KB) — when shipping')
     })
   })
 })
@@ -1988,7 +1967,7 @@ describe('AppRuntimeService', () => {
       expect(state.status).toBe('paused')
     })
 
-    it('should return waiting_user state with escalation ID', () => {
+    it('derives waiting from pending questions rather than the stale status field', () => {
       const appId = randomUUID()
       mockAppManager.getApp.mockReturnValue({
         id: appId,
@@ -2002,11 +1981,11 @@ describe('AppRuntimeService', () => {
       const service = createService()
       const state = service.getAppState(appId)
 
-      expect(state.status).toBe('waiting_user')
-      expect(state.pendingEscalationId).toBe('esc-001')
+      expect(state.status).toBe('idle')
+      expect(state.pendingDecisionCount).toBe(0)
     })
 
-    it('should return error state for error and needs_login', () => {
+    it('should return error state for error', () => {
       const appId = randomUUID()
       mockAppManager.getApp.mockReturnValue({
         id: appId,
@@ -2022,6 +2001,22 @@ describe('AppRuntimeService', () => {
 
       expect(state.status).toBe('error')
       expect(state.lastError).toBe('Something failed')
+    })
+
+    it('should return needs_login state distinct from error', () => {
+      const appId = randomUUID()
+      mockAppManager.getApp.mockReturnValue({
+        id: appId,
+        status: 'needs_login',
+        userConfig: {},
+        userOverrides: {},
+        permissions: { granted: [], denied: [] },
+      })
+
+      const service = createService()
+      const state = service.getAppState(appId)
+
+      expect(state.status).toBe('needs_login')
     })
 
     it('should return idle for non-existent app', () => {
@@ -2059,6 +2054,101 @@ describe('AppRuntimeService', () => {
 
       const state = service.getAppState(appId)
       expect(state.nextRunAtMs).toBe(99999)
+    })
+  })
+
+  describe('getOverview', () => {
+    function insertAppRecord(appId: string, status: string): void {
+      const db = dbManager.getAppDatabase()
+      const specJson = JSON.stringify(createTestSpec())
+      db.prepare(`
+        INSERT INTO installed_apps (id, spec_id, space_id, spec_json, status, user_config_json, user_overrides_json, permissions_json, installed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(appId, `spec-${appId}`, 'space-001', specJson, status, '{}', '{}', '{"granted":[],"denied":[]}', Date.now())
+    }
+
+    it('should attach state, latest summary and recent run statuses per app', () => {
+      const appId = randomUUID()
+      insertAppRecord(appId, 'active')
+      const app = {
+        id: appId,
+        specId: `spec-${appId}`,
+        spaceId: 'space-001',
+        spec: createTestSpec(),
+        status: 'active' as const,
+        userConfig: {},
+        userOverrides: {},
+        permissions: { granted: [], denied: [] },
+        installedAt: Date.now(),
+      }
+      mockAppManager.listApps.mockReturnValue([app])
+      mockAppManager.getApp.mockReturnValue(app)
+
+      const runId = createTestRunId()
+      store.insertRun({ runId, appId, sessionKey: 'sess-001', status: 'ok', triggerType: 'manual', startedAt: 1000 })
+      store.completeRun(runId, { status: 'ok', finishedAt: 1100, durationMs: 100 })
+      store.insertEntry(createTestEntry({ appId, runId, type: 'run_complete', ts: 1100, content: { summary: 'All done' } }))
+
+      const service = createService()
+      const overview = service.getOverview()
+
+      expect(overview).toHaveLength(1)
+      expect(overview[0].appId).toBe(appId)
+      expect(overview[0].state.status).toBe('idle')
+      expect(overview[0].latestSummary?.summary).toBe('All done')
+      expect(overview[0].recentRunStatuses).toEqual(['ok'])
+    })
+
+    it('should exclude uninstalled apps returned by the manager', () => {
+      const appId = randomUUID()
+      insertAppRecord(appId, 'uninstalled')
+      mockAppManager.listApps.mockReturnValue([{
+        id: appId,
+        specId: `spec-${appId}`,
+        spaceId: 'space-001',
+        spec: createTestSpec(),
+        status: 'uninstalled' as const,
+        userConfig: {},
+        userOverrides: {},
+        permissions: { granted: [], denied: [] },
+        installedAt: Date.now(),
+      }])
+
+      const service = createService()
+      expect(service.getOverview()).toHaveLength(0)
+    })
+
+    it('should scope the manager query to the given space', () => {
+      mockAppManager.listApps.mockReturnValue([])
+      const service = createService()
+
+      service.getOverview('space-001')
+
+      expect(mockAppManager.listApps).toHaveBeenCalledWith({ spaceId: 'space-001', type: 'automation' })
+    })
+
+    it('should return an empty recent-run-statuses array for an app with no runs', () => {
+      const appId = randomUUID()
+      insertAppRecord(appId, 'active')
+      const app = {
+        id: appId,
+        specId: `spec-${appId}`,
+        spaceId: 'space-001',
+        spec: createTestSpec(),
+        status: 'active' as const,
+        userConfig: {},
+        userOverrides: {},
+        permissions: { granted: [], denied: [] },
+        installedAt: Date.now(),
+      }
+      mockAppManager.listApps.mockReturnValue([app])
+      mockAppManager.getApp.mockReturnValue(app)
+
+      const service = createService()
+      const overview = service.getOverview()
+
+      expect(overview[0].recentRunStatuses).toEqual([])
+      expect(overview[0].latestSummary).toBeUndefined()
     })
   })
 
@@ -2211,7 +2301,7 @@ describe('AppRuntimeService', () => {
       ).rejects.toThrow(EscalationNotFoundError)
     })
 
-    it('should record response, reopen original run, and clear waiting_user status', async () => {
+    it('records the answer without enabling automatic execution', async () => {
       const entryId = randomUUID()
       store.insertEntry({
         id: entryId,
@@ -2231,6 +2321,7 @@ describe('AppRuntimeService', () => {
         spaceId: 'space-001',
       })
 
+      store.updateRunSessionId('run-001', 'session-original')
       const service = createService()
 
       // Don't await the full thing - the follow-up run will fail because
@@ -2246,7 +2337,7 @@ describe('AppRuntimeService', () => {
       expect(entry!.userResponse!.text).toBe('Go with option B')
 
       // Verify status was updated
-      expect(mockAppManager.updateStatus).toHaveBeenCalledWith(testAppId, 'active')
+      expect(mockAppManager.updateStatus).not.toHaveBeenCalledWith(testAppId, 'active')
 
       // Verify the original run was reopened (waiting_user → running)
       // instead of creating a new run
@@ -2280,6 +2371,7 @@ describe('AppRuntimeService', () => {
         spaceId: 'space-001',
       })
       vi.mocked(executeRun).mockClear()
+      store.updateRunSessionId('run-001', 'session-original')
 
       const service = createService()
       await service.respondToEscalation(testAppId, entryId, {
@@ -2534,7 +2626,7 @@ describe('AppRuntimeService', () => {
     })
 
     it('rejects a non-runnable app without starting anything', async () => {
-      seedApp('waiting_user')
+      seedApp('needs_login')
       const service = createService()
 
       await expect(service.startManually(testAppId)).rejects.toThrow(AppNotRunnableError)
@@ -2747,15 +2839,14 @@ describe('AppRuntimeService', () => {
 
       await expect(
         service.respondToEscalation(testAppId, 'entry-a', { ts: 4000, text: 'Answer A' })
-      ).resolves.toBeUndefined()
+      ).resolves.toMatchObject({ id: 'entry-a', userResponse: { text: 'Answer A' } })
 
-      // Each answer resumes its own run, not whichever was most recent.
-      expect(store.getRun('run-a')!.status).toBe('running')
-      expect(store.getRun('run-b')!.status).toBe('running')
-      expect(mockAppManager.updateStatus).toHaveBeenCalledWith(testAppId, 'active')
+      expect(store.getEntry('entry-a')!.continuation?.status).toBe('failed')
+      expect(store.getEntry('entry-b')!.continuation?.status).toBe('failed')
+      expect(mockAppManager.updateStatus).not.toHaveBeenCalledWith(testAppId, 'active')
     })
 
-    it('abandons open questions only when the app stops for good', () => {
+    it('preserves unanswered questions across pause and error', () => {
       seedApp('waiting_user')
       seedQuestion('run-a', 'entry-a', 1000)
       const reconcileAwaitingDecision = vi.fn()
@@ -2767,8 +2858,130 @@ describe('AppRuntimeService', () => {
       expect(store.getEntry('entry-a')!.userResponse).toBeUndefined()
 
       onStatusChange(testAppId, 'waiting_user', 'paused')
-      expect(store.getEntry('entry-a')!.userResponse).toBeDefined()
-      expect(reconcileAwaitingDecision).toHaveBeenCalledWith(testAppId)
+      expect(store.getEntry('entry-a')!.userResponse).toBeUndefined()
+      onStatusChange(testAppId, 'paused', 'error')
+      expect(store.getPendingEscalation(testAppId, 'entry-a')).not.toBeNull()
+    })
+  })
+
+  describe('durable continuation scheduling', () => {
+    let app: any
+    const answer = { ts: 1, text: 'Approved' }
+    function seedQuestion(): void {
+      store.insertRun({ runId: 'decision-run', appId: app.id, sessionKey: 'original-session', status: 'waiting_user', triggerType: 'manual', startedAt: Date.now() })
+      store.updateRunSessionId('decision-run', 'engine-session')
+      store.insertEntry({ id: 'decision', appId: app.id, runId: 'decision-run', type: 'escalation', ts: Date.now(), content: { summary: 'Proceed?' } })
+    }
+    beforeEach(() => {
+      getActiveTeamRuntimeMock.mockReset()
+      vi.mocked(executeRun).mockClear()
+      app = { id: randomUUID(), status: 'paused', spec: createTestSpec(), userConfig: {}, userOverrides: {}, spaceId: 'space-001' }
+      dbManager.getAppDatabase().prepare(`INSERT INTO installed_apps(id, spec_id, space_id, spec_json, installed_at) VALUES (?, ?, 'space-001', ?, ?)`).run(app.id, app.id, JSON.stringify(app.spec), Date.now())
+      mockAppManager.getApp.mockReturnValue(app)
+    })
+
+    it('runs once while paused without resuming automatic work or consuming older questions', async () => {
+      seedQuestion()
+      const service = createService()
+      await service.triggerManually(app.id)
+      expect(executeRun).toHaveBeenCalledTimes(1)
+      expect(mockAppManager.updateStatus).not.toHaveBeenCalled()
+      expect(service.getAppState(app.id).automaticEnabled).toBe(false)
+      expect(store.getPendingEscalation(app.id, 'decision')).not.toBeNull()
+    })
+
+    it('durably queues a busy answer, rejects duplicate manual work, then resumes the original run', async () => {
+      seedQuestion()
+      let finish!: () => void
+      let signal: AbortSignal | undefined
+      vi.mocked(executeRun).mockImplementationOnce(async (options: any) => {
+        signal = options.abortSignal
+        await new Promise<void>(resolve => { finish = resolve })
+        return { appId: app.id, runId: 'manual-run', sessionKey: 'manual-session', outcome: 'useful', startedAt: 0, finishedAt: 1, durationMs: 1 }
+      })
+      const service = createService()
+      const manual = service.triggerManually(app.id)
+      await service.respondToEscalation(app.id, 'decision', answer)
+      expect(store.getEntry('decision')?.continuation?.status).toBe('queued')
+      expect(executeRun).toHaveBeenCalledTimes(1)
+      await expect(service.triggerManually(app.id)).rejects.toThrow(ConcurrencyLimitError)
+      mockAppManager.onAppStatusChange.mock.calls[0][0](app.id, 'active', 'paused')
+      expect(signal?.aborted).toBe(false)
+      finish()
+      await manual
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(executeRun).toHaveBeenCalledTimes(2)
+      expect(vi.mocked(executeRun).mock.calls[1][0]).toMatchObject({ existingRunId: 'decision-run', existingSessionKey: 'original-session' })
+      expect(store.getEntry('decision')?.userResponse?.text).toBe('Approved')
+      expect(mockAppManager.updateStatus).not.toHaveBeenCalled()
+    })
+
+    it('uses current permissions when queued execution finally obtains a resource slot', async () => {
+      const apps = new Map(Array.from({ length: 11 }, (_, index) => [`person-${index}`, { ...app, id: `person-${index}`, permissions: { granted: ['ai-browser'], denied: [] } }]))
+      mockAppManager.getApp.mockImplementation((id: string) => apps.get(id))
+      const releases: Array<() => void> = []
+      vi.mocked(executeRun).mockImplementation(async (options: any) => {
+        if (options.app.id !== 'person-10') await new Promise<void>(resolve => releases.push(resolve))
+        return { appId: options.app.id, runId: options.app.id, sessionKey: options.app.id, outcome: 'useful', startedAt: 0, finishedAt: 1, durationMs: 1 }
+      })
+      const service = createService()
+      const runs = [...apps.keys()].map(id => service.triggerManually(id))
+      expect(executeRun).toHaveBeenCalledTimes(10)
+      apps.set('person-10', { ...apps.get('person-10')!, permissions: { granted: [], denied: ['ai-browser'] } })
+      releases.splice(0).forEach(release => release())
+      await Promise.all(runs)
+      expect(vi.mocked(executeRun).mock.calls.find(([options]) => options.app.id === 'person-10')?.[0].app.permissions).toEqual({ granted: [], denied: ['ai-browser'] })
+    })
+
+
+    it('preserves explicit pause after repeated manual execution failures', async () => {
+      for (let index = 0; index < 3; index++) {
+        store.insertRun({ runId: `failure-${index}`, appId: app.id, sessionKey: `failure-${index}`, status: 'error', triggerType: 'manual', startedAt: index })
+      }
+      vi.mocked(executeRun).mockResolvedValueOnce({ appId: app.id, runId: 'failure-2', sessionKey: 'failure-2', outcome: 'error', errorMessage: 'Connection unavailable', startedAt: 0, finishedAt: 1, durationMs: 1 })
+      const service = createService()
+      await service.triggerManually(app.id)
+      expect(service.getAppState(app.id).automaticEnabled).toBe(false)
+      expect(mockAppManager.updateStatus).not.toHaveBeenCalled()
+    })
+
+    it('settles the original run when continuation fails before SDK setup', async () => {
+      seedQuestion()
+      vi.mocked(executeRun).mockRejectedValueOnce(new Error('Original environment missing'))
+      const service = createService()
+      await service.respondToEscalation(app.id, 'decision', answer)
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(store.getRun('decision-run')?.status).toBe('error')
+      expect(store.getEntry('decision')?.continuation?.status).toBe('failed')
+      expect(store.getEntry('decision')?.userResponse?.text).toBe('Approved')
+      expect(store.getEntriesForRun('decision-run').some(entry => entry.type === 'run_error' && entry.content.error === 'Original environment missing')).toBe(true)
+      expect(service.getAppState(app.id).automaticEnabled).toBe(false)
+      expect(mockAppManager.updateStatus).not.toHaveBeenCalled()
+    })
+
+    it('recovers an accepted but unstarted answer from storage after restart', async () => {
+      seedQuestion()
+      store.acceptDecision(app.id, 'decision', answer)
+      store = new ActivityStore(dbManager.getAppDatabase())
+      const service = createService()
+      await service.activateAll()
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(executeRun).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(executeRun).mock.calls[0][0].existingRunId).toBe('decision-run')
+      expect(store.getEntry('decision')?.userResponse?.text).toBe('Approved')
+      await service.deactivateAll()
+    })
+
+    it('does not resurrect a queued task that the user closed', async () => {
+      seedQuestion()
+      store.acceptDecision(app.id, 'decision', answer)
+      const service = createService()
+      await service.closeRun(app.id, 'decision-run')
+      await service.activateAll()
+      expect(executeRun).not.toHaveBeenCalled()
+      expect(store.getEntry('decision')?.continuation?.status).toBe('cancelled')
+      expect(store.getEntry('decision')?.userResponse?.text).toBe('Approved')
+      await service.deactivateAll()
     })
   })
 

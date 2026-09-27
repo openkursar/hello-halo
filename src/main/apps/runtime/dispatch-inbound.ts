@@ -994,6 +994,7 @@ export async function dispatchInboundMessage(
       message: messageText,
       conversationId,
       images: msg.images,
+      attachedFiles: msg.attachments?.map(a => a.localPath),
       imFileSend,
       senderIdentity,
       imSession,

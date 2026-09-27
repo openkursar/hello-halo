@@ -1,6 +1,52 @@
-import { resolve } from 'path'
+import { createReadStream, cpSync, existsSync } from 'fs'
+import { resolve, sep } from 'path'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
+import type { Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
+
+/**
+ * pdf.js keeps its CJK CMaps, base-14 standard fonts, image-codec wasm and ICC
+ * profile as files fetched at runtime rather than importable modules, so the
+ * bundler never sees them. Without the CMaps, a PDF using a CJK encoding but no
+ * embedded font renders blank; without the standard fonts, the base-14 fallback
+ * fails the same way. Mirror all four next to the renderer bundle under one
+ * `pdfjs/` prefix, which PdfViewer resolves relative to the document — that
+ * holds for the packaged file:// page and for the remote server, which serves
+ * this same directory statically.
+ */
+const PDFJS_ASSET_DIRS = ['cmaps', 'standard_fonts', 'wasm', 'iccs']
+
+function pdfjsAssets(): Plugin {
+  const pkgRoot = resolve(__dirname, 'node_modules/pdfjs-dist')
+  let outDir = ''
+  return {
+    name: 'halo-pdfjs-assets',
+    configResolved(config) {
+      outDir = config.build.outDir
+    },
+    // Dev has no bundle to copy into: serve the files straight from the package.
+    configureServer(server) {
+      server.middlewares.use('/pdfjs', (req, res, next) => {
+        const rel = decodeURIComponent((req.url ?? '').split('?')[0]).replace(/^\/+/, '')
+        if (!PDFJS_ASSET_DIRS.includes(rel.split('/')[0])) return next()
+        const file = resolve(pkgRoot, rel)
+        if (!file.startsWith(pkgRoot + sep) || !existsSync(file)) return next()
+        res.setHeader('Content-Type', 'application/octet-stream')
+        createReadStream(file).pipe(res)
+      })
+    },
+    writeBundle() {
+      for (const dir of PDFJS_ASSET_DIRS) {
+        const from = resolve(pkgRoot, dir)
+        if (!existsSync(from)) {
+          this.warn(`pdfjs-dist/${dir} is missing — PDFs needing it will not render correctly`)
+          continue
+        }
+        cpSync(from, resolve(outDir, 'pdfjs', dir), { recursive: true })
+      }
+    },
+  }
+}
 
 // Telemetry / analytics identifiers are deliberately NOT injected at build
 // time. They are per-variant configuration in product.json, read at runtime
@@ -17,10 +63,11 @@ const buildMetaDefine = {
 export default defineConfig({
   main: {
     plugins: [
-      // Bundle @xterm/headless (pure-JS CommonJS) instead of externalizing it —
-      // its named exports are not reachable via ESM interop when left external.
-      // node-pty stays external (native addon).
-      externalizeDepsPlugin({ exclude: ['@xterm/headless'] })
+      // The main process builds to CommonJS because Electron 29's ESM loader rejects
+      // named imports from 'electron'. Bundle ESM-only packages (uuid, open,
+      // proxy-agent) that cannot be require()'d. @xterm/headless is also bundled
+      // for CJS-ESM interop. node-pty and better-sqlite3 stay external (native addons).
+      externalizeDepsPlugin({ exclude: ['@xterm/headless', '@electron-toolkit/utils', 'uuid', 'open', 'proxy-agent'] })
     ],
     build: {
       sourcemap: true,
@@ -34,8 +81,8 @@ export default defineConfig({
           'worker/pty-host/index': resolve(__dirname, 'src/worker/pty-host/index.ts')
         },
         output: {
-          format: 'es',
-          entryFileNames: '[name].mjs'
+          format: 'cjs',
+          entryFileNames: '[name].cjs'
         }
       }
     }
@@ -73,8 +120,20 @@ export default defineConfig({
         }
       }
     },
+    // App.tsx only reaches the page components through React.lazy()/dynamic
+    // import(), so Vite's initial esbuild dep scan (which starts from
+    // index.html and follows *static* imports) never sees the packages they
+    // pull in. The first navigation to one of them then triggers a runtime
+    // "missing dependency" re-optimization, which invalidates chunk hashes
+    // already in flight and surfaces as "Failed to fetch dynamically
+    // imported module" in the window. Listing the pages here makes the
+    // initial scan crawl into them too, so their deps are pre-bundled before
+    // the window ever loads.
+    optimizeDeps: {
+      entries: ['src/renderer/index.html', 'src/renderer/pages/*.tsx']
+    },
     define: buildMetaDefine,
-    plugins: [react()],
+    plugins: [react(), pdfjsAssets()],
     resolve: {
       alias: {
         '@': resolve(__dirname, 'src/renderer')

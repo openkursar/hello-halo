@@ -3,7 +3,7 @@
  * Data-driven navigation items for the settings page
  */
 
-import { Bot, Palette, Settings, Globe, Info, Bell, Store, Code, Heart } from 'lucide-react'
+import { Brain, Palette, Settings, Globe, Info, Bell, Store, Code, Heart } from 'lucide-react'
 import type { SettingsNavItem } from './types'
 
 /**
@@ -13,8 +13,10 @@ import type { SettingsNavItem } from './types'
 export const SETTINGS_NAV_ITEMS: SettingsNavItem[] = [
   {
     id: 'ai-model',
+    // Same glyph as the chat header's ModelSelector (layout/ModelSelector.tsx)
+    // — one icon for "AI model" everywhere it appears, not two.
     labelKey: 'AI Model',
-    icon: Bot
+    icon: Brain
   },
   {
     id: 'message-channels',

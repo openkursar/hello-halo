@@ -9,6 +9,7 @@ import {
 import type {
   ApiResponse,
 } from './_shared'
+import type { ImChannelInstanceConfig } from '../../shared/types/im-channel'
 
 export const imApi = {
   // ===== WeCom Bot (legacy compat) =====
@@ -59,6 +60,48 @@ export const imApi = {
     return httpRequest('POST', '/api/wecom-bot/scan-auth/create-assistant', input)
   },
 
+  // ===== Feishu Bot — Scan-Auth (QR-code device flow) =====
+  feishuBotScanAuthStart: async (): Promise<ApiResponse<{ deviceCode: string; authUrl: string; expiresInMs: number }>> => {
+    if (isElectron()) {
+      return window.halo.feishuBotScanAuthStart()
+    }
+    return httpRequest('POST', '/api/feishu-bot/scan-auth/start')
+  },
+
+  feishuBotScanAuthPoll: async (
+    deviceCode: string,
+  ): Promise<ApiResponse<{ appId: string; appSecret: string; tenantBrand: 'feishu' | 'lark'; openId?: string }> & { kind?: string }> => {
+    if (isElectron()) {
+      return window.halo.feishuBotScanAuthPoll(deviceCode)
+    }
+    return httpRequest('POST', '/api/feishu-bot/scan-auth/poll', { deviceCode })
+  },
+
+  feishuBotScanAuthCancel: async (deviceCode: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.feishuBotScanAuthCancel(deviceCode)
+    }
+    return httpRequest('POST', '/api/feishu-bot/scan-auth/cancel', { deviceCode })
+  },
+
+  feishuBotScanAuthCreateAssistant: async (
+    input: { appIdSuffix: string },
+  ): Promise<ApiResponse<{ appId: string; appName: string }>> => {
+    if (isElectron()) {
+      return window.halo.feishuBotScanAuthCreateAssistant(input)
+    }
+    return httpRequest('POST', '/api/feishu-bot/scan-auth/create-assistant', input)
+  },
+
+  feishuBotReachability: async (
+    instanceId: string,
+  ): Promise<ApiResponse<{ state: string; connectedSinceMs: number | null; lastInboundAgoMs: number | null; inboundCount: number; lastError?: string }>> => {
+    if (isElectron()) {
+      return window.halo.feishuBotReachability(instanceId)
+    }
+    return httpRequest('POST', '/api/feishu-bot/reachability', { instanceId })
+  },
+
   // ===== IM Channels (multi-instance) =====
   imChannelsStatus: async (): Promise<ApiResponse> => {
     if (isElectron()) {
@@ -100,6 +143,27 @@ export const imApi = {
       return window.halo.imChannelsPermissionDefaults()
     }
     return httpRequest('GET', '/api/im-channels/permission-defaults')
+  },
+
+  imChannelsSetInstanceApp: async (instanceId: string, appId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.imChannelsSetInstanceApp(instanceId, appId)
+    }
+    return httpRequest('POST', '/api/im-channels/set-instance-app', { instanceId, appId })
+  },
+
+  imChannelsCreateInstance: async (instance: ImChannelInstanceConfig): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.imChannelsCreateInstance(instance)
+    }
+    return httpRequest('POST', '/api/im-channels/create-instance', { instance })
+  },
+
+  imChannelsUnbindInstance: async (instanceId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.imChannelsUnbindInstance(instanceId)
+    }
+    return httpRequest('POST', '/api/im-channels/unbind-instance', { instanceId })
   },
 
   // ===== WeChat Personal Bot via iLink API =====

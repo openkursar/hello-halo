@@ -12,7 +12,7 @@
  */
 
 import { useState, useRef, useEffect } from 'react'
-import { ChevronDown, Sparkles, Check, X } from 'lucide-react'
+import { ChevronDown, Brain, Check, X } from 'lucide-react'
 import { useAppStore } from '../../stores/app.store'
 import {
   getCurrentSource,
@@ -173,7 +173,7 @@ export function AppModelSelector({
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-1.5">
-        <Sparkles className="w-3.5 h-3.5 text-muted-foreground" />
+        <Brain className="w-3.5 h-3.5 text-muted-foreground" />
         <span className="text-sm text-foreground">{t('Model')}</span>
       </div>
 

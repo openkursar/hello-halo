@@ -12,6 +12,7 @@
 import { useState } from 'react'
 import { CheckCircle2, SkipForward, XCircle, Bell, FileOutput, Clock, ChevronRight, Play, FileText, FolderOpen } from 'lucide-react'
 import type { ActivityEntry } from '../../../shared/apps/app-types'
+import { ActivitySource } from './ActivitySource'
 import { EscalationCard } from './EscalationCard'
 import { MarkdownRenderer } from '../chat/MarkdownRenderer'
 import { useAppsPageStore } from '../../stores/apps-page.store'
@@ -52,12 +53,12 @@ function formatDuration(ms: number): string {
 
 function nodeColorClass(type: ActivityEntry['type']): string {
   switch (type) {
-    case 'run_complete': return 'bg-green-500'
+    case 'run_complete': return 'bg-halo-success'
     case 'run_skipped':  return 'bg-muted-foreground/40'
-    case 'run_error':    return 'bg-red-500'
-    case 'milestone':    return 'bg-blue-400'
-    case 'escalation':   return 'bg-orange-400'
-    case 'output':       return 'bg-purple-400'
+    case 'run_error':    return 'bg-destructive'
+    case 'milestone':    return 'bg-primary'
+    case 'escalation':   return 'bg-halo-warning'
+    case 'output':       return 'bg-primary'
     default:             return 'bg-muted-foreground/40'
   }
 }
@@ -69,17 +70,17 @@ function nodeColorClass(type: ActivityEntry['type']): string {
 function EntryIcon({ type }: { type: ActivityEntry['type'] }) {
   switch (type) {
     case 'run_complete':
-      return <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
+      return <CheckCircle2 className="w-3.5 h-3.5 text-halo-success" />
     case 'run_skipped':
       return <SkipForward className="w-3.5 h-3.5 text-muted-foreground" />
     case 'run_error':
-      return <XCircle className="w-3.5 h-3.5 text-red-500" />
+      return <XCircle className="w-3.5 h-3.5 text-destructive" />
     case 'milestone':
-      return <Bell className="w-3.5 h-3.5 text-blue-400" />
+      return <Bell className="w-3.5 h-3.5 text-primary" />
     case 'escalation':
-      return <Clock className="w-3.5 h-3.5 text-orange-400" />
+      return <Clock className="w-3.5 h-3.5 text-halo-warning" />
     case 'output':
-      return <FileOutput className="w-3.5 h-3.5 text-purple-400" />
+      return <FileOutput className="w-3.5 h-3.5 text-primary" />
     default:
       return null
   }
@@ -112,15 +113,15 @@ export function ActivityEntryCard({ entry, appId, isLast, animationDelay }: Acti
   const continueApp = useAppsStore(s => s.continueApp)
   const appState = useAppsStore(s => s.appStates[appId])
   const [isContinuing, setIsContinuing] = useState(false)
+  const [continueError, setContinueError] = useState(false)
 
   const { content } = entry
   const durationMs = content.durationMs
   const canViewProcess = hasSessionLink(entry)
   const resolvedData = useDataContent(content)
 
-  /** Whether this run_error was due to premature AI termination (no report_to_user call) */
-  const isPrematureTermination =
-    entry.type === 'run_error' && content.error === 'report_to_user not called'
+  const canResume =
+    entry.type === 'run_error' && content.resumeAvailable === true
 
   /** Disable Continue while already running/queued or a continue is in-flight */
   const isAppBusy = appState?.status === 'running' || appState?.status === 'queued'
@@ -134,8 +135,9 @@ export function ActivityEntryCard({ entry, appId, isLast, animationDelay }: Acti
   const handleContinue = async () => {
     if (isContinuing || isAppBusy) return
     setIsContinuing(true)
+    setContinueError(false)
     try {
-      await continueApp(appId, entry.runId)
+      setContinueError(!await continueApp(appId, entry.runId))
     } finally {
       setIsContinuing(false)
     }
@@ -143,6 +145,8 @@ export function ActivityEntryCard({ entry, appId, isLast, animationDelay }: Acti
 
   return (
     <div
+      id={`activity-${entry.id}`}
+      tabIndex={-1}
       className={`relative flex gap-3 ${isLast ? 'pb-2' : 'pb-4'}${animationDelay != null ? ' activity-entry-in' : ''}`}
       style={animationDelay != null ? { animationDelay: `${animationDelay}s` } : undefined}
     >
@@ -155,11 +159,12 @@ export function ActivityEntryCard({ entry, appId, isLast, animationDelay }: Acti
 
       {/* Content */}
       <div className="flex-1 min-w-0">
+        <ActivitySource entry={entry} />
         {/* Meta row: timestamp + type indicator + optional "View process" link */}
-        <div className="flex items-center gap-2 mb-1">
+        <div className="flex flex-wrap items-center gap-2 mb-1">
           <span className="font-mono text-[11px] text-muted-foreground/80 tabular-nums">{formatTs(entry.ts)}</span>
           <EntryIcon type={entry.type} />
-          <span className="text-xs font-medium text-muted-foreground">{t(entryLabel(entry.type))}</span>
+          <span className="text-xs font-medium text-muted-foreground">{entry.type === 'escalation' && entry.content.resolution ? t(entry.content.resolution.reason === 'expired' ? 'Expired' : 'Closed') : entry.type === 'escalation' && entry.userResponse ? t('Answered') : content.stopped ? t('Execution stopped') : t(entryLabel(entry.type))}</span>
           {durationMs != null && (
             <span className="font-mono text-[11px] text-muted-foreground/60">{formatDuration(durationMs)}</span>
           )}
@@ -229,11 +234,11 @@ export function ActivityEntryCard({ entry, appId, isLast, animationDelay }: Acti
 
             {/* Error details for run_error */}
             {entry.type === 'run_error' && content.error && (
-              <p className="text-xs text-red-400">{content.error}</p>
+              <p className="text-xs text-destructive">{content.error}</p>
             )}
 
-            {/* Continue button — only for premature AI termination */}
-            {isPrematureTermination && (
+            {continueError && <p role="alert" className="text-xs text-destructive">{t('Could not continue this execution. Please refresh and try again.')}</p>}
+            {canResume && (
               <button
                 onClick={handleContinue}
                 disabled={isContinuing || isAppBusy}

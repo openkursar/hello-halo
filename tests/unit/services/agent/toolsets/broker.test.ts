@@ -51,6 +51,7 @@ vi.mock('../../../../../src/main/services/agent/toolsets/state', () => ({
 }))
 
 import { buildMcpServerRecord } from '../../../../../src/main/services/agent/toolsets/broker'
+import { TEAM_MCP_SERVER_NAME } from '../../../../../src/shared/apps/team-types'
 import type { ToolsetScope } from '../../../../../src/main/services/agent/toolsets/types'
 
 const scope: ToolsetScope = { spaceId: 'space-1', conversationId: 'conv-1', workDir: '/tmp' }
@@ -142,5 +143,14 @@ describe('buildMcpServerRecord — halo-apps gating', () => {
     expect(buildMcpServerRecord(scope)['halo-apps']).toBeUndefined()
     // web-search is unconditional.
     expect(buildMcpServerRecord(scope)['web-search']).toBeDefined()
+  })
+})
+
+describe('buildMcpServerRecord — Halo Team capability', () => {
+  it('is a registry toolset, never an always-on server', () => {
+    // Team collaboration is opt-in (the Tools menu switch), exactly like
+    // ai-browser: nothing here may re-add it to the always-on set.
+    setOpen([])
+    expect(buildMcpServerRecord(scope)[TEAM_MCP_SERVER_NAME]).toBeUndefined()
   })
 })

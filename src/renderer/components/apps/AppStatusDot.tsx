@@ -7,6 +7,7 @@
 
 import type { AppStatus } from '../../../shared/apps/app-types'
 import type { AutomationAppState } from '../../../shared/apps/app-types'
+import { deriveAutomationStatus } from '../../utils/automation-status'
 
 interface AppStatusDotProps {
   /** From InstalledApp.status */
@@ -20,12 +21,14 @@ interface AppStatusDotProps {
 export function AppStatusDot({ status, runtimeStatus, size = 'sm', className = '' }: AppStatusDotProps) {
   const sz = size === 'sm' ? 'w-2 h-2' : 'w-2.5 h-2.5'
 
-  // Use runtimeStatus when available for finer-grained display
-  const effective = runtimeStatus ?? (status === 'active' ? 'idle' : status)
+  const effective = deriveAutomationStatus(status, runtimeStatus)
 
   if (effective === 'running') {
     return (
-      <span className={`inline-block ${sz} rounded-full bg-green-500 ${className}`} />
+      <span className={`relative inline-flex ${sz} ${className}`}>
+        <span className="absolute inset-0 rounded-full bg-green-400 opacity-75 animate-ping" />
+        <span className={`relative inline-block ${sz} rounded-full bg-green-500`} />
+      </span>
     )
   }
   if (effective === 'queued') {

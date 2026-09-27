@@ -17,6 +17,9 @@
  *   app:trigger            Manually trigger a run
  *   app:get-state          Get real-time automation state
  *   app:get-activity       Get activity log entries for an App
+ *   app:get-runs           Get run history for an App, with each run's last activity summary
+ *   app:get-run-stats      Get aggregate outcome/token/duration stats over an App's recent runs
+ *   app:get-overview       Batched card-wall first paint: state + latest summary + recent runs per App
  *   app:respond-escalation Respond to a pending user escalation
  *   app:update-config      Update App user configuration
  *   app:update-frequency   Update subscription frequency override
@@ -47,6 +50,12 @@ import { deriveSkillCommandName } from '../apps/spec/skill-identity'
 import { listAvailableSkills } from '../apps/skill-discovery'
 import {
   getAppRuntime,
+  getAppSpaceChangePreview,
+  getAppCapabilityInventory,
+  listPeopleDirectory,
+  getStudioSummary,
+  moveAppDefaultSpace,
+  readAppRunMessages,
   sendAppChatMessage,
   stopAppChat,
   stopAppChatConversation,
@@ -64,11 +73,12 @@ import {
   createNativeChatSession,
   forkNativeChatSession,
   deleteNativeChatSession,
+  getDigitalHumanMemoryStatus,
+  consolidateDigitalHumanMemoryNow,
 } from '../apps/runtime'
 import type { AppSpec } from '../apps/spec'
 import type { AppListFilter, UninstallOptions, UpgradeStrategy } from '../apps/manager'
-import type { ActivityQueryOptions, EscalationResponse, AppChatRequest } from '../apps/runtime'
-import { readSessionMessages } from '../apps/runtime/session-store'
+import type { ActivityQueryOptions, RunQueryOptions, EscalationResponse, AppChatRequest } from '../apps/runtime'
 import { getSpace } from '../services/space.service'
 import { broadcastToAll } from '../http/websocket'
 import * as appController from '../controllers/app.controller'
@@ -107,8 +117,76 @@ function requireRuntime() {
 // Handler Registration
 // ---------------------------------------------------------------------------
 
+async function appOperation(name: string, operation: () => unknown | Promise<unknown>) {
+  try {
+    return await operation()
+  } catch (error) {
+    console.error(`[AppIPC] ${name} failed:`, error)
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
 export function registerAppHandlers(): void {
   registerRawRpcHandlers(appRpc, {
+    appStartRun: (appId: string) => appOperation('start-run', async () => {
+      const r = requireRuntime()
+      return r.success ? { success: true, data: await r.runtime.startManually(appId) } : r
+    }),
+    appGetStudioSummary: (language?: string) => appOperation('studio-summary', () => ({ success: true, data: getStudioSummary(language) })),
+    appListPeople: (query?: import('../../shared/apps/people-directory').PeopleDirectoryQuery) => appOperation('list-people', () => ({ success: true, data: listPeopleDirectory(query) })),
+    appGetAllStates: () => appOperation('get-all-states', () => {
+      const r = requireRuntime()
+      return r.success ? { success: true, data: r.runtime.getAllAppStates() } : r
+    }),
+    appGetPendingInbox: (options?: import('../../shared/apps/app-types').PendingDecisionQuery) => appOperation('get-pending-inbox', () => {
+      const r = requireRuntime()
+      return r.success ? { success: true, data: r.runtime.getPendingInbox(options) } : r
+    }),
+    appGetActivityEntry: (input: { appId: string; entryId: string }) => appOperation('get-activity-entry', () => {
+      const r = requireRuntime()
+      return r.success ? { success: true, data: r.runtime.getActivityEntry(input.appId, input.entryId) } : r
+    }),
+    appGetPendingEntries: (input: { appId: string; options?: import('../../shared/apps/app-types').PendingDecisionQuery }) => appOperation('get-pending-entries', () => {
+      const r = requireRuntime()
+      return r.success ? { success: true, data: r.runtime.getPendingEntries(input.appId, input.options) } : r
+    }),
+    appGetCapabilityInventory: () => appOperation('get-capability-inventory', () => {
+      const r = requireManager()
+      return r.success ? { success: true, data: getAppCapabilityInventory() } : r
+    }),
+    appPreviewSpaceChange: (input: { appId: string; newSpaceId: string }) => appOperation('preview-space-change', () => ({
+      success: true, data: getAppSpaceChangePreview(input.appId, input.newSpaceId),
+    })),
+    appRetryEscalationContinuation: (input: { appId: string; entryId: string }) => appOperation('retry-escalation-continuation', async () => {
+      const r = requireRuntime()
+      if (!r.success) return r
+      await r.runtime.retryEscalationContinuation(input.appId, input.entryId)
+      return { success: true }
+    }),
+    appConfirmEscalationDeadline: (input: { appId: string; entryId: string; deadlineAt: number | null }) => appOperation('confirm-escalation-deadline', async () => {
+      const r = requireRuntime()
+      if (!r.success) return r
+      await r.runtime.confirmEscalationDeadline(input.appId, input.entryId, input.deadlineAt)
+      return { success: true }
+    }),
+    appDismissEscalation: (input: { appId: string; entryId: string }) => appOperation('dismiss-escalation', async () => {
+      const r = requireRuntime()
+      if (!r.success) return r
+      await r.runtime.dismissEscalation(input.appId, input.entryId)
+      return { success: true }
+    }),
+    appCloseRun: (input: { appId: string; runId: string }) => appOperation('close-run', async () => {
+      const r = requireRuntime()
+      if (!r.success) return r
+      await r.runtime.closeRun(input.appId, input.runId)
+      return { success: true }
+    }),
+    appStopRun: (input: { appId: string; runId: string }) => appOperation('stop-run', async () => {
+      const r = requireRuntime()
+      if (!r.success) return r
+      await r.runtime.stopRun(input.appId, input.runId)
+      return { success: true }
+    }),
     // ── app:install ──────────────────────────────────────────────────────────
     appInstall: async (input: { spaceId: string | null; spec: AppSpec; userConfig?: Record<string, unknown> }) => {
       // Shared install + activate orchestration lives in the controller.
@@ -327,14 +405,56 @@ export function registerAppHandlers(): void {
       }
     },
 
+    // ── app:get-runs ─────────────────────────────────────────────────────────
+    appGetRuns: async (input: { appId: string; options?: RunQueryOptions }) => {
+      try {
+        const r = requireRuntime()
+        if (!r.success) return r
+        const runs = r.runtime.getRunsForAppWithSummary(input.appId, input.options)
+        return { success: true, data: runs }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:get-runs error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // ── app:get-run-stats ────────────────────────────────────────────────────
+    appGetRunStats: async (input: { appId: string; window?: number }) => {
+      try {
+        const r = requireRuntime()
+        if (!r.success) return r
+        const stats = r.runtime.getRunStats(input.appId, input.window)
+        return { success: true, data: stats }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:get-run-stats error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // ── app:get-overview ─────────────────────────────────────────────────────
+    appGetOverview: async (input?: { spaceId?: string }) => {
+      try {
+        const r = requireRuntime()
+        if (!r.success) return r
+        const overview = r.runtime.getOverview(input?.spaceId)
+        return { success: true, data: overview }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:get-overview error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
     // ── app:respond-escalation ───────────────────────────────────────────────
     appRespondEscalation: async (input: { appId: string; escalationId: string; response: EscalationResponse }) => {
       try {
         const r = requireRuntime()
         if (!r.success) return r
-        await r.runtime.respondToEscalation(input.appId, input.escalationId, input.response)
+        const entry = await r.runtime.respondToEscalation(input.appId, input.escalationId, input.response)
         console.log(`[AppIPC] app:respond-escalation: appId=${input.appId}, escalationId=${input.escalationId}`)
-        return { success: true }
+        return { success: true, data: entry }
       } catch (error: unknown) {
         const err = error as Error
         console.error('[AppIPC] app:respond-escalation error:', err.message)
@@ -511,16 +631,7 @@ export function registerAppHandlers(): void {
           return { success: false, error: `App not found: ${input.appId}` }
         }
 
-        if (!app.spaceId) {
-          return { success: false, error: `Global apps do not have session data` }
-        }
-
-        const space = getSpace(app.spaceId)
-        if (!space?.path) {
-          return { success: false, error: `Space not found for app: ${input.appId}` }
-        }
-
-        const messages = readSessionMessages(space.path, input.appId, input.runId)
+        const messages = readAppRunMessages(input.appId, input.runId)
         return { success: true, data: messages }
       } catch (error: unknown) {
         const err = error as Error
@@ -848,6 +959,35 @@ export function registerAppHandlers(): void {
       }
     },
 
+    // ── app:list-available-skills-for-space ─────────────────────────────────
+    // Same disk-scan as above, keyed directly by spaceId — for surfaces (the
+    // space resource rail) that have a space, not a digital human, in hand.
+    appListAvailableSkillsForSpace: async (spaceId: string) => {
+      try {
+        return { success: true, data: listAvailableSkills(spaceId) }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:list-available-skills-for-space error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // ── app:list-effective-mcp-apps ──────────────────────────────────────────
+    // Space-scoped ∪ global MCP apps (space overrides global), for read-only
+    // display in the space resource rail — not the "declared dependencies of
+    // one digital human" list AppMcpDepsSection shows.
+    appListEffectiveMcpApps: async (spaceId: string) => {
+      try {
+        const r = requireManager()
+        if (!r.success) return r
+        return { success: true, data: r.manager.listEffectiveMcpApps(spaceId) }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:list-effective-mcp-apps error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
     // ── app:get-data-path ──────────────────────────────────────────────────
     appGetDataPath: async (appId: string) => {
       try {
@@ -915,6 +1055,28 @@ export function registerAppHandlers(): void {
       }
     },
 
+    // ── app:memory-status / app:memory-consolidate ──────────────────────────
+    appGetMemoryStatus: async (appId: string) => {
+      try {
+        const status = await getDigitalHumanMemoryStatus(appId)
+        return status ? { success: true, data: status } : { success: false, error: 'App not found' }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:memory-status error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    appConsolidateMemory: async (appId: string) => {
+      try {
+        return { success: true, data: consolidateDigitalHumanMemoryNow(appId) }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:memory-consolidate error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
     // ── app:move-space ─────────────────────────────────────────────────────
     appMoveSpace: async (input: { appId: string; newSpaceId: string | null }) => {
       try {
@@ -926,37 +1088,17 @@ export function registerAppHandlers(): void {
           return { success: false, error: `App not found: ${input.appId}` }
         }
 
-        // For automation apps that are active: deactivate before moving so the
-        // scheduler and event router don't hold stale space references, then
-        // re-activate after the move completes.
-        const isAutomation = app.spec.type === 'automation'
-        const wasActive = app.status === 'active'
-        const runtime = getAppRuntime()
-
-        if (isAutomation && wasActive && runtime) {
-          await runtime.deactivate(input.appId).catch(err => {
-            console.warn(`[AppIPC] app:move-space -- runtime deactivate failed (non-fatal): ${err}`)
-          })
-        }
-
-        await r.manager.moveToSpace(input.appId, input.newSpaceId)
-
-        // Re-activate automation apps that were running before the move
-        let activationWarning: string | undefined
-        if (isAutomation && wasActive && runtime) {
-          try {
-            await runtime.activate(input.appId)
-          } catch (err) {
-            const errMsg = err instanceof Error ? err.message : String(err)
-            console.warn(`[AppIPC] app:move-space -- runtime activate failed: ${errMsg}`)
-            activationWarning = errMsg
-          }
+        if (app.spec.type === 'automation') {
+          if (!input.newSpaceId) throw new Error('Digital humans require a work space')
+          await moveAppDefaultSpace(input.appId, input.newSpaceId)
+        } else {
+          await r.manager.moveToSpace(input.appId, input.newSpaceId)
         }
 
         console.log(
           `[AppIPC] app:move-space: appId=${input.appId}, newSpaceId=${input.newSpaceId ?? 'global'}`
         )
-        return { success: true, data: { activationWarning } }
+        return { success: true }
       } catch (error: unknown) {
         const err = error as Error
         console.error('[AppIPC] app:move-space error:', err.message)

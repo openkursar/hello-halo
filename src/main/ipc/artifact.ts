@@ -15,6 +15,7 @@ import {
   initArtifactWatcher,
   reconcileArtifacts,
   readArtifactContent,
+  readArtifactBytes,
   saveArtifactContent,
   detectFileType,
   createFile,
@@ -124,6 +125,19 @@ export function registerArtifactHandlers(): void {
         return { success: true, data: content }
       } catch (error) {
         console.error('[IPC] artifact:read-content error:', error)
+        return { success: false, error: (error as Error).message }
+      }
+    },
+
+    // Read raw bytes for the Canvas document viewers. The Buffer crosses the
+    // bridge as a Uint8Array via structured clone — no base64 on either side.
+    readArtifactBytes: async (filePath: string) => {
+      try {
+        console.log(`[IPC] artifact:read-bytes - path: ${filePath}`)
+        const result = await readArtifactBytes(filePath)
+        return { success: true, data: result }
+      } catch (error) {
+        console.error('[IPC] artifact:read-bytes error:', error)
         return { success: false, error: (error as Error).message }
       }
     },

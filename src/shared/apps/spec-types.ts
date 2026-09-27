@@ -246,9 +246,12 @@ export interface StoreMetadata {
    * - 'builtin': bundled with the build itself (auto-installed at startup,
    *              protected from permanent deletion, refreshed on every launch)
    * - 'manual':  added via direct IPC/HTTP call (e.g. drag-and-drop)
+   * - 'bundled': not independently chosen — installed automatically because
+   *              another app (an automation's `requires.skills`) declared it
+   *              as a dependency and shipped its files inline
    * Older records may not carry this field; treat 'undefined' as 'store'.
    */
-  install_source?: 'store' | 'builtin' | 'manual'
+  install_source?: 'store' | 'builtin' | 'manual' | 'bundled'
 }
 
 // ============================================

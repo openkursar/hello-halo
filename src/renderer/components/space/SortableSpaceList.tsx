@@ -125,7 +125,7 @@ function SortableSpaceRow({ space, isDragging, renderItem }: SortableSpaceRowPro
         zIndex: dragging ? 10 : undefined,
         position: 'relative',
       }}
-      className={dragging ? 'opacity-60' : undefined}
+      className={`h-full${dragging ? ' opacity-60' : ''}`}
       {...attributes}
       {...listeners}
     >

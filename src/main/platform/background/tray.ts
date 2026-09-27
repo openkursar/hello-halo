@@ -6,8 +6,9 @@
  * and quick access to show the main window, toggle online/offline, and quit.
  */
 
-import { Tray, Menu, app, nativeImage } from 'electron'
+import { Tray, Menu, nativeImage } from 'electron'
 import { join } from 'path'
+import { getTrayIconDir } from '../../foundation/product-config'
 import type { BackgroundStatus } from './types'
 
 /**
@@ -157,11 +158,12 @@ export class TrayManager {
   private createIcon(): Electron.NativeImage {
     const isMac = process.platform === 'darwin'
 
-    // Resolve the path to tray icon assets.
-    // resources/tray/ is included in the files array (package.json) so it lives
-    // inside app.asar in production. app.getAppPath() returns the ASAR root in
-    // production and the project root in development — both resolve correctly.
-    const resourcesPath = join(app.getAppPath(), 'resources', 'tray')
+    // Resolve the path to tray icon assets. Defaults to resources/tray/, but a
+    // brand build can point product.json's `trayIconDir` at its own icon set
+    // (see getTrayIconDir). That directory is included in app.asar via the
+    // build's `files` config, so this resolves correctly both in development
+    // and packaged.
+    const resourcesPath = getTrayIconDir()
 
     if (isMac) {
       // macOS: Use template images. Electron automatically picks @2x for Retina.

@@ -49,6 +49,12 @@ export interface LocationAwareSessionDepsConfig {
   }) => boolean
   /** Register a one-shot completion callback keyed by correlationId; returns an unregister. */
   registerTurnComplete: (correlationId: string, cb: (outcome: TurnCompletion) => void) => () => void
+  /**
+   * Ask the owner node to abort a member's running turn, resolving with whether
+   * one was running. Injected like `sendWake` so this module keeps no transport.
+   * Rejects when the owner refuses or cannot be reached.
+   */
+  sendStop: (p: { officeId: string; ownerNodeId: string; appId: string; epochId: string }) => Promise<boolean>
   /** Cached spaceId of a remote member (populated at join). */
   getRemoteSpaceId: (appId: string) => string | undefined
 }
@@ -105,6 +111,18 @@ export function withOwnerResolvedSpace(
   return ownSpaceId ? { ...request, spaceId: ownSpaceId } : request
 }
 
+/**
+ * Mark an arriving wake as what it is: a request from another machine.
+ *
+ * Set here rather than trusted from the frame, for the same reason the space is
+ * re-resolved above — the sender authored every field, so a sender that simply
+ * omitted this one would have its request run as if the owner had started it.
+ * Arriving over the link IS the evidence, and it is evidence only this side has.
+ */
+export function withExternalOrigin(request: SerializedWakeRequest): SerializedWakeRequest {
+  return { ...request, teamContext: { ...request.teamContext, external: true } }
+}
+
 export function makeLocationAwareSessionDeps(
   config: LocationAwareSessionDepsConfig
 ): OrchestrationSessionDeps {
@@ -114,6 +132,7 @@ export function makeLocationAwareSessionDeps(
     selfNodeId,
     sendWake,
     registerTurnComplete,
+    sendStop,
     getRemoteSpaceId,
   } = config
 
@@ -230,6 +249,16 @@ export function makeLocationAwareSessionDeps(
       if (isLocal(appId, teamId)) return local.closeTeamSession(appId, teamId, epochId)
       // The owner tears down its own session; nothing to close here.
       return Promise.resolve()
+    },
+
+    stopTeamSession(appId, teamId, epochId) {
+      const owner = resolveOwnerNode(appId, teamId)
+      if (owner === SELF_NODE_ID) return local.stopTeamSession(appId, teamId, epochId)
+      // Unlike closeTeamSession, doing nothing here would be a lie: the turn is
+      // running on the owner and somebody just asked for it to stop. The request
+      // travels, and its answer is the owner's.
+      console.log(`${LOG_TAG} remote stop app=${appId} owner=${owner} office=${teamId}`)
+      return sendStop({ officeId: teamId, ownerNodeId: owner, appId, epochId })
     },
 
     getMemberSpaceId(appId) {

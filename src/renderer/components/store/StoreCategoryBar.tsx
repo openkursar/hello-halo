@@ -80,7 +80,7 @@ export function StoreCategoryBar() {
   if (storeTypeFilter === null) return null
 
   return (
-    <div ref={scrollRef} className="flex items-center gap-2 overflow-x-auto scrollbar-none px-4 pt-3 pb-3">
+    <div ref={scrollRef} className="flex items-center gap-2 overflow-x-auto scrollbar-none px-6 sm:px-10 pt-3 pb-3">
       <CategoryChip
         active={storeCategory === null}
         label={t('All')}
