@@ -283,20 +283,12 @@ export async function reconcileStagedUpdateOnStartup(): Promise<void> {
     return
   }
 
-  // A helper still running owns the install directory: it is mid-swap, or
-  // waiting for a confirmation it will act on either way. Touching the
-  // directory now would race it — and this start may be the user relaunching
-  // by hand while the swap is in progress.
-  if (typeof state.helperPid === 'number' && state.helperPid > 0 && isProcessAlive(state.helperPid)) {
-    console.log(`[Updater] Update helper (pid ${state.helperPid}) is still working — leaving the install directory to it`)
-    return
-  }
-
   const ourVersion = app.getVersion()
 
   if (state.phase === 'awaiting-confirm' && state.version === ourVersion) {
     // The swap worked and we are the version it installed. Saying so is what
-    // lets the helper drop the backup and finish.
+    // lets the helper drop the backup and finish — and it is the one thing a
+    // running helper is waiting for, so it happens before the guard below.
     const confirmFile = confirmFileFor(layout, ourVersion)
     try {
       await mkdir(layout.workDir, { recursive: true })
@@ -307,6 +299,14 @@ export async function reconcileStagedUpdateOnStartup(): Promise<void> {
       // the previous version back, which is the safe direction.
       console.error('[Updater] Could not write update confirmation:', error)
     }
+    return
+  }
+
+  // A helper still running owns the install directory: it is mid-swap, or has
+  // decided to reverse. Recovery must not race it — and this start may be the
+  // user relaunching by hand while the swap is in progress.
+  if (typeof state.helperPid === 'number' && state.helperPid > 0 && isProcessAlive(state.helperPid)) {
+    console.log(`[Updater] Update helper (pid ${state.helperPid}) is still working — leaving the install directory to it`)
     return
   }
 
