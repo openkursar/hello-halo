@@ -1215,6 +1215,12 @@ html.platform-desktop body::after {
   animation: search-highlight-pulse 2s ease-out forwards;
 }
 
+/* The pulse's glow extends past the message; transcript rows clip paint to
+   themselves, so lift that for the row being highlighted. */
+[data-transcript-index]:has(.search-highlight) {
+  content-visibility: visible;
+}
+
 .search-term-highlight {
   background-color: hsl(48 96% 53% / 0.3) !important;
   font-weight: 600 !important;

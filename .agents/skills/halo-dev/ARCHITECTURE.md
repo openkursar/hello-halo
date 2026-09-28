@@ -206,7 +206,9 @@ src/
     ├── components/                    # UI sub-components by domain (NOT full-screen views):
     │   ├── apps/                      #   Apps management
     │   ├── canvas/                    #   Content Canvas + viewers/
-    │   ├── chat/                      #   Chat stream + tool-result/
+    │   ├── chat/                      #   Chat stream + tool-result/ + transcript/ (native
+    │   │                              #   transcript scrolling for every chat surface — no
+    │   │                              #   list virtualization; see transcript/DESIGN.md)
     │   ├── layout/                    #   Header, ModelSelector, SpaceSelector, etc.
     │   ├── settings/                  #   Settings sections
     │   ├── setup/                     #   Sub-components: LoginSelector, SetupProviderConfig, ServerConnect

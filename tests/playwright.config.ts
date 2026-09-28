@@ -83,6 +83,11 @@ export default defineConfig({
       use: { actionTimeout: 15000 }
     },
     {
+      name: 'transcript-scroll',
+      testMatch: '**/transcript-scroll.spec.ts',
+      use: { actionTimeout: 15000 }
+    },
+    {
       name: 'smoke',
       testMatch: '**/smoke.spec.ts',
       use: {

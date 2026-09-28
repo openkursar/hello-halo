@@ -1011,8 +1011,9 @@ export default function App() {
         await selectConversation(conversationId)
 
         // Step 4: Dispatch navigation event for ChatView to handle
-        // ChatView uses Virtuoso scrollToIndex to bring the message into viewport,
-        // then applies DOM highlighting — no need to pre-check DOM existence here.
+        // ChatView asks MessageList to bring the message into view (mounting older
+        // history if needed), then applies DOM highlighting — no need to pre-check
+        // DOM existence here.
         // Small delay to let conversation data load and MessageList mount.
         setTimeout(() => {
           console.log(`[App] Dispatching navigate-to-message for: ${messageId}`)

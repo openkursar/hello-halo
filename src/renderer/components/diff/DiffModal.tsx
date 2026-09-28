@@ -10,6 +10,7 @@
  */
 
 import { useEffect, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import {
   X,
   ChevronLeft,
@@ -109,7 +110,9 @@ export function DiffModal({
   const hasPrev = currentIndex > 0
   const hasNext = currentIndex < allFiles.length - 1
 
-  return (
+  // Portaled: opened from inside transcript rows, whose containment would
+  // otherwise clip this overlay to the row.
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       {/* Backdrop */}
       <div
@@ -262,6 +265,7 @@ export function DiffModal({
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }

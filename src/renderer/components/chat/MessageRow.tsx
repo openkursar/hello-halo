@@ -47,7 +47,7 @@ export interface MessageRowProps {
    *  Rendered as a permanent annotation at the bottom of the assistant bubble. */
   injectionMessages?: Message[]
 
-  /** Additional className for the outer wrapper (e.g., width constraints from Virtuoso) */
+  /** Additional className for the outer wrapper (e.g., width constraints from the list) */
   className?: string
 
   /**

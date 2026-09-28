@@ -10,13 +10,13 @@ import { invalidateTeamSessionHistory, loadTeamSessionHistory, matchesTeamHistor
  * chat engine lives here once.
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react'
 import { Loader2, AlertCircle, LockKeyhole, MessageSquareMore } from 'lucide-react'
 import { api } from '../../api'
 import { usePeopleViewStore } from '../../stores/people-view.store'
 import { useChatStore } from '../../stores/chat.store'
-import { useSmartScroll } from '../../hooks/useSmartScroll'
 import { MessageRow } from '../chat/MessageRow'
+import { useStickToBottom, transcriptRowClass, captureTranscriptPosition, restoreTranscriptPosition } from '../chat/transcript'
 import { CompactNotice } from '../chat/CompactNotice'
 import { StreamingSection } from '../chat/StreamingSection'
 import { useBrowserToolCalls } from '../chat/useBrowserToolCalls'
@@ -99,9 +99,8 @@ export function TeamSessionChat({
    * that asks. Cleared as soon as anything actually happens here.
    */
   const [deliveredNoReply, setDeliveredNoReply] = useState<string | null>(null)
-  const scrollRef = useRef<HTMLDivElement>(null)
   const restoredScroll = useRef(false)
-  const savedScroll = useRef(usePeopleViewStore.getState().scrolls[`team-chat:${conversationId}`])
+  const savedPosition = useRef(usePeopleViewStore.getState().transcriptPositions[conversationId])
 
   const session = useChatStore(s => s.getSession(conversationId))
   const resetSession = useChatStore(s => s.resetSession)
@@ -112,22 +111,34 @@ export function TeamSessionChat({
   } = session
 
   const backgroundTurn = isBackgroundTurn?.(messages) ?? false
-  const { scrollToBottom, handleScroll } = useSmartScroll({
-    containerRef: scrollRef,
-    deps: [backgroundTurn ? '' : streamingContent, backgroundTurn ? 0 : thoughts.length, !backgroundTurn && isStreaming, !backgroundTurn && isThinking, pendingQuestion, backgroundTurn ? null : messages, !backgroundTurn && !!apiRetry],
-    behavior: 'auto',
-  })
+  const follower = useStickToBottom({ live: isGenerating && !backgroundTurn })
+  const { scroller, scrollToBottom, detach, isFollowing } = follower
 
   const streamingBrowserToolCalls = useBrowserToolCalls(thoughts)
 
-  useEffect(() => {
-    if (restoredScroll.current || (loadState !== 'loaded' && loadState !== 'empty') || !scrollRef.current) return
+  useLayoutEffect(() => {
+    if (restoredScroll.current || (loadState !== 'loaded' && loadState !== 'empty') || !scroller) return
     restoredScroll.current = true
-    if (savedScroll.current !== undefined) {
-      scrollRef.current.scrollTop = savedScroll.current
-      handleScroll()
-    }
-  }, [loadState, messages, handleScroll])
+    const saved = savedPosition.current
+    if (!saved) return
+    detach()
+    if (!restoreTranscriptPosition(scroller, saved)) scrollToBottom()
+  }, [loadState, messages, scroller, detach, scrollToBottom])
+
+  // Remember where the reader was, as a message-relative position (a scrollTop
+  // would not survive contained rows falling back to estimated heights on
+  // remount). Taken once scrolling settles, and once more on the way out.
+  const saveTimer = useRef<ReturnType<typeof setTimeout>>()
+  const savePosition = useCallback(() => {
+    clearTimeout(saveTimer.current)
+    if (!scroller?.isConnected || !restoredScroll.current) return
+    usePeopleViewStore.getState().saveTranscriptPosition(conversationId, captureTranscriptPosition(scroller, isFollowing()))
+  }, [scroller, conversationId, isFollowing])
+  const handleScroll = useCallback(() => {
+    clearTimeout(saveTimer.current)
+    saveTimer.current = setTimeout(savePosition, 150)
+  }, [savePosition])
+  useLayoutEffect(() => savePosition, [savePosition])
 
   const inputIdentity = useRef({ appId, epochId, key: draftKey ?? conversationId })
   if (inputIdentity.current.appId !== appId || inputIdentity.current.epochId !== epochId) {
@@ -461,8 +472,8 @@ export function TeamSessionChat({
           <span className="text-sm">{t('Loading chat...')}</span>
         </div>
       ) : (
-        <div ref={scrollRef} className="flex-1 overflow-y-auto" onScroll={event => { handleScroll(); if (restoredScroll.current) usePeopleViewStore.getState().saveScroll(`team-chat:${conversationId}`, event.currentTarget.scrollTop) }}>
-          <div className="mx-auto max-w-3xl px-4 py-5">
+        <div ref={follower.scrollerRef} tabIndex={-1} className="flex-1 overflow-y-auto focus:outline-none" onScroll={handleScroll}>
+          <div ref={follower.contentRef} className="mx-auto max-w-3xl px-4 py-5">
             {topSlot}
 
             {loadState === 'empty' && !epochId && !hasStreaming && !showRelayedTranscript && (
@@ -495,7 +506,9 @@ export function TeamSessionChat({
             )}
 
             {(loadState !== 'error' || messages.length > 0) && (renderMessages ? renderMessages(messages, hasStreaming ? thoughts : []) : messages.map(message => (
-              <MessageRow key={message.id} message={message} hideBrowserViewButton />
+              <div key={message.id} className={transcriptRowClass(message)}>
+                <MessageRow message={message} hideBrowserViewButton />
+              </div>
             )))}
 
             {(hasStreaming || showRelayedTranscript || pendingQuestion) && <div className="mt-4">{readonlyQuestion ?? (isBackgroundTurn?.(messages)
