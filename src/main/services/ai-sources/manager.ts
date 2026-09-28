@@ -30,12 +30,14 @@ import {
   type AISourceType,
   type AISourcesConfig,
   type AISource,
+  type OAuthSourceConfig,
   type AISourceUser,
   type BackendRequestConfig,
   type DirectCallEndpoint,
   type OAuthStartResult,
   type OAuthCompleteResult,
   type ModelOption,
+  type ModelRefreshSummary,
   type ProviderId,
   type AuthQuotaSnapshot,
   DEFAULT_MODEL
@@ -52,7 +54,7 @@ import { getCustomProvider } from './providers/custom.provider'
 import { getGitHubCopilotProvider } from './providers/github-copilot.provider'
 import { getClaudeProvider } from './providers/claude.provider'
 import { getZhipuCodingOAuthProvider } from './providers/zhipu-coding-oauth.provider'
-import { getChatGPTProvider } from './providers/chatgpt.provider'
+import { getChatGPTProvider, restoreChatGPTCatalogCache } from './providers/chatgpt.provider'
 import { getCliDelegatedProvider } from './providers/cli-delegated.provider'
 import { loadAuthProvidersAsync } from './auth-loader'
 import { loadProductConfig } from '../../foundation/product-config'
@@ -107,6 +109,8 @@ class AISourceManager {
 
     // Sync saved sources' model lists with current BUILTIN_PROVIDERS
     this.syncBuiltinModels()
+    const chatgptSource = this.getAiSourcesConfig().sources.find(source => source.provider === 'chatgpt' && source.modelCatalogCache)
+    restoreChatGPTCatalogCache(chatgptSource?.modelCatalogCache)
 
     // Start async initialization (optional providers + dynamic loading)
     this.initPromise = this.initializeAsync()
@@ -718,6 +722,7 @@ class AISourceManager {
     const modelCapabilities: Record<string, ModelOption['capabilities']> = data._modelCapabilities || {}
     const modelVision: Record<string, boolean> = data._modelVision || {}
     const defaultModel = data._defaultModel || ''
+    const catalogDegraded = providerType === 'chatgpt' && data._catalogDegraded === true
 
     const builtin = getBuiltinProvider(providerType)
     const now = new Date().toISOString()
@@ -805,6 +810,18 @@ class AISourceManager {
       sourceId = existingSource.id
       newSources = aiSources.sources.map(s => {
         if (s.id === existingSource.id) {
+          const sameAccount = !s.user?.uid || !data.user?.uid || s.user.uid === data.user.uid
+          const offlineConfig = catalogDegraded && sameAccount
+            ? this.providers.get(providerType)?.getOfflineConfig?.(this.buildLegacyOAuthConfig(s))
+            : undefined
+          const offlineData = offlineConfig?.[providerType as keyof AISourcesConfig] as OAuthSourceConfig | undefined
+          const loginModels = offlineData?.availableModels?.map(id => ({
+            ...s.availableModels.find(item => item.id === id),
+            id,
+            name: offlineData.modelNames?.[id] || id,
+            ...(offlineData.modelCapabilities?.[id] ? { capabilities: offlineData.modelCapabilities[id] } : {}),
+            ...(typeof offlineData.modelVision?.[id] === 'boolean' ? { supportsVision: offlineData.modelVision[id] } : {})
+          }))
           return {
             ...s,
             accessToken: tokenData?.accessToken || '',
@@ -814,8 +831,9 @@ class AISourceManager {
               name: loginResult.user?.name || '',
               uid: tokenData?.uid || ''
             },
-            model: defaultModel || s.model,
-            availableModels: models.length > 0 ? models : s.availableModels,
+            model: sameAccount ? (s.model || defaultModel) : defaultModel,
+            availableModels: loginModels ?? (models.length > 0 ? models : s.availableModels),
+            modelCatalogCache: data._modelCatalogCache ?? (sameAccount ? s.modelCatalogCache : undefined),
             updatedAt: now
           }
         }
@@ -840,6 +858,7 @@ class AISourceManager {
         },
         model: defaultModel,
         availableModels: models,
+        modelCatalogCache: data._modelCatalogCache,
         createdAt: now,
         updatedAt: now
       }
@@ -1003,7 +1022,7 @@ class AISourceManager {
    * Only non-sensitive fields (availableModels, model, modelOverrides,
    * updatedAt) are written; encrypted tokens on disk are never touched.
    */
-  async refreshSourceConfig(sourceId: string): Promise<ProviderResult<void>> {
+  async refreshSourceConfig(sourceId: string): Promise<ProviderResult<{ degraded: boolean }>> {
     await this.ensureInitialized()
 
     // Capability check first — decide "unsupported" without an unrelated token
@@ -1027,11 +1046,10 @@ class AISourceManager {
     // hardcoded fallback catalog for the rest of the session.
     const tokenResult = await this.ensureValidToken(sourceId)
     if (!tokenResult.success) {
-      console.error(
-        `[AISourceManager] Refresh aborted for "${source.name}" (${source.provider}): token refresh failed:`,
-        tokenResult.error
-      )
-      return { success: false, error: tokenResult.error || 'Token refresh failed' }
+      console.warn(`[AISourceManager] Catalog refresh authentication failed for ${source.id} (${source.provider}); offline reconstruction: ${Boolean(provider.getOfflineConfig)}`)
+      if (!provider.getOfflineConfig) {
+        return { success: false, error: tokenResult.error || 'Token refresh failed' }
+      }
     }
 
     // Re-read decrypted config AFTER refresh so a rotated token is carried in.
@@ -1046,7 +1064,9 @@ class AISourceManager {
 
     console.log(`[AISourceManager] Refreshing source "${source.name}" (${source.provider})`)
 
-    const result = await provider.refreshConfig(legacyConfig)
+    const result = tokenResult.success
+      ? await provider.refreshConfig(legacyConfig)
+      : { success: true, data: provider.getOfflineConfig!(legacyConfig) }
 
     if (!result.success || !result.data) {
       console.warn(`[AISourceManager] Refresh failed for "${source.name}":`, result.error)
@@ -1059,18 +1079,13 @@ class AISourceManager {
       return { success: true } // No updates from provider
     }
 
-    // A provider that could not reach its catalog answers with a hardcoded
-    // fallback list rather than failing, so the source stays usable. That list
-    // is non-empty and carries no capability data, which makes it indistinguishable
-    // from a real catalog at the merge below — and writing it would replace
-    // previously-fetched context windows with client-side defaults until the next
-    // successful refresh. Keep what is on disk instead.
-    if (providerData.degraded) {
+    // Unreconciled fallback lists from other providers must not erase fetched metadata.
+    if (providerData.degraded && !providerData.catalogReconciled) {
       console.warn(
         `[AISourceManager] Refresh degraded for "${source.name}" (${source.provider}): ` +
           `provider served a fallback catalog, keeping stored models and capabilities`
       )
-      return { success: true }
+      return { success: true, data: { degraded: true } }
     }
 
     // Convert provider's string[] + modelNames to v2 ModelOption[]
@@ -1078,7 +1093,9 @@ class AISourceManager {
     const modelNames: Record<string, string> = providerData.modelNames || {}
     const models: ModelOption[] = modelIds.map(id => ({
       id,
-      name: modelNames[id] || id
+      name: modelNames[id] || id,
+      ...(providerData.modelCapabilities?.[id] ? { capabilities: providerData.modelCapabilities[id] } : {}),
+      ...(typeof providerData.modelVision?.[id] === 'boolean' ? { supportsVision: providerData.modelVision[id] } : {})
     }))
 
     // Read fresh config from disk to avoid overwriting concurrent token rotations
@@ -1091,8 +1108,13 @@ class AISourceManager {
       if (s.id !== sourceId) return s
       return {
         ...s,
-        availableModels: models.length > 0 ? models : s.availableModels,
-        model: providerData.model || s.model,
+        availableModels: models.length > 0 || providerData.catalogReconciled
+          ? models.map(model => providerData.degraded
+            ? { ...s.availableModels.find(item => item.id === model.id), ...model }
+            : model)
+          : s.availableModels,
+        model: providerData.degraded ? s.model : (providerData.model || s.model),
+        modelCatalogCache: providerData.modelCatalogCache ?? s.modelCatalogCache,
         modelOverrides: nextOverrides ?? s.modelOverrides,
         updatedAt: now
       }
@@ -1105,24 +1127,26 @@ class AISourceManager {
       }
     } as any)
 
-    console.log(`[AISourceManager] Refreshed "${source.name}": ${models.length} models, model: ${providerData.model || '(unchanged)'}`)
-    return { success: true }
+    console.log(`[AISourceManager] Catalog ${providerData.degraded ? 'reconstructed offline' : 'refreshed'} for ${source.id} (${source.provider}): ${models.length} models`)
+    return { success: true, data: { degraded: Boolean(providerData.degraded) } }
   }
 
-  /**
-   * Refresh all source configurations
-   */
-  async refreshAllConfigs(): Promise<void> {
+  async refreshAllConfigs(): Promise<ModelRefreshSummary> {
     await this.ensureInitialized()
     const aiSources = this.getAiSourcesConfig()
+    const summary: ModelRefreshSummary = { degradedSourceIds: [], failedSourceIds: [] }
 
     for (const source of aiSources.sources) {
       try {
-        await this.refreshSourceConfig(source.id)
+        const result = await this.refreshSourceConfig(source.id)
+        if (!result.success) summary.failedSourceIds.push(source.id)
+        else if (result.data?.degraded) summary.degradedSourceIds.push(source.id)
       } catch (error) {
+        summary.failedSourceIds.push(source.id)
         console.error(`[AISourceManager] Failed to refresh ${source.name}:`, error)
       }
     }
+    return summary
   }
 
   // ========== Metered Quota ==========
@@ -1216,6 +1240,10 @@ class AISourceManager {
         // Runtime-tolerant: a legacy or externally written source can omit the
         // list, and a throw here would abort logout before the source is deleted.
         availableModels: (source.availableModels || []).map(m => m.id),
+        modelNames: Object.fromEntries((source.availableModels || []).map(m => [m.id, m.name])),
+        modelCapabilities: Object.fromEntries((source.availableModels || []).filter(m => m.capabilities).map(m => [m.id, m.capabilities])),
+        modelVision: Object.fromEntries((source.availableModels || []).filter(m => typeof m.supportsVision === 'boolean').map(m => [m.id, m.supportsVision])),
+        modelCatalogCache: source.modelCatalogCache,
         accessToken: source.accessToken,
         refreshToken: source.refreshToken,
         tokenExpires: source.tokenExpires

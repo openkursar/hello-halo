@@ -17,6 +17,8 @@ import type { MemorySettings } from '../../shared/types/memory';
 import type { ApiProvider } from '../../shared/types/ai-sources';
 import type { FileChangesSummary } from '../../shared/file-changes';
 import type { GoalInput } from '../../shared/types/goal';
+import type { ApiRetryState } from '../../shared/types/api-retry';
+import { DEFAULT_MAX_TURNS } from '../../shared/constants/agent-limits';
 // Re-export them
 export { DEFAULT_MODEL, getCurrentModelName, hasAnyAISource };
 
@@ -398,6 +400,8 @@ export interface ConversationMeta {
   starred?: boolean; // Pinned conversation for quick access
   /** Engine recorded at conversation creation. Read with `?? 'anthropic'` fallback. */
   engineId?: EngineId | null;
+  /** User renamed it; the first message no longer sets the title. */
+  titleCustomized?: boolean;
 }
 
 // ============================================
@@ -868,6 +872,11 @@ export interface CompactInfo {
   preTokens: number;
 }
 
+/** A model request the engine will resend, with its deadline on this client's clock. */
+export interface ApiRetryNotice extends ApiRetryState {
+  retryAt: number;
+}
+
 // ============================================
 // AskUserQuestion Types
 // ============================================
@@ -976,7 +985,7 @@ export const DEFAULT_CONFIG: HaloConfig = {
     port: 3456
   },
   mcpServers: {},  // Empty by default
-  agent: { maxTurns: 999 },  // Agent defaults
+  agent: { maxTurns: DEFAULT_MAX_TURNS },  // Agent defaults
   isFirstLaunch: true,
   modelConfigSkipped: false
 };

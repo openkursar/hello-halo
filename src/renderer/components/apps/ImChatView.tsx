@@ -27,6 +27,7 @@ import type { ImSessionRecord, SessionSource } from '../../../shared/types/im-ch
 import { getImSessionDisplayName } from '../../../shared/types/im-channel'
 import { buildImSessionKey } from '../../../shared/apps/im-keys'
 import { CHANNEL_LABELS } from './im-channel-labels'
+import type { ApiRetryState } from '../../../shared/types/api-retry'
 
 interface ImChatViewProps {
   appId: string
@@ -145,10 +146,12 @@ export function ImChatView({ appId, spaceId, session, clearKey, footerAction }: 
     if (useChatStore.getState().getSession(conversationId).isGenerating) {
       api.getSessionState(conversationId).then(res => {
         if (res.success && res.data) {
-          const { isActive } = res.data as { isActive: boolean }
+          const { isActive, apiRetry } = res.data as { isActive: boolean; apiRetry?: ApiRetryState }
           if (!isActive) {
             console.log(`[ImChatView] Backend session inactive — clearing stale generating state`)
             useChatStore.getState().resetSession(conversationId)
+          } else {
+            useChatStore.getState().handleAgentApiRetry({ spaceId, conversationId, retry: apiRetry ?? null })
           }
         }
       }).catch(() => {})
@@ -288,6 +291,7 @@ export function ImChatView({ appId, spaceId, session, clearKey, footerAction }: 
               error={error}
               errorType={errorType}
               textBlockVersion={textBlockVersion}
+              onStop={() => setShowStopConfirm(true)}
               onAtBottomStateChange={handleAtBottomStateChange}
               hideBrowserViewButton
             />

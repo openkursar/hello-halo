@@ -44,7 +44,7 @@ export interface ToolsetDefinition {
   createServer: (scope: ToolsetScope) => unknown
 }
 
-/** Toolset state exposed to the renderer "Tools" menu */
+/** Toolset state exposed to the composer's "+" menu */
 export interface ToolsetStatus {
   id: string
   displayName: string

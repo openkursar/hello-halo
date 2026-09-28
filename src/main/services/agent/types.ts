@@ -7,6 +7,7 @@
 
 import type { ReasoningEffortSetting } from '../../../shared/constants/reasoning-effort'
 import type { Goal, GoalInput } from '../../../shared/types/goal'
+import type { ApiRetryState } from '../../../shared/types/api-retry'
 
 // ============================================
 // API Credentials
@@ -231,6 +232,14 @@ export interface SessionState {
   spaceId: string
   conversationId: string
   thoughts: Thought[]  // Backend accumulates thoughts (Single Source of Truth)
+  /** The model request the engine is waiting to resend, if any (see api-retry.ts). */
+  apiRetry?: PendingApiRetry | null
+}
+
+/** A retry the engine announced; `retryAt` is on this process's clock. */
+export interface PendingApiRetry {
+  state: ApiRetryState
+  retryAt: number
 }
 
 // ============================================

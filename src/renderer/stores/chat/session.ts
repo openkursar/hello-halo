@@ -238,6 +238,7 @@ export const createSessionSlice: ChatSlice<'answerQuestion' | 'loadMessageThough
         error,
         isGenerating: false,
         isThinking: false,
+        apiRetry: null,
       })
       return { sessions: newSessions }
     })
@@ -257,6 +258,7 @@ export const createSessionSlice: ChatSlice<'answerQuestion' | 'loadMessageThough
         ...session,
         isGenerating: false,
         isThinking: false,
+        apiRetry: null,
         pendingQuestion: session.pendingQuestion?.status === 'active'
           ? { ...session.pendingQuestion, status: 'cancelled' as const }
           : session.pendingQuestion,

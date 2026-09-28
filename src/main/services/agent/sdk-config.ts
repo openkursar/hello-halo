@@ -23,6 +23,7 @@ import { resolveModelId } from '../../../shared/types/ai-sources'
 import { buildSystemPrompt, DEFAULT_ALLOWED_TOOLS, hostSystemPromptText, toEngineSystemPrompt } from './system-prompt'
 import { createCanUseTool } from './permission-handler'
 import { DEFAULT_DISABLED_TOOLS, TEAM_TOOLS } from '../../../shared/constants/disabled-tools'
+import { DEFAULT_MAX_TURNS } from '../../../shared/constants/agent-limits'
 import {
   MAX_OUTPUT_TOKENS_HARD_MIN,
   MAX_OUTPUT_TOKENS_HARD_CAP,
@@ -967,7 +968,7 @@ export async function buildBaseSdkOptions(params: BaseSdkOptionsParams): Promise
       digitalHumansEnabled: params.digitalHumansEnabled,
       toolsetIndex: params.toolsetIndex
     }) + (params.memoryInstructions ? `\n\n${params.memoryInstructions}` : '')),
-    maxTurns: params.maxTurns ?? 50,
+    maxTurns: params.maxTurns ?? DEFAULT_MAX_TURNS,
     allowedTools: [...DEFAULT_ALLOWED_TOOLS],
     // Enable Skills loading from $CLAUDE_CONFIG_DIR/skills/ and <workspace>/.claude/skills/
     settingSources: ['user', 'project'],

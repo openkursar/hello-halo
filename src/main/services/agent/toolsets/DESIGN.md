@@ -20,7 +20,7 @@ enter context only while it is enabled. Disabled toolsets cost one summary line.
 - **The AI never enables a toolset itself.** Tools are frozen per turn by the CC
   subprocess, so a mid-turn open would be unusable that turn and the model would
   waste steps probing for it. Instead the AI calls `request_toolset`, which asks
-  the user to flip the switch (and highlights it in the input "Tools" menu). Once
+  the user to flip the switch (and highlights it in the composer's "+" panel). Once
   the user enables it, the session rebuilds and its tools are available from the
   next message.
 - **Resident cost** = the single `request_toolset` meta tool, whose description
@@ -84,17 +84,21 @@ to the model-pin stamp. Only user toggles update the seed (AI requests never ope
 toolset; a restore must not rewrite it). Seeding happens **only at creation** — never
 in `getOpenToolsets` hydration — so reopening an old (empty) conversation stays empty.
 Unknown ids in the seed are dropped on hydrate, so no filtering is needed at stamp time.
-On first run, before any user toggle has written `config.lastToolsets`, `createConversation`
-seeds `FIRST_RUN_DEFAULT_TOOLSETS` (currently `['ai-browser']`) so the browser is on out of
-the box; once the user toggles anything, `config.lastToolsets` (including an empty set = all
-off) is authoritative.
+Before any user toggle has written `config.lastToolsets`, `createConversation` seeds
+`DEFAULT_TOOLSETS` (`shared/constants/toolsets.ts`, currently `ai-browser` + `halo-team`);
+once the user toggles anything, `config.lastToolsets` (including an empty set = all off) is
+authoritative. When a toolset later joins the defaults, `applyNewToolsetDefaultsOnDisk`
+(foundation/config, at startup) adds it to an existing `lastToolsets` exactly once and records
+it in `config.toolsetDefaultsSeen`, so a user who then turns it off keeps it off. The renderer
+reads the same constant: the composer's "+" button surfaces only toolsets enabled beyond it.
 
 ## 5) `request_toolset` UX
 
 `requestToolset` (broker) emits `toolsets:requested`; the renderer
-(`App.tsx` → `toolsets.store.applyRequestedEvent` → `ToolsetControls`) opens the
-"Tools" menu and pulse-highlights the requested switch. The meta-server tool
-returns guidance so the AI tells the user which toolset to enable, then stops.
+(`App.tsx` → `toolsets.store.applyRequestedEvent` → `useComposerToolsets`) opens the
+composer's "+" panel and highlights the requested switch in its Capabilities group.
+The meta-server tool returns guidance so the AI tells the user which toolset to
+enable, then stops.
 
 ## 6) Automation (digital humans)
 
@@ -145,9 +149,9 @@ record, so the user's enabled set survives.
 1. Implement the in-process MCP server under `services/<feature>/`.
 2. Add one `registerToolset({ id, displayName, summary, usageGuide, isAvailable,
    createServer })` entry in `registry.ts`.
-3. Interactive: meta tools, system-prompt section, renderer "Tools" menu, and
-   persistence all derive from the registry. Add the renderer icon in
-   `components/chat/ToolsetControls.tsx`.
+3. Interactive: meta tools, system-prompt section, the composer's Capabilities
+   group, and persistence all derive from the registry. Add the renderer icon,
+   label and one-line description in `components/chat/composer-menu/toolset-display.tsx`.
 4. Automation (optional): add a `resolvePermission` gate + MCP injection in
    `apps/runtime/execute.ts` and `app-chat.ts`, a usage-guide append in
    `prompt.ts` / `prompt/identity.ts`, and a toggle in `AppConfigPanel.tsx`.

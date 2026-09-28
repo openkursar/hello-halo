@@ -1,5 +1,6 @@
 /**
- * System RPC contract (passthrough). Auto-launch, window controls, and logging.
+ * System RPC contract (passthrough). Auto-launch, window controls, logging, and
+ * the native file/folder picker.
  * Handler return shapes are preserved verbatim.
  */
 import { rawRpcMethod } from '../define'
@@ -14,4 +15,5 @@ export const systemRpc = {
   toggleMaximizeWindow: rawRpcMethod('window:toggle-maximize'),
   openLogFolder: rawRpcMethod('system:open-log-folder'),
   relaunch: rawRpcMethod('system:relaunch'),
+  pickLocalEntries: rawRpcMethod('system:pick-local-entries'),
 }

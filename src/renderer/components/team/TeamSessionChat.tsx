@@ -108,13 +108,13 @@ export function TeamSessionChat({
   const answerQuestion = useChatStore(s => s.answerQuestion)
   const {
     isGenerating, streamingContent, isStreaming, thoughts, isThinking, compactInfo,
-    pendingQuestion, error, errorType, textBlockVersion,
+    pendingQuestion, error, errorType, textBlockVersion, apiRetry,
   } = session
 
   const backgroundTurn = isBackgroundTurn?.(messages) ?? false
   const { scrollToBottom, handleScroll } = useSmartScroll({
     containerRef: scrollRef,
-    deps: [backgroundTurn ? '' : streamingContent, backgroundTurn ? 0 : thoughts.length, !backgroundTurn && isStreaming, !backgroundTurn && isThinking, pendingQuestion, backgroundTurn ? null : messages],
+    deps: [backgroundTurn ? '' : streamingContent, backgroundTurn ? 0 : thoughts.length, !backgroundTurn && isStreaming, !backgroundTurn && isThinking, pendingQuestion, backgroundTurn ? null : messages, !backgroundTurn && !!apiRetry],
     behavior: 'auto',
   })
 
@@ -448,6 +448,8 @@ export function TeamSessionChat({
     showBrowserViewButton={false}
     pendingQuestion={readonly ? undefined : pendingQuestion}
     onAnswerQuestion={readonly ? undefined : handleAnswerQuestion}
+    apiRetry={apiRetry}
+    onStop={handleStop}
   />
 
   return (

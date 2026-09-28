@@ -272,7 +272,7 @@ export function registerAgentHandlers(): void {
       }
     },
 
-    // User enables a toolset from the "Tools" menu (schedules a session rebuild)
+    // User enables a toolset from the composer's "+" menu (schedules a session rebuild)
     openToolset: async (data: { spaceId: string; conversationId: string; toolsetId: string }) => {
       try {
         const result = await openToolsetByUser(data.spaceId, data.conversationId, data.toolsetId)

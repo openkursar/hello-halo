@@ -54,7 +54,6 @@ export async function clearGoal(spaceId: string, conversationId: string, goal: G
   const ui = useGoalUiStore.getState()
   const undoable = goal.status === 'active'
   // Undo is offered before the goal disappears, so the shelf never renders a gap between them.
-  ui.setExpanded(conversationId, false)
   if (undoable) ui.offerUndo(conversationId, toGoalInput(goal))
   const rollback = store.applyOptimistic(conversationId, null)
   const result = await store.clear(spaceId, conversationId)

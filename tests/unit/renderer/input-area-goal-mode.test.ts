@@ -16,7 +16,7 @@ vi.mock('../../../src/renderer/stores/app.store', () => ({ useAppStore: (select:
 vi.mock('../../../src/renderer/stores/chat.store', () => ({ useChatStore: Object.assign((select: any) => select({ pendingComposerInput: null, currentSpaceId: 's' }), { getState: () => ({ clearComposerDraft: vi.fn() }), setState: vi.fn() }) }))
 vi.mock('../../../src/renderer/stores/onboarding.store', () => ({ useOnboardingStore: () => ({ isActive: false, currentStep: null }) }))
 vi.mock('../../../src/renderer/components/onboarding/onboardingData', () => ({ getOnboardingPrompt: () => '' }))
-vi.mock('../../../src/renderer/components/chat/ToolsetControls', () => ({ ToolsetControls: () => null }))
+vi.mock('../../../src/renderer/components/chat/composer-menu/useComposerToolsets', () => ({ useComposerToolsets: () => ({ list: [], extraEnabled: [], requested: new Set(), toggle: vi.fn() }) }))
 vi.mock('../../../src/renderer/components/chat/LiveSessionsHeader', () => ({ LiveSessionsHeader: () => null }))
 vi.mock('../../../src/renderer/components/chat/KnowledgeBaseButton', () => ({ KnowledgeBaseButton: () => null }))
 vi.mock('../../../src/renderer/components/chat/DigitalHumanSelector', () => ({ DigitalHumanSelector: () => null }))
@@ -44,11 +44,10 @@ beforeEach(() => {
   vi.stubGlobal('window', { innerWidth: 1280 })
   goal = {
     active: true,
-    menuItem: { label: 'Set goal', title: 'Set goal', onSelect: vi.fn() },
+    menuItem: { label: 'Set goal', description: 'Keeps working toward it', onSelect: vi.fn() },
     exit: vi.fn(),
     chip: null,
     placeholder: 'Describe the goal',
-    hint: () => ({ full: '', short: '' }),
     sendTitle: 'Set goal',
     canSubmit: (text: string) => text.trim().length > 0,
     submit: vi.fn(async () => true),
@@ -101,7 +100,7 @@ it('Send mid-turn sets the goal rather than injecting a message', () => {
   expect(toolbar(tree).props.canSend).toBe(true)
   toolbar(tree).props.onSend()
 
-  expect(goal.submit).toHaveBeenCalledWith('Ship the release', undefined, true)
+  expect(goal.submit).toHaveBeenCalledWith('Ship the release', undefined, true, [])
   expect(props.onInject).not.toHaveBeenCalled()
   expect(props.onSend).not.toHaveBeenCalled()
 })

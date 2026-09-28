@@ -761,7 +761,11 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
 
     const timer = setTimeout(() => {
       quiescenceTimers.delete(epochId)
-      void checkQuiescence(teamId, epochId)
+      // Fires after the turn that scheduled it — by then the store may be gone
+      // (shutdown, team dissolved). A lost check is not worth an unhandled throw.
+      void checkQuiescence(teamId, epochId).catch((err) => {
+        console.error(`${LOG_TAG} quiescence check failed: team=${teamId} epoch=${epochId}`, err)
+      })
     }, QUIESCENCE_DELAY_MS)
     if (typeof timer.unref === 'function') timer.unref()
     quiescenceTimers.set(epochId, timer)

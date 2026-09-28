@@ -29,7 +29,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.useFakeTimers()
   useGoalStore.setState({ byConversation: new Map([['c', active]]), unseenByModel: new Set() })
-  useGoalUiStore.setState({ undo: new Map(), expanded: new Set(['c']), composerGoalMode: new Set() })
+  useGoalUiStore.setState({ undo: new Map(), composerGoalMode: new Set() })
   useNotificationStore.setState({ toasts: [] })
 })
 
@@ -42,7 +42,6 @@ describe('goal actions', () => {
 
     expect(useGoalStore.getState().byConversation.get('c')).toBeNull()
     expect(useGoalUiStore.getState().undo.get('c')?.previous).toEqual({ objective: 'Ship it', doneWhen: ['Tests pass'] })
-    expect(useGoalUiStore.getState().expanded.has('c')).toBe(false)
     expect(await clearing).toBe(true)
 
     api.setGoal.mockResolvedValueOnce({ success: true, data: { ...active, note: undefined, updatedBy: 'user' } })

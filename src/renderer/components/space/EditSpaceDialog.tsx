@@ -1,10 +1,10 @@
 /**
  * EditSpaceDialog
  *
- * Modal for renaming a dedicated space, changing its icon, and setting its
- * shared memory. Sibling to CreateSpaceDialog (same overlay shell, same z-[60]
- * so it sits above any z-50 panel it was opened from, e.g. SpaceSelector's
- * dropdown).
+ * Modal for editing a dedicated space: its name, icon color, and — folded
+ * under Advanced — its shared memory. Sibling to CreateSpaceDialog (same
+ * overlay shell, same z-[60] so it sits above any z-50 panel it was opened
+ * from, e.g. SpaceSelector's dropdown).
  */
 
 import { useCallback, useEffect, useState } from 'react'
@@ -12,6 +12,7 @@ import { useTranslation } from '../../i18n'
 import { useSpaceStore } from '../../stores/space.store'
 import { api } from '../../api'
 import { SpaceColorSwatch } from './SpaceColorSwatch'
+import { Disclosure } from '../ui/Disclosure'
 import { MemorySettingsPanel } from '../memory/MemorySettingsPanel'
 import { type SpaceColorId } from './spaceAvatarUtils'
 import type { Space } from '../../types'
@@ -122,24 +123,27 @@ export function EditSpaceDialog({ space, onClose, onSaved }: EditSpaceDialogProp
         </div>
 
         <div className="mb-6">
-          <div className="text-sm text-muted-foreground mb-1">{t('Workspace memory')}</div>
-          <p className="text-xs text-muted-foreground mb-3">
-            {t('Conversations in this workspace share one memory: lasting decisions, preferences and know-how, organized into topics. Changes apply to new conversations.')}
-          </p>
-          <MemorySettingsPanel
-            settings={memory}
-            onChange={next => setMemory(resolveMemorySettings(next))}
-            disabled={initialMemory === null || saving}
-            loadStatus={loadStatus}
-            consolidateNow={consolidateNow}
-          />
+          <Disclosure title={t('Advanced')}>
+            <div>
+              <div className="text-sm text-muted-foreground mb-1">{t('Workspace memory')}</div>
+              <p className="text-xs text-muted-foreground mb-3">
+                {t('Conversations in this workspace share one memory: lasting decisions, preferences and know-how, organized into topics. Changes apply to new conversations.')}
+              </p>
+              <MemorySettingsPanel
+                settings={memory}
+                onChange={next => setMemory(resolveMemorySettings(next))}
+                disabled={initialMemory === null || saving}
+                loadStatus={loadStatus}
+                consolidateNow={consolidateNow}
+              />
+              {loadFailed && (
+                <p className="mt-3 text-xs text-destructive">
+                  {t('Memory settings could not be loaded. Close and reopen this dialog to try again.')}
+                </p>
+              )}
+            </div>
+          </Disclosure>
         </div>
-
-        {loadFailed && (
-          <p className="mb-3 text-xs text-destructive">
-            {t('Memory settings could not be loaded. Close and reopen this dialog to try again.')}
-          </p>
-        )}
         {error && <p className="mb-3 text-xs text-destructive">{error}</p>}
 
         <div className="flex justify-end gap-2.5">

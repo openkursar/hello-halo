@@ -7,7 +7,7 @@
  * itself: tools are frozen per turn, so a mid-turn open would be unusable). The
  * tool is self-documenting: its description lists exactly which capabilities are
  * off, so no extra system-prompt index is needed. Calling it highlights that
- * capability's switch in the input "Tools" menu.
+ * capability's switch in the composer's "+" menu.
  *
  * Deliberately NOT a generic "toolsets"/"MCP manager" surface — it governs only
  * the handful of optional, user-gated capabilities, and disappears once they are
@@ -38,11 +38,11 @@ export function createBrokerMetaServer(scope: ToolsetScope, handlers: BrokerMeta
   const requestTool = tool(
     'request_toolset',
     'Some optional capabilities are turned OFF, and you CANNOT enable them yourself — only the user can, ' +
-    'via the input "Tools" menu.\n\n' +
+    'via the "+" menu in the chat input.\n\n' +
     'Currently off:\n' + (offList || '(none)') + '\n\n' +
     'When a task needs one of these (or the user asks for it), call this tool IMMEDIATELY with its id. ' +
     'Do NOT ask the user for permission to call it, and do NOT merely explain that you cannot — ' +
-    'calling this IS how you help: it highlights that capability\'s switch in the "Tools" menu. ' +
+    'calling this IS how you help: it highlights that capability\'s switch in the "+" menu. ' +
     'After calling, tell the user in ONE short line to flip the highlighted switch; its tools become ' +
     'available from their next message. Do not attempt the capability\'s tools until it is enabled.',
     {
@@ -56,7 +56,7 @@ export function createBrokerMetaServer(scope: ToolsetScope, handlers: BrokerMeta
         return text(`"${label}" is already enabled — its tools (mcp__${args.name}__*) are available now.`)
       }
       return text(
-        `Asked the user to enable "${label}" (highlighted in the Tools menu). ` +
+        `Asked the user to enable "${label}" (highlighted in the "+" menu). ` +
         `Tell them to turn it on; its tools (mcp__${args.name}__*) will be available from their next message.`
       )
     }

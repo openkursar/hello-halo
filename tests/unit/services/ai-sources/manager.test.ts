@@ -280,6 +280,37 @@ describe('single-source create / update / delete', () => {
     expect(saved.currentId).toBe(saved.sources[0].id)
   })
 
+  it('keeps a ChatGPT account overlay and selected model on offline re-login', async () => {
+    const cache = { provider: 'chatgpt' as const, version: 1 as const, fetchedAt: '2026-01-01', entries: [
+      { slug: 'gpt-6-sol', visibility: 'hide' }, { slug: 'account-only', display_name: 'Account model', visibility: 'list' }
+    ] }
+    seed({ currentId: 'ex', sources: [oauthSource({
+      id: 'ex', provider: 'chatgpt', model: 'account-only', user: { name: 'U', uid: 'u' },
+      availableModels: [{ id: 'account-only', name: 'Account model' }], modelCatalogCache: cache
+    })] })
+    const mgr = new AISourceManager()
+    await (mgr as unknown as { ensureInitialized(): Promise<void> }).ensureInitialized()
+    ;(mgr as unknown as { providers: Map<string, unknown> }).providers.set('chatgpt', {
+      type: 'chatgpt',
+      startLogin: vi.fn(),
+      completeLogin: vi.fn(async () => ({ success: true, data: { user: { name: 'U' },
+        _availableModels: ['gpt-6-sol'], _catalogDegraded: true, _defaultModel: 'gpt-6-sol',
+        _tokenData: { accessToken: 'new-token', refreshToken: 'rt', expiresAt: 1, uid: 'u' }
+      } })),
+      getOfflineConfig: vi.fn().mockReturnValue({ chatgpt: {
+        availableModels: ['account-only', 'gpt-6-luna'], modelNames: { 'account-only': 'Account model' },
+        degraded: true, catalogReconciled: true
+      } }),
+      getBackendConfig: vi.fn()
+    })
+    await mgr.completeOAuthLogin('chatgpt', 'state')
+    const saved = (store.value.aiSources as AISourcesConfig).sources[0]
+    expect(saved.model).toBe('account-only')
+    expect(saved.availableModels.map(item => item.id)).toEqual(['account-only', 'gpt-6-luna'])
+    expect(saved.modelCatalogCache).toEqual(cache)
+    expect(saved.accessToken).toBe('new-token')
+  })
+
   it('updates the existing provider source instead of creating a second', async () => {
     seed({ currentId: 'ex', sources: [oauthSource({ id: 'ex', provider: 'single-prov' as never })] })
     const mgr = new AISourceManager()
@@ -314,6 +345,7 @@ describe('refreshSourceConfig — token freshness and degraded catalogs', () => 
     refreshConfig: ReturnType<typeof vi.fn>
     checkTokenWithConfig: ReturnType<typeof vi.fn>
     refreshTokenWithConfig: ReturnType<typeof vi.fn>
+    getOfflineConfig?: ReturnType<typeof vi.fn>
   }
 
   function registerProvider(
@@ -403,6 +435,75 @@ describe('refreshSourceConfig — token freshness and degraded catalogs', () => 
     const saved = store.value.aiSources as AISourcesConfig
     expect(saved.sources[0].availableModels.map(m => m.id)).toEqual(['stored'])
     expect(saved.sources[0].modelOverrides).toEqual({ stored: { contextWindow: 200000 } })
+  })
+
+  it('applies a reconciled offline catalog while preserving capabilities, selection and cache', async () => {
+    const cache = { provider: 'chatgpt' as const, version: 1 as const, fetchedAt: '2026-01-01', entries: [{ slug: 'hidden', visibility: 'hide' }] }
+    seedCatalogSource({
+      model: 'stored',
+      availableModels: [{ id: 'stored', name: 'Stored', supportsVision: false, capabilities: { contextWindow: 345678 } }],
+      modelCatalogCache: cache
+    })
+    const mgr = new AISourceManager()
+    const provider = registerProvider(mgr, {
+      refreshConfig: vi.fn().mockResolvedValue({ success: true, data: { 'catalog-prov': {
+        degraded: true, catalogReconciled: true, availableModels: ['stored', 'new-builtin'], model: 'new-builtin'
+      } } })
+    })
+    const result = await mgr.refreshSourceConfig('o1')
+    expect(result.data?.degraded).toBe(true)
+    const saved = (store.value.aiSources as AISourcesConfig).sources[0]
+    expect(saved.model).toBe('stored')
+    expect(saved.availableModels[0]).toMatchObject({ supportsVision: false, capabilities: { contextWindow: 345678 } })
+    expect(saved.availableModels.map(m => m.id)).toEqual(['stored', 'new-builtin'])
+    expect(saved.modelCatalogCache).toEqual(cache)
+    expect(saved.modelOverrides).toEqual({ stored: { contextWindow: 200000 } })
+    const legacy = provider.refreshConfig.mock.calls[0][0]['catalog-prov']
+    expect(legacy.modelCatalogCache).toEqual(cache)
+    expect(legacy.modelVision).toEqual({ stored: false })
+    expect(legacy.modelCapabilities).toEqual({ stored: { contextWindow: 345678 } })
+  })
+
+  it('reconstructs locally on token failure without calling the remote catalog', async () => {
+    seedCatalogSource()
+    const mgr = new AISourceManager()
+    const provider = registerProvider(mgr, {
+      checkTokenWithConfig: vi.fn().mockReturnValue({ valid: false, needsRefresh: true }),
+      refreshTokenWithConfig: vi.fn().mockResolvedValue({ success: false, error: 'offline' }),
+      getOfflineConfig: vi.fn().mockReturnValue({ 'catalog-prov': {
+        degraded: true, catalogReconciled: true, availableModels: ['stored', 'new-builtin']
+      } })
+    })
+    expect(await mgr.refreshSourceConfig('o1')).toEqual({ success: true, data: { degraded: true } })
+    expect(provider.refreshConfig).not.toHaveBeenCalled()
+    expect(provider.getOfflineConfig).toHaveBeenCalled()
+    expect((store.value.aiSources as AISourcesConfig).sources[0].availableModels.map(m => m.id)).toContain('new-builtin')
+  })
+
+  it('persists a successful overlay and model metadata without turning capabilities into user overrides', async () => {
+    seedCatalogSource()
+    const cache = { provider: 'chatgpt' as const, version: 1 as const, fetchedAt: '2026-01-01', entries: [{ slug: 'hidden', visibility: 'hide' }] }
+    const mgr = new AISourceManager()
+    registerProvider(mgr, { refreshConfig: vi.fn().mockResolvedValue({ success: true, data: { 'catalog-prov': {
+      availableModels: ['fetched'], modelNames: { fetched: 'Fetched' },
+      modelCapabilities: { fetched: { contextWindow: 456789 } }, modelVision: { fetched: false }, modelCatalogCache: cache
+    } } }) })
+    expect((await mgr.refreshSourceConfig('o1')).data?.degraded).toBe(false)
+    const saved = (store.value.aiSources as AISourcesConfig).sources[0]
+    expect(saved.modelCatalogCache).toEqual(cache)
+    expect(saved.availableModels).toEqual([{ id: 'fetched', name: 'Fetched', supportsVision: false, capabilities: { contextWindow: 456789 } }])
+    expect(saved.modelOverrides).toEqual({ stored: { contextWindow: 200000 } })
+  })
+
+  it('reports degraded and failed sources independently in an aggregate refresh', async () => {
+    seed({ sources: ['ok', 'cached', 'failed', 'threw'].map(id => oauthSource({ id })) })
+    const mgr = new AISourceManager()
+    vi.spyOn(mgr, 'refreshSourceConfig')
+      .mockResolvedValueOnce({ success: true, data: { degraded: false } })
+      .mockResolvedValueOnce({ success: true, data: { degraded: true } })
+      .mockResolvedValueOnce({ success: false, error: 'offline' })
+      .mockRejectedValueOnce(new Error('failed'))
+    expect(await mgr.refreshAllConfigs()).toEqual({ degradedSourceIds: ['cached'], failedSourceIds: ['failed', 'threw'] })
   })
 
   it('writes the catalog when the provider reached its endpoint', async () => {

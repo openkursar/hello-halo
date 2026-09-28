@@ -50,6 +50,8 @@ export interface MessageListProps {
   error?: string | null  // Error message to display when generation fails
   errorType?: AgentErrorType | null  // Special error type for custom UI handling
   onContinue?: () => void  // Callback to continue after interrupt (for InterruptedBubble)
+  /** Stops the running turn; offered on the live retry notice. */
+  onStop?: () => void
   isCompact?: boolean  // Compact mode when Canvas is open
   /** Side padding for the transcript; defaults to the main chat's. */
   sidePadClassName?: string
@@ -118,11 +120,13 @@ function StreamingFooterContent({
   conversationId,
   showBrowserViewButton,
   revisionRef,
+  onStopRef,
   senderName,
 }: {
   conversationId: string
   showBrowserViewButton: boolean
   revisionRef: React.RefObject<StreamingRevision>
+  onStopRef: React.RefObject<(() => void) | undefined>
   senderName?: string
 }) {
   // Subscribe to this conversation's session so the footer re-renders when
@@ -149,6 +153,8 @@ function StreamingFooterContent({
       onAnswerQuestion={rev.onAnswerQuestion}
       queuedMessages={queuedMessages}
       senderName={senderName}
+      apiRetry={session?.apiRetry ?? null}
+      onStop={onStopRef.current ? () => onStopRef.current?.() : undefined}
     />
   )
 }
@@ -203,6 +209,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   error = null,
   errorType = null,
   onContinue,
+  onStop,
   isCompact = false,
   sidePadClassName,
   textBlockVersion = 0,
@@ -349,10 +356,11 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   }, [])
 
   // 2. Streaming scroll: follow content growth while AI is generating
+  const hasApiRetry = useChatStore(s => !!s.sessions.get(conversationId)?.apiRetry)
   useEffect(() => {
     if (!isAtBottomRef.current || !isGenerating) return
     scheduleScrollToEnd()
-  }, [streamingContent, thoughts.length, isThinking, isGenerating, pendingQuestion, scheduleScrollToEnd])
+  }, [streamingContent, thoughts.length, isThinking, isGenerating, pendingQuestion, hasApiRetry, scheduleScrollToEnd])
 
   // 3. New-message scroll: when user sends a message (displayMessages grows)
   const prevDisplayCountRef = useRef(displayMessages.length)
@@ -396,9 +404,11 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     )
   }, [previousCostMap, thoughtsLoader, hideBrowserViewButton, defaultThoughtsExpanded, defaultThoughtsMaximized, injectionMap, contentWidthClass, sidePadClass, senderName])
 
-  // Ref for onContinue — keeps Footer callback stable when parent re-renders
+  // Refs for callbacks — keep the Footer callback stable when the parent re-renders
   const onContinueRef = useRef(onContinue)
   onContinueRef.current = onContinue
+  const onStopRef = useRef(onStop)
+  onStopRef.current = onStop
 
   // Streaming revision: combines all streaming state into a single object.
   // StreamingFooterContent reads this via ref (always fresh) and subscribes to
@@ -433,6 +443,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
             conversationId={conversationId}
             showBrowserViewButton={!hideBrowserViewButton}
             revisionRef={streamingRevisionRef}
+            onStopRef={onStopRef}
             senderName={senderName}
           />
         )}

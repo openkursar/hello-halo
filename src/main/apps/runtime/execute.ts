@@ -129,9 +129,6 @@ interface StreamResult {
 // Constants
 // ============================================
 
-/** Default max turns per stream cycle for automation runs when not configured by user */
-const DEFAULT_MAX_TURNS = 100
-
 /**
  * Max auto-continue attempts when AI ends without calling report_to_user.
  *
@@ -496,6 +493,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
         console.error(`[Runtime][${app.id}] CLI stderr:`, data)
       },
       memoryGuard: appMemoryGuard(memoryScope, runTag, memorySettings),
+      maxTurns: config.agent?.maxTurns,
       // Built-in server ids below are mirrored in shared/apps/builtin-mcp.ts — keep in sync.
       mcpServers: {
         ...requiredMcpServers,              // declared MCP dependencies
@@ -519,7 +517,6 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
 
     // Override SDK options for automation context
     sdkOptions.systemPrompt = toEngineSystemPrompt(systemPrompt)
-    sdkOptions.maxTurns = config.agent?.maxTurns ?? DEFAULT_MAX_TURNS
     // Token-level partials OFF: a run is headless and emits no renderer events,
     // so there is no live consumer for token frames. processStream persists one
     // aggregate block-level message (thinking / tool-call / tool-result / text) per

@@ -54,11 +54,11 @@ export function registerConfigRoutes(app: Express): void {
   app.post('/api/config/refresh-ai-sources', async (_req: Request, res: Response) => {
     try {
       const manager = getAISourceManager()
-      await manager.refreshAllConfigs()
+      const modelRefresh = await manager.refreshAllConfigs()
       // Through the controller, which masks credentials. Returning the raw
       // config here handed every secret to any caller holding the remote
       // token, while the sibling config endpoints masked correctly.
-      res.json(configController.getConfig())
+      res.json({ ...configController.getConfig(), modelRefresh })
     } catch (error) {
       console.error('[HTTP] refresh-ai-sources failed:', (error as Error).message)
       res.json({ success: false, error: (error as Error).message })

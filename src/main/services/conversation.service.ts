@@ -20,6 +20,9 @@ import { getSeedKBIds } from './tlon'
 import { getConfig } from '../foundation/config.service'
 import { v4 as uuidv4 } from 'uuid'
 import type { FileChangesSummary } from '../../shared/file-changes'
+import { titleFromFirstMessage } from '../../shared/conversation-title'
+import { splitAttachedPaths } from '../../shared/attached-paths'
+import { DEFAULT_TOOLSETS } from '../../shared/constants/toolsets'
 import type { KBSource } from '../../shared/types/tlon'
 import type { ImageAttachment } from '../../shared/types/image-attachment'
 import type { GoalInput } from '../../shared/types/goal'
@@ -141,6 +144,13 @@ export interface ConversationMeta {
    * the engine badge without loading the full conversation.
    */
   engineId?: 'anthropic' | 'halo' | 'codex' | null
+  /**
+   * Set when the user renamed the conversation. Suppresses the first-message
+   * auto-title, so a rename survives even if it happens before the first user
+   * message. Absent on legacy data = auto-title still applies. Carried in the
+   * meta so the renderer can apply the same rule optimistically.
+   */
+  titleCustomized?: boolean
 }
 
 export interface Conversation extends ConversationMeta {
@@ -186,13 +196,6 @@ export interface Conversation extends ConversationMeta {
    */
   modelSourceId?: string
   modelId?: string
-  /**
-   * Set when the user renamed the conversation. Suppresses the first-message
-   * auto-title in addMessage, so a rename survives even if it happens before
-   * the first user message. Absent on legacy data = auto-title still applies
-   * (same behavior as before the field existed).
-   */
-  titleCustomized?: boolean
 }
 
 // Thoughts file structure
@@ -548,8 +551,9 @@ function toMeta(conversation: Conversation): ConversationMeta {
   let preview: string | undefined
 
   if (lastMessage) {
-    preview = lastMessage.content.slice(0, PREVIEW_LENGTH)
-    if (lastMessage.content.length > PREVIEW_LENGTH) {
+    const text = splitAttachedPaths(lastMessage.content).text
+    preview = text.slice(0, PREVIEW_LENGTH)
+    if (text.length > PREVIEW_LENGTH) {
       preview += '...'
     }
   }
@@ -570,6 +574,10 @@ function toMeta(conversation: Conversation): ConversationMeta {
 
   if (conversation.engineId) {
     meta.engineId = conversation.engineId
+  }
+
+  if (conversation.titleCustomized) {
+    meta.titleCustomized = true
   }
 
   return meta
@@ -721,15 +729,6 @@ export function listConversations(spaceId: string): ConversationMeta[] {
 }
 
 // Create a new conversation (always v2 format)
-/**
- * Out-of-box toolset selection for the very first conversation, before the user
- * has ever toggled a toolset (no config.lastToolsets yet). AI Browser is a core
- * capability, so it is on by default; the user can turn it off, after which
- * config.lastToolsets (possibly empty) takes over. Ids must match the registry
- * (services/agent/toolsets); unavailable ids are dropped at use time.
- */
-const FIRST_RUN_DEFAULT_TOOLSETS = ['ai-browser']
-
 export function createConversation(spaceId: string, title?: string): Conversation {
   const id = uuidv4()
   const now = new Date().toISOString()
@@ -746,10 +745,10 @@ export function createConversation(spaceId: string, title?: string): Conversatio
   // Stamp the global last-used toolset selection so a new conversation inherits
   // the previous window's enabled toolsets (mirrors the model pin above). Unknown
   // or unavailable ids are ignored at use time (toolsets/registry availability
-  // gate), so no filtering here. On first run (no persisted selection yet) the
-  // browser toolset is on out of the box; once the user toggles anything,
-  // config.lastToolsets is authoritative — including an empty set (all off).
-  let toolsets: string[] = FIRST_RUN_DEFAULT_TOOLSETS
+  // gate), so no filtering here. Until the user toggles anything the shared
+  // defaults apply; after that config.lastToolsets is authoritative — including
+  // an empty set (all off).
+  let toolsets: string[] = [...DEFAULT_TOOLSETS]
   // KB ids to preload: the space's bound KBs plus the global default, snapshotted
   // once at creation so the conversation owns its knowledge set (space rebinds
   // affect only later conversations; the user can add/remove per conversation).
@@ -887,7 +886,7 @@ export function addMessage(spaceId: string, conversationId: string, message: Omi
     message.role === 'user' &&
     !conversation.titleCustomized
   ) {
-    conversation.title = message.content.slice(0, 50) + (message.content.length > 50 ? '...' : '')
+    conversation.title = titleFromFirstMessage(message.content) ?? conversation.title
   }
 
   // Ensure version is set for new writes

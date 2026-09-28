@@ -48,6 +48,7 @@ import { isAppChatKey, parseAppChatKey } from '../../../shared/apps/im-keys'
 import { analytics } from '../analytics/analytics.service'
 import { AnalyticsEvents } from '../analytics/types'
 import { deriveErrorCode } from '../analytics/error-code'
+import { beginApiRetry, endApiRetry, parseApiRetryMessage } from './api-retry'
 
 // Unified fallback error suffix - guides user to check logs
 const FALLBACK_ERROR_HINT = 'Check logs in Settings > System > Logs.'
@@ -419,6 +420,9 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
   // Token-level streaming state
   let currentStreamingText = ''  // Accumulates text_delta tokens
   let isStreamingTextBlock = false  // True when inside a text content block
+  // What currentStreamingText held before the open text block began — restored
+  // when the engine abandons that block to resend the request.
+  let textBeforeStreamingBlock = ''
   const STREAM_THROTTLE_MS = 30  // Throttle updates to ~33fps
 
   // Track if SDK reported error_during_execution (for interrupted detection)
@@ -462,6 +466,87 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
 
   // Tool ID to Thought ID mapping - for merging tool_result into tool_use
   const toolIdToThoughtId = new Map<string, string>()
+  let nextStreamThoughtId = 0
+  const attemptTools = new Map<string, string>()
+  let attemptTextBaseline = lastTextContent
+  let attemptStreamingTextBaseline = currentStreamingText
+  let attemptToolBreakBaseline = hadSubstantiveToolSinceLastText
+
+  const beginStreamingAttempt = (): void => {
+    if (isStreamingTextBlock || streamingBlocks.size > 0 ||
+        [...attemptTools.keys()].some(thoughtId =>
+          !sessionState.thoughts.find((t: Thought) => t.id === thoughtId)?.toolResult)) return
+    attemptTools.clear()
+    attemptTextBaseline = lastTextContent
+    attemptStreamingTextBaseline = currentStreamingText
+    attemptToolBreakBaseline = hadSubstantiveToolSinceLastText
+  }
+
+  const abandonStreamingAttempt = (): void => {
+    for (const block of streamingBlocks.values()) {
+      if (block.type !== 'thinking') continue
+      const thought = sessionState.thoughts.find((t: Thought) => t.id === block.thoughtId)
+      if (thought) {
+        thought.content = block.content
+        thought.isStreaming = false
+      }
+      emitAgentEvent('agent:thought-delta', spaceId, conversationId, {
+        thoughtId: block.thoughtId,
+        content: block.content,
+        isComplete: true
+      })
+    }
+
+    let abandonedTools = 0
+    for (const [thoughtId, toolId] of attemptTools) {
+      const thought = sessionState.thoughts.find((t: Thought) => t.id === thoughtId)
+      if (!thought || thought.toolResult) continue
+      const block = [...streamingBlocks.values()].find(b => b.thoughtId === thoughtId)
+      const toolResult = {
+        output: 'Not run: the model request was interrupted and sent again.',
+        isError: true,
+        timestamp: new Date().toISOString()
+      }
+      thought.isStreaming = false
+      thought.isReady = true
+      thought.toolResult = toolResult
+      if (block) {
+        emitAgentEvent('agent:thought-delta', spaceId, conversationId, {
+          thoughtId,
+          toolInput: {},
+          isComplete: true,
+          isReady: true,
+          isToolInput: true
+        })
+      }
+      emitAgentEvent('agent:thought-delta', spaceId, conversationId, {
+        thoughtId,
+        toolResult,
+        isToolResult: true
+      })
+      toolIdToThoughtId.delete(toolId)
+      abandonedTools++
+    }
+    streamingBlocks.clear()
+    attemptTools.clear()
+
+    const rolledBackText = isStreamingTextBlock ||
+      lastTextContent !== attemptTextBaseline || currentStreamingText !== attemptStreamingTextBaseline
+    isStreamingTextBlock = false
+    lastTextContent = attemptTextBaseline
+    currentStreamingText = attemptStreamingTextBaseline
+    textBeforeStreamingBlock = attemptStreamingTextBaseline
+    hadSubstantiveToolSinceLastText = attemptToolBreakBaseline
+    if (rolledBackText) {
+      emitAgentEvent('agent:message', spaceId, conversationId, {
+        type: 'message',
+        content: attemptTextBaseline,
+        isComplete: false,
+        isStreaming: false
+      })
+    }
+    console.log(`[Agent][${conversationId}] api_retry rolled back attempt: not_run_tools=${abandonedTools} text_reset=${rolledBackText}`)
+  }
 
   const t1 = Date.now()
 
@@ -566,6 +651,16 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
       callbacks.onRawMessage(sdkMessage)
     }
 
+    // A pending retry is over as soon as the resent request answers.
+    if (
+      sessionState.apiRetry &&
+      (sdkMessage.type === 'stream_event' || sdkMessage.type === 'assistant') &&
+      (sdkMessage as any).parent_tool_use_id == null
+    ) {
+      console.log(`[Agent][${conversationId}] api_retry recovered on attempt ${sessionState.apiRetry.state.attempt}`)
+      endApiRetry(sessionState)
+    }
+
     // Handle stream_event for token-level streaming (text only)
     if (sdkMessage.type === 'stream_event') {
       const event = (sdkMessage as any).event
@@ -587,6 +682,7 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
       // message_start, the counts from message_delta — see streamUsageByMessageId
       // for the telemetry side and `lastSingleUsage` for the context gauge.
       if (event.type === 'message_start') {
+        beginStreamingAttempt()
         streamingMessageId = event.message?.id
       } else if (event.type === 'message_delta') {
         const deltaUsage = extractStreamDeltaUsage(event)
@@ -604,6 +700,7 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
       if (event.type === 'content_block_start' && event.content_block?.type === 'text') {
         isStreamingTextBlock = true
         const blockText = event.content_block.text || ''
+        textBeforeStreamingBlock = hadSubstantiveToolSinceLastText ? '' : currentStreamingText
 
         if (hadSubstantiveToolSinceLastText) {
           // A substantive tool occurred — previous text was transitional, start fresh
@@ -634,7 +731,7 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
       // Thinking block started - send empty thought immediately
       if (event.type === 'content_block_start' && event.content_block?.type === 'thinking') {
         const blockIndex = event.index ?? 0
-        const thoughtId = `thought-thinking-${Date.now()}-${blockIndex}`
+        const thoughtId = `thought-thinking-${Date.now()}-${nextStreamThoughtId++}`
 
         // Track this block for delta correlation
         streamingBlocks.set(blockIndex, {
@@ -697,7 +794,8 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
         const blockIndex = event.index ?? 0
         const toolId = event.content_block.id || `tool-${Date.now()}`
         const toolName = event.content_block.name || 'Unknown'
-        const thoughtId = `thought-tool-${Date.now()}-${blockIndex}`
+        const thoughtId = `thought-tool-${Date.now()}-${nextStreamThoughtId++}`
+        attemptTools.set(thoughtId, toolId)
 
         // Mark substantive tool — breaks text continuity (transparent tools like TodoWrite do not)
         if (!isTransparentTool(toolName)) {
@@ -1066,6 +1164,22 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
         }
       }
 
+      // A model request failed and the engine will send it again after a wait.
+      if (subtype === 'api_retry') {
+        const retry = parseApiRetryMessage(msg)
+        if (retry) {
+          console.warn(
+            `[Agent][${conversationId}] api_retry attempt=${retry.attempt}/${retry.maxRetries}` +
+            ` delay_ms=${retry.delayMs} status=${retry.errorStatus ?? 'none'} kind=${retry.errorKind}` +
+            ` reason="${(retry.errorMessage ?? '').slice(0, 200).replace(/"/g, "'")}"`
+          )
+          abandonStreamingAttempt()
+          beginApiRetry(sessionState, retry)
+        } else {
+          console.warn(`[Agent][${conversationId}] api_retry frame ignored: unexpected shape`)
+        }
+      }
+
       // Session goal changed (engines with features.goal). A user-side change
       // is echoed here once the engine hands it to the model.
       if (subtype === 'goal_updated') {
@@ -1176,6 +1290,13 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
         console.log(`[Agent][${conversationId}] Token usage (single API):`, tokenUsage)
       }
     }
+  }
+
+  // A retry still pending here never got its answer: the turn ended on the
+  // final failure or on a stop.
+  if (sessionState.apiRetry) {
+    console.log(`[Agent][${conversationId}] api_retry abandoned at turn end (attempt ${sessionState.apiRetry.state.attempt})`)
+    endApiRetry(sessionState)
   }
 
   // ========== Stream End Handling ==========

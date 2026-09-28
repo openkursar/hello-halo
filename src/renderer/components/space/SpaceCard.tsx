@@ -141,7 +141,7 @@ export function SpaceCard({ space, summary, onOpen, onOpenTab }: SpaceCardProps)
                 ) : (
                   <>
                     <button onClick={() => { setMenuOpen(false); setEditing(true) }} className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-muted/60 transition-colors">
-                      <Pencil className="w-3.5 h-3.5 text-muted-foreground" /> {t('Rename')}
+                      <Pencil className="w-3.5 h-3.5 text-muted-foreground" /> {t('Edit')}
                     </button>
                     <button onClick={handleOpenFolder} className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-muted/60 transition-colors">
                       <FolderOpen className="w-3.5 h-3.5 text-muted-foreground" /> {t('Show in Folder')}

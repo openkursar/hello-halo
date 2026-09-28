@@ -57,7 +57,7 @@ const goal = (patch: any = {}) => ({ objective: 'Ship the release', doneWhen: ['
 beforeEach(() => {
   vi.stubGlobal('navigator', { platform: 'MacIntel' })
   env.goal = undefined
-  env.ui = { expanded: new Set(), undo: new Map(), dropUndo: vi.fn(), setExpanded: vi.fn() }
+  env.ui = { undo: new Map(), dropUndo: vi.fn() }
   env.conversations = [{ id: 'c', title: 'Chat' }]
 })
 
@@ -72,12 +72,15 @@ it('shelf renders nothing without a goal', () => {
   expect(nodes(tree).some(node => node.type === 'section')).toBe(false)
 })
 
-it('shelf shows an active goal collapsed, with its criteria count', () => {
+it('shelf shows an active goal with its criteria count and the actions on it', () => {
   env.goal = goal()
-  const strings = text(shelf()())
+  const tree = shelf()()
+  const strings = text(tree)
   expect(strings).toContain('Goal')
   expect(strings).toContain('Ship the release')
   expect(strings).toContain('1 criterion')
+  expect(nodes(tree).some(node => node.props?.title === 'Edit goal')).toBe(true)
+  expect(nodes(tree).some(node => node.props?.title === 'Clear goal')).toBe(true)
 })
 
 it('shelf offers a new goal once the goal is achieved', () => {
@@ -87,6 +90,17 @@ it('shelf offers a new goal once the goal is achieved', () => {
   expect(text(tree)).toContain('Goal achieved')
   nodes(tree).find(node => node.type === 'button' && node.props.title === 'New goal').props.onClick()
   expect(onNewGoal).toHaveBeenCalled()
+})
+
+it('shelf can reopen the goal tab for a finished or abandoned goal', async () => {
+  const { canvasLifecycle } = await import('../../../src/renderer/services/canvas-lifecycle')
+  for (const status of ['complete', 'abandoned']) {
+    ;(canvasLifecycle.openGoal as any).mockClear()
+    env.goal = goal({ status, updatedBy: 'agent' })
+    const tree = shelf()()
+    nodes(tree).find(node => node.type === 'button' && node.props.title === 'Edit goal').props.onClick()
+    expect(canvasLifecycle.openGoal).toHaveBeenCalledWith('s', 'c')
+  }
 })
 
 it('shelf offers undo right after a clear', () => {
@@ -148,6 +162,45 @@ it('editor follows a change silently while it has no edits', () => {
 
   expect(banner(tree)).toBeUndefined()
   expect(nodes(tree).find(node => node.type === 'textarea').props.value).toBe('Halo wording')
+})
+
+it('editor keeps the actions in the footer, never the header', () => {
+  env.goal = goal()
+  const tree = editor()()
+  const footer = nodes(tree).find(node => node.type === 'footer')
+  const header = nodes(tree).find(node => node.type === 'header')
+  expect(text(footer)).toContain('Save goal')
+  expect(text(footer)).toContain('Clear goal')
+  expect(nodes(header).some(node => node.type === 'button')).toBe(false)
+})
+
+it('footer keeps clear and cancel usable until a save is in flight', async () => {
+  env.goal = goal()
+  const { saveGoal } = await import('../../../src/renderer/components/goal/goal-actions')
+  let release!: (ok: boolean) => void
+  const inFlight = new Promise<boolean>((resolve) => { release = resolve })
+  ;(saveGoal as any).mockReturnValueOnce(inFlight)
+  const button = (tree: any, label: string) =>
+    nodes(tree).find(node => node.type === 'button' && [node.props?.children].flat(Infinity).includes(label))
+
+  const render = editor()
+  let tree = render()
+  nodes(tree).find(node => node.type === 'textarea').props.onChange({ target: { value: 'My own wording' } })
+  tree = render()
+  expect(button(tree, 'Clear goal').props.disabled).toBeFalsy()
+  expect(button(tree, 'Cancel').props.disabled).toBeFalsy()
+
+  button(tree, 'Save goal').props.onClick()
+  tree = render()
+  expect(button(tree, 'Clear goal').props.disabled).toBe(true)
+  expect(button(tree, 'Cancel').props.disabled).toBe(true)
+
+  release(true)
+  await inFlight
+  await Promise.resolve()
+  await Promise.resolve()
+  tree = render()
+  expect(button(tree, 'Clear goal').props.disabled).toBeFalsy()
 })
 
 it('editor ignores Esc while an input method is composing', async () => {

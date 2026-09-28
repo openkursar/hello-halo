@@ -596,7 +596,7 @@ export function SystemSection({ config, setConfig }: SystemSectionProps) {
                           <span>{healthReport.platform} ({healthReport.arch})</span>
                         </div>
                         <div className="flex justify-between">
-                          <span className="text-muted-foreground">{t('Memory')}</span>
+                          <span className="text-muted-foreground">{t('System Memory')}</span>
                           <span>{healthReport.system.memory.free} / {healthReport.system.memory.total}</span>
                         </div>
                         <div className="flex justify-between">

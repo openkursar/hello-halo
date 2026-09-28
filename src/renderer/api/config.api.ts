@@ -9,7 +9,7 @@ import {
 import type {
   ApiResponse,
 } from './_shared'
-import type { ModelOption } from '../../shared/types'
+import type { ModelOption, ModelRefreshSummary } from '../../shared/types'
 import type { CatalogModelCapability, ModelCapabilityOverride } from '../../shared/types/model-capabilities'
 
 /** Result payload of `validateApi` (connection test). */
@@ -71,7 +71,7 @@ export const configApi = {
     return httpRequest('POST', '/api/config/fetch-models', { apiKey, apiUrl })
   },
 
-  refreshAISourcesConfig: async (): Promise<ApiResponse> => {
+  refreshAISourcesConfig: async (): Promise<ApiResponse & { modelRefresh?: ModelRefreshSummary }> => {
     if (isElectron()) {
       return window.halo.refreshAISourcesConfig()
     }

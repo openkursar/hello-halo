@@ -21,6 +21,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { createDatabaseManager } from '../../../../../src/main/platform/store/database-manager'
 import type { DatabaseManager } from '../../../../../src/main/platform/store/types'
 import { FederationStore } from '../../../../../src/main/apps/federation/store'
+import { DEFAULT_OFFICE_SCOPE } from '../../../../../src/main/apps/federation/types'
 import {
   MIGRATION_NAMESPACE as FED_NS,
   migrations as fedMigrations,
@@ -31,6 +32,8 @@ import {
   migrations as teamMigrations,
 } from '../../../../../src/main/apps/team/migrations'
 import { createFederationManager } from '../../../../../src/main/apps/runtime/federation/manager'
+import type { FederationManager } from '../../../../../src/main/apps/runtime/federation/manager'
+import type { FederationCoordinator } from '../../../../../src/main/apps/runtime/federation/coordinator'
 import { createFederation } from '../../../../../src/main/apps/runtime/federation/index'
 import { LanMeshLink } from '../../../../../src/main/apps/runtime/federation/lan-mesh-provider'
 import { SELF_NODE_ID, buildTeamSessionKey } from '../../../../../src/shared/apps/team-types'
@@ -76,6 +79,10 @@ describe('federation roster sync (DR)', () => {
   let dbManager: DatabaseManager
   let federationStore: FederationStore
   let teamStore: TeamStore
+  // Started hosts and joiners keep ticking (heartbeats, roster refresh) on unref'd
+  // timers that read the store; afterEach closes it, so they stop first.
+  const managers: FederationManager[] = []
+  const coordinators: FederationCoordinator[] = []
 
   beforeEach(() => {
     dbManager = createDatabaseManager(':memory:')
@@ -87,6 +94,8 @@ describe('federation roster sync (DR)', () => {
   })
 
   afterEach(() => {
+    for (const manager of managers.splice(0)) manager.stopAll()
+    for (const coordinator of coordinators.splice(0)) coordinator.stop()
     dbManager.closeAll()
   })
 
@@ -120,6 +129,7 @@ describe('federation roster sync (DR)', () => {
       joinedAt: Date.now(),
       lastSeen: Date.now(),
       status: 'online',
+      advertisedUrl: null,
     })
   }
 
@@ -129,7 +139,8 @@ describe('federation roster sync (DR)', () => {
    */
   function wireTwoNodes(opts?: { verify?: (token: string) => OfficeCredentialLike | null }) {
     const verify =
-      opts?.verify ?? ((token: string) => (token === VALID_TOKEN ? { officeId: OFFICE } : null))
+      opts?.verify ??
+      ((token: string) => (token === VALID_TOKEN ? { officeId: OFFICE, scope: DEFAULT_OFFICE_SCOPE } : null))
 
     const bReceived: FederationMessage[] = []
     const rosterChangedFor: string[] = []
@@ -154,6 +165,7 @@ describe('federation roster sync (DR)', () => {
     })
 
     hostManager.hostOffice(OFFICE)
+    managers.push(hostManager)
     return { hostManager, bLink, bReceived, rosterChangedFor }
   }
 
@@ -168,6 +180,7 @@ describe('federation roster sync (DR)', () => {
       onRoster,
     })
     fed.coordinator.start()
+    coordinators.push(fed.coordinator)
     const request: JoinRequest = {
       kind: 'join-request',
       officeId: OFFICE,
@@ -241,6 +254,7 @@ describe('federation roster sync (DR)', () => {
       verifyCredential: () => null,
     })
     fed.coordinator.start()
+    coordinators.push(fed.coordinator)
     fed.coordinator.requestJoin({
       kind: 'join-request',
       officeId: OFFICE,
@@ -283,6 +297,7 @@ describe('federation roster sync (DR)', () => {
       verifyCredential: () => null,
     })
     fed.coordinator.start()
+    coordinators.push(fed.coordinator)
     fed.coordinator.requestJoin(request)
     fed.coordinator.requestJoin(request) // rejoin (e.g. reconnect re-handshake)
 

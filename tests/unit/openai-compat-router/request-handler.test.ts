@@ -582,3 +582,132 @@ describe('upstream error mapping', () => {
     })
   })
 })
+
+describe('upstream error retry hints', () => {
+  async function relay(upstream: { status: number; body: unknown; headers?: Record<string, string> }, apiType = 'chat_completions') {
+    const req = anthReq()
+    runInterceptors.mockResolvedValue({ intercepted: false, request: req })
+    proxyFetch.mockResolvedValue(
+      fakeResponse({
+        ok: false,
+        status: upstream.status,
+        headers: upstream.headers,
+        text: typeof upstream.body === 'string' ? upstream.body : JSON.stringify(upstream.body),
+      }),
+    )
+    const res = makeRes()
+    await handleMessagesRequest(
+      req,
+      baseConfig(apiType === 'anthropic_passthrough' ? { apiType, url: 'https://third-party/v1/messages' } : { apiType }),
+      res as unknown as ExpressResponse,
+    )
+    return res
+  }
+
+  it('keeps the upstream status for a vendor-specific error type instead of collapsing it to 500', async () => {
+    const res = await relay({
+      status: 429,
+      body: { type: 'error', error: { type: 'GoUsageLimitError', message: 'Go usage limit exceeded' } },
+    })
+
+    expect(res.statusCode).toBe(429)
+    expect((res.jsonBody as { error: { type: string } }).error.type).toBe('GoUsageLimitError')
+  })
+
+  it('tells the client not to retry a spent quota, with no invented wait', async () => {
+    const res = await relay({
+      status: 429,
+      body: { type: 'error', error: { type: 'GoUsageLimitError', message: 'Go usage limit exceeded' } },
+    })
+
+    expect(res.headers['x-should-retry']).toBe('false')
+    expect(res.headers['retry-after']).toBeUndefined()
+  })
+
+  it('leaves an ordinary rate limit retryable on the client\'s own backoff', async () => {
+    const res = await relay({ status: 429, body: { error: { type: 'rate_limit_error', message: 'Too many requests' } } })
+
+    expect(res.statusCode).toBe(429)
+    expect(res.headers['x-should-retry']).toBeUndefined()
+    expect(res.headers['retry-after']).toBeUndefined()
+  })
+
+  it('forwards the upstream retry-after rather than replacing it', async () => {
+    const res = await relay({
+      status: 429,
+      body: { error: { type: 'rate_limit_error', message: 'slow down' } },
+      headers: { 'retry-after': '20' },
+    })
+
+    expect(res.headers['retry-after']).toBe('20')
+  })
+
+  it.each(['chat_completions', 'anthropic_passthrough'])(
+    '%s: preserves short retry-after despite quota wording',
+    async (apiType) => {
+      const res = await relay({
+        status: 429,
+        body: { error: { type: 'rate_limit_error', message: 'Quota exceeded: requests per minute. Please retry in 2 seconds.' } },
+        headers: { 'retry-after': '2' },
+      }, apiType)
+
+      expect(res.statusCode).toBe(429)
+      expect(res.headers['retry-after']).toBe('2')
+      expect(res.headers['x-should-retry']).toBeUndefined()
+    },
+  )
+
+  it('honors an explicit upstream refusal to retry even with a retry-after', async () => {
+    const res = await relay({
+      status: 429,
+      body: { error: { type: 'rate_limit_error', message: 'Quota exceeded' } },
+      headers: { 'retry-after': '2', 'x-should-retry': 'false' },
+    })
+
+    expect(res.headers['x-should-retry']).toBe('false')
+    expect(res.headers['retry-after']).toBe('2')
+  })
+
+  it('suggests a short wait for a server-side failure that came without one', async () => {
+    const res = await relay({ status: 503, body: 'Service Unavailable' })
+
+    expect(res.statusCode).toBe(500)
+    expect(res.headers['retry-after']).toBe('3')
+  })
+
+  it('passthrough: keeps the upstream retry-after instead of forcing a short one', async () => {
+    const res = await relay(
+      {
+        status: 429,
+        body: { type: 'error', error: { type: 'rate_limit_error', message: 'slow down' } },
+        headers: { 'retry-after': '30' },
+      },
+      'anthropic_passthrough',
+    )
+
+    expect(res.statusCode).toBe(429)
+    expect(res.headers['retry-after']).toBe('30')
+  })
+
+  it('passthrough: marks a spent quota as not retryable', async () => {
+    const res = await relay(
+      { status: 429, body: { type: 'error', error: { type: 'rate_limit_error', message: 'You exceeded your current quota' } } },
+      'anthropic_passthrough',
+    )
+
+    expect(res.headers['x-should-retry']).toBe('false')
+  })
+
+  it('passthrough: an upstream x-should-retry is authoritative', async () => {
+    const res = await relay(
+      {
+        status: 429,
+        body: { type: 'error', error: { type: 'rate_limit_error', message: 'usage limit' } },
+        headers: { 'x-should-retry': 'true' },
+      },
+      'anthropic_passthrough',
+    )
+
+    expect(res.headers['x-should-retry']).toBe('true')
+  })
+})

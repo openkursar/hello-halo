@@ -12,6 +12,7 @@ import { canvasLifecycle } from '../../services/canvas-lifecycle'
 import { useConversationGoal, useGoalStore, useGoalSupported, type GoalInput } from '../../stores/goal.store'
 import { useGoalUiStore } from '../../stores/goal-ui.store'
 import type { ImageAttachment } from '../../types'
+import { appendAttachedPaths, type AttachedPath } from '../../../shared/attached-paths'
 import { GoalShelf } from './GoalShelf'
 import { notifyGoalUpdateFailed, pendingGoal, saveGoal } from './goal-actions'
 import { parseGoalDraft } from './parseGoalDraft'
@@ -92,14 +93,14 @@ export function useGoalComposer({
     if (modeKey) useGoalUiStore.getState().setComposerGoalMode(modeKey, on)
   }, [modeKey])
 
-  const submit = useCallback(async (text: string, images: ImageAttachment[] | undefined, thinkingEnabled: boolean) => {
+  const submit = useCallback(async (text: string, images: ImageAttachment[] | undefined, thinkingEnabled: boolean, paths?: AttachedPath[]) => {
     const input = parseGoalDraft(text)
     if (!input || !spaceId || !conversationId) return false
     setMode(false)
     // Mid-turn, the goal goes to the running turn, which picks it up at its next step.
     const accepted = isGenerating
       ? await saveGoal(spaceId, conversationId, input)
-      : await sendWithGoal(spaceId, conversationId, input, () => send(text, images, thinkingEnabled, input))
+      : await sendWithGoal(spaceId, conversationId, input, () => send(appendAttachedPaths(text, paths ?? []), images, thinkingEnabled, input))
     if (!accepted) setMode(true)
     return accepted
   }, [spaceId, conversationId, isGenerating, send, setMode])
@@ -119,28 +120,11 @@ export function useGoalComposer({
   const hasActiveGoal = goal?.status === 'active'
   const finishedGoal = !!goal && !hasActiveGoal
 
-  const hint = (text: string) => {
-    const count = parseGoalDraft(text)?.doneWhen?.length ?? 0
-    const recognised = count === 0 ? '' : ` · ${count === 1 ? t('1 criterion') : t('{{count}} criteria', { count })}`
-    if (isGenerating) {
-      return {
-        full: t('Halo is replying. The goal applies on its next step; no new message is sent') + recognised,
-        short: t('Applies on next step') + recognised,
-      }
-    }
-    return {
-      full: (sendKeyMode === 'ctrl-enter'
-        ? t('Add "- " lines for done-when criteria')
-        : t('Add "- " lines for done-when criteria (Shift+Enter for a new line)')) + recognised,
-      short: t('Add "- " lines for criteria') + recognised,
-    }
-  }
-
   return {
     active,
     menuItem: {
       label: hasActiveGoal ? t('Edit goal') : finishedGoal ? t('Set a new goal') : t('Set a goal'),
-      title: hasActiveGoal ? t('Edit goal') : t("Give Halo an outcome to work toward until it's done"),
+      description: t('Halo keeps working toward it; context compaction never loses it'),
       onSelect: () => {
         if (hasActiveGoal) void canvasLifecycle.openGoal(spaceId, conversationId)
         else setMode(true)
@@ -149,7 +133,6 @@ export function useGoalComposer({
     exit: () => setMode(false),
     chip: <GoalModeChip onExit={() => setMode(false)} />,
     placeholder: t('Describe the outcome you want Halo to reach…'),
-    hint,
     sendTitle: isGenerating
       ? t('Set goal — Halo picks it up at its next step')
       : sendKeyMode === 'ctrl-enter' ? t('Set goal and start — Ctrl+Enter') : t('Set goal and start — Enter'),

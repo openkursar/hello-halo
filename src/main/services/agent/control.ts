@@ -12,6 +12,8 @@ import { activeSessions, v2Sessions, closeV2Session, getConsumerHandle, getRunni
 import { hasActiveTeamTasks } from './subagent-handler'
 import { getActivePendingQuestion, type RecoverablePendingQuestion } from './permission-handler'
 import type { Thought } from './types'
+import type { ApiRetryState } from '../../../shared/types/api-retry'
+import { snapshotApiRetry } from './api-retry'
 
 // ============================================
 // Stop Generation
@@ -193,6 +195,8 @@ export function getSessionState(conversationId: string): {
   thoughts: Thought[]
   spaceId?: string
   pendingQuestion?: RecoverablePendingQuestion
+  /** The retry the engine is waiting on, with the wait left as of now. */
+  apiRetry?: ApiRetryState
 } {
   // A pending question lets reconnecting clients rebuild the question card, and
   // marks the session active on its own: the turn is blocked on the answer even
@@ -208,7 +212,8 @@ export function getSessionState(conversationId: string): {
         isActive: true,
         thoughts: [...sessionState.thoughts],
         spaceId: sessionState.spaceId,
-        pendingQuestion
+        pendingQuestion,
+        ...(sessionState.apiRetry ? { apiRetry: snapshotApiRetry(sessionState.apiRetry) } : {})
       }
     }
   }
@@ -224,6 +229,7 @@ export function getSessionState(conversationId: string): {
     isActive: true,
     thoughts: [...session.thoughts],
     spaceId: session.spaceId,
-    pendingQuestion
+    pendingQuestion,
+    ...(session.apiRetry ? { apiRetry: snapshotApiRetry(session.apiRetry) } : {})
   }
 }

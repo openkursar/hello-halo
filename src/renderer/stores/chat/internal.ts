@@ -8,12 +8,13 @@
  */
 import { create } from 'zustand'
 import { api } from '../../api'
-import type { Conversation, ConversationMeta, Message, ToolCall, Artifact, Thought, AgentEventBase, ImageAttachment, CompactInfo, CanvasContext, AgentErrorType, PendingQuestion, Question, TaskStatus, PulseItem, PulseReadInfo, TaskProgress } from '../../types'
+import type { Conversation, ConversationMeta, Message, ToolCall, Artifact, Thought, AgentEventBase, ImageAttachment, CompactInfo, ApiRetryNotice, CanvasContext, AgentErrorType, PendingQuestion, Question, TaskStatus, PulseItem, PulseReadInfo, TaskProgress } from '../../types'
 import type { SessionInitInfo } from '../../types/slash-command'
 import { PULSE_READ_GRACE_PERIOD_MS } from '../../types'
 import { canvasLifecycle } from '../../services/canvas-lifecycle'
 import type { StoreApi } from 'zustand'
 import type { GoalInput } from '../../../shared/types/goal'
+import type { ApiRetryEvent } from '../../../shared/types/api-retry'
 
 // LRU cache size limit
 export const CONVERSATION_CACHE_SIZE = 10
@@ -54,6 +55,8 @@ export interface SessionState {
   errorType: AgentErrorType | null  // Special error type for custom UI handling
   // Compact notification
   compactInfo: CompactInfo | null
+  // Model request the engine is waiting to resend; mirrors main, never persisted
+  apiRetry: ApiRetryNotice | null
   // Text block version - increments on each new text block (for StreamingBubble reset)
   textBlockVersion: number
   // Pending question from AskUserQuestion tool
@@ -81,6 +84,7 @@ export function createEmptySessionState(): SessionState {
     error: null,
     errorType: null,
     compactInfo: null,
+    apiRetry: null,
     textBlockVersion: 0,
     pendingQuestion: null,
     queuedMessages: [],
@@ -237,6 +241,7 @@ export interface ChatState {
     taskProgress?: TaskProgress
   }) => void
   handleAgentCompact: (data: AgentEventBase & { trigger: 'manual' | 'auto'; preTokens: number }) => void
+  handleAgentApiRetry: (data: ApiRetryEvent) => void
   handleAgentSessionInfo: (data: AgentEventBase & SessionInitInfo) => void
   handleAgentTurnStart: (data: AgentEventBase & { autonomous?: boolean }) => void
 
@@ -284,7 +289,7 @@ export const EMPTY_SPACE_STATE: SpaceState = createEmptySpaceState()
 // ---- re-exports for slices ----
 export { api, canvasLifecycle, PULSE_READ_GRACE_PERIOD_MS }
 export type { SessionInitInfo }
-export type { Conversation, ConversationMeta, Message, ToolCall, Artifact, Thought, AgentEventBase, ImageAttachment, CompactInfo, CanvasContext, AgentErrorType, PendingQuestion, Question, TaskStatus, PulseItem, PulseReadInfo, TaskProgress }
+export type { Conversation, ConversationMeta, Message, ToolCall, Artifact, Thought, AgentEventBase, ImageAttachment, CompactInfo, ApiRetryNotice, CanvasContext, AgentErrorType, PendingQuestion, Question, TaskStatus, PulseItem, PulseReadInfo, TaskProgress }
 
 // ---- slice creator types: each slice receives the store's set/get and
 // returns its subset of ChatState; get() sees the full store for cross-slice calls.

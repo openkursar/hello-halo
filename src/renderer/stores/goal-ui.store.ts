@@ -21,13 +21,10 @@ export interface GoalUndoEntry {
 interface GoalUiState {
   /** Composer draft keys whose next Send sets a goal. */
   composerGoalMode: Set<string>
-  /** Conversations whose goal shelf is expanded. */
-  expanded: Set<string>
   /** conversationId -> the goal just cleared from it, while Undo is offered. */
   undo: Map<string, GoalUndoEntry>
 
   setComposerGoalMode: (draftKey: string, on: boolean) => void
-  setExpanded: (conversationId: string, expanded: boolean) => void
   offerUndo: (conversationId: string, previous: GoalInput) => void
   dropUndo: (conversationId: string, id?: number) => void
   /** Drop everything held for a deleted conversation. */
@@ -46,17 +43,11 @@ function toggled(set: Set<string>, key: string, on: boolean): Set<string> | null
 
 export const useGoalUiStore = create<GoalUiState>((set, get) => ({
   composerGoalMode: new Set(),
-  expanded: new Set(),
   undo: new Map(),
 
   setComposerGoalMode: (draftKey, on) => {
     const next = toggled(get().composerGoalMode, draftKey, on)
     if (next) set({ composerGoalMode: next })
-  },
-
-  setExpanded: (conversationId, expanded) => {
-    const next = toggled(get().expanded, conversationId, expanded)
-    if (next) set({ expanded: next })
   },
 
   offerUndo: (conversationId, previous) => {
@@ -77,7 +68,6 @@ export const useGoalUiStore = create<GoalUiState>((set, get) => ({
 
   forget: (conversationId) => {
     get().setComposerGoalMode(conversationId, false)
-    get().setExpanded(conversationId, false)
     get().dropUndo(conversationId)
   },
 }))

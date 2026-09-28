@@ -7,7 +7,7 @@
  * broker meta server, and the currently-open toolsets. Only external process-based
  * MCP servers (user-installed apps) are passed separately by the caller.
  *
- * Toolsets are toggled by the user from the input "Tools" menu. A change persists
+ * Toolsets are toggled by the user from the composer's "+" menu. A change persists
  * to the conversation record and schedules a session rebuild, so the new set is
  * seeded at the next session creation. There is deliberately NO runtime hot-swap:
  * one uniform mechanism across all engines (creation-time seed + rebuild-on-change)
@@ -247,7 +247,7 @@ export function requestToolset(scope: ToolsetScope, toolsetId: string): RequestT
   return { ok: true, displayName: def.displayName }
 }
 
-/** Current toolset statuses for the renderer "Tools" menu */
+/** Current toolset statuses for the composer's "+" menu */
 export function listToolsetStatuses(spaceId: string, conversationId: string): ToolsetStatus[] {
   const open = getOpenToolsets(spaceId, conversationId)
   return getAvailableToolsets().map(def => ({

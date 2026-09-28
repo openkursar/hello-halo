@@ -163,6 +163,9 @@ export interface AISourceProvider {
    * @returns Updated configuration for this provider
    */
   refreshConfig?(config: AISourcesConfig): Promise<ProviderResult<Partial<AISourcesConfig>>>
+
+  /** Optional local reconstruction when authentication prevents a remote refresh. */
+  getOfflineConfig?(config: AISourcesConfig): Partial<AISourcesConfig>
 }
 
 /**

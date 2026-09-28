@@ -750,6 +750,8 @@ export interface JoinedOfficeSnapshot {
     goal: string
     leadAppId: string | null
     collabMode: CollabMode
+    /** The host's own node id — the authority of this office (persisted as the shadow office's host_node_id). */
+    hostNodeId: string
     /**
      * The office's currently-open run epoch, if any. Persisted as the shadow
      * office's current_epoch_id so a joiner can bind the live run from its own

@@ -124,3 +124,12 @@ describe('conversation title ownership (#307)', () => {
     expect(stored?.title).toBe('legacy first message')
   })
 })
+
+describe('first-message title edge cases', () => {
+  it('keeps the default title when the first message has no text', () => {
+    const conv = createConversation(SPACE)
+    addMessage(SPACE, conv.id, { role: 'user', content: '' })
+
+    expect(getConversation(SPACE, conv.id)?.title).toBe(conv.title)
+  })
+})

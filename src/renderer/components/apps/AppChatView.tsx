@@ -32,6 +32,7 @@ import type { Message, ImageAttachment, Artifact } from '../../types'
 import type { SlashCommandItem } from '../../types/slash-command'
 import { getAppChatConversationId } from '../../../shared/apps/im-keys'
 import type { DigitalHumanSelectorConfig } from '../chat/DigitalHumanSelector'
+import type { ApiRetryState } from '../../../shared/types/api-retry'
 
 interface AppChatViewProps {
   /** App ID */
@@ -207,10 +208,12 @@ export function AppChatView({ appId, spaceId, conversationId: conversationIdProp
     if (useChatStore.getState().getSession(conversationId).isGenerating) {
       api.getSessionState(conversationId).then(res => {
         if (res.success && res.data) {
-          const { isActive } = res.data as { isActive: boolean }
+          const { isActive, apiRetry } = res.data as { isActive: boolean; apiRetry?: ApiRetryState }
           if (!isActive) {
             console.log(`[AppChatView] Backend session inactive — clearing stale generating state`)
             useChatStore.getState().resetSession(conversationId)
+          } else {
+            useChatStore.getState().handleAgentApiRetry({ spaceId, conversationId, retry: apiRetry ?? null })
           }
         }
       }).catch(() => {})
@@ -374,6 +377,7 @@ export function AppChatView({ appId, spaceId, conversationId: conversationIdProp
               textBlockVersion={textBlockVersion}
               pendingQuestion={pendingQuestion}
               onAnswerQuestion={handleAnswerQuestion}
+              onStop={handleStop}
               onAtBottomStateChange={handleAtBottomStateChange}
               hideBrowserViewButton
             />

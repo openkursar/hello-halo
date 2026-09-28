@@ -19,7 +19,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Loader2, X, Plus, Sparkles, ChevronDown, ChevronRight } from 'lucide-react'
+import { Loader2, X, Plus, Sparkles } from 'lucide-react'
 import type {
   CreateTeamInput,
   MemberSourcing,
@@ -37,6 +37,7 @@ import { useTranslation } from '../../i18n'
 import { SystemPromptEditor } from '../apps/SystemPromptEditor'
 import { AppInstallDialog } from '../apps/AppInstallDialog'
 import { SpacePicker } from '../apps/SpacePicker'
+import { Disclosure } from '../ui/Disclosure'
 import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
 
 interface TeamCreateDialogProps {
@@ -73,9 +74,6 @@ export function TeamCreateDialog({ onClose, onCreated }: TeamCreateDialogProps) 
   const [escalationRouting, setEscalationRouting] = useState<EscalationRouting>('lead')
   const [selectedAppIds, setSelectedAppIds] = useState<string[]>([])
   const [submitted, setSubmitted] = useState(false)
-  // Advanced options (coordination / escalation) stay collapsed by default —
-  // sensible defaults cover most teams, keeping creation low-friction.
-  const [showAdvanced, setShowAdvanced] = useState(false)
   // Stacked on top of this dialog rather than replacing it, so the in-progress
   // team form (name, goal, already-picked members) survives the inline
   // digital-human creation flow regardless of whether it's finished or cancelled.
@@ -423,65 +421,46 @@ export function TeamCreateDialog({ onClose, onCreated }: TeamCreateDialogProps) 
 
             {/* Advanced options — collapsed by default to keep creation simple. */}
             <div ref={advancedSectionRef} className="border-t border-border pt-4">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowAdvanced(v => {
-                    if (!v) reveal(advancedSectionRef.current)
-                    return !v
-                  })
-                }}
-                className="flex w-full items-center gap-1.5 text-sm font-medium text-foreground"
+              <Disclosure
+                title={t('Advanced options')}
+                hint={t('Defaults work for most teams')}
+                onOpenChange={open => { if (open) reveal(advancedSectionRef.current) }}
               >
-                {showAdvanced
-                  ? <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                  : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
-                {t('Advanced options')}
-                {!showAdvanced && (
-                  <span className="ml-1 truncate text-xs font-normal text-muted-foreground/70">
-                    {t('Defaults work for most teams')}
-                  </span>
-                )}
-              </button>
+                {/* Coordination */}
+                <Field label={t('Coordination')}>
+                  <RadioRow
+                    checked={collabMode === 'structured'}
+                    label={t('Managed mode')}
+                    hint={t('The Lead assigns tasks and reviews results.')}
+                    onSelect={() => setCollabMode('structured')}
+                  />
+                  <RadioRow
+                    checked={collabMode === 'free'}
+                    label={t('Free mode')}
+                    hint={t('All members communicate freely.')}
+                    onSelect={() => setCollabMode('free')}
+                  />
+                </Field>
 
-              {showAdvanced && (
-                <div className="mt-4 space-y-5">
-                  {/* Coordination */}
-                  <Field label={t('Coordination')}>
-                    <RadioRow
-                      checked={collabMode === 'structured'}
-                      label={t('Managed mode')}
-                      hint={t('The Lead assigns tasks and reviews results.')}
-                      onSelect={() => setCollabMode('structured')}
-                    />
-                    <RadioRow
-                      checked={collabMode === 'free'}
-                      label={t('Free mode')}
-                      hint={t('All members communicate freely.')}
-                      onSelect={() => setCollabMode('free')}
-                    />
-                  </Field>
-
-                  {/* When a member needs help (escalation routing). The lead is
-                      not named here — at creation time the user has not met it
-                      yet; Settings uses its name once it exists. */}
-                  <Field label={t('When members need help')}>
-                    <RadioRow
-                      checked={escalationRouting === 'lead'}
-                      label={t('Work it out within the team first')}
-                      hint={t('Members are asked to clear blockers together before involving you. One can still reach you directly when the decision is clearly yours.')}
-                      badge={t('Recommended')}
-                      onSelect={() => setEscalationRouting('lead')}
-                    />
-                    <RadioRow
-                      checked={escalationRouting === 'user'}
-                      label={t('Notify me directly')}
-                      hint={t('Members are asked to bring blockers straight to you.')}
-                      onSelect={() => setEscalationRouting('user')}
-                    />
-                  </Field>
-                </div>
-              )}
+                {/* When a member needs help (escalation routing). The lead is
+                    not named here — at creation time the user has not met it
+                    yet; Settings uses its name once it exists. */}
+                <Field label={t('When members need help')}>
+                  <RadioRow
+                    checked={escalationRouting === 'lead'}
+                    label={t('Work it out within the team first')}
+                    hint={t('Members are asked to clear blockers together before involving you. One can still reach you directly when the decision is clearly yours.')}
+                    badge={t('Recommended')}
+                    onSelect={() => setEscalationRouting('lead')}
+                  />
+                  <RadioRow
+                    checked={escalationRouting === 'user'}
+                    label={t('Notify me directly')}
+                    hint={t('Members are asked to bring blockers straight to you.')}
+                    onSelect={() => setEscalationRouting('user')}
+                  />
+                </Field>
+              </Disclosure>
             </div>
           </div>
 

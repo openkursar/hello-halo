@@ -87,8 +87,7 @@ export function registerConfigHandlers(): void {
         // No deep merging needed - frontend manages the complete sources array
 
         // Restore '***' sentinels to real values before saving.
-        const existing = getConfig() as Record<string, unknown>
-        unmaskSentinels(processedUpdates, existing)
+        unmaskSentinels(processedUpdates, { ...getConfig() })
 
         const config = saveConfig(processedUpdates)
         console.log('[Settings] config:set - Saved successfully')
@@ -153,10 +152,10 @@ export function registerConfigHandlers(): void {
       console.log('[Settings] config:refresh-ai-sources - Refreshing all AI sources')
       try {
         const manager = getAISourceManager()
-        await manager.refreshAllConfigs()
+        const modelRefresh = await manager.refreshAllConfigs()
         const config = getConfig()
-        console.log('[Settings] config:refresh-ai-sources - Refreshed, current:', (config as any).aiSources?.current || 'custom')
-        return { success: true, data: config }
+        console.log('[Settings] config:refresh-ai-sources - Completed:', modelRefresh)
+        return { success: true, data: config, modelRefresh }
       } catch (error: unknown) {
         const err = error as Error
         console.error('[Settings] config:refresh-ai-sources - Failed:', err.message)

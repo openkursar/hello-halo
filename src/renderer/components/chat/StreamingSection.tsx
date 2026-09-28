@@ -13,7 +13,8 @@ import { BrowserTaskCard } from '../tool/BrowserTaskCard'
 import { TerminalTaskCard } from '../tool/TerminalTaskCard'
 import { AskUserQuestionCard } from './AskUserQuestionCard'
 import { QueuedMessagesPanel } from './QueuedMessagesPanel'
-import type { Thought, PendingQuestion } from '../../types'
+import { ApiRetryNotice } from './ApiRetryNotice'
+import type { Thought, PendingQuestion, ApiRetryNotice as ApiRetryNoticeState } from '../../types'
 import type { BrowserToolCall } from './useBrowserToolCalls'
 import type { TerminalToolCall } from './useTerminalToolCalls'
 
@@ -63,6 +64,12 @@ export interface StreamingSectionProps {
    * known from the conversation, not the content.
    */
   senderName?: string
+
+  /** A failed model request the engine is waiting to resend. */
+  apiRetry?: ApiRetryNoticeState | null
+
+  /** Stops the turn; offered on the retry notice. */
+  onStop?: () => void
 }
 
 export function StreamingSection({
@@ -79,6 +86,8 @@ export function StreamingSection({
   className = '',
   queuedMessages = [],
   senderName,
+  apiRetry = null,
+  onStop,
 }: StreamingSectionProps) {
   return (
     <div className={`flex justify-start animate-fade-in pb-4 ${className}`}>
@@ -91,6 +100,9 @@ export function StreamingSection({
         {(thoughts.length > 0 || isThinking) && (
           <ThoughtProcess thoughts={thoughts} isThinking={isThinking} />
         )}
+
+        {/* The model request failed and is waiting to be sent again */}
+        {apiRetry && <ApiRetryNotice retry={apiRetry} onStop={onStop} />}
 
         {/* Real-time browser task card */}
         {browserToolCalls.length > 0 && (

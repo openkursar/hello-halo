@@ -20,6 +20,7 @@ import {
   unsubscribeFromConversation,
 } from './_shared'
 import type { GoalUpdatedEvent } from '../../shared/types/goal'
+import type { ApiRetryEvent } from '../../shared/types/api-retry'
 
 export const eventsApi = {
   // ===== Event Listeners =====
@@ -49,6 +50,8 @@ export const eventsApi = {
     onEvent('agent:turn-start', callback),
   onAgentGoalUpdated: (callback: (data: GoalUpdatedEvent) => void) =>
     onEvent<GoalUpdatedEvent>('agent:goal-updated', callback),
+  onAgentApiRetry: (callback: (data: ApiRetryEvent) => void) =>
+    onEvent<ApiRetryEvent>('agent:api-retry', callback),
   onToolsetsChanged: (callback: (data: unknown) => void) =>
     onEvent('toolsets:changed', callback),
   onToolsetsRequested: (callback: (data: unknown) => void) =>

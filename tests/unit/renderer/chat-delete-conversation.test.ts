@@ -163,8 +163,8 @@ describe('deleteConversation — goal state', () => {
     const { useGoalUiStore } = await import('../../../src/renderer/stores/goal-ui.store')
     const goal: Goal = { objective: 'Ship', doneWhen: [], status: 'active', updatedBy: 'user', updatedAt: 't' }
     useGoalStore.setState({ byConversation: new Map<string, Goal | null>([['gone', goal], ['kept', goal]]) })
-    useGoalUiStore.getState().setExpanded('gone', true)
-    useGoalUiStore.getState().setExpanded('kept', true)
+    useGoalUiStore.getState().setComposerGoalMode('gone', true)
+    useGoalUiStore.getState().setComposerGoalMode('kept', true)
 
     apiMock.deleteConversation.mockResolvedValue({ success: true })
     const useStore = buildStore([makeConversation('gone'), makeConversation('kept')], 'kept')
@@ -172,7 +172,7 @@ describe('deleteConversation — goal state', () => {
 
     expect(useGoalStore.getState().byConversation.has('gone')).toBe(false)
     expect(useGoalStore.getState().byConversation.has('kept')).toBe(true)
-    expect(useGoalUiStore.getState().expanded.has('gone')).toBe(false)
-    expect(useGoalUiStore.getState().expanded.has('kept')).toBe(true)
+    expect(useGoalUiStore.getState().composerGoalMode.has('gone')).toBe(false)
+    expect(useGoalUiStore.getState().composerGoalMode.has('kept')).toBe(true)
   })
 })

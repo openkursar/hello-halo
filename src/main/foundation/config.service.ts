@@ -21,6 +21,8 @@ import type {
 } from '../../shared/types'
 import { DEFAULT_MODEL } from '../../shared/types'
 import { BUILTIN_PROVIDERS, getBuiltinProvider } from '../../shared/constants'
+import { applyNewToolsetDefaults } from '../../shared/constants/toolsets'
+import { DEFAULT_MAX_TURNS, LEGACY_DEFAULT_MAX_TURNS } from '../../shared/constants/agent-limits'
 import { decryptString } from './secure-storage.service'
 import {
   encryptConfigFields,
@@ -344,6 +346,84 @@ function migrateWecomBotToImChannelInstances(): void {
 }
 
 // ============================================================================
+// DEFAULT TOOLSETS CARRY-FORWARD
+// ============================================================================
+// A saved `lastToolsets` is the user's own choice, but it predates any toolset
+// that became a default later. Each new default is added to it once, and
+// `toolsetDefaultsSeen` records that it was offered so turning it off sticks.
+// ============================================================================
+
+function applyNewToolsetDefaultsOnDisk(): void {
+  const configPath = getConfigPath()
+  if (!existsSync(configPath)) return
+
+  let parsed: Record<string, any>
+  try {
+    parsed = JSON.parse(readFileSync(configPath, 'utf-8'))
+  } catch (error) {
+    console.error('[Config Migration] Skipped default toolsets: config unreadable, will retry next start:', (error as Error).message)
+    return
+  }
+
+  const saved: string[] | undefined = Array.isArray(parsed.lastToolsets) ? parsed.lastToolsets : undefined
+  const previousSeen: string[] | undefined = Array.isArray(parsed.toolsetDefaultsSeen)
+    ? parsed.toolsetDefaultsSeen
+    : undefined
+  const result = applyNewToolsetDefaults(saved, previousSeen)
+  if (previousSeen && result.seen.length === previousSeen.length) return
+
+  const added = saved && result.lastToolsets ? result.lastToolsets.filter(id => !saved.includes(id)) : []
+  if (result.lastToolsets) parsed.lastToolsets = result.lastToolsets
+  parsed.toolsetDefaultsSeen = result.seen
+
+  try {
+    writeFileSync(configPath, JSON.stringify(parsed, null, 2))
+    console.log('[Config Migration] Recorded default toolsets:', { seen: result.seen, addedToLastToolsets: added })
+  } catch (error) {
+    console.error('[Config Migration] Failed to persist default toolsets:', error)
+  }
+}
+
+// ============================================================================
+// LEGACY MAX TURNS UPGRADE
+// ============================================================================
+// Configs saved before the default rose to DEFAULT_MAX_TURNS still carry the
+// old default, which silently caps every session. It is raised once; the
+// marker keeps a value the user sets afterwards from being touched again.
+// ============================================================================
+
+function upgradeLegacyMaxTurnsOnDisk(): void {
+  const configPath = getConfigPath()
+  if (!existsSync(configPath)) return
+
+  let parsed: Record<string, any>
+  try {
+    parsed = JSON.parse(readFileSync(configPath, 'utf-8'))
+  } catch {
+    return
+  }
+
+  const agent = parsed.agent && typeof parsed.agent === 'object' ? parsed.agent : {}
+  if (agent.maxTurnsDefaultUpgraded) return
+
+  const upgraded = agent.maxTurns === LEGACY_DEFAULT_MAX_TURNS
+  parsed.agent = {
+    ...agent,
+    ...(upgraded ? { maxTurns: DEFAULT_MAX_TURNS } : {}),
+    maxTurnsDefaultUpgraded: true,
+  }
+
+  try {
+    writeFileSync(configPath, JSON.stringify(parsed, null, 2))
+    if (upgraded) {
+      console.log(`[Config Migration] Raised legacy maxTurns ${LEGACY_DEFAULT_MAX_TURNS} → ${DEFAULT_MAX_TURNS}`)
+    }
+  } catch (error) {
+    console.error('[Config Migration] Failed to persist maxTurns upgrade:', error)
+  }
+}
+
+// ============================================================================
 // EMAIL CHANNEL SEED
 // ============================================================================
 // Enterprise builds declare their corporate SMTP endpoint in product.json
@@ -603,6 +683,12 @@ interface HaloConfig {
    * conversation record — this is purely the seed for the next new conversation.
    */
   lastToolsets?: string[]
+  /**
+   * Default toolsets this install has already been offered. A default added
+   * later is carried into `lastToolsets` once at startup
+   * (`applyNewToolsetDefaultsOnDisk`).
+   */
+  toolsetDefaultsSeen?: string[]
   permissions: {
     fileAccess: 'allow' | 'ask' | 'deny'
     commandExecution: 'allow' | 'ask' | 'deny'
@@ -623,6 +709,8 @@ interface HaloConfig {
   // Agent behavior configuration
   agent?: {
     maxTurns: number
+    /** Set once `maxTurns` has been checked for the legacy default (`upgradeLegacyMaxTurnsOnDisk`). */
+    maxTurnsDefaultUpgraded?: boolean
     promptProfile?: 'official' | 'halo'
     configDirMode?: 'halo' | 'cc' | 'custom'
     customConfigDir?: string
@@ -907,7 +995,7 @@ const DEFAULT_CONFIG: HaloConfig = {
     autoLaunch: false
   },
   agent: {
-    maxTurns: 999,
+    maxTurns: DEFAULT_MAX_TURNS,
     promptProfile: 'halo'
   },
   remoteAccess: {
@@ -1241,6 +1329,10 @@ export async function initializeApp(): Promise<void> {
 
   // Migrate single wecomBot config to multi-instance imChannels.instances[]
   migrateWecomBotToImChannelInstances()
+
+  applyNewToolsetDefaultsOnDisk()
+
+  upgradeLegacyMaxTurnsOnDisk()
 
   // Seed the email channel from product.json on first run (enterprise builds)
   seedEmailChannelDefaults()

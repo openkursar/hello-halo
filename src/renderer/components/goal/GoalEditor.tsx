@@ -11,7 +11,7 @@
  * change that lands meanwhile is noticed even while the editor was not mounted.
  */
 
-import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type DragEvent, type KeyboardEvent } from 'react'
 import { AlertTriangle, Check, GripVertical, Info, Loader2, Plus, X } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { canvasLifecycle, type TabState } from '../../services/canvas-lifecycle'
@@ -89,7 +89,7 @@ function sameContent(a: Goal | null, b: Goal | null): boolean {
 
 const isDirty = (state: EditorState) => !sameFields(fieldsOf(state), state.base)
 
-const BUTTON = 'h-9 sm:h-8 px-3 rounded-md text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50'
+const BUTTON = 'inline-flex h-9 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap px-3 rounded-md text-[13px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50'
 const SECONDARY_BUTTON = `${BUTTON} border border-border bg-secondary text-foreground hover:bg-surface-hover`
 const PRIMARY_BUTTON = `${BUTTON} bg-primary text-primary-foreground hover:bg-primary-hover disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed`
 
@@ -139,8 +139,9 @@ function GoalEditorForm({ tab, spaceId, conversationId }: { tab: TabState; space
   /** The base the other version was opened against; a resolved conflict hides it. */
   const [previewBase, setPreviewBase] = useState<Goal | null | undefined>(undefined)
 
+  const formRef = useRef<HTMLDivElement>(null)
   const objectiveRef = useRef<HTMLTextAreaElement>(null)
-  const rowRefs = useRef(new Map<number, HTMLInputElement>())
+  const rowRefs = useRef(new Map<number, HTMLTextAreaElement>())
   const { requestClear, confirmDialog } = useClearGoal(spaceId, conversationId, running)
   const timeAgo = useTimeAgo(goal?.updatedAt)
 
@@ -197,12 +198,28 @@ function GoalEditorForm({ tab, spaceId, conversationId }: { tab: TabState; space
     setFocusRequest(null)
   }, [focusRequest])
 
-  useEffect(() => {
-    const el = objectiveRef.current
-    if (!el) return
-    el.style.height = 'auto'
-    el.style.height = `${el.scrollHeight}px`
-  }, [state?.objective])
+  useLayoutEffect(() => {
+    const form = formRef.current
+    if (!form) return
+    const resize = () => {
+      const fields = [objectiveRef.current, ...rowRefs.current.values()]
+      for (const field of fields) {
+        if (!field) continue
+        field.style.height = 'auto'
+        field.style.height = `${field.scrollHeight + field.offsetHeight - field.clientHeight}px`
+      }
+    }
+    resize()
+    // Canvas resizing changes wrapping without changing the window viewport.
+    let width = form.getBoundingClientRect().width
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry.contentRect.width === width) return
+      width = entry.contentRect.width
+      resize()
+    })
+    observer.observe(form)
+    return () => observer.disconnect()
+  }, [state?.objective, state?.rows, deleted])
 
   useEffect(() => {
     if (!savedFlash) return
@@ -226,7 +243,7 @@ function GoalEditorForm({ tab, spaceId, conversationId }: { tab: TabState; space
   const finished = !!latest && latest.status !== 'active'
   const showingLatest = conflict && previewBase === state.base
   const objectiveMissing = !fields.objective
-  const canSave = !saving && !objectiveMissing && (dirty || finished)
+  const canSave = !saving && !conflict && !objectiveMissing && (dirty || finished)
 
   const update = (patch: Partial<EditorState>) => setState((s) => (s ? { ...s, ...patch } : s))
   const setRows = (rows: Row[]) => update({ rows })
@@ -259,6 +276,8 @@ function GoalEditorForm({ tab, spaceId, conversationId }: { tab: TabState; space
   }
 
   const cancel = () => {
+    if (saving) return
+    setAttemptedSave(false)
     if (dirty) setState(fromGoal(latest, state.rows))
     else closeTab()
   }
@@ -307,7 +326,7 @@ function GoalEditorForm({ tab, spaceId, conversationId }: { tab: TabState; space
     setFocusRequest({ id: row.id, at: 'end' })
   }
 
-  const handleRowKeyDown = (e: KeyboardEvent<HTMLInputElement>, index: number) => {
+  const handleRowKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>, index: number) => {
     if (e.nativeEvent.isComposing) return
     const row = state.rows[index]
     if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
@@ -387,8 +406,8 @@ function GoalEditorForm({ tab, spaceId, conversationId }: { tab: TabState; space
 
   const actions = (
     <>
-      <button type="button" onClick={cancel} className={SECONDARY_BUTTON} title={dirty ? t('Discard changes') : t('Close')}>
-        {t('Cancel')}
+      <button type="button" onClick={cancel} disabled={saving} className={SECONDARY_BUTTON} title={dirty ? t('Discard changes') : t('Close')}>
+        {dirty ? t('Cancel') : t('Close')}
       </button>
       <button
         type="button"
@@ -397,48 +416,43 @@ function GoalEditorForm({ tab, spaceId, conversationId }: { tab: TabState; space
         className={PRIMARY_BUTTON}
         title={`${primaryLabel} — ${navigator.platform.toLowerCase().includes('mac') ? '⌘S' : 'Ctrl+S'}`}
       >
-        {saving ? <Loader2 size={14} className="animate-spin" aria-label={t('Saving...')} /> : primaryLabel}
+        {saving && <Loader2 size={14} className="animate-spin" aria-hidden />}
+        {primaryLabel}
       </button>
     </>
   )
 
   return (
-    <div className="flex h-full flex-col" onKeyDown={handleKeyDown}>
-      <div className="flex-1 min-h-0 overflow-y-auto">
-        <div className="mx-auto w-full max-w-2xl px-4 sm:px-8 py-5 sm:py-8">
-          {/* Header */}
-          <div
+    <div className="flex h-full min-h-0 min-w-0 flex-col bg-background" onKeyDown={handleKeyDown} aria-busy={saving}>
+      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]">
+        <div ref={formRef} className="mx-auto w-full max-w-3xl px-5 py-6">
+          <header
             key={refreshFlash}
-            className={`flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg text-xs text-muted-foreground
-              ${refreshFlash ? 'animate-[pulse-highlight_600ms_ease-in-out_1]' : ''}`}
+            className={`border-b border-border/60 pb-5 ${refreshFlash ? 'animate-[pulse-highlight_600ms_ease-in-out_1]' : ''}`}
           >
-            {latest ? (
-              <>
-                <GoalStatusIcon goal={latest} running={running} size={15} />
-                <span className="font-medium text-foreground">{goalStatusLabel(latest, running, t)}</span>
-                <span aria-hidden>·</span>
-                <span>{attribution}</span>
-              </>
-            ) : (
-              <span>{attribution}</span>
-            )}
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+              <h1 className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                {latest && <GoalStatusIcon goal={latest} running={running} size={16} />}
+                {latest ? goalStatusLabel(latest, running, t) : t('No goal set')}
+              </h1>
+              {latest && <span className="text-xs text-muted-foreground">{attribution}</span>}
+            </div>
             {conversation && (
-              <span className="min-w-0 truncate sm:ml-auto">
+              <p className="mt-2 truncate text-xs text-muted-foreground" title={conversation.title}>
                 {t('in "{{title}}"', { title: conversation.title })}
-              </span>
+              </p>
             )}
-            <span className="hidden sm:flex items-center gap-2 w-full sm:w-auto sm:ml-3">
-              {actions}
-            </span>
-          </div>
+          </header>
 
           {/* Banners */}
           {bannerText && (
             <div className="mt-4 rounded-lg border border-primary/30 bg-primary/[0.06] px-3 py-2.5 text-sm">
-              <div role="alert" className="flex flex-col sm:flex-row sm:items-center gap-2">
-                <AlertTriangle size={15} className="hidden sm:block shrink-0 text-primary" aria-hidden />
-                <span className="flex-1 text-foreground">{bannerText}</span>
-                <div className="flex flex-wrap items-center gap-2">
+              <div role="alert" className="space-y-3">
+                <p className="flex items-start gap-2">
+                  <AlertTriangle size={15} className="mt-0.5 shrink-0 text-primary" aria-hidden />
+                  <span className="text-foreground">{bannerText}</span>
+                </p>
+                <div className="flex flex-wrap items-center justify-end gap-2">
                   {latest && (
                     <button
                       type="button"
@@ -489,18 +503,18 @@ function GoalEditorForm({ tab, spaceId, conversationId }: { tab: TabState; space
             rows={1}
             aria-invalid={objectiveMissing && (dirty || attemptedSave)}
             aria-describedby={`${tab.id}-objective-error`}
-            className="mt-1.5 w-full resize-none overflow-hidden rounded-lg border border-border bg-card px-3 py-2 text-base sm:text-lg leading-snug text-foreground placeholder:text-subtle-foreground focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-primary/[0.12]"
+            className="mt-1.5 w-full resize-none overflow-hidden rounded-lg border border-border bg-card px-3 py-2 text-sm leading-snug text-foreground placeholder:text-subtle-foreground focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-primary/[0.12]"
           />
           <p id={`${tab.id}-objective-error`} className="min-h-[1.25rem] pt-1 text-xs text-destructive" aria-live="polite">
             {objectiveMissing && (dirty || attemptedSave) ? t('Add an objective') : ''}
           </p>
 
-          {/* Criteria */}
+          {/* Criteria — textareas so a long check wraps instead of scrolling away. */}
           <div className="mt-3 flex flex-wrap items-baseline justify-between gap-x-3">
-            <span id={`${tab.id}-criteria`} className="text-sm font-medium text-foreground">{t('Done when')}</span>
+            <span id={`${tab.id}-criteria`} className="text-sm font-medium text-foreground">{t('Done when (optional)')}</span>
             <span className="text-xs text-muted-foreground">{t('Concrete checks Halo can verify')}</span>
           </div>
-          <ul className="mt-2 space-y-1.5" aria-labelledby={`${tab.id}-criteria`}>
+          <ul className="mt-2 space-y-1" aria-labelledby={`${tab.id}-criteria`}>
             {state.rows.map((row, index) => (
               <li
                 key={row.id}
@@ -510,7 +524,7 @@ function GoalEditorForm({ tab, spaceId, conversationId }: { tab: TabState; space
                   setDropIndex(index)
                 }}
                 onDrop={(e) => handleDrop(e, index)}
-                className={`group flex items-center gap-1.5 rounded-md ${dropIndex === index && dragIndex !== index ? 'ring-2 ring-primary/40' : ''} ${dragIndex === index ? 'opacity-50' : ''}`}
+                className={`group flex items-start gap-1.5 rounded-md ${dropIndex === index && dragIndex !== index ? 'ring-2 ring-primary/40' : ''} ${dragIndex === index ? 'opacity-50' : ''}`}
               >
                 <span
                   draggable
@@ -523,13 +537,13 @@ function GoalEditorForm({ tab, spaceId, conversationId }: { tab: TabState; space
                     setDropIndex(null)
                   }}
                   title={t('Drag to reorder (Alt+↑/↓)')}
-                  className="hidden sm:flex shrink-0 cursor-grab items-center text-muted-foreground/50 hover:text-muted-foreground"
+                  className="mt-2.5 hidden sm:flex shrink-0 cursor-grab items-center text-muted-foreground/50 hover:text-muted-foreground"
                   aria-hidden
                 >
                   <GripVertical size={14} />
                 </span>
-                <span className="shrink-0 text-muted-foreground" aria-hidden>•</span>
-                <input
+                <span className="mt-2.5 shrink-0 text-muted-foreground" aria-hidden>•</span>
+                <textarea
                   ref={(el) => {
                     if (el) rowRefs.current.set(row.id, el)
                     else rowRefs.current.delete(row.id)
@@ -539,14 +553,15 @@ function GoalEditorForm({ tab, spaceId, conversationId }: { tab: TabState; space
                   onKeyDown={(e) => handleRowKeyDown(e, index)}
                   placeholder={t('e.g. The test suite passes')}
                   aria-label={t('Criterion {{number}}', { number: index + 1 })}
-                  className="flex-1 min-w-0 h-9 rounded-md border border-transparent bg-transparent px-2 text-sm text-foreground placeholder:text-subtle-foreground hover:border-border focus:outline-none focus:border-primary focus:bg-card"
+                  rows={1}
+                  className="flex-1 min-w-0 resize-none overflow-hidden rounded-md border border-transparent bg-transparent px-2 py-1.5 text-sm leading-5 text-foreground placeholder:text-subtle-foreground hover:border-border focus:outline-none focus:border-primary focus:bg-card"
                 />
                 <button
                   type="button"
                   onClick={() => removeRow(index, 'none')}
                   aria-label={t('Remove criterion')}
                   title={t('Remove criterion')}
-                  className="shrink-0 inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 focus-visible:opacity-100 hover:text-destructive hover:bg-destructive/10 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+                  className="shrink-0 mt-0.5 inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 focus-visible:opacity-100 hover:text-destructive hover:bg-destructive/10 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
                 >
                   <X size={14} />
                 </button>
@@ -556,40 +571,41 @@ function GoalEditorForm({ tab, spaceId, conversationId }: { tab: TabState; space
           <button
             type="button"
             onClick={() => insertRowAfter(state.rows.length - 1)}
-            className="mt-1.5 inline-flex items-center gap-1.5 h-9 sm:h-8 px-2 rounded-md text-sm text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+            className="mt-1.5 inline-flex h-9 items-center gap-1.5 rounded-md border border-dashed border-border px-3 text-sm text-muted-foreground hover:border-primary/50 hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
           >
             <Plus size={14} aria-hidden />
             {t('Add criterion')}
           </button>
-
-          {/* Footer */}
-          <div className="mt-8 flex flex-col sm:flex-row sm:items-center gap-3 border-t border-border pt-4">
-            <p className="flex-1 flex items-start gap-1.5 text-xs text-muted-foreground">
-              <Info size={13} className="mt-px shrink-0" aria-hidden />
-              {running ? t('Halo will see your changes at its next step.') : t('Halo will see your changes with your next message.')}
-            </p>
-            <span className="text-xs text-halo-success empty:-mt-3 sm:empty:mt-0" aria-live="polite">
-              {savedFlash ? (
-                <span className="inline-flex items-center gap-1"><Check size={13} aria-hidden />{t('Saved')}</span>
-              ) : null}
-            </span>
-            {latest && (
-              <button
-                type="button"
-                onClick={() => requestClear(latest, closeTab)}
-                className="self-start sm:self-auto h-8 px-2.5 -ml-2.5 sm:ml-0 rounded-md text-xs text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive/40"
-              >
-                {latest.status === 'active' ? t('Clear goal') : t('Dismiss')}
-              </button>
-            )}
-          </div>
         </div>
       </div>
 
-      {/* Mobile action bar */}
-      <div className="sm:hidden flex justify-end gap-2 border-t border-border bg-background px-4 py-2.5">
-        {actions}
-      </div>
+      {/* Action bar — one fixed place for the goal's actions at every width:
+          destructive on the left, primary pair on the right, never in the header. */}
+      <footer className="shrink-0 border-t border-border bg-background px-5 py-3">
+        <div className="mx-auto flex w-full max-w-3xl flex-wrap items-center gap-x-3 gap-y-2">
+          {latest && (
+            <button
+              type="button"
+              onClick={() => requestClear(latest, closeTab)}
+              disabled={saving}
+              className="h-8 shrink-0 rounded-md px-2.5 text-xs text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive/40"
+            >
+              {latest.status === 'active' ? t('Clear goal') : t('Dismiss')}
+            </button>
+          )}
+          <p className="min-w-0 flex-1 basis-52 items-start gap-1.5 text-xs text-muted-foreground">
+            {running ? t('Halo will see your changes at its next step.') : t('Halo will see your changes with your next message.')}
+          </p>
+          <span className="text-xs text-halo-success" aria-live="polite">
+            {savedFlash ? (
+              <span className="inline-flex items-center gap-1"><Check size={13} aria-hidden />{t('Saved')}</span>
+            ) : null}
+          </span>
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            {actions}
+          </div>
+        </div>
+      </footer>
       {confirmDialog}
     </div>
   )

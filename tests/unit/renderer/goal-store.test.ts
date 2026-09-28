@@ -120,7 +120,6 @@ describe('goal store', () => {
     useGoalStore.setState({ byConversation: new Map([['c', goal('x')], ['d', null]]), unseenByModel: new Set(['c']) })
     const ui = useGoalUiStore.getState()
     ui.setComposerGoalMode('c', true)
-    ui.setExpanded('c', true)
     ui.offerUndo('c', { objective: 'x' })
 
     state().forget('c')
@@ -130,6 +129,6 @@ describe('goal store', () => {
     expect(state().byConversation.has('d')).toBe(true)
     expect(state().unseenByModel.has('c')).toBe(false)
     const after = useGoalUiStore.getState()
-    expect(after.composerGoalMode.has('c') || after.expanded.has('c') || after.undo.has('c')).toBe(false)
+    expect(after.composerGoalMode.has('c') || after.undo.has('c')).toBe(false)
   })
 })

@@ -605,6 +605,36 @@ html.platform-desktop body::after {
   animation: pop-in var(--dur) var(--ease);
 }
 
+/* Composer "+" panel: rises from the composer's top edge, the mirror of pop-in. */
+@keyframes composer-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-composer-rise {
+  animation: composer-rise var(--dur) var(--ease);
+}
+
+/* A row the AI asked the user to look at: one soft wash that fades out. */
+@keyframes composer-attention {
+  0%, 30% {
+    background-color: hsl(var(--primary) / 0.14);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.animate-composer-attention {
+  animation: composer-attention 2.4s var(--ease);
+}
+
 /* Pulse "seen" item grace-period countdown (PulseList) — the bar drains
    over the 60s removal window, the label pulses to signal "about to go". */
 @keyframes countdown {

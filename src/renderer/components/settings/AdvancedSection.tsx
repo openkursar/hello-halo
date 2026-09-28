@@ -12,6 +12,7 @@ import { CLIConfigSection } from './CLIConfigSection'
 import { Switch } from '../ui/Switch'
 import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 import { DEFAULT_DISABLED_TOOLS } from '../../../shared/constants/disabled-tools'
+import { DEFAULT_MAX_TURNS } from '../../../shared/constants/agent-limits'
 import {
   TEAM_CIRCUIT_DEFAULTS,
   TEAM_DEFAULT_TURN_TIMEOUT_MS,
@@ -113,7 +114,7 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
   const { t } = useTranslation()
   const { showConfirm, DialogComponent: RestartDialogComponent } = useConfirmDialog()
 
-  const [maxTurns, setMaxTurnsState] = useState(config?.agent?.maxTurns ?? 50)
+  const [maxTurns, setMaxTurnsState] = useState(config?.agent?.maxTurns ?? DEFAULT_MAX_TURNS)
   const [sdkEngine, setSdkEngineState] = useState<'anthropic' | 'halo' | 'codex'>(
     config?.agent?.sdkEngine ?? 'anthropic'
   )
@@ -226,7 +227,7 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
       await saveAgentConfig({ maxTurns: clamped })
     } catch (error) {
       console.error('[AdvancedSection] Failed to update maxTurns:', error)
-      setMaxTurnsState(config?.agent?.maxTurns ?? 50)
+      setMaxTurnsState(config?.agent?.maxTurns ?? DEFAULT_MAX_TURNS)
     }
   }
 

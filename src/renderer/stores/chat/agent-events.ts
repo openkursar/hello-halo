@@ -18,7 +18,7 @@ function isVirtualConversationId(conversationId: string): boolean {
   return isAppChatKey(conversationId)
 }
 
-export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAgentToolCall' | 'handleAgentToolResult' | 'handleAgentError' | 'handleAgentComplete' | 'handleAgentThought' | 'handleAgentThoughtDelta' | 'handleAgentCompact' | 'handleAgentSessionInfo' | 'handleAgentTurnStart' | 'handleAskQuestion'> = (set, get) => ({
+export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAgentToolCall' | 'handleAgentToolResult' | 'handleAgentError' | 'handleAgentComplete' | 'handleAgentThought' | 'handleAgentThoughtDelta' | 'handleAgentCompact' | 'handleAgentApiRetry' | 'handleAgentSessionInfo' | 'handleAgentTurnStart' | 'handleAskQuestion'> = (set, get) => ({
   handleAgentMessage: (data) => {
     const { conversationId, content, delta, isStreaming, isNewTextBlock } = data as AgentEventBase & {
       content?: string
@@ -105,6 +105,7 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
         errorType: errorType || null,
         isGenerating: false,
         isThinking: false,
+        apiRetry: null,
         // Only add error thought for non-interrupted errors
         thoughts: errorType === 'interrupted' ? session.thoughts : [...session.thoughts, errorThought],
         // Mark pending question as cancelled on error
@@ -180,7 +181,8 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
         newSessions.set(conversationId, {
           ...session,
           isStreaming: false,
-          isThinking: false
+          isThinking: false,
+          apiRetry: null
           // Keep isGenerating=true and streamingContent until backend loads
         })
       }
@@ -209,7 +211,8 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
           // Carry the engine stamp through reload so EngineBadge stays
           // visible across send-message cycles (otherwise the badge would
           // flicker off until the user navigates away and back).
-          engineId: updatedConversation.engineId
+          engineId: updatedConversation.engineId,
+          titleCustomized: updatedConversation.titleCustomized
         }
 
         // Now atomically: update cache, metadata, AND clear session state
@@ -428,6 +431,27 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
     })
   },
 
+  // A failed model request is waiting to be resent (retry), or requests go
+  // through again (null). The deadline is fixed on this client's clock.
+  handleAgentApiRetry: (data) => {
+    const { conversationId, retry } = data
+    if (retry) {
+      console.log(`[ChatStore] handleAgentApiRetry [${conversationId}]: attempt ${retry.attempt}/${retry.maxRetries} in ${retry.delayMs}ms (status ${retry.errorStatus ?? 'none'})`)
+    }
+
+    set((state) => {
+      const session = state.sessions.get(conversationId)
+      if (!retry && !session?.apiRetry) return state
+
+      const newSessions = new Map(state.sessions)
+      newSessions.set(conversationId, {
+        ...(session || createEmptySessionState()),
+        apiRetry: retry ? { ...retry, retryAt: Date.now() + retry.delayMs } : null
+      })
+      return { sessions: newSessions }
+    })
+  },
+
   // Handle session-info from SDK system:init — store slash_commands / skills / agents
   handleAgentSessionInfo: (data) => {
     const { conversationId, slashCommands, skills, agents } = data
@@ -457,6 +481,7 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
         error: null,
         errorType: null,
         compactInfo: null,
+        apiRetry: null,
         textBlockVersion: 0,
         pendingQuestion: null,
         queuedMessages: [],

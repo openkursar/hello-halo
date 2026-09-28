@@ -593,6 +593,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
               error={error}
               errorType={errorType}
               onContinue={currentConversation ? () => continueAfterInterrupt(currentConversation.id) : undefined}
+              onStop={handleStop}
               isCompact={isCompact}
               textBlockVersion={textBlockVersion}
               pendingQuestion={pendingQuestion}

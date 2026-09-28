@@ -47,6 +47,7 @@ import type { AgentEventBase, Thought, ToolCall, HaloConfig, AgentErrorType, Que
 import type { SessionInitInfo } from './types/slash-command'
 import type { IngestProgressEvent } from '../shared/types/tlon'
 import type { ToastPayload } from '../shared/types/notification'
+import type { ApiRetryState } from '../shared/types/api-retry'
 import { hasAnyAISource } from './types'
 import { openWorkNotification, type WorkNavigationTarget } from './utils/people-navigation'
 import { useTeamStore } from './stores/team.store'
@@ -149,6 +150,7 @@ export default function App() {
   const handleAgentThought = useChatStore(s => s.handleAgentThought)
   const handleAgentThoughtDelta = useChatStore(s => s.handleAgentThoughtDelta)
   const handleAgentCompact = useChatStore(s => s.handleAgentCompact)
+  const handleAgentApiRetry = useChatStore(s => s.handleAgentApiRetry)
   const handleAgentSessionInfo = useChatStore(s => s.handleAgentSessionInfo)
   const handleAgentTurnStart = useChatStore(s => s.handleAgentTurnStart)
   const handleAskQuestion = useChatStore(s => s.handleAskQuestion)
@@ -435,6 +437,7 @@ export default function App() {
             const backendState = res.data as {
               isActive: boolean
               pendingQuestion?: { id: string; questions: Question[] }
+              apiRetry?: ApiRetryState
             }
             if (!backendState.isActive) {
               console.log(`[App] Session ${conversationId} completed while backgrounded — recovering`)
@@ -458,6 +461,10 @@ export default function App() {
                 console.log(`[App] Re-hydrating pending question for ${conversationId} after resume`)
                 chatState.handleAskQuestion({ spaceId: spaceId ?? '', conversationId, id: pq.id, questions: pq.questions })
               }
+            }
+            // Retry notices pushed while suspended were lost; the backend's is current.
+            if (backendState.isActive) {
+              chatState.handleAgentApiRetry({ spaceId: spaceId ?? '', conversationId, retry: backendState.apiRetry ?? null })
             }
           }
         }).catch(err => {
@@ -639,6 +646,11 @@ export default function App() {
       handleAgentCompact(data as AgentEventBase & { trigger: 'manual' | 'auto'; preTokens: number })
     })
 
+    // Engine is waiting to resend a failed model request (or requests flow again)
+    const unsubApiRetry = api.onAgentApiRetry((data) => {
+      handleAgentApiRetry(data)
+    })
+
     // AskUserQuestion - AI needs user input to continue
     const unsubAskQuestion = api.onAgentAskQuestion((data) => {
       console.log('[App] Received agent:ask-question event:', data)
@@ -671,7 +683,7 @@ export default function App() {
       useToolsetsStore.getState().applyChangedEvent(data as ToolsetsChangedEvent)
     })
 
-    // AI asked the user to enable a toolset — pop the Tools menu + highlight it.
+    // AI asked the user to enable a toolset — open the composer's "+" panel + highlight it.
     const unsubToolsetReq = api.onToolsetsRequested((data) => {
       useToolsetsStore.getState().applyRequestedEvent(data as ToolsetsRequestedEvent)
     })
@@ -685,6 +697,7 @@ export default function App() {
       unsubError()
       unsubComplete()
       unsubCompact()
+      unsubApiRetry()
       unsubAskQuestion()
       unsubSessionInfo()
       unsubTurnStart()
@@ -701,6 +714,7 @@ export default function App() {
     handleAgentThought,
     handleAgentThoughtDelta,
     handleAgentCompact,
+    handleAgentApiRetry,
     handleAgentSessionInfo,
     handleAgentTurnStart,
     handleAskQuestion,

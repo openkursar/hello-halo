@@ -80,6 +80,7 @@ Key concepts:
 - "Canvas" = The panel showing AI-generated content
 - "MCP" = Model Context Protocol, a way to extend AI capabilities
 - "Deep Thinking" = Extended reasoning mode for complex tasks
+- "Memory" = What the AI remembers across runs (NOT hardware RAM); "System Memory" = The machine's RAM, shown only in diagnostics
 
 Features:
 - AI Agent like claude code

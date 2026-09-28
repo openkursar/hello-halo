@@ -36,6 +36,8 @@ import { useTranslation } from '../../i18n'
 import { useChatStore } from '../../stores/chat.store'
 import { SourceChips } from './SourceChips'
 import { GoalSetBadge } from '../goal'
+import { AttachedPathChips } from './AttachedPathChips'
+import { splitAttachedPaths } from '../../../shared/attached-paths'
 
 interface MessageItemProps {
   message: Message
@@ -262,6 +264,11 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
     [message.metadata?.fileChanges]
   )
 
+  const userAttachments = useMemo(
+    () => (isUser && message.content ? splitAttachedPaths(message.content) : null),
+    [isUser, message.content]
+  )
+
   // Handle copying message content to clipboard
   const handleCopyMessage = useCallback(async () => {
     if (!message.content) return
@@ -350,12 +357,16 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
         <MessageImages images={message.images} />
       )}
 
+      {userAttachments && userAttachments.paths.length > 0 && (
+        <AttachedPathChips paths={userAttachments.paths} className={userAttachments.text.trim() ? 'mb-2' : ''} />
+      )}
+
       {/* Message content with streaming cursor */}
       <div className="break-words leading-relaxed" data-message-content>
         {message.content && (
           isUser ? (
             // User messages: simple whitespace-preserving text
-            <span className="whitespace-pre-wrap">{message.content}</span>
+            <span className="whitespace-pre-wrap">{userAttachments ? userAttachments.text.trimEnd() : message.content}</span>
           ) : (
             // Assistant messages: full markdown rendering
             <MarkdownRenderer content={message.content} />

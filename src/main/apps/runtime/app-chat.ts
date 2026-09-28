@@ -785,6 +785,7 @@ async function runAppChatTurn(
       console.error(`[AppChat][${appId}] CLI stderr:`, data)
     },
     mcpServers,
+    maxTurns: config.agent?.maxTurns,
     memoryGuard: appMemoryGuard(memoryScope, `chat:${conversationId.slice(0, 8)}`, memorySettings),
   })
 

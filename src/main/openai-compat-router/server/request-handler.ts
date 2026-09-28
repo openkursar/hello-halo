@@ -33,6 +33,7 @@ import { applyProviderAdapter, type AdapterContext } from './provider-adapters'
 import { handleKiroRequest } from '../adapters/kiro.adapter'
 import { countTokens } from '../utils/token-counter'
 import { deferInputTokensEstimate, fillResponseUsageFallback } from '../utils/usage-estimator'
+import { applyRetryHints, getUpstreamError, sendError } from './error-response'
 
 export interface RequestHandlerOptions {
   debug?: boolean
@@ -48,90 +49,6 @@ export interface RequestHandlerOptions {
 }
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000 // 10 minutes
-
-/**
- * Anthropic error type to HTTP status code mapping
- */
-const ERROR_STATUS_MAP: Record<string, number> = {
-  invalid_request_error: 400,
-  authentication_error: 401,
-  permission_error: 403,
-  not_found_error: 404,
-  request_too_large: 413,
-  rate_limit_error: 429,
-  api_error: 500,
-  overloaded_error: 529,
-  timeout_error: 504
-}
-
-/**
- * HTTP status code to Anthropic error type mapping (official only)
- */
-const STATUS_ERROR_MAP: Record<number, string> = {
-  400: 'invalid_request_error',
-  401: 'authentication_error',
-  403: 'permission_error',
-  404: 'not_found_error',
-  413: 'request_too_large',
-  429: 'rate_limit_error',
-  500: 'api_error',
-  529: 'overloaded_error'
-}
-
-/**
- * Get Anthropic error type from HTTP status code
- */
-function getErrorTypeFromStatus(status: number): string {
-  return STATUS_ERROR_MAP[status] || 'api_error'
-}
-
-/**
- * Get error type and message from upstream response
- * Priority: upstream error.type (OpenAI format) > HTTP status mapping > 'api_error'
- */
-function getUpstreamError(status: number, errorText: string): { type: string; message: string } {
-  try {
-    const json = JSON.parse(errorText)
-    // OpenAI format: { error: { type, message } }
-    if (json?.error?.type) {
-      return { type: json.error.type, message: json.error.message || '' }
-    }
-    // Anthropic format: { error: { type, message } }
-    if (json?.error?.message) {
-      return { type: json.error.type || getErrorTypeFromStatus(status), message: json.error.message }
-    }
-  } catch {
-    // Not JSON, ignore
-  }
-  return {
-    type: getErrorTypeFromStatus(status),
-    message: errorText || `HTTP ${status}`
-  }
-}
-
-/**
- * Send error response in Anthropic JSON format
- *
- * Returns HTTP error status code + JSON body (not SSE).
- * SDK recognizes HTTP 4xx/5xx and throws APIError immediately.
- */
-function sendError(
-  res: ExpressResponse,
-  errorType: string,
-  message: string
-): void {
-  const status = ERROR_STATUS_MAP[errorType] || 500
-  console.log(`[RequestHandler] Sending error: HTTP ${status} ${errorType} - ${message.slice(0, 100)}`)
-
-  res.status(status)
-  res.setHeader('Content-Type', 'application/json')
-  res.setHeader('request-id', `req_${Date.now()}`)
-  res.setHeader('retry-after', '3')
-  res.json({
-    type: 'error',
-    error: { type: errorType, message }
-  })
-}
 
 // ============================================================================
 // Upstream Fetch
@@ -455,8 +372,8 @@ async function handleAnthropicPassthrough(
 
       res.status(upstreamResp.status)
       forwardResponseHeaders(upstreamResp, res)
-      // Business policy: override retry-after for faster client recovery
-      res.setHeader('retry-after', '3')
+      const { type: errorType, message: errorMessage } = getUpstreamError(upstreamResp.status, errorText)
+      applyRetryHints(res, upstreamResp.status, errorType, errorMessage, upstreamResp.headers)
       res.end(errorText)
       return
     }
@@ -635,10 +552,10 @@ async function handleOpenAIConversion(
             const retryErrorText = await upstreamResp.text().catch(() => '')
             const { type: retryErrorType, message: retryErrorMessage } = getUpstreamError(upstreamResp.status, retryErrorText)
             console.error(`[RequestHandler] Provider error ${upstreamResp.status}: ${retryErrorText.slice(0, 200)}`)
-            return sendError(res, retryErrorType, retryErrorMessage)
+            return sendError(res, retryErrorType, retryErrorMessage, upstreamResp)
           }
         } else {
-          return sendError(res, errorType, errorMessage)
+          return sendError(res, errorType, errorMessage, upstreamResp)
         }
       } else if (requiresStream && !wantStream) {
         console.warn('[RequestHandler] Upstream requires stream=true, retrying...')
@@ -661,10 +578,10 @@ async function handleOpenAIConversion(
           const { type: retryErrorType, message: retryErrorMessage } = getUpstreamError(upstreamResp.status, retryErrorText)
           console.error(`[RequestHandler] Provider error ${upstreamResp.status}: ${retryErrorText.slice(0, 200)}`)
           console.log(`[RequestHandler] upstream_error_detail wire=openai api_type=${apiType} retry=true status=${upstreamResp.status} duration_ms=${Date.now() - oaiRetryStartTs} content_type=${upstreamResp.headers.get('content-type') || ''} www_authenticate=${upstreamResp.headers.get('www-authenticate') || ''} url=${backendUrl} body_head="${retryErrorText.slice(0, 500).replace(/"/g, "'")}"`)
-          return sendError(res, retryErrorType, retryErrorMessage)
+          return sendError(res, retryErrorType, retryErrorMessage, upstreamResp)
         }
       } else {
-        return sendError(res, errorType, errorMessage)
+        return sendError(res, errorType, errorMessage, upstreamResp)
       }
     }
 

@@ -18,7 +18,7 @@ export const CODEX_ADAPTER_ID = 'openai-codex'
  * the local router — so the two versions have no reason to move together.
  * Bump this when a CLI release changes the catalog or the wire shape.
  */
-export const CODEX_CLI_VERSION = '0.154.0'
+export const CODEX_CLI_VERSION = '0.157.1'
 
 /** A catalog entry shipped with Halo, as the source and the picker read it. */
 export interface CodexSubscriptionModel {
@@ -39,17 +39,21 @@ export interface CodexSubscriptionModel {
  * This is therefore the base of the picker, not merely a pre-fetch seed.
  *
  * Entries are the `visibility: "list"` models of the catalog shipped with the
- * CLI this source emulates ({@link CODEX_CLI_VERSION}, tag `rust-v0.154.0`), in
- * ascending `priority`. That catalog also marks `gpt-5.2` visible; it is
- * intentionally not offered here.
+ * CLI this source emulates ({@link CODEX_CLI_VERSION}, tag `rust-v0.157.1`), in
+ * ascending `priority`. Models that catalog hides are not offered here.
  */
 export const CODEX_SUBSCRIPTION_MODELS: readonly CodexSubscriptionModel[] = [
   { slug: 'gpt-6-astra', name: 'GPT-6-Astra', priority: 1 },
-  { slug: 'gpt-5.6-sol', name: 'GPT-5.6-Sol', priority: 6 },
+  { slug: 'gpt-6-sol', name: 'GPT-6-Sol', priority: 2 },
+  { slug: 'gpt-6-luna', name: 'GPT-6-Luna', priority: 3 },
+  { slug: 'gpt-5.6-sol', name: 'GPT-5.6-Sol', priority: 4 },
   { slug: 'gpt-5.6-terra', name: 'GPT-5.6-Terra', priority: 7 },
   { slug: 'gpt-5.6-luna', name: 'GPT-5.6-Luna', priority: 8 },
   { slug: 'gpt-5.5', name: 'GPT-5.5', priority: 12 }
 ]
 
-/** Offline default model — an entry of {@link CODEX_SUBSCRIPTION_MODELS}. */
-export const CODEX_DEFAULT_MODEL = 'gpt-5.5'
+/**
+ * Offline default model — an entry of {@link CODEX_SUBSCRIPTION_MODELS}.
+ * Halo's own pick; the emulated CLI's picker default is `gpt-6-astra`.
+ */
+export const CODEX_DEFAULT_MODEL = 'gpt-6-sol'

@@ -200,6 +200,30 @@ export interface AISourceUser {
   uid?: string
 }
 
+/** Only fields consumed by the ChatGPT picker and request adapter are cached. */
+export interface CodexCatalogEntry {
+  slug: string
+  display_name?: string
+  visibility?: string
+  priority?: number
+  input_modalities?: string[]
+  context_window?: number
+  supports_reasoning_summary_parameter?: boolean
+  use_responses_lite?: boolean
+}
+
+export interface ModelCatalogCache {
+  provider: 'chatgpt'
+  version: 1
+  fetchedAt: string
+  entries: CodexCatalogEntry[]
+}
+
+export interface ModelRefreshSummary {
+  degradedSourceIds: string[]
+  failedSourceIds: string[]
+}
+
 /**
  * AI Source - Unified configuration for all sources
  * Both API Key and OAuth sources use this same structure
@@ -239,6 +263,8 @@ export interface AISource {
   model: string
   /** Available models list (at least one required) */
   availableModels: ModelOption[]
+  /** Last successful remote overlay, including explicitly hidden models. */
+  modelCatalogCache?: ModelCatalogCache
 
   // ===== Metadata (Required) =====
   /** Creation timestamp (ISO 8601) */
@@ -297,6 +323,9 @@ export interface OAuthSourceConfig {
   model: string
   availableModels: string[]
   modelNames?: Record<string, string>
+  modelCapabilities?: Record<string, CatalogModelCapability>
+  modelVision?: Record<string, boolean>
+  modelCatalogCache?: ModelCatalogCache
   accessToken?: string
   refreshToken?: string
   tokenExpires?: number

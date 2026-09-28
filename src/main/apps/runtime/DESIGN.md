@@ -285,8 +285,9 @@ via the "Continue" button (in the Activity Thread or Session Detail view).
   "continue"; automation runs have no human operator.
 - `report_to_user` is already mandated by the system prompt and powers the
   Activity Thread. Using it as the completion gate adds zero new concepts.
-- `MAX_TURNS` raised from 30 → 100 to give autonomous runs more room before
-  per-cycle turn limits are hit.
+- The per-cycle turn limit is the user's `agent.maxTurns`, falling back to the
+  shared `DEFAULT_MAX_TURNS` (`shared/constants/agent-limits.ts`) like every
+  other entry point, so a run is not cut short before it can report.
 
 **Trade-off**: Up to 10 extra LLM round-trips per cycle in pathological cases,
 plus indefinite user-driven cycles. Acceptable: the alternative is a silently
