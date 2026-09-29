@@ -12,6 +12,7 @@ import { TerminalSquare, ArrowUpRight, Loader2 } from 'lucide-react'
 import { useTerminalStore } from '../../stores/terminal.store'
 import type { ToolCall } from '../../types'
 import { useTranslation } from '../../i18n'
+import { trackToolOpen } from '../../services/tool-session-telemetry'
 
 const TERMINAL_TOOL_PREFIX = 'mcp__ai-terminal__'
 
@@ -78,7 +79,7 @@ export function TerminalTaskCard({ terminalToolCalls, isActive, showOpenButton =
       if (typeof session === 'string') referenced = session
     }
     const target = referenced || runningSessions()[0]?.id
-    if (target) void openInCanvas(target)
+    if (target) trackToolOpen('terminal', 'task_card', openInCanvas(target))
   }
 
   return (

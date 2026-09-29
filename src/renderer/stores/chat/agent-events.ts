@@ -4,19 +4,11 @@
 import type { ChatSlice } from './internal'
 import { api, createEmptySessionState } from './internal'
 import type { AgentEventBase, Conversation, ConversationMeta, Thought, ToolCall } from './internal'
-import { isAppChatKey, parseTeamSessionKey } from '../../../shared/apps/im-keys'
+import { isAppChatKey, isFollowedConversationId, parseTeamSessionKey } from '../../../shared/apps/im-keys'
 import { isRemoteMemberAppId } from '../team.store'
 import { nextTextBlockVersion } from './text-block-version'
+import { noteTurnEnded } from '../../services/home-telemetry'
 
-/**
- * Virtual conversation ids never represent a real user conversation and must
- * never appear in the sidebar or the Pulse panel: "app-chat:{appId}" and IM
- * session keys (digital-human + IM sessions). Real conversations are UUIDs that
- * match a ConversationMeta in spaceStates.
- */
-function isVirtualConversationId(conversationId: string): boolean {
-  return isAppChatKey(conversationId)
-}
 
 export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAgentToolCall' | 'handleAgentToolResult' | 'handleAgentError' | 'handleAgentComplete' | 'handleAgentThought' | 'handleAgentThoughtDelta' | 'handleAgentCompact' | 'handleAgentApiRetry' | 'handleAgentSessionInfo' | 'handleAgentTurnStart' | 'handleAskQuestion'> = (set, get) => ({
   handleAgentMessage: (data) => {
@@ -85,6 +77,8 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
   handleAgentError: (data) => {
     const { conversationId, error, errorType } = data
     console.log(`[ChatStore] handleAgentError [${conversationId}]:`, error, errorType ? `(type: ${errorType})` : '')
+    // A user stop is recorded when requested, so any interruption reaching here is a failure.
+    noteTurnEnded(conversationId, 'error')
 
     // Add error thought to session (only for non-interrupted errors)
     // Interrupted errors get special UI treatment, not shown as error thought
@@ -103,6 +97,7 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
         ...session,
         error,
         errorType: errorType || null,
+        errorSeen: false,
         isGenerating: false,
         isThinking: false,
         apiRetry: null,
@@ -122,6 +117,8 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
   handleAgentComplete: async (data) => {
     const { spaceId, conversationId } = data
     console.log(`[ChatStore] handleAgentComplete [${conversationId}]`)
+    const endedSession = get().sessions.get(conversationId)
+    noteTurnEnded(conversationId, endedSession?.error ? 'error' : 'ok')
 
     // Check if user is currently viewing this conversation. `document.hasFocus()`
     // guards against the window being backgrounded (minimized, another app
@@ -130,18 +127,17 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
     // never shows up in the task panel.
     const state = get()
     const currentSpaceState = state.currentSpaceId ? state.spaceStates.get(state.currentSpaceId) : null
-    const isUserViewingThisConversation =
-      state.currentSpaceId === spaceId &&
-      currentSpaceState?.currentConversationId === conversationId &&
-      document.hasFocus()
+    const isDigitalHumanConversation = isAppChatKey(conversationId)
+    const isOnScreen = isDigitalHumanConversation
+      ? currentSpaceState?.selectedAppChat?.conversationId === conversationId
+      : state.currentSpaceId === spaceId && currentSpaceState?.currentConversationId === conversationId && !currentSpaceState?.selectedAppChat
+    const isUserViewingThisConversation = isOnScreen && document.hasFocus()
 
     // Track unseen completion if user is not viewing this conversation.
-    // Skip virtual sessions (digital-human chat, IM, automation runs): they are
-    // not real conversations and must never surface in Pulse or the sidebar.
-    if (!isUserViewingThisConversation && !isVirtualConversationId(conversationId)) {
-      // Find the conversation title from any space state
-      let title = 'Conversation'
-      let metaFound = false
+    if (!isUserViewingThisConversation && isFollowedConversationId(conversationId)) {
+      // Digital-human items are named by the task panel, not from the index.
+      let title = isDigitalHumanConversation ? '' : 'Conversation'
+      let metaFound = isDigitalHumanConversation
       for (const [, ss] of state.spaceStates) {
         const meta = ss.conversations.find(c => c.id === conversationId)
         if (meta) { title = meta.title; metaFound = true; break }

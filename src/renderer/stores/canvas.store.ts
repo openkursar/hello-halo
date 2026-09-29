@@ -46,7 +46,7 @@ interface CanvasState {
   // Tab Actions (delegate to canvasLifecycle)
   openFile: (path: string, title?: string) => Promise<void>
   openUrl: (url: string, title?: string) => Promise<void>
-  attachAIBrowserView: (viewId: string, url: string, title?: string) => void
+  attachAIBrowserView: (viewId: string, url: string, title?: string) => Promise<string>
   openContent: (content: string, title: string, type: ContentType, language?: string) => void
   openTeam: (teamId: string, title?: string) => Promise<string>
   closeTab: (tabId: string) => void
@@ -131,9 +131,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       await canvasLifecycle.openUrl(url, title)
     },
 
-    attachAIBrowserView: (viewId: string, url: string, title?: string) => {
-      canvasLifecycle.attachAIBrowserView(viewId, url, title)
-    },
+    attachAIBrowserView: (viewId: string, url: string, title?: string) =>
+      canvasLifecycle.attachAIBrowserView(viewId, url, title),
 
     openContent: (content: string, title: string, type: ContentType, language?: string) => {
       canvasLifecycle.openContent(content, title, type, language)

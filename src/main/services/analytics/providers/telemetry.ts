@@ -52,6 +52,7 @@
 
 import { BaseProvider, BaseProviderOptions } from './base'
 import type { AnalyticsEvent, UserContext } from '../types'
+import { HOME_EVENT_NAMES, homeEventWhitelist } from '../../../../shared/analytics/home-telemetry'
 
 /** Hard cap on in-memory queue length. Reaching this triggers an immediate flush. */
 const MAX_QUEUE_SIZE = 100
@@ -142,10 +143,13 @@ const EVENT_WHITELIST: Record<string, readonly string[]> = {
   // Session / navigation
   'session.start':  ['view', 'platform', 'startedAt'],
   'session.end':    ['view', 'platform', 'durationMs'],
-  'page.view':      ['view', 'from'],
+  'page.view':      ['view', 'from', 'shell'],
+
+  // Home shell, navigation and the pages they lead to
+  ...Object.fromEntries(HOME_EVENT_NAMES.map((event) => [event, homeEventWhitelist(event)])),
 
   // Store funnel (identifiers only — slug/type, never user content)
-  'store.view':                ['tab', 'ref'],
+  'store.view':                ['tab', 'ref', 'entry', 'shell'],
   'store.detail.view':         ['appId', 'appType', 'installedState', 'source'],
   'store.card.click':          ['appId', 'appType', 'source'],
   'store.search':              ['resultCount', 'tabScope'],

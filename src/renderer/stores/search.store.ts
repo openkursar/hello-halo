@@ -17,6 +17,7 @@
 import { create } from 'zustand'
 
 export type SearchScope = 'conversation' | 'space' | 'global'
+export type SearchOpenSurface = 'icon' | 'shortcut' | 'mobile_menu' | 'highlight_bar'
 
 interface SearchResult {
   conversationId: string
@@ -35,6 +36,8 @@ interface SearchResult {
 interface SearchState {
   // ===== Search Panel State (Full Screen Edit Mode) =====
   isSearchOpen: boolean
+  /** Where the panel was last opened from. */
+  openSurface: SearchOpenSurface
   searchScope: SearchScope
   query: string // Current input value (UI state)
   searchedQuery: string // Query that produced current results (result metadata)
@@ -50,7 +53,7 @@ interface SearchState {
 
   // ===== Actions =====
   // Search panel (edit mode)
-  openSearch: (scope?: SearchScope) => void
+  openSearch: (scope?: SearchScope, surface?: SearchOpenSurface) => void
   closeSearch: () => void
   resetSearch: () => void // Clear search completely (for new search, not for reopening)
   setQuery: (query: string) => void
@@ -73,6 +76,7 @@ export const useSearchStore = create<SearchState>((set, get) => ({
   // ===== Initial state =====
   // Search panel
   isSearchOpen: false,
+  openSurface: 'icon',
   searchScope: 'global',
   query: '',
   searchedQuery: '',
@@ -91,9 +95,10 @@ export const useSearchStore = create<SearchState>((set, get) => ({
    * Open search panel without clearing previous search state
    * This preserves query and results when user opens search from highlight bar
    */
-  openSearch: (scope = 'global') =>
+  openSearch: (scope = 'global', surface = 'icon') =>
     set({
       isSearchOpen: true,
+      openSurface: surface,
       searchScope: scope
       // Note: DO NOT clear results/query here - preserve state for user to resume
     }),

@@ -42,6 +42,7 @@ module.exports = {
         },
         'surface-hover': 'hsl(var(--surface-hover))',
         'subtle-foreground': 'hsl(var(--subtle-foreground))',
+        'faint-foreground': 'hsl(var(--faint-foreground))',
         'accent-on-dark': 'hsl(var(--accent-on-dark))',
         // Halo brand colors
         'halo-glow': 'hsl(var(--halo-glow))',

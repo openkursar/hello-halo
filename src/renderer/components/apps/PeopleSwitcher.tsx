@@ -10,7 +10,7 @@ import { visibleDigitalHumans } from '../../utils/people-model'
 import { resolveSpecI18n } from '../../utils/spec-i18n'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { needsAttention } from '../../../shared/apps/app-types'
-import { AppTypeIcon } from '../store/AppTypeIcon'
+import { AutomationAvatar } from './AutomationAvatar'
 import { AppStatusDot } from './AppStatusDot'
 import { DetailSwitcher, type DetailSwitcherItem } from './DetailSwitcher'
 
@@ -44,7 +44,8 @@ export function PeopleSwitcher({ selectedAppId, onSelect }: PeopleSwitcherProps)
         return {
           id: app.id,
           name,
-          icon: <AppTypeIcon type="automation" icon={app.spec.icon} name={name} size="xs" />,
+          // Same generated face as the directory card and detail header.
+          icon: <AutomationAvatar name={name} size={26} />,
           flagged,
           dimmed: app.status === 'paused',
           trailing: flagged ? (

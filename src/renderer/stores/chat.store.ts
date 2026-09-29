@@ -21,7 +21,7 @@ import { createMessagingSlice } from './chat/messaging'
 import { createAgentEventsSlice } from './chat/agent-events'
 import { createSessionSlice } from './chat/session'
 import { createAppChatSelectionSlice } from './chat/app-chat-selection'
-import { isAppChatKey } from '../../shared/apps/im-keys'
+import { isAppChatKey, parseDirectAppChatKey } from '../../shared/apps/im-keys'
 
 export const useChatStore = create<ChatState>((set, get) => ({
   spaceStates: new Map<string, SpaceState>(),
@@ -66,7 +66,7 @@ function _extractPulseFingerprint(sessions: Map<string, SessionState>): string {
   for (const [id, s] of sessions) {
     // Only include sessions that could produce non-idle status
     if (s.isGenerating || s.pendingToolApproval || s.error || s.pendingQuestion?.status === 'active') {
-      parts.push(`${id}:${s.isGenerating ? 1 : 0}${s.pendingToolApproval ? 1 : 0}${s.error && s.errorType !== 'interrupted' ? 1 : 0}${s.pendingQuestion?.status === 'active' ? 1 : 0}`)
+      parts.push(`${id}:${s.isGenerating ? 1 : 0}${s.pendingToolApproval ? 1 : 0}${s.error && s.errorType !== 'interrupted' && !s.errorSeen ? 1 : 0}${s.pendingQuestion?.status === 'active' ? 1 : 0}`)
     }
   }
   return parts.join('|')
@@ -97,6 +97,24 @@ function _computePulseItems(state: ChatState): PulseItem[] {
     const status = deriveTaskStatus(session, hasUnseen)
     if (status === 'idle') continue
 
+    // A listed digital-human conversation has no index entry; the task panel
+    // names it and resolves its space from the app.
+    const appId = parseDirectAppChatKey(conversationId)
+    if (appId) {
+      items.push({
+        conversationId,
+        appId,
+        spaceId: '',
+        spaceName: '',
+        title: '',
+        status,
+        starred: false,
+        updatedAt: new Date(session.turnStartedAt ?? Date.now()).toISOString()
+      })
+      addedIds.add(conversationId)
+      continue
+    }
+
     const meta = findMeta(conversationId)
     if (!meta) continue
 
@@ -119,6 +137,7 @@ function _computePulseItems(state: ChatState): PulseItem[] {
     const meta = findMeta(conversationId)
     items.push({
       conversationId,
+      appId: parseDirectAppChatKey(conversationId) ?? undefined,
       spaceId: info.spaceId,
       spaceName: getSpaceName(info.spaceId),
       title: meta?.title || info.title,
@@ -155,6 +174,7 @@ function _computePulseItems(state: ChatState): PulseItem[] {
     if (!info.kept && now - info.readAt >= PULSE_READ_GRACE_PERIOD_MS) continue
     items.push({
       conversationId,
+      appId: parseDirectAppChatKey(conversationId) ?? undefined,
       spaceId: info.spaceId,
       spaceName: getSpaceName(info.spaceId),
       title: info.title,
@@ -327,7 +347,7 @@ export function deriveTaskStatus(
 ): TaskStatus {
   if (session) {
     if (session.pendingToolApproval || session.pendingQuestion?.status === 'active') return 'waiting'
-    if (session.error && session.errorType !== 'interrupted') return 'error'
+    if (session.error && session.errorType !== 'interrupted' && !session.errorSeen) return 'error'
     if (session.isGenerating) return 'generating'
   }
   if (hasUnseenCompletion) return 'completed-unseen'
@@ -370,12 +390,14 @@ export function useAllConversationStatuses(): Map<string, TaskStatus> {
         }
       }
       // Digital-human sessions live outside spaceState.conversations but are
-      // listed beside them, keyed by the same session ids. They never enter
-      // unseenCompletions, so only their live state counts.
+      // listed beside them, keyed by the same session ids.
       for (const [id, session] of state.sessions) {
         if (!isAppChatKey(id)) continue
-        const status = deriveTaskStatus(session, false)
+        const status = deriveTaskStatus(session, state.unseenCompletions.has(id))
         if (status !== 'idle') result.set(id, status)
+      }
+      for (const id of state.unseenCompletions.keys()) {
+        if (isAppChatKey(id) && !result.has(id)) result.set(id, 'completed-unseen')
       }
       return result
     },

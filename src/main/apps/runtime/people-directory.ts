@@ -30,10 +30,16 @@ export function buildPeopleDirectory(
     includeIds = includeIds ? includeIds.filter(id => waiting.has(id)) : [...waiting]
   }
   const search = query.q?.trim().toLocaleLowerCase()
-  const page = manager.listPeopleDirectory({ ...query, includeIds, excludeIds: [...excluded],
-    searchTeamMemberIds: search ? memberships.filter(member => member.teamName.toLocaleLowerCase().includes(search)).map(member => member.appId) : [],
-  })
-  const removedTotal = manager.listPeopleDirectory({ removed: true, excludeIds: [...excluded], limit: 1 }).total
+  const searchTeamMemberIds = search ? memberships.filter(member => member.teamName.toLocaleLowerCase().includes(search)).map(member => member.appId) : []
+  const page = manager.listPeopleDirectory({ ...query, includeIds, excludeIds: [...excluded], searchTeamMemberIds })
+  // Same search, team and workspace as the page, so the count matches what the
+  // removed section lists when opened.
+  let removedIncludeIds: string[] | undefined
+  if (query.teamId) removedIncludeIds = memberships.filter(member => member.teamId === query.teamId).map(member => member.appId)
+  const removedTotal = manager.listPeopleDirectory({
+    q: query.q, language: query.language, spaceId: query.spaceId, includeIds: removedIncludeIds,
+    excludeIds: [...excluded], searchTeamMemberIds, removed: true, limit: 1,
+  }).total
   const live = runtime.getDirectoryRuntimeSnapshot()
   const recent = store.getDirectoryRecentRuns(page.items.map(person => person.id))
   const teamsByPerson = new Map<string, Array<{ id: string; name: string }>>()

@@ -81,6 +81,14 @@ describe('bounded people directory', () => {
     expect(buildPeopleDirectory(manager, activity, runtime, memberships, { removed: true }).items.map(person => person.id)).toEqual(['p149'])
   })
 
+  it('counts removed people with the same search, team and workspace filters the removed list applies', () => {
+    expect(buildPeopleDirectory(manager, activity, runtime, memberships, { q: 'p149' }).removedTotal).toBe(1)
+    expect(buildPeopleDirectory(manager, activity, runtime, memberships, { q: 'p148' }).removedTotal).toBe(0)
+    expect(buildPeopleDirectory(manager, activity, runtime, memberships, { teamId: 'team' }).removedTotal).toBe(0)
+    expect(buildPeopleDirectory(manager, activity, runtime, memberships, { spaceId: 'elsewhere' }).removedTotal).toBe(0)
+    expect(buildPeopleDirectory(manager, activity, runtime, memberships, { spaceId: 'space' }).removedTotal).toBe(1)
+  })
+
   it('treats a stopped person as waiting on the owner, and a removed one as neither', () => {
     const db = database.getAppDatabase()
     db.prepare("UPDATE installed_apps SET status = 'error' WHERE id = 'p002'").run()

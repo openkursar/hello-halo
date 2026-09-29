@@ -23,6 +23,7 @@ import {
 } from '../../types'
 import { useTranslation } from '../../i18n'
 import { useIsMobile } from '../../hooks/useIsMobile'
+import { getCurrentView, trackHome } from '../../services/home-telemetry'
 import { isAnthropicProvider } from '../../types'
 
 /** Read v2 aiSources config with empty fallback */
@@ -421,16 +422,20 @@ export function ModelSelector() {
 
   if (!config) return null
 
+  const toggle = () => {
+    if (!isOpen && getCurrentView() === 'space') {
+      trackHome('home.header.action', { action: 'model', surface: 'desktop' })
+    }
+    setIsOpen(!isOpen)
+  }
+
   return (
     <div className="relative" ref={dropdownRef}>
-      {/* Trigger Button - icon only on mobile, text on desktop.
-          Prototype `.model-btn`: 32px height, 10px horizontal padding, 6px
-          gap, 8px radius, bordered surface, 12px full-color text, hover
-          border tints to accent — not the borderless muted-text pill this
-          used to be. */}
+      {/* Icon only on mobile, text on desktop. Borderless so the header stays
+          quiet; the fill appears on hover. */}
       <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="h-8 flex items-center gap-1.5 px-2.5 rounded-sm border border-border bg-card text-xs text-foreground hover:border-primary transition-colors ease-halo"
+        onClick={toggle}
+        className="h-8 flex items-center gap-1.5 px-2.5 rounded-sm text-xs text-foreground hover:bg-secondary transition-colors ease-halo"
         title={currentModelName}
       >
         {/* Mobile: show Sparkles icon */}

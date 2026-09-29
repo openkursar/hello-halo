@@ -11,8 +11,8 @@ export function TeamList({ onNewTeam, onJoinOffice }: { onNewTeam: () => void; o
   const loading = useTeamStore(s => s.isLoadingList)
   const error = useTeamStore(s => s.error)
   const select = useTeamStore(s => s.selectTeam)
-  return <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-8">
-    <div className="mx-auto max-w-6xl">
+  return <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4 sm:px-10 sm:py-8">
+    <div>
       <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
         <div><h1 className="text-xl font-medium">{t('Teams')}</h1><p className="mt-1.5 max-w-xl text-sm leading-6 text-muted-foreground">{t('A shared workspace for your digital humans to get things done.')}</p></div>
         <button onClick={onJoinOffice} className="flex min-h-10 items-center gap-2 rounded-xl border border-border bg-background px-3 py-2 text-sm transition-colors hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"><LogIn size={16} aria-hidden="true" />{t('Join a team')}</button>

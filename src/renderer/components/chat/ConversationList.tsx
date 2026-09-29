@@ -4,9 +4,9 @@
  * Supports drag-to-resize, inline title editing, and conversation management.
  */
 
-import { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react'
+import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, memo } from 'react'
 import { createPortal } from 'react-dom'
-import { Virtuoso } from 'react-virtuoso'
+import { Virtuoso, type Components } from 'react-virtuoso'
 import { Plus } from '../icons/ToolIcons'
 import { EllipsisVertical, Pin, Pencil, Trash2, ChevronRight } from 'lucide-react'
 import { useTranslation } from '../../i18n'
@@ -23,6 +23,7 @@ import { useAppChatConversationRows, type AppChatConversationRow } from '../../h
 import { parseAppChatKey } from '../../../shared/apps/im-keys'
 import { NATIVE_SESSION_CHANNEL, NATIVE_DEFAULT_CHAT_ID } from '../../../shared/types/im-channel'
 import type { ConversationMeta } from '../../types'
+import { markEntry, trackHome } from '../../services/home-telemetry'
 
 // Width constraints (in pixels)
 const MIN_WIDTH = 140
@@ -37,7 +38,7 @@ const clampWidth = (v: number) => Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, v))
 interface ConversationListProps {
   /** Canvas-open collapsed mode — 56px icon strip: grouping/pin hidden,
    * each conversation is just a status dot (prototype's
-   * `.body.canvas-open .conv`). Resizing is disabled in this mode. */
+   * `.body.canvas-open .conv`). The resize handle can still drag it open. */
   collapsed?: boolean
 }
 
@@ -54,12 +55,7 @@ function appChatRegistryTarget(row: AppChatConversationRow): { channel: string; 
     : { channel: NATIVE_SESSION_CHANNEL, chatId: NATIVE_DEFAULT_CHAT_ID }
 }
 
-/**
- * Conversation timestamp: clock time for today, weekday-less date beyond it.
- * Kept narrower than `formatTimeAgo` because it has to fit beside a title in a
- * 140–360px sidebar without truncating it. The hover card reuses it so the same
- * conversation never shows two different times.
- */
+/** Hover-card timestamp: clock time for today, weekday-less date beyond it. */
 function formatRowTime(timestamp: string | number, t: (s: string) => string): string {
   const d = new Date(timestamp)
   const ms = d.getTime()
@@ -136,6 +132,23 @@ type ConversationRow =
    *  Pinned), so they carry the avatar/name context the section header would
    *  otherwise provide. */
   | { type: 'dh-item'; key: string; row: AppChatConversationRow; standalone: boolean }
+
+/**
+ * The scroller takes no padding: Virtuoso's viewport is absolutely positioned
+ * at top 0 and width 100% of the scroller's padding box, so side padding shifts
+ * rows right without narrowing them (clipping their right edge) and vertical
+ * padding is ignored. Side spacing lives on each row instead, and the top and
+ * bottom spacing are Header/Footer spacers. `flow-root` keeps a header row's
+ * top margin inside the row, where Virtuoso measures it.
+ */
+const PaddedRow: Components<ConversationRow>['Item'] = ({ children, item: _item, context: _context, ...props }) => (
+  <div {...props} className="flow-root px-2 pb-0.5">{children}</div>
+)
+const listComponents: Components<ConversationRow> = {
+  Item: PaddedRow,
+  Header: () => <div className="h-1" />,
+  Footer: () => <div className="h-3" />,
+}
 
 /**
  * Build the full flat row list:
@@ -254,6 +267,10 @@ export const ConversationList = memo(function ConversationList({
   // user reach the same icon-strip view by dragging the handle instead of
   // only via the canvas. Independent of `collapsed`; combined below.
   const [isDragCollapsed, setIsDragCollapsed] = useState(false)
+  // Dragged back open while the canvas has it collapsed. Lasts until the
+  // canvas closes, so the next canvas open starts collapsed again.
+  const [expandedOverCanvas, setExpandedOverCanvas] = useState(false)
+  useEffect(() => { if (!collapsed) setExpandedOverCanvas(false) }, [collapsed])
   const widthRef = useRef(width)
 
   // Sync width when config arrives asynchronously
@@ -292,6 +309,17 @@ export const ConversationList = memo(function ConversationList({
     setHoverCard({ ...card, top: r.top + r.height / 2, left: r.right + 8 })
   }, [])
   const hideHoverCard = useCallback(() => setHoverCard(null), [])
+  // Centred on its row, but shifted to stay inside the window — rows near the
+  // bottom (or top) edge would otherwise cut the card off.
+  const hoverCardRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const el = hoverCardRef.current
+    if (!el || !hoverCard) return
+    const margin = 8
+    const h = el.offsetHeight
+    const top = Math.min(Math.max(hoverCard.top - h / 2, margin), window.innerHeight - h - margin)
+    el.style.top = `${top}px`
+  }, [hoverCard])
 
   const rows = useMemo<ConversationRow[]>(
     () => buildConversationRows(conversations, allAppChatRows, collapsedApps, t),
@@ -312,10 +340,12 @@ export const ConversationList = memo(function ConversationList({
       const containerRect = containerRef.current.getBoundingClientRect()
       const newWidth = e.clientX - containerRect.left
       if (newWidth < DRAG_COLLAPSE_THRESHOLD) {
-        setIsDragCollapsed(true)
+        if (collapsed) setExpandedOverCanvas(false)
+        else setIsDragCollapsed(true)
         return
       }
       setIsDragCollapsed(false)
+      if (collapsed) setExpandedOverCanvas(true)
       const clampedWidth = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, newWidth))
       setWidth(clampedWidth)
       widthRef.current = clampedWidth
@@ -340,7 +370,7 @@ export const ConversationList = memo(function ConversationList({
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseup', handleMouseUp)
     }
-  }, [isDragging])
+  }, [isDragging, collapsed])
 
   // Close dropdown menu on outside click
   useEffect(() => {
@@ -390,6 +420,7 @@ export const ConversationList = memo(function ConversationList({
     const name = editingTitle.trim()
     if (editingId && name) {
       const appChatRow = allAppChatRows.find(r => r.id === editingId)
+      trackHome('home.conversation.action', { action: 'rename', kind: appChatRow ? 'digital_human' : 'normal' })
       if (appChatRow) {
         const target = appChatRegistryTarget(appChatRow)
         void api.imSessionsSetCustomName({ appId: appChatRow.appId, ...target, name })
@@ -429,8 +460,21 @@ export const ConversationList = memo(function ConversationList({
     handleSaveEdit()
   }
 
+  const handleSelectConversation = (conv: ConversationMeta) => {
+    trackHome('home.conversation.select', { kind: 'normal', pinned: !!conv.starred })
+    useChatStore.getState().selectConversation(conv.id)
+  }
+
+  const handleCreateConversation = (surface: 'list' | 'rail_collapsed') => {
+    const spaceId = useSpaceStore.getState().currentSpace?.id
+    if (!spaceId) return
+    trackHome('home.conversation.create', { surface })
+    useChatStore.getState().createConversation(spaceId)
+  }
+
   const handleTogglePin = (e: React.MouseEvent, conv: ConversationMeta) => {
     e.stopPropagation()
+    trackHome('home.conversation.action', { action: conv.starred ? 'unpin' : 'pin', kind: 'normal' })
     const spaceId = useSpaceStore.getState().currentSpace?.id
     if (spaceId) useChatStore.getState().toggleStarConversation(spaceId, conv.id, !conv.starred)
   }
@@ -461,11 +505,14 @@ export const ConversationList = memo(function ConversationList({
   const handleSelectAppChat = (row: AppChatConversationRow) => {
     const spaceId = useSpaceStore.getState().currentSpace?.id
     if (!spaceId) return
+    trackHome('home.conversation.select', { kind: 'digital_human', pinned: row.starred, appId: row.appId })
+    markEntry('home_conv_dh')
     useChatStore.getState().selectAppChatConversation(spaceId, row.appId, row.id)
   }
 
   const handleToggleAppChatPin = (e: React.MouseEvent, row: AppChatConversationRow) => {
     e.stopPropagation()
+    trackHome('home.conversation.action', { action: row.starred ? 'unpin' : 'pin', kind: 'digital_human' })
     const spaceId = useSpaceStore.getState().currentSpace?.id
     if (spaceId) toggleAppChatPin(spaceId, row.id)
   }
@@ -479,6 +526,7 @@ export const ConversationList = memo(function ConversationList({
   const handleDeleteAppChat = async (row: AppChatConversationRow) => {
     const spaceId = useSpaceStore.getState().currentSpace?.id
     if (!spaceId) return
+    trackHome('home.conversation.action', { action: 'delete', kind: 'digital_human' })
     try {
       const res = row.isDefault
         ? await api.appChatClear(row.appId, spaceId, row.id)
@@ -507,7 +555,7 @@ export const ConversationList = memo(function ConversationList({
 
     return (
       <div
-        onClick={() => !isEditing && useChatStore.getState().selectConversation(conversation.id)}
+        onClick={() => !isEditing && handleSelectConversation(conversation)}
         onMouseEnter={(e) => showHoverCard(e.currentTarget, hoverCardFor({ type: 'item', key: conversation.id, conversation }, t))}
         onMouseLeave={hideHoverCard}
         className={cn(
@@ -517,9 +565,6 @@ export const ConversationList = memo(function ConversationList({
             : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
         )}
       >
-        {isActive && (
-          <span className="absolute left-0 top-[7px] bottom-[7px] w-[2.5px] rounded-[2px] bg-primary" />
-        )}
 
         {isEditing ? (
           <div ref={editContainerRef} className="flex flex-1 items-center gap-1" onClick={(e) => e.stopPropagation()}>
@@ -557,17 +602,13 @@ export const ConversationList = memo(function ConversationList({
 
             <EngineBadge engineId={conversation.engineId} size="xs" />
 
-            <span className="shrink-0 text-[11px] tabular-nums text-subtle-foreground group-hover:hidden">
-              {formatRowTime(conversation.updatedAt, t)}
-            </span>
-
             <button
               onClick={(e) => handleTogglePin(e, conversation)}
               className={cn(
                 'ml-auto w-[22px] h-[22px] flex-shrink-0 rounded-[6px] hidden group-hover:flex items-center justify-center transition-colors',
                 conversation.starred
                   ? 'text-accent-on-dark'
-                  : 'text-subtle-foreground hover:bg-surface-hover hover:text-foreground'
+                  : 'text-faint-foreground hover:bg-surface-hover hover:text-foreground'
               )}
               title={conversation.starred ? t('Unpin') : t('Pin')}
               aria-pressed={conversation.starred}
@@ -577,7 +618,7 @@ export const ConversationList = memo(function ConversationList({
 
             <button
               onClick={(e) => openMoreMenu(e, conversation.id)}
-              className="w-[22px] h-[22px] flex-shrink-0 rounded-[6px] flex items-center justify-center text-subtle-foreground opacity-0 group-hover:opacity-100 transition-colors hover:bg-surface-hover hover:text-foreground focus-visible:opacity-100"
+              className="w-[22px] h-[22px] flex-shrink-0 rounded-[6px] flex items-center justify-center text-faint-foreground opacity-0 group-hover:opacity-100 transition-colors hover:bg-surface-hover hover:text-foreground focus-visible:opacity-100"
               title={t('More')}
             >
               <EllipsisVertical className="w-[13px] h-[13px]" strokeWidth={1.8} />
@@ -614,9 +655,6 @@ export const ConversationList = memo(function ConversationList({
             : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
         )}
       >
-        {isActive && !row.uninstalled && (
-          <span className="absolute left-0 top-[7px] bottom-[7px] w-[2.5px] rounded-[2px] bg-primary" />
-        )}
 
         {standalone && <AutomationAvatar name={row.digitalHumanName} size={16} />}
 
@@ -644,10 +682,6 @@ export const ConversationList = memo(function ConversationList({
           <span className="text-[11px] text-muted-foreground shrink-0">{t('Paused')}</span>
         )}
 
-        <span className="shrink-0 text-[11px] tabular-nums text-subtle-foreground group-hover:hidden">
-          {formatRowTime(row.updatedAt, t)}
-        </span>
-
         {!row.uninstalled && (
           <>
             <button
@@ -656,7 +690,7 @@ export const ConversationList = memo(function ConversationList({
                 'ml-auto w-[22px] h-[22px] flex-shrink-0 rounded-[6px] hidden group-hover:flex items-center justify-center transition-colors',
                 row.starred
                   ? 'text-accent-on-dark'
-                  : 'text-subtle-foreground hover:bg-surface-hover hover:text-foreground'
+                  : 'text-faint-foreground hover:bg-surface-hover hover:text-foreground'
               )}
               title={row.starred ? t('Unpin') : t('Pin')}
               aria-pressed={row.starred}
@@ -666,7 +700,7 @@ export const ConversationList = memo(function ConversationList({
 
             <button
               onClick={(e) => openMoreMenu(e, row.id)}
-              className="w-[22px] h-[22px] flex-shrink-0 rounded-[6px] flex items-center justify-center text-subtle-foreground opacity-0 group-hover:opacity-100 transition-colors hover:bg-surface-hover hover:text-foreground focus-visible:opacity-100"
+              className="w-[22px] h-[22px] flex-shrink-0 rounded-[6px] flex items-center justify-center text-faint-foreground opacity-0 group-hover:opacity-100 transition-colors hover:bg-surface-hover hover:text-foreground focus-visible:opacity-100"
               title={t('More')}
             >
               <EllipsisVertical className="w-[13px] h-[13px]" strokeWidth={1.8} />
@@ -681,9 +715,10 @@ export const ConversationList = memo(function ConversationList({
   // container clips anything reaching past its edge.
   const hoverCardPortal = hoverCard && !editingId && createPortal(
     <div
+      ref={hoverCardRef}
       role="tooltip"
       style={{ top: hoverCard.top, left: hoverCard.left }}
-      className="pointer-events-none fixed z-[60] w-[260px] -translate-y-1/2 rounded-lg border border-border bg-popover px-3.5 py-3 shadow-lg"
+      className="pointer-events-none fixed z-[60] w-[260px] rounded-lg border border-border bg-popover px-3.5 py-3 shadow-lg"
     >
       {hoverCard.owner && (
         <span className="mb-1.5 flex items-center gap-2">
@@ -699,24 +734,16 @@ export const ConversationList = memo(function ConversationList({
     document.body
   )
 
-  if (collapsed || isDragCollapsed) {
-    // Canvas-driven collapse (`collapsed`) has no drag handle — the canvas
-    // dictates the layout, dragging it back open would immediately fight
-    // with that. Drag-triggered collapse (`isDragCollapsed`) keeps the
-    // handle so the same drag gesture can pull it back out.
-    const showDragHandle = !collapsed
+  if ((collapsed && !expandedOverCanvas) || isDragCollapsed) {
     return (
       <div
-        ref={showDragHandle ? containerRef : undefined}
-        className="relative w-14 h-full flex-shrink-0 border-r border-border bg-background flex flex-col items-center"
+        ref={containerRef}
+        className="relative w-14 h-full flex-shrink-0 border-r border-border/50 bg-background flex flex-col items-center"
       >
         <div className="w-full px-2 pt-2.5 pb-1.5">
           <button
-            onClick={() => {
-              const spaceId = useSpaceStore.getState().currentSpace?.id
-              if (spaceId) useChatStore.getState().createConversation(spaceId)
-            }}
-            className="flex h-9 w-full items-center justify-center rounded-sm border border-primary/[0.18] bg-primary/[0.12] text-accent-on-dark transition-colors ease-halo hover:bg-primary/[0.18]"
+            onClick={() => handleCreateConversation('rail_collapsed')}
+            className="flex h-9 w-full items-center justify-center rounded-sm bg-secondary/60 text-foreground transition-colors ease-halo hover:bg-surface-hover"
             title={t('New conversation')}
           >
             <Plus className="w-4 h-4" />
@@ -728,7 +755,7 @@ export const ConversationList = memo(function ConversationList({
             to tell them apart; it is portaled and fixed-positioned because
             this column scrolls, and a scroll container clips anything
             reaching past its edge. */}
-        <div className="flex-1 w-full overflow-y-auto px-2 py-1 flex flex-col items-center gap-1.5">
+        <div className="flex-1 w-full overflow-y-auto px-2 py-1 flex flex-col items-center gap-0.5">
           {rows.map(row => {
             if (row.type === 'header' || row.type === 'dh-header') return null
             const isAppChat = row.type === 'dh-item'
@@ -744,21 +771,26 @@ export const ConversationList = memo(function ConversationList({
                   if (isAppChat) {
                     if (!row.row.uninstalled) handleSelectAppChat(row.row)
                   } else {
-                    useChatStore.getState().selectConversation(row.conversation.id)
+                    handleSelectConversation(row.conversation)
                   }
                 }}
                 onMouseEnter={(e) => showHoverCard(e.currentTarget, hoverCardFor(row, t))}
                 onMouseLeave={hideHoverCard}
-                className="flex h-5 w-8 items-center justify-center"
+                aria-current={active}
+                className={cn(
+                  'flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full transition-colors ease-halo hover:bg-secondary',
+                  active && 'bg-secondary'
+                )}
               >
-                {/* Busy/attention states win over the plain dot: with the list
-                    collapsed this is the only place that state is visible. */}
+                {/* Colour carries the state; the round backdrop marks the open
+                    conversation (and hover) — with the list collapsed this is
+                    the only place either is visible. */}
                 {status !== 'idle' ? (
                   <TaskStatusDot status={status} size="md" />
                 ) : (
                   <span className={cn(
-                    'w-[7px] h-[7px] rounded-full transition-colors ease-halo',
-                    active ? 'bg-primary opacity-100' : 'bg-subtle-foreground opacity-50'
+                    'w-[7px] h-[7px] rounded-full',
+                    active ? 'bg-foreground' : 'bg-subtle-foreground opacity-50'
                   )} />
                 )}
               </button>
@@ -766,15 +798,13 @@ export const ConversationList = memo(function ConversationList({
           })}
         </div>
         {hoverCardPortal}
-        {showDragHandle && (
-          <div
-            className={`absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-primary/50 transition-colors z-20 ${
-              isDragging ? 'bg-primary/50' : ''
-            }`}
-            onMouseDown={handleMouseDown}
-            title={t('Drag to resize width')}
-          />
-        )}
+        <div
+          className={`absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-primary/50 transition-colors z-20 ${
+            isDragging ? 'bg-primary/50' : ''
+          }`}
+          onMouseDown={handleMouseDown}
+          title={t('Drag to resize width')}
+        />
       </div>
     )
   }
@@ -783,16 +813,13 @@ export const ConversationList = memo(function ConversationList({
     <>
     <div
       ref={containerRef}
-      className="border-r border-border flex flex-col bg-background relative"
+      className="border-r border-border/50 flex flex-col bg-background relative"
       style={{ width, transition: isDragging ? 'none' : 'width 0.2s ease' }}
     >
       <div className="flex flex-col gap-2 px-2.5 pt-4 pb-3">
         <button
-          onClick={() => {
-            const spaceId = useSpaceStore.getState().currentSpace?.id
-            if (spaceId) useChatStore.getState().createConversation(spaceId)
-          }}
-          className="flex h-8 w-full items-center justify-center gap-1.5 rounded-sm border border-primary/[0.18] bg-primary/[0.12] text-xs font-medium text-accent-on-dark transition-colors ease-halo hover:bg-primary/[0.18]"
+          onClick={() => handleCreateConversation('list')}
+          className="flex h-8 w-full items-center justify-center gap-1.5 rounded-sm bg-secondary/60 text-xs font-medium text-foreground transition-colors ease-halo hover:bg-surface-hover"
         >
           <Plus className="w-3.5 h-3.5" />
           {t('New conversation')}
@@ -807,7 +834,8 @@ export const ConversationList = memo(function ConversationList({
             // Virtuoso's scroller only sets overflow-y, which leaves overflow-x
             // resolving to `auto` — a stray pixel of row width then shows a
             // horizontal scrollbar under a list that never scrolls sideways.
-            className="px-2 pt-1 pb-3 overflow-x-hidden"
+            className="overflow-x-hidden"
+            components={listComponents}
             itemContent={(index, row) => {
               if (row.type === 'header') {
                 // No uppercase/letter-spacing: both are no-ops on CJK labels
@@ -825,7 +853,10 @@ export const ConversationList = memo(function ConversationList({
                 return (
                   <button
                     type="button"
-                    onClick={() => toggleAppCollapsed(row.appId)}
+                    onClick={() => {
+                      trackHome('home.dh_group.toggle', { collapsed: !row.collapsed })
+                      toggleAppCollapsed(row.appId)
+                    }}
                     className={cn(
                       // pr = the rows' own 10px padding plus the 22px their
                       // always-rendered (opacity-0) "more" button occupies, so
@@ -899,6 +930,7 @@ export const ConversationList = memo(function ConversationList({
             <button
               onClick={(e) => {
                 e.stopPropagation()
+                trackHome('home.conversation.action', { action: 'delete', kind: 'normal' })
                 const spaceId = useSpaceStore.getState().currentSpace?.id
                 if (spaceId) useChatStore.getState().deleteConversation(spaceId, conv.id)
                 setMenuOpenId(null)

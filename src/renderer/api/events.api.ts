@@ -9,7 +9,6 @@ import {
   disconnectWebSocket,
   forceReconnectWebSocket,
   getServerUrl,
-  httpRequest,
   isElectron,
   onEvent,
   onWsStateChange,
@@ -19,6 +18,7 @@ import {
   subscribeToConversation,
   unsubscribeFromConversation,
 } from './_shared'
+import { enqueueReport } from './analytics-batch'
 import type { GoalUpdatedEvent } from '../../shared/types/goal'
 import type { ApiRetryEvent } from '../../shared/types/api-retry'
 
@@ -86,29 +86,28 @@ export const eventsApi = {
   /**
    * Report a telemetry event. Fire-and-forget — never awaited, never throws.
    *
-   * Scheduling:
-   *   - The transport call is deferred to an idle moment via
-   *     `requestIdleCallback` (with a 2s timeout so a constantly busy CPU
-   *     can't starve telemetry indefinitely).
-   *   - On environments without rIC support (older Electron, test runners,
-   *     older browsers) we fall back to `setTimeout(0)`, which still yields
-   *     to pending UI work without introducing a queue.
-   *   - Each event is scheduled independently; there is no renderer-side
-   *     queue. Batching is handled exclusively in the main process.
-   *
    * Transport:
-   *   - In Electron mode, uses the IPC `analytics:report` channel.
-   *   - In HTTP mode (Capacitor/remote), POSTs to `/api/analytics/report`.
+   *   - In Electron mode, uses the IPC `analytics:report` channel; the main
+   *     process batches upstream. The IPC call is deferred to an idle moment
+   *     via `requestIdleCallback` (2s timeout so a busy CPU can't starve it),
+   *     falling back to `setTimeout(0)` where rIC is missing.
+   *   - In HTTP mode (Capacitor/remote), joins a batch POSTed to
+   *     `/api/analytics/report` (see `analytics-batch.ts`). Enqueueing is a
+   *     cheap array push, done synchronously so an event reported during
+   *     unload is queued before the page-hide flush.
    */
   trackEvent: (event: string, properties?: Record<string, unknown>): void => {
+    if (!isElectron()) {
+      try {
+        enqueueReport({ event, properties })
+      } catch {
+        // Telemetry must never break the app
+      }
+      return
+    }
     const send = (): void => {
       try {
-        if (isElectron()) {
-          window.halo.trackEvent(event, properties)
-        } else {
-          // HTTP fire-and-forget: no need to await or handle errors
-          void httpRequest('POST', '/api/analytics/report', { event, properties })
-        }
+        window.halo.trackEvent(event, properties)
       } catch {
         // Telemetry must never break the app
       }

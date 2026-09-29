@@ -93,7 +93,7 @@ export function SearchHighlightBar() {
   const canNavigate = totalResults > 1
 
   const handleEditSearch = () => {
-    openSearch()
+    openSearch('global', 'highlight_bar')
   }
 
   const handleClose = () => {

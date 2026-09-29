@@ -4,7 +4,7 @@
  * Tests:
  * - Store CRUD: unseen -> read transitions, keep/remove, space cascade
  * - Expiry sweep (grace-period cutoff)
- * - Service-level virtual-conversation-id guard (app-chat: prefix)
+ * - Service-level guard: listed digital-human sessions persist, channel sessions do not
  */
 
 import { describe, it, expect, beforeEach } from 'vitest'
@@ -80,6 +80,15 @@ describe('TaskStateStore', () => {
     expect(store.list()).toHaveLength(0)
   })
 
+  it('deleteIdAndChildren removes the id and its ":"-scoped children only', () => {
+    store.upsertUnseen('app-chat:a1', 'space-1', 'A', 1000)
+    store.upsertUnseen('app-chat:a1:local:direct:s1', 'space-1', 'A', 1000)
+    store.upsertUnseen('app-chat:a10', 'space-1', 'B', 1000)
+    store.deleteIdAndChildren('app-chat:a1')
+
+    expect(store.list().map(r => r.conversationId)).toEqual(['app-chat:a10'])
+  })
+
   it('deleteAllInSpace only removes rows for that space', () => {
     store.upsertUnseen('conv-1', 'space-a', 'A', 1000)
     store.upsertUnseen('conv-2', 'space-b', 'B', 1000)
@@ -128,8 +137,19 @@ describe('TaskStateService', () => {
     service = createTaskStateService(store)
   })
 
-  it('never persists a virtual (digital-human chat) conversation id', () => {
-    service.markUnseen('app-chat:some-app-id', 'space-1', 'Digital human chat')
+  it('persists the digital-human sessions listed beside conversations', () => {
+    service.markUnseen('app-chat:some-app-id', 'space-1', '')
+    service.markUnseen('app-chat:some-app-id:local:direct:abc', 'space-1', '')
+    expect(service.list().map(row => row.conversationId).sort()).toEqual([
+      'app-chat:some-app-id',
+      'app-chat:some-app-id:local:direct:abc',
+    ])
+  })
+
+  it('never persists IM, HTTP or team channel sessions', () => {
+    service.markUnseen('app-chat:some-app-id:wecom:direct:user1', 'space-1', '')
+    service.markUnseen('app-chat:some-app-id:team:team1:epoch1', 'space-1', '')
+    service.markRead('app-chat:some-app-id:http:direct:x', 'space-1', '', 'error')
     expect(service.list()).toHaveLength(0)
   })
 

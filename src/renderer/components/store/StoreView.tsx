@@ -10,6 +10,7 @@ import { AlertCircle } from 'lucide-react'
 import { api } from '../../api'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useStoreRevalidation } from '../../hooks/useStoreRevalidation'
+import { currentShell, takeEntry } from '../../services/home-telemetry'
 import { StoreHeader } from './StoreHeader'
 import { StoreCategoryBar } from './StoreCategoryBar'
 import { StoreGrid } from './StoreGrid'
@@ -38,7 +39,7 @@ export function StoreView() {
 
   // Store funnel: entering the store and every tab switch.
   useEffect(() => {
-    void api.trackEvent('store.view', { tab: storeTypeFilter ?? 'discover' })
+    void api.trackEvent('store.view', { tab: storeTypeFilter ?? 'discover', entry: takeEntry(), shell: currentShell() })
   }, [storeTypeFilter])
 
   // Load store apps and update badges on mount.

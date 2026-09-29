@@ -46,6 +46,10 @@
      against --background and 3.71 against --card, below WCAG AA for the 10–12px
      labels this token is used on. 52% clears 4.5 on both surfaces. */
   --subtle-foreground: 220 9% 52%;
+  /* Low-frequency icon controls only (never text): recedes until hovered.
+     Kept at the 3:1 floor for interactive graphics, including on the
+     secondary-tinted toolbars and hovered rows it sits on. */
+  --faint-foreground: 220 8% 44%;
   --accent: 217 91% 60%;
   --accent-foreground: 0 0% 100%;
   --accent-on-dark: 212 96% 78%;
@@ -105,6 +109,7 @@
   /* Darkened from the prototype's 58%, which scores only 2.98 on light
      surfaces — see the dark-theme note above. 46% clears 4.5. */
   --subtle-foreground: 221 10% 46%;
+  --faint-foreground: 220 9% 52%;
   --accent: 217 91% 55%;
   --accent-foreground: 0 0% 100%;
   /* Falls back to --primary in light mode, matching the prototype's
@@ -343,6 +348,20 @@ html.platform-desktop body::after {
 
 .scrollbar-overlay::-webkit-scrollbar-thumb:hover {
   background: hsl(var(--muted-foreground) / 0.4);
+}
+
+/* Every scrollbar stays hidden until the pointer is over its scroller. The
+   thumb goes transparent rather than away, so its space never shifts content.
+   Kept after the variants above: equal specificity, so source order wins.
+   The two variants that set `scrollbar-color` need their own rule — Chromium
+   ignores ::-webkit-scrollbar styles on elements that set it. */
+:not(:hover)::-webkit-scrollbar-thumb {
+  background: transparent;
+}
+
+.scrollbar-thin:not(:hover),
+.scrollbar-overlay:not(:hover) {
+  scrollbar-color: transparent transparent;
 }
 
 /* Light mode: Shiki themes are ['github-dark', 'github-light'].
@@ -1089,15 +1108,6 @@ html.platform-desktop body::after {
   line-height: 1.5;
 }
 
-/* Artifact card hover effect - subtle, no movement to avoid jitter */
-.artifact-card {
-  transition: background-color 0.15s ease, box-shadow 0.15s ease;
-}
-
-.artifact-card:hover {
-  box-shadow: 0 2px 8px hsl(var(--foreground) / 0.08);
-}
-
 /* Input focus styles */
 .input-focus {
   transition: all 0.2s ease;
@@ -1284,18 +1294,6 @@ html.platform-desktop body::after {
    Pulse - Task Status Indicators
    ============================================ */
 
-/* Pulse dot breathe animation */
-@keyframes pulse-dot-breathe {
-  0%, 100% {
-    opacity: 0.6;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1.3);
-  }
-}
-
 /* Pulse dot pop-in */
 @keyframes pulse-dot-appear {
   from {
@@ -1318,12 +1316,10 @@ html.platform-desktop body::after {
 
 .pulse-dot-generating {
   background-color: hsl(var(--primary));
-  animation: pulse-dot-breathe 2s ease-in-out infinite;
 }
 
 .pulse-dot-waiting {
   background-color: hsl(var(--halo-warning));
-  animation: pulse-dot-breathe 1.5s ease-in-out infinite;
 }
 
 .pulse-dot-completed {

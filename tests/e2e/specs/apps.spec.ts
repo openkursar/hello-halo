@@ -53,8 +53,6 @@ test.describe('Apps Page', () => {
     await navigateToApps(window)
 
     await expect(window.getByRole('textbox', { name: /Search digital humans|搜索数字人/i })).toBeVisible()
-    await expect(window.getByRole('button', { name: /Card view|卡片视图/i })).toBeVisible()
-    await expect(window.getByRole('button', { name: /List view|列表视图/i })).toBeVisible()
 
     await window.screenshot({ path: 'tests/e2e/results/apps-digital-humans.png' })
   })

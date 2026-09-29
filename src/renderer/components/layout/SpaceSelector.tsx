@@ -10,12 +10,13 @@
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
-import { ChevronDown, ChevronRight, Plus, Unplug, Search, Lightbulb, LayoutGrid } from 'lucide-react'
+import { ChevronDown, ChevronRight, Plus, Unplug, Search, Lightbulb, Layers } from 'lucide-react'
 import { useAppStore } from '../../stores/app.store'
 import { useSpaceStore } from '../../stores/space.store'
 import { SpaceAvatar } from '../space/SpaceAvatar'
 import { CreateSpaceDialog } from '../space/CreateSpaceDialog'
 import { useTranslation } from '../../i18n'
+import { capCount, trackHome, trackNavigate } from '../../services/home-telemetry'
 import type { Space, SpaceSummary } from '../../types'
 
 /** Minimum interval between loadSpaces calls (ms) */
@@ -112,6 +113,13 @@ export function SpaceSelector() {
       setIsOpen(false)
       return
     }
+    trackHome('home.space.switch', {
+      kind: 'select',
+      surface: 'header',
+      toHalo: space.id === haloSpace?.id,
+      spaceCount: capCount((haloSpace ? 1 : 0) + listedSpaces.length),
+      searched: searchQuery.trim().length > 0,
+    })
     setCurrentSpace(space)
     refreshCurrentSpace()  // Load full space data (preferences) from backend
     navigate('space')
@@ -119,6 +127,13 @@ export function SpaceSelector() {
   }
 
   const handleSpaceCreated = (space: Space) => {
+    trackHome('home.space.switch', {
+      kind: 'create',
+      surface: 'header',
+      toHalo: false,
+      spaceCount: capCount(allSpaces.length),
+      searched: false,
+    })
     setShowCreateDialog(false)
     setCurrentSpace(space)
     refreshCurrentSpace()
@@ -126,11 +141,13 @@ export function SpaceSelector() {
   }
 
   const handleCreateSpace = () => {
+    trackHome('home.space.action', { action: 'create_open', surface: 'header' })
     setIsOpen(false)
     setShowCreateDialog(true)
   }
 
   const handleGoToWorkspaces = () => {
+    trackNavigate('spaces', 'header', 'header')
     setIsOpen(false)
     navigate('spaces')
   }
@@ -168,18 +185,15 @@ export function SpaceSelector() {
     <div className="flex items-center">
       {/* Separate control from the dropdown trigger below — this one
           navigates, it doesn't open anything. Two different actions can't
-          share one click target. The leading icon is the only thing marking
-          it as a destination at rest: plain header text reads as a label,
-          and users were not finding the management page behind it. Dropped
-          under `sm`, where the header has no room and the name alone has to
-          carry the "this is a workspace" signal (SpaceAvatar + displayName
-          in the trigger). */}
+          share one click target. The breadcrumb chevron and the hover
+          underline mark it as a destination. Dropped under `sm`, where the
+          header has no room and the name alone has to carry the "this is a
+          workspace" signal (SpaceAvatar + displayName in the trigger). */}
       <button
         onClick={handleGoToWorkspaces}
-        className="hidden sm:flex items-center gap-1.5 h-9 pl-2 pr-2.5 flex-shrink-0 rounded-sm text-sm text-muted-foreground hover:bg-secondary hover:text-foreground hover:underline underline-offset-[3px] transition-colors ease-halo"
+        className="hidden sm:flex items-center h-9 px-2 flex-shrink-0 rounded-sm text-sm text-muted-foreground hover:bg-secondary hover:text-foreground hover:underline underline-offset-[3px] transition-colors ease-halo"
         title={t('Manage workspaces')}
       >
-        <LayoutGrid className="w-3.5 h-3.5 flex-shrink-0" />
         {t('Workspace')}
       </button>
       <ChevronRight aria-hidden="true" className="hidden sm:block w-3.5 h-3.5 flex-shrink-0 text-subtle-foreground opacity-60 -mx-[3px]" />
@@ -187,10 +201,10 @@ export function SpaceSelector() {
       <div className="relative" ref={dropdownRef}>
         <button
           onClick={() => setIsOpen(!isOpen)}
-          className="h-9 pl-1.5 pr-2 flex items-center gap-[9px] border border-transparent rounded-sm text-sm hover:bg-secondary hover:border-primary/[0.18] transition-colors ease-halo max-w-[140px] sm:max-w-[180px]"
+          className="h-9 pl-1.5 pr-2 flex items-center gap-2 border border-transparent rounded-sm text-sm hover:bg-secondary hover:border-primary/[0.18] transition-colors ease-halo max-w-[140px] sm:max-w-[180px]"
           title={t('Current workspace: {{name}} — click to switch', { name: displayName })}
         >
-          <SpaceAvatar space={currentSpace ?? { id: 'halo', name: displayName, isTemp: true }} size={24} />
+          <SpaceAvatar space={currentSpace ?? { id: 'halo', name: displayName, isTemp: true }} size={20} />
           <span className="font-semibold tracking-[-0.01em] truncate">{displayName}</span>
           <ChevronDown className="w-3 h-3 flex-shrink-0 text-subtle-foreground" />
         </button>
@@ -284,7 +298,7 @@ export function SpaceSelector() {
               onClick={handleGoToWorkspaces}
               className="w-full rounded-sm px-2.5 py-2 text-left text-[13px] text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors ease-halo flex items-center gap-2"
             >
-              <LayoutGrid className="w-3.5 h-3.5" />
+              <Layers className="w-3.5 h-3.5" />
               {t('Manage workspaces')}
             </button>
           </div>

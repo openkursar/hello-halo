@@ -13,6 +13,7 @@ import {
   getAppChatConversationId,
   buildImSessionKey,
   buildLocalSessionKey,
+  parseDirectAppChatKey,
   buildTeamSessionKey,
   isImSessionKey,
   isLocalSessionKey,
@@ -177,5 +178,18 @@ describe('im-keys: native local sessions', () => {
       chatType: 'direct',
       chatId: 'uuid-9',
     })
+  })
+})
+
+describe('parseDirectAppChatKey', () => {
+  it('returns the appId for the native and local sessions the user chats in', () => {
+    expect(parseDirectAppChatKey(getAppChatConversationId('app-1'))).toBe('app-1')
+    expect(parseDirectAppChatKey(buildLocalSessionKey('app-1', 'uuid-1'))).toBe('app-1')
+  })
+
+  it('returns null for channel sessions and non-app-chat ids', () => {
+    expect(parseDirectAppChatKey('app-chat:app-1:wecom:direct:user1')).toBeNull()
+    expect(parseDirectAppChatKey('app-chat:app-1:team:team1:epoch1')).toBeNull()
+    expect(parseDirectAppChatKey('conv-uuid')).toBeNull()
   })
 })

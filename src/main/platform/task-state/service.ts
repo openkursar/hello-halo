@@ -12,7 +12,7 @@
 
 import { sendToRenderer } from '../../foundation/window.service'
 import { broadcastToAll } from '../../http/websocket'
-import { isAppChatKey } from '../../../shared/apps/im-keys'
+import { getAppChatConversationId, isFollowedConversationId } from '../../../shared/apps/im-keys'
 import { TaskStateStore } from './store'
 import type { ConversationTaskState } from './types'
 
@@ -27,9 +27,12 @@ export interface TaskStateService {
   markRead(conversationId: string, spaceId: string, title: string, originalStatus: 'completed-unseen' | 'error'): void
   setKept(conversationId: string, kept: boolean): void
   remove(conversationId: string): void
+  /** Drop every row of one digital human's conversations (app permanently deleted). */
+  removeAppConversations(appId: string): void
   deleteAllInSpace(spaceId: string): void
   dispose(): void
 }
+
 
 function broadcast(): void {
   // No payload -- clients re-fetch via taskListState. The row set is small
@@ -60,13 +63,13 @@ export function createTaskStateService(store: TaskStateStore): TaskStateService 
     list: () => store.list(),
 
     markUnseen(conversationId, spaceId, title) {
-      if (isAppChatKey(conversationId)) return
+      if (!isFollowedConversationId(conversationId)) return
       store.upsertUnseen(conversationId, spaceId, title, Date.now())
       broadcast()
     },
 
     markRead(conversationId, spaceId, title, originalStatus) {
-      if (isAppChatKey(conversationId)) return
+      if (!isFollowedConversationId(conversationId)) return
       store.upsertRead(conversationId, spaceId, title, originalStatus, Date.now())
       broadcast()
     },
@@ -78,6 +81,11 @@ export function createTaskStateService(store: TaskStateStore): TaskStateService 
 
     remove(conversationId) {
       store.remove(conversationId)
+      broadcast()
+    },
+
+    removeAppConversations(appId) {
+      store.deleteIdAndChildren(getAppChatConversationId(appId))
       broadcast()
     },
 

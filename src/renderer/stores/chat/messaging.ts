@@ -4,6 +4,7 @@
 import type { ChatSlice } from './internal'
 import { api, canvasLifecycle, createEmptySessionState } from './internal'
 import type { CanvasContext, Message } from './internal'
+import { noteTurnEnded, noteTurnSent, trackHome } from '../../services/home-telemetry'
 import i18n from '../../i18n'
 import { titleFromFirstMessage } from '../../../shared/conversation-title'
 
@@ -172,6 +173,7 @@ export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 
       // so no agent event will ever end this one.
       if (response && response.success === false) {
         console.error(`[ChatStore] Message refused for ${conversationId}: ${response.error ?? 'unknown error'}`)
+        noteTurnEnded(conversationId, 'error')
         // A goal send reports its own failure.
         withdraw(goal ? null : i18n.t('Failed to send message'))
         return false
@@ -179,6 +181,7 @@ export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 
       return true
     } catch (error) {
       console.error('Failed to send message:', error)
+      noteTurnEnded(conversationId, 'error')
       // A goal send reports its own failure and rolls back the goal shown for
       // it; its bubble goes too, since the composer hands the text back.
       if (goal) {
@@ -204,6 +207,7 @@ export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 
   // Stop generation for a specific conversation
   stopGeneration: async (conversationId?: string) => {
     const targetId = conversationId || get().getCurrentSpaceState().currentConversationId
+    if (targetId) noteTurnEnded(targetId, 'stopped')
     try {
       await api.stopGeneration(targetId ?? undefined)
 
@@ -304,6 +308,8 @@ export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 
     const state = get()
     const spaceState = state.spaceStates.get(state.currentSpaceId || '')
     if (spaceState?.currentConversationId === conversationId) {
+      trackHome('home.composer.send', { source: 'continue', recipient: 'halo', hasImages: false, imageCount: 0, isInject: false })
+      noteTurnSent(conversationId, 'halo')
       state.sendMessage('continue')
     }
   },

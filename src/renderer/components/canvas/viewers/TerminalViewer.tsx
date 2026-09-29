@@ -21,6 +21,7 @@ import { isElectron } from '../../../api/transport'
 import { useTerminalStore } from '../../../stores/terminal.store'
 import { useTranslation } from '../../../i18n'
 import type { TabState } from '../../../services/canvas-lifecycle'
+import { noteTerminalInput } from '../../../services/tool-session-telemetry'
 import { buildTheme, getMinimumContrastRatio } from '../../../lib/terminal-theme'
 import { latchTerminalEnd, type TerminalEndState } from '../../../lib/terminal-liveness'
 
@@ -89,6 +90,7 @@ export function TerminalViewer({ tab }: TerminalViewerProps) {
     // No-ops once the session has exited (dead terminals are read-only replays).
     const sendInput = (data: string) => {
       if (deadRef.current) return
+      noteTerminalInput(sessionId, data)
       if (isElectron()) {
         void api.terminalInput(sessionId, data)
       } else if (!api.sendWsMessage('terminal-input', { sessionId, data })) {
