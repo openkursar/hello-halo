@@ -74,9 +74,11 @@ export function TerminalViewer({ tab }: TerminalViewerProps) {
 
     // Ctrl/Cmd+C copies when text is selected (xterm's selection is internal —
     // the browser never sees it); without a selection it passes through as
-    // SIGINT (#358).
+    // SIGINT (#358). Check the selection text: a whitespace-only selection
+    // copies nothing, and gating on hasSelection() alone would swallow the
+    // keypress without copying or interrupting.
     term.attachCustomKeyEventHandler((e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'c' && term.hasSelection()) {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'c' && term.getSelection().length > 0) {
         // copyToClipboard falls back to execCommand on HTTP remote (non-secure
         // context), where navigator.clipboard is undefined.
         if (e.type === 'keydown') void copyToClipboard(term.getSelection()).catch(() => {})
