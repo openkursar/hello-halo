@@ -32,26 +32,24 @@ function nodes(tree: any): any[] { if (!tree || typeof tree !== 'object') return
 function element(tree: any, type: string, label?: string) { return nodes(tree).find(node => node.type === type && (!label || node.props['aria-label'] === label || node.props.children === label)) }
 const app = (id: string, spaceId: string) => ({ id, spaceId, status: 'active', spec: { type: 'automation', name: id, description: `${id} research` } }) as any
 beforeEach(() => {
-  env.people = { query: '', team: '', space: '', attention: false, view: 'cards', page: 1, directoryScroll: 80, drafts: {}, setFilters: (patch: any) => Object.assign(env.people, patch), rememberPerson: vi.fn(), saveDraft: (key: string, value: any) => { env.people.drafts[key] = value }, clearDraft: (key: string) => { delete env.people.drafts[key] } }
+  env.people = { query: '', team: '', space: '', page: 1, directoryScroll: 80, drafts: {}, setFilters: (patch: any) => Object.assign(env.people, patch), rememberPerson: vi.fn(), saveDraft: (key: string, value: any) => { env.people.drafts[key] = value }, clearDraft: (key: string) => { delete env.people.drafts[key] } }
   env.apps = { appStates: { Lin: { pendingDecisionCount: 1 }, Amy: { pendingDecisionCount: 0 } }, activityEntries: {}, isLoading: false, error: null }
   env.directory = { data: { items: [{ id: 'Lin', name: 'Lin', description: 'Research', status: 'paused', spaceId: 'halo', state: { pendingDecisionCount: 1 }, teams: [{ id: 'research', name: 'Research' }] }], total: 1, attentionTotal: 1, removedTotal: 0 }, load: vi.fn(), refresh: vi.fn(), loading: false, error: false }
   env.teams = [{ id: 'research', name: 'Research', localMembers: [{ appId: 'Lin' }] }]
   env.page = { openActivityThread: vi.fn(), openAppTeams: vi.fn() }
 })
-it('directory retains search, team, workspace and attention preferences when opening a summarized person', () => {
+it('directory retains search, team and workspace preferences when opening a summarized person', () => {
   const runner = new ComponentRunner()
   const render = () => runner.render(() => PeopleDirectory({ spaceMap: { halo: 'Halo', other: 'Other' }, onCreate: vi.fn() }))
   let tree = render(); expect(nodes(tree).filter(node => node.type === 'article')).toHaveLength(1)
   element(tree, 'input', 'Search digital humans').props.onChange({ target: { value: 'research' } })
   element(tree, 'select', 'Filter by team').props.onChange({ target: { value: 'research' } })
   element(tree, 'select', 'Filter by workspace').props.onChange({ target: { value: 'halo' } })
-  element(tree, 'button', 'Needs my attention').props.onClick()
   tree = render(); expect(nodes(tree).filter(node => node.type === 'article')).toHaveLength(1)
-  element(tree, 'button', 'List view').props.onClick(); tree = render()
   const article = nodes(tree).find(node => node.type === 'article')
   nodes(article).find(node => node.type === 'button').props.onClick({ stopPropagation: () => {} })
   expect(env.page.openActivityThread).toHaveBeenCalledWith('Lin')
-  expect(env.people).toMatchObject({ query: 'research', team: 'research', space: 'halo', attention: true, view: 'list', directoryScroll: 80 })
+  expect(env.people).toMatchObject({ query: 'research', team: 'research', space: 'halo', directoryScroll: 80 })
 })
 it('lists a stopped person as needing the owner and says so on the card', () => {
   env.directory.data.items = [{ id: 'Kai', name: 'Kai', description: 'Ops', status: 'error', spaceId: 'halo', state: { blocked: 'auto_disabled', automaticEnabled: false, pendingDecisionCount: 0 }, teams: [] }]
@@ -61,6 +59,19 @@ it('lists a stopped person as needing the owner and says so on the card', () => 
   expect(labels).not.toContain('Paused')
   // Stopping turns automatic tasks off, so the card must not read as paused.
   expect(nodes(tree).some(node => node.type === 'span' && node.props.children === 'Stopped, waiting for you')).toBe(true)
+})
+
+it('keeps the requests inbox reachable when everyone waiting is on another page', () => {
+  env.page.setCurrentTab = vi.fn()
+  env.directory.data.items = [{ id: 'Amy', name: 'Amy', description: 'Ops', status: 'active', spaceId: 'halo', state: { pendingDecisionCount: 0 }, teams: [] }]
+  env.directory.data.attentionTotal = 3
+  const find = (tree: any) => nodes(tree).find(node => node.type === 'button' && [node.props.children].flat().includes('Handle all ({{count}})'))
+  const tree = new ComponentRunner().render(() => PeopleDirectory({ spaceMap: { halo: 'Halo' }, onCreate: vi.fn() }))
+  expect(nodes(tree).filter(node => node.type === 'h2').map(node => node.props.children).flat(Infinity)).not.toContain('Needs you')
+  find(tree).props.onClick()
+  expect(env.page.setCurrentTab).toHaveBeenCalledWith('inbox')
+  env.directory.data.attentionTotal = 0
+  expect(find(new ComponentRunner().render(() => PeopleDirectory({ spaceMap: { halo: 'Halo' }, onCreate: vi.fn() })))).toBeUndefined()
 })
 
 it('failed submission retains the exact draft after closing and reopening the question', async () => {

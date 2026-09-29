@@ -177,7 +177,7 @@ export function NavRail() {
     // a Header-height spacer.
     <div
       className={cn(
-        'flex flex-col items-center h-full flex-shrink-0 bg-card border-r border-border pt-3 pb-3.5',
+        'flex flex-col items-center h-full flex-shrink-0 bg-card border-r border-border/50 pt-3 pb-3.5',
         !isMacElectron && 'w-14'
       )}
       // The macOS traffic-light group is wider than the prototype's 56px

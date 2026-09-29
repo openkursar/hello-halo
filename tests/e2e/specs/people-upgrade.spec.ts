@@ -11,12 +11,10 @@ test('directory search, bounded pages, return state and coordinator separation u
   await expect(window.getByRole('button', { name: 'System coordinator', exact: true })).toHaveCount(0)
   await search.fill('Evidence team')
   await expect(window.locator('article')).toHaveCount(1)
-  await window.getByRole('button', { name: 'List view', exact: true }).click()
   await window.getByRole('button', { name: 'Analyst 000', exact: true }).click()
   await expect(window.getByRole('button', { name: 'Run once', exact: true })).toBeEnabled()
   await window.getByRole('button', { name: 'All digital humans', exact: true }).click()
   await expect(search).toHaveValue('Evidence team')
-  await expect(window.getByRole('button', { name: 'List view', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await search.fill('')
   await window.getByRole('button', { name: 'Next', exact: true }).click()
   await expect(window.locator('article')).toHaveCount(24)
@@ -25,7 +23,7 @@ test('directory search, bounded pages, return state and coordinator separation u
 
 test('inbox includes hidden coordinators, pages requests, and retains unsent decision drafts', async ({ window }) => {
   await navigateToApps(window)
-  await window.getByRole('button', { name: 'Needs my attention', exact: true }).first().click()
+  await window.getByRole('button', { name: /^Handle all/ }).click()
   await expect(window.locator('article')).toHaveCount(30)
   await window.getByRole('button', { name: 'Load more requests', exact: true }).click()
   await expect(window.locator('article')).toHaveCount(34)

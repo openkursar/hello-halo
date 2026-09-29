@@ -105,7 +105,7 @@ export function DetailSwitcher({ title, searchPlaceholder, items, selectedId, on
 
   if (collapsed) {
     return (
-      <div ref={containerRef} className="relative flex w-14 flex-shrink-0 flex-col items-center border-r border-border">
+      <div ref={containerRef} className="relative flex w-14 flex-shrink-0 flex-col items-center border-r border-border/50">
         <button
           type="button"
           onClick={() => setCollapsed(false)}
@@ -153,7 +153,7 @@ export function DetailSwitcher({ title, searchPlaceholder, items, selectedId, on
   }
 
   return (
-    <div ref={containerRef} className="relative flex flex-shrink-0 flex-col border-r border-border" style={{ width }}>
+    <div ref={containerRef} className="relative flex flex-shrink-0 flex-col border-r border-border/50" style={{ width }}>
       <div className="flex items-center gap-2 px-3 pt-3 pb-2">
         <span className="flex-1 text-xs font-medium text-subtle-foreground">
           {title} <span className="tabular-nums">{items.length}</span>

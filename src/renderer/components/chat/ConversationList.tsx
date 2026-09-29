@@ -721,7 +721,7 @@ export const ConversationList = memo(function ConversationList({
     return (
       <div
         ref={containerRef}
-        className="relative w-14 h-full flex-shrink-0 border-r border-border bg-background flex flex-col items-center"
+        className="relative w-14 h-full flex-shrink-0 border-r border-border/50 bg-background flex flex-col items-center"
       >
         <div className="w-full px-2 pt-2.5 pb-1.5">
           <button
@@ -796,7 +796,7 @@ export const ConversationList = memo(function ConversationList({
     <>
     <div
       ref={containerRef}
-      className="border-r border-border flex flex-col bg-background relative"
+      className="border-r border-border/50 flex flex-col bg-background relative"
       style={{ width, transition: isDragging ? 'none' : 'width 0.2s ease' }}
     >
       <div className="flex flex-col gap-2 px-2.5 pt-4 pb-3">

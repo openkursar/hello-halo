@@ -372,7 +372,7 @@ export function ArtifactRail({
   return (
     <div
       ref={railRef}
-      className={`h-full flex-shrink-0 flex flex-col relative overflow-hidden ${isExpanded ? 'border-l border-border bg-card' : ''}`}
+      className={`h-full flex-shrink-0 flex flex-col relative overflow-hidden ${isExpanded ? 'border-l border-border/50 bg-card' : ''}`}
       style={{
         width: displayWidth,
         // Disable transition when: dragging OR Canvas is open (prevent layout flicker)
@@ -396,7 +396,7 @@ export function ArtifactRail({
           collapse direction — there's no icon-only strip to click when
           closed, matching the prototype's binary show/hide. */}
       {isExpanded && (
-        <div className="flex-shrink-0 pl-3 pr-1.5 h-10 border-b border-border flex items-center justify-between">
+        <div className="flex-shrink-0 pl-3 pr-1.5 h-10 border-b border-border/50 flex items-center justify-between">
           <TabStrip active={activeTab} onChange={handleTabChange} stripRef={tabStripRef} />
           <button
             onClick={handleToggleExpanded}

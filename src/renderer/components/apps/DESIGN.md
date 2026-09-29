@@ -24,6 +24,12 @@ link (`openAppConfigAt`) scrolls to. `RunsSummaryBand` at the top of
 full record.
 
 `PeopleDirectory` renders server-filtered bounded pages from `appListPeople`.
+Removed people are a collapsed section below the pages, fetched in pages of their
+own (`removed: true`) only once opened; `removedTotal` is counted with the same
+search, team and workspace filters so the section's count matches its list. The
+"Handle all" entry into the requests inbox sits in the filter row and is shown
+whenever `attentionTotal` (directory-wide) is non-zero — not inside the page's
+"Needs you" group, since the people waiting may be on another page.
 The directory projection contains no prompts, credentials, or full installed specs.
 `people-directory.store` rejects out-of-order search responses; opening a person
 hydrates only that full record with `appGet`. Team and capability consumers retain
@@ -37,7 +43,8 @@ in `renderer/utils/people-model` and are shared by these projections.
 "Needs you" has one definition, `needsAttention` in `shared/apps/app-types`: an
 unanswered question, or a person the runtime stopped and only the owner can
 restart (`AutomationAppState.blocked`). The directory grouping, the card's
-status line, the attention filter and the person's own list all ask it, so a
+status line, the server's `attention` query option and the person's own list
+all ask it, so a
 card cannot be listed as needing the owner for a reason its page does not show.
 A stop is an item in that list carrying its own way out (`BlockedCard`, resume),
 never a badge on its own — the split is what produced a red status line above an

@@ -312,7 +312,7 @@ export function AppsPage() {
           once something is opened (a person, a skill, an MCP server, a team):
           those screens navigate by their own back link, so browse-level tabs
           on top of them only offer a second, competing way out. */}
-      {!inTeamWorkbench && !showsAppDetail && <div className="flex items-center gap-1 px-3 sm:px-4 py-2 border-b border-border flex-shrink-0 overflow-x-auto">
+      {!inTeamWorkbench && !showsAppDetail && <div className="flex items-center gap-1 px-3 sm:px-4 py-2 border-b border-border/50 flex-shrink-0 overflow-x-auto">
         {/* The request inbox has no tab of its own: it is reached from the
             directory's "Needs you" group, so it highlights this tab. */}
         <TabButton
