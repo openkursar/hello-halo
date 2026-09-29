@@ -51,6 +51,7 @@ import {
   deliverExternalMessage,
 } from '../services/conversation-interop'
 import { setConversationInteropFactory } from '../services/agent/toolsets/broker'
+import { initSpaceMemoryConsolidation, disposeSpaceMemoryConsolidation } from '../services/memory-consolidation'
 import { markExtendedServicesReady } from './state'
 import { getMainWindow, sendToRenderer } from '../foundation/window.service'
 import { initializeHealthSystem, setSessionCleanupFn } from '../services/health'
@@ -198,6 +199,11 @@ async function initPlatformAndApps(): Promise<void> {
   // No DB/store dependency — dormant until the halo-conversations toolset
   // (services/agent/toolsets/broker.ts) actually registers a wait.
   initConversationInterop()
+
+  // Space memory consolidation: subscribes to onAgentEvent turn ends and, when
+  // a space's memory has grown past its threshold, reorganises it in the
+  // background (services/memory-consolidation/space-trigger.ts).
+  initSpaceMemoryConsolidation()
 
   // Wire the toolset broker's dependency-inversion seam (mirrors
   // setSessionInvalidator/setActiveTeamRuntime/setMemorySdk): broker.ts must
@@ -1151,6 +1157,18 @@ async function initPlatformAndApps(): Promise<void> {
       onRunStateChanged: (teamId) => getFederationManager()?.broadcastRosterFor(teamId),
     })
 
+    // A run left open by a previous session has nothing executing it — its
+    // sessions died with that process — but it holds the team's run slot, so
+    // every trigger this session fires would read "already running" and skip.
+    // Seal those before anything is armed, so the slot, the History rows and the
+    // triggers all start from the truth (TeamRuntime.recoverInterruptedRuns).
+    try {
+      const sealed = await getActiveTeamRuntime()?.recoverInterruptedRuns()
+      if (sealed) console.log(`[Bootstrap] Sealed ${sealed} interrupted team run(s)`)
+    } catch (err) {
+      console.error('[Bootstrap] Team interrupted-run recovery failed:', err)
+    }
+
     // Team triggers: register the kind='team' scheduler handler and rehydrate
     // persisted triggers — schedule triggers become scheduler jobs, event
     // triggers (webhook/file/wecom) become EventRouter subscriptions. Must run
@@ -1164,6 +1182,9 @@ async function initPlatformAndApps(): Promise<void> {
         store: teamStore,
         eventRouter,
         runTeam: (teamId, trigger) => teamService.runTeam(teamId, trigger),
+        // Live state, not the persisted pointer: a run that outlived its process
+        // must not keep refusing this session's triggers.
+        activeRunEpochId: (teamId) => getActiveTeamRuntime()?.activeRunEpochId(teamId) ?? null,
       })
       teamTriggerScheduler.registerHandler()
       teamTriggerScheduler.rehydrate()
@@ -1546,6 +1567,7 @@ export async function cleanupExtendedServices(): Promise<void> {
 
   // Cross-Conversation Interop: drop the onAgentEvent subscription.
   disposeConversationInterop()
+  disposeSpaceMemoryConsolidation()
 
   // Team: Tear down the service + runtime accessor and the data layer before
   // the App Manager goes away (the service holds an App Manager reference).

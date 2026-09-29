@@ -128,12 +128,48 @@ export const DELEGABLE_BUILTIN_TOOLS: readonly { name: string; group: Capability
   { name: 'WebFetch', group: 'network' },
   { name: 'WebSearch', group: 'network' },
   { name: 'Agent', group: 'other' },
-  { name: 'TodoWrite', group: 'other' },
   { name: 'Bash', group: 'advanced' },
   { name: 'Write', group: 'advanced' },
   { name: 'Edit', group: 'advanced' },
   { name: 'NotebookEdit', group: 'advanced' },
 ]
+
+/**
+ * Built-in tools every caller has, never offered as a switch: they act on the
+ * turn's own bookkeeping and reach nothing outside it. Withholding the task
+ * list only made multi-step work worse.
+ */
+export const ALWAYS_AVAILABLE_BUILTIN_TOOLS: readonly string[] = ['TodoWrite']
+
+/**
+ * What a guest may use when their access is turned on and the build names no
+ * default of its own: looking at files in the workspace. Paths are held to the
+ * workspace at run time, whatever is granted here.
+ */
+export const DEFAULT_GUEST_ALLOWED_TOOLS: readonly string[] = ['Read', 'Glob', 'Grep']
+
+/**
+ * The guest policy a first turn-on of guest access starts from: the build's
+ * own default when it names one — an empty list included — else
+ * {@link DEFAULT_GUEST_ALLOWED_TOOLS}.
+ */
+export function defaultGuestPolicy(buildDefault?: { allowedTools?: string[] } | null): { allowedTools: string[] } {
+  return { allowedTools: [...(buildDefault?.allowedTools ?? DEFAULT_GUEST_ALLOWED_TOOLS)] }
+}
+
+/**
+ * Guest access turned on or off. Off keeps the choices made, so turning it
+ * back on restores them; a first turn-on starts from {@link defaultGuestPolicy}.
+ */
+export function withGuestAccess<T extends { guestPolicy?: CapabilityPolicy; savedGuestPolicy?: CapabilityPolicy }>(
+  holder: T,
+  on: boolean,
+  buildDefault?: { allowedTools?: string[] } | null
+): T {
+  if (!on) return { ...holder, guestPolicy: undefined, savedGuestPolicy: holder.guestPolicy ?? holder.savedGuestPolicy }
+  const { savedGuestPolicy, ...rest } = holder
+  return { ...rest, guestPolicy: holder.guestPolicy ?? savedGuestPolicy ?? defaultGuestPolicy(buildDefault) } as T
+}
 
 /** Group order for rendering. Labels are supplied by the screen (they differ per scenario). */
 export const CAPABILITY_TOOL_GROUPS: readonly CapabilityToolGroup[] = ['file', 'network', 'other', 'advanced']
@@ -208,6 +244,7 @@ export function allowsBuiltin(
   name: string,
   mode: CapabilityMode
 ): boolean {
+  if (ALWAYS_AVAILABLE_BUILTIN_TOOLS.includes(name)) return true
   const listed = policy?.allowedTools
   if (listed === undefined) return mode === 'permissive'
   return listed.includes(name)
@@ -316,7 +353,7 @@ export function buildAllowedToolRules(
   policy: CapabilityPolicy | undefined,
   mode: CapabilityMode
 ): string[] {
-  const rules: string[] = []
+  const rules: string[] = [...ALWAYS_AVAILABLE_BUILTIN_TOOLS]
   for (const { name } of DELEGABLE_BUILTIN_TOOLS) {
     if (name === 'Bash') continue
     if (allowsBuiltin(policy, name, mode)) rules.push(name)
@@ -361,6 +398,7 @@ export function allowsBuiltinAtCallTime(
   name: string,
   mode: CapabilityMode
 ): boolean {
+  if (ALWAYS_AVAILABLE_BUILTIN_TOOLS.includes(name)) return true
   if (!DELEGABLE_BUILTIN_TOOLS.some((tool) => tool.name === name)) return false
   return allowsBuiltin(policy, name, mode)
 }
@@ -392,7 +430,7 @@ export function capabilityPolicyFromPreset(preset: CapabilityPresetId): Capabili
     allowedTools: DELEGABLE_BUILTIN_TOOLS.filter((tool) =>
       preset === 'workspace'
         ? tool.group !== 'advanced' || tool.name !== 'Bash'
-        : tool.group === 'file' || tool.group === 'network' || tool.name === 'TodoWrite'
+        : tool.group === 'file' || tool.group === 'network'
     ).map((tool) => tool.name),
     bashScope: 'full',
     allowAiBrowser: false,

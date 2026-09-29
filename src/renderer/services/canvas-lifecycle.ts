@@ -53,6 +53,7 @@ export type ContentType =
   | 'browser'
   | 'terminal'
   | 'team'
+  | 'goal'
 
 export interface BrowserState {
   isLoading: boolean
@@ -92,6 +93,8 @@ export interface TabState {
   terminalSessionId?: string // For terminal tabs - the pty session id
   /** Persistent Halo team rendered by the Team workbench. */
   teamId?: string
+  /** Conversation whose goal the goal editor edits. */
+  goal?: { spaceId: string; conversationId: string }
   /**
    * Whether the Canvas owns the BrowserView's lifecycle.
    * true  — created via createBrowserView (openUrl/openPdf): destroy on close.
@@ -380,6 +383,16 @@ class CanvasLifecycle {
     confirmSingleClose: (sessionId: string) => Promise<boolean>
     disposeOnBulkClose: (sessionId: string) => Promise<void>
   } | null = null
+
+  /**
+   * Content type -> prompt shown before a user closes a tab of that type with
+   * unsaved changes. Registered by the domain that owns the editor; it resolves
+   * false to keep the tab open. Types with no guard close without asking.
+   */
+  private dirtyCloseGuards = new Map<ContentType, (tab: TabState) => Promise<boolean>>()
+
+  /** Content type -> reload for tabs whose content is neither a file nor a view. */
+  private refreshHandlers = new Map<ContentType, (tab: TabState) => Promise<void>>()
 
   // ============================================
   // Initialization
@@ -829,6 +842,41 @@ class CanvasLifecycle {
     return tabId
   }
 
+  /** Open the goal editor for a conversation, reusing its tab if one is open. */
+  async openGoal(spaceId: string, conversationId: string): Promise<string> {
+    for (const [tabId, tab] of this.tabs) {
+      if (tab.type === 'goal' && tab.goal?.conversationId === conversationId) {
+        this.setOpen(true)
+        await this.switchTab(tabId)
+        return tabId
+      }
+    }
+
+    const tabId = generateTabId()
+    const tab: TabState = {
+      id: tabId,
+      type: 'goal',
+      title: i18n.t('Goal'),
+      goal: { spaceId, conversationId },
+      isDirty: false,
+      isLoading: false,
+    }
+
+    this.tabs.set(tabId, tab)
+    this.setOpen(true)
+    this.notifyTabsChange()
+    await this.switchTab(tabId)
+    return tabId
+  }
+
+  /** Rename a tab, e.g. when what it shows is renamed elsewhere. */
+  setTabTitle(tabId: string, title: string): void {
+    const tab = this.tabs.get(tabId)
+    if (!tab || tab.title === title) return
+    tab.title = title
+    this.notifyTabsChange()
+  }
+
   /** Update a terminal tab's title (from lifecycle title events). */
   setTerminalTitle(sessionId: string, title: string): void {
     for (const [, tab] of this.tabs) {
@@ -885,11 +933,29 @@ class CanvasLifecycle {
   }
 
   /**
+   * Register the prompt asked before a dirty tab of `type` is closed by the
+   * user, one tab at a time or all at once. Returns an unsubscribe function.
+   * Space-switch teardown never asks.
+   */
+  setDirtyCloseGuard(type: ContentType, guard: (tab: TabState) => Promise<boolean>): () => void {
+    this.dirtyCloseGuards.set(type, guard)
+    return () => {
+      if (this.dirtyCloseGuards.get(type) === guard) this.dirtyCloseGuards.delete(type)
+    }
+  }
+
+  /**
    * Close a tab
    */
   async closeTab(tabId: string): Promise<void> {
     const tab = this.tabs.get(tabId)
     if (!tab) return
+
+    const dirtyGuard = tab.isDirty ? this.dirtyCloseGuards.get(tab.type) : undefined
+    if (dirtyGuard && !(await dirtyGuard(tab))) {
+      console.log(`[CanvasLifecycle] Close of dirty tab ${tabId} cancelled by user`)
+      return
+    }
 
     console.log(`[CanvasLifecycle] Closing tab: ${tabId}`)
 
@@ -925,10 +991,31 @@ class CanvasLifecycle {
     this.notifyTabsChange()
   }
 
+  /** Register how tabs of `type` reload on Refresh. Returns an unsubscribe function. */
+  setRefreshHandler(type: ContentType, handler: (tab: TabState) => Promise<void>): () => void {
+    this.refreshHandlers.set(type, handler)
+    return () => {
+      if (this.refreshHandlers.get(type) === handler) this.refreshHandlers.delete(type)
+    }
+  }
+
   /**
-   * Close all tabs
+   * Close all tabs. `confirmDirty` is for a close the user asked for: each
+   * dirty tab with a guard asks first, and one "keep" cancels the whole close.
    */
-  async closeAll(): Promise<void> {
+  async closeAll(options?: { confirmDirty?: boolean }): Promise<void> {
+    if (options?.confirmDirty) {
+      for (const tab of [...this.tabs.values()]) {
+        const dirtyGuard = tab.isDirty ? this.dirtyCloseGuards.get(tab.type) : undefined
+        if (!dirtyGuard || !this.tabs.has(tab.id)) continue
+        await this.switchTab(tab.id)
+        if (!(await dirtyGuard(tab))) {
+          console.log(`[CanvasLifecycle] Close all cancelled by user at dirty tab ${tab.id}`)
+          return
+        }
+      }
+    }
+
     console.log('[CanvasLifecycle] Closing all tabs')
 
     // Tear down each tab's underlying resource. Browser/pdf views go by
@@ -1293,6 +1380,8 @@ class CanvasLifecycle {
       this.notifyTabsChange()
 
       await this.loadFileContent(tabId, tab.path, tab.type)
+    } else {
+      await this.refreshHandlers.get(tab.type)?.(tab)
     }
   }
 

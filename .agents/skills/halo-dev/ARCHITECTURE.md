@@ -30,6 +30,9 @@ Services Layer (src/main/services)
   - domain services: agent, ai-browser, ai-sources, space, conversation,
     artifact, analytics, remote, etc.
   - app-bridge.ts   : DI seam so services reach Apps data without importing up
+  - memory-consolidation: background agent that reorganises an oversized memory
+                    (digital human or space) into topics; space turns reach it
+                    via the onAgentEvent turn-end signal, never from services/agent
   - openai-compat-router (src/main/openai-compat-router) sits in this tier:
     services/agent starts it and encodes backend configs through its index;
     it depends on services only through the standalone proxy-fetch utility,
@@ -41,7 +44,9 @@ Platform Layer (src/main/platform)
   - store       : SQLite manager + migrations foundation
   - scheduler   : persistent job engine
   - event       : event routing/filter/dedup
-  - memory      : scoped memory tools + files (SDK primitives injected via memory/sdk)
+  - memory      : memory.md + topic wiki per owner (digital human, space): layouts,
+                  turn rendering, write lock + engine-hook write guard, file side
+                  of consolidation (SDK primitives injected via memory/sdk)
   - background  : keep-alive + tray + daemon browser
   - turn-gate   : generic "one turn per session key" lock + FIFO mailbox
                   (shared by apps/runtime/team and services/agent; see its DESIGN.md)
@@ -49,6 +54,7 @@ Platform Layer (src/main/platform)
 Foundation Layer (src/main/foundation)  ← bedrock, zero upward deps
   - config.service, config-encryption, crypto-envelope, credential-safety
   - secure-storage, window, protocol, logging/, product-config
+  - path-containment (how file-tool path arguments resolve; containment checks)
 ```
 
 ## 2) Dependency Direction (Must Hold)
@@ -94,7 +100,8 @@ src/
 │   ├── foundation/                    # Bedrock tier (zero upward deps): config.service,
 │   │                                  #   config-encryption, crypto-envelope,
 │   │                                  #   credential-safety, secure-storage, window,
-│   │                                  #   protocol, logging/, product-config
+│   │                                  #   protocol, logging/, product-config,
+│   │                                  #   path-containment (file-tool path boundaries)
 │   ├── controllers/                   # Business logic shared by IPC & HTTP
 │   ├── http/                          # Remote Access: Express + WebSocket
 │   │   ├── routes/                    #   Per-domain route modules (*.routes.ts) +
@@ -172,7 +179,8 @@ src/
 │   │                                  #   and teammates; enforced in apps/runtime/capability-policy)
 │   └── constants/                     # providers, ignore-patterns, display-scale,
 │                                      #   model-capabilities (wire-id → capability
-│                                      #   inference), model-runtime-limits,
+│                                      #   inference), model-pricing (wire-id → list
+│                                      #   price; data in shared/data), model-runtime-limits,
 │                                      #   reasoning-effort
 │
 ├── preload/
@@ -198,7 +206,9 @@ src/
     ├── components/                    # UI sub-components by domain (NOT full-screen views):
     │   ├── apps/                      #   Apps management
     │   ├── canvas/                    #   Content Canvas + viewers/
-    │   ├── chat/                      #   Chat stream + tool-result/
+    │   ├── chat/                      #   Chat stream + tool-result/ + transcript/ (native
+    │   │                              #   transcript scrolling for every chat surface — no
+    │   │                              #   list virtualization; see transcript/DESIGN.md)
     │   ├── layout/                    #   Header, ModelSelector, SpaceSelector, etc.
     │   ├── settings/                  #   Settings sections
     │   ├── setup/                     #   Sub-components: LoginSelector, SetupProviderConfig, ServerConnect

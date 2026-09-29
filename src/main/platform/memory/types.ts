@@ -5,6 +5,8 @@
  * Consumed by apps/runtime and other platform modules.
  */
 
+import type { MemoryPromptOptions } from './prompt'
+
 // ============================================================================
 // Memory Scopes
 // ============================================================================
@@ -13,7 +15,7 @@
  * Memory scope determines which memory file is targeted.
  *
  * - 'user':  Global user preferences, stored at {haloDir}/user-memory.md
- * - 'space': Per-space knowledge, stored at {spacePath}/.halo/memory.md
+ * - 'space': Per-space memory, stored at {spacePath}/.halo/memory.md
  * - 'app':   Per-app private memory, stored at {spacePath}/.halo/apps/{appId}/memory.md
  */
 export type MemoryScopeType = 'user' | 'space' | 'app'
@@ -38,47 +40,6 @@ export interface MemoryCallerScope {
 }
 
 // ============================================================================
-// Read / Write Parameters
-// ============================================================================
-
-/**
- * Read mode for memory read operations.
- *
- * - 'full':     Return the entire memory file (default)
- * - 'headers':  Return only markdown heading lines with line numbers (low token cost)
- * - 'section':  Return a specific section matched by heading text
- * - 'tail':     Return the last N lines of the file
- */
-export type MemoryReadMode = 'full' | 'headers' | 'section' | 'tail'
-
-export interface MemoryReadParams {
-  /** Which memory scope to read from */
-  scope: MemoryScopeType
-  /** Optional: specific file path within the memory/ subdirectory */
-  path?: string
-  /** Read mode. Defaults to 'full' for backward compatibility. */
-  mode?: MemoryReadMode
-  /** Heading text to match when mode='section'. Case-insensitive substring match. */
-  section?: string
-  /** Number of lines to return when mode='tail'. Defaults to 50. */
-  limit?: number
-}
-
-export interface MemoryWriteParams {
-  /** Which memory scope to write to */
-  scope: MemoryScopeType
-  /** Content to write */
-  content: string
-  /** Write mode: 'append' adds to end, 'replace' overwrites entire file */
-  mode: 'append' | 'replace'
-}
-
-export interface MemoryListParams {
-  /** Which memory scope to list files from */
-  scope: MemoryScopeType
-}
-
-// ============================================================================
 // Session Summary
 // ============================================================================
 
@@ -88,13 +49,6 @@ export interface SessionSummaryParams {
   /** Optional slug for the filename (e.g., 'debug-api-timeout'). If omitted, timestamp-based. */
   slug?: string
 }
-
-// ============================================================================
-// Compaction
-// ============================================================================
-
-/** Size threshold in bytes before compaction is triggered (100KB) */
-export const COMPACTION_THRESHOLD_BYTES = 100 * 1024
 
 // ============================================================================
 // Turn Modes
@@ -116,77 +70,14 @@ export type MemoryTurnMode = 'run' | 'session'
 // ============================================================================
 
 /**
- * The public interface of the memory module.
+ * The memory service handed to apps/runtime at bootstrap.
  *
- * Consumed by apps/runtime (via initMemory()) to:
- * - Read/write memory programmatically
- * - Manage session lifecycle (flush, compaction, summaries)
- * - Generate system prompt fragments
+ * Everything else — layouts, snapshots, rendering, consolidation primitives, the
+ * write guard — is stateless and imported from this module's index directly.
  */
 export interface MemoryService {
   /**
-   * Read memory content.
-   *
-   * @param caller - Who is reading
-   * @param params - What to read (scope + optional path)
-   * @returns Content string, or null if file does not exist
-   * @throws If the caller lacks permission to read the requested scope
-   */
-  read(caller: MemoryCallerScope, params: MemoryReadParams): Promise<string | null>
-
-  /**
-   * Write memory content.
-   *
-   * @param caller - Who is writing
-   * @param params - What to write (scope, content, mode)
-   * @throws If the caller lacks permission or violates isolation rules
-   */
-  write(caller: MemoryCallerScope, params: MemoryWriteParams): Promise<void>
-
-  /**
-   * List files in the memory/ subdirectory for a given scope.
-   *
-   * @param caller - Who is listing
-   * @param params - Which scope to list
-   * @returns Array of relative file paths, or empty array if directory doesn't exist
-   */
-  list(caller: MemoryCallerScope, params: MemoryListParams): Promise<string[]>
-
-  /**
-   * Flush in-progress memory before context compaction.
-   *
-   * Called by apps/runtime just before the Agent SDK performs context compaction.
-   * The implementation appends any pending notes from the current session.
-   * In V1 this is a no-op placeholder (no in-memory buffer to flush).
-   */
-  flushBeforeCompaction(caller: MemoryCallerScope): Promise<void>
-
-  /**
-   * Replace a memory.md that has grown too large with a compacted summary,
-   * keeping the full version at memory/YYYY-MM-DD-HHmm.md.
-   *
-   * The summary is produced by the caller (apps/runtime owns the LLM call) and
-   * handed over here, rather than this taking the file away first and waiting
-   * for one: memory.md stays readable and writable for the minutes generation
-   * takes, so a concurrent execution never meets an empty slot, and whatever it
-   * writes in the meantime is inside the version that gets archived.
-   *
-   * @param caller - Who is compacting
-   * @param scope - Which scope to compact
-   * @param summary - What memory.md holds afterwards
-   * @returns Path to the archived file, or null if there was nothing to compact
-   */
-  compact(
-    caller: MemoryCallerScope,
-    scope: MemoryScopeType,
-    summary: string
-  ): Promise<string | null>
-
-  /**
-   * Save a session summary to the memory/ archive directory.
-   *
-   * Called by apps/runtime when a session ends. The summary is stored as
-   * a markdown file in the memory/ subdirectory.
+   * Save an automation run's record under run/.
    *
    * @param caller - Who is saving
    * @param scope - Which scope to save under
@@ -199,23 +90,11 @@ export interface MemoryService {
   ): Promise<void>
 
   /**
-   * Get system prompt instructions for memory usage.
-   *
-   * Returns a markdown fragment to be appended to the agent's system prompt.
-   * Guides the AI to use native file tools (Read/Edit/Write) on memory.md.
+   * The system prompt fragment that teaches the agent to keep its memory.
    *
    * @param mode - What the caller actually does for this turn, so the
    *               instructions never promise an injection that did not happen
-   * @returns Prompt fragment string
+   * @param opts - Owner kind and declared tracked items
    */
-  getPromptInstructions(mode: MemoryTurnMode): string
-
-  /**
-   * Check if a memory file exceeds the compaction threshold.
-   *
-   * @param caller - Who is checking
-   * @param scope - Which scope to check
-   * @returns true if the file size exceeds COMPACTION_THRESHOLD_BYTES
-   */
-  needsCompaction(caller: MemoryCallerScope, scope: MemoryScopeType): Promise<boolean>
+  getPromptInstructions(mode: MemoryTurnMode, opts?: MemoryPromptOptions): string
 }

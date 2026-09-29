@@ -72,6 +72,22 @@
     "path": "/api/spaces/:spaceId"
   },
   {
+    "method": "GET",
+    "path": "/api/spaces/:spaceId/preferences"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/spaces/:spaceId/preferences"
+  },
+  {
+    "method": "GET",
+    "path": "/api/spaces/:spaceId/memory"
+  },
+  {
+    "method": "POST",
+    "path": "/api/spaces/:spaceId/memory/consolidate"
+  },
+  {
     "method": "DELETE",
     "path": "/api/spaces/:spaceId"
   },
@@ -298,6 +314,14 @@
   {
     "method": "POST",
     "path": "/api/apps/:appId/clear-memory"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/:appId/memory"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/memory/consolidate"
   },
   {
     "method": "POST",

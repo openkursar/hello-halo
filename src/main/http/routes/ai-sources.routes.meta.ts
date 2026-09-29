@@ -63,7 +63,7 @@ export const MODULE: RouteModuleMeta = {
       notes: [
         'All optional inputs are validated. Catalog data accepts only positive integer contextWindow and maxOutputTokens values within Halo runtime limits; catalogSupportsVision must be a boolean.',
         'Priority, highest first: user override, then a [1m] model-id suffix (contextWindow only), then an exact preset entry, then catalog data, then a model-family pattern entry, then built-in defaults. A pattern entry is only a family guess and ranks below the provider catalog; an exact entry is curated and ranks above it.',
-        'A context above 200K does not opt the SDK into extended context unless the user explicitly enables extendedContext or the model id ends in [1m].',
+        'A context window above 200K is what opts the SDK into extended context — there is no separate switch. A model id ending in [1m] does the same.',
         'Returns 400 for a missing modelId or malformed capability data.',
       ].join('\n'),
     },

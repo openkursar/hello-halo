@@ -147,6 +147,11 @@ if (dataFolderName !== DEFAULT_DATA_FOLDER_NAME) {
   app.setPath('userData', joinPath(appDataPath, dataFolderName))
   console.log(`[Main] userData isolated to: ${joinPath(appDataPath, dataFolderName)}`)
 }
+// A build under test must not share browser storage with a real install of the
+// same product, and macOS resolves appData without consulting HOME.
+if (process.env.HALO_E2E_TEST && process.env.HALO_DATA_DIR) {
+  app.setPath('userData', joinPath(process.env.HALO_DATA_DIR, 'electron-user-data'))
+}
 
 // Log path isolation (per-variant / per-cluster-node) — see
 // foundation/logging/log-isolation.ts for the rules. Must run pre-ready.

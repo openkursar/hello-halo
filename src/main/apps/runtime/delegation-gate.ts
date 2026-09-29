@@ -13,6 +13,15 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { resolve } from 'node:path'
+import {
+  decideFileAccess,
+  fileExportRefusal,
+  filterSearchOutput,
+  searchPathRewrite,
+  FILE_TOOLS,
+  type TurnFileAccess,
+} from './turn-file-access'
 import {
   allowsBuiltinAtCallTime,
   resolveBashAccess,
@@ -30,6 +39,8 @@ export type ToolAuditSink = (entry: TeamToolAudit) => void
 export interface ActiveDelegation {
   policy: CapabilityPolicy | undefined
   mode: CapabilityMode
+  /** Where this turn's file tools may reach; see turn-file-access. */
+  files?: TurnFileAccess
   /** Identifies the turn in the owner's record. */
   audit?: {
     teamId: string
@@ -91,7 +102,7 @@ export function decideDelegatedTool(
   const delegation = active.get(conversationId)
   if (!delegation) return { allow: true }
 
-  const decision = judge(delegation, toolName)
+  const decision = judge(delegation, toolName, input)
   if (!decision.allow) {
     record(delegation, toolName, input, 'denied', decision.reason ?? null)
     console.warn(`${LOG_TAG} refused ${toolName} on ${conversationId}: ${decision.reason}`)
@@ -124,7 +135,7 @@ export function recordExecutedTool(
  * granted. Built-ins are re-asked because the pool they were removed from was
  * fixed at session creation.
  */
-function judge(delegation: ActiveDelegation, toolName: string): ToolDecision {
+function judge(delegation: ActiveDelegation, toolName: string, input: Record<string, unknown>): ToolDecision {
   if (toolName.startsWith('mcp__')) return { allow: true }
 
   const { policy, mode } = delegation
@@ -145,8 +156,78 @@ function judge(delegation: ActiveDelegation, toolName: string): ToolDecision {
     }
   }
 
+  if (delegation.files) {
+    const decision = decideFileAccess(delegation.files, toolName, input, allowsBuiltinAtCallTime(policy, toolName, mode))
+    if (decision) return decision.allow ? { allow: true } : { allow: false, reason: decision.reason }
+  }
   if (allowsBuiltinAtCallTime(policy, toolName, mode)) return { allow: true }
   return { allow: false, reason: `"${toolName}" was not granted for this request.` }
+}
+
+/**
+ * Why a file may not be sent out of the turn a conversation is running now, or
+ * null. The send tools resolve a path the way the export gate does.
+ */
+export function turnFileExportRefusal(conversationId: string, filePath: string): string | null {
+  const files = active.get(conversationId)?.files
+  return files ? fileExportRefusal(files, resolve(filePath)) : null
+}
+
+/**
+ * The same file boundary, as engine hooks. Needed besides the gate: an engine
+ * clears a call its own rules allow (a granted Read) without asking the gate,
+ * and only a pre-tool hook sees every call. Read at call time, like the gate,
+ * because the session outlives the turn that registered its terms.
+ *
+ * A granted search is also rewritten to run at the path as judged, and its
+ * result has closed paths removed without a trace, for engines that recurse
+ * into hidden folders and let a hook replace the output.
+ */
+export function createTurnFileAccessHooks(conversationId: string): Record<string, unknown[]> {
+  const pre = async (hookInput: unknown): Promise<Record<string, unknown>> => {
+    const event = hookInput as { tool_name?: string; tool_input?: unknown }
+    const delegation = active.get(conversationId)
+    if (!delegation?.files || !event?.tool_name) return {}
+    const input = event.tool_input && typeof event.tool_input === 'object'
+      ? (event.tool_input as Record<string, unknown>)
+      : {}
+    const granted = allowsBuiltinAtCallTime(delegation.policy, event.tool_name, delegation.mode)
+    const decision = decideFileAccess(delegation.files, event.tool_name, input, granted)
+    if (!decision || decision.allow) {
+      // The search runs at the path that was judged, spelled as judged.
+      const updatedInput = searchPathRewrite(event.tool_name, input, delegation.files.cwd)
+      return updatedInput ? { hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput } } : {}
+    }
+    record(delegation, event.tool_name, input, 'denied', decision.reason)
+    console.warn(`${LOG_TAG} refused ${event.tool_name} on ${conversationId}: ${decision.reason}`)
+    return {
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: decision.reason,
+      },
+    }
+  }
+
+  const post = async (hookInput: unknown): Promise<Record<string, unknown>> => {
+    const event = hookInput as { tool_name?: string; tool_input?: unknown; tool_response?: unknown; cwd?: string }
+    const delegation = active.get(conversationId)
+    if (!delegation?.files || !event?.tool_name || typeof event.tool_response !== 'string') return {}
+    const input = event.tool_input && typeof event.tool_input === 'object'
+      ? (event.tool_input as Record<string, unknown>)
+      : {}
+    const filtered = filterSearchOutput(
+      delegation.files, event.tool_name, input, event.tool_response, event.cwd ?? delegation.files.cwd
+    )
+    if (filtered === null) return {}
+    return { hookSpecificOutput: { hookEventName: 'PostToolUse', updatedMCPToolOutput: filtered } }
+  }
+
+  // One entry per tool: the Halo engine does not read `A|B` as alternation.
+  return {
+    PreToolUse: FILE_TOOLS.map(matcher => ({ matcher, hooks: [pre] })),
+    PostToolUse: ['Grep', 'Glob'].map(matcher => ({ matcher, hooks: [post] })),
+  }
 }
 
 function record(
@@ -187,7 +268,7 @@ function record(
  *
  * Shaped as the SDK's hook map so the caller only has to hand it to the session.
  */
-export function createDelegationAuditHooks(conversationId: string): Record<string, unknown> {
+export function createDelegationAuditHooks(conversationId: string): Record<string, unknown[]> {
   return {
     PostToolUse: [
       {

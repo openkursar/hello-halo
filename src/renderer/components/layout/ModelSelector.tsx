@@ -56,6 +56,7 @@ function ModelList({ onDone }: { onDone: () => void }) {
   const { t } = useTranslation()
   const { config, setConfig, navigate } = useAppStore()
   const [isRefreshing, setIsRefreshing] = useState(false)
+  const [refreshStatus, setRefreshStatus] = useState<'success' | 'cached' | 'failed' | null>(null)
 
   const aiSources = useAiSources()
   const currentSource = getCurrentSource(aiSources)
@@ -141,15 +142,21 @@ function ModelList({ onDone }: { onDone: () => void }) {
     if (isRefreshing) return
 
     setIsRefreshing(true)
+    setRefreshStatus(null)
     try {
       const result = await api.refreshAISourcesConfig()
       if (result.success && result.data) {
-        setConfig({ ...config, aiSources: (result.data as any).aiSources as AISourcesConfig })
-        console.log('[ModelSelector] Models refreshed successfully')
+        const latestConfig = useAppStore.getState().config
+        if (latestConfig) setConfig({ ...latestConfig, aiSources: (result.data as any).aiSources as AISourcesConfig })
+        setRefreshStatus(result.modelRefresh?.failedSourceIds.length
+          ? 'failed'
+          : result.modelRefresh?.degradedSourceIds.length ? 'cached' : 'success')
       } else {
+        setRefreshStatus('failed')
         console.warn('[ModelSelector] Refresh failed:', result.error)
       }
     } catch (error) {
+      setRefreshStatus('failed')
       console.error('[ModelSelector] Failed to refresh models:', error)
     } finally {
       setIsRefreshing(false)
@@ -249,6 +256,16 @@ function ModelList({ onDone }: { onDone: () => void }) {
           </div>
         )
       })}
+
+      {refreshStatus && (
+        <p role="status" className="px-3 py-2 text-xs text-muted-foreground">
+          {refreshStatus === 'cached'
+            ? t('Could not fetch the latest model catalog for some providers. Using cached and built-in models.')
+            : refreshStatus === 'failed'
+              ? t('Some model lists could not be refreshed. Please try again.')
+              : t('Models refreshed successfully.')}
+        </p>
+      )}
 
       {/* Footer: Add/Manage source + Refresh */}
       {aiSources.sources.length === 0 ? (

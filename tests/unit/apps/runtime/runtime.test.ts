@@ -171,6 +171,7 @@ vi.mock('../../../../src/main/services/agent/events', () => ({
 // Mock resolved-sdk (report-tool.ts imports tool/createSdkMcpServer from here)
 vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
   createSession: vi.fn(),
+  getActiveEngine: () => null,
   tool: vi.fn((name: string, description: string, schema: unknown, handler: unknown) => ({
     name,
     description,
@@ -1263,12 +1264,12 @@ describe('Prompt Builder', () => {
       const prompt = buildAppSystemPrompt({
         appId: 'test-app-id',
         appSpec: createTestSpec(),
-        memoryInstructions: '## Memory\nUse memory_read to recall state.',
+        memoryInstructions: '## Memory\nUse memory_status to recall state.',
         triggerContext: 'Manual',
         workDir: '/tmp/test',
       })
 
-      expect(prompt).toContain('memory_read')
+      expect(prompt).toContain('memory_status')
     })
 
     it('should always include reporting rules', () => {
@@ -1399,23 +1400,36 @@ describe('Prompt Builder', () => {
     })
   })
 
-  describe('buildInitialMessage', () => {
-    /** Minimal no-memory snapshot — buildInitialMessage requires one. */
-    const memorySnapshot = {
-      exists: false,
+  const memorySectionBase = {
+      layout: {
+        file: '/tmp/test-memory.md',
+        dataDir: '/tmp/memory',
+        topicsDir: '/tmp/memory/topics',
+        runDir: '/tmp/memory/run',
+        archiveDir: '/tmp/memory/archive',
+        snapshotsDir: '/tmp/memory/.snapshots',
+        consolidationDir: '/tmp/memory/.consolidation',
+        stateFile: '/tmp/memory/.state.json',
+      },
+      // Template default, not an empty memory: the two content cases below
+      // need a `false` here to reach the branches that render inlined content.
+      blank: false,
       totalLines: 0,
       sizeBytes: 0,
       firstSection: null,
+      nowBytes: 0,
       headers: [],
       fullContent: null,
-      archiveFiles: [],
-      archiveTotalCount: 0,
-      compactionArchiveCount: 0,
-      memoryFilePath: '/tmp/test-memory.md',
-      memoryArchiveDir: '/tmp/memory/run',
+      topics: { root: '/tmp/memory/topics', children: [], topicCount: 0, totalBytes: 0, truncated: false },
+      runFiles: [],
+      runTotalCount: 0,
+      archiveCount: 0,
       lastModified: null,
-      rawContent: null,
     }
+
+  describe('buildInitialMessage', () => {
+    /** Minimal no-memory snapshot — buildInitialMessage requires one. */
+    const memorySnapshot = { ...memorySectionBase, exists: false }
 
     const selfInstance = {
       id: 'aaaabbbb',
@@ -1494,20 +1508,7 @@ describe('Prompt Builder', () => {
 
   // Shared with app-chat, which opens a team session with the same block.
   describe('buildMemorySection', () => {
-    const base = {
-      totalLines: 0,
-      sizeBytes: 0,
-      firstSection: null,
-      headers: [],
-      fullContent: null,
-      archiveFiles: [],
-      archiveTotalCount: 0,
-      compactionArchiveCount: 0,
-      memoryFilePath: '/tmp/test-memory.md',
-      memoryArchiveDir: '/tmp/memory/run',
-      lastModified: null,
-      rawContent: null,
-    }
+    const base = memorySectionBase
 
     it('should point at the file and ask for creation when none exists', () => {
       const section = buildMemorySection({ ...base, exists: false })
@@ -1541,6 +1542,20 @@ describe('Prompt Builder', () => {
 
       expect(section).toContain('## State | 3 items tracked')
       expect(section).toContain('# History')
+    })
+
+    it('should list the space topics read-only only when offered', () => {
+      const tree = {
+        root: '/tmp/space/.halo/memory/topics',
+        children: [{ kind: 'topic' as const, relPath: 'release.md', description: 'when shipping', sizeBytes: 900 }],
+        topicCount: 1,
+        totalBytes: 900,
+        truncated: false,
+      }
+      expect(buildMemorySection({ ...base, exists: false })).not.toContain('Space memory topics')
+      const section = buildMemorySection({ ...base, exists: false }, tree)
+      expect(section).toContain('### Space memory topics (read-only) — generated from the space\'s topic files')
+      expect(section).toContain('release.md (0.9KB) — when shipping')
     })
   })
 })

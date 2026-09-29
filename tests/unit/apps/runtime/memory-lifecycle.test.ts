@@ -1,13 +1,14 @@
 /**
- * Characterization tests for apps/runtime/turn/memory-lifecycle.
+ * apps/runtime/turn/memory-lifecycle — a digital human's memory around a turn.
  *
- * These lock the behavior extracted verbatim from execute.ts so the refactor
- * is provably behavior-preserving:
  * - prepareMemoryForTurn pre-inserts a History heading by default and skips it
  *   when preInsertHistory is false (the team-turn policy).
- * - finalizeMemoryAfterTurn skips the session summary on noop runs, honors the
- *   compact/saveSessionSummary option gates, and only reaches compaction when
- *   the store reports it is needed.
+ * - finalizeMemoryAfterTurn skips the run record on noop runs and requests
+ *   consolidation unless told not to.
+ * - memory_schema reaches the instructions as tracked items.
+ * - The space's topics are offered only when allowed, and never to a guest.
+ * - The guard lets the digital human write its own memory and only read the
+ *   space's.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -17,31 +18,33 @@ import { tmpdir } from 'os'
 import type { MemoryCallerScope, MemoryService } from '../../../../src/main/platform/memory'
 import type { TriggerContext } from '../../../../src/main/apps/runtime/types'
 
-// The snapshot mock reports the same file the prepare step writes to, so a case
-// can seed content and then read back what the turn inserted.
-let snapshotFilePath = ''
-let snapshotRawContent: string | null = null
+vi.mock('../../../../src/main/services/memory-consolidation', () => ({
+  requestConsolidation: vi.fn(),
+}))
 
-vi.mock('../../../../src/main/platform/memory/snapshot', () => ({
-  buildMemorySnapshot: vi.fn(async () => ({
-    exists: snapshotRawContent !== null,
-    totalLines: 0,
-    sizeBytes: 0,
-    headers: [],
-    archiveTotalCount: 0,
-    memoryFilePath: snapshotFilePath,
-    rawContent: snapshotRawContent,
-  })),
-  createMemoryStatusMcpServer: vi.fn(),
+let spaceMemoryEnabled = true
+const teamMembers = vi.hoisted(() => ({ byApp: new Map<string, unknown[]>(), ready: true }))
+vi.mock('../../../../src/main/apps/team', () => ({
+  getTeamStore: () => teamMembers.ready
+    ? { listMembersByAppId: (appId: string) => teamMembers.byApp.get(appId) ?? [] }
+    : null,
+}))
+
+vi.mock('../../../../src/main/services/space.service', () => ({
+  isSpaceMemoryEnabled: vi.fn(() => spaceMemoryEnabled),
 }))
 
 import {
   prepareMemoryForTurn,
   finalizeMemoryAfterTurn,
-  formatRunTimestamp,
+  memoryTracksFromSpec,
+  memoryPromptOptions,
+  loadSpaceTopicsForTurn,
+  appMemoryGuard,
   type MemoryFinalizeContext,
-  type CompactionCredentialsProvider,
+  type AppConsolidationInputs,
 } from '../../../../src/main/apps/runtime/turn/memory-lifecycle'
+import { requestConsolidation } from '../../../../src/main/services/memory-consolidation'
 
 const scope: MemoryCallerScope = {
   type: 'app',
@@ -52,21 +55,18 @@ const scope: MemoryCallerScope = {
 
 const trigger = { type: 'manual', description: 'test' } as unknown as TriggerContext
 
-const creds: CompactionCredentialsProvider = async () => ({
-  anthropicApiKey: 'k',
-  anthropicBaseUrl: 'https://example.invalid',
-  sdkModel: 'test-model',
-})
+const consolidation: AppConsolidationInputs = {
+  appName: 'Test App',
+  settings: { enabled: true, autoConsolidate: true, cadence: 'diligent' },
+  resolveCredentials: async () => ({}) as never,
+  isBusy: () => false,
+}
 
-function makeMemory(overrides: Partial<MemoryService> = {}): MemoryService {
+function makeMemory(): MemoryService {
   return {
     saveSessionSummary: vi.fn(async () => {}),
-    needsCompaction: vi.fn(async () => false),
-    read: vi.fn(async () => ''),
-    compact: vi.fn(async () => 'archive.md'),
-    write: vi.fn(async () => {}),
-    ...overrides,
-  } as unknown as MemoryService
+    getPromptInstructions: vi.fn(() => ''),
+  }
 }
 
 function baseCtx(overrides: Partial<MemoryFinalizeContext> = {}): MemoryFinalizeContext {
@@ -84,98 +84,160 @@ function baseCtx(overrides: Partial<MemoryFinalizeContext> = {}): MemoryFinalize
   }
 }
 
-describe('formatRunTimestamp', () => {
-  it('formats as YYYY-MM-DD-HHmm (local, zero-padded)', () => {
-    const d = new Date(2026, 0, 5, 9, 7) // Jan 5 2026 09:07 local
-    expect(formatRunTimestamp(d)).toBe('2026-01-05-0907')
-  })
-})
-
 describe('prepareMemoryForTurn', () => {
   let dir = ''
+  let memoryFile = ''
   let prepareScope: MemoryCallerScope
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'mem-lifecycle-'))
-    // prepareMemoryForTurn writes through the app's own memory path, so the
-    // temp dir has to be the space the scope points at for the insert to land
-    // in the file these assertions read.
-    snapshotFilePath = join(dir, '.halo', 'apps', 'app-1', 'memory.md')
-    mkdirSync(dirname(snapshotFilePath), { recursive: true })
+    memoryFile = join(dir, '.halo', 'apps', 'app-1', 'memory.md')
+    mkdirSync(dirname(memoryFile), { recursive: true })
     prepareScope = { ...scope, spacePath: dir }
-    snapshotRawContent = null
   })
 
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true })
   })
 
-  it('pre-inserts a History heading by default into existing content', async () => {
-    snapshotRawContent = '# now\n\n## State\n\n# History\n'
-    writeFileSync(snapshotFilePath, snapshotRawContent, 'utf-8')
+  it('pre-inserts a History heading by default, and the snapshot already holds it', async () => {
+    writeFileSync(memoryFile, '# now\n\n## State\n\n# History\n', 'utf-8')
 
-    const { snapshot, runTimestamp } = await prepareMemoryForTurn(prepareScope)
+    const { snapshot, runTimestamp } = await prepareMemoryForTurn(prepareScope, { byLabel: 'schedule#a1b2' })
 
-    expect(snapshot.memoryFilePath).toBe(snapshotFilePath)
-    const written = readFileSync(snapshotFilePath, 'utf-8')
-    expect(written).toContain(`## ${runTimestamp}`)
-    // Heading sits right after the # History line
-    expect(written).toMatch(/# History\s*\n\n## \d{4}-\d{2}-\d{2}-\d{4}/)
+    expect(snapshot.layout.file).toBe(memoryFile)
+    const written = readFileSync(memoryFile, 'utf-8')
+    expect(written).toMatch(/# History\s*\n\n## \d{4}-\d{2}-\d{2}-\d{4}  \[by: schedule#a1b2\]/)
+    expect(snapshot.fullContent).toContain(`## ${runTimestamp}`)
   })
 
   it('does NOT pre-insert when preInsertHistory is false (team policy)', async () => {
-    snapshotRawContent = '# now\n\n## State\n\n# History\n'
-    writeFileSync(snapshotFilePath, snapshotRawContent, 'utf-8')
+    const content = '# now\n\n## State\n\n# History\n'
+    writeFileSync(memoryFile, content, 'utf-8')
 
     await prepareMemoryForTurn(prepareScope, { preInsertHistory: false })
 
-    const written = readFileSync(snapshotFilePath, 'utf-8')
-    expect(written).toBe(snapshotRawContent) // untouched
+    expect(readFileSync(memoryFile, 'utf-8')).toBe(content)
+  })
+
+  it('gives a chat or team turn a skeleton to edit when the digital human has no memory yet', async () => {
+    const { snapshot } = await prepareMemoryForTurn(prepareScope, { preInsertHistory: false })
+
+    expect(readFileSync(memoryFile, 'utf-8')).toBe('# now\n\n## State\n\n# History\n')
+    expect(snapshot.exists).toBe(true)
+    expect(snapshot.blank).toBe(true)
   })
 })
 
 describe('finalizeMemoryAfterTurn', () => {
-  it('skips session summary on noop runs', async () => {
+  beforeEach(() => { vi.mocked(requestConsolidation).mockClear() })
+
+  it('skips the run record on noop runs', async () => {
     const memory = makeMemory()
-    await finalizeMemoryAfterTurn(memory, scope, baseCtx({ outcome: 'noop' }), creds)
+    await finalizeMemoryAfterTurn(memory, scope, baseCtx({ outcome: 'noop' }), consolidation)
     expect(memory.saveSessionSummary).not.toHaveBeenCalled()
   })
 
-  it('saves session summary but skips compaction when compact:false', async () => {
+  it('records the run and requests consolidation of the app memory by default', async () => {
     const memory = makeMemory()
-    await finalizeMemoryAfterTurn(memory, scope, baseCtx(), creds, {
+    await finalizeMemoryAfterTurn(memory, scope, baseCtx(), consolidation)
+    expect(memory.saveSessionSummary).toHaveBeenCalledTimes(1)
+    expect(requestConsolidation).toHaveBeenCalledTimes(1)
+    const req = vi.mocked(requestConsolidation).mock.calls[0][0]
+    expect(req.ownerKind).toBe('digital-human')
+    expect(req.ownerName).toBe('Test App')
+    expect(req.layout.file).toBe('/tmp/space-1/.halo/apps/app-1/memory.md')
+  })
+
+  it('does nothing at all when memory is turned off', async () => {
+    const memory = makeMemory()
+    await finalizeMemoryAfterTurn(memory, scope, baseCtx(), { ...consolidation, settings: { ...consolidation.settings, enabled: false } })
+    expect(memory.saveSessionSummary).not.toHaveBeenCalled()
+    expect(requestConsolidation).not.toHaveBeenCalled()
+  })
+
+  it('records the run but requests no consolidation when consolidate:false', async () => {
+    const memory = makeMemory()
+    await finalizeMemoryAfterTurn(memory, scope, baseCtx(), consolidation, {
       saveSessionSummary: true,
-      compact: false,
+      consolidate: false,
     })
     expect(memory.saveSessionSummary).toHaveBeenCalledTimes(1)
-    expect(memory.needsCompaction).not.toHaveBeenCalled()
+    expect(requestConsolidation).not.toHaveBeenCalled()
+  })
+})
+
+describe('memoryPromptOptions', () => {
+  const spec = { type: 'automation', name: 'x' } as never
+
+  it('carries team guidance only for a digital human that belongs to a team', () => {
+    teamMembers.byApp.set('in-team', [{ teamId: 't1' }])
+    expect(memoryPromptOptions('in-team', spec).inTeam).toBe(true)
+    expect(memoryPromptOptions('solo', spec).inTeam).toBe(false)
   })
 
-  it('checks compaction need by default and stops when not needed', async () => {
-    const memory = makeMemory({ needsCompaction: vi.fn(async () => false) })
-    await finalizeMemoryAfterTurn(memory, scope, baseCtx(), creds)
-    expect(memory.needsCompaction).toHaveBeenCalledTimes(1)
-    expect(memory.compact).not.toHaveBeenCalled()
+  it('keeps team guidance when membership cannot be read', () => {
+    teamMembers.ready = false
+    try {
+      expect(memoryPromptOptions('solo', spec).inTeam).toBe(true)
+    } finally {
+      teamMembers.ready = true
+    }
+  })
+})
+
+describe('memoryTracksFromSpec', () => {
+  it('turns memory_schema into tracked items', () => {
+    const tracks = memoryTracksFromSpec({
+      type: 'automation',
+      name: 'x',
+      memory_schema: { faq_cache: { type: 'object', description: 'cached answers' } },
+    } as never)
+    expect(tracks).toEqual([{ name: 'faq_cache', type: 'object', description: 'cached answers' }])
   })
 
-  it('hands the summary to compact in one call, so memory.md is only ever swapped', async () => {
-    const memory = makeMemory({
-      needsCompaction: vi.fn(async () => true),
-      read: vi.fn(async () => '# now\n\n## State | big\n\n# History\n'),
-    })
-    await finalizeMemoryAfterTurn(memory, scope, baseCtx(), creds)
+  it('yields nothing when the spec declares none', () => {
+    expect(memoryTracksFromSpec({ type: 'automation', name: 'x' } as never)).toBeUndefined()
+  })
+})
 
-    expect(memory.compact).toHaveBeenCalledTimes(1)
-    expect(vi.mocked(memory.compact).mock.calls[0][2]).toContain('# now')
-    expect(memory.write).not.toHaveBeenCalled()
+describe('loadSpaceTopicsForTurn', () => {
+  let dir = ''
+  let spaceScope: MemoryCallerScope
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'mem-space-'))
+    const topics = join(dir, '.halo', 'memory', 'topics')
+    mkdirSync(topics, { recursive: true })
+    writeFileSync(join(topics, 'release.md'), '---\nname: Release\ndescription: when shipping\n---\nbody\n')
+    spaceScope = { ...scope, spacePath: dir }
+    spaceMemoryEnabled = true
   })
 
-  it('leaves memory.md untouched when the file is empty', async () => {
-    const memory = makeMemory({
-      needsCompaction: vi.fn(async () => true),
-      read: vi.fn(async () => ''),
-    })
-    await finalizeMemoryAfterTurn(memory, scope, baseCtx(), creds)
-    expect(memory.compact).not.toHaveBeenCalled()
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  it('offers the space topics to every turn when allowed', async () => {
+    const tree = await loadSpaceTopicsForTurn(spaceScope, { enabledForApp: true })
+    expect(tree?.topicCount).toBe(1)
+  })
+
+  it('offers nothing when not allowed, or when the space turned memory off', async () => {
+    expect(await loadSpaceTopicsForTurn(spaceScope, { enabledForApp: false })).toBeNull()
+    spaceMemoryEnabled = false
+    expect(await loadSpaceTopicsForTurn(spaceScope, { enabledForApp: true })).toBeNull()
+  })
+})
+
+describe('appMemoryGuard', () => {
+  it('writes its own memory and only reads the space memory', () => {
+    const guard = appMemoryGuard(scope, 'run', consolidation.settings)
+    expect(guard.writable.map(l => l.file)).toEqual(['/tmp/space-1/.halo/apps/app-1/memory.md'])
+    expect(guard.readOnly?.map(l => l.file)).toEqual(['/tmp/space-1/.halo/memory.md'])
+  })
+
+  it('writes nothing when its memory is turned off', () => {
+    const guard = appMemoryGuard(scope, 'run', { ...consolidation.settings, enabled: false })
+    expect(guard.writable).toEqual([])
+    expect(guard.readOnly?.map(l => l.file)).toContain('/tmp/space-1/.halo/apps/app-1/memory.md')
   })
 })

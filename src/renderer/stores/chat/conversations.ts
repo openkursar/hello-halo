@@ -5,6 +5,9 @@ import type { ChatSlice, ChatState } from './internal'
 import { CONVERSATION_CACHE_SIZE, api, createEmptySessionState, createEmptySpaceState } from './internal'
 import type { Conversation, ConversationMeta, Thought, Question } from './internal'
 import { readTransition } from './task-read'
+import { useGoalStore } from '../goal.store'
+import { useGoalUiStore } from '../goal-ui.store'
+import type { ApiRetryState } from '../../../shared/types/api-retry'
 
 /**
  * Optimistically write a conversation's knowledgeBaseIds into the cache, then
@@ -288,6 +291,7 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'loadConver
           thoughts: Thought[]
           spaceId?: string
           pendingQuestion?: { id: string; questions: Question[] }
+          apiRetry?: ApiRetryState
         }
 
         // Recover in-flight thoughts so the streaming view rebuilds after a refresh.
@@ -319,6 +323,16 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'loadConver
             conversationId,
             id: sessionState.pendingQuestion.id,
             questions: sessionState.pendingQuestion.questions,
+          })
+        }
+
+        // Recover a retry the engine is waiting on, so arriving mid-wait shows
+        // the countdown instead of a bare spinner.
+        if (sessionState.isActive && sessionState.apiRetry) {
+          get().handleAgentApiRetry({
+            spaceId: sessionState.spaceId ?? '',
+            conversationId,
+            retry: sessionState.apiRetry,
           })
         }
       }
@@ -383,6 +397,8 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'loadConver
             pulseReadAt: newPulseReadAt
           }
         })
+        useGoalStore.getState().forget(conversationId)
+        useGoalUiStore.getState().forget(conversationId)
 
         // Deleting the last conversation would leave the space with no current
         // conversation — every consumer (sendMessage, toolsets, KB) degrades to
@@ -418,6 +434,7 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'loadConver
             newCache.set(conversationId, {
               ...cached,
               title: newTitle,
+              titleCustomized: true,
               updatedAt: new Date().toISOString()
             })
           }
@@ -430,7 +447,7 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'loadConver
               ...existingState,
               conversations: existingState.conversations.map((c) =>
                 c.id === conversationId
-                  ? { ...c, title: newTitle, updatedAt: new Date().toISOString() }
+                  ? { ...c, title: newTitle, titleCustomized: true, updatedAt: new Date().toISOString() }
                   : c
               )
             })

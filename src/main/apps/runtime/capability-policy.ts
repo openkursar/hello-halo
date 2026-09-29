@@ -23,6 +23,7 @@ import {
 } from '../../../shared/apps/capability-policy'
 import type { CapabilityMode, CapabilityPolicy } from '../../../shared/apps/capability-policy'
 import type { TeamTriggerContext } from '../../../shared/apps/team-types'
+import { FILE_TOOLS } from './turn-file-access'
 
 export { computeDisallowedBuiltins }
 
@@ -123,6 +124,13 @@ export interface ApplyCapabilityPolicyInput {
   dbMcpServers: Record<string, unknown> | null
   /** Servers that are the turn's channel rather than a capability. */
   alwaysKeep?: ReadonlySet<string>
+  /**
+   * Keep the file tools in the pool even when the policy withholds them. The
+   * turn's file boundary (turn-file-access) then admits a withheld tool only
+   * on memory and on files handed to the turn: a digital human cannot work
+   * without its memory, whoever it is working for.
+   */
+  keepFileTools?: boolean
 }
 
 export interface AppliedCapabilityPolicy {
@@ -150,13 +158,14 @@ export function applyCapabilityPolicy(
   sdkOptions: Record<string, any>,
   input: ApplyCapabilityPolicyInput
 ): AppliedCapabilityPolicy {
-  const { policy, mode, mcpServers, dbMcpServers, alwaysKeep } = input
+  const { policy, mode, mcpServers, dbMcpServers, alwaysKeep, keepFileTools } = input
 
   if (!isRestrictivePolicy(policy, mode)) {
     return { enforced: false, disallowedTools: [], mcpServers: mcpServers as Record<string, any> }
   }
 
   const disallowedTools = computeDisallowedBuiltins(policy, mode)
+    .filter(name => !(keepFileTools && FILE_TOOLS.includes(name)))
   const filtered = filterMcpServersByPolicy(mcpServers, dbMcpServers, policy, mode, alwaysKeep)
 
   sdkOptions.disallowedTools = disallowedTools

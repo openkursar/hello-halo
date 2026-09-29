@@ -34,8 +34,8 @@ import { getAppManager } from '../manager'
 import { analytics } from '../../services/analytics/analytics.service'
 import { AnalyticsEvents } from '../../services/analytics/types'
 import { resolvePermission } from '../../../shared/apps/app-types'
-import type { MemoryCallerScope } from '../../platform/memory'
 import { getTaskStateService } from '../../platform/task-state'
+import { createMemoryStatusMcpServer, resolveMemoryLayout, type MemoryCallerScope, type TopicsTree } from '../../platform/memory'
 import { getConfig } from '../../foundation/config.service'
 import {
   getApiCredentials,
@@ -45,7 +45,8 @@ import {
   getDbMcpServers
 } from '../../services/agent/helpers'
 import { emitAgentEvent } from '../../services/agent/events'
-import { resolveCredentialsForSdk, buildBaseSdkOptions } from '../../services/agent/sdk-config'
+import { resolveCredentialsForSdk, buildBaseSdkOptions, addSdkHooks } from '../../services/agent/sdk-config'
+import { toEngineSystemPrompt } from '../../services/agent/system-prompt'
 import { getEngineCapabilities } from '../../services/agent/resolved-sdk'
 import { applyReasoningEffort } from '../../services/agent/reasoning-effort'
 import { createCanUseTool } from '../../services/agent/permission-handler'
@@ -99,7 +100,9 @@ import {
   beginDelegatedTurn,
   clearDelegation,
   createDelegationAuditHooks,
+  createTurnFileAccessHooks,
   decideDelegatedTool,
+  turnFileExportRefusal,
 } from './delegation-gate'
 import type { CapabilityMode, CapabilityPolicy } from '../../../shared/apps/capability-policy'
 import type { TeamTriggerContext } from '../../../shared/apps/team-types'
@@ -125,14 +128,22 @@ import { createWebSearchMcpServer } from '../../services/web-search'
 import { createOcrMcpServer } from '../../services/ocr'
 import { createApiRefMcpServer, HALO_API_TOOLSET_ID } from '../../services/api-ref'
 import { createEmailMcpServer } from '../../services/email-mcp'
-import { getSpace, getSpaceDir } from '../../services/space.service'
+import { getSpace, getSpaceDir, isSpaceMemoryEnabled } from '../../services/space.service'
 import { readSessionMessages, saveChatSessionId, loadChatSessionId, deleteChatSessionId, copySessionJsonl } from './session-store'
 import { getAppMemoryService, getActivityStore } from './index'
 import { resolveExecutionEnvironment, validateExecutionEnvironment, legacySessionEnvironmentKey, resolveChatEnvironment, appChatRunId, validateEnvironmentConnections } from './execution-environment'
 import { createPersonContextMcpServer, personContextPrompt } from './person-context-tool'
 import type { PersonContextCaller } from '../../../shared/apps/person-context'
-import { createMemoryStatusMcpServer } from '../../platform/memory/snapshot'
-import { prepareMemoryForTurn, checkAndCompactMemory } from './turn/memory-lifecycle'
+import {
+  prepareMemoryForTurn,
+  requestAppMemoryConsolidation,
+  memoryPromptOptions,
+  loadSpaceTopicsForTurn,
+  appMemoryGuard,
+  appMemorySettings,
+  appTurnFileAccess,
+} from './turn/memory-lifecycle'
+import { closedFolderDenyRules } from './turn-file-access'
 import { buildLiveInstancesSection, buildMemorySection } from './prompt'
 import { createReportToolServer, type ReportToolContext } from './report-tool'
 // Key builders live in shared/ so the renderer can import them without
@@ -175,6 +186,11 @@ export interface AppChatRequest {
   message: string
   /** Optional image attachments for multimodal input */
   images?: ImageAttachment[]
+  /**
+   * Local files the sender attached (IM media staged on disk). A restricted
+   * turn may read these even where its file access is otherwise narrowed.
+   */
+  attachedFiles?: string[]
   /** Enable extended thinking mode */
   thinkingEnabled?: boolean
   /**
@@ -323,10 +339,14 @@ function emitSessionUpdated(
  *
  * Best-effort — a memory read fault must cost the turn its context, not the turn.
  */
-async function buildSessionMemoryPreamble(scope: MemoryCallerScope, appId: string): Promise<string> {
+async function buildSessionMemoryPreamble(
+  scope: MemoryCallerScope,
+  appId: string,
+  spaceTopics: TopicsTree | null
+): Promise<string> {
   try {
     const { snapshot } = await prepareMemoryForTurn(scope, { preInsertHistory: false })
-    return `${buildMemorySection(snapshot)}\n\n`
+    return `${buildMemorySection(snapshot, spaceTopics)}\n\n`
   } catch (err) {
     console.error(`[AppChat][${appId}] Memory snapshot failed, continuing without it:`, err)
     return ''
@@ -486,9 +506,14 @@ async function runAppChatTurn(
     ? getActiveTeamRuntime()?.buildPromptContext(teamContext.teamId, appId) ?? null
     : null
   const disposableMember = teamPromptCtx?.selfIsDisposable === true
+  // A disposable member has no memory of its own; an owner can also turn it off.
+  const memorySettings = appMemorySettings(app)
+  const memoryActive = !disposableMember && memorySettings.enabled
 
   // ── 3. Build system prompt for interactive chat ──────
-  const memoryInstructions = disposableMember ? '' : memory.getPromptInstructions('session')
+  const memoryInstructions = !memoryActive
+    ? ''
+    : memory.getPromptInstructions('session', memoryPromptOptions(appId, app.spec))
   const usesAIBrowser = resolvePermission(app, 'ai-browser')
   const usesTerminal = resolvePermission(app, 'ai-terminal') && isTerminalAvailable()
   const usesEmail = resolvePermission(app, 'email') // gated on channel config downstream
@@ -593,7 +618,7 @@ async function runAppChatTurn(
   const systemPrompt = assembleAppChatPrompt({ identity, entry, constraints })
 
   // ── 4. Build MCP servers ─────────────────────────────
-  const memoryMcpServer = disposableMember ? null : createMemoryStatusMcpServer(memoryScope)
+  const memoryMcpServer = !memoryActive ? null : createMemoryStatusMcpServer(resolveMemoryLayout(memoryScope, 'app'))
 
   validateEnvironmentConnections(environment, app, manager, 'chat')
   const disabledMcpIds = new Set(
@@ -619,7 +644,10 @@ async function runAppChatTurn(
   // FileExportGate roots = the space's working directory (matches the AI's
   // cwd) + tmpdir. Not the same as memoryScope.spacePath, which targets
   // space.path (internal storage) — see getSpaceDir().
-  const exportGate = new FileExportGate([environment.workDir, osTmpdir()])
+  const exportGate = new FileExportGate(
+    [environment.workDir, osTmpdir()],
+    realPath => turnFileExportRefusal(conversationId, realPath)
+  )
   const notifyMcpServer = createNotifyToolServer({
     appId: app.id,
     appName: app.spec.name,
@@ -677,10 +705,21 @@ async function runAppChatTurn(
       : {}),
     ...(usesHaloApi ? { 'halo-api-ref': createApiRefMcpServer() } : {}),
     ...(usesEmail && config.notificationChannels?.email?.enabled
-      ? { 'halo-email': createEmailMcpServer(config.notificationChannels.email) }
+      ? {
+          'halo-email': createEmailMcpServer(config.notificationChannels.email, {
+            refuseAttachment: filePath => turnFileExportRefusal(conversationId, filePath),
+          }),
+        }
       : {}),
     // Inject file-send tool when the originating IM channel supports file delivery
-    ...(imFileSend ? { 'im-file-send': createFileSendMcpServer(imFileSend) } : {}),
+    ...(imFileSend
+      ? {
+          'im-file-send': createFileSendMcpServer((filePath, filename) => {
+            const refusal = turnFileExportRefusal(conversationId, filePath)
+            return refusal ? Promise.reject(new Error(refusal)) : imFileSend(filePath, filename)
+          }),
+        }
+      : {}),
     // report_to_user for team turns only (escalation routing); see reportContext note.
     // A question to the user ends the turn that asked it — the sink is looked up
     // when the tool fires rather than captured here, because it is created later
@@ -747,12 +786,14 @@ async function runAppChatTurn(
       console.error(`[AppChat][${appId}] CLI stderr:`, data)
     },
     mcpServers,
+    maxTurns: config.agent?.maxTurns,
+    memoryGuard: appMemoryGuard(memoryScope, `chat:${conversationId.slice(0, 8)}`, memorySettings),
   })
 
   const thinkingBudget = applyReasoningEffort(sdkOptions, thinkingEnabled, resolvedCreds.capabilities)
 
   // Override for app chat context
-  sdkOptions.systemPrompt = systemPrompt
+  sdkOptions.systemPrompt = toEngineSystemPrompt(systemPrompt)
 
   // Non-native sessions (IM channels, etc.) are non-interactive — the user
   // cannot respond to interactive tool prompts, so deny them preemptively.
@@ -794,6 +835,16 @@ async function runAppChatTurn(
     }
   }
 
+  // Where a strict turn's file tools may reach (turn-file-access). A teammate
+  // from this machine is the owner's own and is held to the tool switches only.
+  const strictFiles = delegation?.mode === 'strict'
+  const turnFileAccess = appTurnFileAccess(memoryScope, {
+    memoryActive,
+    spaceMemoryOffered: app.userOverrides?.spaceMemoryAccess === true && isSpaceMemoryEnabled(spaceId),
+    workDir,
+    attachedFiles: [...(request.attachedFiles ?? []), ...(imageFallback?.filePaths ?? [])],
+  })
+
   let applied: ReturnType<typeof applyCapabilityPolicy> | null = null
   if (delegation) {
     applied = applyCapabilityPolicy(sdkOptions, {
@@ -805,6 +856,7 @@ async function runAppChatTurn(
       // not a capability: withholding them isolates the member instead of
       // restricting the caller. An IM guest's turn has no such channel.
       alwaysKeep: borrowedTeamTurn ? TEAM_CHANNEL_MCP : undefined,
+      keepFileTools: strictFiles,
     })
     if (applied.enforced) {
       // A restriction the engine would accept and ignore is worse than one the
@@ -819,7 +871,11 @@ async function runAppChatTurn(
           `Switch Halo's agent engine to Claude Code to let teammates put your digital humans to work.`
         )
       }
-      sdkOptions.hooks = createDelegationAuditHooks(conversationId)
+      addSdkHooks(sdkOptions, createDelegationAuditHooks(conversationId))
+      if (strictFiles) {
+        addSdkHooks(sdkOptions, createTurnFileAccessHooks(conversationId))
+        sdkOptions.disallowedTools = [...(sdkOptions.disallowedTools ?? []), ...closedFolderDenyRules(turnFileAccess)]
+      }
     }
     console.log(
       `[AppChat][${appId}] Borrowed turn ` +
@@ -859,6 +915,7 @@ async function runAppChatTurn(
     beginDelegatedTurn(conversationId, {
       policy: applied?.enforced ? delegation?.policy : undefined,
       mode: applied?.enforced ? delegation!.mode : 'permissive',
+      ...(applied?.enforced && strictFiles ? { files: turnFileAccess } : {}),
       ...(applied?.enforced && borrowedTeamTurn && teamContext
         ? {
             audit: {
@@ -962,8 +1019,15 @@ async function runAppChatTurn(
     // what was actually said, not our preamble. A disposable member has no
     // memory to open with (see `disposableMember`) — reading one would also
     // teach it that it has a file to maintain.
-    const memoryPreamble =
-      resumeSessionId || disposableMember ? '' : await buildSessionMemoryPreamble(memoryScope, appId)
+    const memoryPreamble = resumeSessionId || !memoryActive
+      ? ''
+      : await buildSessionMemoryPreamble(
+          memoryScope,
+          appId,
+          await loadSpaceTopicsForTurn(memoryScope, {
+            enabledForApp: app.userOverrides?.spaceMemoryAccess === true,
+          })
+        )
 
     // Who else is executing this same digital human right now. Unlike the memory
     // block this goes on EVERY turn: it is true only at the moment it is built,
@@ -972,6 +1036,8 @@ async function runAppChatTurn(
     // the system prompt precisely because it changes every turn — the system
     // prompt is fingerprinted for session reuse (sdk-config.ts), so per-turn
     // content there would rebuild the session on every message.
+    // A guest's turn is described as `im-guest`, so its History entries are
+    // signed as a guest's without the instructions having to say so.
     const selfInstance = describeSelfInstance(appId, { conversationId })
     const livePreamble =
       buildLiveInstancesSection(selfInstance, listLiveInstances(appId, selfInstance.id)) + '\n\n'
@@ -1120,26 +1186,18 @@ async function runAppChatTurn(
       })
     }
 
-    // A session grows memory.md just like a run does, so it gets the same size
-    // ceiling — a file that only automation runs keep in check would still bloat
-    // for a digital human that mostly works in chats and teams. Costs nothing
-    // until the threshold is crossed. Detached: housekeeping, not part of the turn.
-    // The delegated fields belong here for the same reason they do on a run: a
-    // source carrying no key of its own is routed by header, and without them
-    // compaction takes the raw-SDK path with an empty key, fails, and quietly
-    // installs the heuristic summary as the digital human's memory.
+    // A session grows memory.md just like a run does, so it gets the same
+    // consolidation — a memory only automation runs kept in check would still
+    // bloat for a digital human that mostly works in chats and teams. Costs
+    // nothing until the threshold is crossed; detached, not part of the turn.
     // Skipped for a disposable member: it has no memory to keep in check.
-    if (!disposableMember) {
-      void checkAndCompactMemory(memory, memoryScope, app.spec.name, chatRunId, async () => ({
-        anthropicApiKey: resolvedCreds.anthropicApiKey,
-        anthropicBaseUrl: resolvedCreds.anthropicBaseUrl,
-        sdkModel: resolvedCreds.sdkModel,
-        provider: credentials.provider,
-        oauthProvider: credentials.oauthProvider,
-        delegatedAuth: credentials.delegatedAuth,
-        delegatedRoutingHeader: resolvedCreds.delegatedRoutingHeader,
-        capabilities: resolvedCreds.capabilities,
-      }))
+    if (memoryActive) {
+      requestAppMemoryConsolidation(memoryScope, {
+        appName: app.spec.name,
+        settings: memorySettings,
+        resolveCredentials: async () => resolvedCreds,
+        isBusy: () => listLiveInstances(appId, describeSelfInstance(appId, { conversationId }).id).length > 0,
+      }, chatRunId)
     }
 
     // Flush buffered IM supplements (deferred so busy lock is released first)

@@ -205,6 +205,20 @@ export const MODULE: RouteModuleMeta = {
       returns: '{success:true,data:{filesRemoved:number}}',
       impact: 'irreversible',
     },
+    'GET /api/apps/:appId/memory': {
+      expose: 'ai',
+      group: 'digital-human',
+      summary: "Read the state of a digital human's memory",
+      returns: '{success:true,data:{exists,totalBytes,topicCount,lastConsolidatedAt,lastAttempt,consolidating}}',
+    },
+    'POST /api/apps/:appId/memory/consolidate': {
+      expose: 'ai',
+      group: 'digital-human',
+      summary: "Consolidate a digital human's memory now",
+      returns: '{success:true,data:{started:boolean,reason?:"already-running"|"empty"|"not-found"}}',
+      impact: 'reversible',
+      notes: 'Returns once started; runs in the background with the digital human\'s model. Keeps a restorable snapshot.',
+    },
     'POST /api/apps/:appId/move-space': {
       expose: 'ai',
       group: ['digital-human', 'workspace'],
@@ -231,7 +245,7 @@ export const MODULE: RouteModuleMeta = {
       summary: 'Merge-patch per-installation overrides (notification level, model)',
       body: '{"notificationLevel": "important"}',
       returns: '{success:true}',
-      notes: 'Other fields you can set the same way: modelSourceId, modelId. JSON Merge Patch semantics: send null to clear a field (e.g. {"modelSourceId":null} to fall back to the global model). The run schedule is NOT set here — use POST /:appId/frequency.',
+      notes: 'Other fields you can set the same way: modelSourceId, modelId, spaceMemoryAccess (true lets the digital human read its space\'s memory topics), memory ({enabled, autoConsolidate, cadence: "diligent"|"balanced"|"economical"} — sent as a whole object). JSON Merge Patch semantics: send null to clear a field (e.g. {"modelSourceId":null} to fall back to the global model). The run schedule is NOT set here — use POST /:appId/frequency.',
       impact: 'reversible',
     },
     'POST /api/apps/:appId/frequency': {

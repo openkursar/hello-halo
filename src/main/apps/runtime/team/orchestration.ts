@@ -127,6 +127,26 @@ export interface Orchestration {
   /** Can this session take a turn — a streaming turn OR a held reservation. */
   isSessionOccupied(sessionKey: string): boolean
 
+  /**
+   * The run epoch this process is executing for the team, or null — the question
+   * every trigger guard on a team is really asking. Deliberately NOT the persisted
+   * `team.currentEpochId`: that pointer outlives the process that set it, so a
+   * crash or a quit mid-run would have a team refuse every future run (nothing
+   * would ever clear it), while the team sits idle on the board. A joined office is
+   * the one exception, where the replicated pointer is the only live signal this
+   * node can have.
+   */
+  activeRunEpochId(teamId: string): string | null
+
+  /**
+   * Seal the runs a previous session left open (see {@link activeRunEpochId}).
+   * Run once at bootstrap, before triggers are rehydrated, so the run slot, the
+   * History rows and this session's triggers all start from the same truth.
+   * Returns how many were sealed.
+   */
+  recoverInterruptedRuns(): Promise<number>
+
+  /** `instruction` is this run's concrete brief, appended to the lead's start wake. */
   startEpoch(teamId: string, trigger?: TeamRunTrigger, instruction?: string): Promise<TeamEpoch>
   /**
    * Return the open 'conversation' epoch for a (team, chat), or create one. Used
@@ -440,6 +460,18 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
   // epochId → appIds awaiting a user decision. Cleared on response or seal.
   const escalationWaiters = new Map<string, Set<string>>()
 
+  // teamId → the run epoch THIS process is executing. `team.currentEpochId` is a
+  // cache of the same fact for the UI and for joiners; this map is the fact
+  // itself, and it is the only one a dead process cannot leave lying — see
+  // `activeRunEpochId` and `recoverInterruptedRuns`.
+  const activeRunEpochs = new Map<string, string>()
+
+  /**
+   * What a run interrupted by the app going away is recorded as. Only written
+   * when the epoch has no summary of its own.
+   */
+  const INTERRUPTED_SUMMARY = 'Interrupted: the app closed while this run was open.'
+
   bus.onBreach((event: CircuitBreachEvent) => {
     void handleBreach(event)
   })
@@ -729,7 +761,11 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
 
     const timer = setTimeout(() => {
       quiescenceTimers.delete(epochId)
-      void checkQuiescence(teamId, epochId)
+      // Fires after the turn that scheduled it — by then the store may be gone
+      // (shutdown, team dissolved). A lost check is not worth an unhandled throw.
+      void checkQuiescence(teamId, epochId).catch((err) => {
+        console.error(`${LOG_TAG} quiescence check failed: team=${teamId} epoch=${epochId}`, err)
+      })
     }, QUIESCENCE_DELAY_MS)
     if (typeof timer.unref === 'function') timer.unref()
     quiescenceTimers.set(epochId, timer)
@@ -1175,8 +1211,9 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     const team = store.getTeamById(teamId)
     if (!team) throw new Error(`Team not found: ${teamId}`)
     if (!team.leadAppId) throw new Error(`Team has no lead provisioned: ${teamId}`)
-    if (team.currentEpochId) {
-      throw new Error(`Team ${teamId} already has a running epoch (${team.currentEpochId})`)
+    const activeEpochId = activeRunEpochId(teamId)
+    if (activeEpochId) {
+      throw new Error(`Team ${teamId} already has a running epoch (${activeEpochId})`)
     }
 
     const epoch: TeamEpoch = {
@@ -1191,6 +1228,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     store.insertEpoch(epoch, runTrigger.type)
     store.updateTeamCurrentEpoch(teamId, epoch.id)
     store.updateTeamStatus(teamId, 'running')
+    activeRunEpochs.set(teamId, epoch.id)
     publishEpoch(epoch.id)
     emitTeamUpdated(teamId)
 
@@ -1314,11 +1352,6 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
   }
 
   /**
-   * Archive one epoch: stamp its end, tear down member team sessions (keeping
-   * JSONL/sessionId for history), reset the bus, and clear quiescence timers.
-   * Does NOT touch team.currentEpochId/status — callers decide that.
-   */
-  /**
    * Business outcome of a sealed run (P0-4): failure beats everything, a still-
    * waiting decision beats deliverables, deliverables beat "nothing to do".
    */
@@ -1334,17 +1367,35 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     return produced ? 'output' : 'no_action'
   }
 
+  /** The outcome an end reason classifies to; null for a conversation epoch. */
+  function classifyEpochOutcome(
+    teamId: string,
+    epoch: TeamEpoch,
+    endReason: EpochEndReason
+  ): EpochOutcome | null {
+    return epoch.lifecycle === 'run' ? classifyRunOutcome(teamId, epoch.id, endReason) : null
+  }
+
+  /**
+   * Archive one epoch: stamp its end, tear down member team sessions (keeping
+   * JSONL/sessionId for history), reset the bus, and clear quiescence timers.
+   * Does NOT touch team.currentEpochId/status — callers decide that.
+   *
+   * The record written is the caller's: a run classified from its end reason, or
+   * one preserved as it stood (see `recoverInterruptedRuns`).
+   */
   async function archiveEpoch(
     teamId: string,
     epochId: string,
     endReason: EpochEndReason,
-    summary: string | null
+    summary: string | null,
+    outcome: EpochOutcome | null
   ): Promise<void> {
-    const epoch = store.getEpochById(epochId)
-    const outcome =
-      epoch?.lifecycle === 'run' ? classifyRunOutcome(teamId, epochId, endReason) : null
     store.endEpoch(epochId, Date.now(), endReason, summary, outcome)
     publishEpoch(epochId)
+    // The run slot is free the moment the epoch is stamped, whatever the caller
+    // decides to do with the pointer.
+    if (activeRunEpochs.get(teamId) === epochId) activeRunEpochs.delete(teamId)
 
     await closeEpochResources(teamId, epochId)
 
@@ -1400,6 +1451,10 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     store.touchEpoch(epochId, Date.now())
     const reopeningTask = epoch.workItem?.status === 'completed'
     if (reopeningTask) store.updateWorkItem(epochId, { status: 'open' })
+    // A turn entering a run epoch makes it the team's live run context — whether
+    // this call just opened it or woke a hibernated one. Claim the slot before
+    // the early return below, so a second run cannot start alongside it.
+    if (epoch.lifecycle === 'run') activeRunEpochs.set(teamId, epochId)
     if (epoch.endedAt === null && !reopeningTask) return true
     store.reopenEpoch(epochId)
     if (epoch.lifecycle === 'run') {
@@ -1432,20 +1487,27 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     if (epoch.endedAt !== null && endReason === 'stopped') return
 
     console.log(`${LOG_TAG} sealEpochById: team=${teamId} epoch=${epochId} reason=${endReason}`)
-    await archiveEpoch(teamId, epochId, endReason, summary)
+    await archiveEpoch(teamId, epochId, endReason, summary, classifyEpochOutcome(teamId, epoch, endReason))
+    releaseRunSlot(teamId, epochId)
+  }
 
+  /**
+   * Hand the team's run slot back when `epochId` is the run it points at. A
+   * conversation epoch, or a run epoch that already stopped being current, leaves
+   * the pointer alone.
+   */
+  function releaseRunSlot(teamId: string, epochId: string): void {
     const team = store.getTeamById(teamId)
-    if (team && team.currentEpochId === epochId) {
-      store.updateTeamStatus(teamId, 'idle')
-      store.updateTeamCurrentEpoch(teamId, null)
-      emitTeamUpdated(teamId)
-      // Propagate the rested run-state to joiners. The service-level pauseTeam
-      // fires this too, but quiescence/breach auto-seal funnels only through
-      // here — without this an auto-ended run leaves a joiner's members
-      // spinning until the next throttled roster refresh. Observer-only;
-      // never blocks or breaks the seal.
-      notifyRunStateChanged(teamId)
-    }
+    if (!team || team.currentEpochId !== epochId) return
+    store.updateTeamStatus(teamId, 'idle')
+    store.updateTeamCurrentEpoch(teamId, null)
+    emitTeamUpdated(teamId)
+    // Propagate the rested run-state to joiners. The service-level pauseTeam
+    // fires this too, but quiescence/breach auto-seal funnels only through
+    // here — without this an auto-ended run leaves a joiner's members
+    // spinning until the next throttled roster refresh. Observer-only;
+    // never blocks or breaks the seal.
+    notifyRunStateChanged(teamId)
   }
 
   async function sealEpoch(
@@ -1491,6 +1553,64 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
   ): Promise<void> {
     if (endReason === 'completed' || endReason === 'cleared') escalationWaiters.delete(epochId)
     await sealEpochById(teamId, epochId, endReason, summary ?? null)
+  }
+
+  function activeRunEpochId(teamId: string): string | null {
+    const team = store.getTeamById(teamId)
+    if (!team) return null
+    // A joined office does not run the office's runs — its members' turns execute
+    // on their owners — so for it the replicated pointer is not a cache but the
+    // only live signal this node can have.
+    if (team.hostNodeId != null) return team.currentEpochId ?? null
+    return activeRunEpochs.get(teamId) ?? null
+  }
+
+  /**
+   * Seal the runs a previous session left open.
+   *
+   * An open run epoch IS the team's "a run is in flight" fact, and the only thing
+   * that closes one is this process deciding to (the lead finalizing, quiescence,
+   * a person stopping it) — so a process that goes away mid-run strands it. The
+   * epoch then stays open for good: the team refuses every trigger, the History
+   * row reads Running, and nothing will ever clear either. Sealing it is not
+   * killing work — the sessions died with that process — it is recording when the
+   * work stopped.
+   *
+   * The epoch keeps the record it already had: a run that stamped its summary and
+   * outcome had finished and was merely revived (a message re-opens its context),
+   * and re-classifying that as a failure would rewrite history.
+   */
+  async function recoverInterruptedRuns(): Promise<number> {
+    let sealed = 0
+    for (const team of store.listTeams()) {
+      // A joined office mirrors a run performed on another node: its epoch is
+      // open because its owner is still running it. Only the node that hosts the
+      // office may decide that one of its own runs is over.
+      if (team.hostNodeId != null) continue
+
+      const epoch = store.getCurrentEpochForTeam(team.id)
+      if (epoch) {
+        console.log(
+          `${LOG_TAG} recoverInterruptedRuns: sealing team=${team.id} epoch=${epoch.id} ` +
+          `(open since ${new Date(epoch.startedAt).toISOString()})`
+        )
+        await archiveEpoch(
+          team.id,
+          epoch.id,
+          'error',
+          epoch.summary ?? INTERRUPTED_SUMMARY,
+          epoch.outcome ?? classifyEpochOutcome(team.id, epoch, 'error')
+        )
+        sealed++
+      }
+      // A pointer with no open epoch behind it is stale in the same way, and just
+      // as capable of reading "running" at a team that is doing nothing.
+      if (team.currentEpochId) releaseRunSlot(team.id, team.currentEpochId)
+    }
+    if (sealed > 0) {
+      console.log(`${LOG_TAG} recoverInterruptedRuns: sealed ${sealed} interrupted run(s)`)
+    }
+    return sealed
   }
 
   // ── Report sink ───────────────────────────────────────────────────────────
@@ -1723,6 +1843,8 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     maybeAutoNameConversation,
     noteEpochTurn,
     closeEpochResources,
+    activeRunEpochId,
+    recoverInterruptedRuns,
     sealEpoch,
     sealConversationEpoch,
     requestSeal,

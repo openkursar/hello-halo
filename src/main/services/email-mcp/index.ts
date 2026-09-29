@@ -79,9 +79,13 @@ function resolveAdvancedDefaults(userConfig: EmailChannelConfig): EmailChannelCo
  * - CalDAV: only registered when config.caldavUrl is set
  *
  * @param rawConfig - Email channel config from config.notificationChannels.email
+ * @param opts.refuseAttachment - Why a local file may not be attached, or null
  * @returns An SDK MCP server instance
  */
-export function createEmailMcpServer(rawConfig: EmailChannelConfig): SdkMcpServer {
+export function createEmailMcpServer(
+  rawConfig: EmailChannelConfig,
+  opts: { refuseAttachment?: (filePath: string) => string | null } = {}
+): SdkMcpServer {
   const config = resolveAdvancedDefaults(rawConfig)
   const userEmail = config.smtp.user
 
@@ -97,7 +101,7 @@ export function createEmailMcpServer(rawConfig: EmailChannelConfig): SdkMcpServe
     createEmailListTool(imap),
     createEmailReadTool(imap),
     createEmailSearchTool(imap),
-    createEmailSendTool(smtp),
+    createEmailSendTool(smtp, opts.refuseAttachment),
     createEmailReplyTool(imap, smtp, userEmail),
     createEmailForwardTool(imap, smtp),
     createEmailMoveTool(imap),

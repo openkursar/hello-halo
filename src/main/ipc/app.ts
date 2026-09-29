@@ -73,6 +73,8 @@ import {
   createNativeChatSession,
   forkNativeChatSession,
   deleteNativeChatSession,
+  getDigitalHumanMemoryStatus,
+  consolidateDigitalHumanMemoryNow,
 } from '../apps/runtime'
 import type { AppSpec } from '../apps/spec'
 import type { AppListFilter, UninstallOptions, UpgradeStrategy } from '../apps/manager'
@@ -1049,6 +1051,28 @@ export function registerAppHandlers(): void {
       } catch (error: unknown) {
         const err = error as Error
         console.error('[AppIPC] app:clear-memory error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // ── app:memory-status / app:memory-consolidate ──────────────────────────
+    appGetMemoryStatus: async (appId: string) => {
+      try {
+        const status = await getDigitalHumanMemoryStatus(appId)
+        return status ? { success: true, data: status } : { success: false, error: 'App not found' }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:memory-status error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    appConsolidateMemory: async (appId: string) => {
+      try {
+        return { success: true, data: consolidateDigitalHumanMemoryNow(appId) }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:memory-consolidate error:', err.message)
         return { success: false, error: err.message }
       }
     },

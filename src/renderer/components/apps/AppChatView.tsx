@@ -33,6 +33,7 @@ import type { SlashCommandItem } from '../../types/slash-command'
 import { getAppChatConversationId } from '../../../shared/apps/im-keys'
 import type { DigitalHumanSelectorConfig } from '../chat/DigitalHumanSelector'
 import { noteTurnEnded, noteTurnSent } from '../../services/home-telemetry'
+import type { ApiRetryState } from '../../../shared/types/api-retry'
 
 interface AppChatViewProps {
   /** App ID */
@@ -96,7 +97,7 @@ export function AppChatView({ appId, spaceId, conversationId: conversationIdProp
     textBlockVersion,
   } = session
 
-  // ── Scroll control via the shared MessageList shell (Virtuoso-based) ──
+  // ── Scroll control via the shared MessageList shell ──
   const messageListRef = useRef<MessageListHandle>(null)
   const [showScrollButton, setShowScrollButton] = useState(false)
   const handleAtBottomStateChange = useCallback((atBottom: boolean) => {
@@ -208,10 +209,12 @@ export function AppChatView({ appId, spaceId, conversationId: conversationIdProp
     if (useChatStore.getState().getSession(conversationId).isGenerating) {
       api.getSessionState(conversationId).then(res => {
         if (res.success && res.data) {
-          const { isActive } = res.data as { isActive: boolean }
+          const { isActive, apiRetry } = res.data as { isActive: boolean; apiRetry?: ApiRetryState }
           if (!isActive) {
             console.log(`[AppChatView] Backend session inactive — clearing stale generating state`)
             useChatStore.getState().resetSession(conversationId)
+          } else {
+            useChatStore.getState().handleAgentApiRetry({ spaceId, conversationId, retry: apiRetry ?? null })
           }
         }
       }).catch(() => {})
@@ -379,6 +382,7 @@ export function AppChatView({ appId, spaceId, conversationId: conversationIdProp
               textBlockVersion={textBlockVersion}
               pendingQuestion={pendingQuestion}
               onAnswerQuestion={handleAnswerQuestion}
+              onStop={handleStop}
               onAtBottomStateChange={handleAtBottomStateChange}
               hideBrowserViewButton
             />

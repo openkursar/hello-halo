@@ -4,10 +4,11 @@
  *
  * Verifies: registers under kind 'team'; rehydrate adds a job per enabled
  * schedule trigger AND an EventRouter subscription per enabled event trigger;
- * the due handler skips when the team is already running and runs otherwise;
- * RunOutcome maps useful/skipped/error; event subscriptions run the team
- * (type 'event') with the same reentrancy guard; sync/remove maintain both the
- * team's jobs and its event subscriptions.
+ * the due handler skips while this process is running an epoch and runs
+ * otherwise — including when the stored pointer is stale; RunOutcome maps
+ * useful/skipped/error; event subscriptions run the team (type 'event') with the
+ * same reentrancy guard; sync/remove maintain both the team's jobs and its event
+ * subscriptions.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -69,8 +70,13 @@ function makeHarness() {
   } as any
 
   const runTeam = vi.fn(async () => {})
-  const ts = createTeamTriggerScheduler({ scheduler, store, eventRouter, runTeam })
-  return { ts, scheduler, eventRouter, store, runTeam, jobs, teams, triggers, eventSubs, getDueHandler: () => dueHandler }
+  // The live run slot, in the shape the runtime answers it: what this process is
+  // executing now. Independent of the persisted team row on purpose — that is
+  // the whole point of the guard.
+  const live = { epochId: null as string | null }
+  const activeRunEpochId = vi.fn(() => live.epochId)
+  const ts = createTeamTriggerScheduler({ scheduler, store, eventRouter, runTeam, activeRunEpochId })
+  return { ts, scheduler, eventRouter, store, runTeam, jobs, teams, triggers, eventSubs, live, getDueHandler: () => dueHandler }
 }
 
 function fakeEvent(over: Partial<AutomationEvent> = {}): AutomationEvent {
@@ -121,12 +127,22 @@ describe('createTeamTriggerScheduler', () => {
     expect(outcome).toBe('useful')
   })
 
-  it('due handler skips when the team already has a running epoch', async () => {
-    h.teams.set('team-1', { id: 'team-1', currentEpochId: 'epoch-x' })
+  it('due handler skips while this process is running an epoch for the team', async () => {
+    h.live.epochId = 'epoch-x'
     h.ts.registerHandler()
     const outcome = await h.getDueHandler()!(dueJob())
     expect(h.runTeam).not.toHaveBeenCalled()
     expect(outcome).toBe('skipped')
+  })
+
+  it('a persisted current_epoch_id does not skip a trigger when nothing is running', async () => {
+    // The team row still points at a run whose process is gone (the app was
+    // killed mid-run). Nothing executes that epoch, so the tick must run.
+    h.teams.set('team-1', { id: 'team-1', currentEpochId: 'epoch-from-a-dead-process' })
+    h.ts.registerHandler()
+    const outcome = await h.getDueHandler()!(dueJob())
+    expect(h.runTeam).toHaveBeenCalledWith('team-1', { type: 'schedule', triggerId: 't1' })
+    expect(outcome).toBe('useful')
   })
 
   it('due handler removes the job and skips when the team is gone', async () => {
@@ -190,12 +206,20 @@ describe('createTeamTriggerScheduler', () => {
     expect(h.runTeam).toHaveBeenCalledWith('team-1', { type: 'event', triggerId: 'e1' })
   })
 
-  it('event subscription skips when the team already has a running epoch', async () => {
-    h.teams.set('team-1', { id: 'team-1', currentEpochId: 'epoch-x' })
+  it('event subscription skips while this process is running an epoch for the team', async () => {
+    h.live.epochId = 'epoch-x'
     h.triggers.push(eventTrigger({ id: 'e1' }))
     h.ts.rehydrate()
     await h.eventSubs[0].handler(fakeEvent())
     expect(h.runTeam).not.toHaveBeenCalled()
+  })
+
+  it('event subscription runs the team when the stored pointer is stale', async () => {
+    h.teams.set('team-1', { id: 'team-1', currentEpochId: 'epoch-from-a-dead-process' })
+    h.triggers.push(eventTrigger({ id: 'e1' }))
+    h.ts.rehydrate()
+    await h.eventSubs[0].handler(fakeEvent())
+    expect(h.runTeam).toHaveBeenCalledWith('team-1', { type: 'event', triggerId: 'e1' })
   })
 
   it('event subscription skips when the team is gone', async () => {

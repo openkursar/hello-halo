@@ -107,7 +107,6 @@ const WEB_SEARCHER_AGENT: AgentDefinition = {
   description: 'Search the web for current information using AI browser. Use this when you need up-to-date information, recent documentation, research, news, or answers to factual questions that may be beyond your training data.',
   tools: WEB_SEARCHER_BROWSER_TOOLS,
   prompt: WEB_SEARCHER_PROMPT,
-  model: 'sonnet',
 }
 
 // ============================================

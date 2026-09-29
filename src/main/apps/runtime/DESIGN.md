@@ -114,7 +114,7 @@ Two consequences follow:
 ### 2.4 report_to_user as SDK MCP Server
 
 **Decision**: `report_to_user` is implemented as an SDK MCP server using
-`tool()` + `createSdkMcpServer()`, same pattern as `platform/memory/tools.ts`
+`tool()` + `createSdkMcpServer()`, same pattern as `platform/memory/snapshot.ts` (`memory_status`)
 and `services/ai-browser/sdk-mcp-server.ts`.
 
 **Rationale**:
@@ -285,8 +285,9 @@ via the "Continue" button (in the Activity Thread or Session Detail view).
   "continue"; automation runs have no human operator.
 - `report_to_user` is already mandated by the system prompt and powers the
   Activity Thread. Using it as the completion gate adds zero new concepts.
-- `MAX_TURNS` raised from 30 → 100 to give autonomous runs more room before
-  per-cycle turn limits are hit.
+- The per-cycle turn limit is the user's `agent.maxTurns`, falling back to the
+  shared `DEFAULT_MAX_TURNS` (`shared/constants/agent-limits.ts`) like every
+  other entry point, so a run is not cut short before it can report.
 
 **Trade-off**: Up to 10 extra LLM round-trips per cycle in pathological cases,
 plus indefinite user-driven cycles. Acceptable: the alternative is a silently
@@ -775,7 +776,8 @@ apps/runtime depends on:
 ├── apps/spec             AppSpec type (via manager)
 ├── platform/scheduler    addJob(), removeJob(), onJobDue(), getJob()
 ├── platform/event        on(), emit()
-├── platform/memory       createTools(), getPromptInstructions()
+├── platform/memory       layouts, snapshot + section, getPromptInstructions(), write guard
+├── services/memory-consolidation  requestConsolidation() after runs and chat turns; consolidateNow()/status for settings (memory-control.ts)
 ├── platform/background   registerKeepAliveReason()
 ├── platform/store        DatabaseManager (for migrations + activity store)
 ├── services/agent        getApiCredentials (helpers), resolveCredentialsForSdk,
@@ -936,3 +938,42 @@ and `POST /api/apps/:appId/runs/start`. It acknowledges admission without waitin
 for model completion, so the automatic-task switch remains usable while work is
 running. The existing public `/trigger` endpoint retains its completion response
 for external integrations. Both paths share admission and concurrency checks.
+
+
+## Memory and file boundaries of a digital human
+
+- Its own memory: read and written by every turn (owner, team, IM guest), under
+  the memory lock; off entirely when the owner turns memory off
+  (`userOverrides.memory`).
+- Its space's topics: offered read-only when `spaceMemoryAccess` is on and the
+  space has memory on. Writes are refused by the write guard.
+- A strict turn (an IM guest, or a teammate's request from another machine) is
+  held to `turn-file-access.ts`, enforced by a pre-tool hook and the delegation
+  gate alike. A teammate from this machine is the owner's own: held to the tool
+  switches only, with no path boundary, as before.
+  - memory content (memory.md + topics; the space's topics per the rule above)
+    and the files handed to the turn (IM attachments, persisted images) — always,
+    even for a chat-only guest (`keepFileTools` keeps the file tools in the pool);
+  - Read/Glob/Grep, when granted, only inside the workspace; Write/Edit, when
+    granted, only inside the workspace. Path arguments are read as the engines
+    read them (`foundation/path-containment`: `~` is the home folder);
+  - the space's `.halo/` stays closed except for the memory above. Both engines
+    get read-deny rules for it (`closedFolderDenyRules`, `Read(//…)` in
+    `disallowedTools`) and apply them while walking — the Halo engine through
+    its `utils/read-deny` — so a search from the workspace root never opens a
+    closed file and nothing about its result window can depend on one. The one
+    exception is `.halo/attachments`, which holds this turn's persisted images
+    and is left to the hook, file by file. Two backstops sit behind the rules:
+    a granted search is rewritten to run at the physical path that was judged
+    (`searchPathRewrite`, the pre-tool hook's `updatedInput`; links resolved, so
+    `/Volumes/Macintosh HD/…` runs as the workspace itself), and closed lines
+    are removed from its output (`filterSearchOutput`) without a trace — no
+    count of hidden lines, and the engine's own "no matches" text when nothing
+    is left;
+  - a file in the closed folder cannot be sent out either (`turnFileExportRefusal`,
+    checked by the notify tool's export gate, the IM file-send tool and email
+    attachments).
+  - Bash and the terminal cannot be held to paths; they follow the policy only.
+  - Codex runs no restricted turn at all (it cannot enforce a policy).
+- TodoWrite is available to every caller (`ALWAYS_AVAILABLE_BUILTIN_TOOLS`).
+- A guest's History entries are signed `im-guest#xxxx` (`live-instances.ts`).

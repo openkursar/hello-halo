@@ -32,12 +32,19 @@ const __dirname = path.dirname(__filename)
 
 export interface SeededConversation {
   conversationId: string
+  /** Ids of the seeded messages, in order. */
+  messageIds: string[]
 }
 
 export interface SeedConversationOptions {
   title?: string
   /** Defaults to 120 — comfortably over the "100+" S3 spec threshold. */
   messageCount?: number
+  /**
+   * `mixed` gives replies widely varying heights (lists, code, tables, long
+   * prose) — the shape that stresses transcript scrolling. Defaults to uniform.
+   */
+  variety?: 'uniform' | 'mixed'
 }
 
 let bundledWorkerPath: string | null = null
@@ -57,7 +64,8 @@ function getBundledWorker(): string {
     platform: 'node',
     format: 'cjs',
     outfile,
-    external: ['better-sqlite3', 'electron'],
+    // Native addons load at run time from node_modules; esbuild cannot bundle them.
+    external: ['better-sqlite3', 'electron', '@parcel/watcher'],
     logLevel: 'silent',
   })
 

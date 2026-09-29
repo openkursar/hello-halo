@@ -31,6 +31,7 @@ import {
   migrations as teamMigrations,
 } from '../../../../../src/main/apps/team/migrations'
 import { createFederationCoordinator } from '../../../../../src/main/apps/runtime/federation/coordinator'
+import type { FederationCoordinator } from '../../../../../src/main/apps/runtime/federation/coordinator'
 import {
   InMemoryFederationHub,
   InMemoryFederationLink,
@@ -83,6 +84,10 @@ describe('FederationCoordinator', () => {
   let hub: InMemoryFederationHub
   let clock: number
   const now = () => clock
+  // Every coordinator started in a test must be stopped before the store closes:
+  // its heartbeat keeps sweeping presence on a 2s interval, and a tick that lands
+  // after `closeAll()` fails on a closed connection.
+  const coordinators: FederationCoordinator[] = []
 
   beforeEach(() => {
     dbManager = createDatabaseManager(':memory:')
@@ -96,6 +101,7 @@ describe('FederationCoordinator', () => {
   })
 
   afterEach(() => {
+    for (const coordinator of coordinators.splice(0)) coordinator.stop()
     dbManager.closeAll()
   })
 
@@ -121,6 +127,7 @@ describe('FederationCoordinator', () => {
       onM2Frame: opts?.onM2Frame as never,
     })
     coordinator.start()
+    coordinators.push(coordinator)
     return { coordinator, hostLink }
   }
 
@@ -456,6 +463,7 @@ describe('FederationCoordinator', () => {
         presence: { suspectAfterMs: SUSPECT_MS, confirmedOfflineMs: CONFIRMED_MS },
       })
       joiner.start()
+      coordinators.push(joiner)
       // The joiner knows its host and has confirmed it offline after silence.
       federationStore.upsertNode({
         nodeId: HOST, officeId: OFFICE, identity: 'identity-host', displayName: 'Host',
@@ -483,7 +491,6 @@ describe('FederationCoordinator', () => {
       clock += 10_000
       inbound(HOST, { kind: 'heartbeat', officeId: OFFICE, fromNode: HOST, ts: clock })
       expect(joinsSent()).toBe(before + 3) // the explicit send + the re-armed re-drive
-      joiner.stop()
     })
 
     it('does not crash the handshake on duplicate bringMembers; a name clash is admitted renamed', () => {

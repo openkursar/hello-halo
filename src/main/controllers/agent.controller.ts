@@ -15,6 +15,7 @@ import {
 } from '../services/agent'
 import type { ImageAttachment } from '../../shared/types/image-attachment'
 import { markIntentionalStop } from '../apps/runtime'
+import type { GoalInput } from '../../shared/types/goal'
 
 export interface SendMessageRequest {
   spaceId: string
@@ -24,6 +25,7 @@ export interface SendMessageRequest {
   images?: ImageAttachment[]  // Optional images for multi-modal messages
   thinkingEnabled?: boolean   // Enable extended thinking mode
   knowledgeBaseId?: string           // Chat-with-knowledge-base turn
+  goal?: GoalInput                   // Set as the conversation goal before this message runs
 }
 
 export interface ControllerResponse<T = unknown> {

@@ -11,10 +11,14 @@ import {
 } from '../../shared/types/ai-sources';
 import { NotificationChannelsConfig }  from '../../shared/types/notification-channels';
 import type { KBSource } from '../../shared/types/tlon';
+import type { MemorySettings } from '../../shared/types/memory';
 // Re-exported below as well, but `export … from` creates no local binding, so the
 // declarations in this file that USE these names need their own import.
 import type { ApiProvider } from '../../shared/types/ai-sources';
 import type { FileChangesSummary } from '../../shared/file-changes';
+import type { GoalInput } from '../../shared/types/goal';
+import type { ApiRetryState } from '../../shared/types/api-retry';
+import { DEFAULT_MAX_TURNS } from '../../shared/constants/agent-limits';
 // Re-export them
 export { DEFAULT_MODEL, getCurrentModelName, hasAnyAISource };
 
@@ -332,6 +336,7 @@ export interface SpaceLayoutPreferences {
 // All space preferences (extensible for future features)
 export interface SpacePreferences {
   layout?: SpaceLayoutPreferences;
+  memory?: MemorySettings;  // Memory shared by the space's conversations
 }
 
 export interface Space {
@@ -395,6 +400,8 @@ export interface ConversationMeta {
   starred?: boolean; // Pinned conversation for quick access
   /** Engine recorded at conversation creation. Read with `?? 'anthropic'` fallback. */
   engineId?: EngineId | null;
+  /** User renamed it; the first message no longer sets the title. */
+  titleCustomized?: boolean;
 }
 
 // ============================================
@@ -539,6 +546,8 @@ export interface EngineCapabilities {
     skills: boolean; mcp: boolean; hooks: boolean; permissionRules: boolean;
     sessionResume: boolean; sessionFork: boolean; interrupt: boolean;
     multimodalImage: boolean; contextCompaction: boolean; askUserQuestion: boolean;
+    /** Optional because a mobile client can talk to a server older than the flag. */
+    goal?: boolean;
   };
 }
 
@@ -641,6 +650,8 @@ export interface Message {
     epochId?: string;
     teamName?: string;
     fromMemberName?: string | null;
+    /** The goal the user set with this message (user messages only). */
+    goal?: GoalInput;
   };
   error?: string;  // Error message when assistant response failed (e.g., 429 rate limit)
   /**
@@ -860,6 +871,11 @@ export interface CompactInfo {
   preTokens: number;
 }
 
+/** A model request the engine will resend, with its deadline on this client's clock. */
+export interface ApiRetryNotice extends ApiRetryState {
+  retryAt: number;
+}
+
 // ============================================
 // AskUserQuestion Types
 // ============================================
@@ -968,7 +984,7 @@ export const DEFAULT_CONFIG: HaloConfig = {
     port: 3456
   },
   mcpServers: {},  // Empty by default
-  agent: { maxTurns: 999 },  // Agent defaults
+  agent: { maxTurns: DEFAULT_MAX_TURNS },  // Agent defaults
   isFirstLaunch: true,
   modelConfigSkipped: false
 };

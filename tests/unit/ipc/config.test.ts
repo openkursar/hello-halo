@@ -55,12 +55,36 @@ vi.mock('../../../src/main/ipc/rpc', () => ({
 }))
 
 import { registerConfigHandlers } from '../../../src/main/ipc/config'
+import { getConfig } from '../../../src/main/foundation/config.service'
+import { getAISourceManager } from '../../../src/main/services/ai-sources'
 
 describe('config IPC model fetching', () => {
   beforeEach(() => {
     controllerFetchModelsMock.mockReset()
     fetchModelsFromApiMock.mockReset()
     registerRawRpcHandlersMock.mockReset()
+  })
+
+  it('returns cached and failed refresh outcomes alongside the updated configuration', async () => {
+    const config = {
+      api: { provider: 'anthropic', apiKey: '', apiUrl: 'https://api.anthropic.com', model: 'default' },
+      aiSources: { version: 2, currentId: null, sources: [] },
+      permissions: { fileAccess: 'allow', commandExecution: 'ask', networkAccess: 'allow', trustMode: false },
+      appearance: { theme: 'system' },
+      system: { autoLaunch: false },
+      remoteAccess: { enabled: false, port: 0 },
+      onboarding: { completed: false },
+      mcpServers: {},
+      isFirstLaunch: false
+    } satisfies ReturnType<typeof getConfig>
+    const modelRefresh = { degradedSourceIds: ['cached'], failedSourceIds: ['failed'] }
+    vi.mocked(getConfig).mockReturnValue(config)
+    vi.mocked(getAISourceManager).mockReturnValue({
+      refreshAllConfigs: vi.fn().mockResolvedValue(modelRefresh)
+    } as unknown as ReturnType<typeof getAISourceManager>)
+    registerConfigHandlers()
+    const handlers = registerRawRpcHandlersMock.mock.calls[0][1]
+    await expect(handlers.refreshAISourcesConfig()).resolves.toEqual({ success: true, data: config, modelRefresh })
   })
 
   it('delegates to the config controller so structured errors reach Electron', async () => {

@@ -14,7 +14,8 @@
  * keeps focus throughout — this component is purely presentational.
  *
  * Design:
- *  - Follows Halo's existing dropdown language: bg-popover, border-border, rounded-xl, shadow-lg.
+ *  - Same shell as the composer's "+" panel: spans the composer card's width,
+ *    matches its corner radius, and rises from its top edge.
  *  - Selected row: subtle bg-primary/10 + left accent bar (border-l-2 border-primary).
  *  - Hover: hover:bg-muted/50 — matches InputArea's attachment menu items.
  *  - Category badge: neutral muted pill, no bright colours.
@@ -36,6 +37,8 @@ interface SlashCommandMenuProps {
   onSelect: (item: SlashCommandItem) => void
   /** Called when the user clicks outside or presses Escape */
   onClose: () => void
+  /** The composer card's corner radius, so the menu reads as part of it. */
+  radiusClassName?: string
 }
 
 // Category label map — neutral labels only, no per-category colour
@@ -78,6 +81,7 @@ export function SlashCommandMenu({
   selectedIndex,
   onSelect,
   onClose,
+  radiusClassName = 'rounded-xl',
 }: SlashCommandMenuProps) {
   const { t } = useTranslation()
   const menuRef = useRef<HTMLDivElement>(null)
@@ -120,13 +124,13 @@ export function SlashCommandMenu({
   return (
     <div
       ref={menuRef}
-      className="absolute bottom-full left-0 mb-2 w-full max-w-md
-        bg-popover border border-border rounded-xl shadow-lg z-30
-        overflow-hidden"
+      className={`absolute bottom-full -inset-x-px mb-2
+        bg-popover border border-border/70 ${radiusClassName} shadow-soft z-30
+        overflow-hidden animate-composer-rise`}
       style={{ maxHeight: `${MAX_VISIBLE_ROWS * 42 + 36}px` }}
     >
       {/* Scrollable item list */}
-      <div className="overflow-y-auto" style={{ maxHeight: `${MAX_VISIBLE_ROWS * 42}px` }}>
+      <div className="overflow-y-auto scrollbar-thin" style={{ maxHeight: `${MAX_VISIBLE_ROWS * 42}px` }}>
         <div className="py-1">
           {rows.map((row) => {
             if (row.type === 'header') {

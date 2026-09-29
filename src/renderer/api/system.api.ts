@@ -9,6 +9,7 @@ import {
 import type {
   ApiResponse,
 } from './_shared'
+import type { PickedLocalEntry } from '../../shared/attached-paths'
 
 export const systemApi = {
   // ===== Onboarding =====
@@ -61,6 +62,19 @@ export const systemApi = {
       return { success: false, error: 'Only available in desktop app' }
     }
     return window.halo.relaunch()
+  },
+
+  // A remote client's files are not on the host, so their paths mean nothing there.
+  pickLocalEntries: async (): Promise<ApiResponse<PickedLocalEntry[]>> => {
+    if (!isElectron()) {
+      return { success: false, error: 'Only available in desktop app' }
+    }
+    return window.halo.pickLocalEntries()
+  },
+
+  getPathForFile: (file: File): string => {
+    if (!isElectron()) return ''
+    return window.halo.getPathForFile(file)
   },
 
   // ===== Window (Electron only) =====

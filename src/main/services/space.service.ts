@@ -21,6 +21,8 @@ import { getHaloDir, getTempSpacePath, getSpacesDir } from '../foundation/config
 import { v4 as uuidv4 } from 'uuid'
 import { getAppManager } from './app-bridge'
 import { getTaskStateService } from '../platform/task-state'
+import { resolveMemoryLayout, type MemoryLayout } from '../platform/memory'
+import { resolveMemorySettings, sanitizeMemorySettings, type MemorySettings, type ResolvedMemorySettings } from '../../shared/types/memory'
 
 // Re-export config helper for backward compatibility with existing imports
 export { getSpacesDir } from '../foundation/config.service'
@@ -52,6 +54,8 @@ interface SpaceLayoutPreferences {
 
 interface SpacePreferences {
   layout?: SpaceLayoutPreferences
+  /** Memory shared by this space's conversations; see shared/types/memory. */
+  memory?: MemorySettings
 }
 
 interface SpaceMeta {
@@ -728,7 +732,13 @@ export function updateSpacePreferences(
     if (preferences.layout) {
       currentPrefs.layout = {
         ...currentPrefs.layout,
-        ...preferences.layout
+        ...sanitizeLayoutPreferences(preferences.layout)
+      }
+    }
+    if (preferences.memory) {
+      currentPrefs.memory = {
+        ...currentPrefs.memory,
+        ...sanitizeMemorySettings(preferences.memory)
       }
     }
 
@@ -771,6 +781,39 @@ export function getSpacePreferences(spaceId: string): SpacePreferences | null {
 
   const meta = tryReadMeta(entry.path)
   return meta?.preferences || null
+}
+
+// ============================================================================
+// Space Memory
+// ============================================================================
+
+/** The recognised layout preferences of an untrusted object (an IPC or HTTP body). */
+function sanitizeLayoutPreferences(input: unknown): SpaceLayoutPreferences {
+  const out: SpaceLayoutPreferences = {}
+  if (!input || typeof input !== 'object') return out
+  const raw = input as Record<string, unknown>
+  if (typeof raw.artifactRailExpanded === 'boolean') out.artifactRailExpanded = raw.artifactRailExpanded
+  if (typeof raw.chatWidth === 'number' && Number.isFinite(raw.chatWidth)) out.chatWidth = raw.chatWidth
+  return out
+}
+
+/** A space's memory settings, defaults filled in (memory and auto-consolidation on). */
+export function getSpaceMemorySettings(spaceId: string): ResolvedMemorySettings {
+  return resolveMemorySettings(getSpacePreferences(spaceId)?.memory)
+}
+
+export function isSpaceMemoryEnabled(spaceId: string): boolean {
+  return getSpaceMemorySettings(spaceId).enabled
+}
+
+/**
+ * Where a space's memory lives: in the space's data directory, never the
+ * working directory, so it stays out of the user's project files.
+ */
+export function getSpaceMemoryLayout(spaceId: string): MemoryLayout | null {
+  const space = getSpace(spaceId)
+  if (!space || space.isMissing) return null
+  return resolveMemoryLayout({ type: 'user', spaceId, spacePath: space.path }, 'space')
 }
 
 // ============================================================================

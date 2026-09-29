@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/openkursar/hello-halo/win-update-helper/internal/archive"
@@ -70,7 +71,8 @@ func TestRunExtractsAndMarksComplete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode()&0o111 == 0 {
+	// Windows has no executable bit to preserve; Go reports every file as 0666.
+	if runtime.GOOS != "windows" && info.Mode()&0o111 == 0 {
 		t.Errorf("executable bit lost: %v", info.Mode())
 	}
 }

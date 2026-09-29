@@ -43,7 +43,9 @@ import type {
   OAuthSourceConfig,
   OAuthStartResult,
   OAuthCompleteResult,
-  AISourceUserInfo
+  AISourceUserInfo,
+  CodexCatalogEntry,
+  ModelCatalogCache
 } from '../../../../shared/types'
 import { CHATGPT_PROVIDER_ID } from '../../../../shared/constants'
 import {
@@ -321,19 +323,50 @@ interface TokenSet {
   refreshToken: string
 }
 
-/** The fields of the catalog this provider reads, per `ModelInfo` on the wire. */
-interface CatalogModel {
-  slug: string
-  display_name?: string
-  /** `list` is what the picker shows; `hide` and `none` are filtered out. */
-  visibility?: string
-  priority?: number
-  /** `["text", "image"]` when the model accepts images. */
-  input_modalities?: string[]
-  /** The model's real context window, which Halo has no other way to learn. */
-  context_window?: number
-  supports_reasoning_summary_parameter?: boolean
-  use_responses_lite?: boolean
+type CatalogModel = CodexCatalogEntry
+
+function normalizeCatalog(value: unknown): CatalogModel[] {
+  if (!Array.isArray(value)) throw new Error('Invalid model catalog')
+  return value.map((entry: unknown) => {
+    if (!entry || typeof entry !== 'object') throw new Error('Invalid catalog entry')
+    const raw = entry as Record<string, unknown>
+    if (typeof raw.slug !== 'string' || !raw.slug.trim()) throw new Error('Invalid model slug')
+    const model: CatalogModel = { slug: raw.slug }
+    for (const key of ['display_name', 'visibility'] as const) {
+      if (typeof raw[key] === 'string') model[key] = raw[key]
+    }
+    for (const key of ['priority', 'context_window'] as const) {
+      if (typeof raw[key] === 'number' && Number.isFinite(raw[key])) model[key] = raw[key]
+    }
+    for (const key of ['supports_reasoning_summary_parameter', 'use_responses_lite'] as const) {
+      if (typeof raw[key] === 'boolean') model[key] = raw[key]
+    }
+    if (Array.isArray(raw.input_modalities) && raw.input_modalities.every((item) => typeof item === 'string')) {
+      model.input_modalities = raw.input_modalities
+    }
+    return model
+  })
+}
+
+function cachedCatalog(config: OAuthSourceConfig): CatalogModel[] {
+  const cache = config.modelCatalogCache
+  if (cache?.provider === 'chatgpt' && cache.version === 1) {
+    try {
+      return normalizeCatalog(cache.entries)
+    } catch {
+      console.warn('[ChatGPT] Invalid catalog cache, using stored model metadata')
+    }
+  }
+  // Legacy snapshots cannot recover hidden entries; retain their known metadata until a successful fetch.
+  return (config.availableModels ?? []).map((slug) => ({
+    slug,
+    display_name: config.modelNames?.[slug] ?? slug,
+    visibility: 'list',
+    context_window: config.modelCapabilities?.[slug]?.contextWindow,
+    input_modalities: config.modelVision?.[slug] === undefined
+      ? undefined
+      : config.modelVision[slug] ? ['text', 'image'] : ['text']
+  }))
 }
 
 /**
@@ -405,13 +438,21 @@ function mergeCatalog(remote: CatalogModel[]): CatalogModel[] {
     .sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0))
 }
 
-/**
- * Tell the manager the fetch produced nothing usable, so it keeps the models
- * already stored instead of writing an empty list over them. The manager returns
- * on `degraded` before reading anything else, so this carries nothing else.
- */
-function degradedCatalog(): Partial<AISourcesConfig> {
-  return { [CHATGPT_PROVIDER_ID]: { degraded: true } } as unknown as Partial<AISourcesConfig>
+export function restoreChatGPTCatalogCache(cache: ModelCatalogCache | undefined): void {
+  if (cache?.provider !== 'chatgpt' || cache.version !== 1) return
+  try {
+    setCodexModelCapabilities(normalizeCatalog(cache.entries))
+  } catch {
+    console.warn('[ChatGPT] Invalid catalog capability cache; waiting for refresh')
+  }
+}
+
+function degradedCatalog(config: OAuthSourceConfig): Partial<AISourcesConfig> {
+  const overlay = cachedCatalog(config)
+  setCodexModelCapabilities(overlay)
+  return {
+    [CHATGPT_PROVIDER_ID]: { ...toModelOptions(mergeCatalog(overlay)), degraded: true, catalogReconciled: true }
+  } as unknown as Partial<AISourcesConfig>
 }
 
 class ChatGPTProvider implements OAuthAISourceProvider {
@@ -490,15 +531,18 @@ class ChatGPTProvider implements OAuthAISourceProvider {
   private async catalogOrFallback(
     accessToken: string,
     accountId: string
-  ): Promise<ReturnType<typeof toModelOptions>> {
+  ): Promise<ReturnType<typeof toModelOptions> & { modelCatalogCache?: ModelCatalogCache; degraded?: boolean }> {
     try {
       const catalog = await this.fetchCatalog(accessToken, accountId)
-      if (catalog.length > 0) return toModelOptions(mergeCatalog(catalog))
+      if (catalog.length > 0) return {
+        ...toModelOptions(mergeCatalog(catalog)),
+        modelCatalogCache: this.catalogCache(catalog)
+      }
       console.warn('[ChatGPT] Catalog came back empty, using the shipped list')
     } catch (error) {
       console.warn('[ChatGPT] Catalog fetch failed, using the shipped list:', error)
     }
-    return toModelOptions(mergeCatalog([]))
+    return { ...toModelOptions(mergeCatalog([])), degraded: true }
   }
 
   /**
@@ -524,8 +568,8 @@ class ChatGPTProvider implements OAuthAISourceProvider {
       throw new Error(`HTTP ${response.status}: ${errorText.slice(0, 200)}`)
     }
 
-    const body = await response.json() as { models?: CatalogModel[] }
-    const raw = body.models || []
+    const body = await response.json() as { models?: unknown }
+    const raw = normalizeCatalog(body?.models)
 
     // Log the whole overlay, not the merged result: "why is model X missing" is
     // answered by what the backend sent, and once it is merged into the shipped
@@ -558,14 +602,15 @@ class ChatGPTProvider implements OAuthAISourceProvider {
     return this.conf(config)?.user || null
   }
 
-  /**
-   * Rebuild this account's list by merging the backend's overlay onto the
-   * shipped catalog.
-   *
-   * A failed fetch answers `degraded` instead of an empty list: the manager
-   * reads that as "keep what is stored", so an offline launch or a transient
-   * backend error does not wipe the picker down to nothing.
-   */
+  private catalogCache(entries: CatalogModel[]): ModelCatalogCache {
+    return { provider: 'chatgpt', version: 1, fetchedAt: new Date().toISOString(), entries }
+  }
+
+  getOfflineConfig(config: AISourcesConfig): Partial<AISourcesConfig> {
+    return degradedCatalog(this.conf(config) ?? { loggedIn: false, model: '', availableModels: [] })
+  }
+
+  /** Failed refreshes still apply the current shipped catalog to the last known overlay. */
   async refreshConfig(config: AISourcesConfig): Promise<ProviderResult<Partial<AISourcesConfig>>> {
     const c = this.conf(config)
     if (!c?.accessToken) {
@@ -575,17 +620,22 @@ class ChatGPTProvider implements OAuthAISourceProvider {
     try {
       const catalog = await this.fetchCatalog(c.accessToken, c.user?.uid || '')
       if (catalog.length === 0) {
-        console.warn('[ChatGPT] Catalog came back empty, keeping stored models')
-        return { success: true, data: degradedCatalog() }
+        console.warn('[ChatGPT] Catalog came back empty, using cached overlay')
+        return { success: true, data: degradedCatalog(c) }
       }
 
       return {
         success: true,
-        data: { [CHATGPT_PROVIDER_ID]: { ...c, ...toModelOptions(mergeCatalog(catalog)) } } as unknown as Partial<AISourcesConfig>
+        data: {
+          [CHATGPT_PROVIDER_ID]: {
+            ...toModelOptions(mergeCatalog(catalog)),
+            modelCatalogCache: this.catalogCache(catalog)
+          }
+        } as unknown as Partial<AISourcesConfig>
       }
     } catch (error) {
-      console.warn('[ChatGPT] Catalog fetch failed, keeping stored models:', error)
-      return { success: true, data: degradedCatalog() }
+      console.warn('[ChatGPT] Catalog fetch failed, using cached overlay:', error)
+      return { success: true, data: degradedCatalog(c) }
     }
   }
 
@@ -706,6 +756,8 @@ class ChatGPTProvider implements OAuthAISourceProvider {
         _modelNames: Record<string, string>
         _modelCapabilities?: Record<string, { contextWindow?: number }>
         _modelVision?: Record<string, boolean>
+        _modelCatalogCache?: ModelCatalogCache
+        _catalogDegraded?: boolean
         _defaultModel: string
       } = {
         success: true,
@@ -720,6 +772,8 @@ class ChatGPTProvider implements OAuthAISourceProvider {
         _modelNames: models.modelNames,
         _modelCapabilities: models.modelCapabilities,
         _modelVision: models.modelVision,
+        _modelCatalogCache: models.modelCatalogCache,
+        _catalogDegraded: models.degraded,
         _defaultModel: CODEX_DEFAULT_MODEL
       }
 

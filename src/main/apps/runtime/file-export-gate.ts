@@ -35,16 +35,20 @@ export class FileExportDeniedError extends Error {
   readonly code = 'FILE_EXPORT_DENIED'
   readonly requestedPath: string
   readonly allowedRoots: string[]
+  readonly reason?: string
 
-  constructor(requestedPath: string, allowedRoots: string[]) {
+  constructor(requestedPath: string, allowedRoots: string[], reason?: string) {
     const roots = allowedRoots.map(r => `"${r}"`).join(', ')
     super(
-      `File export denied: "${requestedPath}" is outside allowed directories [${roots}]. ` +
-      'Only files within the current space or temporary directory can be sent.'
+      reason
+        ? `File export denied: "${requestedPath}". ${reason}`
+        : `File export denied: "${requestedPath}" is outside allowed directories [${roots}]. ` +
+          'Only files within the current space or temporary directory can be sent.'
     )
     this.name = 'FileExportDeniedError'
     this.requestedPath = requestedPath
     this.allowedRoots = allowedRoots
+    this.reason = reason
   }
 }
 
@@ -72,8 +76,10 @@ export class FileExportGate {
    * @param allowedRoots - Directories from which files may be exported.
    *   Each root is resolved to an absolute path. Empty or non-existent
    *   roots are silently filtered out.
+   * @param refuse - Read at send time: why a file inside the roots may still
+   *   not leave (a restricted turn's closed folders), or null.
    */
-  constructor(allowedRoots: string[]) {
+  constructor(allowedRoots: string[], private readonly refuse?: (realPath: string) => string | null) {
     this.resolvedRoots = allowedRoots
       .filter(r => r.length > 0)
       .map(r => {
@@ -112,6 +118,10 @@ export class FileExportGate {
 
     if (!isAllowed) {
       throw new FileExportDeniedError(filePath, this.resolvedRoots)
+    }
+    const refusal = this.refuse?.(realPath)
+    if (refusal) {
+      throw new FileExportDeniedError(filePath, this.resolvedRoots, refusal)
     }
 
     // 4. Construct the sanctioned file object.

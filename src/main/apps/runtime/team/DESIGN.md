@@ -847,8 +847,8 @@ path (§3.5):
   scheduler jobs; `webhook`/`file`/`wecom` triggers become EventRouter
   subscriptions via the shared `sourceConfigToEventFilter` mapping
   (`apps/runtime/event-filter-mapping.ts`, also used by the app runtime). Both
-  paths converge on the injected `runTeam`, guarded by the team's
-  `currentEpochId` so triggers never overlap a live run.
+  paths converge on the injected `runTeam`, guarded so triggers never overlap a
+  live run — see below.
 - **Conversation** (message-driven ingress): user UI / IM. Each inbound message
   resumes the lead's session inside a long-lived `'conversation'` epoch scoped
   **per chat** (`orchestration.ensureConversationEpoch(teamId, chatKey)` —
@@ -864,6 +864,29 @@ path (§3.5):
   `team_epochs.lifecycle` (`'run' | 'conversation'`, v3) and the chat scope on
   `team_epochs.chat_key` (v4); `getCurrentEpochForTeam` is filtered to run epochs
   so open conversation epochs never shadow it.
+
+### A run is live because a process is running it
+
+The reentrancy guard asks the runtime's in-memory run slot
+(`TeamRuntime.activeRunEpochId`), never `team.currentEpochId`. The pointer is a
+projection of that slot for the UI and for joiners, and it outlives the process
+that wrote it. Guarding on it made one crash mid-run permanent: the epoch stayed
+open for good, every later trigger read "already running" and skipped silently,
+and the team never ran again — while still answering in conversations, which do
+not occupy the slot, so nothing looked wrong. The pointer is still written on
+start and cleared on seal; it is simply no longer what a trigger believes. A
+joined office is the exception and keeps reading it, because there the run really
+is happening on another node.
+
+`recoverInterruptedRuns()` runs once at bootstrap, before triggers are
+rehydrated: every open run epoch on a hosted office is sealed as interrupted
+(`error`, the reason the History tab labels "Interrupted") and the slot is
+released. That is not killing work — the sessions died with the process that
+owned them — it is recording when the work stopped, so the next trigger starts a
+run instead of being refused by a ghost. The epoch keeps the record it already
+had: a run that stamped its summary and outcome had finished and was merely
+revived (a message re-opens its context), and re-classifying that would rewrite
+history.
 
 ### Team as an IM backend
 

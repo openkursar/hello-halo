@@ -5,7 +5,7 @@
  * This tool allows the AI to write activity entries to the Activity Thread,
  * enabling structured communication between the AI and the user.
  *
- * Uses the same tool() + createSdkMcpServer() pattern as platform/memory/tools.ts.
+ * Uses the same tool() + createSdkMcpServer() pattern as ./notify-tool.ts.
  */
 
 import { z } from 'zod'

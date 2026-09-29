@@ -1,8 +1,10 @@
 /**
  * S3 — Chat: long-list scroll. Per perf-program.md: seed 100+ messages into a
- * conversation, then scroll it 30 times, watching whether DOM node count
- * grows unbounded (virtualization failing) or the message list's own
- * `react-virtuoso` keeps it flat.
+ * conversation, then scroll it 30 times, watching DOM node count and render
+ * cost. The transcript renders native rows: older history is mounted in pages
+ * as the reader nears the top (never unmounted), and off-screen rows skip
+ * layout/paint via `content-visibility` — so node count grows by at most the
+ * pages scrolled into, then stays flat.
  *
  * Seeding goes through the real `conversation.service.ts` functions (see
  * seed-conversation.ts) rather than a hand-written JSON fixture, so the file
@@ -62,14 +64,10 @@ test('S3 long-list scroll', async () => {
     const throttle = currentThrottle()
     await cdp.setCpuThrottlingRate(throttle)
 
-    // react-virtuoso's default scroll container — see MessageList.tsx. The
-    // conversation-list sidebar (ConversationList) also renders its own
-    // Virtuoso, so the bare test id resolves to 2 elements (Playwright
-    // strict-mode violation) — scope to the one containing the seeded
-    // message text to target the message list specifically.
-    const scroller = window.locator('[data-testid="virtuoso-scroller"]').filter({ hasText: /Seeded (question|answer) #/ })
+    // MessageList's own scroll container (see MessageList.tsx).
+    const scroller = window.locator('[data-testid="transcript-scroller"]')
     await scroller.waitFor({ state: 'visible', timeout: 15000 })
-    // Let Virtuoso finish its initial mount-to-bottom layout pass before the
+    // Let the initial pin-to-bottom and first render pass settle before the
     // baseline snapshot, so that settling isn't misattributed to scrolling.
     await window.waitForTimeout(1000)
 
@@ -91,8 +89,8 @@ test('S3 long-list scroll', async () => {
     const t0 = Date.now()
 
     // Alternate scroll direction so the run exercises both "scroll toward
-    // older messages" and "scroll back down" — Virtuoso mounts/unmounts rows
-    // on both, a one-directional sweep would only ever grow the window.
+    // older messages" and "scroll back down" — rows switch between skipped and
+    // rendered in both directions.
     for (let i = 0; i < SCROLL_REPEATS; i++) {
       const deltaY = i % 2 === 0 ? -600 : 600
       await scroller.hover()
@@ -122,9 +120,8 @@ test('S3 long-list scroll', async () => {
       }
     }
 
-    // A resolved wheel-event loop isn't proof the list actually scrolled. Virtuoso exposes no scroll-position
-    // API here, so read the native scrollTop the same way MessageList's own
-    // scrollToEnd() does.
+    // A resolved wheel-event loop isn't proof the list actually scrolled; read
+    // the native scrollTop.
     if (!preconditionFailure) {
       const scrollTop = await scroller.evaluate((el) => el.scrollTop).catch(() => null)
       if (scrollTop === null) {

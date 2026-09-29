@@ -86,7 +86,7 @@ export function useCanvasLifecycle() {
   )
 
   const closeAllTabs = useCallback(
-    () => canvasLifecycle.closeAll(),
+    () => canvasLifecycle.closeAll({ confirmDirty: true }),
     []
   )
 

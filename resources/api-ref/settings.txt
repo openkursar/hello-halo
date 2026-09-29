@@ -141,7 +141,7 @@ POST   /api/model-capabilities/resolve                             Resolve a mod
      # out: {"success":true,"data":{"displayName":"...","provider":"...","contextWindow":128000,"maxOutputTokens":8192,"vision":false,"thinking":false}}
      # note: All optional inputs are validated. Catalog data accepts only positive integer contextWindow and maxOutputTokens values within Halo runtime limits; catalogSupportsVision must be a boolean.
      # note: Priority, highest first: user override, then a [1m] model-id suffix (contextWindow only), then an exact preset entry, then catalog data, then a model-family pattern entry, then built-in defaults. A pattern entry is only a family guess and ranks below the provider catalog; an exact entry is curated and ranks above it.
-     # note: A context above 200K does not opt the SDK into extended context unless the user explicitly enables extendedContext or the model id ends in [1m].
+     # note: A context window above 200K is what opts the SDK into extended context — there is no separate switch. A model id ending in [1m] does the same.
      # note: Returns 400 for a missing modelId or malformed capability data.
 
 GET    /api/security/policy                                        Read the security policy this build runs under

@@ -38,6 +38,7 @@ import {
   type ImChannelInstanceStatus,
 } from '../../../shared/types/im-channel'
 import { ChannelBackendSelect, ChannelBackendName } from './ChannelBackendSelect'
+import { Disclosure } from '../ui/Disclosure'
 import type {
   ChannelBackendApp,
   ChannelBackendTeam,
@@ -48,6 +49,7 @@ import { WecomScanAuthDialog } from './WecomScanAuthDialog'
 import { FeishuInstanceCard } from './FeishuInstanceCard'
 import { FeishuScanAuthDialog } from './FeishuScanAuthDialog'
 import { ImInstancePermissionSection } from './ImInstancePermissionSection'
+import { defaultGuestPolicy } from '../../../shared/apps/capability-policy'
 import type { ImPermissionDefaults } from './ImInstancePermissionSection'
 import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
 
@@ -864,7 +866,6 @@ function NotifyChannelCard({
   const { t } = useTranslation()
   const Icon = def.icon
   const isEnabled = Boolean(channelConfig?.enabled)
-  const [showAdvanced, setShowAdvanced] = useState(false)
 
   // The help link answers "where do I get this credential", so it hangs off the
   // channel's secret input rather than a hard-coded field name.
@@ -961,29 +962,19 @@ function NotifyChannelCard({
           {/* Advanced fields (collapsible) */}
           {def.fields.some(f => f.group === 'advanced') && (
             <div className="border-t border-border/60 pt-3">
-              <button
-                type="button"
-                onClick={() => setShowAdvanced(!showAdvanced)}
-                className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-              >
-                <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${showAdvanced ? 'rotate-180' : ''}`} />
-                {t('Advanced')}
-              </button>
-              {showAdvanced && (
-                <div className="mt-3 space-y-3 animate-in slide-in-from-top-1 duration-150">
-                  {def.fields.filter(f => f.group === 'advanced').map((field) => (
-                    <ChannelField
-                      key={field.key}
-                      field={field}
-                      value={getFieldValue(field)}
-                      onChange={(value) => handleFieldChange(field.key, value, field.nested)}
-                    />
-                  ))}
-                  <p className="text-[11px] text-muted-foreground leading-relaxed">
-                    {t('CalDAV URL enables calendar tools. Supports {host} and {email} placeholders.')}
-                  </p>
-                </div>
-              )}
+              <Disclosure title={t('Advanced')} contentClassName="space-y-3">
+                {def.fields.filter(f => f.group === 'advanced').map((field) => (
+                  <ChannelField
+                    key={field.key}
+                    field={field}
+                    value={getFieldValue(field)}
+                    onChange={(value) => handleFieldChange(field.key, value, field.nested)}
+                  />
+                ))}
+                <p className="text-[11px] text-muted-foreground leading-relaxed">
+                  {t('CalDAV URL enables calendar tools. Supports {host} and {email} placeholders.')}
+                </p>
+              </Disclosure>
             </div>
           )}
 
@@ -1171,9 +1162,7 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
       replyScope: 'all', // Default to all messages
       permissionEnabled: pd?.defaultEnabled ?? false,
       ...(pd?.defaultEnabled ? {
-        guestPolicy: pd.defaultGuestAccess
-          ? { allowedTools: pd.defaultGuestPolicy?.allowedTools ?? [] }
-          : undefined,
+        guestPolicy: pd.defaultGuestAccess ? defaultGuestPolicy(pd.defaultGuestPolicy) : undefined,
       } : {}),
     }
     const newInstances = [...instances, newInstance]
@@ -1236,9 +1225,7 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
       replyScope: 'all',
       permissionEnabled: pd?.defaultEnabled ?? false,
       ...(pd?.defaultEnabled ? {
-        guestPolicy: pd.defaultGuestAccess
-          ? { allowedTools: pd.defaultGuestPolicy?.allowedTools ?? [] }
-          : undefined,
+        guestPolicy: pd.defaultGuestAccess ? defaultGuestPolicy(pd.defaultGuestPolicy) : undefined,
       } : {}),
     }
     saveInstances([...instances, newInstance])

@@ -131,6 +131,12 @@ export interface EngineCapabilities {
     multimodalImage: boolean
     contextCompaction: boolean
     askUserQuestion: boolean
+    /**
+     * Whether the engine keeps a per-session goal the host can read and set
+     * (`getGoal` / `setGoal` on the session, `goal` seed option) and reports
+     * changes as `system` / `goal_updated` stream messages.
+     */
+    goal: boolean
   }
 }
 
@@ -173,18 +179,22 @@ export const ANTHROPIC_CAPABILITIES: EngineCapabilities = {
     multimodalImage: true,
     contextCompaction: true,
     askUserQuestion: true,
+    goal: false,
   },
 }
 
 /**
- * Halo SDK — currently mirrors CC's capability set since it implements the
- * same protocol surface. Kept as a separate constant so future divergence is
- * a simple constant edit, not an architectural change.
+ * Halo SDK — mirrors CC's capability set since it implements the same protocol
+ * surface, plus the features only it offers.
  */
 export const HALO_CAPABILITIES: EngineCapabilities = {
   ...ANTHROPIC_CAPABILITIES,
   engineId: 'halo',
   displayName: 'Halo SDK',
+  features: {
+    ...ANTHROPIC_CAPABILITIES.features,
+    goal: true,
+  },
 }
 
 /**

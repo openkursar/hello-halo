@@ -51,7 +51,7 @@ export function SessionDetailView({ appId, runId }: SessionDetailViewProps) {
   const [loadState, setLoadState] = useState<LoadState>('loading')
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
-  // ── Scroll control via the shared MessageList shell (Virtuoso-based) ──
+  // ── Scroll control via the shared MessageList shell ──
   const messageListRef = useRef<MessageListHandle>(null)
   const [showScrollButton, setShowScrollButton] = useState(false)
   const handleAtBottomStateChange = useCallback((atBottom: boolean) => {

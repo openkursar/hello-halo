@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -64,7 +65,8 @@ func TestPackExtractRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if executable(info.Mode()) != executable(mode) {
+		// Windows has no executable bit to preserve; Go reports every file as 0666.
+		if runtime.GOOS != "windows" && executable(info.Mode()) != executable(mode) {
 			t.Errorf("%s mode = %v, want executable=%v", name, info.Mode(), executable(mode))
 		}
 	}

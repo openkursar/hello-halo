@@ -88,26 +88,35 @@ Current source wiring in bootstrap:
 
 Purpose:
 
-- provide memory MCP tools (`memory_read`, `memory_write`, `memory_list`)
-- enforce scope permissions
-- resolve memory file locations and compaction/summary utilities
+- memory layout per owner (digital human, space): `memory.md` (`# now` + `# History`) and `memory/topics/` wiki
+- snapshot + rendering of the bounded `## Memory` block a turn opens with (capped `# now`, recent History titles, generated topic index)
+- memory instructions (owner kind, `memory_schema` tracked items, empty-space short form)
+- the per-memory write lock, and the engine-hook write guard that holds the agent's file tools to it
+- the file side of consolidation (cadence assessment, workspace, validation, conflict report + rebase, swap, snapshots, History trim, cooldown state)
 
 Key files:
 
 - `src/main/platform/memory/index.ts`
-- `src/main/platform/memory/tools.ts`
+- `src/main/platform/memory/types.ts`
 - `src/main/platform/memory/paths.ts`
 - `src/main/platform/memory/permissions.ts`
 - `src/main/platform/memory/file-ops.ts`
+- `src/main/platform/memory/topics.ts`
+- `src/main/platform/memory/snapshot.ts`
+- `src/main/platform/memory/section.ts`
 - `src/main/platform/memory/prompt.ts`
-- `src/main/platform/memory/types.ts`
+- `src/main/platform/memory/guard.ts`
+- `src/main/platform/memory/consolidation.ts`
 - `src/main/platform/memory/DESIGN.md`
+
+The consolidating agent and its scheduling live in `src/main/services/memory-consolidation`.
+Settings types (`MemorySettings`, `MemoryStatus`, cadences) live in `src/shared/types/memory.ts`.
 
 Path model:
 
-- user memory: `{haloDir}/user-memory.md` and `{haloDir}/user-memory/`
+- user memory: `{haloDir}/user-memory.md` and `{haloDir}/user-memory/` (reserved, not wired)
 - space memory: `{spacePath}/.halo/memory.md` and `{spacePath}/.halo/memory/`
-- app memory: `{spacePath}/apps/{appId}/memory.md` and `{spacePath}/apps/{appId}/memory/`
+- app memory: `{appDataPath}/memory.md` and `{appDataPath}/memory/` (default `{spacePath}/.halo/apps/{appId}`)
 
 ## 2.5 `platform/background`
 

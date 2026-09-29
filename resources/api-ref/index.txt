@@ -16,6 +16,10 @@ POST   /api/spaces                                                 [ai]       wo
 PUT    /api/spaces/reorder                                         [ai]       workspace               Set the display order of spaces
 GET    /api/spaces/$HALO_SPACE_ID                                  [ai]       workspace               Read one space
 PUT    /api/spaces/$HALO_SPACE_ID                                  [ai]       workspace               Rename a space or change its icon
+GET    /api/spaces/$HALO_SPACE_ID/preferences                      [ai]       workspace               Read a space's preferences (layout, memory settings)
+PUT    /api/spaces/$HALO_SPACE_ID/preferences                      [ai]       workspace               Change a space's preferences, e.g. turn its shared memory on or off
+GET    /api/spaces/$HALO_SPACE_ID/memory                           [ai]       workspace               Read the state of a space's memory
+POST   /api/spaces/$HALO_SPACE_ID/memory/consolidate               [ai]       workspace               Consolidate a space's memory now
 DELETE /api/spaces/$HALO_SPACE_ID                                  [ai]       workspace               Delete a space and everything inside it
 POST   /api/spaces/$HALO_SPACE_ID/open                             [ai]       workspace               Get a space working directory path
 GET    /api/spaces/$HALO_SPACE_ID/conversations                    [ai]       conversation            List conversations in a space
@@ -80,6 +84,8 @@ DELETE /api/apps/<appId>                                           [ai]       di
 POST   /api/apps/<appId>/reinstall                                 [ai]       digital-human           Reinstall a previously soft-deleted (uninstalled) digital human
 POST   /api/apps/<appId>/move-space                                [ai]       digital-human,workspace Set which space a digital human starts new work in
 POST   /api/apps/<appId>/clear-memory                              [ai]       digital-human           Delete all of a digital human's memory files
+GET    /api/apps/<appId>/memory                                    [ai]       digital-human           Read the state of a digital human's memory
+POST   /api/apps/<appId>/memory/consolidate                        [ai]       digital-human           Consolidate a digital human's memory now
 DELETE /api/apps/<appId>/permanent                                 [wrapped]  digital-human           Permanently delete a digital human and all its data
 POST   /api/apps/<appId>/pause                                     [ai]       digital-human           Pause a digital human (stops scheduling)
 POST   /api/apps/<appId>/resume                                    [ai]       digital-human           Resume a paused digital human

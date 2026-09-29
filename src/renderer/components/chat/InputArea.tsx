@@ -3,11 +3,11 @@
  *
  * Layout (following industry standard):
  * ┌──────────────────────────────────────────────────────┐
- * │ [Image previews]                                     │
+ * │ [Image previews] [Attached path chips]               │
  * │ ┌──────────────────────────────────────────────────┐ │
  * │ │ Textarea                                         │ │
  * │ └──────────────────────────────────────────────────┘ │
- * │ [Recipient] [+] [Tools] [Thinking] [Knowledge] ── [Send] │
+ * │ [Recipient] [+] [Thinking] [Knowledge] ──── [Send]   │
  * │      Bottom toolbar: always visible, expandable     │
  * └──────────────────────────────────────────────────────┘
  *
@@ -20,14 +20,20 @@
  */
 
 import { useState, useRef, useEffect, useMemo, useCallback, KeyboardEvent, ClipboardEvent, DragEvent } from 'react'
-import { Plus, ImagePlus, Loader2, AlertCircle, Atom, Lightbulb, MessageSquare, Bot } from 'lucide-react'
+import { Plus, ImagePlus, Paperclip, Loader2, AlertCircle, Lightbulb, MessagesSquare, Bot, Target } from 'lucide-react'
 import { useAppStore } from '../../stores/app.store'
 import { useChatStore } from '../../stores/chat.store'
 import { useOnboardingStore } from '../../stores/onboarding.store'
 import { getOnboardingPrompt } from '../onboarding/onboardingData'
-import { ToolsetControls } from './ToolsetControls'
 import { LiveSessionsHeader } from './LiveSessionsHeader'
-import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
+import { ComposerMenu, type ComposerMenuSection } from './composer-menu/ComposerMenu'
+import { useComposerToolsets } from './composer-menu/useComposerToolsets'
+import { sortToolsets, toolsetDescription, toolsetIcon, toolsetLabel } from './composer-menu/toolset-display'
+import type { ToolsetStatus } from '../../stores/toolsets.store'
+import { AttachedPathChips } from './AttachedPathChips'
+import { appendAttachedPaths, canAttachPath, type AttachedPath, type PickedLocalEntry } from '../../../shared/attached-paths'
+import { api } from '../../api'
+import { isElectron } from '../../api/transport'
 import { ImageAttachmentPreview } from './ImageAttachmentPreview'
 import { KnowledgeBaseButton } from './KnowledgeBaseButton'
 import { processImage, isValidImageType, formatFileSize } from '../../utils/imageProcessor'
@@ -51,6 +57,7 @@ import {
   trackHomeThrottled,
   type ComposerOrigin,
 } from '../../services/home-telemetry'
+import type { GoalComposerConfig } from '../goal'
 
 // ── mention helpers ──
 //
@@ -181,9 +188,10 @@ interface InputAreaProps {
    */
   mentionConversations?: ConversationMentionCandidate[]
   /**
-   * Hide the on-demand toolset broker control ("Tools" button). Digital-human
-   * chat sets this: a digital human's tools are governed by its Capabilities
-   * panel, not the broker, so the control would be inert and misleading here.
+   * Hide the Capabilities group of the "+" panel (the toolset broker's
+   * switches). Digital-human chat sets this: a digital human's tools are
+   * governed by its own Capabilities panel, not the broker, so the switches
+   * would be inert and misleading here.
    */
   hideToolsetControls?: boolean
   /**
@@ -215,10 +223,16 @@ interface InputAreaProps {
    * when the key changes — drafts are read once, at mount, via lazy useState.
    */
   draftKey?: string
+  /**
+   * Conversation goal: the "+" menu row, goal mode, and the shelf above the
+   * card. Only the space conversation board sets this, and only for engines
+   * that keep goals.
+   */
+  goal?: GoalComposerConfig
 }
 
 // Draft attachments stay in memory; image data must not fill browser storage.
-interface InputDraft { content: string; images: ImageAttachment[] }
+interface InputDraft { content: string; images: ImageAttachment[]; paths: AttachedPath[] }
 const inputDrafts = new Map<string, InputDraft>()
 // A failed send can settle after its original input has been replaced.
 const draftRecoverySubscribers = new Map<string, Set<(draft: InputDraft) => void>>()
@@ -227,10 +241,12 @@ const draftRecoverySubscribers = new Map<string, Set<(draft: InputDraft) => void
 const MAX_IMAGE_SIZE = 20 * 1024 * 1024  // 20MB max per image (before compression)
 const MAX_IMAGES = 10  // Max images per message
 
-// Number of actions offered by the "+" control. With only one, the toolbar
-// shows it directly instead of hiding it behind a popover — bump this when an
-// action is added or removed.
-const ATTACH_ACTION_COUNT: number = 3
+function base64ToFile(data: string, name: string, mediaType: string): File {
+  const binary = atob(data)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
+  return new File([bytes], name, { type: mediaType })
+}
 
 // Error message type
 interface ImageError {
@@ -238,7 +254,7 @@ interface ImageError {
   message: string
 }
 
-export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder, isCompact = false, toolbarSlot, draftKey, slashCommands = [], mentionArtifacts = [], mentionConversations = [], hideToolsetControls = false, hideKnowledgeControls = false, standalone = false, digitalHumanSelector }: InputAreaProps) {
+export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder, isCompact = false, toolbarSlot, draftKey, slashCommands = [], mentionArtifacts = [], mentionConversations = [], hideToolsetControls = false, hideKnowledgeControls = false, standalone = false, digitalHumanSelector, goal }: InputAreaProps) {
   const { t } = useTranslation()
   const sendKeyMode = useAppStore(state => state.config?.chat?.sendKeyMode ?? 'enter')
 
@@ -259,11 +275,13 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
   const [content, setContent] = useState(() => draftKey ? inputDrafts.get(draftKey)?.content ?? '' : '')
   const [isFocused, setIsFocused] = useState(false)
   const [images, setImages] = useState<ImageAttachment[]>(() => draftKey ? inputDrafts.get(draftKey)?.images ?? [] : [])
+  const [paths, setPaths] = useState<AttachedPath[]>(() => draftKey ? inputDrafts.get(draftKey)?.paths ?? [] : [])
   useEffect(() => {
     if (!draftKey) return
     const restore = (draft: InputDraft) => {
       setContent(current => current || draft.content)
       setImages(current => current.length ? current : draft.images)
+      setPaths(current => current.length ? current : draft.paths)
     }
     const listeners = draftRecoverySubscribers.get(draftKey) ?? new Set<(draft: InputDraft) => void>()
     listeners.add(restore)
@@ -277,10 +295,10 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
   }, [draftKey])
   useEffect(() => {
     if (draftKey) {
-      if (content || images.length) inputDrafts.set(draftKey, { content, images })
+      if (content || images.length || paths.length) inputDrafts.set(draftKey, { content, images, paths })
       else inputDrafts.delete(draftKey)
     }
-  }, [draftKey, content, images])
+  }, [draftKey, content, images, paths])
   const [isDragOver, setIsDragOver] = useState(false)
   const [isProcessingImages, setIsProcessingImages] = useState(false)
   const [imageError, setImageError] = useState<ImageError | null>(null)
@@ -300,6 +318,32 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
   const [cursorPos, setCursorPos] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const cardRef = useRef<HTMLDivElement>(null)
+  const plusTriggerRef = useRef<HTMLButtonElement>(null)
+  const goalMode = !!goal?.active
+  // A remote client's files are not on the host, so only uploaded images make sense there.
+  const canAttachLocalPaths = isElectron()
+
+  const openAttachMenu = useCallback(() => {
+    setSlashMenuOpen(false)
+    setMentionMenuOpen(false)
+    setShowAttachMenu(true)
+  }, [])
+  const toolsets = useComposerToolsets({
+    enabled: !hideToolsetControls,
+    canOpen: !isGenerating,
+    panelOpen: showAttachMenu,
+    onRequested: openAttachMenu,
+  })
+
+  useEffect(() => {
+    if (goalMode) textareaRef.current?.focus()
+  }, [goalMode])
+
+  // The "+" button leaves while a turn runs; its panel goes with it rather than reappearing later.
+  useEffect(() => {
+    if (isGenerating) setShowAttachMenu(false)
+  }, [isGenerating])
 
   // Only the home composer wires the recipient selector, so it also scopes
   // the home.composer.* events.
@@ -433,25 +477,72 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
     setImages(prev => prev.filter(img => img.id !== id))
   }
 
+  /** Refused items are reported here, before any chip appears, so nothing looks attached that will not be sent. */
+  const reportUnattachable = (count: number, reason: 'no-local-path' | 'not-absolute') => {
+    if (count === 0) return
+    console.warn('[InputArea] Items not attached', { count, reason, desktop: canAttachLocalPaths })
+    showError(canAttachLocalPaths
+      ? t('{{count}} item(s) could not be attached: not a file or folder on this computer', { count })
+      : t('Only images can be attached from this device'))
+  }
+
+  const addPaths = (candidates: AttachedPath[]) => {
+    const added = candidates.filter(p => canAttachPath(p.path))
+    reportUnattachable(candidates.length - added.length, 'not-absolute')
+    if (added.length === 0) return
+    setPaths(prev => {
+      const known = new Set(prev.map(p => p.path))
+      return [...prev, ...added.filter(p => !known.has(p.path) && known.add(p.path))]
+    })
+    requestAnimationFrame(() => textareaRef.current?.focus())
+  }
+
+  const removePath = (path: string) => {
+    setPaths(prev => prev.filter(p => p.path !== path))
+  }
+
+  /**
+   * Splits dropped or pasted files: images become image attachments (the model
+   * sees them), everything else with a local path is attached by path. Images
+   * beyond the per-message limit fall back to their path rather than vanish.
+   */
+  const attachFiles = async (entries: Array<{ file: File; isDirectory: boolean }>) => {
+    const imageFiles: File[] = []
+    const byPath: AttachedPath[] = []
+    let withoutPath = 0
+    for (const { file, isDirectory } of entries) {
+      const path = canAttachLocalPaths ? api.getPathForFile(file) : ''
+      if (!isDirectory && isValidImageType(file) && images.length + imageFiles.length < MAX_IMAGES) {
+        imageFiles.push(file)
+      } else if (path) {
+        byPath.push({ path, isDirectory })
+      } else {
+        withoutPath += 1
+      }
+    }
+    reportUnattachable(withoutPath, 'no-local-path')
+    addPaths(byPath)
+    if (imageFiles.length > 0) await addImages(imageFiles)
+  }
+
   // Handle paste event
   const handlePaste = async (e: ClipboardEvent) => {
     const items = e.clipboardData?.items
     if (!items) return
 
-    const imageFiles: File[] = []
-
+    const files: Array<{ file: File; isDirectory: boolean }> = []
     for (const item of Array.from(items)) {
-      if (item.type.startsWith('image/')) {
-        const file = item.getAsFile()
-        if (file) {
-          imageFiles.push(file)
-        }
-      }
+      if (item.kind !== 'file') continue
+      const file = item.getAsFile()
+      // A copied file from the system file manager arrives with a path; a
+      // screenshot or copied image arrives with bytes only. attachFiles
+      // reports whatever it cannot take.
+      if (file) files.push({ file, isDirectory: false })
     }
 
-    if (imageFiles.length > 0) {
-      e.preventDefault()  // Prevent default only if we're handling images
-      await addImages(imageFiles)
+    if (files.length > 0) {
+      e.preventDefault()
+      await attachFiles(files)
     }
   }
 
@@ -502,10 +593,14 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
       return
     }
 
-    const files = Array.from(e.dataTransfer.files).filter(file => isValidImageType(file))
+    const items = Array.from(e.dataTransfer.items ?? []).filter(item => item.kind === 'file')
+    const files = Array.from(e.dataTransfer.files).map((file, index) => ({
+      file,
+      isDirectory: items[index]?.webkitGetAsEntry?.()?.isDirectory ?? false,
+    }))
 
     if (files.length > 0) {
-      await addImages(files)
+      await attachFiles(files)
     }
   }
 
@@ -521,16 +616,43 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
     }
   }
 
-  // Handle image button click (from attachment menu)
-  const handleImageButtonClick = () => {
-    if (isHomeComposer) trackHome('home.composer.attach', { action: 'image' })
-    setShowAttachMenu(false)
-    fileInputRef.current?.click()
+  // "+" → Files and folders. The desktop opens the native picker; a remote
+  // client can only upload images from its own device.
+  const handleAttachClick = async () => {
+    if (isHomeComposer) trackHome('home.composer.attach', { action: 'files' })
+    if (!canAttachLocalPaths) {
+      fileInputRef.current?.click()
+      return
+    }
+    const res = await api.pickLocalEntries()
+    if (!res.success) {
+      console.warn('[InputArea] File picker failed', { error: res.error })
+      showError(t('Could not open the file picker'))
+      return
+    }
+    const picked: PickedLocalEntry[] = res.data ?? []
+    const imageFiles: File[] = []
+    const byPath: AttachedPath[] = []
+    for (const entry of picked) {
+      if (entry.image && images.length + imageFiles.length < MAX_IMAGES) {
+        const name = entry.path.split(/[\\/]/).pop() || 'image'
+        imageFiles.push(base64ToFile(entry.image.data, name, entry.image.mediaType))
+      } else {
+        byPath.push({ path: entry.path, isDirectory: entry.isDirectory })
+      }
+    }
+    addPaths(byPath)
+    if (imageFiles.length > 0) await addImages(imageFiles)
+    textareaRef.current?.focus()
   }
 
-  const handleAttachMenuChange = (open: boolean) => {
-    if (open && isHomeComposer) trackHome('home.composer.attach', { action: 'open' })
-    setShowAttachMenu(open)
+  const handleAttachMenuToggle = () => {
+    if (showAttachMenu) {
+      closeAttachMenu('outside')
+      return
+    }
+    if (isHomeComposer) trackHome('home.composer.attach', { action: 'open' })
+    openAttachMenu()
   }
 
   const trackMentionOpen = (type?: MentionTelemetryType) => {
@@ -784,6 +906,8 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
       // Command names are never sent: non-skill commands include user-defined ones.
       trackHome('home.composer.slash', { action: 'select', kind: item.category })
     }
+    // A command is not a goal.
+    if (goalMode) goal?.exit()
     const newContent = item.command + ' '
     setContent(newContent)
     setSlashMenuOpen(false)
@@ -827,12 +951,13 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
   const handleSend = () => {
     const textToSend = isOnboardingSendStep ? onboardingPrompt : content.trim()
 
-    if (isGenerating) {
-      // Mid-turn inject: text only (no images, no thinking toggle)
-      if (textToSend && onInject) {
+    if (isGenerating && !goalMode) {
+      // Mid-turn inject: text and attached paths (no images, no thinking toggle)
+      if ((textToSend || paths.length > 0) && onInject) {
         trackSend(textToSend, [], true)
-        onInject(textToSend)
+        onInject(appendAttachedPaths(textToSend, paths))
         setContent('')
+        setPaths([])
         if (draftKey) useChatStore.getState().clearComposerDraft(draftKey)
         handleMentionClose()
         handleSlashClose()
@@ -841,11 +966,16 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
       return
     }
 
-    const hasContent = textToSend || images.length > 0
+    const hasContent = goalMode ? goal!.canSubmit(textToSend) : (textToSend || images.length > 0 || paths.length > 0)
     if (hasContent) {
-      const sentImages = images
+      // A goal set mid-turn goes to the running turn, not a new message, so attachments wait for the next one.
+      const keepImages = goalMode && isGenerating
+      const sentImages = keepImages ? [] : images
+      const sentPaths = keepImages ? [] : paths
       trackSend(textToSend, sentImages, false)
-      const result = onSend(textToSend, sentImages.length > 0 ? sentImages : undefined, thinkingEnabled)
+      const result = goalMode
+        ? goal!.submit(textToSend, sentImages.length > 0 ? sentImages : undefined, thinkingEnabled, sentPaths)
+        : onSend(appendAttachedPaths(textToSend, sentPaths), sentImages.length > 0 ? sentImages : undefined, thinkingEnabled)
       if (draftKey) inputDrafts.delete(draftKey)
       if (draftKey && result instanceof Promise) {
         const restoreDraft = () => {
@@ -854,6 +984,7 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
           const restored = {
             content: saved?.content || textToSend,
             images: saved?.images.length ? saved.images : sentImages,
+            paths: saved?.paths.length ? saved.paths : sentPaths,
           }
           inputDrafts.set(recoveryKey, restored)
           draftRecoverySubscribers.get(recoveryKey)?.forEach(listener => listener(restored))
@@ -869,7 +1000,10 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
       if (!isOnboardingSendStep) {
         setContent('')
         if (draftKey) useChatStore.getState().clearComposerDraft(draftKey)
-        setImages([])  // Clear images after send
+        if (!keepImages) {
+          setImages([])
+          setPaths([])
+        }
         handleMentionClose()
         handleSlashClose()
         // Don't reset thinkingEnabled - user might want to keep it on
@@ -955,6 +1089,15 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
     }
     // ─────────────────────────────────────────────────────────────────────────
 
+    // Leaving goal mode keeps the text as an ordinary draft. Esc here never
+    // stops a running turn; a second Esc, outside goal mode, does.
+    if (goalMode && (e.key === 'Escape' || (e.key === 'Backspace' && content === ''))) {
+      e.preventDefault()
+      e.stopPropagation()
+      goal?.exit()
+      return
+    }
+
     // Mobile: send via button only
     // PC: respect sendKeyMode setting
     if (!isMobile()) {
@@ -984,11 +1127,88 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
   // During generation (inject mode): only plain text is allowed, no images
   // Normal mode: text or images, not currently processing
   const canSend = isOnboardingSendStep ||
-    (isGenerating
-      ? (content.trim().length > 0 && !!onInject)
-      : ((content.trim().length > 0 || images.length > 0) && !isProcessingImages)
+    (goalMode
+      ? (goal!.canSubmit(content) && !isProcessingImages)
+      : isGenerating
+        ? ((content.trim().length > 0 || paths.length > 0) && !!onInject)
+        : ((content.trim().length > 0 || images.length > 0 || paths.length > 0) && !isProcessingImages)
     )
   const hasImages = images.length > 0
+  const cardRadius = standalone ? 'rounded-[22px]' : 'rounded-[18px]'
+
+  const closeAttachMenu = useCallback((reason: 'select' | 'escape' | 'outside') => {
+    setShowAttachMenu(false)
+    if (reason === 'escape') textareaRef.current?.focus()
+  }, [])
+
+  const digitalHumanBlockedReason = !digitalHumanSelector || digitalHumanSelector.options.length === 0
+    ? t('No digital humans in this space yet')
+    : digitalHumanSelector.locked
+      ? t('Switch recipient after the current reply finishes')
+      : null
+  const conversationBlockedReason = mentionConversations.length === 0 ? t('No other conversations in this space yet') : null
+  const attachedCount = images.length + paths.length
+
+  // Add → things this message carries; Context → where the work points;
+  // Capabilities → what the AI may use. Unavailable rows stay visible and say why.
+  const menuSections: ComposerMenuSection[] = [
+    {
+      id: 'add',
+      title: t('Add'),
+      items: [{
+        id: 'files',
+        icon: <Paperclip size={16} />,
+        label: canAttachLocalPaths ? t('Files and folders') : t('Images'),
+        description: canAttachLocalPaths
+          ? t('Attach from this computer; AI reads them where they are')
+          : t('Upload images from this device'),
+        meta: attachedCount > 0 ? String(attachedCount) : undefined,
+        disabledReason: isProcessingImages ? t('Processing image...') : null,
+        onSelect: () => void handleAttachClick(),
+      }],
+    },
+    {
+      id: 'context',
+      title: t('Context'),
+      items: [
+        ...(goal ? [{
+          id: 'goal',
+          icon: <Target size={16} />,
+          label: goal.menuItem.label,
+          description: goal.menuItem.description,
+          onSelect: goal.menuItem.onSelect,
+        }] : []),
+        {
+          id: 'conversation',
+          icon: <MessagesSquare size={16} />,
+          label: t('Reference a conversation'),
+          description: t('Let AI read another conversation, or message it directly'),
+          disabledReason: conversationBlockedReason,
+          onSelect: () => handleOpenMentionMenu('conversation'),
+        },
+        {
+          id: 'digital-human',
+          icon: <Bot size={16} />,
+          label: t('Chat with a digital human'),
+          description: t('Hand this message to one of your digital humans'),
+          disabledReason: digitalHumanBlockedReason,
+          onSelect: () => handleOpenMentionMenu('digital_human'),
+        },
+      ],
+    },
+    ...(toolsets.list.length > 0 ? [{
+      id: 'capabilities',
+      title: t('Capabilities'),
+      items: sortToolsets(toolsets.list).map(ts => ({
+        id: `toolset:${ts.id}`,
+        icon: toolsetIcon(ts.id),
+        label: toolsetLabel(t, ts),
+        description: toolsetDescription(t, ts),
+        toggle: { checked: ts.open, onChange: () => toolsets.toggle(ts) },
+        attention: toolsets.requested.has(ts.id) && !ts.open,
+      })),
+    }] : []),
+  ]
 
   return (
     <div className={`
@@ -1020,14 +1240,18 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
             Sibling above the input card; the input box itself is untouched. */}
         <LiveSessionsHeader />
 
+        {/* Inset past the card's corner radius so the shelf sits on its straight top edge. */}
+        {goal && <div className={standalone ? 'mx-6' : 'mx-5'}>{goal.shelf}</div>}
+
         {/* Input container — radius kept at the prototype's literal values
             (its own core visual feature, not on the 8/10/12/16 scale):
             22px centered/standalone, 18px once docked at the bottom. */}
         <div
+          ref={cardRef}
           className={`
             relative flex flex-col border bg-card shadow-soft
             transition-colors ease-halo
-            ${standalone ? 'rounded-[22px]' : 'rounded-[18px]'}
+            ${cardRadius}
             ${isFocused ? 'border-primary ring-[3px] ring-primary/[0.12]' : 'border-border'}
             ${isDragOver ? 'ring-2 ring-primary/50 bg-primary/5' : ''}
           `}
@@ -1037,8 +1261,18 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
         >
           {/* Slash-command autocomplete menu — floats above the input box.
               Only rendered when there are actual matches; no empty-state UI. */}
+          {showAttachMenu && !isGenerating && !isOnboardingSendStep && (
+            <ComposerMenu
+              sections={menuSections}
+              anchorRef={cardRef}
+              triggerRef={plusTriggerRef}
+              onClose={closeAttachMenu}
+              radiusClassName={cardRadius}
+            />
+          )}
           {slashMenuOpen && filteredSlashCommands.length > 0 && (
             <SlashCommandMenu
+              radiusClassName={cardRadius}
               items={filteredSlashCommands}
               selectedIndex={slashSelectedIndex}
               onSelect={handleSlashSelect}
@@ -1048,8 +1282,8 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
           {/* @ mention autocomplete menu — one menu, one keyboard model, one
               row shell; only the row content differs per candidate kind. */}
           {mentionMenuOpen && mentionCandidates.length > 0 && (
-            <div className="absolute bottom-full left-0 mb-2 w-full max-w-md bg-popover border border-border rounded-xl shadow-lg z-30 overflow-hidden">
-              <div className="max-h-[336px] overflow-y-auto py-1">
+            <div className={`absolute bottom-full -inset-x-px mb-2 bg-popover border border-border/70 ${cardRadius} shadow-soft z-30 overflow-hidden animate-composer-rise`}>
+              <div className="max-h-[336px] overflow-y-auto py-1 scrollbar-thin">
                 {mentionGroups.map(group => (
                   <div key={group.kind}>
                     {/* "More exists" rides on the heading rather than a line
@@ -1113,7 +1347,7 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
           {/* Stays open with zero matches: a silently empty "@" is
               indistinguishable from the keystroke not registering. */}
           {mentionMenuOpen && mentionCandidates.length === 0 && (
-            <div className="absolute bottom-full left-0 mb-2 w-56 bg-popover border border-border rounded-xl shadow-lg z-30 overflow-hidden">
+            <div className={`absolute bottom-full -inset-x-px mb-2 bg-popover border border-border/70 ${cardRadius} shadow-soft z-30 overflow-hidden animate-composer-rise`}>
               <div className="px-3 py-4 text-xs text-muted-foreground text-center">
                 {t('No matching results found')}
               </div>
@@ -1134,6 +1368,10 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
             </>
           )}
 
+          {paths.length > 0 && (
+            <AttachedPathChips paths={paths} onRemove={removePath} className="px-3 pt-3" />
+          )}
+
           {/* Image processing indicator */}
           {isProcessingImages && (
             <div className="px-4 py-2 flex items-center gap-2 text-xs text-muted-foreground border-b border-border/30">
@@ -1148,11 +1386,15 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
               bg-primary/5 rounded-2xl border-2 border-dashed border-primary/30
               pointer-events-none z-10">
               <div className="flex flex-col items-center gap-2 text-primary/70">
-                <ImagePlus size={24} />
-                <span className="text-sm font-medium">{t('Drop to add images')}</span>
+                {canAttachLocalPaths ? <Paperclip size={22} /> : <ImagePlus size={24} />}
+                <span className="text-sm font-medium">
+                  {canAttachLocalPaths ? t('Drop files or folders to attach') : t('Drop to add images')}
+                </span>
               </div>
             </div>
           )}
+
+          {goalMode && goal.chip}
 
           {/* Textarea area */}
           <div className="px-4 pt-3.5">
@@ -1221,7 +1463,7 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
               // redundancy the docked (post-first-message) state inherits
               // the same placeholder for, since it's the same InputArea
               // instance either way.
-              placeholder={placeholder || t('@ for digital humans, files and conversations, / for skills and commands')}
+              placeholder={goalMode ? goal.placeholder : placeholder || t('@ for digital humans, files and conversations, / for skills and commands')}
               readOnly={isOnboardingSendStep}
               rows={1}
               className={`w-full bg-transparent resize-none text-[15px] leading-[1.5]
@@ -1236,32 +1478,20 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
           <InputToolbar
             isGenerating={isGenerating}
             isOnboarding={isOnboardingSendStep}
-            isProcessingImages={isProcessingImages}
             thinkingEnabled={thinkingEnabled}
             onThinkingToggle={() => setThinkingEnabled(!thinkingEnabled)}
             showAttachMenu={showAttachMenu}
-            onAttachMenuChange={handleAttachMenuChange}
-            onImageClick={handleImageButtonClick}
-            imageCount={images.length}
-            maxImages={MAX_IMAGES}
-            onOpenMentionMenu={handleOpenMentionMenu}
-            digitalHumanBlockedReason={
-              !digitalHumanSelector || digitalHumanSelector.options.length === 0
-                ? t('No digital humans in this space yet')
-                : digitalHumanSelector.locked
-                  ? t('Switch recipient after the current reply finishes')
-                  : null
-            }
-            conversationBlockedReason={mentionConversations.length === 0 ? t('No other conversations in this space yet') : null}
+            onAttachMenuToggle={handleAttachMenuToggle}
+            plusTriggerRef={plusTriggerRef}
+            extraToolsets={toolsets.extraEnabled}
             canSend={canSend}
             onSend={handleSend}
             onStop={onStop}
             sendKeyMode={sendKeyMode}
-            visionEnabled={visionEnabled}
             toolbarSlot={toolbarSlot}
-            hideToolsetControls={hideToolsetControls}
             hideKnowledgeControls={hideKnowledgeControls}
             digitalHumanSelector={digitalHumanSelector}
+            sendTitle={goalMode ? goal.sendTitle : undefined}
           />
         </div>
       </div>
@@ -1271,61 +1501,47 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
 
 /**
  * Input Toolbar - Bottom action bar
- * Extracted as a separate component for maintainability and future extensibility
  *
- * Layout: [+attachment] [knowledge] [tools] [thinking] ──── [send]
+ * Layout: [recipient] [+] [extra capabilities] [thinking] [knowledge] ──── [send]
  */
 interface InputToolbarProps {
   toolbarSlot?: React.ReactNode
   isGenerating: boolean
   isOnboarding: boolean
-  isProcessingImages: boolean
   thinkingEnabled: boolean
   onThinkingToggle: () => void
   showAttachMenu: boolean
-  onAttachMenuChange: (open: boolean) => void
-  onImageClick: () => void
-  imageCount: number
-  maxImages: number
-  /** Inserts "@" and opens the mention menu — same code path as typing "@" by hand. Backs both menu entries that lead there. */
-  onOpenMentionMenu: (via: 'digital_human' | 'conversation') => void
-  /** Why "Chat with a digital human" cannot be used now, or null. Disables — never hides — the entry, so it stays discoverable. */
-  digitalHumanBlockedReason: string | null
-  /** Why "Reference a conversation" cannot be used now, or null. Same disable-never-hide rule. */
-  conversationBlockedReason: string | null
+  onAttachMenuToggle: () => void
+  plusTriggerRef: React.RefObject<HTMLButtonElement>
+  /** Capabilities on beyond the defaults — the only toolset state shown at rest. */
+  extraToolsets: ToolsetStatus[]
   canSend: boolean
   onSend: () => void
   onStop?: () => void
   sendKeyMode: 'enter' | 'ctrl-enter'
-  visionEnabled: boolean
-  hideToolsetControls: boolean
   hideKnowledgeControls: boolean
   digitalHumanSelector?: DigitalHumanSelectorConfig
+  /** Overrides the Send tooltip, e.g. while Send sets a goal. */
+  sendTitle?: string
 }
 
 function InputToolbar({
   toolbarSlot,
   isGenerating,
   isOnboarding,
-  isProcessingImages,
   thinkingEnabled,
   onThinkingToggle,
   showAttachMenu,
-  onAttachMenuChange,
-  onImageClick,
-  imageCount,
-  maxImages,
-  onOpenMentionMenu,
-  digitalHumanBlockedReason,
-  conversationBlockedReason,
+  onAttachMenuToggle,
+  plusTriggerRef,
+  extraToolsets,
   canSend,
   onSend,
   onStop,
   sendKeyMode,
-  visionEnabled,
-  hideToolsetControls,
   hideKnowledgeControls,
-  digitalHumanSelector
+  digitalHumanSelector,
+  sendTitle
 }: InputToolbarProps) {
   const { t } = useTranslation()
   return (
@@ -1341,116 +1557,40 @@ function InputToolbar({
           <DigitalHumanSelector {...digitalHumanSelector} />
         )}
 
-        {/* A single available action shows directly as its own icon button
-            instead of hiding behind a "+" popover; the popover form only
-            earns its keep once a second action exists. */}
         {!isGenerating && !isOnboarding && (
-          ATTACH_ACTION_COUNT === 1 ? (
-            <button
-              type="button"
-              onClick={onImageClick}
-              disabled={isProcessingImages || imageCount >= maxImages}
-              title={!visionEnabled ? t('Current model has no vision — images will be read via local OCR (text only)') : t('Add image')}
-              className={`w-8 h-8 shrink-0 flex items-center justify-center rounded-sm cursor-pointer
-                transition-colors ease-halo
-                ${imageCount > 0
-                  ? 'bg-primary/[0.12] text-accent-on-dark'
-                  : 'text-faint-foreground hover:text-foreground hover:bg-secondary'
-                }
-                ${(isProcessingImages || imageCount >= maxImages) ? 'opacity-50 cursor-not-allowed' : ''}
-              `}
-            >
-              <ImagePlus size={17} />
-            </button>
-          ) : (
-            <Popover
-              open={showAttachMenu}
-              onOpenChange={(open) => {
-                if (open && isProcessingImages) return
-                onAttachMenuChange(open)
-              }}
-            >
-              <PopoverTrigger
-                title={t('More actions')}
-                className={`w-8 h-8 shrink-0 items-center justify-center rounded-sm cursor-pointer
-                  transition-all duration-150
-                  ${showAttachMenu
-                    ? 'bg-primary/[0.12] text-accent-on-dark'
-                    : 'text-faint-foreground hover:text-foreground hover:bg-secondary'
-                  }
-                  ${isProcessingImages ? 'opacity-50 cursor-not-allowed' : ''}
-                `}
-              >
-                <Plus size={17} className={`transition-transform duration-200 ${showAttachMenu ? 'rotate-45' : ''}`} />
-              </PopoverTrigger>
-
-              <PopoverContent side="top" align="start" sideOffset={8} className="py-1.5 rounded-xl min-w-[160px]">
-                <button
-                  onClick={onImageClick}
-                  disabled={imageCount >= maxImages}
-                  className={`w-full px-3 py-2 flex items-center gap-3 text-sm
-                    transition-colors duration-150
-                    ${imageCount >= maxImages
-                      ? 'text-muted-foreground/40 cursor-not-allowed'
-                      : 'text-foreground hover:bg-muted/50'
-                    }
-                  `}
-                  title={!visionEnabled ? t('Current model has no vision — images will be read via local OCR (text only)') : undefined}
-                >
-                  <ImagePlus size={16} className="text-muted-foreground" />
-                  <span>{t('Add image')}</span>
-                  {!visionEnabled && imageCount === 0 && (
-                    <span className="ml-auto text-xs text-muted-foreground/60">
-                      {t('via OCR')}
-                    </span>
-                  )}
-                  {imageCount > 0 && (
-                    <span className="ml-auto text-xs text-muted-foreground">
-                      {imageCount}/{maxImages}
-                    </span>
-                  )}
-                </button>
-                {/* Both entries below open the same "@" menu; only the label
-                    and the availability check differ, so a user who thinks in
-                    "talk to someone" and one who thinks in "point at a past
-                    conversation" each find their own way in. */}
-                <button
-                  onClick={() => onOpenMentionMenu('digital_human')}
-                  disabled={!!digitalHumanBlockedReason}
-                  className={`w-full px-3 py-2 flex items-center gap-3 text-sm
-                    transition-colors duration-150
-                    ${digitalHumanBlockedReason
-                      ? 'text-muted-foreground/40 cursor-not-allowed'
-                      : 'text-foreground hover:bg-muted/50'
-                    }
-                  `}
-                  title={digitalHumanBlockedReason ?? undefined}
-                >
-                  <Bot size={16} className="text-muted-foreground" />
-                  <span>{t('Chat with a digital human')}</span>
-                </button>
-                <button
-                  onClick={() => onOpenMentionMenu('conversation')}
-                  disabled={!!conversationBlockedReason}
-                  className={`w-full px-3 py-2 flex items-center gap-3 text-sm
-                    transition-colors duration-150
-                    ${conversationBlockedReason
-                      ? 'text-muted-foreground/40 cursor-not-allowed'
-                      : 'text-foreground hover:bg-muted/50'
-                    }
-                  `}
-                  title={conversationBlockedReason ?? undefined}
-                >
-                  <MessageSquare size={16} className="text-muted-foreground" />
-                  <span>{t('Reference a conversation')}</span>
-                </button>
-              </PopoverContent>
-            </Popover>
-          )
+          <button
+            ref={plusTriggerRef}
+            type="button"
+            onClick={onAttachMenuToggle}
+            aria-label={t('Add files, context and capabilities')}
+            aria-haspopup="menu"
+            aria-expanded={showAttachMenu}
+            title={t('Add files, context and capabilities')}
+            className={`w-8 h-8 shrink-0 flex items-center justify-center rounded-full transition-colors duration-150
+              ${showAttachMenu
+                ? 'bg-secondary text-foreground'
+                : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
+              }`}
+          >
+            <Plus size={18} className={`transition-transform duration-200 ease-halo ${showAttachMenu ? 'rotate-45' : ''}`} />
+          </button>
         )}
 
-        {/* On-demand toolsets (catalog menu + activation pills) */}
-        {!isGenerating && !isOnboarding && !hideToolsetControls && <ToolsetControls />}
+        {/* Quiet reminder of capabilities turned on beyond the defaults; opens the panel. */}
+        {!isGenerating && !isOnboarding && extraToolsets.length > 0 && (
+          <button
+            type="button"
+            onClick={onAttachMenuToggle}
+            title={extraToolsets.map(ts => toolsetLabel(t, ts)).join(', ')}
+            aria-label={t('Capabilities on: {{names}}', { names: extraToolsets.map(ts => toolsetLabel(t, ts)).join(', ') })}
+            className="h-8 shrink-0 flex items-center gap-1.5 px-2 rounded-full text-muted-foreground
+              hover:text-foreground hover:bg-secondary transition-colors duration-150"
+          >
+            {extraToolsets.map(ts => (
+              <span key={ts.id} className="inline-flex">{toolsetIcon(ts.id, 15)}</span>
+            ))}
+          </button>
+        )}
 
         {/* Thinking mode toggle - always show full label, no expansion */}
         {!isGenerating && !isOnboarding && (
@@ -1503,7 +1643,8 @@ function InputToolbar({
               }
             `}
             title={
-              isGenerating
+              sendTitle ? sendTitle
+              : isGenerating
                 ? t('Add to queue')
                 : sendKeyMode === 'ctrl-enter'
                   ? (thinkingEnabled ? t('Send (Deep Thinking) — Ctrl+Enter') : t('Send — Ctrl+Enter'))

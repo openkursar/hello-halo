@@ -47,6 +47,7 @@ import type { McpAppChange } from '../../services/app-bridge'
 import { syncSkillToFilesystem, removeSkillFromFilesystem } from './skill-sync'
 import { withSkillMdName } from '../../../shared/skill-frontmatter'
 import { isBuiltinApp } from './types'
+import { sanitizeMemorySettings } from '../../../shared/types/memory'
 
 // ============================================
 // MCP Apps Change Event
@@ -787,7 +788,11 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         if (value == null) {
           delete merged[key]
         } else {
-          merged[key] = value
+          // Memory settings merge field by field, so a change to one never
+          // resets another that a concurrent change just saved.
+          merged[key] = key === 'memory'
+            ? { ...(merged.memory as object | undefined), ...sanitizeMemorySettings(value) }
+            : value
         }
       }
       store.updateOverrides(appId, merged as InstalledApp['userOverrides'])

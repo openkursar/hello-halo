@@ -455,6 +455,8 @@ export function onEvent<T = unknown>(channel: string, callback: (data: T) => voi
       'agent:ask-question': 'onAgentAskQuestion',
       'agent:session-info': 'onAgentSessionInfo',
       'agent:turn-start': 'onAgentTurnStart',
+      'agent:goal-updated': 'onAgentGoalUpdated',
+      'agent:api-retry': 'onAgentApiRetry',
       'toolsets:changed': 'onToolsetsChanged',
       'toolsets:requested': 'onToolsetsRequested',
       'terminal:data': 'onTerminalData',

@@ -78,6 +78,13 @@ export interface InstalledApp {
     modelSourceId?: string
     /** Override model within the selected AI source. Used together with modelSourceId. */
     modelId?: string
+    /**
+     * Offer this digital human its space's memory topics, read-only, in every
+     * turn. Off by default.
+     */
+    spaceMemoryAccess?: boolean
+    /** This digital human's memory: on/off, auto-consolidation, cadence. */
+    memory?: import('../../../shared/types/memory').MemorySettings
   }
 
   /** Permission grants and denials */

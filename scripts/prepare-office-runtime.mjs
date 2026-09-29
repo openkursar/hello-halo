@@ -20,7 +20,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
-import { execSync } from 'node:child_process'
+import { execFileSync, execSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -199,7 +199,8 @@ function smokeTest(outModules) {
   const pkg = JSON.parse(fs.readFileSync(path.join(STAGING_DIR, 'package.json'), 'utf8'))
   const names = Object.keys(pkg.dependencies ?? {})
   const script = names.map((n) => `require(${JSON.stringify(n)});`).join('') + 'console.log("ok");'
-  const out = execSync(`node -e '${script}'`, {
+  // No shell: cmd.exe does not treat single quotes as quoting.
+  const out = execFileSync(process.execPath, ['-e', script], {
     env: { ...process.env, NODE_PATH: outModules },
     encoding: 'utf8',
   }).trim()

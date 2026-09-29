@@ -8,7 +8,8 @@
  * - Mobile-friendly: tap to see details on touch devices
  */
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { TokenUsage } from '../../types'
 import { useTranslation } from '../../i18n'
 
@@ -31,9 +32,41 @@ function formatCost(cost: number): string {
   return `$${cost.toFixed(2)}`
 }
 
+/** Fixed-position offsets that put the tooltip above `anchor`, right-aligned. */
+function placeAbove(anchor: HTMLElement | null): { bottom: number; right: number } | null {
+  if (!anchor?.isConnected) return null
+  const rect = anchor.getBoundingClientRect()
+  return { bottom: window.innerHeight - rect.top + 8, right: window.innerWidth - rect.right }
+}
+
 export function TokenUsageIndicator({ tokenUsage, previousCost = 0, className = '' }: TokenUsageIndicatorProps) {
   const { t } = useTranslation()
-  const [showTooltip, setShowTooltip] = useState(false)
+  const anchorRef = useRef<HTMLDivElement>(null)
+  // Viewport position of the tooltip; null while hidden. Portaled and fixed
+  // because transcript rows clip their own paint.
+  const [tooltipAt, setTooltipAt] = useState<{ bottom: number; right: number } | null>(null)
+  const showTooltip = tooltipAt !== null
+  const setShowTooltip = (show: boolean) => setTooltipAt(show ? placeAbove(anchorRef.current) : null)
+
+  // A fixed tooltip does not travel with its anchor: follow it while the
+  // transcript scrolls (it keeps scrolling while a reply streams in).
+  useEffect(() => {
+    if (!showTooltip) return
+    let frame = 0
+    const follow = () => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => {
+        setTooltipAt(placeAbove(anchorRef.current))
+      })
+    }
+    window.addEventListener('scroll', follow, true)
+    window.addEventListener('resize', follow)
+    return () => {
+      cancelAnimationFrame(frame)
+      window.removeEventListener('scroll', follow, true)
+      window.removeEventListener('resize', follow)
+    }
+  }, [showTooltip])
 
   // Current context size, matching CC's /context formula:
   //   input_tokens + cache_read_input_tokens + cache_creation_input_tokens
@@ -50,6 +83,7 @@ export function TokenUsageIndicator({ tokenUsage, previousCost = 0, className = 
 
   return (
     <div
+      ref={anchorRef}
       className={`relative inline-flex items-center ${className}`}
       onMouseEnter={() => setShowTooltip(true)}
       onMouseLeave={() => setShowTooltip(false)}
@@ -61,8 +95,11 @@ export function TokenUsageIndicator({ tokenUsage, previousCost = 0, className = 
       </span>
 
       {/* Tooltip - shows on hover/tap */}
-      {showTooltip && (
-        <div className="absolute bottom-full right-0 mb-2 z-50 animate-fade-in">
+      {tooltipAt && createPortal(
+        <div
+          className="fixed z-50 pointer-events-none animate-fade-in"
+          style={{ bottom: tooltipAt.bottom, right: tooltipAt.right }}
+        >
           <div className="bg-popover border border-border rounded-lg shadow-lg p-3 min-w-[180px]">
             {/* Header */}
             <div className="text-xs font-medium text-foreground mb-2">
@@ -127,7 +164,8 @@ export function TokenUsageIndicator({ tokenUsage, previousCost = 0, className = 
               </div>
             )}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   )

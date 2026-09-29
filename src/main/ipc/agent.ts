@@ -18,9 +18,12 @@ import {
   listToolsets,
   openToolsetByUser,
   closeToolsetByUser,
+  getConversationGoal,
+  setConversationGoal,
   onAgentEvent,
   onAgentBroadcast
 } from '../services/agent'
+import type { GoalInput } from '../../shared/types/goal'
 import { getEngineCapabilities, getActiveEngine, getDegradedFromEngine } from '../services/agent/resolved-sdk'
 import { getEngineAvailability } from '../services/agent/engine-availability'
 import { defaultCapabilitiesFor } from '../services/agent/capabilities'
@@ -98,6 +101,7 @@ export function registerAgentHandlers(): void {
           size?: number
         }>
         thinkingEnabled?: boolean  // Enable extended thinking mode
+        goal?: GoalInput  // Set as the conversation goal before this message runs
       }
     ) => {
       try {
@@ -268,7 +272,7 @@ export function registerAgentHandlers(): void {
       }
     },
 
-    // User enables a toolset from the "Tools" menu (schedules a session rebuild)
+    // User enables a toolset from the composer's "+" menu (schedules a session rebuild)
     openToolset: async (data: { spaceId: string; conversationId: string; toolsetId: string }) => {
       try {
         const result = await openToolsetByUser(data.spaceId, data.conversationId, data.toolsetId)
@@ -286,6 +290,28 @@ export function registerAgentHandlers(): void {
         return result.ok ? { success: true } : { success: false, error: result.error }
       } catch (error: unknown) {
         const err = error as Error
+        return { success: false, error: err.message }
+      }
+    },
+
+    // Conversation goal; data is the goal or null
+    getGoal: async (data: { spaceId: string; conversationId: string }) => {
+      try {
+        return { success: true, data: await getConversationGoal(data.spaceId, data.conversationId) }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[IPC] agent:goal-get error:', err)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // Set (or clear with goal: null) the goal on the user's behalf; starts no turn
+    setGoal: async (data: { spaceId: string; conversationId: string; goal: GoalInput | null }) => {
+      try {
+        return { success: true, data: await setConversationGoal(data.spaceId, data.conversationId, data.goal) }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[IPC] agent:goal-set error:', err)
         return { success: false, error: err.message }
       }
     },

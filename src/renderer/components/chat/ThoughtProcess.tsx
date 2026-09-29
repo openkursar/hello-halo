@@ -43,6 +43,7 @@ void function _i18nActionKeys(t: (k: string) => string) {
   t('Editing {{file}}...'); t('Searching {{pattern}}...'); t('Matching {{pattern}}...');
   t('Executing {{command}}...'); t('Fetching {{url}}...'); t('Searching {{query}}...');
   t('Updating tasks...'); t('Executing {{task}}...'); t('Waiting for user response...');
+  t('Setting goal...'); t('Updating goal...'); t('Completing goal...'); t('Abandoning goal...');
   t('Processing...'); t('Thinking...');
 }
 
@@ -76,6 +77,7 @@ function getActionSummaryData(thoughts: Thought[]): { key: string; params?: Reco
           return { key: 'Executing {{task}}...', params: { task: extractSearchTerm(input?.description) } }
         case 'NotebookEdit': return { key: 'Editing {{file}}...', params: { file: extractFileName(input?.notebook_path) } }
         case 'AskUserQuestion': return { key: 'Waiting for user response...' }
+        case 'Goal': return { key: goalActionKey(input?.action) }
         default: return { key: 'Processing...' }
       }
     }
@@ -85,6 +87,15 @@ function getActionSummaryData(thoughts: Thought[]): { key: string; params?: Reco
     }
   }
   return { key: 'Thinking...' }
+}
+
+function goalActionKey(action: unknown): string {
+  switch (action) {
+    case 'update': return 'Updating goal...'
+    case 'complete': return 'Completing goal...'
+    case 'abandon': return 'Abandoning goal...'
+    default: return 'Setting goal...'
+  }
 }
 
 // Extract filename from path (e.g., "/foo/bar/config.json" -> "config.json")

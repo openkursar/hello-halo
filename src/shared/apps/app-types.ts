@@ -83,6 +83,13 @@ export interface InstalledApp {
     modelId?: string
     /** When true, the login notice bar is permanently dismissed for this app */
     loginNoticeDismissed?: boolean
+    /**
+     * Offer this digital human its space's memory topics, read-only, in every
+     * turn. Off by default.
+     */
+    spaceMemoryAccess?: boolean
+    /** This digital human's memory: on/off, auto-consolidation, cadence. */
+    memory?: import('../types/memory').MemorySettings
   }
 
   /** Permission grants and denials */

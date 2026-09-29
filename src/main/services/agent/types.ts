@@ -6,6 +6,8 @@
  */
 
 import type { ReasoningEffortSetting } from '../../../shared/constants/reasoning-effort'
+import type { Goal, GoalInput } from '../../../shared/types/goal'
+import type { ApiRetryState } from '../../../shared/types/api-retry'
 
 // ============================================
 // API Credentials
@@ -25,8 +27,6 @@ export interface ResolvedModelCapabilities {
   maxOutputTokens: number
   contextWindow: number
   reasoningEffort?: ReasoningEffortSetting
-  /** User opted this model into a window above CC's 200K intrinsic. */
-  extendedContext?: boolean
   /**
    * False when `maxOutputTokens` is only Halo's blanket fallback — no preset,
    * no catalog entry, no user value. Required rather than optional so every
@@ -34,6 +34,8 @@ export interface ResolvedModelCapabilities {
    * guess on the wire for exactly the models Halo knows nothing about.
    */
   maxOutputTokensConfigured: boolean
+  /** The model thinks adaptively instead of against a token budget. */
+  adaptiveThinking?: boolean
 }
 
 /**
@@ -149,6 +151,7 @@ export interface AgentRequest {
   canvasContext?: CanvasContext  // Current canvas state for AI awareness
   knowledgeBaseId?: string         // When set, run as a "chat with this knowledge base" turn:
                               // working dir = the KB's wiki dir, that KB injected into the prompt
+  goal?: GoalInput            // Set as the conversation goal before this message runs (engines with features.goal)
 }
 
 // ============================================
@@ -229,6 +232,14 @@ export interface SessionState {
   spaceId: string
   conversationId: string
   thoughts: Thought[]  // Backend accumulates thoughts (Single Source of Truth)
+  /** The model request the engine is waiting to resend, if any (see api-retry.ts). */
+  apiRetry?: PendingApiRetry | null
+}
+
+/** A retry the engine announced; `retryAt` is on this process's clock. */
+export interface PendingApiRetry {
+  state: ApiRetryState
+  retryAt: number
 }
 
 // ============================================
@@ -251,6 +262,10 @@ export type V2SDKSession = {
   // Optional because alternate engines may not expose them — callers must guard.
   setMaxThinkingTokens?: (maxThinkingTokens: number | null) => Promise<void>
   setPermissionMode?: (mode: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan') => Promise<void>
+  // Session goal — present on engines advertising `features.goal`.
+  getGoal?: () => Goal | null
+  /** Throws TypeError on a blank objective. */
+  setGoal?: (goal: GoalInput | null) => Goal | null
 }
 
 /**

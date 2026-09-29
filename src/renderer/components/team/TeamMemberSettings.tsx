@@ -403,14 +403,7 @@ function DelegatedCapabilities({ teamId, member }: { teamId: string; member: Tea
           <CapabilityPolicyFields
             policy={policy}
             mode="permissive"
-            groupLabels={{
-              file: t('File Read'),
-              network: t('Network'),
-              other: t('Other'),
-              // Reworded for this scenario: these are the ones that touch the
-              // owner's machine, which is the whole reason the screen exists.
-              advanced: t('Touches your computer'),
-            }}
+            audience="teammate"
             onChange={next => save({ ...policy, ...next })}
             extraToggles={[
               {

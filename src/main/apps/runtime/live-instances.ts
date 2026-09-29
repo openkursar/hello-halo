@@ -31,6 +31,7 @@ import { getConversationsWithActiveRound } from './app-chat-sink'
 import { getRunningConsumerIds } from '../../services/agent/session-manager'
 import { listActiveRuns } from './active-runs'
 import { getImSessionRegistry } from './im-session-registry'
+import { getImPermissionContext } from './im-permission-registry'
 import { getActiveTeamRuntime } from './team'
 import { getAppChatConversationId, parseAppChatKey, parseTeamSessionKey } from '../../../shared/apps/im-keys'
 import { classifySessionSource, getImSessionDisplayName } from '../../../shared/types/im-channel'
@@ -228,6 +229,9 @@ function describeConversation(
 
   const parsed = parseAppChatKey(conversationId)
   if (parsed && classifySessionSource(parsed.channel) === 'im') {
+    // Whoever sent the message in flight: a guest's entries are signed as a
+    // guest's, and the other instances see the session under the same name.
+    if (getImPermissionContext(conversationId)?.isOwner === false) return { kind: 'im', origin: 'im-guest' }
     const session = getImSessionRegistry()?.findSession(appId, parsed.channel, parsed.chatId)
     return { kind: 'im', origin: session ? getImSessionDisplayName(session) : parsed.chatId }
   }

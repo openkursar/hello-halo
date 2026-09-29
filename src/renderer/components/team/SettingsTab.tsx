@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   GitBranch, RefreshCw, Bot, UserCircle,
-  Trash2, Plus, Info, Crown, Star, LogOut, ChevronRight, Settings2, Users, Network,
+  Trash2, Plus, Info, Crown, Star, LogOut, Users, Network,
 } from 'lucide-react'
 import type { TeamDetail, TeamTrigger, TeamScheduleConfig, TeamTriggerInput } from '../../../shared/apps/team-types'
 import { leadAppIdSet } from '../../../shared/apps/team-types'
@@ -16,6 +16,7 @@ import { SchedulePicker } from '../apps/SchedulePicker'
 import { SystemPromptEditor } from '../apps/SystemPromptEditor'
 import type { ScheduleValue } from '../apps/schedule-utils'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
+import { Disclosure } from '../ui/Disclosure'
 import { Switch } from '../ui/Switch'
 import { HttpTriggerCard } from '../common/HttpTriggerCard'
 import { AppInstallDialog } from '../apps/AppInstallDialog'
@@ -75,18 +76,20 @@ export function SettingsTab({ detail, openMemberId, onOpenMemberChange }: Settin
 
         {/* Advanced, folded away (§6.6): collaboration structure, escalation
             routing, HTTP trigger, and disband — rarely touched, out of the way. */}
-        <AdvancedSection>
-          <OfficeSkinSection teamId={detail.team.id} />
-          <CollaborationSection team={detail.team} readOnly={readOnly} />
-          {!readOnly && (
-            <div className="border-t border-border pt-6">
-              <HttpTriggerCard kind="team" id={detail.team.id} />
-            </div>
-          )}
-          {readOnly
-            ? <LeaveSection teamId={detail.team.id} teamName={detail.team.name} />
-            : <DangerSection detail={detail} />}
-        </AdvancedSection>
+        <div className="border-t border-border pt-6">
+          <Disclosure title={t('Advanced')}>
+            <OfficeSkinSection teamId={detail.team.id} />
+            <CollaborationSection team={detail.team} readOnly={readOnly} />
+            {!readOnly && (
+              <div className="border-t border-border pt-6">
+                <HttpTriggerCard kind="team" id={detail.team.id} />
+              </div>
+            )}
+            {readOnly
+              ? <LeaveSection teamId={detail.team.id} teamName={detail.team.name} />
+              : <DangerSection detail={detail} />}
+          </Disclosure>
+        </div>
       </div>
     </div>
   )
@@ -694,26 +697,6 @@ function LeaveSection({ teamId, teamName }: { teamId: string; teamName: string }
         />
       )}
     </>
-  )
-}
-
-// ── Advanced (folded) ──
-
-function AdvancedSection({ children }: { children: React.ReactNode }) {
-  const { t } = useTranslation()
-  const [open, setOpen] = useState(false)
-  return (
-    <div className="border-t border-border pt-6">
-      <button
-        onClick={() => setOpen(v => !v)}
-        className="flex w-full items-center gap-2 text-left"
-      >
-        <Settings2 className="h-4 w-4 text-muted-foreground" />
-        <span className="flex-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('Advanced')}</span>
-        <ChevronRight className={`h-4 w-4 text-muted-foreground transition-transform ${open ? 'rotate-90' : ''}`} />
-      </button>
-      {open && <div className="mt-4 space-y-6">{children}</div>}
-    </div>
   )
 }
 

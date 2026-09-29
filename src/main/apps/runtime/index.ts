@@ -160,6 +160,9 @@ export {
 export { getImSessionRegistry } from './im-session-registry'
 export { ImSessionRegistry } from './im-session-registry'
 
+// Digital-human memory as its owner sees it from settings (called by IPC/HTTP)
+export { getDigitalHumanMemoryStatus, consolidateDigitalHumanMemoryNow } from './memory-control'
+
 // Re-export IM session invalidation (called by IPC reload handler)
 export { invalidateImSessions } from '../../services/agent/session-manager'
 

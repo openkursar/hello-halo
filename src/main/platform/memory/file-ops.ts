@@ -1,49 +1,100 @@
 /**
  * platform/memory -- File Operations
  *
- * Low-level filesystem operations for memory files.
- * All functions are async and operate on absolute paths.
- * Path resolution and permission checks happen in the calling layer.
+ * Low-level filesystem operations for memory files, and the one lock every
+ * writer of a memory takes — this module's own writers and, through the write
+ * guard, the agent's file tools.
  */
 
-import { readFile, writeFile, appendFile, mkdir, readdir, rename, stat, link, copyFile } from 'fs/promises'
-import { existsSync } from 'fs'
+import { readFile, writeFile, mkdir, readdir, rename, stat, link, copyFile } from 'fs/promises'
+import { existsSync, readFileSync, readdirSync, statSync } from 'fs'
 import { join, dirname } from 'path'
+import type { MemoryLayout } from './paths'
+import type { MemoryOwnerKind } from './prompt'
 
 // ============================================================================
 // Write serialization
 // ============================================================================
 
 /**
- * One memory file is shared by every execution of the same digital human —
- * scheduled runs, chat threads, IM threads, team turns — all in this process.
- * Several of the writes below are read-modify-write, so without serialization
- * two overlapping executions interleave and the later write silently drops the
- * earlier one. Tail of the pending chain per absolute path.
+ * One memory is shared by every execution writing to it — scheduled runs,
+ * chats, IM threads, team turns, a consolidation — all in this process. Several
+ * writes are read-modify-write, so without serialization two overlapping
+ * writers interleave and the later write silently drops the earlier one.
  *
- * Not covered: the agent's own Read/Edit/Write reach the file through its
- * sandbox rather than this module, so they cannot be serialized from here.
+ * Keyed by the memory's memory.md path: one lock covers that file and its whole
+ * data directory, because a consolidation replaces both at once.
  */
 const writeQueues = new Map<string, Promise<void>>()
 
-async function withMemoryFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
-  const previous = writeQueues.get(filePath) ?? Promise.resolve()
+/**
+ * Take the lock for one memory.
+ *
+ * Returns the release function, or null when `timeoutMs` elapsed first. A
+ * timed-out waiter gives up its place without breaking the order of the ones
+ * behind it. `leaseMs` releases the lock on its own if the holder never does —
+ * for holders whose release depends on a callback that may not arrive.
+ */
+export async function acquireMemoryLock(
+  key: string,
+  opts: { timeoutMs?: number; leaseMs?: number } = {}
+): Promise<(() => void) | null> {
+  const previous = writeQueues.get(key) ?? Promise.resolve()
 
-  let release: () => void = () => {}
-  const held = new Promise<void>(resolve => { release = resolve })
+  let resolveHeld: () => void = () => {}
+  const held = new Promise<void>(resolve => { resolveHeld = resolve })
   const queued = previous.then(() => held)
-  writeQueues.set(filePath, queued)
+  writeQueues.set(key, queued)
 
-  await previous
+  let released = false
+  let leaseTimer: ReturnType<typeof setTimeout> | undefined
+  const release = (): void => {
+    if (released) return
+    released = true
+    if (leaseTimer) clearTimeout(leaseTimer)
+    resolveHeld()
+    // Cleared only once everything ahead has released too. A waiter that timed
+    // out releases while its predecessor still holds the lock; deleting the
+    // entry then would hand the next caller a free lock beside that holder.
+    void queued.then(() => {
+      if (writeQueues.get(key) === queued) writeQueues.delete(key)
+    })
+  }
 
+  if (opts.timeoutMs === undefined) {
+    await previous
+  } else {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const acquired = await Promise.race([
+      previous.then(() => true),
+      new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), opts.timeoutMs) }),
+    ])
+    if (timer) clearTimeout(timer)
+    if (!acquired) {
+      release()
+      return null
+    }
+  }
+
+  if (opts.leaseMs !== undefined) {
+    leaseTimer = setTimeout(() => {
+      if (released) return
+      console.warn(`[Memory] Lock on ${key} not released within ${opts.leaseMs}ms — releasing it`)
+      release()
+    }, opts.leaseMs)
+    leaseTimer.unref?.()
+  }
+
+  return release
+}
+
+/** Run `fn` while holding the lock for one memory. */
+export async function withMemoryLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const release = (await acquireMemoryLock(key))!
   try {
     return await fn()
   } finally {
     release()
-    // Only the last waiter clears the entry, so the map does not grow per file.
-    if (writeQueues.get(filePath) === queued) {
-      writeQueues.delete(filePath)
-    }
   }
 }
 
@@ -53,7 +104,7 @@ async function withMemoryFileLock<T>(filePath: string, fn: () => Promise<T>): Pr
  * The lock keeps two writers in this process off the same temp name; the pid
  * keeps two Halo instances sharing a machine off it too.
  */
-async function atomicWrite(filePath: string, content: string): Promise<void> {
+export async function atomicWrite(filePath: string, content: string): Promise<void> {
   await ensureDir(dirname(filePath))
 
   const tmpPath = `${filePath}.${process.pid}.tmp`
@@ -65,12 +116,7 @@ async function atomicWrite(filePath: string, content: string): Promise<void> {
 // Read
 // ============================================================================
 
-/**
- * Read a memory file.
- *
- * @param filePath - Absolute path to the file
- * @returns File content as string, or null if file does not exist
- */
+/** @returns File content, or null if the file does not exist */
 export async function readMemoryFile(filePath: string): Promise<string | null> {
   try {
     return await readFile(filePath, 'utf-8')
@@ -82,154 +128,73 @@ export async function readMemoryFile(filePath: string): Promise<string | null> {
   }
 }
 
+// ============================================================================
+// Skeleton
+// ============================================================================
+
 /**
- * Extract all markdown headings from a memory file.
- *
- * Returns heading lines prefixed with their line numbers, e.g.:
- *   L1:  # State
- *   L15: ## Tracked Items
- *   L30: ## Patterns
- *
- * @param filePath - Absolute path to the file
- * @returns Heading lines with line numbers, or null if file does not exist
+ * The file a memory starts as: its sections in place and nothing in them, so
+ * the agent's first write is an Edit like every later one — never a Write that
+ * could land on top of another conversation's. No sample lines: anything here
+ * would be read as something remembered.
  */
-export async function readMemoryHeadings(filePath: string): Promise<string | null> {
-  const content = await readMemoryFile(filePath)
-  if (content === null) return null
+const MEMORY_SKELETON: Record<MemoryOwnerKind, string> = {
+  // `## State` is the line a digital human's instructions keep first.
+  'digital-human': '# now\n\n## State\n\n# History\n',
+  space: '# now\n\n# History\n',
+}
 
-  const lines = content.split('\n')
-  const headings: string[] = []
+/** A skeleton line: a section heading with nothing after it. */
+const SKELETON_LINE = /^(?:#\s+now|#\s+History|##\s+State(?:\s*\|)?)$/
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
-    if (/^#{1,6}\s/.test(line)) {
-      headings.push(`L${i + 1}: ${line}`)
-    }
-  }
+/** Larger than this, a file holds more than a skeleton; no need to read it. */
+const SKELETON_MAX_BYTES = 256
 
-  if (headings.length === 0) {
-    return '(No markdown headings found in memory file)'
-  }
-
-  return headings.join('\n')
+/** Whether memory.md content records nothing: absent, blank, or only the skeleton. */
+export function isBlankMemory(content: string | null): boolean {
+  if (content === null) return true
+  return content.split('\n').every(line => line.trim() === '' || SKELETON_LINE.test(line.trim()))
 }
 
 /**
- * Extract a specific section from a memory file by heading text.
- *
- * A section starts at the matched heading line and ends at the next heading
- * of equal or higher level, or at the end of the file.
- *
- * Matching is case-insensitive substring: section="tracked" matches "## Tracked Items".
- *
- * @param filePath - Absolute path to the file
- * @param heading  - Heading text to match (case-insensitive substring)
- * @returns Section content including the heading line, or null if file/section not found
+ * Whether a memory records anything yet — in memory.md beyond its skeleton, or
+ * as a topic. Synchronous and cheap (a stat, and a read only of a file small
+ * enough to be a skeleton), for the session setup that picks instructions.
  */
-export async function readMemorySection(filePath: string, heading: string): Promise<string | null> {
-  const content = await readMemoryFile(filePath)
-  if (content === null) return null
-
-  const lines = content.split('\n')
-  const needle = heading.toLowerCase()
-
-  // Find the first heading line that matches
-  let startIdx = -1
-  let startLevel = 0
-
-  for (let i = 0; i < lines.length; i++) {
-    const match = lines[i].match(/^(#{1,6})\s+(.*)/)
-    if (match && match[2].toLowerCase().includes(needle)) {
-      startIdx = i
-      startLevel = match[1].length
-      break
-    }
+export function memoryHasContent(layout: MemoryLayout): boolean {
+  try {
+    if (statSync(layout.file).size > SKELETON_MAX_BYTES) return true
+    if (!isBlankMemory(readFileSync(layout.file, 'utf-8'))) return true
+  } catch (err: unknown) {
+    if (!isNodeError(err) || err.code !== 'ENOENT') throw err
   }
-
-  if (startIdx === -1) {
-    return null // Section not found
+  try {
+    return readdirSync(layout.topicsDir).some(name => !name.startsWith('.'))
+  } catch (err: unknown) {
+    if (isNodeError(err) && err.code === 'ENOENT') return false
+    throw err
   }
-
-  // Find the end: next heading at same or higher level (fewer or equal #)
-  let endIdx = lines.length
-  for (let i = startIdx + 1; i < lines.length; i++) {
-    const match = lines[i].match(/^(#{1,6})\s/)
-    if (match && match[1].length <= startLevel) {
-      endIdx = i
-      break
-    }
-  }
-
-  return lines.slice(startIdx, endIdx).join('\n')
 }
 
 /**
- * Read the last N lines of a memory file.
+ * Give a memory its skeleton if memory.md is missing or blank. Never touches a
+ * file that holds anything.
  *
- * @param filePath - Absolute path to the file
- * @param limit    - Number of lines to return (default: 50)
- * @returns Last N lines as string, or null if file does not exist
+ * @returns Whether the skeleton was written
  */
-export async function readMemoryTail(filePath: string, limit: number = 50): Promise<string | null> {
-  const content = await readMemoryFile(filePath)
-  if (content === null) return null
-
-  const lines = content.split('\n')
-  const startLine = Math.max(0, lines.length - limit)
-  const tailLines = lines.slice(startLine)
-
-  if (startLine > 0) {
-    return `... (showing last ${limit} of ${lines.length} lines)\n` + tailLines.join('\n')
-  }
-
-  return tailLines.join('\n')
+export async function ensureMemoryFile(layout: MemoryLayout, owner: MemoryOwnerKind): Promise<boolean> {
+  if ((await getFileSize(layout.file)) > SKELETON_MAX_BYTES) return false
+  return withMemoryLock(layout.file, async () => {
+    const content = await readMemoryFile(layout.file)
+    if (content !== null && content.trim() !== '') return false
+    await atomicWrite(layout.file, MEMORY_SKELETON[owner])
+    return true
+  })
 }
 
 // ============================================================================
 // Write
 // ============================================================================
-
-/**
- * Append content to a memory file.
- *
- * Ensures the parent directory exists. Prepends a metadata comment
- * with timestamp and source identifier for audit trail.
- *
- * @param filePath - Absolute path to the file
- * @param content  - Content to append
- * @param source   - Identifier of the writer (e.g., 'user', 'app:my-app')
- */
-export async function appendToMemoryFile(
-  filePath: string,
-  content: string,
-  source: string
-): Promise<void> {
-  await withMemoryFileLock(filePath, async () => {
-    await ensureDir(dirname(filePath))
-
-    const timestamp = new Date().toISOString()
-    const header = `\n<!-- ${timestamp} by ${source} -->\n`
-    const payload = header + content.trimEnd() + '\n'
-
-    await appendFile(filePath, payload, 'utf-8')
-  })
-}
-
-/**
- * Replace the entire content of a memory file.
- *
- * Uses atomic write pattern: write to temp file, then rename.
- * Ensures the parent directory exists.
- *
- * @param filePath - Absolute path to the file
- * @param content  - New content
- */
-export async function replaceMemoryFile(
-  filePath: string,
-  content: string
-): Promise<void> {
-  await withMemoryFileLock(filePath, () => atomicWrite(filePath, content))
-}
 
 /**
  * Open a `# History` entry for a turn that is about to start, so the agent has
@@ -250,7 +215,7 @@ export async function insertHistoryHeading(
   timestamp: string,
   byLabel?: string
 ): Promise<void> {
-  await withMemoryFileLock(filePath, async () => {
+  await withMemoryLock(filePath, async () => {
     const heading = byLabel ? `## ${timestamp}  [by: ${byLabel}]` : `## ${timestamp}`
 
     // A file that exists but holds nothing still needs the whole skeleton:
@@ -258,7 +223,7 @@ export async function insertHistoryHeading(
     // is the section every reader of this file expects to find.
     const content = await readMemoryFile(filePath)
     if (content === null || content.trim() === '') {
-      await atomicWrite(filePath, `# now\n\n## State\n\n# History\n\n${heading}\n`)
+      await atomicWrite(filePath, `${MEMORY_SKELETON['digital-human']}\n${heading}\n`)
       return
     }
 
@@ -277,43 +242,14 @@ export async function insertHistoryHeading(
   })
 }
 
-/**
- * Move the current memory file into the archive and put `content` in its place,
- * as one step.
- *
- * The summary that becomes `content` takes a minute or more to generate, and the
- * file must stay readable for all of it: an execution starting meanwhile reads
- * real memory rather than an empty slot, and its own writes land in the file
- * that is about to be archived — so they are preserved there rather than lost.
- * The trade is that such writes are in the archive but not in the summary, which
- * is why generation reads the file and this call does not.
- *
- * @param filePath   - Path to the current memory.md
- * @param archiveDir - Path to the memory/ archive directory
- * @param content    - What memory.md holds afterwards
- * @returns Path to the archived file
- */
-export async function archiveAndReplaceMemoryFile(
-  filePath: string,
-  archiveDir: string,
-  content: string
-): Promise<string> {
-  return withMemoryFileLock(filePath, async () => {
-    const archivePath = await copyToArchive(filePath, archiveDir)
-    await atomicWrite(filePath, content)
-    return archivePath
-  })
-}
-
 // ============================================================================
 // List
 // ============================================================================
 
 /**
- * List files in a memory archive directory.
+ * List the markdown files directly inside a directory.
  *
- * @param dirPath - Absolute path to the directory
- * @returns Array of filenames (not full paths), sorted newest first
+ * @returns File names, newest first (names are timestamp-prefixed)
  */
 export async function listMemoryFiles(dirPath: string): Promise<string[]> {
   if (!existsSync(dirPath)) {
@@ -326,7 +262,6 @@ export async function listMemoryFiles(dirPath: string): Promise<string[]> {
       .filter(e => e.isFile() && e.name.endsWith('.md'))
       .map(e => e.name)
 
-    // Sort newest first (lexicographic descending works for YYYY-MM-DD format)
     files.sort((a, b) => b.localeCompare(a))
     return files
   } catch (err: unknown) {
@@ -338,39 +273,31 @@ export async function listMemoryFiles(dirPath: string): Promise<string[]> {
 }
 
 // ============================================================================
-// Archive (for compaction)
+// Archive
 // ============================================================================
 
 /**
  * Give the current memory file a second name under the archive, WITHOUT
- * removing it from its own. Caller must hold the file's write lock.
+ * removing it from its own. Caller must hold the memory's lock.
  *
- * A move would be the obvious thing and is wrong here. The write lock orders
- * this module's writers against each other; it does not reach readers, and
- * `buildMemorySnapshot` reads lock-free at the start of every turn. Between an
- * unlink and the replacing write there are several awaited syscalls — long
- * enough, in practice, for most reads landing in that span to see no file at
- * all. What a reader concludes from that is the damage: the trigger message
- * tells it no memory exists and to Write one, and that Write does not come
- * through this module and cannot be stopped. A path that is never absent
+ * A move would be the obvious thing and is wrong here. The lock orders writers;
+ * it does not reach readers, and the snapshot at every turn start reads
+ * lock-free. A reader that finds no memory.md is told to create one with Write,
+ * which replaces the memory with a blank file. A path that is never absent
  * cannot be misread that way.
  *
  * A hard link keeps both names on one inode, so the archive is the file rather
  * than a copy of it and cannot be caught half-written. Filesystems that refuse
  * links fall back to a copy.
  */
-async function copyToArchive(filePath: string, archiveDir: string): Promise<string> {
+export async function linkToArchive(filePath: string, archiveDir: string): Promise<string> {
   await ensureDir(archiveDir)
 
   const now = new Date()
   const slug = formatTimestamp(now)
-  const archivePath = join(archiveDir, `${slug}.md`)
-
-  // Handle name collision (very unlikely -- same minute)
-  let finalPath = archivePath
-  if (existsSync(archivePath)) {
-    const deduped = `${slug}-${now.getSeconds().toString().padStart(2, '0')}.md`
-    finalPath = join(archiveDir, deduped)
+  let finalPath = join(archiveDir, `${slug}.md`)
+  if (existsSync(finalPath)) {
+    finalPath = join(archiveDir, `${slug}-${now.getSeconds().toString().padStart(2, '0')}-${now.getMilliseconds()}.md`)
   }
 
   try {
@@ -381,11 +308,7 @@ async function copyToArchive(filePath: string, archiveDir: string): Promise<stri
   return finalPath
 }
 
-/**
- * Get the size of a file in bytes.
- *
- * @returns File size in bytes, or 0 if file does not exist
- */
+/** @returns File size in bytes, or 0 if the file does not exist */
 export async function getFileSize(filePath: string): Promise<number> {
   try {
     const stats = await stat(filePath)
@@ -402,13 +325,14 @@ export async function getFileSize(filePath: string): Promise<number> {
 // Helpers
 // ============================================================================
 
-async function ensureDir(dirPath: string): Promise<void> {
+export async function ensureDir(dirPath: string): Promise<void> {
   if (!existsSync(dirPath)) {
     await mkdir(dirPath, { recursive: true })
   }
 }
 
-function formatTimestamp(date: Date): string {
+/** Unified memory timestamp: `YYYY-MM-DD-HHmm`, local time. */
+export function formatTimestamp(date: Date): string {
   const y = date.getFullYear()
   const m = (date.getMonth() + 1).toString().padStart(2, '0')
   const d = date.getDate().toString().padStart(2, '0')
@@ -417,6 +341,6 @@ function formatTimestamp(date: Date): string {
   return `${y}-${m}-${d}-${h}${min}`
 }
 
-function isNodeError(err: unknown): err is NodeJS.ErrnoException {
+export function isNodeError(err: unknown): err is NodeJS.ErrnoException {
   return err instanceof Error && 'code' in err
 }

@@ -118,6 +118,12 @@ const STUB_RESULT = 'STUB RESULT 42'
 /** The team session key the bus/relay use for the remote member's turn. */
 const REMOTE_SESSION = buildTeamSessionKey(REMOTE_MEMBER, OFFICE, EPOCH_ID)
 
+// A started host keeps heartbeating and refreshing its roster on unref'd timers,
+// and a started coordinator keeps sweeping presence. They read the store, which
+// afterEach closes — so teardown stops them first, as the app's shutdown does.
+const managers: FederationManager[] = []
+const coordinators: FederationCoordinator[] = []
+
 // ── Test node (host/authority A) + in-process bridge to joiner B ─────────────
 
 interface TestNode {
@@ -172,6 +178,7 @@ function makeNode(opts: {
     onMemberConfirmedOffline: opts.onMemberConfirmedOffline,
   })
   manager.hostOffice(OFFICE)
+  managers.push(manager)
 
   return {
     nodeId: NODE_A,
@@ -207,6 +214,7 @@ function joinFromB(
     onJoinReject: (reason) => handlers.onReject?.(reason),
   })
   bFed.coordinator.start()
+  coordinators.push(bFed.coordinator)
 
   const request: JoinRequest = {
     kind: 'join-request',
@@ -323,6 +331,8 @@ describe('M1b multi-node smoke rig (end-to-end distributed office)', () => {
   })
 
   afterEach(() => {
+    for (const manager of managers.splice(0)) manager.stopAll()
+    for (const coordinator of coordinators.splice(0)) coordinator.stop()
     dbManager.closeAll()
   })
 
@@ -623,6 +633,7 @@ function makePresenceCoordinator(opts: {
     listMembersForNode,
   })
   coordinator.start()
+  coordinators.push(coordinator)
 
   return {
     coordinator,

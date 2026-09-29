@@ -145,7 +145,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     },
 
     closeAllTabs: () => {
-      canvasLifecycle.closeAll()
+      canvasLifecycle.closeAll({ confirmDirty: true })
     },
 
     switchTab: (tabId: string) => {

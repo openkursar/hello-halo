@@ -47,6 +47,14 @@ describe('computeSessionInputsFingerprint', () => {
     expect(computeSessionInputsFingerprint(before)).not.toBe(computeSessionInputsFingerprint(after))
   })
 
+  it('changes when the appended context of a preset prompt changes (halo engine)', () => {
+    const preset = (append: string) => ({ systemPrompt: { type: 'preset', preset: 'default', append } })
+    expect(computeSessionInputsFingerprint(preset('You are Ada.')))
+      .toBe(computeSessionInputsFingerprint(preset('You are Ada.')))
+    expect(computeSessionInputsFingerprint(preset('You are Ada.')))
+      .not.toBe(computeSessionInputsFingerprint(preset('You are Ada. Disabled: Email.')))
+  })
+
   it('ignores in-process server object identity (only names matter)', () => {
     const a = { systemPrompt: 'p', mcpServers: { 'ai-browser': { instance: {} } } }
     const b = { systemPrompt: 'p', mcpServers: { 'ai-browser': { instance: {}, other: 1 } } }

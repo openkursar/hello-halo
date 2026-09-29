@@ -274,11 +274,121 @@ describe('TeamOrchestration', () => {
       expect(pendings[0].teamContext.fromAppId).toBeNull()
     })
 
-    it('rejects starting a second epoch while one is open', async () => {
-      seedTeam(store, { epochId: 'existing-epoch' })
+    it('rejects a second run while this process is executing one', async () => {
+      seedTeam(store)
       const { deps } = makeSession()
       const orch = build(deps)
+      await orch.startEpoch(TEAM_ID)
       await expect(orch.startEpoch(TEAM_ID)).rejects.toThrow(/already has a running epoch/)
+    })
+
+    it('runs for a team whose stored pointer belongs to a process that is gone', async () => {
+      // What a crash mid-run leaves behind: the row still points at an epoch
+      // nothing is executing. Refusing this tick was how a team stopped running
+      // for good while still answering in conversations.
+      seedTeam(store, { epochId: 'epoch-from-a-dead-process' })
+      const { deps } = makeSession()
+      const orch = build(deps)
+
+      const epoch = await orch.startEpoch(TEAM_ID)
+
+      expect(epoch.id).not.toBe('epoch-from-a-dead-process')
+      expect(store.getTeamById(TEAM_ID)!.currentEpochId).toBe(epoch.id)
+    })
+  })
+
+  describe('run liveness and interrupted runs', () => {
+    it('reports the live run and forgets it on seal', async () => {
+      seedTeam(store)
+      const { deps } = makeSession()
+      const orch = build(deps)
+
+      expect(orch.activeRunEpochId(TEAM_ID)).toBeNull()
+      const epoch = await orch.startEpoch(TEAM_ID)
+      expect(orch.activeRunEpochId(TEAM_ID)).toBe(epoch.id)
+
+      await orch.sealEpoch(TEAM_ID, 'completed', null)
+
+      expect(orch.activeRunEpochId(TEAM_ID)).toBeNull()
+      expect(store.getTeamById(TEAM_ID)!.currentEpochId).toBeNull()
+    })
+
+    it('seals a run the previous session left open, and the next run starts', async () => {
+      seedTeam(store)
+      const before = build(makeSession().deps)
+      const stranded = await before.startEpoch(TEAM_ID, { type: 'schedule' })
+      // …the process dies here: no seal, no teardown.
+
+      const after = build(makeSession().deps)
+      // A restart holds no live run, whatever the row says.
+      expect(after.activeRunEpochId(TEAM_ID)).toBeNull()
+
+      expect(await after.recoverInterruptedRuns()).toBe(1)
+
+      const row = store.getEpochById(stranded.id)!
+      expect(row.endedAt).not.toBeNull()
+      expect(row.endReason).toBe('error')
+      expect(row.outcome).toBe('failed')
+      expect(row.summary).toContain('Interrupted')
+      const team = store.getTeamById(TEAM_ID)!
+      expect(team.currentEpochId).toBeNull()
+      expect(team.status).toBe('idle')
+
+      const epoch = await after.startEpoch(TEAM_ID)
+      expect(epoch.id).not.toBe(stranded.id)
+    })
+
+    it('keeps the record of a run that had already produced one', async () => {
+      seedTeam(store)
+      const before = build(makeSession().deps)
+      const epoch = await before.startEpoch(TEAM_ID)
+      // Finished, then re-opened by a message: the epoch's own summary and
+      // outcome describe what that run did, and sealing it later must not
+      // rewrite them into a failure.
+      store.endEpoch(epoch.id, Date.now(), 'completed', 'shipped the brief', 'output')
+      store.reopenEpoch(epoch.id)
+
+      const after = build(makeSession().deps)
+      expect(await after.recoverInterruptedRuns()).toBe(1)
+
+      const row = store.getEpochById(epoch.id)!
+      expect(row.summary).toBe('shipped the brief')
+      expect(row.outcome).toBe('output')
+    })
+
+    it('clears a run pointer whose epoch is already closed', async () => {
+      // The crash window between stamping the epoch and handing the slot back:
+      // the row points at a run that no longer exists in any form.
+      seedTeam(store, { epochId: 'ghost-epoch' })
+      const orch = build(makeSession().deps)
+
+      expect(await orch.recoverInterruptedRuns()).toBe(0)
+
+      const team = store.getTeamById(TEAM_ID)!
+      expect(team.currentEpochId).toBeNull()
+      expect(team.status).toBe('idle')
+    })
+
+    it('leaves a joined office alone — its run belongs to another node', async () => {
+      store.materializeJoinedOffice({
+        hostNodeId: 'host-1',
+        selfNodeId: 'viewer-1',
+        snapshot: {
+          team: { id: TEAM_ID, name: 'Team', goal: 'g', leadAppId: LEAD_APP, collabMode: 'free', epochId: 'host-run', status: 'running' },
+          members: [
+            { appId: LEAD_APP, memberName: 'Lead', role: 'Lead', isLead: true, ownerNodeId: 'host-1', memberIdentity: null },
+          ],
+          edges: [],
+        },
+      })
+      const orch = build(makeSession().deps)
+
+      // Here the replicated pointer IS the live signal: the run happens remotely.
+      expect(orch.activeRunEpochId(TEAM_ID)).toBe('host-run')
+      expect(await orch.recoverInterruptedRuns()).toBe(0)
+
+      expect(store.getEpochById('host-run')!.endedAt).toBeNull()
+      expect(store.getTeamById(TEAM_ID)!.currentEpochId).toBe('host-run')
     })
   })
 

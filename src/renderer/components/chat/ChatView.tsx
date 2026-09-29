@@ -50,6 +50,9 @@ import {
   trackHome,
   trackHomeOnce,
 } from '../../services/home-telemetry'
+import { useGoalComposer } from '../goal'
+import { showsMessageList } from './conversation-body'
+import type { GoalInput } from '../../../shared/types/goal'
 
 interface ChatViewProps {
   isCompact?: boolean
@@ -185,20 +188,17 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
     }
   }, [isOnboarding])
 
-  // MessageList ref for scroll control (Virtuoso-based)
   const messageListRef = useRef<MessageListHandle>(null)
 
-  // Scroll-to-bottom button visibility — driven by Virtuoso's atBottomStateChange
+  // Scroll-to-bottom button visibility — driven by MessageList's at-bottom state
   const [showScrollButton, setShowScrollButton] = useState(false)
   const handleAtBottomStateChange = useCallback((atBottom: boolean) => {
     setShowScrollButton(!atBottom)
   }, [])
 
-  // Handle search result navigation - scroll to message and highlight search term
-  // With Virtuoso, we first scroll the target message into view by index,
-  // then apply DOM-based highlighting once it's rendered.
-  const displayMessagesRef = useRef<{ id: string }[]>([])
-
+  // Handle search result navigation - scroll to message and highlight search term.
+  // MessageList mounts the message if it is in unloaded history, then the
+  // highlight is applied to its DOM once rendered.
   useEffect(() => {
     const handleNavigateToMessage = (event: Event) => {
       const customEvent = event as CustomEvent<{ messageId: string; query: string }>
@@ -215,17 +215,12 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
         el.replaceWith(textNode)
       })
 
-      // Find message index in displayMessages
-      const messageIndex = displayMessagesRef.current.findIndex(m => m.id === messageId)
-      if (messageIndex === -1) {
-        console.warn(`[ChatView] Message not found in displayMessages for ID: ${messageId}`)
+      if (!messageListRef.current?.scrollToMessage(messageId, 'smooth')) {
+        console.warn(`[ChatView] Message not found in transcript for ID: ${messageId}`)
         return
       }
 
-      // Scroll to the message via Virtuoso
-      messageListRef.current?.scrollToIndex(messageIndex, 'smooth')
-
-      // Wait for Virtuoso to render the item, then apply DOM highlighting
+      // Wait for the message to mount and scroll into place, then apply DOM highlighting
       const applyHighlight = (retries = 0) => {
         const messageElement = document.querySelector(`[data-message-id="${messageId}"]`)
         if (!messageElement) {
@@ -265,7 +260,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
         }
       }
 
-      // Small delay to allow Virtuoso to scroll and render
+      // Small delay to allow the scroll to start and the row to render
       setTimeout(() => applyHighlight(), 150)
     }
 
@@ -341,6 +336,19 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
       }
     },
   } : undefined
+
+  const sendWithGoal = useCallback(
+    (content: string, images: ImageAttachment[] | undefined, thinkingEnabled: boolean, goal: GoalInput) =>
+      sendMessage(content, images, thinkingEnabled, { goal }),
+    [sendMessage]
+  )
+  const goalComposer = useGoalComposer({
+    spaceId: currentSpaceId,
+    conversationId: currentConversationId,
+    draftKey: activeConversationId ?? undefined,
+    isGenerating,
+    send: sendWithGoal,
+  })
 
   // Build the slash-command list for the autocomplete menu.
   // Only reads from SDK slash_commands array.
@@ -441,7 +449,9 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
     if ((!content.trim() && (!images || images.length === 0)) || isGenerating) return
 
     if (currentConversationId) noteTurnSent(currentConversationId, 'halo')
-    await sendMessage(content, images, thinkingEnabled)
+    // Sending returns the reader to the end, wherever they were reading.
+    messageListRef.current?.scrollToBottom('auto')
+    return sendMessage(content, images, thinkingEnabled)
   }
 
   // Handle stop - stops the current conversation's generation
@@ -464,14 +474,16 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
       ]
     : realMessages
 
-  // Keep displayMessagesRef in sync for search navigation
-  displayMessagesRef.current = displayMessages
-
   const displayStreamingContent = mockStreamingContent || streamingContent
   const displayIsGenerating = isMockAnimating || isGenerating
   const displayIsThinking = isMockThinking || isThinking
   const displayIsStreaming = isStreaming  // Only real streaming (not mock)
-  const hasMessages = displayMessages.length > 0 || !!displayStreamingContent || displayIsThinking
+  const hasMessages = showsMessageList({
+    messageCount: displayMessages.length,
+    streamingContent: displayStreamingContent,
+    isThinking: displayIsThinking,
+    error,
+  })
 
   // Track previous compact state for smooth transitions
   const prevCompactRef = useRef(isCompact)
@@ -528,6 +540,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
       standalone={isFullTakeoverEmpty}
       digitalHumanSelector={digitalHumanSelector}
       draftKey={activeConversationId ?? undefined}
+      goal={goalComposer}
     />
   )
 
@@ -557,12 +570,11 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
     >
       {/* Messages area wrapper - relative for button positioning */}
       <div className="flex-1 relative overflow-hidden">
-        {/* Virtuoso manages its own scroll container. This wrapper itself
-            isn't remounted on conversation switch (only its children are,
-            via MessageList's own `key`), so the entrance animation plays
-            once when the chat page first mounts — not on every switch — and
-            never touches Virtuoso's own scroll measurements (transform on an
-            ancestor doesn't affect its internal scrollHeight/clientHeight). */}
+        {/* MessageList owns the scroll container. This wrapper itself isn't
+            remounted on conversation switch (only its children are, via
+            MessageList's own `key`), so the entrance animation plays once when
+            the chat page first mounts — not on every switch. A transform on an
+            ancestor doesn't affect the scroller's scrollHeight/clientHeight. */}
         <div
           className={`
             h-full animate-fade-up
@@ -589,6 +601,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
               error={error}
               errorType={errorType}
               onContinue={currentConversation ? () => continueAfterInterrupt(currentConversation.id) : undefined}
+              onStop={handleStop}
               isCompact={isCompact}
               textBlockVersion={textBlockVersion}
               pendingQuestion={pendingQuestion}

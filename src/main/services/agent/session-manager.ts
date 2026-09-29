@@ -31,6 +31,7 @@ import { purgeStaleMcpOAuth } from './mcp-auth-state'
 import { emitAgentEvent } from './events'
 import { registerProcess, unregisterProcess, getCurrentInstanceId } from '../health'
 import { resolveCredentialsForSdk, buildBaseSdkOptions, computeCredentialsFingerprint, computeSessionInputsFingerprint } from './sdk-config'
+import { resolveSpaceMemorySession } from './space-memory'
 import { applySessionReasoningEffort } from './reasoning-effort'
 import { startConsumer, type ConsumerHandle, type ConsumerContext } from './session-consumer'
 import { createConversationSink } from './conversation-sink'
@@ -38,9 +39,10 @@ import { hasActiveTeamTasks } from './subagent-handler'
 import { setSessionInvalidator, buildCreationTimeServers } from './toolsets/broker'
 import { buildToolsetSection } from './toolsets/capability-index'
 import { dropConversationState, getOpenToolsets } from './toolsets/state'
+import { applyGoalDraft } from './goal/draft'
 import { HALO_API_TOOLSET_ID } from '../api-ref'
 import { resolveConversationKnowledgeBases, resolveConversationKnowledgeBaseIds } from './knowledge-context'
-import { buildKnowledgeSection } from './system-prompt'
+import { appendToSystemPrompt, buildKnowledgeSection } from './system-prompt'
 import type { KBReference } from '../../../shared/types/tlon'
 
 /**
@@ -747,6 +749,13 @@ export interface SessionGates {
    * request with the permissions of whoever used the session last.
    */
   requireFreshInputs?: boolean
+  /**
+   * Creation-time context outside the knowledge set that decides what the
+   * session was built with (for space chat: whether the space's memory was on).
+   * A different value rebuilds the session like a knowledge change does, so a
+   * session warmed before a setting flipped never serves a turn built after it.
+   */
+  creationContext?: string
 }
 
 /**
@@ -810,7 +819,8 @@ async function getOrCreateV2SessionInner(
   // credentials fingerprint, so tracked separately to rebuild a session whose
   // resolved KB set or working directory has diverged (attach/detach, indexing
   // completed after creation, or a KB-chat/normal turn switch).
-  const currentKnowledgeFingerprint = computeKnowledgeFingerprint(resolvedKbIds, workDir)
+  const currentKnowledgeFingerprint =
+    computeKnowledgeFingerprint(resolvedKbIds, workDir) + (gates?.creationContext ? `::${gates.creationContext}` : '')
   // Tool set + system prompt baked in eagerly by app chat / automation runs.
   // Main chat builds MCP servers lazily (buildMcpServers) and drives toolset
   // changes via requestSessionRebuild, so it opts out to avoid double-handling.
@@ -951,8 +961,8 @@ async function getOrCreateV2SessionInner(
   // sdkOptions directly; both have converged by this point.
   await purgeStaleMcpOAuth(sdkOptions.mcpServers, `session:${conversationId}`)
 
-  if (resolveKnowledgeBases && typeof sdkOptions.systemPrompt === 'string') {
-    sdkOptions.systemPrompt += buildKnowledgeSection(resolveKnowledgeBases())
+  if (resolveKnowledgeBases && sdkOptions.systemPrompt != null) {
+    sdkOptions.systemPrompt = appendToSystemPrompt(sdkOptions.systemPrompt, buildKnowledgeSection(resolveKnowledgeBases()))
   }
 
   console.debug(`[Agent][${conversationId}] SDK options: model=${sdkOptions.model}, maxTurns=${sdkOptions.maxTurns}, mcpServers=[${Object.keys(sdkOptions.mcpServers || {}).join(', ')}], resume=${!!sessionId}`)
@@ -978,6 +988,11 @@ async function getOrCreateV2SessionInner(
   // Native SDK V2 Session doesn't support resume parameter
   if (effectiveSessionId) {
     sdkOptions.resume = effectiveSessionId
+  }
+  // Keyed on the recorded id, not effectiveSessionId: a resumable conversation
+  // keeps its goal with the engine, even when its transcript went missing.
+  if (!sessionId) {
+    applyGoalDraft(sdkOptions, conversationId)
   }
   // resolved-sdk handles sdkEngine switch (Halo SDK vs CC SDK) transparently.
   // Mark the creation window so a toolset toggle arriving during this await is
@@ -1098,6 +1113,7 @@ export async function ensureSessionWarm(
   // content is read only if a session is actually created.
   const resolvedKbIds = resolveConversationKnowledgeBaseIds(conversation)
   const resolveKnowledgeBases = (): KBReference[] => resolveConversationKnowledgeBases(conversation)
+  const spaceMemory = resolveSpaceMemorySession(spaceId, conversationId)
 
   // Build SDK options using shared configuration
   const sdkOptions = await buildBaseSdkOptions({
@@ -1121,6 +1137,9 @@ export async function ensureSessionWarm(
     disabledTools: config.agent?.disabledTools,
     digitalHumansEnabled,
     toolsetIndex: buildToolsetSection(spaceId, conversationId),
+    // Must match send-message.ts, whose first turn reuses this session.
+    memoryInstructions: spaceMemory?.instructions,
+    memoryGuard: spaceMemory?.guard,
   })
 
   applySessionReasoningEffort(sdkOptions, resolvedCredentials.capabilities)
@@ -1135,7 +1154,8 @@ export async function ensureSessionWarm(
       },
       resolvedKbIds,
       buildMcpServers,
-      resolveKnowledgeBases
+      resolveKnowledgeBases,
+      { creationContext: spaceMemory?.contextKey }
     )
 
     // Ensure consumer's displayModel is up-to-date (same as sendMessage)

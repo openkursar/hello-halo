@@ -204,6 +204,18 @@ export interface TeamRuntime {
    * an unchanged answer writes, publishes and announces nothing.
    */
   reconcileAwaitingDecision(appId: string): void
+  /**
+   * The run epoch this machine is executing for the team right now, or null.
+   * The question every trigger guard is really asking — asked of live state,
+   * never of the persisted `currentEpochId`, which outlives the process that
+   * set it and would otherwise refuse every future run.
+   */
+  activeRunEpochId(teamId: string): string | null
+  /**
+   * Seal the runs a previous session left open. Called once at bootstrap,
+   * before triggers are rehydrated. Returns how many were sealed.
+   */
+  recoverInterruptedRuns(): Promise<number>
   /** `instruction` is this run's concrete brief, appended to the lead's start wake. */
   startEpoch(teamId: string, trigger?: TeamRunTrigger, instruction?: string): Promise<TeamEpoch>
   /** Get/create a per-chat long-lived 'conversation' epoch (message-driven entries, e.g. IM). */
@@ -505,6 +517,8 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
       turnReport.noteTurnEnded(params)
     },
     reconcileAwaitingDecision: (appId) => orchestration!.reconcileAwaitingDecision(appId),
+    activeRunEpochId: (teamId) => orchestration!.activeRunEpochId(teamId),
+    recoverInterruptedRuns: () => orchestration!.recoverInterruptedRuns(),
     startEpoch: (teamId, trigger, instruction) => orchestration!.startEpoch(teamId, trigger, instruction),
     ensureConversationEpoch: (teamId, chatKey, title, createdBy, entryAppId) =>
       orchestration!.ensureConversationEpoch(teamId, chatKey, title, createdBy, entryAppId),

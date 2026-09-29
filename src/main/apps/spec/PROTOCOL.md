@@ -427,9 +427,9 @@ All rules are combined with **AND logic** — the event is accepted only when al
 
 ## 7. `memory_schema` — AI Memory Structure
 
-Declares the data structure the AI should persist in its `memory.md` file. This is guidance for the
-AI — not strict schema validation — used by the AI to determine the structure and content of the
-memory file.
+Declares what the digital human should keep track of in its memory. This is guidance for the AI —
+not validated against the memory file — and decides *what* it records; *how* memory is organised
+(`# now`, `# History`, topics) is built in and the same for every digital human.
 
 **Allowed only when `type=automation`.**
 
@@ -441,9 +441,9 @@ memory_schema:
   last_low_date:
     type: date
     description: "Date of the last detected price low"
-  purchase_decision:
-    type: string
-    description: "Buy / wait decision and rationale"
+  faq_cache:
+    type: object
+    description: "Answers to recurring questions, so they are not researched again"
 ```
 
 `memory_schema` is a `Record<string, MemoryField>`. The key is the field name; the value is:
@@ -451,10 +451,13 @@ memory_schema:
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `type` | `string` (non-empty) | **Yes** | Data type description, e.g. `"string"`, `"number"`, `"array"`, `"date"`, `"boolean"`, `"object"`. Purely descriptive — no runtime validation is performed. |
-| `description` | `string` | No | Field description to help the AI understand the field's purpose. |
+| `description` | `string` | No | What the field is for. |
 
-> **Runtime behavior**: The memory file is stored at `{space.path}/.halo/apps/{appId}/memory/memory.md`.
-> The AI reads this file before each run and writes a summary after the run.
+> **Runtime behavior**: every run and chat session renders the declared fields into the memory
+> instructions as "What this memory tracks". The AI keeps each item current — as a value in
+> `# now`, or as a topic under `memory/topics/` when it accumulates knowledge (a FAQ cache, for
+> example, naturally becomes a topic). Memory lives at `{appDataPath}/memory.md` with
+> `{appDataPath}/memory/` beside it (`appDataPath` defaults to `{space.path}/.halo/apps/{appId}`).
 
 ---
 

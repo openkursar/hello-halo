@@ -13,7 +13,7 @@ const useTerminalToolset = {
   bypassCost:
     'command-completion detection, reading the live screen separately from history, and history search — raw input returns before the command has produced anything',
   unavailable:
-    'If the ai-terminal tools are not in your toolset, you cannot drive this terminal at all — calling request_toolset only highlights the switch in the user\'s "Tools" menu and takes effect from their next message, so tell them to turn ai-terminal on there. Meanwhile use your own Bash tool for work that does not need the shared terminal.',
+    'If the ai-terminal tools are not in your toolset, you cannot drive this terminal at all — calling request_toolset only highlights the switch in the user\'s "+" menu and takes effect from their next message, so tell them to turn ai-terminal on there. Meanwhile use your own Bash tool for work that does not need the shared terminal.',
 } as const
 
 export const MODULE: RouteModuleMeta = {

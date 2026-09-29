@@ -60,6 +60,8 @@ export const appRpc = {
   appGetDataPath: rawRpcMethod('app:get-data-path'),
   appOpenDataFolder: rawRpcMethod('app:open-data-folder'),
   appClearMemory: rawRpcMethod('app:clear-memory'),
+  appGetMemoryStatus: rawRpcMethod('app:memory-status'),
+  appConsolidateMemory: rawRpcMethod('app:memory-consolidate'),
   appMoveSpace: rawRpcMethod('app:move-space'),
 
   // App Chat

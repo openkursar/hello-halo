@@ -60,7 +60,8 @@ interface SpaceState {
   loadSpaceSummaries: (force?: boolean) => Promise<void>
 
   // Preferences actions
-  updateSpacePreferences: (spaceId: string, preferences: Partial<SpacePreferences>) => Promise<void>
+  /** Resolves to whether the preferences were saved. */
+  updateSpacePreferences: (spaceId: string, preferences: Partial<SpacePreferences>) => Promise<boolean>
   getSpacePreferences: (spaceId: string) => SpacePreferences | undefined
 
   // Reorder actions
@@ -292,29 +293,33 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
   updateSpacePreferences: async (spaceId, preferences) => {
     try {
       const response = await api.updateSpacePreferences(spaceId, preferences)
-
-      if (response.success && response.data) {
-        const updatedSpace = response.data as Space
-
-        // Update in current space if it matches
-        const currentSpace = get().currentSpace
-        if (currentSpace?.id === spaceId) {
-          set({ currentSpace: updatedSpace })
-        }
-
-        // Update in spaces list or halo space
-        if (updatedSpace.isTemp) {
-          set({ haloSpace: updatedSpace })
-        } else {
-          set((state) => ({
-            spaces: state.spaces.map((s) =>
-              s.id === spaceId ? updatedSpace : s
-            )
-          }))
-        }
+      if (!response.success || !response.data) {
+        console.error('Failed to update space preferences:', response.error)
+        return false
       }
+
+      const updatedSpace = response.data as Space
+
+      // Update in current space if it matches
+      const currentSpace = get().currentSpace
+      if (currentSpace?.id === spaceId) {
+        set({ currentSpace: updatedSpace })
+      }
+
+      // Update in spaces list or halo space
+      if (updatedSpace.isTemp) {
+        set({ haloSpace: updatedSpace })
+      } else {
+        set((state) => ({
+          spaces: state.spaces.map((s) =>
+            s.id === spaceId ? updatedSpace : s
+          )
+        }))
+      }
+      return true
     } catch (error) {
       console.error('Failed to update space preferences:', error)
+      return false
     }
   },
 

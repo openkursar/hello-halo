@@ -9,11 +9,17 @@
  * - 'halo': Optimized prompt with Halo improvements (Web Research strategy, etc.)
  *
  * Users can switch profiles in Settings > Advanced.
+ *
+ * The halo engine is the exception: it keeps its own default prompt and gets
+ * only Halo's product context appended (SYSTEM_PROMPT_HALO_CONTEXT). Callers
+ * build one host prompt string either way and hand it to the engine through
+ * toEngineSystemPrompt.
  */
 
 import os from 'os'
 import { getDataFolderName } from '../../foundation/product-config'
 import type { KBReference } from '../../../shared/types/tlon'
+import { getActiveEngine } from './resolved-sdk'
 
 // ============================================
 // Constants
@@ -433,6 +439,72 @@ Halo uses custom directories separate from Claude Code's defaults (NOT ~/.claude
 When looking for configuration or skills, use these Halo-specific paths, not Claude Code's default ~/.claude/ directory.
 `.trim()
 
+/**
+ * Halo product context appended to the halo engine's own default prompt. It
+ * carries only what that prompt cannot know: working behavior, tool policy,
+ * environment (cwd, platform, shell, OS, model) and the date come from the
+ * engine.
+ */
+export const SYSTEM_PROMPT_HALO_CONTEXT = `
+# Halo
+You are Halo, an AI assistant with remote access, file management, and built-in AI browser capabilities. The user talks to you through Halo's chat.
+
+If the user asks for help, inform them of Halo's capabilities:
+- General Assistance: Answer questions, provide advice, and help with daily tasks.
+- Get Things Done: Read, edit, and manage files in the current space.
+- Remote Access: Enable in Settings > Remote Access to access Halo via HTTP from other devices.
+- System Commands: Execute shell commands, manage files, organize desktop, and perform system operations.
+{{DIGITAL_HUMANS_CAPABILITY}}
+
+# Web research
+- Search the web with \`mcp__web-search__web_search\`.
+- When search snippets aren't enough, use \`WebFetch\` to read the full page from URLs in search results or user input.
+
+# Halo directories
+- Halo config: {{HALO_DIR}} (stores spaces, settings, app data)
+- Agent config: {{CLAUDE_CONFIG_DIR}}
+- Global skills: {{CLAUDE_CONFIG_DIR}}/skills/<skill-name>/SKILL.md
+- Space-scoped skills: <space-path>/.agents/skills/<skill-name>/SKILL.md or <space-path>/.claude/skills/<skill-name>/SKILL.md
+
+When looking for Halo configuration or skills, use these paths.
+`.trim()
+
+/** A system prompt in the shape the active engine accepts. */
+export type EngineSystemPrompt = string | { type: 'preset'; preset: 'default'; append: string }
+
+function usesEngineDefaultPrompt(): boolean {
+  return getActiveEngine() === 'halo'
+}
+
+/**
+ * Hand a host-built prompt to the active engine: the full prompt for engines
+ * that take Halo's template, the append to its own default for the halo engine.
+ */
+export function toEngineSystemPrompt(hostPrompt: string): EngineSystemPrompt {
+  return usesEngineDefaultPrompt()
+    ? { type: 'preset', preset: 'default', append: hostPrompt }
+    : hostPrompt
+}
+
+/** Host-authored text of a prompt produced by toEngineSystemPrompt; '' when absent. */
+export function hostSystemPromptText(prompt: unknown): string {
+  if (typeof prompt === 'string') return prompt
+  if (prompt && typeof prompt === 'object' && typeof (prompt as { append?: unknown }).append === 'string') {
+    return (prompt as { append: string }).append
+  }
+  return ''
+}
+
+/** Append host text to a prompt of either shape; anything else is returned unchanged. */
+export function appendToSystemPrompt(prompt: unknown, extra: string): unknown {
+  if (typeof prompt === 'string') return prompt + extra
+  if (prompt && typeof prompt === 'object' && typeof (prompt as { append?: unknown }).append === 'string') {
+    const preset = prompt as Exclude<EngineSystemPrompt, string>
+    return { ...preset, append: preset.append + extra }
+  }
+  return prompt
+}
+
 // ============================================
 // Dynamic System Prompt Builder
 // ============================================
@@ -492,16 +564,20 @@ function applyTemplateVariables(template: string, ctx: SystemPromptContext): str
 }
 
 /**
- * Build the complete system prompt with dynamic context.
- * Selects template based on promptProfile (defaults to 'halo').
+ * Build the host system prompt with dynamic context.
+ * Selects template based on promptProfile (defaults to 'halo'); on the halo
+ * engine the result is only the append to that engine's default prompt, and
+ * promptProfile does not apply.
  *
  * @param ctx - Dynamic context for the prompt
- * @returns Complete system prompt string
+ * @returns Host system prompt string; pass it to the engine via toEngineSystemPrompt
  */
 export function buildSystemPrompt(ctx: SystemPromptContext): string {
-  const template = ctx.promptProfile === 'official'
-    ? SYSTEM_PROMPT_OFFICIAL
-    : SYSTEM_PROMPT_HALO
+  const template = usesEngineDefaultPrompt()
+    ? SYSTEM_PROMPT_HALO_CONTEXT
+    : ctx.promptProfile === 'official'
+      ? SYSTEM_PROMPT_OFFICIAL
+      : SYSTEM_PROMPT_HALO
 
   let prompt = applyTemplateVariables(template, ctx)
 
