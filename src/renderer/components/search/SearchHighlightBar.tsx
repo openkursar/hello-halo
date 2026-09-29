@@ -15,7 +15,7 @@ import { useRef, useMemo } from 'react'
 import { ChevronUp, ChevronDown, Search, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useSearchStore } from '@/stores/search.store'
-import { useChatStore } from '@/stores/chat.store'
+import { useChatStore, selectActiveConversationId } from '@/stores/chat.store'
 
 export function SearchHighlightBar() {
   const {
@@ -28,13 +28,9 @@ export function SearchHighlightBar() {
     openSearch
   } = useSearchStore()
 
-  // The open conversation lives on the active space's state, not at the top
-  // level of the chat store — reading it as a top-level field yielded
-  // undefined, so the "results in this conversation first" behaviour below
-  // never applied and the bar always navigated the whole result set.
-  const currentConversationId = useChatStore(s =>
-    (s.currentSpaceId ? s.spaceStates.get(s.currentSpaceId)?.currentConversationId : null) ?? null
-  )
+  // The conversation on screen — a selected digital human's, else the regular
+  // one — decides which results count as "in this conversation".
+  const currentConversationId = useChatStore(selectActiveConversationId)
 
   // Debounce timer for navigation to prevent rapid switches
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null)

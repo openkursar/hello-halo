@@ -1198,7 +1198,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       return `- ${when} (${status}, ${done}/${tasks.length} tasks)${summary}`
     })
     return [
-      'Recent runs of this team (newest first; open a member\u2019s history for full transcripts):',
+      'Recent runs of this team (newest first). This run\u2019s member records are readable with `team_read_member`:',
       ...lines,
     ].join('\n')
   }

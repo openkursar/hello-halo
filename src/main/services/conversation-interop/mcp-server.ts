@@ -21,6 +21,10 @@ import { listConversationsForInterop, readConversationForInterop } from './list-
 import { deliverToConversation, deliverToConversationAndWait } from './delivery'
 import { circuitBreaker, DEFAULT_CIRCUIT_LIMITS } from './circuit-breaker'
 import { resolveConversationTarget } from './target-resolution'
+import { sourceOfConversation } from './source'
+import { withheldReason } from './admission'
+import type { WaitOutcome } from './types'
+import { parseRunSenderKey } from '../../../shared/apps/im-keys'
 
 export interface ConversationInteropScope {
   spaceId: string
@@ -49,6 +53,22 @@ function formatRelativeTime(iso: string): string {
 
 function conversationLabel(id: string, title: string): string {
   return `[${id}] "${title}"`
+}
+
+/** " (digital human)" for a conversation whose source qualifies it; empty for the space's own. */
+function sourceSuffix(label: string | undefined): string {
+  return label ? ` (${label})` : ''
+}
+
+/**
+ * The caller's own participation can end mid-turn (its digital human's owner
+ * switches collaboration off while the turn runs): the tools were mounted when
+ * the turn began, so each call re-checks that the caller is still admitted.
+ */
+function callerWithdrawn(scope: ConversationInteropScope): ReturnType<typeof textResult> | null {
+  const meta = sourceOfConversation(scope.conversationId)?.getMeta(scope.spaceId, scope.conversationId)
+  const unavailable = meta ? withheldReason(meta) : null
+  return unavailable ? textResult(`You can no longer use the cross-conversation tools here: ${unavailable}. (status: unavailable)`, true) : null
 }
 
 /**
@@ -88,6 +108,13 @@ function resolveTargetOrFail(
       ),
     }
   }
+  if (resolved.reason === 'unavailable') {
+    const name = resolved.title ? `"${resolved.title}" [${resolved.conversationId}]` : `[${resolved.conversationId}]`
+    return {
+      ok: false,
+      result: textResult(`${name} cannot be read or messaged: ${resolved.detail}. (status: unavailable)`, true),
+    }
+  }
   if (resolved.reason === 'self_target_title') {
     // Distinct from not_found on purpose: the conversation is not missing —
     // it is THIS one. Saying "no conversation with that title" here would be
@@ -117,7 +144,8 @@ recency-ordered list of conversations (id, title, last activity, message
 count, whether it is currently running) — use this first to find the one
 you want. Pass \`target\` to read that conversation's own content: the clean
 transcript of what was said and decided, never its internal tool-call or
-thinking stream.
+thinking stream. A digital human's chat sessions in this space appear in
+the list too, marked "(digital human)", and are read the same way.
 
 A user message may carry a reference the composer inserted, shaped
 \`[#Title](conv:3a5d77ea)\`. That is a pointer to another conversation, not
@@ -160,6 +188,8 @@ function buildConversationReadTool(scope: ConversationInteropScope) {
         ),
     },
     async (args) => {
+      const offline = callerWithdrawn(scope)
+      if (offline) return offline
       if (!args.target) {
         const result = listConversationsForInterop(scope.spaceId, scope.conversationId, args.cursor)
         if (!result.ok) {
@@ -173,7 +203,7 @@ function buildConversationReadTool(scope: ConversationInteropScope) {
           return textResult('No other conversations in this space yet.')
         }
         const lines = items.map(
-          (c) => `- ${conversationLabel(c.id, c.title)} — ${c.running ? 'running' : 'idle'} — ${c.messageCount} messages — last activity ${formatRelativeTime(c.updatedAt)}`
+          (c) => `- ${conversationLabel(c.id, c.title)}${sourceSuffix(c.label)} — ${c.running ? 'running' : 'idle'} — ${c.messageCount} messages — last activity ${formatRelativeTime(c.updatedAt)}`
         )
         let text = `Conversations in this space (most recently active first), showing ${items.length} of ${total}:\n\n${lines.join('\n')}\n\nPass target with one of the IDs above to read it.`
         if (nextCursor) {
@@ -193,16 +223,19 @@ function buildConversationReadTool(scope: ConversationInteropScope) {
             true
           )
         }
+        if (result.reason === 'unavailable') {
+          return textResult(`[${resolved.id}] cannot be read: ${result.detail}. (status: unavailable)`, true)
+        }
         return textResult(
           'That cursor is no longer valid (the conversation may have changed). Call conversation_read again without a cursor to start from the most recent content.',
           true
         )
       }
 
-      const { id, title, running, updatedAt, lines, totalMessages, hiddenBefore, nextCursor } = result.page
+      const { id, title, label, running, updatedAt, lines, totalMessages, hiddenBefore, nextCursor } = result.page
       const transcript = lines.map((l) => `[${l.role}] ${l.content}`).join('\n')
       const shownChars = lines.reduce((sum, l) => sum + l.content.length, 0)
-      let text = `Conversation ${conversationLabel(id, title)} (${running ? 'running' : 'idle'}, last activity ${formatRelativeTime(updatedAt)}):\n\n${transcript}\n\nShowing the most recent ${lines.length} messages (~${shownChars} chars).`
+      let text = `Conversation ${conversationLabel(id, title)}${sourceSuffix(label)} (${running ? 'running' : 'idle'}, last activity ${formatRelativeTime(updatedAt)}):\n\n${transcript}\n\nShowing the most recent ${lines.length} messages (~${shownChars} chars).`
       if (hiddenBefore > 0 && nextCursor) {
         text += ` ${totalMessages - lines.length} earlier messages are not shown. Call again with cursor="${nextCursor}" for the segment before this one.`
       }
@@ -280,6 +313,8 @@ function buildConversationSendTool(scope: ConversationInteropScope) {
         .describe('Only used with waitForReply=true. How long to wait for a reply. Default 120, max 300.'),
     },
     async (args) => {
+      const offline = callerWithdrawn(scope)
+      if (offline) return offline
       const resolved = resolveTargetOrFail(scope, args.target)
       if (!resolved.ok) return resolved.result
       const targetId = resolved.id
@@ -299,7 +334,7 @@ function buildConversationSendTool(scope: ConversationInteropScope) {
           forwardDepth,
           timeoutMs: (args.timeoutSec ?? 120) * 1000,
         })
-        if (!result.ok) return formatSendFailure(targetId, result.reason)
+        if (!result.ok) return formatSendFailure(targetId, result.reason, result.detail)
         if ('status' in result) {
           // The reply-check consumed this send as the reply someone else needed
           // from THIS conversation — but the caller here asked to wait for
@@ -315,7 +350,7 @@ function buildConversationSendTool(scope: ConversationInteropScope) {
               `(status: delivered_as_reply)`
           )
         }
-        return formatWaitOutcome(targetId, result.outcome, args.timeoutSec ?? 120)
+        return formatWaitOutcome(scope, targetId, result.outcome, args.timeoutSec ?? 120)
       }
 
       const result = await deliverToConversation({
@@ -326,7 +361,7 @@ function buildConversationSendTool(scope: ConversationInteropScope) {
         summary: args.summary,
         forwardDepth,
       })
-      if (!result.ok) return formatSendFailure(targetId, result.reason)
+      if (!result.ok) return formatSendFailure(targetId, result.reason, result.detail)
       if (result.status === 'resolved_pending_wait') {
         return textResult(`Delivered to [${targetId}] as a reply to its pending question. (status: delivered)`)
       }
@@ -339,8 +374,9 @@ function buildConversationSendTool(scope: ConversationInteropScope) {
 }
 
 function formatWaitOutcome(
+  scope: ConversationInteropScope,
   target: string,
-  outcome: { status: 'replied'; message: string } | { status: 'no_reply' } | { status: 'timeout' },
+  outcome: WaitOutcome,
   timeoutSec: number
 ) {
   if (outcome.status === 'replied') {
@@ -349,12 +385,19 @@ function formatWaitOutcome(
   if (outcome.status === 'no_reply') {
     return textResult(`[${target}] finished its turn but did not send a reply back. (status: no_reply)`)
   }
+  if (outcome.status === 'undelivered') {
+    return textResult(`Your message never reached [${target}]: ${outcome.reason}. (status: undelivered)`, true)
+  }
   return textResult(
-    `Timed out waiting for a reply from [${target}] after ${timeoutSec}s. It may still reply later; this call is no longer waiting. (status: timeout)`
+    `Timed out waiting for a reply from [${target}] after ${timeoutSec}s. ` +
+      // A run takes no messages outside a wait, so a late answer is refused.
+      (parseRunSenderKey(scope.conversationId)
+        ? 'A late reply will not be delivered to this run. (status: timeout)'
+        : 'It may still reply later; this call is no longer waiting. (status: timeout)')
   )
 }
 
-function formatSendFailure(target: string, reason: string) {
+function formatSendFailure(target: string, reason: string, detail?: string) {
   switch (reason) {
     case 'not_found':
       return textResult(
@@ -363,8 +406,17 @@ function formatSendFailure(target: string, reason: string) {
       )
     case 'self_target':
       return textResult('You cannot deliver a message to yourself.', true)
+    case 'read_only':
+      return textResult(`[${target}] cannot receive messages from other conversations: ${detail ?? 'it can only be read'}. (status: rejected)`, true)
+    case 'unavailable':
+      return textResult(`[${target}] cannot be messaged: ${detail ?? 'it is unavailable'}. (status: unavailable)`, true)
     case 'unreachable':
       return textResult(`Could not reach [${target}] — it could not be restarted. Try again, or tell the user. (status: unreachable)`, true)
+    case 'chain_too_deep':
+      return textResult(
+        'This message would extend a long chain of automatic replies between conversations. Stop replying automatically; tell the user or wait for their next message. (status: chain_too_deep)',
+        true
+      )
     case 'circuit_open':
       return textResult(
         `Send rate exceeded — further messages from this conversation are paused for ${COOLDOWN_MINUTES} minutes ` +

@@ -151,6 +151,9 @@ export interface AppliedCapabilityPolicy {
  * refuses. That last layer is what command rules ride on, and why the engine
  * rather than Halo evaluates them.
  *
+ * A policy only ever adds to `disallowedTools`: a tool the user disabled
+ * globally is out of the model's pool for a guest or teammate too.
+ *
  * A policy that withholds nothing returns `enforced: false` and changes no
  * option, so an unrestricted turn keeps the engine's fast path exactly as it was.
  */
@@ -168,7 +171,9 @@ export function applyCapabilityPolicy(
     .filter(name => !(keepFileTools && FILE_TOOLS.includes(name)))
   const filtered = filterMcpServersByPolicy(mcpServers, dbMcpServers, policy, mode, alwaysKeep)
 
-  sdkOptions.disallowedTools = disallowedTools
+  // Added to what the session already withholds (the user's disabled tools, the
+  // native team tools): a policy narrows a turn, it never re-opens a tool.
+  sdkOptions.disallowedTools = [...new Set([...(sdkOptions.disallowedTools ?? []), ...disallowedTools])]
   sdkOptions.allowedTools = buildAllowedToolRules(policy, mode)
   sdkOptions.mcpServers = filtered
   // Both must go: the flag and the mode each bypass the permission engine on

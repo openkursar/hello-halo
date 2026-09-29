@@ -16,7 +16,8 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { useAppStore } from '../stores/app.store'
 import { useSpaceStore } from '../stores/space.store'
-import { useChatStore } from '../stores/chat.store'
+import { useChatStore, useActiveConversationId } from '../stores/chat.store'
+import { useActiveConversationTitle } from '../hooks/useActiveConversationTitle'
 import { useCanvasStore, useCanvasIsOpen, useCanvasIsMaximized } from '../stores/canvas.store'
 import { canvasLifecycle } from '../services/canvas-lifecycle'
 import { useSearchStore } from '../stores/search.store'
@@ -81,15 +82,11 @@ export function SpacePage() {
     return (spaceState?.conversations?.length ?? 0) > 0
   })
 
-  const currentConversationId = useChatStore(state => state.getCurrentSpaceState().currentConversationId)
+  // The conversation on screen — a selected digital human's, else the regular one
+  const activeConversationId = useActiveConversationId()
 
   // Centered header title — name of the conversation currently open
-  const currentConversationTitle = useChatStore(state => {
-    const spaceState = state.spaceStates.get(state.currentSpaceId ?? '')
-    const id = spaceState?.currentConversationId
-    if (!id) return undefined
-    return spaceState?.conversations?.find(c => c.id === id)?.title || undefined
-  })
+  const currentConversationTitle = useActiveConversationTitle()
 
   // Canvas state - use precise selectors to minimize re-renders
   const isCanvasOpen = useCanvasIsOpen()
@@ -292,16 +289,16 @@ export function SpacePage() {
   // just resyncs the baseline below, it never forces the rail open, since
   // that conversation's changes aren't new right now.
   const touchedFiles = useConversationTouchedFiles()
-  const touchedFilesBaselineRef = useRef({ conversationId: currentConversationId, size: touchedFiles.size })
+  const touchedFilesBaselineRef = useRef({ conversationId: activeConversationId, size: touchedFiles.size })
 
   useEffect(() => {
     const baseline = touchedFilesBaselineRef.current
-    const sameConversation = baseline.conversationId === currentConversationId
+    const sameConversation = baseline.conversationId === activeConversationId
     if (sameConversation && touchedFiles.size > baseline.size && !effectiveRailExpanded) {
       setRailExpanded(true)
     }
-    touchedFilesBaselineRef.current = { conversationId: currentConversationId, size: touchedFiles.size }
-  }, [touchedFiles, currentConversationId, effectiveRailExpanded, setRailExpanded])
+    touchedFilesBaselineRef.current = { conversationId: activeConversationId, size: touchedFiles.size }
+  }, [touchedFiles, activeConversationId, effectiveRailExpanded, setRailExpanded])
 
   // Consume a workspace card's asset-chip request (space.store's
   // pendingArtifactRailTab, set by SpacesPage before switching here) — force

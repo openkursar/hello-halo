@@ -767,7 +767,7 @@ class CanvasLifecycle {
       isDirty: false,
       isLoading: false, // Already loaded by AI
       browserViewId: viewId, // Reference to existing view
-      browserViewOwned: false, // AI singleton — detach on close, do not destroy
+      browserViewOwned: false, // AI-driven view — detach on close, do not destroy
       browserState: {
         isLoading: false,
         canGoBack: false,
@@ -942,6 +942,16 @@ class CanvasLifecycle {
     return () => {
       if (this.dirtyCloseGuards.get(type) === guard) this.dirtyCloseGuards.delete(type)
     }
+  }
+
+  /**
+   * Close the tabs showing an AI-attached view that no longer exists (its
+   * session ended). Owned views are the Canvas's own to close; only attached
+   * ones can vanish underneath their tab.
+   */
+  async closeTabsOfGoneView(viewId: string): Promise<void> {
+    const stale = [...this.tabs.values()].filter(tab => tab.browserViewId === viewId && !tab.browserViewOwned)
+    for (const tab of stale) await this.closeTab(tab.id)
   }
 
   /**

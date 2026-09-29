@@ -118,6 +118,8 @@ export interface CircuitBreaker {
   recordInboundForwardDepth(conversationId: string, forwardDepth: number): void
   /** The forward depth of the delivery that started the conversation's current turn (0 = not interop-triggered). */
   getInboundForwardDepth(conversationId: string): number
+  /** The turn that carried this depth is over: a later turn of the conversation starts a chain of its own. */
+  clearInboundForwardDepth(conversationId: string): void
   onBreach(listener: (event: CircuitBreachEvent) => void): () => void
 }
 
@@ -210,12 +212,16 @@ export function createCircuitBreaker(limits: CircuitLimits = DEFAULT_CIRCUIT_LIM
     return inboundForwardDepth.get(conversationId) ?? 0
   }
 
+  function clearInboundForwardDepth(conversationId: string): void {
+    inboundForwardDepth.delete(conversationId)
+  }
+
   function onBreach(listener: (event: CircuitBreachEvent) => void): () => void {
     const disposable = breachEmitter.event(listener)
     return () => disposable.dispose()
   }
 
-  return { checkAndCharge, recordInboundForwardDepth, getInboundForwardDepth, onBreach }
+  return { checkAndCharge, recordInboundForwardDepth, getInboundForwardDepth, clearInboundForwardDepth, onBreach }
 }
 
 /** Shared instance — see the `CircuitBreaker` doc comment for why this isn't a bare factory export. */

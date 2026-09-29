@@ -5,7 +5,7 @@
  * from disconnected/connecting → connected (i.e., a reconnect just succeeded).
  *
  * Purpose: Remote/Capacitor clients may lose WebSocket events during brief
- * disconnections. Components that display real-time data (AppChatView,
+ * disconnections. Components that display real-time data (the chat page,
  * ImChatView) use this hook to reload their messages after a reconnect,
  * ensuring no events are silently lost.
  *

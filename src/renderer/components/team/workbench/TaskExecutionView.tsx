@@ -63,7 +63,7 @@ export function TaskExecutionView({ teamId, epochId, appId, spaceId, remote }: {
         <summary className="cursor-pointer text-xs"><span className="font-medium">{label}</span><TaskTimestamp value={turn.input?.timestamp ?? result?.timestamp} recordId={turn.id} format="datetime" className="ml-2 text-muted-foreground" /><span className="mt-2 block line-clamp-2 break-words leading-5 text-muted-foreground">{result?.error || result?.content || t('View execution')}</span></summary>
         {expanded.has(turn.id) && <div className="mt-3 min-w-0 space-y-3 border-t border-border pt-3 [overflow-wrap:anywhere]">
           {turn.input && <details className="rounded-lg bg-secondary/30 p-3"><summary className="cursor-pointer text-xs text-muted-foreground">{t('View original input')}</summary><p className="mt-2 whitespace-pre-wrap text-xs leading-5">{turn.input.content}</p></details>}
-          {turn.outputs.map(message => <MessageRow key={message.id} message={message} hideBrowserViewButton defaultThoughtsExpanded />)}
+          {turn.outputs.map(message => <MessageRow key={message.id} message={message} hideBrowserLiveView hideTerminalOpen defaultThoughtsExpanded />)}
         </div>}
       </details>
     })}

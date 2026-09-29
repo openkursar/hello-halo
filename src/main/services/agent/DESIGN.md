@@ -10,7 +10,8 @@
 |---|---|---|
 | Session lifecycle (create / reuse / destroy / batch-invalidate on config change) | `session-manager.ts` | Largest file. V2 Session model. Registers callback on `config.service.ts` to auto-clean when API config changes. |
 | SDK stream → Thought[] translation | `stream-processor.ts` | Second largest. Incremental push, partial tool calls, interruption recovery. |
-| SDK invocation & configuration | `sdk-config.ts`, `resolved-sdk.ts`, `codex/` | Provider selection, model resolution, SDK option assembly. Alternate SDK engines are loaded only through `resolved-sdk.ts`; Codex-specific translation is isolated under `codex/`. |
+| SDK invocation & configuration | `sdk-config.ts`, `resolved-sdk.ts`, `codex/` | Provider selection, model resolution, SDK option assembly through two named entries (`buildUserSessionSdkOptions`, `buildInternalTaskSdkOptions`; see §11). Alternate SDK engines are loaded only through `resolved-sdk.ts`; Codex-specific translation is isolated under `codex/`. |
+| User AI settings | `user-agent-settings.ts` | The one reader of the user's global AI settings for a session (`maxTurns`, `disabledTools`, `promptProfile`, digital-humans switch). Entries never pass them. See §11. |
 | Thinking depth → engine options | `reasoning-effort.ts` | Combines the per-request Deep Thinking toggle with the per-model effort level into `effort` / `maxThinkingTokens` / Codex `model_reasoning_effort`. Every SDK call site goes through `applyReasoningEffort`. See §9. |
 | Engine availability probe | `engine-availability.ts` | Detects which engine runtimes shipped in this build (manifest + entry file + platform binary for Codex) so `resolved-sdk.ts` can fall back instead of crashing at startup. Result is cached per process; exposed via `agent:get-engine-availability`. |
 | System prompt composition | `system-prompt.ts` | Space context, conversation context, tool availability injection. `buildKnowledgeSection` is exported separately for creation-time append. On the `halo` engine the Claude Code-derived template is not used: `buildSystemPrompt` yields only Halo's product context, and every site that sets `sdkOptions.systemPrompt` wraps it with `toEngineSystemPrompt` into the engine's `{ preset: 'default', append }`. Code that later extends or reads the prompt goes through `appendToSystemPrompt` / `hostSystemPromptText`, never assumes a string. |
@@ -150,6 +151,8 @@ behavior do not inject — they go through the normal send path and queue.
 | If you need to... | Start here |
 |---|---|
 | Change how the SDK is invoked or configured | `sdk-config.ts` / `resolved-sdk.ts` |
+| Add or change a user-level AI setting every session must obey | `user-agent-settings.ts` (read it in the layer that consumes it, never thread it through entries) — see §11 |
+| Add a server every user-facing session should have | `toolsets/base.ts` — see §11 |
 | Change what identity the host puts on outgoing requests | `request-identity-factory.ts` (see §10) |
 | Change how hard a model thinks | `reasoning-effort.ts` (never set `effort` / `maxThinkingTokens` at a call site) |
 | Change engine bundling detection / startup fallback | `engine-availability.ts` / `resolved-sdk.ts` |
@@ -261,7 +264,7 @@ credential change — the toggle does not, since it is not config.
 
 ## 10) Request Identity (halo engine only)
 
-When the active engine is `halo`, `buildBaseSdkOptions` attaches a
+When the active engine is `halo`, the SDK option builders (`sdk-config.ts`) attach a
 `requestIdentity` to the SDK options. The SDK is identity-agnostic — it has a
 `RequestIdentity` seam and forwards whatever it is handed; every
 provider-specific constant and algorithm lives host-side in
@@ -310,3 +313,70 @@ every downstream log.
 paths see the same shape as a first-party client. It is not an accident of
 bundling — it is why the SDK itself carries no provider identity. Do not
 "clean it up" out of the host without a product decision.
+
+## 11) User Settings Are Read at the Bottom; Entries Pass Nothing
+
+Every place that starts an agent session — space chat (`send-message.ts`,
+`session-manager.ts` warm-up), digital-human chat and automation
+(`apps/runtime`), a team member's turn — used to receive the user's global AI
+settings as parameters, and each forgot a different one. Digital humans ignored
+the user's disabled tools; the prompt kept saying Halo could create digital
+humans after the user switched them off.
+
+Now the layers that assemble a session read the settings themselves, through
+`user-agent-settings.ts` (`readUserAgentSettings`):
+
+| Setting | Read by | Notes |
+|---|---|---|
+| `maxTurns`, `disabledTools` | `sdk-config.ts` | Engine-independent. Unset `disabledTools` means the built-in default list; the native team tools are always withheld. |
+| `promptProfile`, `enableDigitalHumans` (prompt line) | `system-prompt.ts` `buildSystemPrompt` | An explicit value in the context wins over the setting. `promptProfile` only picks a template on engines that take Halo's prompt; the halo engine appends product context to its own default and ignores it. So every prompt built on `buildSystemPrompt` — digital humans' too — follows both. |
+| `enableDigitalHumans` (tool) | `toolsets/base.ts` | Gates `halo-apps` in the base toolset. |
+| `configDirMode`, `customConfigDir` | `sdk-config.ts` `buildSdkEnv` via `resolveClaudeConfigDir()` | Not per-entry: `CLAUDE_CONFIG_DIR` also holds the CLI credential slot, so internal tasks follow it too. |
+
+**Two entries, not a flag.** `buildUserSessionSdkOptions` reads the settings.
+`buildInternalTaskSdkOptions` deliberately does not (built-in defaults, `halo`
+profile, no digital-human line): a background task the user never asked for by
+name — memory consolidation, team member proposals — must not inherit the tool
+restrictions or turn cap the user set for their own sessions. Which call site
+uses which:
+
+| Call site | Entry | Why |
+|---|---|---|
+| `send-message.ts`, `session-manager.ts` `ensureSessionWarm` | user session | Space chat. The warm-up must match the send, and now cannot differ: neither passes anything. |
+| `apps/runtime/app-chat.ts` | user session | Digital-human chat, IM, team members: a session the user's digital human runs on their behalf. |
+| `apps/runtime/execute.ts` | user session | Automation the user installed and configured. |
+| `apps/team/service.ts` `proposeMembersViaSdk` | internal task | One-shot, tool-less helper. |
+| `services/memory-consolidation/runner.ts` | internal task | Housekeeping; confined to its workspace, replaces the prompt. |
+
+**A policy narrows, never re-opens.** `applyCapabilityPolicy`
+(`apps/runtime/capability-policy.ts`) adds its withheld tools to the session's
+`disallowedTools` instead of replacing them, so a tool the user disabled stays
+out of an IM guest's or a borrowed teammate's turn even where the policy would
+have granted it.
+
+**Prompt follows the mounts.** An entry that never mounts `halo-apps`
+(automation, a disposable team member) states `digitalHumansEnabled: false` in
+its prompt context, so the prompt does not offer what the run cannot do; others
+inherit the setting.
+
+**Rationale check for digital humans.** The config directory and skills already
+reached digital humans before this change (`buildSdkEnv` fell back to the
+persisted `configDirMode` for every entry, and project/user setting sources were
+always on). What actually changed for them: the user's `disabledTools`, prompt
+profile and the digital-humans switch now apply. Release notes must not claim
+digital humans newly gain the CC config directory's skills or CLAUDE.md.
+
+A new call site decides the same question: is this the user's session, or work
+the system does for itself? Do not add a setting parameter to either entry.
+
+**Base toolset** (`toolsets/base.ts`, `buildBaseToolset`): web search, Halo
+documentation (with the authoring gate `halo-apps` shares) and `halo-apps`
+(while digital humans are enabled). The space chat broker, digital-human chat
+and automation all start from it and remove what does not apply to them at
+their own call site, with the reason. Not in the base: conversation
+collaboration and everything granted per conversation or per permission.
+
+**Entry x capability matrix**: `tests/unit/services/agent/entry-capability-matrix.test.ts`
+runs the real entries and records which servers and which settings each one gets.
+Adding a capability or an entry means updating that table; a server that shows up
+in a row unlisted fails it.

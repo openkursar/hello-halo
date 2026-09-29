@@ -548,7 +548,7 @@ async function garbageCollectStaleBuiltins(
     // then hard delete with allowBuiltin so the protection guard does not
     // fire. The allowBuiltin flag is the loader's only sanctioned bypass.
     try {
-      await appManager.uninstall(app.id)
+      await appManager.uninstall(app.id, { reason: 'system' })
     } catch {
       /* may already be uninstalled — proceed to hard delete */
     }

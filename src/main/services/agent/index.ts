@@ -126,5 +126,7 @@ export { getWorkingDir, getApiCredentials, getApiCredentialsForConversation } fr
 export { addSdkHooks } from './sdk-config'
 export { parseSDKMessage, buildMessageContent, formatCanvasContext } from './message-utils'
 export { getOrCreateV2Session, activeSessions, v2Sessions, getConsumerHandle, SessionOptionsStaleError } from './session-manager'
+// Whether a turn's team agents are still working (a session idle between turns but not free).
+export { hasActiveTeamTasks } from './subagent-handler'
 export type { SessionGates } from './session-manager'
 export { broadcastMcpStatus } from './mcp-manager'

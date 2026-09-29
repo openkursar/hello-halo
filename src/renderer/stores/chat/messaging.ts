@@ -1,225 +1,44 @@
 /**
  * createMessagingSlice — messaging slice of the chat store.
+ *
+ * The verbs act on the conversation on screen (or the one named) and are
+ * carried out by that conversation's backend; see ./backend.
  */
 import type { ChatSlice } from './internal'
-import { api, canvasLifecycle, createEmptySessionState } from './internal'
-import type { CanvasContext, Message } from './internal'
-import i18n from '../../i18n'
-import { titleFromFirstMessage } from '../../../shared/conversation-title'
+import { api, createEmptySessionState } from './internal'
+import { selectActiveConversationId } from './active'
+import { conversationKind, backendFor } from './backend'
 
-export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 'injectMessage' | 'approveTool' | 'rejectTool' | 'continueAfterInterrupt'> = (set, get) => ({
+export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 'injectMessage' | 'dequeueMessage' | 'approveTool' | 'rejectTool' | 'continueAfterInterrupt'> = (set, get) => ({
   sendMessage: async (content, images, thinkingEnabled, options) => {
-    const conversation = get().getCurrentConversation()
-    const conversationMeta = get().getCurrentConversationMeta()
-    const { currentSpaceId } = get()
-
-    if ((!conversation && !conversationMeta) || !currentSpaceId) {
+    const conversationId = selectActiveConversationId(get())
+    if (!conversationId) {
       console.error('[ChatStore] No conversation or space selected')
       return false
     }
-
-    const conversationId = conversationMeta?.id || conversation?.id
-    if (!conversationId) return false
-    const goal = options?.goal
-    let userMessage: Message | undefined
-
-    // Main titles a conversation from its first message the moment it records
-    // it; mirror that now instead of waiting for the turn-end reload.
-    const titleSource = conversationMeta ?? conversation
-    const previousTitle = titleSource?.title
-    const autoTitle = titleSource && titleSource.messageCount === 0 && !titleSource.titleCustomized
-      ? titleFromFirstMessage(content)
-      : null
-    const withTitle = <T extends { title: string }>(item: T, title: string | null | undefined): T =>
-      title ? { ...item, title } : item
-    const restoreOwnedTitle = <T extends { title: string; titleCustomized?: boolean }>(item: T): T =>
-      autoTitle && item.title === autoTitle && !item.titleCustomized && previousTitle
-        ? { ...item, title: previousTitle }
-        : item
-
-    // Take back the optimistic bubble and end "generating" for a message no
-    // agent event will ever finish.
-    const withdraw = (error: string | null) => set((state) => {
-      const newSessions = new Map(state.sessions)
-      const session = newSessions.get(conversationId) || createEmptySessionState()
-      newSessions.set(conversationId, { ...session, error, isGenerating: false, isThinking: false })
-
-      const newCache = new Map(state.conversationCache)
-      const cached = newCache.get(conversationId)
-      if (cached && userMessage) {
-        newCache.set(conversationId, restoreOwnedTitle({ ...cached, messages: cached.messages.filter((m) => m !== userMessage) }))
-      }
-
-      const newSpaceStates = new Map(state.spaceStates)
-      const spaceState = newSpaceStates.get(currentSpaceId)
-      if (spaceState && userMessage) {
-        newSpaceStates.set(currentSpaceId, {
-          ...spaceState,
-          conversations: spaceState.conversations.map((c) =>
-            c.id === conversationId ? restoreOwnedTitle({ ...c, messageCount: Math.max(0, c.messageCount - 1) }) : c
-          )
-        })
-      }
-      return { sessions: newSessions, conversationCache: newCache, spaceStates: newSpaceStates }
-    })
-
-    try {
-      // Initialize/reset session state for this conversation
-      set((state) => {
-        const newSessions = new Map(state.sessions)
-        const prevSession = newSessions.get(conversationId)
-        newSessions.set(conversationId, {
-          isGenerating: true,
-          streamingContent: '',
-          isStreaming: false,
-          thoughts: [],
-          isThinking: true,
-          pendingToolApproval: null,
-          error: null,
-          errorType: null,
-          compactInfo: null,
-          apiRetry: null,
-          textBlockVersion: 0,
-          pendingQuestion: null,
-          queuedMessages: [],
-          turnId: (prevSession?.turnId ?? 0) + 1,
-          turnStartedAt: Date.now(),
-        })
-        return { sessions: newSessions }
-      })
-
-      // Add user message to UI immediately (update cache if exists)
-      userMessage = {
-        id: `msg-${Date.now()}`,
-        role: 'user',
-        content,
-        timestamp: new Date().toISOString(),
-        images: images,  // Include images in message for display
-        ...(goal ? { metadata: { goal } } : {})
-      }
-
-      set((state) => {
-        // Update cache if conversation is loaded
-        const newCache = new Map(state.conversationCache)
-        const cached = newCache.get(conversationId)
-        if (cached) {
-          newCache.set(conversationId, withTitle({
-            ...cached,
-            messages: [...cached.messages, userMessage!],
-            updatedAt: new Date().toISOString()
-          }, autoTitle))
-        }
-
-        // Update metadata (messageCount, first-message title)
-        const newSpaceStates = new Map(state.spaceStates)
-        const spaceState = newSpaceStates.get(currentSpaceId)
-        if (spaceState) {
-          newSpaceStates.set(currentSpaceId, {
-            ...spaceState,
-            conversations: spaceState.conversations.map((c) =>
-              c.id === conversationId
-                ? withTitle({ ...c, messageCount: c.messageCount + 1, updatedAt: new Date().toISOString() }, autoTitle)
-                : c
-            )
-          })
-        }
-        return { spaceStates: newSpaceStates, conversationCache: newCache }
-      })
-
-      // Build Canvas Context for AI awareness
-      // This allows AI to naturally understand what the user is currently viewing
-      const buildCanvasContext = (): CanvasContext | undefined => {
-        if (!canvasLifecycle.getIsOpen() || canvasLifecycle.getTabCount() === 0) {
-          return undefined
-        }
-
-        const tabs = canvasLifecycle.getTabs()
-        const activeTabId = canvasLifecycle.getActiveTabId()
-        const activeTab = canvasLifecycle.getActiveTab()
-
-        return {
-          isOpen: true,
-          tabCount: tabs.length,
-          activeTab: activeTab ? {
-            type: activeTab.type,
-            title: activeTab.title,
-            url: activeTab.url,
-            path: activeTab.path,
-            terminalSessionId: activeTab.terminalSessionId
-          } : null,
-          tabs: tabs.map(t => ({
-            type: t.type,
-            title: t.title,
-            url: t.url,
-            path: t.path,
-            terminalSessionId: t.terminalSessionId,
-            isActive: t.id === activeTabId
-          }))
-        }
-      }
-
-      // Send to agent (with images, thinking mode, and canvas context)
-      const response = await api.sendMessage({
-        spaceId: currentSpaceId,
-        conversationId,
-        message: content,
-        images: images,  // Pass images to API
-        thinkingEnabled,  // Pass thinking mode to API
-        canvasContext: buildCanvasContext(),  // Pass canvas context for AI awareness
-        ...(goal ? { goal } : {})
-      })
-      // A refusal comes back before main records the message or starts a turn,
-      // so no agent event will ever end this one.
-      if (response && response.success === false) {
-        console.error(`[ChatStore] Message refused for ${conversationId}: ${response.error ?? 'unknown error'}`)
-        // A goal send reports its own failure.
-        withdraw(goal ? null : i18n.t('Failed to send message'))
-        return false
-      }
-      return true
-    } catch (error) {
-      console.error('Failed to send message:', error)
-      // A goal send reports its own failure and rolls back the goal shown for
-      // it; its bubble goes too, since the composer hands the text back.
-      if (goal) {
-        withdraw(null)
-        return false
-      }
-      // Update session error state
-      set((state) => {
-        const newSessions = new Map(state.sessions)
-        const session = newSessions.get(conversationId) || createEmptySessionState()
-        newSessions.set(conversationId, {
-          ...session,
-          error: i18n.t('Failed to send message'),
-          isGenerating: false,
-          isThinking: false
-        })
-        return { sessions: newSessions }
-      })
-      return true
-    }
+    return backendFor(conversationId).send({ set, get }, conversationId, { content, images, thinkingEnabled, options })
   },
 
-  // Stop generation for a specific conversation
+  // Stop generation for a specific conversation (default: the one on screen)
   stopGeneration: async (conversationId?: string) => {
-    const targetId = conversationId || get().getCurrentSpaceState().currentConversationId
-    try {
-      await api.stopGeneration(targetId ?? undefined)
-
-      if (targetId) get().markSessionStopped(targetId)
-    } catch (error) {
-      console.error('Failed to stop generation:', error)
+    const targetId = conversationId || selectActiveConversationId(get())
+    if (!targetId) {
+      try {
+        await api.stopGeneration(undefined)
+      } catch (error) {
+        console.error('Failed to stop generation:', error)
+      }
+      return
     }
+    await backendFor(targetId).stop({ set, get }, targetId)
   },
 
-  // Inject a mid-turn message into an active session (Agent Team mode).
-  // The message is optimistically shown in the queued panel, then sent to the main process.
+  // Add a message to the turn that is running. It shows in the queued panel at
+  // once and is taken back if the backend could not deliver it.
   injectMessage: async (conversationId: string, message: string) => {
     const trimmed = message.trim()
     if (!trimmed) return
 
-    // Optimistic UI: add to queue for immediate feedback
     set((state) => {
       const newSessions = new Map(state.sessions)
       const session = newSessions.get(conversationId) || createEmptySessionState()
@@ -231,22 +50,25 @@ export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 
     })
 
     try {
-      await api.injectMessage({ conversationId, message: trimmed })
+      await backendFor(conversationId).inject({ set, get }, conversationId, trimmed)
     } catch (error) {
       console.error('[ChatStore] injectMessage failed:', error)
-      // Roll back on failure
-      set((state) => {
-        const newSessions = new Map(state.sessions)
-        const session = newSessions.get(conversationId)
-        if (session) {
-          newSessions.set(conversationId, {
-            ...session,
-            queuedMessages: session.queuedMessages.filter((m) => m !== trimmed)
-          })
-        }
-        return { sessions: newSessions }
-      })
+      get().dequeueMessage(conversationId, trimmed)
     }
+  },
+
+  dequeueMessage: (conversationId: string, message: string) => {
+    set((state) => {
+      const session = state.sessions.get(conversationId)
+      const index = session?.queuedMessages.indexOf(message) ?? -1
+      if (!session || index < 0) return state
+      const newSessions = new Map(state.sessions)
+      newSessions.set(conversationId, {
+        ...session,
+        queuedMessages: session.queuedMessages.filter((_, i) => i !== index)
+      })
+      return { sessions: newSessions }
+    })
   },
 
   // Approve tool for a specific conversation
@@ -283,28 +105,21 @@ export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 
     }
   },
 
-  // Continue conversation after interrupt (used by InterruptedBubble)
-  // Clears error state and sends a "continue" message to AI to resume the interrupted response
+  // Continue after an interrupt (InterruptedBubble): clear the error and ask
+  // the agent to resume the interrupted response.
   continueAfterInterrupt: (conversationId: string) => {
-    // First clear the error state
     set((state) => {
       const newSessions = new Map(state.sessions)
       const session = newSessions.get(conversationId)
       if (session) {
-        newSessions.set(conversationId, {
-          ...session,
-          error: null,
-          errorType: null
-        })
+        newSessions.set(conversationId, { ...session, error: null, errorType: null })
       }
       return { sessions: newSessions }
     })
 
-    // Then send a "continue" message to AI
-    const state = get()
-    const spaceState = state.spaceStates.get(state.currentSpaceId || '')
-    if (spaceState?.currentConversationId === conversationId) {
-      state.sendMessage('continue')
-    }
+    if (conversationKind(conversationId) === 'virtual') return
+    void backendFor(conversationId)
+      .send({ set, get }, conversationId, { content: 'continue' })
+      .catch((error) => console.error('[ChatStore] continueAfterInterrupt failed:', error))
   },
 })

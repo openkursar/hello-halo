@@ -16,11 +16,16 @@
  */
 
 import { useTerminalStore } from '../stores/terminal.store'
-import { useAIBrowserStore } from '../stores/ai-browser.store'
+import { useAIBrowserStore, isPageInUseByOthers } from '../stores/ai-browser.store'
+import { useChatStore } from '../stores/chat.store'
+import { useAppsStore } from '../stores/apps.store'
+import { parseNativeChatKey } from '../../shared/apps/im-keys'
+import { buildBrowserLiveSessions } from './browser-live-sessions'
 import { useSpaceStore } from '../stores/space.store'
 import { useAppStore } from '../stores/app.store'
 import { canvasLifecycle } from '../services/canvas-lifecycle'
 import { api } from '../api'
+import { isElectron } from '../api/transport'
 import { useTranslation } from '../i18n'
 
 export type LiveSessionKind = 'terminal' | 'browser'
@@ -32,6 +37,10 @@ export interface LiveSession {
   /** AI is actively driving it right now — drives the pulse indicator. */
   busy: boolean
   lastActivityAt: number
+  /** Browser pages: where to point a freshly attached canvas tab. */
+  url?: string | null
+  /** Whether this client can stop it (browser pages live in the desktop app only). */
+  stoppable: boolean
 }
 
 export interface LiveSessionsApi {
@@ -49,9 +58,12 @@ export interface LiveSessionsApi {
    * avoid.
    */
   open: (session: LiveSession) => Promise<boolean>
-  /** Stop the underlying resource (terminates the process/view). */
-  stop: (session: LiveSession) => Promise<void>
+  /** Stop the underlying resource (terminates the process/view). False when it was not stopped. */
+  stop: (session: LiveSession) => Promise<StopOutcome>
 }
+
+/** Why a stop did not happen: what the user can act on differs (a page in use elsewhere stays in use). */
+export type StopOutcome = { stopped: true } | { stopped: false; reason: 'gone' | 'in-use' | 'not-owned' | 'failed' }
 
 export function useLiveSessions(): LiveSessionsApi {
   const { t } = useTranslation()
@@ -63,18 +75,17 @@ export function useLiveSessions(): LiveSessionsApi {
 
   // The terminal registry is process-global (all spaces), but the tray belongs
   // to the space you're in — an AI terminal kept alive in another space must not
-  // leak into this one's tray (it reappears when you return). The AI browser is
-  // a single process-global view carrying no spaceId, so it needs no filter.
+  // leak into this one's tray (it reappears when you return).
   const currentSpaceId = useSpaceStore(s => s.currentSpace?.id)
 
-  // AI browser: the interactive singleton drives one active view at a time.
-  // Its lifecycle (active-view / view-gone) is reflected in the store, keyed to
-  // the exact viewId — the same identity used to reveal the live view.
-  const aiViewId = useAIBrowserStore(s => s.activeViewId)
-  const aiUrl = useAIBrowserStore(s => s.activeUrl)
-  const aiTitle = useAIBrowserStore(s => s.activeTitle)
-  const aiOperating = useAIBrowserStore(s => s.isOperating)
-  const aiLastActivityAt = useAIBrowserStore(s => s.lastActivityAt)
+  // AI browser: every page an AI conversation of this space holds, whichever
+  // conversation is on screen, named after its owner so the rows can be told
+  // apart. Keyed to the exact viewId — the same identity used to reveal it.
+  const browserPages = useAIBrowserStore(s => s.pages)
+  const browserViews = useAIBrowserStore(s => s.views)
+  const browserOperating = useAIBrowserStore(s => s.operating)
+  const apps = useAppsStore(s => s.apps)
+  const spaceConversations = useChatStore(s => (currentSpaceId ? s.spaceStates.get(currentSpaceId)?.conversations : undefined))
 
   // Terminal source: every running session the AI has operated (aiTouched),
   // whoever opened it. A user terminal the AI later drove can outlive its
@@ -90,18 +101,22 @@ export function useLiveSessions(): LiveSessionsApi {
       title: s.title,
       busy: aiWriting.has(s.id),
       lastActivityAt: s.lastActivityAt,
+      stoppable: true,
     }))
 
-  // Browser source: present iff the AI currently holds a live view.
-  const browserSessions: LiveSession[] = aiViewId
-    ? [{
-        id: aiViewId,
-        kind: 'browser' as const,
-        title: aiTitle || hostnameOf(aiUrl) || t('AI Browser'),
-        busy: aiOperating,
-        lastActivityAt: aiLastActivityAt,
-      }]
-    : []
+  const ownerLabel = (conversationId: string): string => {
+    const native = parseNativeChatKey(conversationId)
+    if (native) return apps.find(a => a.id === native.appId)?.spec.name || t('Digital human')
+    return spaceConversations?.find(c => c.id === conversationId)?.title || t('Conversation')
+  }
+  const browserSessions: LiveSession[] = buildBrowserLiveSessions({
+    pages: browserPages,
+    views: browserViews,
+    spaceId: currentSpaceId,
+    operating: browserOperating,
+    ownerLabel,
+    untitled: t('AI Browser'),
+  }).map(s => ({ ...s, stoppable: isElectron() }))
 
   const sessions = [...browserSessions, ...terminalSessions]
     .sort((a, b) => b.lastActivityAt - a.lastActivityAt)
@@ -125,30 +140,30 @@ export function useLiveSessions(): LiveSessionsApi {
       await openTerminalInCanvas(session.id, session.title)
     } else {
       // Attach the exact AI-driven BrowserView (same WebContents).
-      await canvasLifecycle.attachAIBrowserView(session.id, aiUrl || '', session.title)
+      await canvasLifecycle.attachAIBrowserView(session.id, session.url || '', session.title)
     }
     return true
   }
 
-  const stop = async (session: LiveSession) => {
+  const stop = async (session: LiveSession): Promise<StopOutcome> => {
     if (session.kind === 'terminal') {
       await killTerminalSession(session.id)
+      return { stopped: true }
     } else {
-      // Destroying the view routes through browser:destroy, which clears the AI
-      // singleton's active view and broadcasts view-gone (the store then drops it).
-      await api.destroyBrowserView(session.id)
+      // Re-checked at the moment of the click: another conversation may have
+      // moved onto the page since the row was drawn.
+      // Fast path only: the store can be one event behind, so main checks again
+      // and is the one that decides.
+      const browser = useAIBrowserStore.getState()
+      const page = browser.pages[session.id]
+      if (!page) return { stopped: false, reason: 'gone' }
+      if (isPageInUseByOthers(browser, session.id)) return { stopped: false, reason: 'in-use' }
+      // A stopped page is announced gone, which drops it from the store.
+      const result = await api.stopAIBrowserPage(session.id, page.conversationId)
+      if (!result.stopped) console.warn(`[LiveSessions] Stop of ${session.id} refused: ${result.reason ?? 'unavailable'}`)
+      return result.stopped ? { stopped: true } : { stopped: false, reason: result.reason ?? 'failed' }
     }
   }
 
   return { sessions, busy, open, stop }
-}
-
-/** Best-effort hostname for a display label; null when the URL is unusable. */
-function hostnameOf(url: string | null): string | null {
-  if (!url) return null
-  try {
-    return new URL(url).hostname
-  } catch {
-    return null
-  }
 }

@@ -2,11 +2,13 @@
  * ChatHistoryPanel - Collapsible panel for browsing conversation history
  * - Desktop: Dropdown menu from button
  * - Mobile: Bottom sheet for better touch interaction
+ * Lists the space's conversations and, above them, its digital-human
+ * conversations — the same ones the sidebar shows, opening on the same chat page.
  * Features smooth animations, elegant design, and intuitive interactions
  * Supports inline title editing
  */
 
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { Virtuoso } from 'react-virtuoso'
 import { X, EllipsisVertical, Pin, Pencil, Trash2, History } from 'lucide-react'
 import type { ConversationMeta } from '../../types'
@@ -14,7 +16,21 @@ import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { useChatStore, useAllConversationStatuses } from '../../stores/chat.store'
 import { useSpaceStore } from '../../stores/space.store'
+import { useAppChatPinsStore } from '../../stores/app-chat-pins.store'
+import { useAppChatConversationRows, type AppChatConversationRow } from '../../hooks/useAppChatConversationRows'
 import { TaskStatusDot } from '../pulse/TaskStatusDot'
+import { appChatSessionLabel } from './conversation-row-format'
+
+/** One line of the list: a section heading, a space conversation, or a digital human's. */
+type HistoryItem =
+  | { type: 'header'; key: string; label: string }
+  | { type: 'conversation'; key: string; conversation: ConversationMeta }
+  | { type: 'digital-human'; key: string; row: AppChatConversationRow }
+
+/** Pinned first, then newest — the order the sidebar's pinned section reads in. */
+function sortDigitalHumanRows(rows: AppChatConversationRow[]): AppChatConversationRow[] {
+  return [...rows].sort((a, b) => Number(b.starred) - Number(a.starred) || b.updatedAt - a.updatedAt)
+}
 
 // Format relative time
 function formatRelativeTime(dateString: string, t: (key: string, options?: any) => string): string {
@@ -53,20 +69,41 @@ export function ChatHistoryPanel() {
     const spaceState = state.spaceStates.get(state.currentSpaceId ?? '')
     return spaceState?.conversations ?? []
   })
+  // The regular conversation is not "current" while a digital human is on screen.
   const currentConversationId = useChatStore(state => {
     const spaceState = state.spaceStates.get(state.currentSpaceId ?? '')
-    return spaceState?.currentConversationId ?? undefined
+    return spaceState?.selectedAppChat ? undefined : spaceState?.currentConversationId ?? undefined
   })
+  const selectedAppChatId = useChatStore(state => {
+    const spaceState = state.spaceStates.get(state.currentSpaceId ?? '')
+    return spaceState?.selectedAppChat?.conversationId
+  })
+  const currentSpaceId = useChatStore(state => state.currentSpaceId)
   const currentSpace = useSpaceStore(state => state.currentSpace)
   const spaceName = currentSpace?.isTemp ? t('Halo Workspace') : (currentSpace?.name ?? '')
 
   // Single batch subscription for all conversation statuses (replaces N individual hooks)
   const conversationStatuses = useAllConversationStatuses()
   const [isExpanded, setIsExpanded] = useState(false)
+  // Only read while the list is open; the sidebar keeps its own copy warm.
+  const appChatRows = useAppChatConversationRows(currentSpaceId, { enabled: isExpanded })
+  const toggleAppChatPin = useAppChatPinsStore(s => s.toggleAppChatPin)
+  const historyItems = useMemo<HistoryItem[]>(() => {
+    const conversationItems: HistoryItem[] = conversations.map(conversation => ({ type: 'conversation', key: conversation.id, conversation }))
+    if (appChatRows.length === 0) return conversationItems
+    return [
+      { type: 'header', key: 'header:digital-humans', label: t('Digital Humans') },
+      ...sortDigitalHumanRows(appChatRows).map((row): HistoryItem => ({ type: 'digital-human', key: row.id, row })),
+      ...(conversationItems.length > 0 ? [{ type: 'header', key: 'header:conversations', label: t('Conversations') } as HistoryItem] : []),
+      ...conversationItems,
+    ]
+  }, [conversations, appChatRows, t])
+  const totalCount = conversations.length + appChatRows.length
   const [isAnimatingOut, setIsAnimatingOut] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingTitle, setEditingTitle] = useState('')
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null)
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
   const [panelPosition, setPanelPosition] = useState({ top: 0, left: 0 })
   const panelRef = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
@@ -148,6 +185,7 @@ export function ChatHistoryPanel() {
   const handleClose = () => {
     // Cancel any editing and close dropdown menu
     setMenuOpenId(null)
+    setPendingDeleteId(null)
     setEditingId(null)
     setEditingTitle('')
 
@@ -172,6 +210,22 @@ export function ChatHistoryPanel() {
 
     useChatStore.getState().selectConversation(id)
     handleClose()
+  }
+
+  const handleSelectAppChat = (row: AppChatConversationRow) => {
+    if (row.uninstalled || !currentSpaceId) return
+    useChatStore.getState().selectAppChatConversation(currentSpaceId, row.appId, row.id)
+    handleClose()
+  }
+
+  // A digital human's default session cannot be deleted, only emptied.
+  const handleDeleteAppChat = async (row: AppChatConversationRow) => {
+    if (!currentSpaceId) return
+    setMenuOpenId(null)
+    setPendingDeleteId(null)
+    const chat = useChatStore.getState()
+    if (row.isDefault) await chat.clearConversation(row.id)
+    else await chat.deleteAppChatSession(row.appId, currentSpaceId, row.id)
   }
 
   // Start editing a conversation title
@@ -369,10 +423,108 @@ export function ChatHistoryPanel() {
     </div>
   ), [editingId, editingTitle, currentConversationId, conversationStatuses, menuOpenId, isMobile, t])
 
+  // A digital human's conversation. Uninstalled digital humans fade out and stay
+  // listed (reinstalling restores them), like in the sidebar.
+  const renderAppChatItem = (row: AppChatConversationRow) => {
+    const isActive = row.id === selectedAppChatId
+    const status = conversationStatuses.get(row.id) ?? 'idle'
+    const isMenuOpen = menuOpenId === row.id
+    return (
+      <div
+        onClick={() => handleSelectAppChat(row)}
+        className={`
+          w-full px-4 py-3 text-left transition-all duration-150 group relative
+          ${row.uninstalled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer hover:bg-secondary/50'}
+          ${isActive && !row.uninstalled ? 'bg-primary/10' : ''}
+          ${isMenuOpen ? 'z-50' : ''}
+        `}
+      >
+        {isActive && !row.uninstalled && (
+          <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-primary rounded-r" />
+        )}
+        <div className="flex items-start justify-between gap-3 relative">
+          <div className="flex-1 min-w-0 pr-9">
+            <div className="flex items-center gap-1.5">
+              <TaskStatusDot status={status} size="sm" />
+              <p className={`text-sm font-medium truncate ${isActive ? 'text-primary' : 'text-foreground'}`}>
+                {appChatSessionLabel(row, t)}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 mt-1 min-w-0">
+              <span className="text-xs text-muted-foreground truncate">{row.digitalHumanName}</span>
+              <span className="text-muted-foreground/30">·</span>
+              <span className="text-xs text-muted-foreground shrink-0">
+                {formatRelativeTime(new Date(row.updatedAt).toISOString(), t)}
+              </span>
+              {row.status === 'paused' && (
+                <span className="text-xs text-muted-foreground shrink-0">{t('Paused')}</span>
+              )}
+            </div>
+          </div>
+
+          {!row.uninstalled && (
+            <div className={`absolute right-0 top-[1px] ${isMobile ? 'block' : 'hidden group-hover:block'} ${isMenuOpen ? '!block' : ''}`}>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setPendingDeleteId(null)
+                  setMenuOpenId(isMenuOpen ? null : row.id)
+                }}
+                className={`px-2 py-1.5 rounded transition-colors ${isMenuOpen ? 'bg-secondary text-foreground' : 'bg-card/80 text-foreground/60 hover:text-foreground hover:bg-secondary'}`}
+                title={t('More')}
+              >
+                <EllipsisVertical className="w-4 h-4" />
+              </button>
+              {isMenuOpen && (
+                <div
+                  ref={menuRef}
+                  className="absolute right-0 top-full mt-1 z-[9999] min-w-[150px] bg-popover border border-border rounded-lg shadow-lg py-1"
+                >
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      if (currentSpaceId) toggleAppChatPin(currentSpaceId, row.id)
+                      setMenuOpenId(null)
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-secondary transition-colors"
+                  >
+                    <Pin className={`w-4 h-4 ${row.starred ? 'text-primary' : ''}`} />
+                    <span>{row.starred ? t('Unpin') : t('Pin')}</span>
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      if (pendingDeleteId === row.id) void handleDeleteAppChat(row)
+                      else setPendingDeleteId(row.id)
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-destructive hover:bg-destructive/10 transition-colors"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    <span>
+                      {pendingDeleteId === row.id ? t('Confirm') : row.isDefault ? t('Clear chat') : t('Delete')}
+                    </span>
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  const renderListItem = (_index: number, item: HistoryItem) => {
+    if (item.type === 'header') {
+      return <div className="px-4 pt-3 pb-1 text-xs font-medium text-muted-foreground">{item.label}</div>
+    }
+    if (item.type === 'digital-human') return renderAppChatItem(item.row)
+    return renderHistoryItem(_index, item.conversation)
+  }
+
   // Shared conversation list content - virtualized
   const renderConversationList = (height: string) => (
     <>
-      {conversations.length === 0 ? (
+      {historyItems.length === 0 ? (
         <div className="px-4 py-8 text-center">
           <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-muted/50 flex items-center justify-center">
             <svg className="w-6 h-6 text-muted-foreground/50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -385,9 +537,10 @@ export function ChatHistoryPanel() {
       ) : (
         <div style={{ height }}>
           <Virtuoso
-            data={conversations}
+            data={historyItems}
             overscan={200}
-            itemContent={renderHistoryItem}
+            computeItemKey={(_index, item) => item.key}
+            itemContent={renderListItem}
           />
         </div>
       )}
@@ -460,7 +613,7 @@ export function ChatHistoryPanel() {
                 <div>
                   <h3 className="text-base font-semibold text-foreground">{spaceName}</h3>
                   <p className="text-xs text-muted-foreground">
-                    {t('{{count}} conversations', { count: conversations.length })}
+                    {t('{{count}} conversations', { count: totalCount })}
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -511,7 +664,7 @@ export function ChatHistoryPanel() {
                 <div>
                   <h3 className="text-sm font-semibold text-foreground">{spaceName}</h3>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    {t('{{count}} conversations', { count: conversations.length })}
+                    {t('{{count}} conversations', { count: totalCount })}
                   </p>
                 </div>
                 <button

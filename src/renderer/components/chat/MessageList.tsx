@@ -32,6 +32,7 @@ import { useChatStore } from '../../stores/chat.store'
 import { useAppsStore } from '../../stores/apps.store'
 import { isAppChatKey } from '../../../shared/apps/im-keys'
 import { resolveSpecI18n } from '../../utils/spec-i18n'
+import { messageRowKeys } from '../../utils/message-row-key'
 
 export interface MessageListProps {
   /**
@@ -69,10 +70,21 @@ export interface MessageListProps {
   thoughtsLoader?: (messageId: string) => Promise<Thought[]>
   /**
    * Hide the "View live feed" button on BrowserTaskCard (both persisted rows and the
-   * live streaming section). Set true where Canvas/BrowserView is unavailable
-   * (automation app / IM contexts).
+   * live streaming section). Set true where the conversation has no live browser
+   * view to show (automation runs, IM and team transcripts).
    */
-  hideBrowserViewButton?: boolean
+  hideBrowserLiveView?: boolean
+  /**
+   * Hide the "Open" button on TerminalTaskCard. Set true where there is no
+   * canvas to open a terminal in (automation runs, IM and team transcripts).
+   */
+  hideTerminalOpen?: boolean
+  /**
+   * Older messages exist beyond the loaded ones: called when the reader reaches
+   * the top of everything loaded. Pass only while more exists; the surface
+   * reads the next page in and the list keeps the view where it is.
+   */
+  onLoadEarlier?: () => void
   /**
    * Start every message's thought panel expanded. For trace/debug viewers
    * (automation run detail) where the full execution timeline is the point.
@@ -114,6 +126,7 @@ function StreamingFooter({
   browserToolCalls,
   terminalToolCalls,
   showBrowserViewButton,
+  showTerminalOpenButton,
   pendingQuestion,
   onAnswerQuestion,
   onStop,
@@ -128,6 +141,7 @@ function StreamingFooter({
   browserToolCalls: BrowserToolCall[]
   terminalToolCalls: TerminalToolCall[]
   showBrowserViewButton: boolean
+  showTerminalOpenButton: boolean
   pendingQuestion: PendingQuestion | null
   onAnswerQuestion?: (answers: Record<string, string>) => void
   onStop?: () => void
@@ -146,6 +160,7 @@ function StreamingFooter({
       browserToolCalls={browserToolCalls}
       terminalToolCalls={terminalToolCalls}
       showBrowserViewButton={showBrowserViewButton}
+      showTerminalOpenButton={showTerminalOpenButton}
       pendingQuestion={pendingQuestion}
       onAnswerQuestion={onAnswerQuestion}
       queuedMessages={queuedMessages ?? EMPTY_QUEUE}
@@ -178,7 +193,9 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   onAnswerQuestion,
   onAtBottomStateChange,
   thoughtsLoader,
-  hideBrowserViewButton = false,
+  hideBrowserLiveView = false,
+  hideTerminalOpen = false,
+  onLoadEarlier,
   defaultThoughtsExpanded = false,
   defaultThoughtsMaximized = false,
   footerExtra,
@@ -219,7 +236,8 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   }, [messages, isGenerating])
 
   const follower = useStickToBottom({ onAtBottomChange: onAtBottomStateChange, live: isGenerating })
-  const history = useHistoryWindow(displayMessages.length, follower.scroller)
+  const rowKeys = useMemo(() => messageRowKeys(displayMessages), [displayMessages])
+  const history = useHistoryWindow(rowKeys, follower.scroller, { onReachStart: onLoadEarlier })
   const { scroller, scrollToBottom, detach } = follower
   const { reveal } = history
 
@@ -297,21 +315,22 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   const rows = useMemo(() => displayMessages.slice(start).map((message, offset) => {
     const index = start + offset
     return (
-      <div key={`${message.id}:${index}`} data-transcript-index={index} className={transcriptRowClass(message)}>
+      <div key={rowKeys[index]} data-transcript-index={index} className={transcriptRowClass(message)}>
         <MessageRow
           message={message}
           previousCost={previousCostMap.get(index) ?? 0}
           defaultThoughtsExpanded={defaultThoughtsExpanded || expandedThoughtIds.current.has(message.id)}
           defaultThoughtsMaximized={defaultThoughtsMaximized}
           onLoadThoughts={hasThoughtsLoader ? handleLoadThoughts : undefined}
-          hideBrowserViewButton={hideBrowserViewButton}
+          hideBrowserLiveView={hideBrowserLiveView}
+          hideTerminalOpen={hideTerminalOpen}
           injectionMessages={injectionMap.get(message.id)}
           className={contentWidthClass}
           senderName={message.role === 'assistant' ? senderName : undefined}
         />
       </div>
     )
-  }), [displayMessages, start, previousCostMap, defaultThoughtsExpanded, defaultThoughtsMaximized, hasThoughtsLoader, handleLoadThoughts, hideBrowserViewButton, injectionMap, contentWidthClass, senderName])
+  }), [displayMessages, start, previousCostMap, defaultThoughtsExpanded, defaultThoughtsMaximized, hasThoughtsLoader, handleLoadThoughts, hideBrowserLiveView, hideTerminalOpen, rowKeys, injectionMap, contentWidthClass, senderName])
 
   // Keep the footer mounted for an active question independently of isGenerating:
   // a recovered question can be paused on the answer with isGenerating false, and
@@ -341,7 +360,8 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
               textBlockVersion={textBlockVersion}
               browserToolCalls={streamingBrowserToolCalls}
               terminalToolCalls={streamingTerminalToolCalls}
-              showBrowserViewButton={!hideBrowserViewButton}
+              showBrowserViewButton={!hideBrowserLiveView}
+              showTerminalOpenButton={!hideTerminalOpen}
               pendingQuestion={pendingQuestion}
               onAnswerQuestion={onAnswerQuestion}
               onStop={onStop}

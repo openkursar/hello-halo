@@ -360,7 +360,11 @@ function buildTeamRules(ctx: TeamPromptContext): string {
       '  before asking for the same result again. "No error" does not prove the',
       '  work is complete; assess the actual outcome and recorded evidence.',
       '  A manual stop is intentional: do not automatically restart or reassign',
-      '  that work without explicit instructions.'
+      '  that work without explicit instructions.',
+      '- To check what a teammate actually said and was told in this run — rather',
+      '  than what it reported — read its record with `team_read_member(member)`',
+      '  (newest page first; pass `before` for earlier ones). It shows messages,',
+      '  not thinking or tool traces. Read only what the question needs.'
     )
   }
 

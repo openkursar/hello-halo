@@ -25,12 +25,15 @@ import {
   loadAppChatMessages,
   loadImChatMessages,
   loadChatMessagesForConversation,
+  loadChatTranscriptForConversation,
+  loadChatMessageThoughts,
   createNativeChatSession,
   forkNativeChatSession,
   deleteNativeChatSession,
   patchTouchesMcp,
   rejectIfRemoteMcpForbidden,
   restartAppChat,
+  injectIntoAppChat,
   sendAppChatMessage,
   stopAppChat,
   stopAppChatConversation,
@@ -46,9 +49,10 @@ import type {
   InstalledApp,
   UninstallOptions,
 } from './_shared'
-import { resolveAppChatTarget, type AppChatTarget } from '../../controllers/app-chat-target.controller'
+import { resolveAppChatTarget, resolveUserInjectTarget, type AppChatTarget } from '../../controllers/app-chat-target.controller'
 import type { EscalationAnswerPayload } from '../../../shared/apps/app-types'
 import type { ImageAttachment } from '../../../shared/types/image-attachment'
+import type { CanvasContext } from '../../../shared/types/canvas-context'
 import { getStudioSummary, listPeopleDirectory, getAppCapabilityInventory, getAppSpaceChangePreview, moveAppDefaultSpace, readAppRunMessages, getDigitalHumanMemoryStatus, consolidateDigitalHumanMemoryNow } from '../../apps/runtime'
 
 async function respondOperation(res: Response, name: string, operation: () => unknown | Promise<unknown>): Promise<void> {
@@ -57,6 +61,56 @@ async function respondOperation(res: Response, name: string, operation: () => un
   } catch (error) {
     console.error(`[HTTP][Apps] ${name} failed:`, error)
     res.json({ success: false, error: error instanceof Error ? error.message : String(error) })
+  }
+}
+
+const MAX_CANVAS_TABS = 50
+const MAX_CANVAS_FIELD_CHARS = 500
+
+function canvasField(value: unknown): string | undefined {
+  return typeof value === 'string' && value ? value.slice(0, MAX_CANVAS_FIELD_CHARS) : undefined
+}
+
+function canvasTab(value: unknown): { type: string; title: string; url?: string; path?: string; terminalSessionId?: string } | null {
+  if (!value || typeof value !== 'object') return null
+  const tab = value as Record<string, unknown>
+  if (typeof tab.type !== 'string' || typeof tab.title !== 'string') return null
+  const url = canvasField(tab.url)
+  const path = canvasField(tab.path)
+  const terminalSessionId = canvasField(tab.terminalSessionId)
+  return {
+    type: tab.type.slice(0, MAX_CANVAS_FIELD_CHARS),
+    title: tab.title.slice(0, MAX_CANVAS_FIELD_CHARS),
+    ...(url ? { url } : {}),
+    ...(path ? { path } : {}),
+    ...(terminalSessionId ? { terminalSessionId } : {}),
+  }
+}
+
+/**
+ * The canvas context a client sent with a chat message, or undefined when it is
+ * not one. It is rendered into the model's prompt, so it is rebuilt field by
+ * field with bounded sizes instead of passed through.
+ */
+function parseCanvasContext(value: unknown): CanvasContext | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const candidate = value as Record<string, unknown>
+  if (candidate.isOpen !== true || !Number.isFinite(candidate.tabCount) || !Array.isArray(candidate.tabs)) return undefined
+
+  const tabs: CanvasContext['tabs'] = []
+  for (const raw of candidate.tabs.slice(0, MAX_CANVAS_TABS)) {
+    const tab = canvasTab(raw)
+    if (!tab) return undefined
+    tabs.push({ ...tab, isActive: (raw as { isActive?: unknown }).isActive === true })
+  }
+  const active = candidate.activeTab === null ? null : canvasTab(candidate.activeTab)
+  if (active === null && candidate.activeTab !== null) return undefined
+
+  return {
+    isOpen: true,
+    tabCount: Math.min(Math.max(0, Math.trunc(candidate.tabCount as number)), MAX_CANVAS_TABS),
+    activeTab: active,
+    tabs,
   }
 }
 
@@ -353,7 +407,7 @@ export function registerAppsRoutes(app: Express): void {
 
       const options: UninstallOptions = {}
       if (req.query.purge === 'true') options.purge = true
-      await manager.uninstall(appId, options)
+      await manager.uninstall(appId, { ...options, reason: 'user' })
       console.log('[HTTP] DELETE /api/apps/%s', appId)
       res.json({ success: true })
     } catch (error) {
@@ -1007,6 +1061,7 @@ export function registerAppsRoutes(app: Express): void {
         message?: unknown
         images?: ImageAttachment[]
         thinkingEnabled?: unknown
+        canvasContext?: unknown
       }
       if (typeof body.spaceId !== 'string' || !body.spaceId) {
         res.status(400).json({ success: false, error: 'Missing required field: spaceId' })
@@ -1022,6 +1077,7 @@ export function registerAppsRoutes(app: Express): void {
       // how a turn is attributed and what it may do, and a spread hands those to
       // whoever is calling. Everything identity-bearing is derived server-side.
       const conversationId = target.conversationId
+      const canvasContext = parseCanvasContext(body.canvasContext)
       const request: AppChatRequest = {
         appId,
         spaceId: body.spaceId,
@@ -1029,6 +1085,7 @@ export function registerAppsRoutes(app: Express): void {
         conversationId,
         ...(Array.isArray(body.images) && body.images.length > 0 ? { images: body.images } : {}),
         ...(body.thinkingEnabled !== undefined ? { thinkingEnabled: !!body.thinkingEnabled } : {}),
+        ...(canvasContext ? { canvasContext } : {}),
         ...(target.teamContext ? { teamContext: target.teamContext } : {}),
       }
       sendAppChatMessage(request).catch((error: unknown) => {
@@ -1042,6 +1099,31 @@ export function registerAppsRoutes(app: Express): void {
         data: { conversationId }
       })
     } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/apps/:appId/chat/inject — the user adds a message to the turn a
+  // digital human is running. Only the user's own chats (default and local
+  // sessions) accept it: an HTTP, IM or team session is not theirs to interject in.
+  app.post('/api/apps/:appId/chat/inject', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      const { conversationId, message } = (req.body ?? {}) as { conversationId?: unknown; message?: unknown }
+      if (typeof conversationId !== 'string' || typeof message !== 'string' || !message.trim()) {
+        res.status(400).json({ success: false, error: 'Missing required fields: conversationId, message' })
+        return
+      }
+      const target = resolveUserInjectTarget(appId, conversationId)
+      if (!target.ok) {
+        res.status(target.status).json({ success: false, error: target.error })
+        return
+      }
+      const delivered = injectIntoAppChat(target.conversationId, message.trim(), { source: 'injection' })
+      console.log('[HTTP] POST /api/apps/%s/chat/inject (conversationId=%s, delivered=%s)', appId, conversationId, delivered)
+      res.json({ success: true, data: { delivered } })
+    } catch (error) {
+      console.error('[HTTP] POST /api/apps/:appId/chat/inject failed:', error)
       res.json({ success: false, error: (error as Error).message })
     }
   })
@@ -1148,6 +1230,61 @@ export function registerAppsRoutes(app: Express): void {
       }
       const messages = loadAppChatMessages(space.path, appId)
       res.json({ success: true, data: messages })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/apps/:appId/chat/transcript — one page of the transcript, newest
+  // first, thought processes left out (see chat/messages/:messageId/thoughts).
+  app.get('/api/apps/:appId/chat/transcript', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      const manager = getManagerOrFail(res)
+      if (!manager) return
+      const appData = manager.getApp(appId)
+      if (!appData) {
+        res.status(404).json({ success: false, error: `App not found: ${appId}` })
+        return
+      }
+      const space = appData.spaceId ? getSpace(appData.spaceId) : null
+      if (!space?.path) {
+        res.json({ success: true, data: { messages: [], hasMoreBefore: false, cursor: null, total: 0 } })
+        return
+      }
+      const target = resolveTargetOrFail(appId, req.query.conversationId, res)
+      if (!target) return
+      const limit = Number(req.query.limit)
+      const data = loadChatTranscriptForConversation(space.path, appId, target.conversationId, {
+        before: typeof req.query.before === 'string' && req.query.before ? req.query.before : undefined,
+        limit: Number.isFinite(limit) ? limit : undefined,
+        through: typeof req.query.through === 'string' && req.query.through ? req.query.through : undefined,
+      })
+      res.json({ success: true, data })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/apps/:appId/chat/messages/:messageId/thoughts — one message's thought process
+  app.get('/api/apps/:appId/chat/messages/:messageId/thoughts', async (req: Request, res: Response) => {
+    try {
+      const { appId, messageId } = req.params
+      const manager = getManagerOrFail(res)
+      if (!manager) return
+      const appData = manager.getApp(appId)
+      if (!appData) {
+        res.status(404).json({ success: false, error: `App not found: ${appId}` })
+        return
+      }
+      const space = appData.spaceId ? getSpace(appData.spaceId) : null
+      if (!space?.path) {
+        res.json({ success: true, data: [] })
+        return
+      }
+      const target = resolveTargetOrFail(appId, req.query.conversationId, res)
+      if (!target) return
+      res.json({ success: true, data: loadChatMessageThoughts(space.path, appId, target.conversationId, messageId) })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }

@@ -17,6 +17,11 @@ import {
   isImSessionKey,
   isLocalSessionKey,
   parseAppChatKey,
+  parseNativeChatKey,
+  nativeChatAppId,
+  buildRunSenderKey,
+  parseRunSenderKey,
+  isAppChatKey,
   resolveHttpConversationId,
 } from '../../../src/shared/apps/im-keys'
 
@@ -177,5 +182,42 @@ describe('im-keys: native local sessions', () => {
       chatType: 'direct',
       chatId: 'uuid-9',
     })
+  })
+})
+
+describe('parseNativeChatKey: the chat-board sessions of a digital human', () => {
+  it('parses the default session and a local session', () => {
+    expect(parseNativeChatKey(getAppChatConversationId('app-1'))).toEqual({ appId: 'app-1', kind: 'default' })
+    expect(parseNativeChatKey(buildLocalSessionKey('app-1', 'sess-1'))).toEqual({ appId: 'app-1', kind: 'local', chatId: 'sess-1' })
+  })
+
+  it('rejects IM, HTTP and team sessions, and anything else', () => {
+    for (const key of [
+      buildImSessionKey('app-1', 'wecom-bot', 'direct', 'u'),
+      'app-chat:app-1:http:direct:client',
+      buildTeamSessionKey('app-1', 'team-1', 'epoch-1'),
+      'app-chat:app-1:local:group:s',
+      'app-chat:',
+      '3a5d77ea-1c2b-4f7e-9d10-0123456789ab',
+      buildRunSenderKey('app-1', 'run-1'),
+    ]) {
+      expect(parseNativeChatKey(key), key).toBeNull()
+      expect(nativeChatAppId(key), key).toBeNull()
+    }
+  })
+
+  it('nativeChatAppId reads the same rule', () => {
+    expect(nativeChatAppId(buildLocalSessionKey('app-1', 's'))).toBe('app-1')
+    expect(nativeChatAppId(getAppChatConversationId('app-2'))).toBe('app-2')
+  })
+})
+
+describe('run sender keys', () => {
+  it('round-trips and never looks like a chat key', () => {
+    const key = buildRunSenderKey('app-1', 'run-1')
+    expect(parseRunSenderKey(key)).toEqual({ appId: 'app-1', runId: 'run-1' })
+    expect(isAppChatKey(key)).toBe(false)
+    expect(parseRunSenderKey(getAppChatConversationId('app-1'))).toBeNull()
+    expect(parseRunSenderKey('app-run:app-1')).toBeNull()
   })
 })

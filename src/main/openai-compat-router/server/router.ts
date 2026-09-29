@@ -32,12 +32,6 @@ export function createApp(options: RouterOptions = {}): Express {
     }
   }))
 
-  // Request logging middleware (production-level)
-  app.use((req, _res, next) => {
-    console.log(`[Router] ${req.method} ${req.url}`)
-    next()
-  })
-
   // Health check endpoint
   app.get('/health', (_req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() })
@@ -143,6 +137,13 @@ export function createApp(options: RouterOptions = {}): Express {
     const { messages, system, model } = (req.body || {}) as { messages?: unknown; system?: unknown; model?: string }
     const result = handleCountTokensRequest(messages, system, model)
     res.json(result)
+  })
+
+  // Matched routes log their own requests; anything else falls through to
+  // Express's default 404.
+  app.use((req, _res, next) => {
+    console.warn(`[Router] unmatched_route method=${req.method} url=${req.url}`)
+    next()
   })
 
   return app

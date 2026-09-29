@@ -61,7 +61,7 @@ registerToolset({
   // one silently retargeted another's next call. Lifecycle belongs to
   // ai-browser; this only names whose view it is.
   createServer: (scope: ToolsetScope) =>
-    createAIBrowserMcpServer(getInteractiveBrowserContext(scope.conversationId), scope.workDir)
+    createAIBrowserMcpServer(getInteractiveBrowserContext(scope.conversationId, scope.spaceId), scope.workDir)
 })
 
 registerToolset({

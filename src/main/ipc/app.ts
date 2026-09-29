@@ -26,8 +26,11 @@
  *   app:update-spec        Update App spec (JSON Merge Patch)
  *   app:chat-send          Send a chat message to an App's AI agent
  *   app:chat-stop          Stop an active app chat generation
+ *   app:chat-inject        Add a message to the turn an app chat is running
  *   app:chat-status        Get app chat status (generating + conversationId)
  *   app:chat-messages      Load persisted chat messages for an app
+ *   app:chat-transcript    Load one page of persisted chat messages (newest first, thoughts omitted)
+ *   app:chat-message-thoughts  Load the thought process of one chat message
  *   app:chat-session-state Get session state for recovery after refresh
  *   app:chat-restart       Restart an app's chat agent (reload prompt/config)
  *   app:im-chat-messages   Load persisted IM session chat messages
@@ -59,11 +62,14 @@ import {
   sendAppChatMessage,
   stopAppChat,
   stopAppChatConversation,
+  injectIntoAppChat,
   isAppChatGenerating,
   isAppChatConversationGenerating,
   loadAppChatMessages,
   loadImChatMessages,
   loadChatMessagesForConversation,
+  loadChatTranscriptForConversation,
+  loadChatMessageThoughts,
   getAppChatSessionState,
   getAppChatConversationId,
   clearAppChat,
@@ -80,6 +86,7 @@ import type { AppSpec } from '../apps/spec'
 import type { AppListFilter, UninstallOptions, UpgradeStrategy } from '../apps/manager'
 import type { ActivityQueryOptions, RunQueryOptions, EscalationResponse, AppChatRequest } from '../apps/runtime'
 import { getSpace } from '../services/space.service'
+import { resolveUserInjectTarget } from '../controllers/app-chat-target.controller'
 import { broadcastToAll } from '../http/websocket'
 import * as appController from '../controllers/app.controller'
 import { analytics } from '../services/analytics/analytics.service'
@@ -214,7 +221,7 @@ export function registerAppHandlers(): void {
           })
         }
 
-        await r.manager.uninstall(input.appId, input.options)
+        await r.manager.uninstall(input.appId, { ...input.options, reason: 'user' })
         console.log(`[AppIPC] app:uninstall: appId=${input.appId}`)
         return { success: true }
       } catch (error: unknown) {
@@ -686,6 +693,28 @@ export function registerAppHandlers(): void {
       }
     },
 
+    // ── app:chat-inject ────────────────────────────────────────────────────
+    // The user adding to the turn a digital human is running. `delivered: false`
+    // means no turn was in flight to take it (it ended in the meantime) — the
+    // caller then sends the text as a new message.
+    appChatInject: async (input: { appId: string; conversationId: string; message: string }) => {
+      try {
+        const message = typeof input?.message === 'string' ? input.message.trim() : ''
+        if (!message || !input?.conversationId) {
+          return { success: false, error: 'Missing conversationId or message' }
+        }
+        const target = resolveUserInjectTarget(input.appId, input.conversationId)
+        if (!target.ok) return { success: false, error: target.error }
+        const delivered = injectIntoAppChat(target.conversationId, message, { source: 'injection' })
+        console.log(`[AppIPC] app:chat-inject: appId=${input.appId} conversationId=${input.conversationId} delivered=${delivered}`)
+        return { success: true, data: { delivered } }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:chat-inject error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
     // ── app:chat-status ────────────────────────────────────────────────────
     // Optional conversationId narrows the check to one native/local/IM session;
     // absent, it reports whether ANY session for the app is generating.
@@ -724,6 +753,50 @@ export function registerAppHandlers(): void {
       } catch (error: unknown) {
         const err = error as Error
         console.error('[AppIPC] app:chat-messages error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // ── app:chat-transcript ────────────────────────────────────────────────
+    // Paged read of the same transcript app:chat-messages returns whole: newest
+    // page first, thought processes left out (app:chat-message-thoughts).
+    appChatTranscript: async (input: { appId: string; spaceId: string; conversationId?: string; before?: string; limit?: number; through?: string }) => {
+      try {
+        const space = getSpace(input.spaceId)
+        if (!space?.path) {
+          return { success: true, data: { messages: [], hasMoreBefore: false, cursor: null, total: 0 } }
+        }
+        const data = loadChatTranscriptForConversation(
+          space.path,
+          input.appId,
+          input.conversationId ?? getAppChatConversationId(input.appId),
+          { before: input.before, limit: input.limit, through: input.through }
+        )
+        return { success: true, data }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:chat-transcript error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // ── app:chat-message-thoughts ──────────────────────────────────────────
+    appChatMessageThoughts: async (input: { appId: string; spaceId: string; conversationId?: string; messageId: string }) => {
+      try {
+        const space = getSpace(input.spaceId)
+        if (!space?.path) {
+          return { success: true, data: [] }
+        }
+        const data = loadChatMessageThoughts(
+          space.path,
+          input.appId,
+          input.conversationId ?? getAppChatConversationId(input.appId),
+          input.messageId
+        )
+        return { success: true, data }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:chat-message-thoughts error:', err.message)
         return { success: false, error: err.message }
       }
     },

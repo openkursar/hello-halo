@@ -491,6 +491,22 @@ export function resolvePermission(
 }
 
 /**
+ * The switch for reading and messaging the other conversations of the app's
+ * space (`halo-conversations`) — one switch for both, like the other built-in
+ * capabilities. Off unless granted: unlike a space conversation, which the user
+ * drives in person, a digital human acts on its own, so reaching into other
+ * conversations is something the owner opts it into.
+ *
+ * The one reading of the default, shared by the runtime that mounts the tools
+ * and the settings switch that shows it.
+ */
+export const CONVERSATION_COLLAB_PERMISSION = 'conversation-collab'
+
+export function isConversationCollabEnabled(app: Pick<InstalledApp, 'permissions' | 'spec'>): boolean {
+  return resolvePermission(app, CONVERSATION_COLLAB_PERMISSION, false)
+}
+
+/**
  * Whether the app was installed by the built-in loader (bundled with the
  * application binary) rather than by the user. Built-in apps are re-synced
  * from disk on every launch and are protected from permanent deletion
@@ -517,6 +533,17 @@ export function getEscalationQuestions(content: ActivityEntryContent): Escalatio
     question: content.question || content.summary,
     ...(content.choices?.length ? { choices: content.choices } : {}),
   }]
+}
+
+/**
+ * The user's answers, one per entry of `getEscalationQuestions`.
+ *
+ * A single decision may arrive flat (`choice` / `text`) or as a one-element
+ * `answers`, whichever shape the question was asked in; both mean the same.
+ */
+export function getEscalationAnswers(response: Pick<EscalationResponse, 'choice' | 'text' | 'answers'>): EscalationAnswer[] {
+  if (response.answers?.length) return response.answers
+  return [{ choice: response.choice, text: response.text }]
 }
 
 /**

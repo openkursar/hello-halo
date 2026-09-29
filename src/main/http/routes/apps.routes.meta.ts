@@ -336,6 +336,10 @@ export const MODULE: RouteModuleMeta = {
       returns: '{success:true}',
       notes: 'Name the session to stop. Stopping every session at once is a much bigger act, so it must be asked for explicitly: send {"all": true}. Sending neither returns 400 rather than guessing.',
     },
+    // The chat UI adding to a running turn; not something an agent drives.
+    'POST /api/apps/:appId/chat/inject': {
+      expose: 'internal',
+    },
     'GET /api/apps/:appId/chat/status': {
       expose: 'ai',
       group: 'digital-human',
@@ -354,6 +358,13 @@ export const MODULE: RouteModuleMeta = {
         'Empty array when the thread has no history yet — a wrong conversationId looks identical, so list the threads first rather than guessing one.',
         'thoughts carries the raw tool calls and results of the run; skip it unless you are diagnosing what the digital human actually did.',
       ].join('\n'),
+    },
+    // Paged read for the chat UI; chat/messages stays the full read for AI callers.
+    'GET /api/apps/:appId/chat/transcript': {
+      expose: 'internal',
+    },
+    'GET /api/apps/:appId/chat/messages/:messageId/thoughts': {
+      expose: 'internal',
     },
     // Recovery-after-refresh snapshot (thoughts, pendingQuestion) for the
     // chat UI to rebuild its view on reconnect — not a general-purpose read.

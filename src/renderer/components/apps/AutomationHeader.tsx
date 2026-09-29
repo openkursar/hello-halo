@@ -174,7 +174,7 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
   // Talking to a digital human happens on the main conversation board, which
   // owns the conversation list and the recipient picker; this button is the
   // shortcut into it, and only a digital human bound to a workspace has one.
-  const handleSendMessage = () => perform(async () => openDigitalHumanChat(appId, app.spaceId ?? null))
+  const handleSendMessage = () => perform(async () => (app.spaceId ? openDigitalHumanChat(appId, app.spaceId) : false))
 
   const handleUninstall = async () => {
     setShowMoreMenu(false)

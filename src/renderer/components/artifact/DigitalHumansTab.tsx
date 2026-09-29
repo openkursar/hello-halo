@@ -42,7 +42,7 @@ export function DigitalHumansTab() {
   // Starts a fresh session rather than reopening the app's existing one:
   // acting on a digital human from a browsing surface means "talk to it now",
   // and resuming a past conversation is the left list's job.
-  const handleOpenChat = async (appId: string, appSpaceId: string | null) => {
+  const handleOpenChat = async (appId: string, appSpaceId: string) => {
     const conversationId = await startDigitalHumanConversation(appId)
     if (conversationId) navigateToAppChat(appSpaceId, appId, conversationId)
   }
@@ -68,9 +68,9 @@ export function DigitalHumansTab() {
             bareIcon
             name={name || app.id}
             description={automationStatusLabel(effectiveStatus, t)}
-            scope={app.spaceId === null ? 'global' : 'space'}
+            scope="space"
             onClick={() => handleOpenOverview(app.id)}
-            onUse={() => { void handleOpenChat(app.id, app.spaceId) }}
+            onUse={() => { if (app.spaceId) void handleOpenChat(app.id, app.spaceId) }}
             useLabel={t('Chat')}
           />
         )

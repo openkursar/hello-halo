@@ -3,11 +3,21 @@
  *
  * Backend core (list/read/deliver/wait/circuit-breaker) plus the
  * `halo-conversations` MCP server (`conversation_read` / `conversation_send`).
- * The renderer is separate work — see DESIGN.md.
+ * Conversations come from registered `ConversationSource`s — the space's own
+ * are built in; a higher tier registers its own at bootstrap. The renderer is
+ * separate work — see DESIGN.md.
  */
 
 export { createConversationInteropMcpServer, type ConversationInteropScope } from './mcp-server'
-export { initConversationInterop, disposeConversationInterop } from './turn-end-watch'
+export { initConversationInterop, disposeConversationInterop } from './lifecycle'
+export { registerConversationSource, getReadableSources } from './source'
+export { CHAT_SOURCE_KIND } from './chat-source'
+export type {
+  ConversationSource,
+  SourceConversation,
+  DispatchedMessage,
+  DispatchOutcome,
+} from './source'
 export { isNativeConversationBusy } from './busy'
 export { listConversationsForInterop, readConversationForInterop } from './list-read'
 export {

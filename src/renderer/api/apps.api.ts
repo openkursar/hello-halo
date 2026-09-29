@@ -16,7 +16,9 @@ import type { ActivityEntry, AutomationAppState, AvailableSkill, EscalationAnswe
 import type { CapabilityInventory } from '../../shared/apps/capability-inventory'
 import type { AppSpaceChangePreview } from '../../shared/apps/app-environment'
 import type { ImageAttachment } from '../../shared/types/image-attachment'
+import type { CanvasContext } from '../../shared/types/canvas-context'
 import type { MemoryStatus } from '../../shared/types/memory'
+import type { Thought, TranscriptPage } from '../../shared/types/transcript'
 
 export const appsApi = {
   appStartRun: async (appId: string): Promise<ApiResponse<import('../../shared/apps/app-types').AppRunStartInfo>> => {
@@ -393,7 +395,7 @@ export const appsApi = {
   // App Chat
   // conversationId addresses a specific native/local session; omit for the app's
   // native default session.
-  appChatSend: async (request: { appId: string; spaceId: string; message: string; images?: ImageAttachment[]; thinkingEnabled?: boolean; conversationId?: string; teamContext?: unknown }): Promise<ApiResponse<{ conversationId: string }>> => {
+  appChatSend: async (request: { appId: string; spaceId: string; message: string; images?: ImageAttachment[]; thinkingEnabled?: boolean; canvasContext?: CanvasContext; conversationId?: string; teamContext?: unknown }): Promise<ApiResponse<{ conversationId: string }>> => {
     // Subscribe to agent events so remote/Capacitor clients receive streaming updates.
     // The view also subscribes on mount (via useRemoteSubscription), but the API-level
     // subscription mirrors sendMessage's pattern and ensures coverage if the API is
@@ -415,6 +417,15 @@ export const appsApi = {
     return httpRequest('POST', `/api/apps/${appId}/chat/stop`, { conversationId })
   },
 
+  // Add a message to the turn a digital human is running. delivered is false when
+  // no turn was in flight to take it — the caller sends it as a new message.
+  appChatInject: async (input: { appId: string; conversationId: string; message: string }): Promise<ApiResponse<{ delivered: boolean }>> => {
+    if (isElectron()) {
+      return window.halo.appChatInject(input)
+    }
+    return httpRequest('POST', `/api/apps/${input.appId}/chat/inject`, { conversationId: input.conversationId, message: input.message })
+  },
+
   appChatStatus: async (appId: string, conversationId?: string): Promise<ApiResponse<{ isGenerating: boolean; conversationId: string }>> => {
     if (isElectron()) {
       return window.halo.appChatStatus(appId, conversationId)
@@ -429,6 +440,29 @@ export const appsApi = {
     }
     const convQs = conversationId ? `&conversationId=${encodeURIComponent(conversationId)}` : ''
     return httpRequest('GET', `/api/apps/${appId}/chat/messages?spaceId=${spaceId}${convQs}`)
+  },
+
+  /** One page of the transcript, newest first; messages carry `thoughts: null` (see appChatMessageThoughts). */
+  appChatTranscript: async (input: { appId: string; spaceId: string; conversationId?: string; before?: string; limit?: number; through?: string }): Promise<ApiResponse<TranscriptPage>> => {
+    if (isElectron()) {
+      return window.halo.appChatTranscript(input)
+    }
+    const params = new URLSearchParams({ spaceId: input.spaceId })
+    if (input.conversationId) params.set('conversationId', input.conversationId)
+    if (input.before) params.set('before', input.before)
+    if (input.limit) params.set('limit', String(input.limit))
+    if (input.through) params.set('through', input.through)
+    return httpRequest('GET', `/api/apps/${input.appId}/chat/transcript?${params}`)
+  },
+
+  /** The thought process of one message, loaded on demand. */
+  appChatMessageThoughts: async (input: { appId: string; spaceId: string; conversationId?: string; messageId: string }): Promise<ApiResponse<Thought[]>> => {
+    if (isElectron()) {
+      return window.halo.appChatMessageThoughts(input)
+    }
+    const params = new URLSearchParams({ spaceId: input.spaceId })
+    if (input.conversationId) params.set('conversationId', input.conversationId)
+    return httpRequest('GET', `/api/apps/${input.appId}/chat/messages/${encodeURIComponent(input.messageId)}/thoughts?${params}`)
   },
 
   appChatSessionState: async (appId: string, conversationId?: string): Promise<ApiResponse> => {

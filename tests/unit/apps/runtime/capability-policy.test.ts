@@ -145,6 +145,18 @@ describe('MCP server injection', () => {
       .not.toHaveProperty('some-future-capability')
   })
 
+  it('never lends another caller the conversation tools, whatever they were granted', () => {
+    // Reading and messaging the owner's other conversations is the owner's own
+    // decision per digital human; no delegated switch reaches it.
+    const withTools = { ...ALL_MCP, 'halo-conversations': {} }
+    const everything = fullCapabilityPolicy()
+
+    expect(filterMcpServersByPolicy(withTools, DB_MCP, undefined, 'permissive', TEAM_CHANNEL)).not.toHaveProperty('halo-conversations')
+    expect(filterMcpServersByPolicy(withTools, DB_MCP, everything, 'permissive', TEAM_CHANNEL)).not.toHaveProperty('halo-conversations')
+    expect(filterMcpServersByPolicy(withTools, DB_MCP, {}, 'strict')).not.toHaveProperty('halo-conversations')
+    expect(filterMcpServersByPolicy(withTools, DB_MCP, everything, 'strict')).not.toHaveProperty('halo-conversations')
+  })
+
   it('gives a guest only the always-safe servers by default', () => {
     const out = filterMcpServersByPolicy(ALL_MCP, DB_MCP, {}, 'strict')
 
@@ -279,6 +291,33 @@ describe('when a policy is enforced at all', () => {
     expect(options.permissionMode).toBe('default')
     expect(options.extraArgs['dangerously-skip-permissions']).toBeUndefined()
     expect(options.allowedTools).toEqual(['TodoWrite', 'Read'])
+    expect(options.disallowedTools).toContain('Bash')
+  })
+})
+
+describe('a policy never re-opens a tool the session already withholds', () => {
+  it('keeps the user\'s disabled tools when it grants them', () => {
+    // The policy allows Read and Grep, but the user disabled Grep everywhere.
+    const options: Record<string, any> = { disallowedTools: ['Grep', 'TeamCreate'] }
+    applyCapabilityPolicy(options, {
+      policy: { allowedTools: ['Read', 'Grep'] },
+      mode: 'strict',
+      mcpServers: ALL_MCP,
+      dbMcpServers: DB_MCP,
+    })
+
+    expect(options.disallowedTools).toEqual(expect.arrayContaining(['Grep', 'TeamCreate', 'Bash']))
+    expect(new Set(options.disallowedTools).size).toBe(options.disallowedTools.length)
+  })
+
+  it('withholds the policy\'s own tools when the session withheld nothing', () => {
+    const options: Record<string, any> = {}
+    applyCapabilityPolicy(options, {
+      policy: { allowedTools: ['Read'] },
+      mode: 'strict',
+      mcpServers: ALL_MCP,
+      dbMcpServers: DB_MCP,
+    })
     expect(options.disallowedTools).toContain('Bash')
   })
 })

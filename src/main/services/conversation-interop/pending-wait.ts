@@ -144,6 +144,11 @@ function settleWait(correlationId: string, outcome: WaitOutcome): boolean {
   return true
 }
 
+/** Whether a wait is still open — its sender is still blocked on it. */
+export function isWaitPending(correlationId: string): boolean {
+  return pendingWaits.has(correlationId)
+}
+
 /** A wait was registered but the delivery never actually started a turn (rejected/failed before dispatch) — fail it now rather than leave it to the timeout. */
 export function abandonWait(correlationId: string, outcome: WaitOutcome): void {
   settleWait(correlationId, outcome)
@@ -206,8 +211,16 @@ export function tryResolveAsReply(fromConversationId: string, toConversationId: 
  * content (see the module doc above).
  */
 export function noteTurnEnded(conversationId: string): void {
-  const correlationId = activeCorrelationFor.get(conversationId)
-  if (!correlationId) return
-  activeCorrelationFor.delete(conversationId)
-  settleWait(correlationId, { status: 'no_reply' })
+  const owed = activeCorrelationFor.get(conversationId)
+  if (owed) {
+    activeCorrelationFor.delete(conversationId)
+    settleWait(owed, { status: 'no_reply' })
+  }
+  // A wait this conversation was itself blocked in has no reader once its turn
+  // is over (stopped, failed). Left open, the target's late answer would be
+  // consumed as its reply and never reach the conversation; settled, it is an
+  // ordinary message again.
+  for (const wait of [...pendingWaits.values()]) {
+    if (wait.fromConversationId === conversationId) settleWait(wait.correlationId, { status: 'no_reply' })
+  }
 }

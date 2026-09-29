@@ -37,7 +37,7 @@ export function initializeSearchHandlers(): void {
       currentSearchId = searchId
 
       try {
-        // Reset cancel token
+        // A new search supersedes any earlier one
         searchService.cancel()
 
         // Execute search with progress callback

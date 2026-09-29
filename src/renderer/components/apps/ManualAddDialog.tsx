@@ -84,7 +84,8 @@ export function ManualAddDialog({ onClose, onSkillAdd, initialType, initialSpace
     setFileError(null)
     setFileInstalling(true)
     try {
-      // Install into the currently-active space; null = global scope.
+      // Install into the currently-active space; with none, a digital human
+      // lands in the Halo space (resolved by the main process).
       const activeSpaceId = useSpaceStore.getState().currentSpace?.id ?? null
       const res = await api.storeImportDhpkg({ spaceId: activeSpaceId })
       if (res.success && res.data?.appId) {

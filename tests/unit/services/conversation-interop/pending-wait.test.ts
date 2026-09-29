@@ -91,6 +91,19 @@ describe('pending-wait', () => {
     expect(consumed).toBe(false)
   })
 
+  it('settles a wait its own conversation was blocked in when that conversation\'s turn ends, so a late answer is an ordinary message', async () => {
+    const registered = registerWait({ fromConversationId: 'A', toConversationId: 'B', timeoutMs: 5000 })
+    if (!registered.ok) throw new Error('expected registration to succeed')
+    armActiveCorrelation('B', registered.correlationId)
+
+    // A's turn is stopped while it waits on B.
+    noteTurnEnded('A')
+    expect(await registered.promise).toEqual({ status: 'no_reply' })
+
+    // B's late answer is no longer swallowed as the reply to a wait nobody reads.
+    expect(tryResolveAsReply('B', 'A', 'late answer')).toBe(false)
+  })
+
   it('refuses a new wait when the target already has an unresolved wait on the source (direct 2-party cycle)', async () => {
     // B is already waiting on A.
     const bWaitsOnA = registerWait({ fromConversationId: 'B', toConversationId: 'A', timeoutMs: 5000 })

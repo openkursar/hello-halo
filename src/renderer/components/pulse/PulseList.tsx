@@ -23,7 +23,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { Pin, SquareCheckBig, ChevronRight, MessageSquare, Users } from 'lucide-react'
-import { useChatStore } from '../../stores/chat.store'
+import { useChatStore, selectActiveConversationId } from '../../stores/chat.store'
 import { useTaskItems } from '../../stores/task.store'
 import { useTeamStore } from '../../stores/team.store'
 import { useAppStore } from '../../stores/app.store'
@@ -106,9 +106,8 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
   // conversation item has faded into its seen/countdown look (prototype:
   // `.tk.sel`, `.tk.seen.sel{opacity:1}`).
   const currentSpaceId = useChatStore(state => state.currentSpaceId)
-  const currentConversationId = useChatStore(state =>
-    state.currentSpaceId ? state.spaceStates.get(state.currentSpaceId)?.currentConversationId ?? null : null
-  )
+  // A digital human on screen takes the place of the regular conversation.
+  const currentConversationId = useChatStore(selectActiveConversationId)
   const selectedAppId = useAppsPageStore(state => state.selectedAppId)
   const selectedTeamId = useTeamStore(state => state.currentTeamId)
   const appView = useAppStore(state => state.view)

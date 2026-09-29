@@ -28,7 +28,8 @@ import {
   registerWebContentsForDownload,
   unregisterWebContentsForDownload
 } from './download-handler'
-import { emitBrowserActiveView, emitBrowserViewGone } from './events'
+import { emitBrowserActiveView, emitBrowserViewGone, emitBrowserConversationReleased } from './events'
+import type { AIBrowserLivePage, AIBrowserStopResult } from '../../../shared/types/ai-browser'
 import { sanitizeFilename, resolveUniquePath } from '../../foundation/file-naming'
 import type {
   BrowserContextInterface,
@@ -75,13 +76,58 @@ export function notifyViewDestroyed(viewId: string): void {
   automationOwnedViewIds.delete(viewId)
   let announce = false
   for (const ctx of liveContexts) {
-    const cleared = ctx.handleViewDestroyed(viewId)
-    if (cleared && !ctx.isScoped) announce = true
+    const held = ctx.handleViewDestroyed(viewId)
+    if (held && ctx.hasUi) announce = true
   }
   if (announce) {
     emitBrowserViewGone({ viewId })
-    console.log(`[BrowserContext] Active view gone: ${viewId}`)
+    console.log(`[BrowserContext] View gone: ${viewId}`)
   }
+}
+
+// Every destroy path (canvas close, tray stop, an agent closing a tab, window
+// teardown, a context ending) funnels through the manager, so reconciling here
+// is what keeps a long-lived context from pointing at a dead page.
+browserViewManager.onViewDestroyed(notifyViewDestroyed)
+
+/**
+ * Every page held by a context that has a UI — the one it acts on and every
+ * other it opened — for a client that missed the live events (renderer reload,
+ * late-connecting window).
+ */
+export function listLivePages(): AIBrowserLivePage[] {
+  const pages: AIBrowserLivePage[] = []
+  for (const ctx of liveContexts) pages.push(...ctx.describeLivePages())
+  return pages
+}
+
+/**
+ * Stop a page from the live-session tray on behalf of `conversationId`.
+ *
+ * The authoritative check (the renderer's is only a fast path, and can be one
+ * event behind): the page must have been opened by that conversation's context,
+ * and no other context may be on it right now — otherwise closing it would pull
+ * it from under another conversation, or close a tab the user opened. A canvas
+ * tab close does not come here; it closes whatever the user asked to close.
+ */
+export function stopLivePage(viewId: string, conversationId: string): AIBrowserStopResult {
+  let owner: BrowserContext | null = null
+  for (const ctx of liveContexts) {
+    if (ctx.hasUi && ctx.conversationId === conversationId && ctx.ownsView(viewId)) owner = ctx
+  }
+  if (!owner) {
+    console.warn(`[BrowserContext] Stop refused: ${viewId} is not a page ${conversationId} opened`)
+    return { stopped: false, reason: 'not-owned' }
+  }
+  for (const ctx of liveContexts) {
+    if (ctx !== owner && ctx.getActiveViewId() === viewId) {
+      console.warn(`[BrowserContext] Stop refused: ${viewId} is in use by ${ctx.conversationId ?? 'another context'}`)
+      return { stopped: false, reason: 'in-use' }
+    }
+  }
+  browserViewManager.destroy(viewId)
+  console.log(`[BrowserContext] Page stopped from the tray: ${viewId} (conversation=${conversationId})`)
+  return { stopped: true }
 }
 
 // Default timeout for CDP commands (ms)
@@ -161,7 +207,17 @@ export class BrowserContext implements BrowserContextInterface {
   // of the main window, preventing lifecycle conflicts with user-visible views.
   private _isScoped: boolean = false
 
-  constructor() {
+  /**
+   * The conversation this context serves. Lets the renderer tell whose page an
+   * active-view event describes; automation runs have none.
+   */
+  readonly conversationId: string | null
+  /** Space of that conversation, so a client can list pages per space. */
+  readonly spaceId: string | null
+
+  constructor(options?: { conversationId?: string; spaceId?: string }) {
+    this.conversationId = options?.conversationId ?? null
+    this.spaceId = options?.spaceId ?? null
     // Enrolled here rather than at each factory so a context can never be built
     // that an external tab close cannot reach (see `notifyViewDestroyed`).
     liveContexts.add(this)
@@ -170,6 +226,55 @@ export class BrowserContext implements BrowserContextInterface {
   /** Whether this context is scoped (automation) vs the global singleton (interactive). */
   get isScoped(): boolean {
     return this._isScoped
+  }
+
+  /**
+   * Whether anything in the renderer can show this context's pages: the user's
+   * singleton and every conversation-bound context. An automation run cannot be
+   * watched, so it stays silent.
+   */
+  get hasUi(): boolean {
+    return !this._isScoped || this.conversationId !== null
+  }
+
+  /** How many tabs this context currently owns (diagnostics). */
+  get ownedViewCount(): number {
+    return this.ownedViewIds.size
+  }
+
+  /** Whether this context opened the view itself. */
+  ownsView(viewId: string): boolean {
+    return this.ownedViewIds.has(viewId)
+  }
+
+  /** Whether the user is watching one of this context's tabs on the main window right now. */
+  hasRevealedView(): boolean {
+    for (const viewId of this.ownedViewIds) {
+      if (browserViewManager.isRevealed(viewId)) return true
+    }
+    return false
+  }
+
+  /** The pages this context holds (owned plus active), or none when no UI could reveal them. */
+  describeLivePages(): AIBrowserLivePage[] {
+    if (!this.hasUi) return []
+    const ids = new Set(this.ownedViewIds)
+    if (this.activeViewId) ids.add(this.activeViewId)
+    const pages: AIBrowserLivePage[] = []
+    for (const viewId of ids) {
+      const state = browserViewManager.getState(viewId)
+      if (!state) continue
+      pages.push({
+        conversationId: this.conversationId,
+        spaceId: this.spaceId,
+        viewId,
+        owned: this.ownedViewIds.has(viewId),
+        url: state.url || null,
+        title: state.title || null,
+        active: viewId === this.activeViewId,
+      })
+    }
+    return pages
   }
 
   /**
@@ -234,18 +339,21 @@ export class BrowserContext implements BrowserContextInterface {
 
   /**
    * Broadcast the active view change to the global event bus so the transport
-   * layer can reach the renderer and remote clients. Only the interactive
-   * singleton (non-scoped) has a UI; scoped automation contexts stay silent.
+   * layer can reach the renderer and remote clients. Contexts without a UI
+   * (automation runs) stay silent.
    */
   private notifyActiveViewChange(viewId: string): void {
-    if (this._isScoped) return
+    if (!this.hasUi) return
     const state = browserViewManager.getState(viewId)
     emitBrowserActiveView({
+      conversationId: this.conversationId,
+      spaceId: this.spaceId,
       viewId,
+      owned: this.ownedViewIds.has(viewId),
       url: state?.url || null,
       title: state?.title || null,
     })
-    console.log(`[BrowserContext] Broadcast active view: ${viewId}`)
+    console.log(`[BrowserContext] Broadcast active view: ${viewId} (conversation=${this.conversationId ?? 'none'})`)
   }
 
   /**
@@ -254,16 +362,17 @@ export class BrowserContext implements BrowserContextInterface {
    * what lets the next tool call create a fresh page instead of operating a
    * dead WebContents.
    *
-   * Returns whether this context had been pointing at it, so the caller can
-   * announce the removal exactly once — every context holding that pointer must
-   * be reconciled, but the renderer must not be told several times.
+   * Returns whether this context held it — opened it or was pointing at it —
+   * so the caller can announce the removal exactly once: a page the context had
+   * moved away from may still be open in a canvas tab, and every context
+   * holding it must be reconciled without telling the renderer several times.
    *
    * Route external closes through {@link notifyViewDestroyed}, never here:
    * calling one context leaves every other one holding a dead pointer.
    */
   handleViewDestroyed(viewId: string): boolean {
-    this.ownedViewIds.delete(viewId)
-    if (this.activeViewId !== viewId) return false
+    const owned = this.ownedViewIds.delete(viewId)
+    if (this.activeViewId !== viewId) return owned
 
     this.disableMonitoring()
     this.activeViewId = null
@@ -1797,6 +1906,18 @@ export class BrowserContext implements BrowserContextInterface {
     this.lastSnapshot = null
     this.workDir = undefined
     liveContexts.delete(this)
+    this.announceReleased()
+  }
+
+  /**
+   * Tell the renderer this conversation holds no page any more. Its surviving
+   * pages would otherwise still be listed (and stoppable) as its own after they
+   * became the user's, and its stale pointer would keep hiding another
+   * conversation's page as "in use".
+   */
+  private announceReleased(): void {
+    if (!this.hasUi || !this.conversationId) return
+    emitBrowserConversationReleased({ conversationId: this.conversationId })
   }
 
   /**
@@ -1837,6 +1958,7 @@ export class BrowserContext implements BrowserContextInterface {
     this.lastSnapshot = null
     this.workDir = undefined
     liveContexts.delete(this)
+    this.announceReleased()
   }
 }
 
@@ -1912,9 +2034,12 @@ function parseKey(key: string): {
  *
  * Lifecycle: create before the run, call `destroy()` after the run.
  * `destroy()` also cleans up any BrowserViews created during the scope.
+ *
+ * Pass `conversationId` when the tabs belong to a chat the user can open: the
+ * context then announces its active tab so the renderer can offer a live view.
  */
-export function createScopedBrowserContext(): BrowserContext {
-  const scoped = new BrowserContext()
+export function createScopedBrowserContext(options?: { conversationId?: string; spaceId?: string }): BrowserContext {
+  const scoped = new BrowserContext(options)
   scoped.markAsScoped()
   return scoped
 }
@@ -1933,10 +2058,10 @@ export function createScopedBrowserContext(): BrowserContext {
  */
 const interactiveContexts = new Map<string, BrowserContext>()
 
-export function getInteractiveBrowserContext(conversationId: string): BrowserContext {
+export function getInteractiveBrowserContext(conversationId: string, spaceId?: string): BrowserContext {
   const existing = interactiveContexts.get(conversationId)
   if (existing) return existing
-  const created = new BrowserContext()
+  const created = new BrowserContext({ conversationId, spaceId })
   interactiveContexts.set(conversationId, created)
   return created
 }

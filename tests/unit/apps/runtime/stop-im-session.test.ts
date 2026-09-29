@@ -94,7 +94,7 @@ vi.mock('../../../../src/main/services/agent/helpers', () => ({
 }))
 vi.mock('../../../../src/main/services/agent/sdk-config', () => ({
   resolveCredentialsForSdk: vi.fn(),
-  buildBaseSdkOptions: vi.fn(),
+  buildUserSessionSdkOptions: vi.fn(),
 }))
 vi.mock('../../../../src/main/services/agent/permission-handler', () => ({
   createCanUseTool: vi.fn(),
@@ -111,6 +111,7 @@ vi.mock('../../../../src/main/services/agent/stream-processor', () => ({
 }))
 vi.mock('../../../../src/main/services/agent/message-utils', () => ({
   buildMessageContent: vi.fn(),
+  formatCanvasContext: () => '',
 }))
 
 vi.mock('../../../../src/main/services/ai-browser', () => ({

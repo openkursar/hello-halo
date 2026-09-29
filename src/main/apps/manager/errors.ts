@@ -73,6 +73,21 @@ export class SpaceNotFoundError extends Error {
 }
 
 /**
+ * Thrown when a digital human (automation app) is installed or moved without a
+ * space. Only MCP servers and skills may be global; a digital human needs a
+ * space to resolve its working directory, memory and conversations.
+ */
+export class AutomationSpaceRequiredError extends Error {
+  readonly specId: string
+
+  constructor(specId: string) {
+    super(`Digital human '${specId}' must belong to a space`)
+    this.name = 'AutomationSpaceRequiredError'
+    this.specId = specId
+  }
+}
+
+/**
  * Thrown when a destructive operation targets a built-in app.
  *
  * Built-in apps are bundled with the build itself (resources/builtin-apps/)

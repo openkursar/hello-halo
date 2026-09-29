@@ -31,6 +31,13 @@ vi.mock('../../../../src/main/services/agent/events', () => ({
 // The built-in source pulls in these engine-facing modules; only its turn-end signal is exercised here.
 vi.mock('../../../../src/main/services/conversation.service', () => ({}))
 vi.mock('../../../../src/main/services/agent/send-message', () => ({ sendMessage: vi.fn() }))
+
+// chat-source reaches the engine through the services/agent barrel; without this
+// every module reset would load the whole engine graph.
+vi.mock('../../../../src/main/services/agent', async () => ({
+  onAgentEvent: (await import('../../../../src/main/services/agent/events')).onAgentEvent,
+  sendMessage: (await import('../../../../src/main/services/agent/send-message')).sendMessage,
+}))
 vi.mock('../../../../src/main/services/conversation-interop/busy', () => ({
   isNativeConversationBusy: () => false,
   hasLiveNativeSession: () => false,
@@ -190,6 +197,21 @@ describe('lifecycle', () => {
 
     disposeConversationInterop()
     expect(second.dispose).toHaveBeenCalledTimes(1)
+  })
+
+  it('drops the inbound forward depth recorded for a conversation when its turn ends, before anything queued behind it dispatches', async () => {
+    const { circuitBreaker } = await import('../../../../src/main/services/conversation-interop/circuit-breaker')
+    const fake = fakeSource('depth')
+    registerConversationSource(fake.source)
+    initConversationInterop()
+    circuitBreaker.recordInboundForwardDepth('depth:1', 6)
+
+    fake.emit('depth:1')
+    await vi.waitFor(() => expect(releaseResolve).not.toBeNull())
+    releaseResolve!()
+    await vi.waitFor(() => expect(drainConversationTurn).toHaveBeenCalledWith('depth:1'))
+
+    expect(circuitBreaker.getInboundForwardDepth('depth:1')).toBe(0)
   })
 
   it('a failure while handling one turn end is logged and does not stop later ones', async () => {

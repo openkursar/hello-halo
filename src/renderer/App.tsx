@@ -50,6 +50,7 @@ import type { ToastPayload } from '../shared/types/notification'
 import type { ApiRetryState } from '../shared/types/api-retry'
 import { hasAnyAISource } from './types'
 import { openWorkNotification, type WorkNavigationTarget } from './utils/people-navigation'
+import { openSearchResultConversation } from './utils/conversation-navigation'
 import { useTeamStore } from './stores/team.store'
 import { canvasLifecycle } from './services/canvas-lifecycle'
 import type { TeamUpdatedEvent, TeamBlackboardEvent, TeamMessageEvent, TeamPresenceEvent, TeamOfficeStatusEvent } from '../shared/apps/team-types'
@@ -156,8 +157,6 @@ export default function App() {
   const handleAskQuestion = useChatStore(s => s.handleAskQuestion)
   const currentSpaceId = useChatStore(s => s.currentSpaceId)
   const setChatCurrentSpace = useChatStore(s => s.setCurrentSpace)
-  const loadConversations = useChatStore(s => s.loadConversations)
-  const selectConversation = useChatStore(s => s.selectConversation)
   const { initialize: initializeOnboarding } = useOnboardingStore()
   const { isSearchOpen, closeSearch, isHighlightBarVisible, hideHighlightBar, goToPreviousResult, goToNextResult, openSearch } = useSearchStore()
 
@@ -422,12 +421,16 @@ export default function App() {
       for (const [conversationId, session] of sessions) {
         if (!session.isGenerating) continue
 
-        // Find spaceId for this conversation (virtual IDs like "app-chat:*" won't match)
-        let spaceId: string | null = null
-        for (const [sid, ss] of chatState.spaceStates) {
-          if (ss.conversations.some(c => c.id === conversationId)) {
-            spaceId = sid
-            break
+        // Find spaceId for this conversation: the space's index for a regular
+        // one, the cached conversation for a digital human. Other session keys
+        // (IM, team) have no conversation to reload and match neither.
+        let spaceId: string | null = chatState.conversationCache.get(conversationId)?.spaceId ?? null
+        if (!spaceId) {
+          for (const [sid, ss] of chatState.spaceStates) {
+            if (ss.conversations.some(c => c.id === conversationId)) {
+              spaceId = sid
+              break
+            }
           }
         }
 
@@ -443,12 +446,14 @@ export default function App() {
               console.log(`[App] Session ${conversationId} completed while backgrounded — recovering`)
 
               if (spaceId) {
-                // Normal conversation — full reload via handleAgentComplete
+                // Space or digital-human conversation — re-read and settle
+                // through handleAgentComplete
                 chatState.handleAgentComplete({ spaceId, conversationId } as AgentEventBase)
               } else {
-                // Virtual conversationId (app-chat:*, im-session, etc.) — no space conversation
-                // to reload. Clear session state directly to unblock the UI; the owning component
-                // (AppChatView / ImChatView) will reload messages via its own isGenerating effect.
+                // Other session keys (IM, team member) — no cached conversation
+                // to reload. Clear session state directly to unblock the UI; the
+                // owning component (ImChatView) reloads messages via its own
+                // isGenerating effect.
                 chatState.resetSession(conversationId)
               }
             } else if (backendState.pendingQuestion) {
@@ -610,15 +615,10 @@ export default function App() {
 
     // Message events (with session IDs)
     const unsubMessage = api.onAgentMessage((data) => {
-      const _m = data as AgentEventBase & { content?: string; delta?: string; isComplete?: boolean; isNewTextBlock?: boolean }
-      if (_m.isComplete || _m.isNewTextBlock) {
-        console.log(`[App][+${Date.now() % 100000}ms] agent:message: isComplete=${_m.isComplete} isNewTextBlock=${_m.isNewTextBlock} contentLen=${(_m.content ?? '').length}`)
-      }
       handleAgentMessage(data as AgentEventBase & { content: string; isComplete: boolean })
     })
 
     const unsubToolCall = api.onAgentToolCall((data) => {
-      console.log('[App] Received agent:tool-call event:', data)
       const toolCall = data as AgentEventBase & ToolCall
       // The Team view never opens itself — the collaboration card and team
       // messages offer it, and the user decides (same rule as the AI browser).
@@ -626,23 +626,19 @@ export default function App() {
     })
 
     const unsubToolResult = api.onAgentToolResult((data) => {
-      console.log('[App] Received agent:tool-result event:', data)
       const toolResult = data as AgentEventBase & { toolId: string; result: string; isError: boolean }
       handleAgentToolResult(toolResult)
     })
 
     const unsubError = api.onAgentError((data) => {
-      console.log('[App] Received agent:error event:', data)
       handleAgentError(data as AgentEventBase & { error: string; errorType?: AgentErrorType })
     })
 
     const unsubComplete = api.onAgentComplete((data) => {
-      console.log(`[App][+${Date.now() % 100000}ms] Received agent:complete event:`, data)
       handleAgentComplete(data as AgentEventBase)
     })
 
     const unsubCompact = api.onAgentCompact((data) => {
-      console.log('[App] Received agent:compact event:', data)
       handleAgentCompact(data as AgentEventBase & { trigger: 'manual' | 'auto'; preTokens: number })
     })
 
@@ -653,7 +649,6 @@ export default function App() {
 
     // AskUserQuestion - AI needs user input to continue
     const unsubAskQuestion = api.onAgentAskQuestion((data) => {
-      console.log('[App] Received agent:ask-question event:', data)
       handleAskQuestion(data as AgentEventBase & { id: string; questions: Question[] })
     })
 
@@ -664,13 +659,11 @@ export default function App() {
 
     // Autonomous turn start — CC produced output without user send (e.g., Agent Team)
     const unsubTurnStart = api.onAgentTurnStart((data) => {
-      console.log('[App] Received agent:turn-start event:', data)
       handleAgentTurnStart(data as AgentEventBase & { autonomous?: boolean })
     })
 
     // MCP status updates (global - not per-conversation)
     const unsubMcpStatus = api.onAgentMcpStatus((data) => {
-      console.log('[App] Received agent:mcp-status event:', data)
       const event = data as { servers: McpServerStatus[]; timestamp: number }
       if (event.servers) {
         setMcpStatus(event.servers, event.timestamp)
@@ -966,9 +959,11 @@ export default function App() {
         conversationId: string
         query: string
         resultIndex: number
+        kind?: 'chat' | 'digital-human'
+        appId?: string
       }>
 
-      const { messageId, spaceId, conversationId, query } = customEvent.detail
+      const { messageId, spaceId, conversationId, query, kind, appId } = customEvent.detail
 
       console.log(`[App] search:navigate-to-result event - space=${spaceId}, conv=${conversationId}, msg=${messageId}`)
 
@@ -1002,13 +997,10 @@ export default function App() {
           await new Promise(resolve => setTimeout(resolve, 50))
         }
 
-        // Step 2: Load conversations if needed
-        console.log(`[App] Loading conversations for space: ${spaceId}`)
-        await loadConversations(spaceId)
-
-        // Step 3: Select conversation
-        console.log(`[App] Selecting conversation: ${conversationId}`)
-        await selectConversation(conversationId)
+        // Step 2: Open the conversation (space conversation or digital human)
+        // with the result's message loaded
+        console.log(`[App] Opening conversation: ${conversationId}`)
+        await openSearchResultConversation({ spaceId, conversationId, messageId, kind, appId })
 
         // Step 4: Dispatch navigation event for ChatView to handle
         // ChatView asks MessageList to bring the message into view (mounting older
@@ -1032,7 +1024,7 @@ export default function App() {
 
     window.addEventListener('search:navigate-to-result', handleNavigateToResult)
     return () => window.removeEventListener('search:navigate-to-result', handleNavigateToResult)
-  }, [currentSpaceId, spaces, haloSpace, setSpaceStoreCurrentSpace, refreshCurrentSpace, setChatCurrentSpace, loadConversations, selectConversation])
+  }, [currentSpaceId, spaces, haloSpace, setSpaceStoreCurrentSpace, refreshCurrentSpace, setChatCurrentSpace])
 
   // Handle Git Bash setup completion
   const handleGitBashSetupComplete = async (installed: boolean) => {

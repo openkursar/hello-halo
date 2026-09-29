@@ -30,20 +30,41 @@ Does NOT:
 
 ## 2. Key Design Decisions
 
-### 2.1 Own SDK Sessions (No sendMessage Modification)
+### 2.1 Own Session Assembly on the Shared Engine
 
-**Decision**: Runtime creates its own V2 sessions using `unstable_v2_createSession`
-directly, rather than modifying the existing `sendMessage()` in `services/agent/`.
+**Decision**: Runtime assembles its own sessions (automation runs in `execute.ts`,
+digital-human chat in `app-chat.ts`) rather than routing through the space chat's
+`sendMessage()` — but it builds on the same engine layer, not a copy of it.
 
-**Rationale**:
-- `sendMessage()` is 946 lines of complex code tightly coupled to conversation UI
-  (mainWindow IPC, thought accumulation, streaming display, conversation persistence).
-- Runtime's execution needs are fundamentally different: no UI streaming, no
-  conversation persistence, different MCP tool set, different error handling.
-- Modifying sendMessage risks breaking the core conversation flow.
-- Runtime imports helper functions (`getApiCredentials`, `resolveCredentialsForSdk`,
-  `buildBaseSdkOptions`, `getHeadlessElectronPath`) from the agent service but
-  manages its own session lifecycle independently.
+**What is shared** (from `services/agent`):
+- Credentials: `getApiCredentials` / `getApiCredentialsForSource` (helpers),
+  `resolveCredentialsForSdk`.
+- Options: `buildUserSessionSdkOptions` (sdk-config). It reads the user's global AI
+  settings (`maxTurns`, `disabledTools`, `promptProfile`, digital-humans switch) and
+  the config directory itself, so a run or a chat turn follows them without passing
+  anything. Never pass these from here, and never build options by hand.
+- Prompt: `buildSystemPrompt` (system-prompt), which the digital-human prompt layers
+  (`prompt.ts`, `prompt/identity.ts`) start from, so it inherits the same settings.
+- Tools: `buildBaseToolset` (`toolsets/base.ts`) — web search, Halo documentation and,
+  while digital humans are enabled, `halo-apps`. Each entry starts from it and states
+  its exclusions where it builds (automation: no `halo-apps`; a disposable team
+  member: no `halo-apps`). Everything else an entry mounts — memory, notify, report,
+  team, browser, terminal, OCR, email, Halo API, person context, IM file send — is
+  its own, granted by app permission and caller.
+- Session engine: chat goes through `getOrCreateV2Session` with a `TurnSink`
+  (2.12a); automation creates its session with `createSession` and drives its own
+  stream (2.10).
+
+**What is Runtime's own**: session lifecycle and persistence (the run JSONL, not the
+conversation store), the per-entry tool list, the capability policy for callers who
+are not the owner, and error handling.
+
+**Rationale**: `sendMessage()` is coupled to the space conversation store and its UI
+events, which neither surface has. But the settings, base tools and prompt were
+duplicated per entry and drifted (a tool the user disabled still worked in a digital
+human; automation shipped without the documentation). What is the same for every
+entry now lives once below the entries; what varies stays flat in each entry, and
+`tests/unit/services/agent/entry-capability-matrix.test.ts` compares them.
 
 **Trade-off**: Some code duplication in stream processing. Acceptable because the
 runtime's stream processing is much simpler (no thought accumulation, no UI events).
@@ -88,14 +109,17 @@ genuinely suspended on the answer, while a team member keeps being woken by team
 periodic checks, so it is told the answer will arrive as its own wake quoting the question.
 
 **One escalation may ask for several decisions.** `content.questions` carries them, and
-`summary` then frames why they are being asked; a single-decision escalation leaves
-`questions` empty and carries its question in `summary` as before. Because the run ends at
+`summary` then frames why they are being asked; a single-decision escalation normally leaves
+`questions` empty and carries its question in `summary` as before, though models do send a
+one-element `questions` and that is equally valid. Because the run ends at
 the escalation, splitting decisions across calls would interrupt the user once per
 question and cost a round trip each — the array is what makes "ask for everything you need
-first" possible. Read the shape through `getEscalationQuestions` and render answers
-through `formatEscalationAnswer` (both in `shared/apps/app-types`, shared with the
-renderer); no caller should branch on which shape was written, and the legacy
-`content.question` field only exists for entries written before it moved into `summary`.
+first" possible. Read the shape through `getEscalationQuestions`, read answers through
+`getEscalationAnswers` (a single decision may be answered flat or as a one-element list),
+and render them through `formatEscalationAnswer` (all in `shared/apps/app-types`, shared
+with the renderer); no caller — including answer validation — should branch on which shape
+was written, and the legacy `content.question` field only exists for entries written before
+it moved into `summary`.
 
 **An app may hold several unanswered questions.** Because the escalating run ends, the app
 is idle from the executor's point of view, and a further trigger can produce a second
@@ -378,7 +402,8 @@ Consequences that matter:
   any other turn and, for IM sessions, pushed to the originating chat (the user
   asked for that work — its completion belongs in the conversation). Native and
   HTTP sessions need no push: the `agent:*` events already reached the client and
-  `AppChatView` reloads the transcript on completion.
+  the chat page re-reads the transcript when the turn completes and settles it in
+  place (see `renderer/stores/chat/DESIGN.md`).
 - A round enqueued while a turn is already running cannot be claimed by it, so
   the residual race is only the instant between enqueue and `system:init`. The
   IM busy check closes even that: `isAppChatConversationGenerating` counts an
@@ -480,9 +505,11 @@ retry. Fork requires the engine's `sessionFork` capability (CC / Halo SDK:
 true; Codex `thread/resume` cannot branch: false); the UI gates the affordance
 on it.
 
-**Layer split in the renderer**: local sessions render in the interactive
-`AppChatView` (keyed by conversationId for a clean remount on switch); IM/HTTP
-sessions stay read-only in `ImChatView`, reached through `ImSessionDetailView`.
+**Layer split in the renderer**: the default and local sessions render in the
+main chat page — the same `ChatView` as space conversations, with the chat
+store's digital-human source behind it (`renderer/stores/chat/DESIGN.md`);
+IM/HTTP sessions stay read-only in `ImChatView`, reached through
+`ImSessionDetailView`.
 
 ### 2.14 Cross-Session Relay (Pending Relay Spool)
 
@@ -630,6 +657,188 @@ status ladder in both derivations, so an unmapped status was indistinguishable
 from a person the runtime had stopped — an uninstalled person read as one that
 had failed. Every status is now mapped explicitly and the ladder exists once.
 
+### 2.18 Transcript Read Model (Stable Ids, Pages, On-Demand Thoughts)
+
+**Decision**: a digital-human session is read into the same message shape as a
+space conversation — `TranscriptMessage` / `TranscriptPage`
+(`shared/types/transcript.ts`, helpers in `shared/transcript.ts`) — and the
+JSONL storage is unchanged (append-only, written by `session-store`).
+
+- **Message id = `session-msg-<N>`**, `N` the physical 1-based file line of the
+  message's first event: the user event, or for an assistant turn the first event
+  that put a thought or text into it (a `result` envelope counts). The file only
+  grows, so the id never changes while the turn is in flight, and never depends
+  on how many messages precede it — which is what lets a reader parse or page
+  anywhere in the file. Blank and malformed lines still count as lines. (The
+  earlier `session-msg-<count>` did not drift on append-only reads; it was
+  replaced because it tied identity to the parse, not to the file.)
+- **Pages come from the newest backwards.** `readSessionTranscript(…, {before?, limit?})`
+  returns `{messages, hasMoreBefore, cursor, total}`; `cursor` is the id of the
+  oldest message in the page and is passed back as `before`. A `before` that no
+  longer exists (history cleared) yields an empty page, never a restart from the
+  newest. Limit defaults to 50, max 200.
+- **Thoughts are not in a page.** Messages with a thought process carry
+  `thoughts: null` + `thoughtsSummary`; `readSessionMessageThoughts` returns one
+  message's thoughts (tool output included). The full read
+  (`readSessionMessages`, used by IM, team-member and run-detail views) is
+  unchanged. On a 13–16 MB team-member transcript the first 50-message page is
+  ~0.13 MB over IPC versus 2–5 MB for the full read.
+- **Parse cache** (`stamped-lru.ts`): the converted messages of a file are kept
+  while its stamp (size + mtime + inode) is unchanged, LRU bounded to 8 files /
+  32 MB of file bytes (the parsed form costs 2–3x that on the heap). Appends change the stamp, so a growing file re-parses on
+  its next read (cold parse of a 16 MB file ≈ 100–160 ms; a warm page is
+  sub-millisecond). Callers get a copy of the array, never the cached one.
+- **Provenance.** A user-side record may carry `_source`
+  (`injection` | `cross-conversation` | `cross-conversation-notice` |
+  `team-message`) and `_metadata` (the flat fields space conversations persist:
+  `fromConversationId/Title`, `summary`, `correlationId`, `forwardDepth`, team
+  fields). The reader maps `_source` to `source` and to the role
+  (`roleForTranscriptSource`: cross-conversation, its notice and team messages
+  are `system`; injection is `user`); unknown sources and fields are ignored.
+  Writers use `SessionWriter.writeTrigger(content, images, teamOrigin, provenance)`
+  / `TurnSink.writeUserMessage(...)`, and write the text to *show*, not the
+  framed text the model received.
+- **Surface**: `app:chat-transcript` / `app:chat-message-thoughts` (IPC, contract in
+  `shared/rpc/contracts/app.contract.ts`) and
+  `GET /api/apps/:appId/chat/transcript`, `GET /api/apps/:appId/chat/messages/:messageId/thoughts`
+  (HTTP, same `resolveAppChatTarget` trust boundary as the other chat routes).
+  `app:chat-messages` keeps its full-array contract. Main-side loaders:
+  `loadChatTranscriptForConversation`, `loadChatMessageThoughts`.
+- **Jumping to a message.** `through: <messageId>` returns the newest page widened
+  back to that message (plus a few above it, capped at 2000 messages), so a search
+  hit older than the newest page can be revealed without walking cursors.
+- **Global search** (`services/search.service.ts`) reads space conversations from
+  their files (never `{id}.thoughts.json`; the query is matched literally) and
+  digital-human sessions through the registered conversation sources — default and
+  local sessions only, the same directory cross-conversation reads use — so a result
+  carries the session key and the stable message id it navigates to. Transcripts
+  are searched one at a time with a yield between them; a digital-human session
+  costs one parse of its JSONL unless the parse cache still holds it.
+- **What is shared, and what is not.** Only the message format and the paging
+  rules (`pageTranscript`, `through`, the list-view projection) are shared. There is
+  no unified reader: space conversations are still read whole through
+  `conversation.service` (`getConversation` / `getMessageThoughts`), digital-human
+  sessions through `session-store` as above.
+
+### 2.19 Chat Browser Contexts (Resident vs Per-Turn, Live View)
+
+**Decision**: each chat's AI browser context lives in `app-chat-browser.ts`, not
+in a map inside `app-chat.ts`, and its lifetime depends on who is chatting:
+
+| Session | Context lifetime |
+|---|---|
+| default (`app-chat:{appId}`) and local (`…:local:direct:{uuid}`) | **resident** — survives the turn, so the next message continues on the same page and the user can open the live view between turns |
+| IM, HTTP, team | **per-turn** — destroyed in `runAppChatTurn`'s `finally`; nobody can watch them and they can be minted without limit |
+
+Every context is created with `createScopedBrowserContext({ conversationId })`,
+which is what makes `services/ai-browser` announce its active page under that
+conversation (see that module's DESIGN, "Live view"). The renderer's "view live
+feed" button for a digital-human chat depends on this and on nothing else here.
+
+**Resident is bounded**, because every page is a Chromium renderer and local
+sessions are unbounded (`MAX_RESIDENT_BROWSER_CONTEXTS`, `RESIDENT_BROWSER_IDLE_MS`):
+- a context idle for 30 minutes is destroyed; cookies live in the shared
+  `persist:browser` session, so only tabs and scroll state are lost;
+- at most 6 contexts may hold pages; a new one evicts the least recently used
+  idle one;
+- never mid-turn (asked of `isAppChatConversationGenerating`, not of a flag kept
+  here — a turn that died before reporting back cannot pin a context) and never
+  while the user is watching one of its tabs (`ctx.hasRevealedView()`); over the
+  cap rather than kill a live turn.
+- a per-turn context still present after 5 minutes lost its cleanup and is
+  reclaimed by the same sweep.
+
+**Teardown paths** (each one goes through `destroyChatBrowserContext`, which logs
+the reason and closes the pages, and the pages' destruction announces `view-gone`):
+session cleared/deleted (`clearSessionByConversationId`), team session closed,
+manual "Restart agent" (`restartAppChat` with `interruptActive`; automatic
+config-change restarts deliberately leave the pages), app uninstalled
+(`onAppUninstalled` in `service.ts`), runtime shutdown, the AI-browser permission
+revoked (next turn), and the sweep's `app-removed` check — deleting a space
+hard-deletes its apps without an uninstall event, so a context of an app that no
+longer exists is noticed on the next sweep (≤ 60 s) instead of being leaked.
+
+Logging: one line per create/destroy (`reason`, view count) and a state line
+every 5 minutes while any context exists (`[AppChatBrowser] State: contexts=…`).
+
+### 2.20 Digital-Human Chats as Cross-Conversation Sources
+
+`conversation_read` / `conversation_send` (`services/conversation-interop`)
+address every conversation of a space through registered *sources*. The space's
+own conversations are built in; this module registers the digital-human source
+(`conversation-source.ts`) from `bootstrap/extended.ts`, right after
+`initAppRuntime` — the interop module declares the slot and never imports this
+tier (the same downward-registration shape as `app-bridge`). The source reads the
+app manager and session registry lazily, so registration order against
+`initConversationInterop` does not matter.
+
+**What is exposed.** Only the sessions the desktop user holds with a digital
+human: the default session (once it holds a conversation) and the local sessions
+of the digital humans installed in the caller's space. IM, HTTP and team sessions
+are neither listed, resolvable, readable nor deliverable to — `getMeta` returns
+null for their keys, so even a guessed id or hashed handle finds nothing.
+Uninstalled digital humans and `enableDigitalHumans: false` expose nothing.
+Titles: the default session is the digital human's name, a local one
+`Name: <custom name | first message | New chat>`. Counts come from the session
+registry, which counts inbound turns, not stored messages.
+
+**References.** `[#Title](conv:<8hex>)`: a space conversation keeps its uuid
+prefix, a digital-human chat carries the first 8 hex of SHA-1 of its
+conversation key (`shared/conversation-reference.ts`, a pure implementation so
+the composer and the resolver derive the same handle). Collisions go through the
+resolver's ambiguity answer with full ids; existing references stay valid.
+
+**Reading.** `readTranscript` walks `loadChatTranscriptForConversation` pages back
+to the start (thoughts never loaded); interop applies its own paging and 8000
+character budget on top, identical for every source.
+
+**Delivering.** `dispatch` runs an ordinary `sendAppChatMessage` for the target's
+conversation key, so the turn is assembled exactly like one the user typed. Two
+things differ: the model reads the framed text (`message`), while
+`AppChatRequest.recorded` makes the sink write the sender's own words with
+`_source: 'cross-conversation'` and the provenance metadata; and dispatch
+resolves when the engine *accepts* the message (`onMessageAccepted`), not when
+the turn ends — a failure before that rejects (the sender sees `unreachable`), a
+failure after it is only logged. Exclusivity is interop's turn gate, keyed by the
+conversation key; `isBusy` is `isAppChatConversationGenerating` (it already
+includes a queued round). The turn-end signal is the public
+`agent:complete` / `agent:error` stream filtered to app-chat keys, and
+`hasLiveSession` is `v2Sessions.has || hasActiveAppChatRound`, which is what lets
+interop tell a still-starting turn from a leaked reservation.
+
+**Sender side.** The rate-limit notice interop leaves in the *sender's*
+conversation goes through `writeNotice`: a `_source: 'cross-conversation-notice'`
+line appended through the sender's live sink (skipped with a warning when none is
+open). A scheduled run acts under its own sender key (`app-run:{appId}:{runId}`,
+`run-conversation-source.ts`), never the default chat: what it sends is a
+one-way notice, a reply to it is refused, and only a `waitForReply` it is blocked
+in gets an answer back.
+
+**Collaboration switch on the target side.** The source reads
+`isConversationCollabEnabled` on every call and marks a switched-off digital
+human's chats `unavailable`; it does not hide them. The directory's admission
+(`services/conversation-interop/admission.ts`) is what keeps other conversations'
+AI from listing, reading or delivering to them — including a delivery queued
+before the switch went off — and tells a caller naming one why. The user's own
+features, global search included, still see them. The composer still shows its
+chats in the # picker, greyed and labelled, not selectable.
+
+**Who gets the tools** (`conversation-collab.ts`, one decision for `app-chat.ts`
+and `execute.ts`): the owner's per-digital-human switch
+`conversation-collab` (`isConversationCollabEnabled`, **off by default**, one
+switch for read and send, settings → Capabilities), AND the caller is the owner
+(an IM guest or a teammate's borrowed turn never gets them, switch or not — the
+capability-policy tables do not list `halo-conversations`, so an applied policy
+strips it too, and this gate holds where none is applied), AND the turn is not in
+a team channel, AND the session is the digital human's default or a local one
+(an owner's IM or HTTP session is not in the conversation directory, so replies to
+it could not route back), AND the global `enableConversationInterop` master switch is not
+off (`enableConversationSend: false` narrows to read-only). The tools load the
+interop module on first use, so the turns that never mount them do not pay for
+the engine session layer at load. Toggling the switch changes the session's
+server set, which its inputs fingerprint already covers, so it takes effect on
+the next message. `entry-capability-matrix.test.ts` pins every row.
+
 ---
 
 ## 3. SQLite Schema
@@ -694,14 +903,19 @@ src/main/apps/runtime/
   -- Interactive chat with an App (separate from automation runs):
   app-chat.ts                -- sendAppChatMessage() and chat session lifecycle
   app-chat-sink.ts           -- TurnSink for chat: run JSONL + round/autonomous delivery (§2.12a)
-  app-chat-live-turn.ts      -- The turn a chat is running RIGHT NOW: whether there is one (`isAppChatConversationGenerating` — the only truthful busy probe; app chat never writes the engine's legacy `activeSessions` map) and how to add a message to it. Its own leaf module because the team layer asks both synchronously, and app-chat.ts imports the team runtime accessor — a static edge back would close that cycle
+  app-chat-browser.ts        -- The AI browser context each chat drives: resident for native chats, per-turn for IM/HTTP/team, idle/cap reaping, teardown by reason (§2.19)
+  conversation-source.ts     -- The digital-human `ConversationSource` registered with services/conversation-interop (default + local sessions only; §2.20)
+  run-conversation-source.ts -- A scheduled run's one-way sender identity for cross-conversation messages (§2.20)
+  conversation-collab.ts     -- Who gets `halo-conversations` (owner's `conversation-collab` switch, owner-only, no team channel, global master switch) and the lazy server factory shared by app-chat.ts and execute.ts (§2.20)
+  app-chat-live-turn.ts      -- The turn a chat is running RIGHT NOW: whether there is one (`isAppChatConversationGenerating` — the only truthful busy probe; app chat never writes the engine's legacy `activeSessions` map) and how to add a message to it (`injectIntoAppChat`: the team bus and, through `app:chat-inject` / `POST /chat/inject`, the user adding to their own running turn — the latter passes `{ source: 'injection' }`, which the transcript reader shows as an annotation on the reply). Its own leaf module because the team layer asks both synchronously, and app-chat.ts imports the team runtime accessor — a static edge back would close that cycle
   config-defaults.ts         -- Merge App config_schema defaults into userConfig
   dispatch-inbound.ts        -- Route IM inbound messages into app-chat
   im-permission-registry.ts  -- Per-conversation owner/guest context for SDK gating
   im-session-registry.ts     -- Persistent IM session list (per app + channel + chatId)
   pending-relays.ts          -- Cross-session relay spool + <relay-from> rendering (§2.14)
   progress-formatter.ts      -- Format streaming progress events for IM transports
-  session-store.ts           -- JSONL persistence for chat history + SDK session IDs
+  session-store.ts           -- JSONL persistence for chat history + SDK session IDs; the transcript read model (§2.18)
+  stamped-lru.ts             -- File-stamped LRU used by session-store's parse cache (§2.18)
   file-export-gate.ts        -- Filesystem boundary for AI-attached file delivery
 
   -- App chat system prompt (Identity / Entry / Constraint layers) — see §2.12:
@@ -781,7 +995,9 @@ apps/runtime depends on:
 ├── platform/background   registerKeepAliveReason()
 ├── platform/store        DatabaseManager (for migrations + activity store)
 ├── services/agent        getApiCredentials (helpers), resolveCredentialsForSdk,
-│                         buildBaseSdkOptions, getHeadlessElectronPath (sdk-config)
+│                         buildUserSessionSdkOptions, getHeadlessElectronPath (sdk-config),
+│                         buildBaseToolset (toolsets/base)
+├── services/conversation-interop   ConversationSource type (registered from bootstrap), createConversationInteropMcpServer (lazy, when collaboration is on)
 ├── services/config       getConfig()
 └── services/space        getSpace()
 ```

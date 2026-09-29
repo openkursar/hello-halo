@@ -20,7 +20,7 @@ import {
 } from '../../platform/memory'
 import { query, tool, createSdkMcpServer, getEngineCapabilities } from '../agent/resolved-sdk'
 import { addSdkHooks } from '../agent'
-import { buildBaseSdkOptions, type ResolvedSdkCredentials } from '../agent/sdk-config'
+import { buildInternalTaskSdkOptions, type ResolvedSdkCredentials } from '../agent/sdk-config'
 import { getHeadlessElectronPath } from '../agent/helpers'
 import { CONSOLIDATION_SYSTEM_PROMPT, buildConsolidationMessage, buildFollowUpMessage } from './prompt'
 
@@ -111,7 +111,7 @@ async function buildOptions(
   abortController: AbortController
 ): Promise<Record<string, any>> {
   const { ws, tag } = input
-  const sdkOptions = await buildBaseSdkOptions({
+  const sdkOptions = await buildInternalTaskSdkOptions({
     credentials: input.credentials,
     workDir: ws.dir,
     electronPath: getHeadlessElectronPath(),

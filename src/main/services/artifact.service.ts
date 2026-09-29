@@ -64,8 +64,6 @@ function getWorkingDir(spaceId: string): string {
  * Uses caching and file watching for optimal performance
  */
 export async function listArtifacts(spaceId: string, maxDepth: number = 2): Promise<Artifact[]> {
-  console.log(`[Artifact] listArtifacts for space: ${spaceId}`)
-
   const workDir = getWorkingDir(spaceId)
 
   if (!existsSync(workDir)) {
@@ -91,7 +89,7 @@ export async function listArtifacts(spaceId: string, maxDepth: number = 2): Prom
     preview: undefined  // Don't load preview by default for performance
   }))
 
-  console.log(`[Artifact] Found ${artifacts.length} artifacts`)
+  console.log(`[Artifact] listArtifacts: spaceId=${spaceId} count=${artifacts.length}`)
   return artifacts
 }
 
@@ -158,7 +156,6 @@ export function watchArtifacts(
  */
 export async function listArtifactsTree(spaceId: string): Promise<{ workspaceRoot: string; nodes: CachedTreeNode[] }> {
   const workDir = getWorkingDir(spaceId)
-  console.log(`[Artifact] listArtifactsTree: spaceId=${spaceId}, workDir=${workDir}`)
 
   if (!existsSync(workDir)) {
     console.log(`[Artifact] Directory does not exist: ${workDir}`)
@@ -167,7 +164,7 @@ export async function listArtifactsTree(spaceId: string): Promise<{ workspaceRoo
 
   const nodes = await listArtifactsTreeCached(spaceId, workDir)
 
-  console.log(`[Artifact] listArtifactsTree: ${nodes.length} root nodes`)
+  console.log(`[Artifact] listArtifactsTree: spaceId=${spaceId} workDir=${workDir} rootNodes=${nodes.length}`)
   return { workspaceRoot: workDir, nodes }
 }
 

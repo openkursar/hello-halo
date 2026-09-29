@@ -15,16 +15,13 @@
  */
 
 import { useMemo } from 'react'
-import { useChatStore } from '../stores/chat.store'
+import { useChatStore, selectActiveConversation } from '../stores/chat.store'
 import { normalizeFileChangesSummary } from '../../shared/file-changes'
 
 export type TouchedFileStatus = 'created' | 'edited'
 
 export function useConversationTouchedFiles(): Map<string, TouchedFileStatus> {
-  const messages = useChatStore(state => {
-    const conversationId = state.getCurrentSpaceState().currentConversationId
-    return conversationId ? state.conversationCache.get(conversationId)?.messages : undefined
-  })
+  const messages = useChatStore(state => selectActiveConversation(state)?.messages)
 
   return useMemo(() => {
     const map = new Map<string, TouchedFileStatus>()

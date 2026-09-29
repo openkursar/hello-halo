@@ -71,8 +71,9 @@ is not blocked by a trigger that is still checking, and the trigger yields to it
 
 ## The agent (`runner.ts`, `prompt.ts`)
 
-A query per round built on `buildBaseSdkOptions` (same credentials, env and
-engine as the owner's sessions), rooted in the workspace:
+A query per round built on `buildInternalTaskSdkOptions` (same credentials, env and
+engine as the owner's sessions, but not the owner's tool restrictions, turn cap or
+prompt style — see `services/agent/DESIGN.md` §11), rooted in the workspace:
 
 - tools: Read, Write, Edit, Glob, Grep, and `memory_move`; no shell, no user
   skills or settings;

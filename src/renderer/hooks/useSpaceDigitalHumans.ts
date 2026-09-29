@@ -35,7 +35,7 @@ export function useSpaceDigitalHumans(spaceId: string | null, { includeUninstall
     const hidden = new Set([...ephemeralMemberIds(teams), ...coordinatorIds(teams)])
     return apps.filter(a =>
       a.spec.type === 'automation'
-      && (a.spaceId === spaceId || a.spaceId === null)
+      && a.spaceId === spaceId
       && (includeUninstalled || a.status !== 'uninstalled')
       && !hidden.has(a.id)
     )

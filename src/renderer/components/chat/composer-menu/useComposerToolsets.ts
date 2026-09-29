@@ -7,7 +7,7 @@
 
 import { useEffect } from 'react'
 import { useToolsetsStore, type ToolsetStatus } from '../../../stores/toolsets.store'
-import { useChatStore } from '../../../stores/chat.store'
+import { useChatStore, selectActiveConversationId } from '../../../stores/chat.store'
 import { useSpaceStore } from '../../../stores/space.store'
 import { DEFAULT_TOOLSETS } from '../../../../shared/constants/toolsets'
 
@@ -34,7 +34,7 @@ export interface ComposerToolsets {
 
 export function useComposerToolsets({ enabled, canOpen, panelOpen, onRequested }: Options): ComposerToolsets {
   const spaceId = useSpaceStore((s) => s.currentSpace?.id ?? null)
-  const conversationId = useChatStore((s) => s.getCurrentConversationId())
+  const conversationId = useChatStore(selectActiveConversationId)
   const active = enabled && !!spaceId && !!conversationId
 
   const statuses = useToolsetsStore((s) => (active ? s.byConversation.get(conversationId!) : undefined))

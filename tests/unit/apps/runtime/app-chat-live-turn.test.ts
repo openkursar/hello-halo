@@ -113,6 +113,14 @@ describe('injectIntoAppChat', () => {
     expect(writeTrigger).toHaveBeenCalledWith('the plan changed')
   })
 
+  it('records the provenance a caller supplies, so the user adding to their own turn reads as an injection', () => {
+    liveTurn(CONVO, vi.fn())
+
+    expect(injectIntoAppChat(CONVO, 'also this', { source: 'injection' })).toBe(true)
+
+    expect(writeTrigger).toHaveBeenCalledWith('also this', undefined, undefined, { source: 'injection' })
+  })
+
   it('records the message only after the engine has taken it', () => {
     // The record is of what HAPPENED, and until the send returns nothing has.
     // Written first, a send that then threw left a transcript line for a

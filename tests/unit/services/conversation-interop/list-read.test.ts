@@ -61,12 +61,17 @@ vi.mock('../../../../src/main/services/space.service', () => ({
 vi.mock('../../../../src/main/services/tlon', () => ({ getSeedKBIds: () => [] }))
 vi.mock('../../../../src/main/foundation/config.service', () => ({ getConfig: () => undefined }))
 
-const { isNativeConversationBusy } = vi.hoisted(() => ({ isNativeConversationBusy: vi.fn(() => false) }))
-vi.mock('../../../../src/main/services/conversation-interop/busy', () => ({ isNativeConversationBusy }))
+const { isNativeConversationBusy } = vi.hoisted(() => ({ isNativeConversationBusy: vi.fn((_id: string) => false) }))
+vi.mock('../../../../src/main/services/conversation-interop/busy', () => ({ isNativeConversationBusy, hasLiveNativeSession: () => false }))
+vi.mock('../../../../src/main/services/agent', () => ({ sendMessage: vi.fn(), onAgentEvent: () => ({ dispose: () => undefined }) }))
 
 import { randomUUID } from 'crypto'
 import { createConversation, addMessage, updateLastMessage } from '../../../../src/main/services/conversation.service'
 import { listConversationsForInterop, readConversationForInterop } from '../../../../src/main/services/conversation-interop/list-read'
+import { registerConversationSource } from '../../../../src/main/services/conversation-interop/source'
+import { createChatConversationSource } from '../../../../src/main/services/conversation-interop/chat-source'
+
+registerConversationSource(createChatConversationSource())
 
 // A fresh space id per test: `listConversations` scans its whole directory,
 // and `createConversation`'s index update defers to an async `setImmediate`

@@ -24,6 +24,8 @@ import type {
 } from './types'
 import type { AppStatus } from '../manager'
 import { BLOCKED_STATUSES, blockedReason } from './app-state'
+import type { EscalationAnswer } from '../../../shared/apps/app-types'
+import { getEscalationAnswers, getEscalationQuestions } from '../../../shared/apps/app-types'
 
 // ============================================
 // Internal Row Types (flat DB shape)
@@ -613,19 +615,18 @@ export class ActivityStore {
     return this.db.transaction(() => {
       const entry = this.getEntry(entryId)
       if (!entry || entry.appId !== appId || entry.type !== 'escalation') throw new Error('Decision not found')
+      const answers = getEscalationAnswers(response)
       if (entry.userResponse) {
-        const answer = (value: EscalationResponse) => JSON.stringify({ choice: value.choice, text: value.text, answers: value.answers })
-        if (answer(entry.userResponse) !== answer(response)) throw new Error('This decision has already been answered differently')
+        const same = (value: EscalationAnswer[]) => JSON.stringify(value.map(({ choice, text }) => ({ choice, text })))
+        if (same(getEscalationAnswers(entry.userResponse)) !== same(answers)) throw new Error('This decision has already been answered differently')
         return entry
       }
       if (entry.content.resolution || this.isRunClosed(entry.runId)) throw new Error('This decision is closed')
       if (entry.content.deadlineReviewRequired) throw new Error('Confirm the historical deadline before answering')
       if (entry.content.deadlineAt !== undefined && entry.content.deadlineAt <= Date.now()) throw new Error('This decision has expired')
-      const questions = entry.content.questions
-      if (questions?.length && (response.answers?.length !== questions.length || response.answers.some(answer => !answer.choice?.trim() && !answer.text?.trim()))) {
+      if (answers.length !== getEscalationQuestions(entry.content).length || answers.some(answer => !answer.choice?.trim() && !answer.text?.trim())) {
         throw new Error('Answer every question before submitting')
       }
-      if (!questions?.length && !response.choice?.trim() && !response.text?.trim()) throw new Error('An answer is required')
       const now = Date.now()
       this.stmtUpdateEntryResponse.run(JSON.stringify({ ...response, ts: now }), entryId)
       this.db.prepare(`INSERT INTO decision_continuations(entry_id, app_id, status, updated_at) VALUES (?, ?, 'queued', ?)`).run(entryId, appId, now)

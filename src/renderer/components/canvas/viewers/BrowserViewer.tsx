@@ -42,7 +42,7 @@ import {
 import { api } from '../../../api'
 import { canvasLifecycle, type TabState, type BrowserState } from '../../../services/canvas-lifecycle'
 import { useBrowserState } from '../../../hooks/useCanvasLifecycle'
-import { useAIBrowserStore } from '../../../stores/ai-browser.store'
+import { useAIBrowserStore, selectViewOwner } from '../../../stores/ai-browser.store'
 import { useTranslation } from '../../../i18n'
 import { useSecurityPolicy } from '../../../hooks/useSecurityPolicy'
 import { getBrowserHomepage } from '../../../utils/browser-homepage'
@@ -172,12 +172,12 @@ export function BrowserViewer({ tab }: BrowserViewerProps) {
     }
   }, [blockedUrl, blockedHost, tab.browserViewId, tab.id, t])
 
-  // AI Browser state — identity by viewId is exact: this tab is the AI's live
-  // view iff its BrowserView is the AI's current active view. No URL/hostname or
-  // title-emoji heuristics (which misfire when tabs share a host).
-  const aiActiveViewId = useAIBrowserStore(state => state.activeViewId)
-  const isAIOperating = useAIBrowserStore(state => state.isOperating)
-  const isThisAIBrowser = !!tab.browserViewId && tab.browserViewId === aiActiveViewId
+  // AI Browser state — identity by viewId is exact: this tab is an AI's live
+  // view iff its BrowserView is some conversation's current active view. No
+  // URL/hostname or title-emoji heuristics (which misfire when tabs share a host).
+  const aiOwnerId = useAIBrowserStore(state => selectViewOwner(state, tab.browserViewId))
+  const isAIOperating = useAIBrowserStore(state => !!aiOwnerId && !!state.operating[aiOwnerId])
+  const isThisAIBrowser = aiOwnerId !== null
 
   // ============================================
   // Container Bounds Registration

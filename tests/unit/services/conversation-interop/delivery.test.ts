@@ -52,6 +52,13 @@ function seed(id: string, title: string): FakeConversation {
 
 vi.mock('../../../../src/main/services/agent/send-message', () => ({ sendMessage }))
 
+// chat-source reaches the engine through the services/agent barrel; without this
+// every module reset would load the whole engine graph.
+vi.mock('../../../../src/main/services/agent', async () => ({
+  onAgentEvent: (await import('../../../../src/main/services/agent/events')).onAgentEvent,
+  sendMessage: (await import('../../../../src/main/services/agent/send-message')).sendMessage,
+}))
+
 vi.mock('../../../../src/main/services/conversation.service', () => ({
   getConversation: (_spaceId: string, id: string) => store.get(id) ?? null,
   updateMessageById: (_spaceId: string, id: string, messageId: string, patch: Partial<FakeMessage>) => {
@@ -81,6 +88,11 @@ import {
   releaseConversationTurn,
   drainConversationTurn,
 } from '../../../../src/main/services/conversation-interop/delivery'
+
+import { registerConversationSource } from '../../../../src/main/services/conversation-interop/source'
+import { createChatConversationSource } from '../../../../src/main/services/conversation-interop/chat-source'
+
+registerConversationSource(createChatConversationSource())
 
 describe('deliverToConversation', () => {
   beforeEach(() => {
@@ -496,7 +508,7 @@ describe('deliverToConversation', () => {
     expect(sendMessage).not.toHaveBeenCalled()
   })
 
-  it('rejects a forward chain past the depth ceiling as circuit_open', async () => {
+  it('rejects a forward chain past the depth ceiling as chain_too_deep', async () => {
     seed('src-4', 'Source')
     seed('tgt-4', 'Target')
 
@@ -509,7 +521,7 @@ describe('deliverToConversation', () => {
       forwardDepth: 7,
     })
 
-    expect(result).toEqual({ ok: false, reason: 'circuit_open' })
+    expect(result).toEqual({ ok: false, reason: 'chain_too_deep' })
   })
 
   it('trips the pair rate limit as circuit_open after repeated sends', async () => {
@@ -924,7 +936,7 @@ describe('deliverExternalMessage (team → coordinating conversation)', () => {
 
       expect(result).toMatchObject({ ok: true, status: 'delivered' })
       expect(target.messages).toHaveLength(0)
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('external delivery patch missed'))
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('delivery patch missed'))
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('ext-tgt-miss'))
     } finally {
       warn.mockRestore()

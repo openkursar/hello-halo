@@ -58,6 +58,7 @@ import { PendingRelayStore, setPendingRelayStore, getPendingRelayStore } from '.
 import { dispatchInboundMessage, clearSupplementBuffersForInstance } from './dispatch-inbound'
 import { clearAllImPermissionContexts } from './im-permission-registry'
 import { clearAllImStreamHandles } from './im-stream-registry'
+import { destroyAllChatBrowserContexts } from './app-chat-browser'
 import { getConfig } from '../../foundation/config.service'
 import { getDataFolderName } from '../../foundation/product-config'
 import { onMcpAppsChange } from '../manager/service'
@@ -118,10 +119,11 @@ export {
   loadAppChatMessages,
   loadImChatMessages,
   loadChatMessagesForConversation,
+  loadChatTranscriptForConversation,
+  loadChatMessageThoughts,
   getAppChatSessionState,
   getAppChatConversationId,
   buildImSessionKey,
-  cleanupAppChatBrowserContext,
   clearAppChat,
   clearImSession,
   stopImSession,
@@ -132,6 +134,9 @@ export {
   renameChatSession,
 } from './app-chat'
 export type { AppChatRequest, NativeSessionResult } from './app-chat'
+export { injectIntoAppChat } from './app-chat-live-turn'
+export { createDigitalHumanConversationSource } from './conversation-source'
+export { createRunConversationSource } from './run-conversation-source'
 
 // Re-export inbound dispatch
 export { dispatchInboundMessage } from './dispatch-inbound'
@@ -535,6 +540,9 @@ export async function shutdownAppRuntime(): Promise<void> {
   // Drop any in-flight IM stream handles so a post-shutdown stopImSession
   // call cannot reach a disposed WecomStreamSession.
   clearAllImStreamHandles()
+
+  // Close every digital-human chat's browser pages (resident ones outlive turns).
+  destroyAllChatBrowserContexts('shutdown')
 
   console.log('[Runtime] App Runtime shutdown complete')
 }

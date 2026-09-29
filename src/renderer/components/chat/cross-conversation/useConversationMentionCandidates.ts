@@ -2,52 +2,42 @@
  * Candidates for the composer's @ conversation picker.
  *
  * Derived entirely from state the renderer already holds: the current space's
- * conversation list (live titles, last-activity preview) joined with the live
- * per-conversation task status. No new transport.
+ * conversation list and its digital-human chats (live titles, last-activity
+ * preview), joined with the live per-conversation task status. No new transport.
  */
 
 import { useMemo } from 'react'
-import { useChatStore, useAllConversationStatuses } from '../../../stores/chat.store'
-import type { TaskStatus } from '../../../types'
+import { useActiveConversationId, useChatStore, useAllConversationStatuses } from '../../../stores/chat.store'
+import { useAppChatConversationRows } from '../../../hooks/useAppChatConversationRows'
+import { useTranslation } from '../../../i18n'
+import { buildConversationMentionCandidates } from './mention-candidates'
+import { useAppsStore } from '../../../stores/apps.store'
+import { isConversationCollabEnabled } from '../../../../shared/apps/app-types'
 
-export interface ConversationMentionCandidate {
-  id: string
-  title: string
-  /** Last-activity preview; empty when the conversation has no messages yet. */
-  summary: string
-  updatedAt: string
-  status: TaskStatus
-}
+export type { ConversationMentionCandidate } from './mention-candidates'
 
-/** Running conversations first, then the most recently active. */
-function activityRank(status: TaskStatus): number {
-  if (status === 'generating') return 0
-  if (status === 'waiting') return 1
-  return 2
-}
-
-export function useConversationMentionCandidates(): ConversationMentionCandidate[] {
-  const spaceState = useChatStore(s => s.getCurrentSpaceState())
+export function useConversationMentionCandidates() {
+  const { t } = useTranslation()
+  const conversations = useChatStore(s => s.getCurrentSpaceState().conversations)
+  const currentSpaceId = useChatStore(s => s.currentSpaceId)
+  const activeConversationId = useActiveConversationId()
   const statuses = useAllConversationStatuses()
+  const digitalHumanChats = useAppChatConversationRows(currentSpaceId)
+  // Read from the live app list, so a switch flipped in settings shows at once.
+  const apps = useAppsStore(s => s.apps)
 
-  const { conversations, currentConversationId } = spaceState
-
-  return useMemo(() => {
-    // Self-delivery is a pure loop source and is rejected by the delivery path;
-    // it must not be offerable here either.
-    return conversations
-      .filter(c => c.id !== currentConversationId)
-      .map(c => ({
-        id: c.id,
-        title: c.title,
-        summary: c.preview || '',
-        updatedAt: c.updatedAt,
-        status: statuses.get(c.id) ?? ('idle' as TaskStatus),
-      }))
-      .sort((a, b) => {
-        const rank = activityRank(a.status) - activityRank(b.status)
-        if (rank !== 0) return rank
-        return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-      })
-  }, [conversations, currentConversationId, statuses])
+  return useMemo(
+    () => buildConversationMentionCandidates({
+      conversations,
+      digitalHumanChats,
+      activeConversationId,
+      statuses,
+      isCollabEnabled: (appId) => {
+        const app = apps.find(a => a.id === appId)
+        return !!app && isConversationCollabEnabled(app)
+      },
+      t,
+    }),
+    [conversations, digitalHumanChats, activeConversationId, statuses, apps, t]
+  )
 }

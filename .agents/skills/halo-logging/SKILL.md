@@ -1,6 +1,6 @@
 ---
 name: halo-logging
-description: Must be invoked when adding or changing a failure path (drop/skip/ignore/timeout/catch), a long-lived stateful link (connection, session, subscription, federation/sync link, IM channel), or a diagnostics/export surface — and before any commit review. Detects AND fixes production-logging gaps in changed code per halo-dev quick.md rule 12.
+description: Must be invoked when adding or changing a failure path (drop/skip/ignore/timeout/catch), a long-lived stateful link (connection, session, subscription, federation/sync link, IM channel), a log on a hot path (stream/IPC event handler, per-request or per-tool-call code, render path), or a diagnostics/export surface — and before any commit review. Detects AND fixes production-logging gaps in changed code per halo-dev quick.md rule 12.
 ---
 
 # Halo Production Logging
@@ -64,12 +64,32 @@ Only review control flow that is **new or modified** in the working tree.
 - Adding a new piece of distributed state? Register it into the existing
   diagnostics export rather than creating a parallel one-off dump.
 
+### 4. No production logs on hot paths
+
+A hot path runs per token, per stream/IPC event, per tool call, per model
+request, per render, or inside a loop over live traffic. On it:
+
+- No info/log-level output. Summaries belong at the edge of the unit: one
+  line per turn/run/session start–end, or a periodic state line (§2). A
+  per-request line is acceptable only as one consolidated line carrying the
+  request's facts (status, duration, sizes) — not a line per step.
+- Detail with unique diagnostic value goes behind a cheap in-memory guard that
+  skips formatting when off — main process: `isDeveloperMode()`. Renderer and
+  preload have no such guard, and their console is forwarded to main.log over
+  IPC, so they get no hot-path logs at all; `console.debug` does not help there.
+- Never log a whole event/payload object: it serializes tool inputs and results
+  (user content) into production logs and costs work in every process it crosses.
+- Exception: a drop/skip/failure on a hot path still logs once at warn/error
+  (§1) — failures are rare by definition; success is not.
+
 ## Fix, don't just flag
 
 When you find a gap, fix it in place:
 - Add the missing drop/skip log at the exact decision point.
 - Add or extend a periodic state self-report for a long-lived resource.
 - Wire new state into the existing diagnostics export.
+- Delete or consolidate hot-path logs (§4); do not convert them to a level that
+  still pays formatting and IPC cost.
 
 ## Report
 

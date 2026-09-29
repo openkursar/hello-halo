@@ -46,6 +46,8 @@ vi.mock('../../../../src/main/services/browser-view.service', () => ({
     getState: (id: string) => states.get(id) ?? null,
     getWebContents: (id: string) => webContentsOf.get(id) ?? null,
     destroy: (id: string) => { states.delete(id); webContentsOf.delete(id) },
+    onViewDestroyed: () => () => {},
+    isRevealed: () => false,
   },
 }))
 
@@ -58,6 +60,7 @@ vi.mock('../../../../src/main/services/ai-browser/download-handler', () => ({
 const viewGone: string[] = []
 vi.mock('../../../../src/main/services/ai-browser/events', () => ({
   emitBrowserActiveView: vi.fn(),
+  emitBrowserConversationReleased: vi.fn(),
   emitBrowserViewGone: ({ viewId }: { viewId: string }) => { viewGone.push(viewId) },
 }))
 

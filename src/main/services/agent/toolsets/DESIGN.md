@@ -12,8 +12,8 @@ enter context only while it is enabled. Disabled toolsets cost one summary line.
 
 ## 2) Model (uniform across all engines)
 
-- **One mechanism, no runtime hot-swap.** The complete in-process MCP set (always-on
-  web-search / halo-apps, the broker meta server, and currently-enabled toolsets)
+- **One mechanism, no runtime hot-swap.** The complete in-process MCP set (the base
+  toolset — web-search / halo-docs / halo-apps, the broker meta server, and currently-enabled toolsets)
   is seeded at **session creation** via creation-time options. Enabling/disabling a
   toolset schedules a **session rebuild**, so the new set is seeded at the next
   session creation — the same deferral machinery as a credentials change.
@@ -42,6 +42,7 @@ SDK path is no longer used.
 | `types.ts` | `ToolsetDefinition`, scope, status, event types |
 | `registry.ts` | The catalog. **Adding a toolset = one entry here** |
 | `state.ts` | Per-conversation open-set; write-through persisted on the conversation record |
+| `base.ts` | `buildBaseToolset`: the servers every user-facing session starts from (web-search, halo-docs, halo-apps while digital humans are enabled). Space chat (via the broker), digital-human chat and automation start from it and exclude explicitly. Imported directly, not through the barrel (the barrel loads the registry). See §6 |
 | `broker.ts` | Builds the creation-time MCP record (`buildCreationTimeServers`); `openToolset`/`closeToolset` (user toggle → persist + schedule rebuild); `requestToolset` (AI → user, emits `toolsets:requested`); emits `toolsets:changed`. Rebuild via an injected invalidator (DI seam, avoids a cycle with session-manager) |
 | `meta-server.ts` | The resident `request_toolset` MCP server (disabled-toolset awareness lives in its tool description) |
 | `capability-index.ts` | `buildToolsetSection`: enabled-toolset usage guides for the system prompt |
@@ -102,7 +103,17 @@ enable, then stops.
 
 ## 6) Automation (digital humans)
 
-Automation does NOT use this broker or the meta server. Enabled toolsets are
+**Base toolset.** `base.ts` is the one part shared with the broker: every entry
+builds its record from `buildBaseToolset` and takes servers OUT, with the reason at
+its call site, rather than listing them itself — so a new base server reaches every
+entry by default. Current exclusions: automation runs and disposable team members
+get no `halo-apps`. Never in the base: `halo-conversations` (its own switch per
+entry kind) and anything granted per conversation or permission (browser,
+terminal, OCR, email, Halo API, memory, report, notify, team tools, person
+context, IM file send). `tests/unit/services/agent/entry-capability-matrix.test.ts`
+pins what each entry ends up with.
+
+Beyond that base, automation does NOT use this broker or the meta server. Enabled toolsets are
 **app permissions** resolved via `resolvePermission(app, '<id>')` in
 `apps/runtime/execute.ts` + `app-chat.ts`, seeded into the run's static MCP set at
 creation, and their usage guides appended in `prompt.ts` / `prompt/identity.ts`.

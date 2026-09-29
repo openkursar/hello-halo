@@ -179,7 +179,7 @@ describe('seedBuiltinSkills', () => {
 
     await seedBuiltinSkills(manager)
 
-    expect(uninstall).toHaveBeenCalledWith('row-stale')
+    expect(uninstall).toHaveBeenCalledWith('row-stale', { reason: 'system' })
     expect(deleteApp).toHaveBeenCalledWith('row-stale')
     expect(deleteApp).toHaveBeenCalledTimes(1)
   })

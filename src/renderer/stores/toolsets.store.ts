@@ -47,6 +47,8 @@ interface ToolsetsState {
   loading: boolean
 
   refresh: (spaceId: string, conversationId: string) => Promise<void>
+  /** Load a conversation's catalog once; concurrent callers share the read. */
+  ensureLoaded: (spaceId: string, conversationId: string) => Promise<void>
   open: (spaceId: string, conversationId: string, toolsetId: string) => Promise<void>
   close: (spaceId: string, conversationId: string, toolsetId: string) => Promise<void>
   getStatuses: (conversationId: string) => ToolsetStatus[]
@@ -55,6 +57,8 @@ interface ToolsetsState {
   applyChangedEvent: (e: ToolsetsChangedEvent) => void
   applyRequestedEvent: (e: ToolsetsRequestedEvent) => void
 }
+
+const loading = new Map<string, Promise<void>>()
 
 export const useToolsetsStore = create<ToolsetsState>((set, get) => ({
   byConversation: new Map(),
@@ -76,6 +80,16 @@ export const useToolsetsStore = create<ToolsetsState>((set, get) => ({
     } finally {
       set({ loading: false })
     }
+  },
+
+  ensureLoaded: async (spaceId, conversationId) => {
+    if (get().byConversation.has(conversationId)) return
+    let read = loading.get(conversationId)
+    if (!read) {
+      read = get().refresh(spaceId, conversationId).finally(() => loading.delete(conversationId))
+      loading.set(conversationId, read)
+    }
+    await read
   },
 
   open: async (spaceId, conversationId, toolsetId) => {

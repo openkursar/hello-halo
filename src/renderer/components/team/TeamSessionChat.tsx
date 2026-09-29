@@ -507,7 +507,7 @@ export function TeamSessionChat({
 
             {(loadState !== 'error' || messages.length > 0) && (renderMessages ? renderMessages(messages, hasStreaming ? thoughts : []) : messages.map(message => (
               <div key={message.id} className={transcriptRowClass(message)}>
-                <MessageRow message={message} hideBrowserViewButton />
+                <MessageRow message={message} hideBrowserLiveView hideTerminalOpen />
               </div>
             )))}
 

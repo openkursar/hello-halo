@@ -11,9 +11,9 @@
  * announced update could not be downloaded or staged, so the user is handed the
  * download page instead of a progress bar that never finishes.
  *
- * The prompt is sticky — the user either applies the update or defers it for the
- * day. Deferral is remembered per version so the hourly re-check does not
- * re-open a prompt the user already answered.
+ * The prompt is sticky — the user either applies the update or defers it for a
+ * few hours (see update-snooze). Deferral is remembered per version so the
+ * hourly re-check does not re-open a prompt the user just answered.
  *
  * A release the feed marks `mandatory` removes both ways out: no defer button,
  * no close button, and an existing deferral for that version stops counting —
@@ -25,31 +25,10 @@ import { api } from '../../api'
 import { useTranslation } from '../../i18n'
 import { useNotificationStore } from '../../stores/notification.store'
 import type { UpdaterReleaseNotes } from '../../../shared/types/updater'
+import { isUpdateSnoozed, snoozeUpdate } from './update-snooze'
 
 // Stable toast ID so lifecycle events replace rather than duplicate
 const UPDATE_TOAST_ID = 'updater-lifecycle'
-
-const SNOOZE_STORAGE_KEY = 'halo-update-snooze'
-
-function today(): string {
-  return new Date().toISOString().slice(0, 10)
-}
-
-function isSnoozed(version: string): boolean {
-  try {
-    return localStorage.getItem(SNOOZE_STORAGE_KEY) === `${version}|${today()}`
-  } catch {
-    return false
-  }
-}
-
-function snooze(version: string): void {
-  try {
-    localStorage.setItem(SNOOZE_STORAGE_KEY, `${version}|${today()}`)
-  } catch {
-    /* private mode or quota — deferral just does not persist */
-  }
-}
 
 /**
  * Normalize release notes into a markdown list.
@@ -89,14 +68,14 @@ export function UpdateNotification() {
     const unsubscribe = api.onUpdaterStatus((data) => {
       const version = data.version
       const mandatory = data.mandatory === true
-      if (!version || (!mandatory && isSnoozed(version))) return
+      if (!version || (!mandatory && isUpdateSnoozed(version))) return
 
       const title = t('New version Halo {{version}} available', { version })
       const deferAction = mandatory
         ? undefined
         : {
-          label: t("Don't remind me today"),
-          onClick: () => snooze(version),
+          label: t('Remind me later'),
+          onClick: () => snoozeUpdate(version),
         }
       const notes = formatReleaseNotes(data.releaseNotes)
       // Without this line the prompt just looks broken: no close, no "later",

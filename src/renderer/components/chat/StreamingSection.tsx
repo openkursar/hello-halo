@@ -4,7 +4,7 @@
  * Pure presentational component — no store coupling. Composes
  * ThoughtProcess + BrowserTaskCard + StreamingBubble + AskUserQuestionCard.
  *
- * Shared across: MessageList (main chat), AppChatView, ImChatView.
+ * Shared across: MessageList (space and digital-human chat), ImChatView.
  */
 
 import { ThoughtProcess } from './ThoughtProcess'
@@ -41,8 +41,12 @@ export interface StreamingSectionProps {
   terminalToolCalls?: TerminalToolCall[]
 
   /** Whether to show the "View live feed" button on BrowserTaskCard.
-   *  Set false in automation app contexts where Canvas/BrowserView is unavailable. */
+   *  Set false where there is no live browser view for the conversation. */
   showBrowserViewButton?: boolean
+
+  /** Whether to show the "Open" button on TerminalTaskCard.
+   *  Set false where there is no canvas to open a terminal in. */
+  showTerminalOpenButton?: boolean
 
   /** Active question from AskUserQuestion tool */
   pendingQuestion?: PendingQuestion | null
@@ -81,6 +85,7 @@ export function StreamingSection({
   browserToolCalls = [],
   terminalToolCalls = [],
   showBrowserViewButton = true,
+  showTerminalOpenButton = true,
   pendingQuestion,
   onAnswerQuestion,
   className = '',
@@ -121,7 +126,7 @@ export function StreamingSection({
             <TerminalTaskCard
               terminalToolCalls={terminalToolCalls}
               isActive={isThinking}
-              showOpenButton={showBrowserViewButton}
+              showOpenButton={showTerminalOpenButton}
             />
           </div>
         )}

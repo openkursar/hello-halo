@@ -38,6 +38,35 @@ describe('durable decisions', () => {
     expect(store.getEntry('a')?.userResponse?.text).toBe('Proceed')
   })
 
+  function asked(id: string, questions: { question: string; choices?: string[] }[]): void {
+    store.insertRun({ runId: id, appId: 'person', sessionKey: `session-${id}`, status: 'waiting_user', triggerType: 'manual', startedAt: Date.now() })
+    store.insertEntry({ id, appId: 'person', runId: id, type: 'escalation', ts: Date.now(), content: { summary: 'Audit done', questions } })
+  }
+
+  it('accepts a one-question request answered flat or as a list, and treats both as the same answer', () => {
+    asked('one', [{ question: 'Which fix path?', choices: ['A', 'B', 'C'] }])
+    expect(store.acceptDecision('person', 'one', { ts: 1, choice: 'A' }).continuation?.status).toBe('queued')
+    expect(store.acceptDecision('person', 'one', { ts: 2, answers: [{ choice: 'A' }] }).userResponse?.choice).toBe('A')
+    expect(() => store.acceptDecision('person', 'one', { ts: 3, choice: 'B' })).toThrow(/differently/)
+    expect(store.getQueuedContinuations()).toHaveLength(1)
+
+    asked('list', [{ question: 'Which fix path?' }])
+    expect(store.acceptDecision('person', 'list', { ts: 1, answers: [{ text: 'A, but after release' }] }).continuation?.status).toBe('queued')
+  })
+
+  it('rejects answers that leave a question blank or do not match the questions asked', () => {
+    asked('one', [{ question: 'Which fix path?' }])
+    expect(() => store.acceptDecision('person', 'one', { ts: 1, text: '   ' })).toThrow(/every question/)
+    expect(() => store.acceptDecision('person', 'one', { ts: 1, answers: [{ choice: 'A' }, { choice: 'B' }] })).toThrow(/every question/)
+    asked('two', [{ question: 'Fix path?' }, { question: 'Release window?' }])
+    expect(() => store.acceptDecision('person', 'two', { ts: 1, choice: 'A' })).toThrow(/every question/)
+    expect(() => store.acceptDecision('person', 'two', { ts: 1, answers: [{ choice: 'A' }, {}] })).toThrow(/every question/)
+    expect(store.acceptDecision('person', 'two', { ts: 1, answers: [{ choice: 'A' }, { text: 'Before 10.30' }] }).continuation?.status).toBe('queued')
+    question('legacy')
+    expect(() => store.acceptDecision('person', 'legacy', { ts: 1 })).toThrow(/every question/)
+    expect(store.getEntry('one')?.userResponse).toBeUndefined()
+  })
+
   it('rolls the answer back when scheduling cannot persist', () => {
     question('a')
     manager.getAppDatabase().exec(`CREATE TRIGGER fail_outbox BEFORE INSERT ON decision_continuations BEGIN SELECT RAISE(ABORT, 'disk failure'); END;`)

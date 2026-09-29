@@ -468,6 +468,7 @@ export function onEvent<T = unknown>(channel: string, callback: (data: T) => voi
       'canvas:tab-action': 'onCanvasTabAction',
       'ai-browser:active-view-changed': 'onAIBrowserActiveViewChanged',
       'ai-browser:view-gone': 'onAIBrowserViewGone',
+      'ai-browser:conversation-released': 'onAIBrowserConversationReleased',
       'artifact:tree-update': 'onArtifactTreeUpdate',
       'perf:snapshot': 'onPerfSnapshot',
       'perf:warning': 'onPerfWarning',

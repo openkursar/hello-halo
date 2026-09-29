@@ -138,6 +138,49 @@ export function parseAppChatKey(conversationId: string): ParsedAppChatKey | null
   return { appId, channel, chatType, chatId }
 }
 
+/** A conversation the user holds with a digital human on the chat board. */
+export type NativeChatKey =
+  | { appId: string; kind: 'default' }
+  | { appId: string; kind: 'local'; chatId: string }
+
+/**
+ * Parse a chat-board conversation key: the digital human's default session
+ * ("app-chat:{appId}") or one of its local sessions. Null for every other key —
+ * IM, HTTP and team sessions are not conversations the user holds on the chat
+ * board. The one definition of that rule; everything else asks this.
+ */
+export function parseNativeChatKey(conversationId: string): NativeChatKey | null {
+  const parts = conversationId.split(':')
+  if (parts[0] !== 'app-chat') return null
+  if (parts.length === 2) return parts[1] ? { appId: parts[1], kind: 'default' } : null
+  const parsed = parseAppChatKey(conversationId)
+  return parsed && parsed.channel === LOCAL_SESSION_CHANNEL && parsed.chatType === 'direct'
+    ? { appId: parsed.appId, kind: 'local', chatId: parsed.chatId }
+    : null
+}
+
+/** The app a chat-board conversation belongs to (see {@link parseNativeChatKey}). */
+export function nativeChatAppId(conversationId: string): string | null {
+  return parseNativeChatKey(conversationId)?.appId ?? null
+}
+
+/**
+ * The sender identity of one scheduled run of a digital human when it messages
+ * other conversations. Distinct from every chat key: nothing sent to it can
+ * reach the digital human's chats, so a run's messages are one-way notices.
+ *
+ * Format: "app-run:{appId}:{runId}"
+ */
+export function buildRunSenderKey(appId: string, runId: string): string {
+  return `app-run:${appId}:${runId}`
+}
+
+export function parseRunSenderKey(conversationId: string): { appId: string; runId: string } | null {
+  const parts = conversationId.split(':')
+  if (parts.length !== 3 || parts[0] !== 'app-run' || !parts[1] || !parts[2]) return null
+  return { appId: parts[1], runId: parts[2] }
+}
+
 /**
  * Check whether a conversationId belongs to a (pushable) IM channel session.
  *

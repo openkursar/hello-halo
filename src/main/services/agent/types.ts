@@ -112,29 +112,8 @@ export type { ImageAttachment, ImageMediaType }
 // Canvas Context
 // ============================================
 
-/**
- * Canvas Context - Injected into messages to provide AI awareness of user's open tabs
- * This allows AI to naturally understand what the user is currently viewing
- */
-export interface CanvasContext {
-  isOpen: boolean
-  tabCount: number
-  activeTab: {
-    type: string  // 'browser' | 'code' | 'markdown' | 'image' | 'pdf' | 'text' | 'json' | 'csv' | 'terminal'
-    title: string
-    url?: string   // For browser/pdf tabs
-    path?: string  // For file tabs
-    terminalSessionId?: string  // For terminal tabs - the pty session id the AI drives via terminal_* tools
-  } | null
-  tabs: Array<{
-    type: string
-    title: string
-    url?: string
-    path?: string
-    terminalSessionId?: string  // For terminal tabs - the pty session id the AI drives via terminal_* tools
-    isActive: boolean
-  }>
-}
+export type { CanvasContext } from '../../../shared/types/canvas-context'
+import type { CanvasContext } from '../../../shared/types/canvas-context'
 
 // ============================================
 // Agent Request

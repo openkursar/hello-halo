@@ -4,6 +4,7 @@
 import type { ChatSlice } from './internal'
 import { PULSE_READ_GRACE_PERIOD_MS, api, createEmptySessionState } from './internal'
 import type { Thought, PulseReadInfo } from './internal'
+import { conversationKind, backendFor } from './backend'
 
 // Store-level timer for pulseReadAt cleanup (independent of UI components)
 let _pulseCleanupTimer: ReturnType<typeof setTimeout> | null = null
@@ -41,7 +42,7 @@ function splitTaskStateRows(rows: TaskStateRow[]): {
   return { unseenCompletions, pulseReadAt }
 }
 
-export const createSessionSlice: ChatSlice<'answerQuestion' | 'loadMessageThoughts' | 'cleanupPulseReadAt' | 'keepPulseItem' | 'removePulseItem' | 'loadPersistedTaskState' | 'syncPersistedTaskState' | 'resetSession' | 'setSessionError' | 'markSessionStopped' | 'reset' | 'resetSpace'> = (set, get) => ({
+export const createSessionSlice: ChatSlice<'answerQuestion' | 'loadMessageThoughts' | 'cleanupPulseReadAt' | 'keepPulseItem' | 'removePulseItem' | 'loadPersistedTaskState' | 'syncPersistedTaskState' | 'resetSession' | 'setSessionError' | 'markSessionStopped' | 'reset' | 'resetSpace' | 'forgetConversation'> = (set, get) => ({
   answerQuestion: async (conversationId: string, answers: Record<string, string>) => {
     const session = get().sessions.get(conversationId)
     if (!session?.pendingQuestion) {
@@ -75,47 +76,10 @@ export const createSessionSlice: ChatSlice<'answerQuestion' | 'loadMessageThough
     }
   },
 
-  // Load thoughts for a specific message (lazy loading from separated storage)
-  // Returns the thoughts array and updates the conversation cache so subsequent reads are instant
-  loadMessageThoughts: async (spaceId: string, conversationId: string, messageId: string): Promise<Thought[]> => {
-    // Check if already loaded in cache
-    const cached = get().conversationCache.get(conversationId)
-    if (cached) {
-      const msg = cached.messages.find(m => m.id === messageId)
-      if (msg && Array.isArray(msg.thoughts)) {
-        console.log(`[ChatStore] Thoughts cache hit for ${conversationId}/${messageId}: ${msg.thoughts.length} thoughts`)
-        return msg.thoughts  // Already loaded
-      }
-    }
-
-    console.log(`[ChatStore] Loading thoughts for ${conversationId}/${messageId}...`)
-    try {
-      const response = await api.getMessageThoughts(spaceId, conversationId, messageId)
-      if (response.success && response.data) {
-        const thoughts = response.data as Thought[]
-        console.log(`[ChatStore] Loaded ${thoughts.length} thoughts for ${conversationId}/${messageId}, updating cache`)
-
-        // Update the conversation cache with loaded thoughts
-        set((state) => {
-          const newCache = new Map(state.conversationCache)
-          const conversation = newCache.get(conversationId)
-          if (conversation) {
-            const updatedMessages = conversation.messages.map(m =>
-              m.id === messageId ? { ...m, thoughts } : m
-            )
-            newCache.set(conversationId, { ...conversation, messages: updatedMessages })
-          }
-          return { conversationCache: newCache }
-        })
-
-        return thoughts
-      }
-    } catch (error) {
-      console.error(`[ChatStore] Failed to load thoughts for ${conversationId}/${messageId}:`, error)
-    }
-
-    return []
-  },
+  // Load thoughts for a specific message (lazy loading from separated storage).
+  // Returns them and keeps them in the conversation cache so later reads are instant.
+  loadMessageThoughts: (spaceId: string, conversationId: string, messageId: string): Promise<Thought[]> =>
+    backendFor(conversationId).loadThoughts({ set, get }, { spaceId, conversationId }, messageId),
 
   // Remove expired pulse readAt entries and schedule next cleanup. `kept`
   // entries (user clicked "Keep") never expire, so they're excluded from
@@ -277,6 +241,7 @@ export const createSessionSlice: ChatSlice<'answerQuestion' | 'loadMessageThough
       sessionInitInfo: new Map(),
       unseenCompletions: new Map(),
       pulseReadAt: new Map(),
+      conversationLoadErrors: new Map(),
       currentSpaceId: null,
       pendingPulseNavigation: null,
       pendingComposerInput: null,
@@ -297,6 +262,11 @@ export const createSessionSlice: ChatSlice<'answerQuestion' | 'loadMessageThough
       const orphanIds = new Set(
         spaceState?.conversations.map(c => c.id) ?? []
       )
+      // Digital-human conversations are not in the space's index; the cache
+      // knows which space they were read for.
+      for (const [id, conversation] of state.conversationCache) {
+        if (conversation.spaceId === spaceId && conversationKind(id) === 'digital-human') orphanIds.add(id)
+      }
 
       const newSpaceStates = new Map(state.spaceStates)
       newSpaceStates.delete(spaceId)
@@ -307,11 +277,18 @@ export const createSessionSlice: ChatSlice<'answerQuestion' | 'loadMessageThough
       const newUnseen = new Map(state.unseenCompletions)
       const newPulseReadAt = new Map(state.pulseReadAt)
 
+      const newSessionInitInfo = new Map(state.sessionInitInfo)
+      const newDrafts = new Map(state.composerDrafts)
+      const newLoadErrors = new Map(state.conversationLoadErrors)
+
       for (const id of orphanIds) {
         newCache.delete(id)
         newSessions.delete(id)
         newUnseen.delete(id)
         newPulseReadAt.delete(id)
+        newSessionInitInfo.delete(id)
+        newDrafts.delete(id)
+        newLoadErrors.delete(id)
       }
 
       // Also clean unseenCompletions/pulseReadAt that reference this spaceId
@@ -329,6 +306,41 @@ export const createSessionSlice: ChatSlice<'answerQuestion' | 'loadMessageThough
         sessions: newSessions,
         unseenCompletions: newUnseen,
         pulseReadAt: newPulseReadAt,
+        sessionInitInfo: newSessionInitInfo,
+        composerDrafts: newDrafts,
+        conversationLoadErrors: newLoadErrors,
+      }
+    })
+  },
+
+  // Drop every trace of one conversation, wherever it lives: cache, live turn,
+  // slash-command info, unsent draft, pulse entries, and the board selection if
+  // it points at it.
+  forgetConversation: (conversationId: string) => {
+    set((state) => {
+      const drop = <V,>(map: Map<string, V>): Map<string, V> => {
+        if (!map.has(conversationId)) return map
+        const next = new Map(map)
+        next.delete(conversationId)
+        return next
+      }
+
+      let spaceStates = state.spaceStates
+      for (const [spaceId, spaceState] of state.spaceStates) {
+        if (spaceState.selectedAppChat?.conversationId !== conversationId) continue
+        if (spaceStates === state.spaceStates) spaceStates = new Map(state.spaceStates)
+        spaceStates.set(spaceId, { ...spaceState, selectedAppChat: null })
+      }
+
+      return {
+        spaceStates,
+        conversationCache: drop(state.conversationCache),
+        sessions: drop(state.sessions),
+        sessionInitInfo: drop(state.sessionInitInfo),
+        unseenCompletions: drop(state.unseenCompletions),
+        pulseReadAt: drop(state.pulseReadAt),
+        composerDrafts: drop(state.composerDrafts),
+        conversationLoadErrors: drop(state.conversationLoadErrors),
       }
     })
   }

@@ -26,6 +26,7 @@ import type {
   StatusChangeHandler,
   AppInstalledHandler,
   AppUninstalledHandler,
+  AppUninstallReason,
   Unsubscribe,
   UninstallOptions,
   UpgradeStrategy,
@@ -37,6 +38,7 @@ import {
   AppAlreadyInstalledError,
   InvalidStatusTransitionError,
   SpaceNotFoundError,
+  AutomationSpaceRequiredError,
   BuiltinAppProtectedError,
   McpCommandBlockedError,
 } from './errors'
@@ -189,10 +191,10 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
   }
 
   /** Fire app-uninstalled handlers. Errors are isolated per subscriber. */
-  function notifyUninstalled(app: InstalledApp): void {
+  function notifyUninstalled(app: InstalledApp, reason: AppUninstallReason): void {
     for (const handler of appUninstalledHandlers) {
       try {
-        handler(app)
+        handler(app, reason)
       } catch (error) {
         console.error('[AppManager] Uninstall handler error:', error)
       }
@@ -353,6 +355,9 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       // gets persisted: parsing is also where a skill's identifier is
       // normalized, so discarding it would let an un-normalized name through.
       const validated = validateAppSpec(spec)
+      if (validated.type === 'automation' && spaceId === null) {
+        throw new AutomationSpaceRequiredError(validated.name)
+      }
       const installSpec: AppSpec = validated.type === 'skill'
         ? withUniqueSkillName(validated, spaceId)
         : validated
@@ -495,7 +500,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       return appId
     },
 
-    async uninstall(appId: string, _options?: UninstallOptions): Promise<void> {
+    async uninstall(appId: string, options?: UninstallOptions): Promise<void> {
       const app = requireApp(appId)
 
       // Soft-delete: transition to 'uninstalled' status and record timestamp
@@ -551,7 +556,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
 
       // Fire uninstall event. `app` was captured by requireApp() before the
       // status transition so subscribers receive the original spec metadata.
-      notifyUninstalled(app)
+      notifyUninstalled(app, options?.reason ?? 'user')
     },
 
     reinstall(appId: string): void {
@@ -901,6 +906,10 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         return
       }
 
+      if (app.spec.type === 'automation' && newSpaceId === null) {
+        throw new AutomationSpaceRequiredError(app.spec.name)
+      }
+
       // Validate that the target space exists (if non-global)
       if (newSpaceId !== null) {
         const spacePath = getSpacePath(newSpaceId)
@@ -1163,6 +1172,11 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
           // Hard-delete the DB record
           store.delete(app.id)
           deleted++
+
+          // An app the user never uninstalled still holds live state (runs,
+          // browser contexts, chat consumers) that subscribers release on
+          // uninstall; one that was uninstalled already announced it then.
+          if (app.status !== 'uninstalled') notifyUninstalled(app, 'space-deleted')
 
           console.log(`[AppManager] Deleted app ${app.id} (${app.spec.name}) from space ${spaceId}`)
         } catch (err) {

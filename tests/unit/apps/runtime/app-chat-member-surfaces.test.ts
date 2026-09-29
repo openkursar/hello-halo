@@ -111,7 +111,9 @@ vi.mock('../../../../src/main/apps/runtime/team', async (importOriginal) => ({
 vi.mock('../../../../src/main/apps/runtime/team/team-tools', () => ({
   createTeamMcpServer: () => ({ _isMcpServer: true, name: 'halo-team' }),
 }))
-vi.mock('../../../../src/main/apps/conversation-mcp', () => ({
+// The base toolset reaches the digital-human tools through the app bridge.
+vi.mock('../../../../src/main/services/app-bridge', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   createHaloAppsMcpServer,
 }))
 vi.mock('../../../../src/main/platform/memory', async (importOriginal) => ({
@@ -119,7 +121,7 @@ vi.mock('../../../../src/main/platform/memory', async (importOriginal) => ({
   createMemoryStatusMcpServer,
 }))
 
-const { buildBaseSdkOptions } = vi.hoisted(() => ({ buildBaseSdkOptions: vi.fn(() => ({})) }))
+const { buildUserSessionSdkOptions } = vi.hoisted(() => ({ buildUserSessionSdkOptions: vi.fn(() => ({})) }))
 const { getEngineCapabilities } = vi.hoisted(() => ({ getEngineCapabilities: vi.fn((): unknown => null) }))
 vi.mock('../../../../src/main/services/agent/resolved-sdk', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../../src/main/services/agent/resolved-sdk')>()),
@@ -134,7 +136,7 @@ vi.mock('../../../../src/main/services/agent/sdk-config', () => ({
     anthropicBaseUrl: 'https://example.invalid',
     capabilities: {},
   })),
-  buildBaseSdkOptions,
+  buildUserSessionSdkOptions,
   // The real merge: what is under test here is that app-chat goes through it.
   addSdkHooks: (options: Record<string, any>, hooks: Record<string, unknown[]>) => {
     const merged: Record<string, unknown[]> = { ...(options.hooks ?? {}) }
@@ -151,6 +153,7 @@ vi.mock('../../../../src/main/services/agent/permission-handler', () => ({
 }))
 vi.mock('../../../../src/main/services/agent/message-utils', () => ({
   buildMessageContent: (text: string) => text,
+  formatCanvasContext: () => '',
 }))
 vi.mock('../../../../src/main/services/agent/image-attachments', () => ({
   prepareNonVisionImageFallback: () => undefined,
@@ -168,7 +171,7 @@ vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
 }))
 vi.mock('../../../../src/main/services/ai-browser', () => ({
   createAIBrowserMcpServer: vi.fn(),
-  createScopedBrowserContext: vi.fn(),
+  createScopedBrowserContext: vi.fn(() => ({ destroy: vi.fn(), ownedViewCount: 0, hasRevealedView: () => false })),
   AI_BROWSER_SYSTEM_PROMPT: 'AI browser instructions',
 }))
 vi.mock('../../../../src/main/services/ai-terminal', () => ({
@@ -304,7 +307,8 @@ vi.mock('../../../../src/main/services/memory-consolidation', () => ({
 // ============================================
 
 import { sendAppChatMessage } from '../../../../src/main/apps/runtime/app-chat'
-import { getOrCreateV2Session } from '../../../../src/main/services/agent/session-manager'
+import { getOrCreateV2Session, updateConsumerDisplayModel } from '../../../../src/main/services/agent/session-manager'
+import { resolveCredentialsForSdk } from '../../../../src/main/services/agent/sdk-config'
 import { requestAppMemoryConsolidation } from '../../../../src/main/apps/runtime/turn/memory-lifecycle'
 import { buildTeamSessionKey } from '../../../../src/shared/apps/team-types'
 
@@ -334,8 +338,8 @@ function memberTurn(opts: { external?: boolean } = {}): Parameters<typeof sendAp
 
 /** What the turn handed the session layer, once it had assembled everything. */
 function mountedSurfaces(): { mcpServers: Record<string, unknown>; systemPrompt: string } {
-  const call = buildBaseSdkOptions.mock.calls.at(-1) as unknown as [{ mcpServers: Record<string, unknown> }]
-  const options = buildBaseSdkOptions.mock.results.at(-1)!.value as { systemPrompt?: string }
+  const call = buildUserSessionSdkOptions.mock.calls.at(-1) as unknown as [{ mcpServers: Record<string, unknown> }]
+  const options = buildUserSessionSdkOptions.mock.results.at(-1)!.value as { systemPrompt?: string }
   return {
     mcpServers: call[0].mcpServers,
     systemPrompt: options.systemPrompt ?? '',
@@ -372,7 +376,7 @@ function keptMemberContext(): void {
 
 describe('a temporary collaboration member mounts no memory and no digital-human tools', () => {
   beforeEach(() => {
-    buildBaseSdkOptions.mockClear()
+    buildUserSessionSdkOptions.mockClear()
     beginRound.mockClear()
     getPromptInstructions.mockClear()
     createMemoryStatusMcpServer.mockClear()
@@ -415,7 +419,7 @@ describe('a temporary collaboration member mounts no memory and no digital-human
 
 describe('a digital human with a life beyond the work keeps both', () => {
   beforeEach(() => {
-    buildBaseSdkOptions.mockClear()
+    buildUserSessionSdkOptions.mockClear()
     getPromptInstructions.mockClear()
     createMemoryStatusMcpServer.mockClear()
     createHaloAppsMcpServer.mockClear()
@@ -441,16 +445,16 @@ describe('a restricted borrowed turn keeps every tool-call watcher', () => {
     keptMemberContext()
     getDelegatedPolicy.mockReturnValue({ allowedTools: ['Read'] } as never)
     getEngineCapabilities.mockReturnValue({ features: { permissionRules: true, hooks: true } })
-    buildBaseSdkOptions.mockReset()
+    buildUserSessionSdkOptions.mockReset()
     // What sdk-config installs for memoryGuard before the policy is applied.
-    buildBaseSdkOptions.mockImplementation(() => ({ hooks: { PreToolUse: [guardSentinel] } }) as never)
+    buildUserSessionSdkOptions.mockImplementation(() => ({ hooks: { PreToolUse: [guardSentinel] } }) as never)
   })
 
   afterEach(() => {
     getDelegatedPolicy.mockReturnValue(undefined as never)
     getEngineCapabilities.mockReturnValue(null)
-    buildBaseSdkOptions.mockReset()
-    buildBaseSdkOptions.mockImplementation(() => ({}) as never)
+    buildUserSessionSdkOptions.mockReset()
+    buildUserSessionSdkOptions.mockImplementation(() => ({}) as never)
   })
 
   it('on an engine that cannot enforce a policy (Codex), a restricted turn does not start at all', async () => {
@@ -464,7 +468,7 @@ describe('a restricted borrowed turn keeps every tool-call watcher', () => {
 
   it('a teammate from this machine gets the audit and the memory guard, but no path boundary', async () => {
     await sendAppChatMessage(memberTurn())
-    const options = buildBaseSdkOptions.mock.results.at(-1)!.value as {
+    const options = buildUserSessionSdkOptions.mock.results.at(-1)!.value as {
       hooks: Record<string, Array<{ matcher?: string }>>
     }
     expect(options.hooks.PreToolUse).toEqual([guardSentinel])
@@ -474,9 +478,9 @@ describe('a restricted borrowed turn keeps every tool-call watcher', () => {
 
   it('a request from another machine adds the audit and the file boundary without dropping the memory guard', async () => {
     await sendAppChatMessage(memberTurn({ external: true }))
-    const call = buildBaseSdkOptions.mock.calls.at(-1) as unknown as [{ memoryGuard?: unknown }]
+    const call = buildUserSessionSdkOptions.mock.calls.at(-1) as unknown as [{ memoryGuard?: unknown }]
     expect(call[0].memoryGuard).toBeDefined()
-    const options = buildBaseSdkOptions.mock.results.at(-1)!.value as {
+    const options = buildUserSessionSdkOptions.mock.results.at(-1)!.value as {
       hooks: Record<string, Array<{ matcher?: string }>>
       disallowedTools: string[]
     }
@@ -486,5 +490,32 @@ describe('a restricted borrowed turn keeps every tool-call watcher', () => {
     )
     expect(options.hooks.PostToolUse.map(h => h.matcher)).toEqual(expect.arrayContaining([undefined, 'Grep', 'Glob']))
     expect(options.disallowedTools).toContain('Bash')
+  })
+})
+
+describe('the consumer of a digital-human chat knows the model\'s context window', () => {
+  beforeEach(() => {
+    keptMemberContext()
+    vi.mocked(getOrCreateV2Session).mockClear()
+    vi.mocked(updateConsumerDisplayModel).mockClear()
+    vi.mocked(resolveCredentialsForSdk).mockResolvedValueOnce({
+      displayModel: 'test-model',
+      sdkModel: 'test-model',
+      anthropicApiKey: 'key',
+      anthropicBaseUrl: 'https://example.invalid',
+      capabilities: { contextWindow: 321_000 },
+    } as never)
+  })
+
+  it('hands it over when the consumer is created and again on every reuse', async () => {
+    // Its own conversation: an earlier case marked EPOCH_ID's as coming from outside.
+    const own = buildTeamSessionKey(app.id, TEAM_ID, 'epoch-context-window')
+    const turn = memberTurn()
+    await sendAppChatMessage({ ...turn, conversationId: own, teamContext: { ...turn.teamContext!, epochId: 'epoch-context-window' } })
+
+    const creation = vi.mocked(getOrCreateV2Session).mock.calls.at(-1)![5] as { contextWindow?: number }
+    expect(creation.contextWindow).toBe(321_000)
+    // A reuse refreshes the consumer; leaving the window out would clear it.
+    expect(updateConsumerDisplayModel).toHaveBeenLastCalledWith(own, 'test-model', 321_000)
   })
 })

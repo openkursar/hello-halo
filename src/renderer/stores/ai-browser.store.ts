@@ -1,167 +1,165 @@
 /**
- * AI Browser Store - State management for AI Browser mode
+ * AI Browser Store - live-view state for AI-driven browser pages
  *
- * Manages the AI Browser feature toggle and related state.
- * When AI Browser is enabled, the AI agent gains access to
- * browser control tools for web automation.
- *
- * Key features:
- * - Tracks active view ID for "View Live" functionality
- * - Listens for IPC events from main process when AI creates/selects views
+ * Each conversation (space chat or digital-human chat) drives its own active
+ * page. The main process announces it with the owning conversationId; this
+ * store keeps one entry per conversation, and every consumer reads the entry of
+ * the conversation on screen — so "View live feed" always reveals the page the
+ * visible conversation is driving, never another one's.
  */
 
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
 import { api } from '../api'
+import { canvasLifecycle } from '../services/canvas-lifecycle'
+import { useChatStore } from './chat.store'
+import { selectActiveConversationId } from './chat/active'
+import type { AIBrowserActiveView, AIBrowserLivePage } from '../../shared/types/ai-browser'
 
 // ============================================
 // Types
 // ============================================
 
-interface AIBrowserState {
-  // Current active browser view ID (if any) — the view the AI is driving.
-  // This is the identity used to reveal the live view and to light the
-  // "AI is operating this browser" indicator on the matching canvas tab.
-  activeViewId: string | null
-
-  // Current URL being operated on by AI
-  activeUrl: string | null
-
-  // Title of the AI's active view (from the main-process view state)
-  activeTitle: string | null
-
-  // Last time the AI's active view changed (for live-session ordering)
+export interface AIBrowserView {
+  viewId: string
+  url: string | null
+  title: string | null
+  /** Last time this conversation's active view changed (live-session ordering). */
   lastActivityAt: number
+}
 
-  // Loading state for browser operations
-  isOperating: boolean
+/** A page some AI conversation holds, whether or not it is the one it acts on. */
+export interface AIBrowserPage {
+  viewId: string
+  conversationId: string
+  spaceId: string | null
+  url: string | null
+  title: string | null
+  lastActivityAt: number
+}
 
-  // Last error from browser operations
-  lastError: string | null
+interface AIBrowserState {
+  /** Active view per conversation id. */
+  views: Record<string, AIBrowserView>
+  /** Every live page an AI conversation opened itself, by view id (the tray lists these). */
+  pages: Record<string, AIBrowserPage>
+  /** Conversations whose browser card has a step running right now. */
+  operating: Record<string, boolean>
 
-  // Actions
-  setActiveViewId: (viewId: string | null) => void
-  setActiveUrl: (url: string | null) => void
-  setOperating: (isOperating: boolean) => void
-  setError: (error: string | null) => void
-  /** Apply an active-view event from the main process (identity + metadata). */
-  applyActiveView: (data: { viewId: string; url: string | null; title: string | null }) => void
-  /** The AI's view was destroyed elsewhere; clear it if it is the active one. */
+  /** Apply an active-view event from the main process. */
+  applyActiveView: (event: AIBrowserActiveView) => void
+  /** Seed from the main process's snapshot; anything already known is newer and kept. */
+  applySnapshot: (pages: AIBrowserLivePage[]) => void
+  /** An AI-driven view was destroyed; drop every entry pointing at it. */
   handleViewGone: (viewId: string) => void
-  reset: () => void
+  /** A conversation's browser context ended: it points at nothing and owns no page. */
+  handleConversationReleased: (conversationId: string) => void
+  setOperating: (conversationId: string, isOperating: boolean) => void
 }
 
 // ============================================
 // Store
 // ============================================
 
-export const useAIBrowserStore = create<AIBrowserState>()(
-  persist(
-    (set) => ({
-      // Initial state
-      activeViewId: null,
-      activeUrl: null,
-      activeTitle: null,
-      lastActivityAt: 0,
-      isOperating: false,
-      lastError: null,
+export const useAIBrowserStore = create<AIBrowserState>()((set) => ({
+  views: {},
+  pages: {},
+  operating: {},
 
-      // Track active browser view
-      setActiveViewId: (activeViewId: string | null) => {
-        set({ activeViewId })
-      },
+  applyActiveView: ({ conversationId, spaceId, viewId, owned, url, title }) => {
+    // The user's own singleton browser has no conversation and no live-view entry.
+    if (!conversationId) return
+    const lastActivityAt = Date.now()
+    set(state => ({
+      views: { ...state.views, [conversationId]: { viewId, url, title, lastActivityAt } },
+      // A page it only selected stays whoever opened it (the user, another conversation).
+      pages: owned
+        ? { ...state.pages, [viewId]: { viewId, conversationId, spaceId, url, title, lastActivityAt } }
+        : state.pages,
+    }))
+  },
 
-      // Track active URL
-      setActiveUrl: (activeUrl: string | null) => {
-        set({ activeUrl })
-      },
+  applySnapshot: (snapshot) => {
+    set(state => {
+      const views = { ...state.views }
+      const pages = { ...state.pages }
+      const now = Date.now()
+      for (const { conversationId, spaceId, viewId, owned, url, title, active } of snapshot) {
+        if (!conversationId) continue
+        if (owned && !pages[viewId]) pages[viewId] = { viewId, conversationId, spaceId, url, title, lastActivityAt: now }
+        if (active && !views[conversationId]) views[conversationId] = { viewId, url, title, lastActivityAt: now }
+      }
+      return { views, pages }
+    })
+  },
 
-      // Track operation state
-      setOperating: (isOperating: boolean) => {
-        set({ isOperating })
-      },
+  handleViewGone: (viewId) => {
+    set(state => {
+      const gone = Object.keys(state.views).filter(id => state.views[id].viewId === viewId)
+      if (gone.length === 0 && !state.pages[viewId]) return state
+      const views = { ...state.views }
+      const operating = { ...state.operating }
+      const pages = { ...state.pages }
+      delete pages[viewId]
+      for (const id of gone) {
+        delete views[id]
+        delete operating[id]
+      }
+      return { views, operating, pages }
+    })
+  },
 
-      // Set error state
-      setError: (lastError: string | null) => {
-        set({ lastError })
-      },
+  handleConversationReleased: (conversationId) => {
+    set(state => {
+      const ownedPages = Object.keys(state.pages).filter(viewId => state.pages[viewId].conversationId === conversationId)
+      if (ownedPages.length === 0 && !state.views[conversationId] && !state.operating[conversationId]) return state
+      const views = { ...state.views }
+      const operating = { ...state.operating }
+      const pages = { ...state.pages }
+      delete views[conversationId]
+      delete operating[conversationId]
+      for (const viewId of ownedPages) delete pages[viewId]
+      return { views, operating, pages }
+    })
+  },
 
-      // Apply an active-view event from the main process
-      applyActiveView: ({ viewId, url, title }) => {
-        set(state => ({
-          activeViewId: viewId,
-          activeUrl: url ?? state.activeUrl,
-          activeTitle: title ?? null,
-          lastActivityAt: Date.now(),
-        }))
-      },
-
-      // The AI's active view was destroyed elsewhere — clear if it matches
-      handleViewGone: (viewId: string) => {
-        set(state =>
-          state.activeViewId === viewId
-            ? { activeViewId: null, activeUrl: null, activeTitle: null, isOperating: false }
-            : state
-        )
-      },
-
-      // Reset state (e.g., on conversation change)
-      reset: () => {
-        set({
-          activeViewId: null,
-          activeUrl: null,
-          activeTitle: null,
-          lastActivityAt: 0,
-          isOperating: false,
-          lastError: null,
-        })
-      },
-    }),
-    {
-      name: 'halo-ai-browser',
-      // View-live state is all ephemeral; nothing to persist.
-      partialize: () => ({}),
-    }
-  )
-)
+  setOperating: (conversationId, isOperating) => {
+    set(state => {
+      if (!!state.operating[conversationId] === isOperating) return state
+      const operating = { ...state.operating }
+      if (isOperating) operating[conversationId] = true
+      else delete operating[conversationId]
+      return { operating }
+    })
+  },
+}))
 
 // ============================================
 // Selectors
 // ============================================
 
-/**
- * Check if browser is currently operating
- */
-export function useIsAIBrowserOperating(): boolean {
-  return useAIBrowserStore((state) => state.isOperating)
+/** The active view of the conversation on screen. */
+export function useActiveConversationBrowserView(): AIBrowserView | null {
+  const conversationId = useChatStore(selectActiveConversationId)
+  return useAIBrowserStore(state => (conversationId ? state.views[conversationId] ?? null : null))
 }
 
 /**
- * Get last error
+ * Whether a conversation other than the page's owner is currently on it. Such a
+ * page is not the tray's to stop: closing it would pull it from under them.
  */
-export function useAIBrowserError(): string | null {
-  return useAIBrowserStore((state) => state.lastError)
+export function isPageInUseByOthers(state: Pick<AIBrowserState, 'views' | 'pages'>, viewId: string): boolean {
+  const owner = state.pages[viewId]?.conversationId
+  return Object.entries(state.views).some(([id, view]) => id !== owner && view.viewId === viewId)
 }
 
-/**
- * Get active view ID for "View Live" functionality
- */
-export function useAIBrowserActiveViewId(): string | null {
-  return useAIBrowserStore((state) => state.activeViewId)
-}
-
-/**
- * Get active URL being operated by AI
- */
-export function useAIBrowserActiveUrl(): string | null {
-  return useAIBrowserStore((state) => state.activeUrl)
-}
-
-/**
- * Get the title of the AI's active view
- */
-export function useAIBrowserActiveTitle(): string | null {
-  return useAIBrowserStore((state) => state.activeTitle)
+/** The conversation holding page `viewId` (identity by view, never by URL). */
+export function selectViewOwner(state: AIBrowserState, viewId: string | undefined): string | null {
+  if (!viewId) return null
+  if (state.pages[viewId]) return state.pages[viewId].conversationId
+  for (const [conversationId, view] of Object.entries(state.views)) {
+    if (view.viewId === viewId) return conversationId
+  }
+  return null
 }
 
 // ============================================
@@ -169,28 +167,39 @@ export function useAIBrowserActiveTitle(): string | null {
 // ============================================
 
 /**
- * Initialize IPC event listeners for AI Browser state sync
- * Call this during app initialization to enable real-time sync
- * between main process (BrowserContext) and renderer (this store)
+ * Subscribe to AI Browser lifecycle events and seed the store with the pages
+ * that already exist (an event only fires on change, so a reloaded renderer
+ * would otherwise never learn about a page the AI opened earlier).
  *
  * @returns Cleanup function to unsubscribe from events
  */
 export function initAIBrowserStoreListeners(): () => void {
-  // Active view changes: the AI created or selected a view. This is the
-  // identity signal that powers "View live feed" and the operating indicator.
   const unsubActive = api.onAIBrowserActiveViewChanged((data) => {
     useAIBrowserStore.getState().applyActiveView(data)
-    console.log(`[AI Browser Store] Active view updated from main: ${data.viewId}, url: ${data.url}`)
   })
 
-  // View gone: the AI's active view was destroyed (canvas tab close / tray stop).
   const unsubGone = api.onAIBrowserViewGone((data) => {
     useAIBrowserStore.getState().handleViewGone(data.viewId)
-    console.log(`[AI Browser Store] Active view gone from main: ${data.viewId}`)
+    // Its session ended (chat deleted, app uninstalled, tray stop): a tab left
+    // pointing at it would show an empty page.
+    void canvasLifecycle.closeTabsOfGoneView(data.viewId)
   })
 
+  const unsubReleased = api.onAIBrowserConversationReleased((data) => {
+    useAIBrowserStore.getState().handleConversationReleased(data.conversationId)
+  })
+
+  let disposed = false
+  api.listAIBrowserLivePages()
+    .then((pages) => {
+      if (!disposed) useAIBrowserStore.getState().applySnapshot(pages)
+    })
+    .catch((error) => console.warn('[AI Browser Store] Failed to load live pages:', error))
+
   return () => {
+    disposed = true
     unsubActive()
     unsubGone()
+    unsubReleased()
   }
 }

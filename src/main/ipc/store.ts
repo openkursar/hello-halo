@@ -34,21 +34,20 @@ import {
   inspectSkillDeps,
   packDhpkg,
   packSkill,
-  unpackDhpkg,
 } from '../store'
 import { deriveSlug } from '../store/publish/spec-enrich'
 import { getAppManager } from '../apps/manager'
-import { getAppRuntime } from '../apps/runtime'
 import { sendToRenderer } from '../foundation/window.service'
-import type { StoreInstallProgress } from '../../shared/store/store-types'
-import type { AppType, AppSpec } from '../../shared/apps/spec-types'
+import type { StoreInstallProgress, StoreQueryParams } from '../../shared/store/store-types'
+import type { AppType } from '../../shared/apps/spec-types'
+import type { AppSpec } from '../apps/spec'
 import { storeRpc } from '../../shared/rpc/contracts/store.contract'
 import { registerRawRpcHandlers } from './rpc'
 
 export function registerStoreHandlers(): void {
   registerRawRpcHandlers(storeRpc, {
     // ── store:query (new primary entry point) ─────────────────────────────
-    storeQuery: async (params: { search?: string; type?: string; category?: string; page?: number; pageSize?: number; locale?: string }) => {
+    storeQuery: async (params: Partial<StoreQueryParams>) => {
       return storeController.queryStoreApps(params)
     },
 
@@ -299,27 +298,11 @@ export function registerStoreHandlers(): void {
         }
 
         const buf = await readFile(filePath)
-        const { spec } = await unpackDhpkg(buf)
+        const result = await storeController.importDhpkg(buf, input?.spaceId)
+        if (!result.success) return result
 
-        const manager = getAppManager()
-        if (!manager) return { success: false, error: 'App Manager not ready' }
-
-        const spaceId = input?.spaceId ?? null
-        const appId = await manager.install(spaceId, spec, {})
-
-        const runtime = getAppRuntime()
-        if (runtime) {
-          try {
-            await runtime.activate(appId)
-          } catch (err) {
-            console.warn(
-              `[StoreIPC] store:import-dhpkg: runtime activate failed (non-fatal): ${(err as Error).message}`
-            )
-          }
-        }
-
-        console.log(`[StoreIPC] store:import-dhpkg: ${filePath} -> appId=${appId}`)
-        return { success: true, data: { appId } }
+        console.log(`[StoreIPC] store:import-dhpkg: ${filePath} -> appId=${result.data.appId}`)
+        return result
       } catch (error: unknown) {
         const err = error as Error
         console.error('[StoreIPC] store:import-dhpkg error:', err.message)

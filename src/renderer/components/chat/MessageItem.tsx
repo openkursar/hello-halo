@@ -46,7 +46,8 @@ interface MessageItemProps {
   isInContainer?: boolean
   isWorking?: boolean  // True when AI is still generating (not yet complete)
   isWaitingMore?: boolean  // True when content paused (e.g., during tool call), show "..." animation
-  hideBrowserViewButton?: boolean  // Hide the "View live feed" button in BrowserTaskCard (e.g. in automation app context)
+  hideBrowserLiveView?: boolean  // Hide the "View live feed" button in BrowserTaskCard (no live browser view for this conversation)
+  hideTerminalOpen?: boolean  // Hide the "Open" button in TerminalTaskCard (no canvas to open a terminal in)
 }
 
 // Collapsible thought history component
@@ -241,7 +242,7 @@ function ThoughtItem({ thought }: { thought: Thought }) {
   )
 }
 
-export const MessageItem = memo(function MessageItem({ message, previousCost = 0, hideThoughts = false, isInContainer = false, isWorking = false, isWaitingMore = false, hideBrowserViewButton = false }: MessageItemProps) {
+export const MessageItem = memo(function MessageItem({ message, previousCost = 0, hideThoughts = false, isInContainer = false, isWorking = false, isWaitingMore = false, hideBrowserLiveView = false, hideTerminalOpen = false }: MessageItemProps) {
   const isUser = message.role === 'user'
   const isStreaming = (message as any).isStreaming
   const [copied, setCopied] = useState(false)
@@ -249,7 +250,7 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
   const { loadMessageThoughts, currentSpaceId, currentConversationId } = useChatStore(s => ({
     loadMessageThoughts: s.loadMessageThoughts,
     currentSpaceId: s.currentSpaceId,
-    currentConversationId: s.getCurrentSpaceState().currentConversationId,
+    currentConversationId: s.getActiveConversationId(),
   }))
 
   // Whether thoughts are stored separately (null = separated, not yet loaded)
@@ -421,7 +422,7 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
         <BrowserTaskCard
           browserToolCalls={browserToolCalls}
           isActive={isWorking || hasBrowserActivity}
-          showViewButton={!hideBrowserViewButton}
+          showViewButton={!hideBrowserLiveView}
         />
       )}
 
@@ -430,7 +431,7 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
         <TerminalTaskCard
           terminalToolCalls={terminalToolCalls}
           isActive={isWorking}
-          showOpenButton={!hideBrowserViewButton}
+          showOpenButton={!hideTerminalOpen}
         />
       )}
 

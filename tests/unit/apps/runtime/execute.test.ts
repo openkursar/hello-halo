@@ -66,7 +66,7 @@ vi.mock('../../../../src/main/services/agent/sdk-config', () => ({
   // Echoes back the caller's `mcpServers` (built by execute.ts from declared
   // requires + always-on built-ins) instead of a fixed `{}` — that merge is
   // exactly what the MCP-wiring tests below observe.
-  buildBaseSdkOptions: vi.fn((opts: { mcpServers?: Record<string, unknown> }) => ({
+  buildUserSessionSdkOptions: vi.fn((opts: { mcpServers?: Record<string, unknown> }) => ({
     model: 'test-model',
     cwd: '/tmp/test',
     maxTurns: 999,
@@ -232,7 +232,7 @@ import { finalizeMemoryAfterTurn } from '../../../../src/main/apps/runtime/turn/
 import { RunExecutionError } from '../../../../src/main/apps/runtime/errors'
 import { query as agentSdkQuery, createSession } from '../../../../src/main/services/agent/resolved-sdk'
 import { getApiCredentials, getMcpServersForRequires } from '../../../../src/main/services/agent/helpers'
-import { resolveCredentialsForSdk, buildBaseSdkOptions } from '../../../../src/main/services/agent/sdk-config'
+import { resolveCredentialsForSdk, buildUserSessionSdkOptions } from '../../../../src/main/services/agent/sdk-config'
 import { getOrCreateV2Session } from '../../../../src/main/services/agent/session-manager'
 import { resolveExecutionEnvironment } from '../../../../src/main/apps/runtime/execution-environment'
 import { openSessionWriter } from '../../../../src/main/apps/runtime/session-store'
@@ -607,9 +607,9 @@ describe('executeRun — memory', () => {
 
   it('holds the run\'s file tools to its memory boundaries', async () => {
     nextSession = new FakeSession({ script: [assistantReport()] })
-    vi.mocked(buildBaseSdkOptions).mockClear()
+    vi.mocked(buildUserSessionSdkOptions).mockClear()
     await executeRun({ app: makeApp(), trigger: baseTrigger, store: makeStore(), memory: makeMemory() })
-    const params = vi.mocked(buildBaseSdkOptions).mock.calls[0][0] as unknown as Record<string, unknown>
+    const params = vi.mocked(buildUserSessionSdkOptions).mock.calls[0][0] as unknown as Record<string, unknown>
     expect(params.memoryGuard).toEqual({ writable: [], readOnly: [], label: 'test' })
   })
 })

@@ -3,9 +3,8 @@
  *
  * A native conversation's session key is its own conversation id
  * (session-manager.ts). `session-manager`'s own busyness check
- * (`isSessionBusy`) is private, but every primitive it composes is already
- * exported, so this reconstructs the identical check from outside
- * `services/agent` rather than adding a new export to it: a session is busy
+ * (`isSessionBusy`) is private; this rebuilds the identical check from the
+ * primitives the `services/agent` index exports: a session is busy
  * if a legacy `activeSessions` entry is live, or its consumer is running a
  * turn right now, or — idle between turns — it still has team agents working
  * that a future turn must not be torn down under (mirrors session-manager's
@@ -19,8 +18,7 @@
  * loop never closes.
  */
 
-import { activeSessions, getConsumerHandle, v2Sessions } from '../agent/session-manager'
-import { hasActiveTeamTasks } from '../agent/subagent-handler'
+import { activeSessions, getConsumerHandle, hasActiveTeamTasks, v2Sessions } from '../agent'
 
 export function isNativeConversationBusy(conversationId: string): boolean {
   if (activeSessions.has(conversationId)) return true

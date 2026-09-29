@@ -6,30 +6,29 @@
  * - space: Search within all conversations in a space
  * - global: Search across all conversations in all spaces
  *
- * Performance: Uses Promise.all for concurrent file reads, with progress callbacks
+ * Two kinds of conversation are searched, both as clean transcripts (message
+ * content only — never a thought process or tool output):
+ * - space conversations, read straight from their `{id}.json` files. A file scan
+ *   rather than `getConversation`, so a global search does not push the
+ *   conversation being used out of that service's small cache;
+ * - digital-human sessions (default + local), reached through the registered
+ *   conversation sources — the same directory cross-conversation reads use, so
+ *   IM, HTTP and team sessions are not searched.
+ *
+ * Units are searched one at a time, yielding to the event loop between them, so
+ * a large search neither blocks the main process nor outlives a cancel.
  */
 
 import { join } from 'path'
-import { existsSync, readdirSync, readFileSync, statSync } from 'fs'
+import { existsSync, readdirSync, readFileSync } from 'fs'
 import { getTempSpacePath, getHaloDir } from '../foundation/config.service'
-import { getSpace } from './space.service'
+import { getSpace, listSpaces } from './space.service'
+import { CHAT_SOURCE_KIND, getReadableSources, type ConversationSource } from './conversation-interop'
+import { nativeChatAppId } from '../../shared/apps/im-keys'
+import type { TranscriptRole } from '../../shared/types/transcript'
+import type { SearchResult } from '../../shared/types/search'
 
-/**
- * Search result for a single message match
- */
-export interface SearchResult {
-  conversationId: string
-  conversationTitle: string
-  messageId: string
-  spaceId: string
-  spaceName: string
-  messageRole: 'user' | 'assistant'
-  messageContent: string
-  messageTimestamp: string
-  matchCount: number
-  contextBefore?: string
-  contextAfter?: string
-}
+export type { SearchResult }
 
 /**
  * Conversation file structure for searching
@@ -43,21 +42,51 @@ interface ConversationFile {
   messageCount: number
   messages: Array<{
     id: string
-    role: 'user' | 'assistant' | 'system'
+    role: TranscriptRole
     content: string
     timestamp: string
   }>
 }
 
+/** One searchable transcript: a conversation file, or a session of a registered source. */
+type SearchUnit =
+  | { kind: 'file'; path: string }
+  | { kind: 'source'; source: ConversationSource; spaceId: string; conversationId: string; title: string }
+
+/** A message to test against the query, whichever storage it came from. */
+interface Searchable {
+  id: string
+  role: TranscriptRole
+  content: string
+  timestamp: string
+}
+
+const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve))
+
+/** The query as a literal, case-insensitive pattern: what is typed is what is found. */
+function compileQuery(query: string): RegExp {
+  return new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi')
+}
+
+function describeUnit(unit: SearchUnit): string {
+  return unit.kind === 'file' ? unit.path : `${unit.source.kind} session ${unit.conversationId}`
+}
+
+
 /**
  * Search service for managing conversation searches
  */
 export class SearchService {
-  private cancelToken: boolean = false
+  /**
+   * Bumped by every new search and every cancel. A search whose generation is
+   * no longer current has been superseded: it stops at its next unit and
+   * reports neither progress nor results.
+   */
+  private generation = 0
 
   /**
    * Execute search across specified scope
-   * @param query - Search query string
+   * @param query - Search query string, matched literally and case-insensitively
    * @param scope - Search scope: 'conversation', 'space', or 'global'
    * @param currentConversationId - Current conversation ID (required for 'conversation' scope)
    * @param currentSpaceId - Current space ID (required for 'space' scope)
@@ -75,42 +104,35 @@ export class SearchService {
       return []
     }
 
-    this.cancelToken = false
+    const generation = ++this.generation
+    const superseded = () => generation !== this.generation
 
     try {
-      // Step 1: Get files to search based on scope
-      const files = this.getFilesToSearch(scope, currentConversationId, currentSpaceId)
-
-      if (files.length === 0) {
+      const units = this.getUnitsToSearch(scope, currentConversationId, currentSpaceId)
+      if (units.length === 0) {
         return []
       }
 
-      // Step 2: Concurrent file reading with progress tracking
-      const promises = files.map((file, index) =>
-        this.searchFile(file, query)
-          .then(results => {
-            if (!this.cancelToken) {
-              onProgress?.(index + 1, files.length)
-            }
-            return results
-          })
-          .catch(err => {
-            console.error(`Error searching ${file}:`, err)
-            return []
-          })
-      )
+      const pattern = compileQuery(query)
+      const spaceNames = new Map<string, string>()
+      const results: SearchResult[] = []
 
-      // Step 3: Wait for all searches to complete
-      const allResults = await Promise.all(promises)
+      for (let i = 0; i < units.length; i++) {
+        if (superseded()) return []
+        try {
+          results.push(...this.searchUnit(units[i], pattern, query.length, spaceNames))
+        } catch (err) {
+          console.error(`[Search] Failed to search ${describeUnit(units[i])}:`, err)
+        }
+        if (!superseded()) onProgress?.(i + 1, units.length)
+        await yieldToEventLoop()
+      }
 
-      if (this.cancelToken) {
+      if (superseded()) {
         return []
       }
 
-      // Step 4: Merge and sort results by timestamp (newest first)
-      const mergedResults = allResults.flat()
-
-      return mergedResults.sort((a, b) =>
+      return results.sort((a, b) =>
         new Date(b.messageTimestamp).getTime() - new Date(a.messageTimestamp).getTime()
       )
     } catch (error) {
@@ -123,151 +145,186 @@ export class SearchService {
    * Cancel ongoing search operation
    */
   cancel(): void {
-    this.cancelToken = true
+    this.generation++
   }
 
-  /**
-   * Search single conversation file
-   */
-  private async searchFile(filePath: string, query: string): Promise<SearchResult[]> {
-    if (this.cancelToken) {
-      return []
+  private searchUnit(
+    unit: SearchUnit,
+    pattern: RegExp,
+    queryLength: number,
+    spaceNames: Map<string, string>
+  ): SearchResult[] {
+    if (unit.kind === 'file') {
+      const data: ConversationFile = JSON.parse(readFileSync(unit.path, 'utf-8'))
+      // `messages` is an array in a conversation and an object in its thoughts file.
+      if (!Array.isArray(data.messages)) return []
+      return this.matchMessages(data.messages, pattern, queryLength, {
+        kind: 'chat',
+        conversationId: data.id,
+        conversationTitle: data.title,
+        spaceId: data.spaceId,
+        spaceName: this.spaceNameOf(data.spaceId, spaceNames),
+      })
     }
 
-    try {
-      const content = readFileSync(filePath, 'utf-8')
-      const data: ConversationFile = JSON.parse(content)
+    const lines = unit.source.readTranscript(unit.spaceId, unit.conversationId)
+    if (!lines) return []
+    const appId = nativeChatAppId(unit.conversationId) ?? undefined
+    return this.matchMessages(
+      lines.flatMap((l) => (l.id ? [{ id: l.id, role: l.role, content: l.content, timestamp: l.timestamp }] : [])),
+      pattern,
+      queryLength,
+      {
+        kind: 'digital-human',
+        ...(appId ? { appId } : {}),
+        conversationId: unit.conversationId,
+        conversationTitle: unit.title,
+        spaceId: unit.spaceId,
+        spaceName: this.spaceNameOf(unit.spaceId, spaceNames),
+      }
+    )
+  }
 
-      const results: SearchResult[] = []
-      const searchRegex = new RegExp(query, 'gi')
+  private matchMessages(
+    messages: readonly Searchable[],
+    pattern: RegExp,
+    queryLength: number,
+    origin: Pick<SearchResult, 'kind' | 'appId' | 'conversationId' | 'conversationTitle' | 'spaceId' | 'spaceName'>
+  ): SearchResult[] {
+    const results: SearchResult[] = []
+    for (const message of messages) {
+      const content = message.content || ''
+      const matches = content.match(pattern)
+      if (!matches) continue
 
-      // Get space name
-      let spaceName = data.spaceId === 'halo-temp' ? 'Halo' : data.spaceId
+      // Context around the first match
+      const firstMatch = content.search(pattern)
+      const contextStart = Math.max(0, firstMatch - 50)
+      const contextEnd = Math.min(content.length, firstMatch + 100)
 
+      results.push({
+        ...origin,
+        messageId: message.id,
+        messageRole: message.role,
+        messageContent: content.substring(0, 150), // Truncate for display
+        messageTimestamp: message.timestamp,
+        matchCount: matches.length,
+        contextBefore: content.substring(contextStart, firstMatch).trim(),
+        contextAfter: content.substring(firstMatch + queryLength, contextEnd).trim(),
+      })
+    }
+    return results
+  }
+
+  private spaceNameOf(spaceId: string, cache: Map<string, string>): string {
+    const cached = cache.get(spaceId)
+    if (cached !== undefined) return cached
+    let name = spaceId === 'halo-temp' ? 'Halo' : spaceId
+    if (spaceId !== 'halo-temp') {
       try {
-        if (data.spaceId !== 'halo-temp') {
-          const space = getSpace(data.spaceId)
-          if (space) {
-            spaceName = space.name
-          }
-        }
-      } catch (e) {
+        name = getSpace(spaceId)?.name ?? name
+      } catch {
         // Space may have been deleted, use spaceId as fallback
       }
-
-      // Search through messages
-      data.messages?.forEach((message) => {
-        if (this.cancelToken) {
-          return
-        }
-
-        const messageContent = message.content || ''
-        const matches = messageContent.match(searchRegex)
-        const matchCount = matches?.length || 0
-
-        if (matchCount > 0) {
-          // Extract context (before and after search term)
-          const firstMatch = messageContent.search(searchRegex)
-          const contextStart = Math.max(0, firstMatch - 50)
-          const contextEnd = Math.min(messageContent.length, firstMatch + 100)
-
-          const contextBefore = messageContent.substring(contextStart, firstMatch)
-          const contextAfter = messageContent.substring(
-            firstMatch + query.length,
-            contextEnd
-          )
-
-          results.push({
-            conversationId: data.id,
-            conversationTitle: data.title,
-            messageId: message.id,
-            spaceId: data.spaceId,
-            spaceName,
-            messageRole: message.role as 'user' | 'assistant',
-            messageContent: messageContent.substring(0, 150), // Truncate for display
-            messageTimestamp: message.timestamp,
-            matchCount,
-            contextBefore: contextBefore.trim(),
-            contextAfter: contextAfter.trim()
-          })
-        }
-      })
-
-      return results
-    } catch (err) {
-      console.error(`Failed to search file ${filePath}:`, err)
-      return []
     }
+    cache.set(spaceId, name)
+    return name
   }
 
   /**
-   * Get files to search based on scope
+   * Transcripts to search for a scope
    */
-  private getFilesToSearch(
+  private getUnitsToSearch(
     scope: 'conversation' | 'space' | 'global',
     conversationId?: string,
     spaceId?: string
-  ): string[] {
-    const haloDir = getHaloDir()
-    const files: string[] = []
-
+  ): SearchUnit[] {
     if (scope === 'conversation' && conversationId) {
-      // Search single conversation
+      const session = this.findSession(conversationId, spaceId)
+      if (session) return [session]
       const file = this.findConversationFile(conversationId, spaceId)
-      return file ? [file] : []
+      return file ? [{ kind: 'file', path: file }] : []
     }
 
     if (scope === 'space' && spaceId) {
-      // Search all conversations in a space
-      if (spaceId === 'halo-temp') {
-        const tempPath = getTempSpacePath()
-        return this.scanConversationFiles(join(tempPath, 'conversations'))
-      } else {
-        try {
-          const space = getSpace(spaceId)
-          if (space) {
-            return this.scanConversationFiles(join(space.path, '.halo', 'conversations'))
-          }
-        } catch (e) {
-          console.error(`Failed to get space ${spaceId}:`, e)
-        }
-      }
-      return []
+      return [...this.fileUnitsOfSpace(spaceId), ...this.sessionUnitsOfSpace(spaceId)]
     }
 
     if (scope === 'global') {
-      // Search all conversations across all spaces
-      // Scan temp space
-      const tempPath = getTempSpacePath()
-      const tempConvDir = join(tempPath, 'conversations')
-      if (existsSync(tempConvDir)) {
-        files.push(...this.scanConversationFiles(tempConvDir))
-      }
+      const units: SearchUnit[] = []
 
-      // Scan all custom spaces
-      const spacesDir = join(haloDir, 'spaces')
+      // Space conversations: every space directory on disk, the temp space included
+      const tempConvDir = join(getTempSpacePath(), 'conversations')
+      units.push(...this.scanConversationFiles(tempConvDir).map((path) => ({ kind: 'file' as const, path })))
+      const spacesDir = join(getHaloDir(), 'spaces')
       if (existsSync(spacesDir)) {
-        const spaceNames = readdirSync(spacesDir)
-        spaceNames.forEach(spaceName => {
+        for (const spaceName of readdirSync(spacesDir)) {
           try {
             const convDir = join(spacesDir, spaceName, '.halo', 'conversations')
-            if (existsSync(convDir)) {
-              files.push(...this.scanConversationFiles(convDir))
-            }
+            units.push(...this.scanConversationFiles(convDir).map((path) => ({ kind: 'file' as const, path })))
           } catch (e) {
             console.error(`Error scanning space ${spaceName}:`, e)
           }
-        })
+        }
       }
 
-      return files
+      // Digital-human sessions: per registered space (they are listed by space)
+      for (const id of ['halo-temp', ...listSpaces().map((sp) => sp.id)]) {
+        units.push(...this.sessionUnitsOfSpace(id))
+      }
+      return units
     }
 
-    return files
+    return []
+  }
+
+  private fileUnitsOfSpace(spaceId: string): SearchUnit[] {
+    let dir: string | null = null
+    if (spaceId === 'halo-temp') {
+      dir = join(getTempSpacePath(), 'conversations')
+    } else {
+      try {
+        const space = getSpace(spaceId)
+        if (space) dir = join(space.path, '.halo', 'conversations')
+      } catch (e) {
+        console.error(`Failed to get space ${spaceId}:`, e)
+      }
+    }
+    return dir ? this.scanConversationFiles(dir).map((path) => ({ kind: 'file' as const, path })) : []
+  }
+
+  /** The sessions of every readable source other than the space's own conversations. */
+  private sessionUnitsOfSpace(spaceId: string): SearchUnit[] {
+    const units: SearchUnit[] = []
+    for (const source of getReadableSources()) {
+      if (source.kind === CHAT_SOURCE_KIND) continue
+      try {
+        for (const meta of source.list(spaceId)) {
+          units.push({ kind: 'source', source, spaceId, conversationId: meta.id, title: meta.title })
+        }
+      } catch (err) {
+        console.error(`[Search] Failed to list ${source.kind} sessions in ${spaceId}:`, err)
+      }
+    }
+    return units
+  }
+
+  /** The session unit for an id one of the registered sources owns (null for a space conversation). */
+  private findSession(conversationId: string, spaceId?: string): SearchUnit | null {
+    const source = getReadableSources().find((s) => s.kind !== CHAT_SOURCE_KIND && s.owns(conversationId))
+    if (!source) return null
+    // The caller's space first; without one (or when the session is not there) any space holding it.
+    const candidates = [...(spaceId ? [spaceId] : []), 'halo-temp', ...listSpaces().map((sp) => sp.id)]
+    for (const id of new Set(candidates)) {
+      const meta = source.getMeta(id, conversationId)
+      if (meta) return { kind: 'source', source, spaceId: id, conversationId, title: meta.title }
+    }
+    return null
   }
 
   /**
-   * Scan directory for conversation JSON files
+   * Scan directory for conversation JSON files. A conversation's thoughts live
+   * beside it as `{id}.thoughts.json`; that file is not a conversation.
    */
   private scanConversationFiles(dirPath: string): string[] {
     const files: string[] = []
@@ -277,12 +334,11 @@ export class SearchService {
     }
 
     try {
-      const entries = readdirSync(dirPath)
-      entries.forEach(entry => {
-        if (entry.endsWith('.json') && entry !== 'index.json') {
+      for (const entry of readdirSync(dirPath)) {
+        if (entry.endsWith('.json') && !entry.endsWith('.thoughts.json') && entry !== 'index.json') {
           files.push(join(dirPath, entry))
         }
-      })
+      }
     } catch (err) {
       console.error(`Failed to scan directory ${dirPath}:`, err)
     }

@@ -19,6 +19,7 @@ import {
   getAppDetail,
   getAppDocument,
   installFromStore,
+  unpackDhpkg,
   refreshIndex,
   checkUpdates,
   getRegistries,
@@ -42,6 +43,8 @@ import {
 import type { StoreIdentity } from '../store/backend/identity'
 import type { StoreSignInStatus } from '../../shared/store/store-types'
 import { getAppManager } from '../apps/manager'
+import { getAppRuntime } from '../apps/runtime'
+import { resolveInstallSpaceId } from '../../shared/apps/install-scope'
 import { McpCommandBlockedError } from '../apps/manager/errors'
 import { MCP_COMMAND_BLOCKED_MESSAGE } from '../services/security-policy'
 import { trackEvent, AnalyticsEvents } from '../services/analytics'
@@ -86,10 +89,17 @@ export type StoreControllerResponse<T> = StoreControllerSuccess<T> | StoreContro
  * Paginated query — the new primary query entry point.
  */
 export async function queryStoreApps(
-  params: StoreQueryParams
+  params: Partial<StoreQueryParams>
 ): Promise<StoreControllerResponse<StoreQueryResponse>> {
   try {
-    const result = await queryStore(params)
+    if (params.type && !ALLOWED_APP_TYPES.has(params.type)) {
+      return { success: false, error: `Unknown app type: ${String(params.type)}` }
+    }
+    const result = await queryStore({
+      ...params,
+      page: Number.isInteger(params.page) && params.page! >= 1 ? params.page! : 1,
+      pageSize: Number.isInteger(params.pageSize) && params.pageSize! >= 1 ? params.pageSize! : DISCOVER_CATALOG_PAGE_SIZE,
+    })
     return { success: true, data: result }
   } catch (error: unknown) {
     const err = error as Error
@@ -105,6 +115,9 @@ export async function listStoreApps(
   query?: StoreQuery | { search?: string; locale?: string; category?: string; type?: string; tags?: string[] }
 ): Promise<StoreControllerResponse<RegistryEntry[]>> {
   try {
+    if (query?.type && !ALLOWED_APP_TYPES.has(query.type as AppType)) {
+      return { success: false, error: `Unknown app type: ${String(query.type)}` }
+    }
     const apps = await listApps(normalizeStoreQuery(query))
     return { success: true, data: apps }
   } catch (error: unknown) {
@@ -189,6 +202,40 @@ export async function installStoreApp(
       return { success: false, error: MCP_COMMAND_BLOCKED_MESSAGE, code: 'MCP_COMMAND_BLOCKED' }
     }
     console.error('[StoreController] installStoreApp error:', err.message)
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * Install an app from a `.dhpkg` archive and activate it.
+ *
+ * A package that holds a digital human always lands in a space: when the
+ * caller names none it goes to the Halo space.
+ */
+export const APP_MANAGER_NOT_READY = 'App Manager not ready'
+
+export async function importDhpkg(
+  archive: Buffer,
+  spaceId: string | null | undefined,
+): Promise<StoreControllerResponse<{ appId: string }>> {
+  try {
+    const { spec } = await unpackDhpkg(archive)
+
+    const manager = getAppManager()
+    if (!manager) {
+      return { success: false, error: APP_MANAGER_NOT_READY }
+    }
+
+    const appId = await manager.install(resolveInstallSpaceId(spaceId, spec.type), spec, {})
+    try {
+      await getAppRuntime()?.activate(appId)
+    } catch (err) {
+      console.warn(`[StoreController] importDhpkg: activate failed (non-fatal): ${(err as Error).message}`)
+    }
+    return { success: true, data: { appId } }
+  } catch (error: unknown) {
+    const err = error as Error
+    console.error('[StoreController] importDhpkg error:', err.stack || err.message)
     return { success: false, error: err.message }
   }
 }

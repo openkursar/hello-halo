@@ -4,7 +4,8 @@
  * Built-in capabilities for an automation digital human, rendered as toggles.
  *
  * These map to Halo-native, always-present tool servers gated by per-app
- * permissions (resolvePermission): AI Browser, AI Terminal, Email, IM Push.
+ * permissions (resolvePermission): AI Browser, AI Terminal, Operate Halo,
+ * Conversation Collaboration, Email, IM Push.
  * They are distinct from MCP dependencies (external, may be missing) — the
  * visual language here is a plain on/off switch, because the capability is
  * guaranteed to exist; the toggle only grants or denies it.
@@ -22,13 +23,13 @@
 import { useState, useEffect } from 'react'
 import {
   Globe, TerminalSquare, Mail, Send, AlertTriangle,
-  ChevronRight, Search, Brain, Settings2,
+  ChevronRight, Search, Brain, Settings2, MessagesSquare,
 } from 'lucide-react'
 import { api } from '../../api'
 import { useAppsStore } from '../../stores/apps.store'
 import { useAppStore } from '../../stores/app.store'
 import { useTranslation } from '../../i18n'
-import { resolvePermission } from '../../../shared/apps/app-types'
+import { CONVERSATION_COLLAB_PERMISSION, isConversationCollabEnabled, resolvePermission } from '../../../shared/apps/app-types'
 import type { InstalledApp } from '../../../shared/apps/app-types'
 import { Switch } from '../ui/Switch'
 
@@ -119,6 +120,7 @@ export function AppCapabilitiesSection({ app, appId, onRequireRestart }: AppCapa
   // Off unless granted — must pass the same default the runtime uses
   // (apps/runtime/execute.ts), or the switch shows the opposite of reality.
   const haloApiOn = resolvePermission(app, 'halo-api-ref', false)
+  const conversationCollabOn = isConversationCollabEnabled(app)
 
   return (
     <div className="space-y-4">
@@ -147,6 +149,15 @@ export function AppCapabilitiesSection({ app, appId, onRequireRestart }: AppCapa
         description={t('Allow this app to manage Halo itself: spaces, digital humans, knowledge bases and settings')}
         checked={haloApiOn}
         onToggle={next => setPermission('halo-api-ref', next)}
+      />
+
+      {/* Conversation Collaboration */}
+      <ToggleRow
+        icon={MessagesSquare}
+        label={t('Conversation Collaboration')}
+        description={t('Allow this app to read and send messages to other conversations in this space, including other digital humans. It acts on their chats with their full authority, so enable it only for digital humans you trust.')}
+        checked={conversationCollabOn}
+        onToggle={next => setPermission(CONVERSATION_COLLAB_PERMISSION, next)}
       />
 
       {/* Email */}

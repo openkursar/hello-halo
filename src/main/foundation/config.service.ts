@@ -716,8 +716,6 @@ interface HaloConfig {
     customConfigDir?: string
     /** Experimental: switch agent engine. 'anthropic' = Claude Code SDK (default), 'halo' = Halo SDK, 'codex' = Codex SDK adapter. */
     sdkEngine?: 'anthropic' | 'halo' | 'codex'
-    /** Legacy setting retained for migration; native CC Teams are disabled. */
-    enableTeams?: boolean
     /** Enable Digital Humans MCP tools (automation app management) */
     enableDigitalHumans?: boolean
     /** Master switch for Cross-Conversation Interop (conversation_read/conversation_send). Undefined/true = on. */

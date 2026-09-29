@@ -8,6 +8,9 @@ import type { CatalogModelCapability, ModelCapabilityOverride } from '../shared/
 import type { EscalationResponse } from '../shared/apps/app-types'
 import type { UpdaterChannel, UpdaterStatusPayload } from '../shared/types/updater'
 import type { GoalInput } from '../shared/types/goal'
+import type { CanvasContext } from '../shared/types/canvas-context'
+import type { Thought, TranscriptPage } from '../shared/types/transcript'
+import type { AIBrowserActiveView, AIBrowserConversationReleased, AIBrowserLivePage, AIBrowserStopResult, AIBrowserViewGone } from '../shared/types/ai-browser'
 import type { MemorySettings, MemoryStatus } from '../shared/types/memory'
 import type { PickedLocalEntry } from '../shared/attached-paths'
 import { modelCapabilitiesRpc } from '../shared/rpc/contracts/model-capabilities.contract'
@@ -438,8 +441,11 @@ export interface HaloAPI {
   }) => void) => () => void
 
   // AI Browser
-  onAIBrowserActiveViewChanged: (callback: (data: { viewId: string; url: string | null; title: string | null }) => void) => () => void
-  onAIBrowserViewGone: (callback: (data: { viewId: string }) => void) => () => void
+  onAIBrowserActiveViewChanged: (callback: (data: AIBrowserActiveView) => void) => () => void
+  onAIBrowserViewGone: (callback: (data: AIBrowserViewGone) => void) => () => void
+  listAIBrowserLivePages: () => Promise<IpcResponse<AIBrowserLivePage[]>>
+  onAIBrowserConversationReleased: (callback: (data: AIBrowserConversationReleased) => void) => () => void
+  stopAIBrowserPage: (viewId: string, conversationId: string) => Promise<IpcResponse<AIBrowserStopResult>>
 
   // Overlay (for floating UI above BrowserView)
   showChatCapsuleOverlay: () => Promise<IpcResponse>
@@ -603,10 +609,15 @@ export interface HaloAPI {
   // App Chat
   // conversationId addresses a specific native/local session; omit for the app's
   // native default session.
-  appChatSend: (request: { appId: string; spaceId: string; message: string; images?: ImageAttachment[]; thinkingEnabled?: boolean; conversationId?: string; teamContext?: unknown }) => Promise<IpcResponse<{ conversationId: string }>>
+  appChatSend: (request: { appId: string; spaceId: string; message: string; images?: ImageAttachment[]; thinkingEnabled?: boolean; canvasContext?: CanvasContext; conversationId?: string; teamContext?: unknown }) => Promise<IpcResponse<{ conversationId: string }>>
   appChatStop: (appId: string, conversationId?: string) => Promise<IpcResponse>
+  // Add a message to the running turn; delivered:false when no turn was in flight
+  appChatInject: (input: { appId: string; conversationId: string; message: string }) => Promise<IpcResponse<{ delivered: boolean }>>
   appChatStatus: (appId: string, conversationId?: string) => Promise<IpcResponse<{ isGenerating: boolean; conversationId: string }>>
   appChatMessages: (input: { appId: string; spaceId: string; conversationId?: string }) => Promise<IpcResponse>
+  // Paged read, newest page first; messages carry thoughts:null (see appChatMessageThoughts)
+  appChatTranscript: (input: { appId: string; spaceId: string; conversationId?: string; before?: string; limit?: number; through?: string }) => Promise<IpcResponse<TranscriptPage>>
+  appChatMessageThoughts: (input: { appId: string; spaceId: string; conversationId?: string; messageId: string }) => Promise<IpcResponse<Thought[]>>
   appChatSessionState: (appId: string, conversationId?: string) => Promise<IpcResponse>
   appChatClear: (input: { appId: string; spaceId: string; conversationId?: string }) => Promise<IpcResponse>
   appChatRestart: (appId: string) => Promise<IpcResponse<{ sessionsClosed: number }>>
@@ -794,7 +805,6 @@ function createEventListener<T = unknown>(
   console.log(`[Preload] Creating event listener for channel: ${channel}`)
 
   const handler = (_event: Electron.IpcRendererEvent, data: unknown): void => {
-    console.log(`[Preload] Received event on channel: ${channel}`, data)
     callback(data as T)
   }
 
@@ -972,6 +982,9 @@ const api: HaloAPI = {
   // AI Browser - active view change / view gone notifications from main process
   onAIBrowserActiveViewChanged: (callback) => createEventListener('ai-browser:active-view-changed', callback),
   onAIBrowserViewGone: (callback) => createEventListener('ai-browser:view-gone', callback),
+  listAIBrowserLivePages: () => ipcRenderer.invoke('ai-browser:list-live-pages'),
+  onAIBrowserConversationReleased: (callback) => createEventListener('ai-browser:conversation-released', callback),
+  stopAIBrowserPage: (viewId, conversationId) => ipcRenderer.invoke('ai-browser:stop-page', { viewId, conversationId }),
 
   // Overlay (for floating UI above BrowserView)
   ...bindRpc(overlayRpc),

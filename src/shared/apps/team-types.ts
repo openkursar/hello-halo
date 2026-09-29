@@ -1310,6 +1310,8 @@ export const TEAM_TOOL_NAMES = {
   postFinding: 'team_post_finding',
   readBoard: 'team_read_board',
   readArtifact: 'team_read_artifact',
+  /** Lead only: read a member's record of the run. */
+  readMember: 'team_read_member',
   complete: 'team_complete',
   schedule: 'team_schedule',
   unschedule: 'team_unschedule',

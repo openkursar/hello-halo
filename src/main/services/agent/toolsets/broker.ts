@@ -3,7 +3,7 @@
  *
  * Assembles the complete in-process MCP server set for a session and seeds it at
  * session creation (buildCreationTimeServers → buildMcpServerRecord). Every engine
- * receives its in-process servers up front: always-on web-search / halo-apps, the
+ * receives its in-process servers up front: the base toolset (base.ts), the
  * broker meta server, and the currently-open toolsets. Only external process-based
  * MCP servers (user-installed apps) are passed separately by the caller.
  *
@@ -18,10 +18,8 @@
  */
 
 import { getConfig, saveConfig } from '../../../foundation/config.service'
-import { createWebSearchMcpServer } from '../../web-search'
-import * as appBridge from '../../app-bridge'
-import { createOfficialDocsSession } from '../../official-docs-mcp'
 import { emitAgentEvent } from '../events'
+import { buildBaseToolset } from './base'
 import { getAvailableToolsets, getToolset } from './registry'
 import { getOpenToolsets, markOpen, markClosed } from './state'
 import { createBrokerMetaServer, CAPABILITIES_SERVER_NAME } from './meta-server'
@@ -94,22 +92,14 @@ export function setConversationInteropFactory(factory: ConversationInteropFactor
  * creation (see getOrCreateV2Session's buildMcpServers parameter).
  */
 export function buildMcpServerRecord(scope: ToolsetScope): Record<string, unknown> {
-  const record: Record<string, unknown> = {}
+  // Space chat takes the whole base toolset.
+  const record: Record<string, unknown> = buildBaseToolset({ spaceId: scope.spaceId })
 
   const add = (name: string, factory: () => unknown): void => {
     const instance = factory()
     if (instance) record[name] = instance
   }
 
-  // Always-on servers. Documentation is unconditional — it is how the agent
-  // answers "how do I do this in Halo" and how it hands back a task no tool
-  // can reach, neither of which depends on digital humans being enabled.
-  add('web-search', () => createWebSearchMcpServer())
-  const { server: docsMcpServer, guideConsulted } = createOfficialDocsSession()
-  record['halo-docs'] = docsMcpServer
-  if (getConfig().agent?.enableDigitalHumans !== false) {
-    add('halo-apps', () => appBridge.createHaloAppsMcpServer(scope.spaceId, guideConsulted))
-  }
   // Boolean-gated, always-on — a brand-new conversation already has
   // conversation_read with no per-conversation setup. enableConversationSend
   // is a sub-switch: false builds conversation_read only ("omit, don't

@@ -20,6 +20,7 @@
  */
 
 import { DisposableStore, toDisposable, type IDisposable } from '../../platform/event'
+import { circuitBreaker } from './circuit-breaker'
 import { noteTurnEnded } from './pending-wait'
 import { releaseConversationTurn, drainConversationTurn } from './delivery'
 import { createChatConversationSource } from './chat-source'
@@ -31,6 +32,8 @@ let running: DisposableStore | null = null
 async function handleTurnEnded(conversationId: string): Promise<void> {
   await releaseConversationTurn(conversationId)
   noteTurnEnded(conversationId)
+  // Depth travels with the messages of a chain; it must not outlive the turn it was recorded for.
+  circuitBreaker.clearInboundForwardDepth(conversationId)
   drainConversationTurn(conversationId)
 }
 

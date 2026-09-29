@@ -160,6 +160,10 @@ export interface ChatState {
   isLoading: boolean
   isLoadingConversation: boolean  // Loading full conversation
 
+  // Digital-human conversations whose transcript could not be read, with the
+  // reason; cleared when a read succeeds.
+  conversationLoadErrors: Map<string, string>
+
   // In-memory (non-persisted) composer draft per conversationId — switching
   // the input's digital-human selector stashes/restores each link's unsent
   // text. Keyed by conversationId so it works uniformly for space and
@@ -184,11 +188,13 @@ export interface ChatState {
   getSpaceState: (spaceId: string) => SpaceState
   getCurrentConversation: () => Conversation | null
   getCurrentConversationMeta: () => ConversationMeta | null
-  getCurrentSession: () => SessionState
   getSession: (conversationId: string) => SessionState
   getConversations: () => ConversationMeta[]
   getCurrentConversationId: () => string | null
   getCachedConversation: (conversationId: string) => Conversation | null
+  /** The conversation on screen: the selected digital human's, else the regular one. */
+  getActiveConversationId: () => string | null
+  getActiveConversation: () => Conversation | null
 
   // Space actions
   setCurrentSpace: (spaceId: string) => void
@@ -213,6 +219,23 @@ export interface ChatState {
   sendMessage: (content: string, images?: ImageAttachment[], thinkingEnabled?: boolean, options?: SendMessageOptions) => Promise<boolean>
   stopGeneration: (conversationId?: string) => Promise<void>
   injectMessage: (conversationId: string, message: string) => Promise<void>
+  /** Drop a message from the "queued for the running turn" list. */
+  dequeueMessage: (conversationId: string, message: string) => void
+  /** Empty a conversation's history in place (digital-human default sessions). */
+  clearConversation: (conversationId: string) => Promise<boolean>
+  /** Delete a local digital-human session and everything held for it. */
+  deleteAppChatSession: (appId: string, spaceId: string, conversationId: string) => Promise<boolean>
+  /**
+   * Read a conversation in (if it is not cached) and pick up a running turn,
+   * without changing what is selected.
+   */
+  openConversation: (conversationId: string) => Promise<void>
+  /** Read the next older page of a paged conversation into the cache. */
+  loadEarlierMessages: (conversationId: string) => Promise<void>
+  /** Make sure one message (a search result) is among the loaded ones. */
+  ensureMessageLoaded: (conversationId: string, messageId: string) => Promise<void>
+  /** Re-read a conversation after events may have been missed (reconnect). */
+  refreshConversation: (conversationId: string) => Promise<void>
 
   // Tool approval
   approveTool: (conversationId: string) => Promise<void>
@@ -280,6 +303,8 @@ export interface ChatState {
   // Cleanup
   reset: () => void
   resetSpace: (spaceId: string) => void
+  /** Drop every trace of one conversation (cache, live state, draft, selection). */
+  forgetConversation: (conversationId: string) => void
 }
 
 // Default empty states

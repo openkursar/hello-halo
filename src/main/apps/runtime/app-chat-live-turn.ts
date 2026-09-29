@@ -16,6 +16,7 @@
  */
 
 import { hasLiveTurn, sendIntoLiveTurn } from '../../services/agent/live-turn'
+import type { TranscriptProvenance } from '../../../shared/types/transcript'
 import { hasActiveAppChatRound, peekAppChatSink } from './app-chat-sink'
 
 const LOG_TAG = '[AppChatLiveTurn]'
@@ -49,8 +50,12 @@ export function isAppChatConversationGenerating(conversationId: string): boolean
  * team mailbox) can take the message back. A false answer must be cheap to be
  * wrong about, and it is: the cost is latency. A true answer must not be,
  * which is why nothing is written down until the engine has taken the message.
+ *
+ * `provenance` marks how the message entered the transcript. The user adding to
+ * their own running turn passes `{ source: 'injection' }`, which the transcript
+ * shows as an annotation on the reply instead of a bubble of its own.
  */
-export function injectIntoAppChat(conversationId: string, text: string): boolean {
+export function injectIntoAppChat(conversationId: string, text: string, provenance?: TranscriptProvenance): boolean {
   if (!sendIntoLiveTurn(conversationId, text)) return false
 
   // Written only once the engine has taken it, and deliberately after: the
@@ -58,7 +63,9 @@ export function injectIntoAppChat(conversationId: string, text: string): boolean
   // has. The turn reads the message from the engine's own input stream, not from
   // here, so this ordering costs the reader nothing.
   try {
-    peekAppChatSink(conversationId)?.writeUserMessage(text)
+    const sink = peekAppChatSink(conversationId)
+    if (provenance) sink?.writeUserMessage(text, undefined, undefined, provenance)
+    else sink?.writeUserMessage(text)
   } catch (err) {
     // The message DID arrive; only the record of it failed. Reporting failure
     // now would hand the caller's fallback a second copy of a message the member

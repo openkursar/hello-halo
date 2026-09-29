@@ -97,6 +97,14 @@ Different spaces can install the same spec independently with completely isolate
 twice in the same space. Different spaces produce different UUIDs, different rows, different
 work directories.
 
+**Only MCP servers and skills may be global** (`space_id` is nullable for them). A digital
+human (`type: 'automation'`) always belongs to a space: its working directory, memory and
+conversations all resolve through one. `install` and `moveToSpace` reject a null space for
+automation with `AutomationSpaceRequiredError`. Callers that receive a nullable space from a
+user (package import, store install) resolve it with `resolveInstallSpaceId`
+(`shared/apps/install-scope.ts`), which falls back to the Halo space for a digital human.
+There is no migration for rows written before this rule.
+
 ### 2.6 Event Notification: Callback Array Pattern
 
 **Decision**: Use a simple callback array pattern (not EventEmitter) for `onAppStatusChange`.

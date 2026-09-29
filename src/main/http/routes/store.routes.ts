@@ -17,10 +17,7 @@ import {
   publish,
   getPublishPreview,
   findAppByPublishSlug,
-  unpackDhpkg,
 } from '../../store'
-import { getAppManager } from '../../apps/manager'
-import { getAppRuntime } from '../../apps/runtime'
 import type { AppType } from '../../../shared/apps/spec-types'
 
 export function registerStoreRoutes(app: Express): void {
@@ -32,7 +29,7 @@ export function registerStoreRoutes(app: Express): void {
       const { search, type, category, page, pageSize, locale } = req.body as Record<string, unknown>
       const result = await storeController.queryStoreApps({
         search: typeof search === 'string' ? search : undefined,
-        type: typeof type === 'string' ? type : undefined,
+        type: typeof type === 'string' ? (type as AppType) : undefined,
         category: typeof category === 'string' ? category : undefined,
         page: typeof page === 'number' ? page : undefined,
         pageSize: typeof pageSize === 'number' ? pageSize : undefined,
@@ -397,27 +394,15 @@ export function registerStoreRoutes(app: Express): void {
       if (!validatedPath) return
 
       const buf = await readFile(validatedPath)
-      const { spec } = await unpackDhpkg(buf)
-
-      const manager = getAppManager()
-      if (!manager) {
-        res.json({ success: false, error: 'App Manager not ready' })
+      const result = await storeController.importDhpkg(buf, spaceId)
+      if (!result.success) {
+        // The raw message may embed the resolved filesystem path; only the
+        // fixed not-ready message is safe to pass through.
+        res.json({ success: false, error: result.error === storeController.APP_MANAGER_NOT_READY ? result.error : 'Failed to import package' })
         return
       }
 
-      const appId = await manager.install(spaceId ?? null, spec, {})
-      const runtime = getAppRuntime()
-      if (runtime) {
-        try {
-          await runtime.activate(appId)
-        } catch (err) {
-          console.warn(
-            `[HTTP] POST /api/store/import-dhpkg activate failed (non-fatal): ${(err as Error).message}`
-          )
-        }
-      }
-
-      res.json({ success: true, data: { appId } })
+      res.json(result)
     } catch (error) {
       const err = error as Error
       console.error('[HTTP] POST /api/store/import-dhpkg failed:', err.stack || err.message)

@@ -198,7 +198,7 @@ function buildTools(spaceId: string, guideConsulted: () => boolean) {
         } catch (depErr) {
           try {
             // deleteApp() only accepts 'uninstalled' apps — soft-delete first
-            await manager.uninstall(appId)
+            await manager.uninstall(appId, { reason: 'system' })
             await manager.deleteApp(appId)
           } catch { /* rollback is best-effort; the original error matters more */ }
           return textResult(`App creation failed: ${(depErr as Error).message}`, true)
@@ -259,7 +259,7 @@ function buildTools(spaceId: string, guideConsulted: () => boolean) {
 
         // Soft-delete first (required by deleteApp)
         if (app.status !== 'uninstalled') {
-          await manager.uninstall(args.app_id)
+          await manager.uninstall(args.app_id, { reason: 'ai' })
         }
 
         // Hard-delete: permanently removes DB record and work directory
@@ -670,7 +670,7 @@ function buildTools(spaceId: string, guideConsulted: () => boolean) {
             )
           }
 
-          await manager.uninstall(args.skill_id)
+          await manager.uninstall(args.skill_id, { reason: 'ai' })
           return textResult(`Skill "${app.spec.name}" (${args.skill_id}) uninstalled successfully.`)
         }
 

@@ -16,6 +16,7 @@ import type { TeamChecks } from './checks'
 import type { BoardDigest } from './board-digest'
 import type { BoardArchive } from './board-archive'
 import type { ReadTeamArtifact } from './index'
+import { renderMemberRecord, type ReadTeamMemberRecord } from './member-record'
 import type { CollabMode, TaskStatus, TeamCheckSchedule } from '../../../../shared/apps/team-types'
 
 const LOG_TAG = '[TeamTools]'
@@ -42,6 +43,11 @@ export interface TeamMcpContext {
    * test runtimes).
    */
   readArtifact?: ReadTeamArtifact
+  /**
+   * Location-transparent read of a member's record, for the lead. Absent → the
+   * tool reports the capability is unavailable (non-federated test runtimes).
+   */
+  readMemberRecord?: ReadTeamMemberRecord
   /**
    * Periodic checks on teammates. Absent → the tools report the capability is
    * unavailable rather than silently doing nothing (non-federated test runtimes).
@@ -554,6 +560,66 @@ function buildReadArtifactTool(resolve: ResolveTeamMcpContext) {
   )
 }
 
+function buildReadMemberTool(resolve: ResolveTeamMcpContext) {
+  return tool(
+    TEAM_TOOL_NAMES.readMember,
+    'Read what a teammate said and was told in this run — its own record, not its ' +
+      'report. Use it to check work against what the member claims, to find out why ' +
+      'something went wrong, or to gather what several members produced. Only the team ' +
+      'lead can use it.\n\n' +
+      'Pages run from the newest message backwards (about 8000 characters each) and show ' +
+      'the messages only — thinking and tool traces are not included, an assistant line ' +
+      'just says how many steps it took. When earlier messages exist the page ends with ' +
+      'the `before` value to pass for the next one. It also works for a member on another ' +
+      'machine; if its owner is unreachable you get a clear message instead of a hang.\n\n' +
+      'Example: { "member": "researcher" } then { "member": "researcher", "before": 31 }',
+    {
+      member: z.string().describe('Teammate whose record to read (member name).'),
+      before: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe('Read the messages before this message number (the value the previous page gave). Omit for the newest page.'),
+    },
+    async (input) => {
+      const ctx = resolve()
+      if (!ctx) return textResult(NO_TEAM_CONTEXT, true)
+      if (!ctx.selfIsLead) {
+        return textResult('Only the team lead can read a member\u2019s record (team_read_member).', true)
+      }
+      if (ctx.external) {
+        return textResult(
+          'A member\u2019s record is not available in a turn that was started from another machine.',
+          true
+        )
+      }
+      console.log(
+        `${LOG_TAG} ${TEAM_TOOL_NAMES.readMember}: team=${ctx.teamId} epoch=${ctx.epochId} ` +
+          `member="${input.member}" before=${input.before ?? '-'}`
+      )
+      if (!ctx.readMemberRecord) {
+        return textResult('Reading a member\u2019s record is not available in this context.', true)
+      }
+      try {
+        const memberAppId = ctx.bus.resolveMemberAppId(ctx.teamId, input.member)
+        if (memberAppId === ctx.callerAppId) {
+          return textResult('That is you. This tool reads a teammate\u2019s record.', true)
+        }
+        const res = await ctx.readMemberRecord({
+          teamId: ctx.teamId,
+          epochId: ctx.epochId,
+          memberAppId,
+          ...(input.before !== undefined ? { before: input.before } : {}),
+        })
+        return res.ok ? textResult(renderMemberRecord(res)) : textResult(res.message, true)
+      } catch (err) {
+        return busErrorResult(err)
+      }
+    }
+  )
+}
+
 function buildScheduleTool(resolve: ResolveTeamMcpContext) {
   return tool(
     TEAM_TOOL_NAMES.schedule,
@@ -734,6 +800,9 @@ export function createTeamMcpServer(context: TeamMcpContext): SdkMcpServer {
     buildPostFindingTool(resolve),
     buildReadBoardTool(resolve),
     buildReadArtifactTool(resolve),
+    // A member is never the lead of the team it serves in, so it is not offered
+    // a tool it could only be refused.
+    ...(context.selfIsLead ? [buildReadMemberTool(resolve)] : []),
     buildScheduleTool(resolve),
     buildUnscheduleTool(resolve),
     buildCompleteTool(resolve),
@@ -765,6 +834,7 @@ export function buildCoordinationTools(resolve: ResolveTeamMcpContext) {
     buildPostFindingTool(resolve),
     buildReadBoardTool(resolve),
     buildReadArtifactTool(resolve),
+    buildReadMemberTool(resolve),
     buildCompleteTool(resolve),
   ]
 }

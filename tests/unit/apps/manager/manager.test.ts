@@ -30,6 +30,7 @@ import {
   AppAlreadyInstalledError,
   InvalidStatusTransitionError,
   SpaceNotFoundError,
+  AutomationSpaceRequiredError,
 } from '../../../../src/main/apps/manager/errors'
 import type { AppSpec } from '../../../../src/main/apps/spec/schema'
 import {
@@ -196,6 +197,20 @@ describe('AppManager', () => {
       ).rejects.toThrow(AppAlreadyInstalledError)
     })
 
+    it('should reject a digital human installed without a space', async () => {
+      const spec = createTestSpec({ name: 'global-dh', type: 'automation' })
+
+      await expect(service.install(null, spec)).rejects.toThrow(AutomationSpaceRequiredError)
+      expect(service.listApps({ spaceId: null })).toHaveLength(0)
+    })
+
+    it('should reject moving a digital human to global scope', async () => {
+      const appId = await service.install(TEST_SPACE_ID, createTestSpec({ name: 'pinned-dh', type: 'automation' }))
+
+      await expect(service.moveToSpace(appId, null)).rejects.toThrow(AutomationSpaceRequiredError)
+      expect(service.getApp(appId)!.spaceId).toBe(TEST_SPACE_ID)
+    })
+
     it('should overwrite an existing active skill instead of throwing', async () => {
       // Skills are content-only (prompt + files) — re-installing should
       // refresh the row in place rather than fail with a conflict error.
@@ -314,6 +329,29 @@ describe('AppManager', () => {
       expect(existsSync(workDir)).toBe(true) // Still there
     })
 
+    it('should announce a user uninstall with the user reason', async () => {
+      const appId = await service.install(TEST_SPACE_ID, createTestSpec())
+      const handler = vi.fn()
+      service.onAppUninstalled(handler)
+
+      await service.uninstall(appId)
+
+      expect(handler).toHaveBeenCalledTimes(1)
+      expect(handler.mock.calls[0][1]).toBe('user')
+    })
+
+    it('should carry the caller-stated reason for system and AI uninstalls', async () => {
+      const first = await service.install(TEST_SPACE_ID, createTestSpec({ name: 'retired' }))
+      const second = await service.install(TEST_SPACE_ID, createTestSpec({ name: 'removed-by-ai' }))
+      const handler = vi.fn()
+      service.onAppUninstalled(handler)
+
+      await service.uninstall(first, { reason: 'system' })
+      await service.uninstall(second, { reason: 'ai' })
+
+      expect(handler.mock.calls.map(call => call[1])).toEqual(['system', 'ai'])
+    })
+
     it('should notify status change handler on uninstall', async () => {
       const handler = vi.fn()
       service.onAppStatusChange(handler)
@@ -391,6 +429,24 @@ describe('AppManager', () => {
 
     it('should throw AppNotFoundError for non-existent App', async () => {
       await expect(service.deleteApp('non-existent')).rejects.toThrow(AppNotFoundError)
+    })
+  })
+
+  describe('deleteAppsInSpace', () => {
+    it('announces the uninstall of live apps but not of ones already uninstalled', async () => {
+      const liveId = await service.install(TEST_SPACE_ID, createTestSpec({ name: 'live-dh' }))
+      const goneId = await service.install(TEST_SPACE_ID, createTestSpec({ name: 'gone-dh' }))
+      await service.uninstall(goneId)
+      const handler = vi.fn()
+      service.onAppUninstalled(handler)
+
+      const deleted = await service.deleteAppsInSpace(TEST_SPACE_ID)
+
+      expect(deleted).toBe(2)
+      expect(handler).toHaveBeenCalledTimes(1)
+      expect(handler.mock.calls[0][0].id).toBe(liveId)
+      expect(handler.mock.calls[0][1]).toBe('space-deleted')
+      expect(service.getApp(liveId)).toBeNull()
     })
   })
 
@@ -1719,11 +1775,11 @@ describe('AppManager', () => {
       // authored name — the one shape that could pass an identity check based on
       // display text alone.
       const automationId = await service.install(
-        null,
+        TEST_SPACE_ID,
         createTestSpec({ name: 'ai-xie-zuo', display_name: 'AI写作' } as Partial<AppSpec>)
       )
 
-      const skillId = await service.install(null, skillSpec('AI写作'))
+      const skillId = await service.install(TEST_SPACE_ID, skillSpec('AI写作'))
 
       expect(service.getApp(skillId)!.specId).toBe('ai-xie-zuo-2')
       expect(service.getApp(automationId)!.spec.type).toBe('automation')

@@ -10,12 +10,13 @@ interface FakeConversation {
   id: string
   title: string
   updatedAt: string
+  messages: unknown[]
 }
 
 const { store } = vi.hoisted(() => ({ store: new Map<string, FakeConversation>() }))
 
 function seed(id: string, title: string, updatedAt = new Date().toISOString()): FakeConversation {
-  const conv = { id, title, updatedAt }
+  const conv = { id, title, updatedAt, messages: [] }
   store.set(id, conv)
   return conv
 }
@@ -26,7 +27,25 @@ vi.mock('../../../../src/main/services/conversation.service', () => ({
     Array.from(store.values()).map((c) => ({ id: c.id, title: c.title, updatedAt: c.updatedAt, messageCount: 0 })),
 }))
 
+// The built-in source pulls in these engine-facing modules; resolution never calls them.
+vi.mock('../../../../src/main/services/agent/send-message', () => ({ sendMessage: vi.fn() }))
+
+// chat-source reaches the engine through the services/agent barrel; without this
+// every module reset would load the whole engine graph.
+vi.mock('../../../../src/main/services/agent', async () => ({
+  onAgentEvent: (await import('../../../../src/main/services/agent/events')).onAgentEvent,
+  sendMessage: (await import('../../../../src/main/services/agent/send-message')).sendMessage,
+}))
+vi.mock('../../../../src/main/services/conversation-interop/busy', () => ({
+  isNativeConversationBusy: () => false,
+  hasLiveNativeSession: () => false,
+}))
+
 import { resolveConversationTarget } from '../../../../src/main/services/conversation-interop/target-resolution'
+import { registerConversationSource } from '../../../../src/main/services/conversation-interop/source'
+import { createChatConversationSource } from '../../../../src/main/services/conversation-interop/chat-source'
+
+registerConversationSource(createChatConversationSource())
 
 describe('resolveConversationTarget', () => {
   beforeEach(() => {

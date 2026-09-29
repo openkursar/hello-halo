@@ -139,8 +139,13 @@ class BrowserViewManager {
   // Isolates AI view lifecycle from the user-visible mainWindow so that
   // creating/destroying AI views cannot corrupt the mainWindow's view list.
   private offscreenWindow: BrowserWindow | null = null
-  // Track which views live on the offscreen window for correct cleanup.
+  // Views whose home is the offscreen window (AI automation / digital-human chat).
   private offscreenViewIds: Set<string> = new Set()
+  // Subset of offscreenViewIds a user is currently watching: temporarily hosted
+  // on the main window so the canvas can show the exact page the AI drives.
+  // hide() sends them home again.
+  private revealedViewIds: Set<string> = new Set()
+  private destroyedListeners: Set<(viewId: string) => void> = new Set()
 
   // Debounce timers for state change events
   // This prevents flooding the renderer with too many IPC messages during rapid navigation
@@ -400,12 +405,6 @@ class BrowserViewManager {
       return false
     }
 
-    // Offscreen views live on a hidden window and must not be shown on mainWindow
-    if (this.offscreenViewIds.has(viewId)) {
-      console.warn(`[BrowserView] show() - Cannot show offscreen view on mainWindow: ${viewId}`)
-      return false
-    }
-
     // Defensive: if the native BrowserView object has been destroyed (e.g. by
     // a race condition), clean up the stale entry and bail out.
     try {
@@ -426,9 +425,21 @@ class BrowserViewManager {
       this.hide(this.activeViewId)
     }
 
+    if (this.offscreenViewIds.has(viewId) && !this.revealedViewIds.has(viewId)) {
+      this.revealOffscreenView(viewId, view)
+    }
+
     // Add to window
     console.log(`[BrowserView] Adding BrowserView to window...`)
-    this.mainWindow.addBrowserView(view)
+    try {
+      this.mainWindow.addBrowserView(view)
+    } catch (error) {
+      console.error(`[BrowserView] show() - addBrowserView failed: ${viewId}`, error)
+      // A revealed view already left its home window; without this it would be
+      // hosted nowhere and the AI driving it would lose its compositing surface.
+      if (this.revealedViewIds.has(viewId)) this.returnToOffscreenWindow(viewId, view)
+      return false
+    }
     console.log(`[BrowserView] BrowserView added to window`)
 
     // Set bounds with integer values (H5-aware, respects policy-block state)
@@ -457,7 +468,7 @@ class BrowserViewManager {
     if (!view) return false
 
     // Remove from the correct host window
-    const hostWindow = this.offscreenViewIds.has(viewId)
+    const hostWindow = this.isHostedOffscreen(viewId)
       ? this.offscreenWindow
       : this.mainWindow
 
@@ -469,11 +480,80 @@ class BrowserViewManager {
       }
     }
 
+    // A revealed view has no business lingering detached: the AI keeps driving
+    // it and CDP screenshots need a compositing surface.
+    if (this.revealedViewIds.has(viewId)) {
+      this.returnToOffscreenWindow(viewId, view)
+    }
+
     if (this.activeViewId === viewId) {
       this.activeViewId = null
     }
 
     return true
+  }
+
+  /**
+   * Whether a view is currently hosted on the hidden window (as opposed to
+   * home-offscreen but temporarily revealed on the main window).
+   */
+  private isHostedOffscreen(viewId: string): boolean {
+    return this.offscreenViewIds.has(viewId) && !this.revealedViewIds.has(viewId)
+  }
+
+  /** Whether a home-offscreen view is currently shown to the user on the main window. */
+  isRevealed(viewId: string): boolean {
+    return this.revealedViewIds.has(viewId)
+  }
+
+  /**
+   * Move a home-offscreen view to the main window so the user can watch and take
+   * over the exact page the AI is driving. Throttling must be re-enabled first:
+   * with it disabled, the remove/add round trip behind every canvas tab switch
+   * would evict the compositor frame for good (see create()).
+   */
+  private revealOffscreenView(viewId: string, view: BrowserView) {
+    if (this.offscreenWindow && !this.offscreenWindow.isDestroyed()) {
+      try {
+        this.offscreenWindow.removeBrowserView(view)
+      } catch {
+        // Already detached
+      }
+    }
+    view.webContents.setBackgroundThrottling(true)
+    this.revealedViewIds.add(viewId)
+    console.log(`[BrowserView] Offscreen view revealed on main window: ${viewId}`)
+  }
+
+  /** Inverse of revealOffscreenView(); the view must already be detached from the main window. */
+  private returnToOffscreenWindow(viewId: string, view: BrowserView) {
+    this.revealedViewIds.delete(viewId)
+    try {
+      if (view.webContents.isDestroyed()) return
+      const host = this.getOrCreateOffscreenWindow()
+      host.addBrowserView(view)
+      view.setBounds({ x: 0, y: 0, width: 1280, height: 720 })
+      view.webContents.setBackgroundThrottling(false)
+      console.log(`[BrowserView] Revealed view returned to offscreen host: ${viewId}`)
+    } catch (error) {
+      console.error(`[BrowserView] Failed to return view to offscreen host: ${viewId}`, error)
+    }
+  }
+
+  /** Subscribe to view destruction, whichever path destroyed it. Returns an unsubscribe. */
+  onViewDestroyed(listener: (viewId: string) => void): () => void {
+    this.destroyedListeners.add(listener)
+    return () => this.destroyedListeners.delete(listener)
+  }
+
+  private emitViewDestroyed(viewId: string) {
+    for (const listener of this.destroyedListeners) {
+      try {
+        listener(viewId)
+      } catch (error) {
+        console.error(`[BrowserView] view-destroyed listener failed for ${viewId}:`, error)
+      }
+    }
   }
 
   /**
@@ -677,8 +757,7 @@ class BrowserViewManager {
     }
 
     // Remove from the correct host window
-    const isOffscreen = this.offscreenViewIds.has(viewId)
-    const hostWindow = isOffscreen ? this.offscreenWindow : this.mainWindow
+    const hostWindow = this.isHostedOffscreen(viewId) ? this.offscreenWindow : this.mainWindow
 
     if (hostWindow && !hostWindow.isDestroyed()) {
       try {
@@ -700,10 +779,13 @@ class BrowserViewManager {
     this.states.delete(viewId)
     this.lastBounds.delete(viewId)
     this.offscreenViewIds.delete(viewId)
+    this.revealedViewIds.delete(viewId)
 
     if (this.activeViewId === viewId) {
       this.activeViewId = null
     }
+
+    this.emitViewDestroyed(viewId)
   }
 
   /**
@@ -726,6 +808,7 @@ class BrowserViewManager {
     }
     this.offscreenWindow = null
     this.offscreenViewIds.clear()
+    this.revealedViewIds.clear()
   }
 
   /**
@@ -871,7 +954,7 @@ class BrowserViewManager {
     // On policy-block transition, re-apply bounds to move view offscreen or restore it
     if (wasPolicyBlocked !== !!state.blockedByPolicy) {
       const bounds = this.lastBounds.get(viewId)
-      if (bounds && !this.offscreenViewIds.has(viewId)) {
+      if (bounds && !this.isHostedOffscreen(viewId)) {
         this.applyBounds(viewId, bounds)
       }
     }
@@ -910,7 +993,7 @@ class BrowserViewManager {
   private toWindowBounds(viewId: string, bounds: BrowserViewBounds): BrowserViewBounds {
     // Offscreen views live on the hidden host window, which is never zoomed,
     // and their bounds are set in DIPs already.
-    if (this.offscreenViewIds.has(viewId)) return bounds
+    if (this.isHostedOffscreen(viewId)) return bounds
     if (!this.mainWindow || this.mainWindow.isDestroyed()) return bounds
 
     const zoom = this.mainWindow.webContents.getZoomFactor()
@@ -1026,9 +1109,11 @@ class BrowserViewManager {
     this.states.delete(viewId)
     this.lastBounds.delete(viewId)
     this.offscreenViewIds.delete(viewId)
+    this.revealedViewIds.delete(viewId)
     if (this.activeViewId === viewId) {
       this.activeViewId = null
     }
+    this.emitViewDestroyed(viewId)
   }
 
   // ============================================

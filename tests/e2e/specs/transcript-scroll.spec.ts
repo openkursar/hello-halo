@@ -15,6 +15,7 @@ import {
   launchElectronApp,
 } from '../fixtures/electron'
 import { seedLongConversation } from '../fixtures/seed-conversation'
+import { seedDigitalHumanChat } from '../fixtures/seed-digital-human-chat'
 
 const MESSAGE_COUNT = 300
 
@@ -282,3 +283,95 @@ for (const viewport of VIEWPORTS) {
     }
   })
 }
+
+// A digital human's conversation is the same page, read a page at a time: it
+// opens on its newest page only, follows a live turn, pulls older history in as
+// the reader reaches the top without moving what is on screen, and a search hit
+// far back is loaded and centered.
+test('transcript scrolling — digital-human conversation, paged', async () => {
+  test.setTimeout(180000)
+  const TURNS = 150
+  const appEntryPath = getAppEntryPath()
+  const testConfigDir = createTestConfigDir(appEntryPath)
+  const seeded = seedDigitalHumanChat(testConfigDir, { turnCount: TURNS })
+  const app = await launchElectronApp(appEntryPath, testConfigDir)
+
+  try {
+    const window = await app.firstWindow()
+    await window.waitForLoadState('domcontentloaded')
+    const cdp = await window.context().newCDPSession(window)
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false })
+    await window.getByText(seeded.turns[TURNS - 1].reply.slice(0, 24)).first().click()
+
+    const scroller = window.locator('[data-testid="transcript-scroller"]')
+    await scroller.waitFor({ state: 'visible', timeout: 15000 })
+    await settle(window, 1200)
+
+    // Opens at the end with only the newest page built.
+    expect(await distanceToEnd(scroller)).toBeLessThanOrEqual(1)
+    const opened = await mountedRows(scroller)
+    expect(opened).toBeGreaterThan(0)
+    expect(opened).toBeLessThanOrEqual(50)
+
+    // Follows a live turn.
+    const turn = { spaceId: 'halo-temp', conversationId: seeded.conversationId }
+    await sendAgentEvent(app, 'agent:turn-start', turn)
+    for (let i = 0; i < 6; i++) {
+      await sendAgentEvent(app, 'agent:message', { ...turn, delta: STREAM_LINE.repeat(3) + '\n\n', isStreaming: true, isComplete: false })
+      await settle(window, 60)
+      expect(await distanceToEnd(scroller)).toBeLessThanOrEqual(1)
+    }
+    await sendAgentEvent(app, 'agent:error', { ...turn, error: 'stopped by test', errorType: 'interrupted' })
+    await settle(window, 300)
+
+    // Reaching the top pulls older pages in; rows on screen never move back up.
+    const visibleRowTop = () => scroller.evaluate((el) => {
+      const box = el.getBoundingClientRect()
+      const rows = Array.from(el.querySelectorAll<HTMLElement>('[data-message-id]'))
+      const row = rows.find(r => r.getBoundingClientRect().top >= box.top)
+      return row ? { id: row.dataset.messageId!, top: row.getBoundingClientRect().top } : null
+    })
+    await scroller.hover()
+    for (let i = 0; i < 2500; i++) {
+      const done = await scroller.evaluate(el => el.scrollTop === 0 && !!el.querySelector('[data-transcript-index="0"]'))
+      if (done && (await scroller.getByText('Question number 1', { exact: true }).count()) > 0) break
+      const seen = await visibleRowTop()
+      await window.mouse.wheel(0, -700)
+      await window.waitForTimeout(60)
+      if (seen) {
+        const now = await scroller.evaluate((el, id) => el.querySelector<HTMLElement>(`[data-message-id="${id}"]`)?.getBoundingClientRect().top ?? null, seen.id)
+        if (now !== null) expect(now).toBeGreaterThanOrEqual(seen.top - 2)
+      }
+    }
+    await settle(window, 800)
+    await expect(scroller.getByText('Question number 1', { exact: true }).first()).toBeVisible()
+    expect(await mountedRows(scroller)).toBe(TURNS * 2)
+
+    // A search hit far back is loaded and centered, from a reloaded page that
+    // has only the newest page again.
+    await window.reload()
+    await window.getByText(seeded.turns[TURNS - 1].reply.slice(0, 24)).first().click()
+    await scroller.waitFor({ state: 'visible', timeout: 15000 })
+    await settle(window, 1200)
+    expect(await mountedRows(scroller)).toBeLessThanOrEqual(50)
+    // Turn 11's question: user line of turn index 10 is line 21.
+    const farId = 'session-msg-21'
+    await window.evaluate(([id, appId, conversationId]) => {
+      globalThis.dispatchEvent(new CustomEvent('search:navigate-to-result', {
+        detail: { messageId: id, spaceId: 'halo-temp', conversationId, query: '', resultIndex: 0, kind: 'digital-human', appId },
+      }))
+    }, [farId, seeded.appId, seeded.conversationId])
+    await settle(window, 2000)
+    const target = scroller.locator(`[data-message-id="${farId}"]`)
+    await expect(target).toHaveCount(1)
+    const centered = await target.evaluate((el) => {
+      const s = (el.closest('[data-testid="transcript-scroller"]') as HTMLElement).getBoundingClientRect()
+      const r = el.closest('[data-transcript-index]')!.getBoundingClientRect()
+      return Math.abs((r.top + r.bottom) / 2 - (s.top + s.bottom) / 2)
+    })
+    expect(centered).toBeLessThanOrEqual(40)
+  } finally {
+    await app.close()
+    cleanupTestConfigDir(testConfigDir)
+  }
+})

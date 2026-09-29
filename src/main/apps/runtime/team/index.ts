@@ -22,6 +22,7 @@ import type { MessageBus, TurnCompletion, CircuitLimits } from './message-bus'
 import type { Blackboard, BlackboardWriteRecord } from './blackboard'
 import type { TeamPromptContext } from './team-prompt'
 import type { ReadTeamArtifact } from './artifact-read'
+import type { ReadTeamMemberRecord } from './member-record'
 import type { TeamStore } from '../../team'
 import type {
   TeamEpoch,
@@ -150,6 +151,8 @@ export interface TeamRuntime {
   recordToolAudit(entry: TeamToolAudit): void
   /** Location-transparent read of a published team artifact (see {@link ReadTeamArtifact}). */
   readArtifact?: ReadTeamArtifact
+  /** Location-transparent read of a member's record for the lead (see {@link ReadTeamMemberRecord}). */
+  readMemberRecord?: ReadTeamMemberRecord
   /**
    * A member's live runtime status (idle/working/waiting_user/error) on this node,
    * derived from its active team sessions. Read-only projection consumed by the
@@ -319,6 +322,12 @@ export interface CreateTeamRuntimeDeps {
    * Absent → the tool reports the capability is unavailable.
    */
   readArtifact?: ReadTeamArtifact
+  /**
+   * Location-transparent member-record reader (bootstrap wires it to the chat
+   * transcript store + federation manager). Powers the lead's `team_read_member`
+   * tool. Absent → the tool reports the capability is unavailable.
+   */
+  readMemberRecord?: ReadTeamMemberRecord
   /**
    * Epoch lifecycle replication capture (open/seal/reopen/rename/outcome).
    * Bootstrap wires it to the federation authority write log so conversations
@@ -506,6 +515,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     getDelegatedPolicy: (teamId, appId) => store.getMember(teamId, appId)?.delegatedPolicy ?? null,
     recordToolAudit: (entry) => store.insertToolAudit(entry),
     ...(deps.readArtifact ? { readArtifact: deps.readArtifact } : {}),
+    ...(deps.readMemberRecord ? { readMemberRecord: deps.readMemberRecord } : {}),
     getMemberStatus: memberStatus,
     getObservableStatus: (teamId) => orchestration!.getObservableStatus(teamId),
     getMemberBusy: (appId, teamId) => orchestration!.getMemberBusy(appId, teamId),
@@ -676,6 +686,13 @@ export type {
   TeamArtifactReadResult,
   RemoteArtifactFailure,
 } from './artifact-read'
+export { createTeamMemberRecordReader, renderMemberRecord, MEMBER_RECORD_PAGE_CHARS } from './member-record'
+export type {
+  ReadTeamMemberRecord,
+  TeamMemberRecordResult,
+  MemberRecordLine,
+  RemoteRecordRow,
+} from './member-record'
 export { resolveArtifactRef } from './artifact-path'
 export type { ArtifactRefResolution, ArtifactRefRejection } from './artifact-path'
 export { createTeamTriggerScheduler, TEAM_JOB_KIND } from './team-triggers'

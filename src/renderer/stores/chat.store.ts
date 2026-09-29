@@ -21,7 +21,12 @@ import { createMessagingSlice } from './chat/messaging'
 import { createAgentEventsSlice } from './chat/agent-events'
 import { createSessionSlice } from './chat/session'
 import { createAppChatSelectionSlice } from './chat/app-chat-selection'
-import { isAppChatKey } from '../../shared/apps/im-keys'
+import { conversationKind } from './chat/backend'
+import { selectActiveConversationId, selectActiveSession } from './chat/active'
+
+export { selectActiveConversationId, selectActiveConversation, selectActiveSession } from './chat/active'
+export { conversationKind, digitalHumanAppId } from './chat/backend'
+export type { ChatState } from './chat/internal'
 
 export const useChatStore = create<ChatState>((set, get) => ({
   spaceStates: new Map<string, SpaceState>(),
@@ -37,6 +42,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   artifacts: [],
   isLoading: false,
   isLoadingConversation: false,
+  conversationLoadErrors: new Map<string, string>(),
   composerDrafts: new Map<string, string>(),
   _pulseItems: [],
   _pulseCount: 0,
@@ -303,19 +309,17 @@ useChatStore.subscribe((state) => {
   }
 })
 
+/** The id of the conversation on screen (the selected digital human's, else the regular one). */
+export function useActiveConversationId(): string | null {
+  return useChatStore(selectActiveConversationId)
+}
+
 /**
- * Selector: Get current session's isGenerating state
- * Use this in components that need to react to generation state changes
+ * Selector: whether the conversation on screen is generating.
+ * Use this in components that need to react to generation state changes.
  */
 export function useIsGenerating(): boolean {
-  return useChatStore((state) => {
-    const spaceState = state.currentSpaceId
-      ? state.spaceStates.get(state.currentSpaceId)
-      : null
-    if (!spaceState?.currentConversationId) return false
-    const session = state.sessions.get(spaceState.currentConversationId)
-    return session?.isGenerating ?? false
-  })
+  return useChatStore((state) => selectActiveSession(state).isGenerating)
 }
 
 /**
@@ -373,7 +377,7 @@ export function useAllConversationStatuses(): Map<string, TaskStatus> {
       // listed beside them, keyed by the same session ids. They never enter
       // unseenCompletions, so only their live state counts.
       for (const [id, session] of state.sessions) {
-        if (!isAppChatKey(id)) continue
+        if (conversationKind(id) === 'space') continue
         const status = deriveTaskStatus(session, false)
         if (status !== 'idle') result.set(id, status)
       }

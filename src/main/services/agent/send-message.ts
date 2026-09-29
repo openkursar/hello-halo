@@ -47,7 +47,7 @@ import {
   buildMessageContent,
 } from './message-utils'
 import { prepareNonVisionImageFallback, OCR_TOOLSET_ID } from './image-attachments'
-import { resolveCredentialsForSdk, buildBaseSdkOptions } from './sdk-config'
+import { resolveCredentialsForSdk, buildUserSessionSdkOptions } from './sdk-config'
 import { resolveSpaceMemorySession, buildSpaceMemoryPreamble } from './space-memory'
 import { applyReasoningEffort } from './reasoning-effort'
 import { createConversationSink } from './conversation-sink'
@@ -108,7 +108,6 @@ export async function sendMessage(
   if (request.knowledgeBaseId) {
     console.log(`[Agent] KB chat turn: knowledgeBaseId=${request.knowledgeBaseId} ctx=${kbChatCtx ? 'resolved' : 'NULL'} workDir=${workDir}`)
   }
-  const digitalHumansEnabled = config.agent?.enableDigitalHumans !== false
 
   // Accumulate stderr for detailed error messages
   let stderrBuffer = ''
@@ -191,7 +190,7 @@ export async function sendMessage(
     const spaceMemory = kbChatCtx ? null : resolveSpaceMemorySession(spaceId, conversationId)
 
     // Build base SDK options
-    const sdkOptions = await buildBaseSdkOptions({
+    const sdkOptions = await buildUserSessionSdkOptions({
       // Same switch that loads the halo_api_ref tool: a session without the
       // manual has no way to discover the API, so the credentials would only
       // widen what an injected instruction can reach.
@@ -205,13 +204,6 @@ export async function sendMessage(
         console.error(`[Agent][${conversationId}] CLI stderr:`, data)
         stderrBuffer += data
       },
-      maxTurns: config.agent?.maxTurns,
-      promptProfile: config.agent?.promptProfile,
-      configDirMode: config.agent?.configDirMode,
-      customConfigDir: config.agent?.customConfigDir,
-      enableTeams: config.agent?.enableTeams,
-      disabledTools: config.agent?.disabledTools,
-      digitalHumansEnabled,
       toolsetIndex: buildToolsetSection(spaceId, conversationId),
       memoryInstructions: spaceMemory?.instructions,
       memoryGuard: spaceMemory?.guard,

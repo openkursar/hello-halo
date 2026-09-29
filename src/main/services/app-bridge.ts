@@ -37,9 +37,15 @@ export interface McpAppChange {
  */
 export type McpAppsChangeHandler = (spaceId: string | null, change?: McpAppChange) => void
 
+/** How a session wants the halo-apps server shaped. */
+export interface HaloAppsServerOptions {
+  /** The session mounts its own person-context tool; leave this server's out. */
+  omitPersonContext?: boolean
+}
+
 interface AppBridgeImpl {
   getAppManager: () => AppManagerService | null
-  createHaloAppsMcpServer: (spaceId: string, guideConsulted: () => boolean) => unknown
+  createHaloAppsMcpServer: (spaceId: string, guideConsulted: () => boolean, options?: HaloAppsServerOptions) => unknown
   onMcpAppsChange: (handler: McpAppsChangeHandler) => () => void
 }
 
@@ -71,8 +77,12 @@ export function getAppManager(): AppManagerService | null {
  * `guideConsulted` comes from the same session's `halo-docs` server: the
  * authoring guide is read there and gates spec creation here.
  */
-export function createHaloAppsMcpServer(spaceId: string, guideConsulted: () => boolean): unknown {
-  return impl ? impl.createHaloAppsMcpServer(spaceId, guideConsulted) : null
+export function createHaloAppsMcpServer(
+  spaceId: string,
+  guideConsulted: () => boolean,
+  options?: HaloAppsServerOptions
+): unknown {
+  return impl ? impl.createHaloAppsMcpServer(spaceId, guideConsulted, options) : null
 }
 
 /**

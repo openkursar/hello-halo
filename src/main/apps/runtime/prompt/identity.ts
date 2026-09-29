@@ -29,6 +29,12 @@ export interface IdentityFragmentsInput {
   workDir: string
   modelInfo?: string
   /**
+   * The turn mounts no digital-human management tools (a disposable team
+   * member), so the prompt must not say Halo can manage digital humans. Unset:
+   * the user's digital-humans setting decides.
+   */
+  withholdDigitalHumans?: boolean
+  /**
    * Pre-rendered "disabled capabilities" guidance (buildDisabledCapabilitiesGuidance).
    * Present only when the user has turned a toggleable capability off; the caller
    * owns the computation because it has the full InstalledApp. Undefined = omit.
@@ -51,6 +57,7 @@ export function buildIdentityFragments(input: IdentityFragmentsInput): string[] 
     workDir: input.workDir,
     modelInfo: input.modelInfo,
     knowledgeBases: getKBReferencesForApp(input.appId),
+    ...(input.withholdDigitalHumans ? { digitalHumansEnabled: false } : {}),
   }
   let base = input.usesAIBrowser
     ? buildSystemPromptWithAIBrowser(promptCtx, AI_BROWSER_SYSTEM_PROMPT)

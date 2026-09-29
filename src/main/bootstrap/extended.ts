@@ -49,6 +49,7 @@ import {
   disposeConversationInterop,
   createConversationInteropMcpServer,
   deliverExternalMessage,
+  registerConversationSource,
 } from '../services/conversation-interop'
 import { setConversationInteropFactory } from '../services/agent/toolsets/broker'
 import { initSpaceMemoryConsolidation, disposeSpaceMemoryConsolidation } from '../services/memory-consolidation'
@@ -64,11 +65,12 @@ import type { DatabaseManager } from '../platform/store'
 import { refuseNewerData } from './schema-refusal'
 import { initTaskState } from '../platform/task-state'
 import { initScheduler, shutdownScheduler } from '../platform/scheduler'
+import { combinedDisposable } from '../platform/event'
 import { initMemory } from '../platform/memory'
 import { setMemorySdk } from '../platform/memory/sdk'
 import { tool as sdkTool, createSdkMcpServer as sdkCreateMcpServer } from '../services/agent/resolved-sdk'
 import { initAppManager, shutdownAppManager } from '../apps/manager'
-import { initAppRuntime, shutdownAppRuntime, getEventRouter, getActivityStore, getImSessionRegistry } from '../apps/runtime'
+import { initAppRuntime, shutdownAppRuntime, getEventRouter, getActivityStore, getImSessionRegistry, createDigitalHumanConversationSource, createRunConversationSource } from '../apps/runtime'
 import { initTeamStore, shutdownTeamStore, getTeamStore, initTeamService, shutdownTeamService, getTeamService } from '../apps/team'
 import type { TeamStore } from '../apps/team'
 import { initFederationStore, shutdownFederationStore, getFederationStore, getAuthorityStore } from '../apps/federation'
@@ -82,7 +84,7 @@ import type { OwnerStatus, MemberWriteRecord, ArtifactRef } from '../apps/runtim
 import { SELF_NODE_ID, TEAM_EVENTS, buildTeamSessionKey } from '../../shared/apps/team-types'
 import type { BlackboardTask, BlackboardFinding, TaskStatus, TeamActivity, TeamUpdatedEvent, TeamEpoch, TeamCheck } from '../../shared/apps/team-types'
 import { parseTeamSessionKey, parseTeamChatKey } from '../../shared/apps/im-keys'
-import { createTeamRuntime, setActiveTeamRuntime, getActiveTeamRuntime, createTeamTriggerScheduler, createDefaultSessionDeps, createTeamArtifactReader, createTeamArtifactOpener, createLocalArtifactResolver, createLocalArtifactPathResolver, RemoteArtifactError, pruneSharedFileCopies, defaultSharedCopyRoot } from '../apps/runtime/team'
+import { createTeamRuntime, setActiveTeamRuntime, getActiveTeamRuntime, createTeamTriggerScheduler, createDefaultSessionDeps, createTeamArtifactReader, createTeamMemberRecordReader, createTeamArtifactOpener, createLocalArtifactResolver, createLocalArtifactPathResolver, RemoteArtifactError, pruneSharedFileCopies, defaultSharedCopyRoot } from '../apps/runtime/team'
 import { readTeamMemberMessages, isAppChatConversationGenerating } from '../apps/runtime/app-chat'
 import type { TeamTriggerScheduler } from '../apps/runtime/team'
 import { createSpace, deleteSpace, getSpace, getSpaceDir } from '../services/space.service'
@@ -131,6 +133,7 @@ let platformDb: DatabaseManager | null = null
 // relayCapture.start() returns an IDisposable (agent-event subscription), not
 // a bare function — dispose() it on shutdown.
 let disposeRelayCapture: { dispose(): void } | null = null
+let digitalHumanConversations: { dispose(): void } | null = null
 let flushRelayCapture: (() => void) | null = null
 let onSystemResume: (() => void) | null = null
 let taskStateService: Awaited<ReturnType<typeof initTaskState>> | null = null
@@ -195,7 +198,7 @@ async function initPlatformAndApps(): Promise<void> {
   initTeamStore({ db })
 
   // Cross-Conversation Interop: subscribes to onAgentEvent for the
-  // waitForReply no_reply signal (services/conversation-interop/turn-end-watch.ts).
+  // waitForReply no_reply signal (services/conversation-interop/lifecycle.ts).
   // No DB/store dependency — dormant until the halo-conversations toolset
   // (services/agent/toolsets/broker.ts) actually registers a wait.
   initConversationInterop()
@@ -242,6 +245,17 @@ async function initPlatformAndApps(): Promise<void> {
   // Wire lifecycle events (install/uninstall/run) into the analytics pipeline.
   // Must come after both appManager and runtime are ready.
   installAppsSubscribers(appManager, runtime)
+
+  // Cross-Conversation Interop: digital-human chats join the conversation
+  // directory (dependency-inversion seam: services/conversation-interop declares
+  // the slot, this tier fills it). The source reads the app manager and session
+  // registry lazily, so it only needs registering once the runtime is up;
+  // registering before or after initConversationInterop makes no difference.
+  digitalHumanConversations = combinedDisposable(
+    registerConversationSource(createDigitalHumanConversationSource()),
+    // A scheduled run's one-way sender identity (apps/runtime/run-conversation-source.ts).
+    registerConversationSource(createRunConversationSource())
+  )
 
   // ── Phase 3.6: Team runtime + service ────────────────────────────────────
   // The team coordination kernel reuses the app-chat session layer (resume,
@@ -906,6 +920,23 @@ async function initPlatformAndApps(): Promise<void> {
       ...fetchRemoteArtifact,
     })
 
+    // The lead's read of a member's record (logic in apps/runtime/team/member-record):
+    // this node's transcript store for a local member, the owner's history plane
+    // for a remote one.
+    const readTeamMemberRecord = createTeamMemberRecordReader({
+      store: teamStore,
+      readLocal: (appId, teamId, epochId) => readTeamMemberMessages(appId, teamId, epochId),
+      ...(fedManager
+        ? {
+            fetchRemote: async ({ teamId, epochId, appId, ownerNodeId }) => {
+              const manager = getFederationManager()
+              if (!manager) throw new Error('federation is not initialized')
+              return manager.fetchMemberHistory({ officeId: teamId, ownerNodeId, appId, epochId })
+            },
+          }
+        : {}),
+    })
+
     // The same resolution for a person clicking a shared file: a path the OS can
     // open, with a teammate's file copied here read-only first.
     const openTeamArtifact = createTeamArtifactOpener({
@@ -985,6 +1016,7 @@ async function initPlatformAndApps(): Promise<void> {
         store: teamStore,
         session: teamSessionDeps,
         readArtifact: readTeamArtifact,
+        readMemberRecord: readTeamMemberRecord,
         turnTimeoutMs: getConfig().agent?.teamTurnTimeoutMs,
         circuitOverrides: getConfig().agent?.teamCircuitLimits,
         maxConcurrentTurns: getConfig().agent?.teamMaxConcurrentTurns,
@@ -1565,7 +1597,10 @@ export async function cleanupExtendedServices(): Promise<void> {
   // Store: Shutdown registry service (before app manager)
   shutdownRegistryService()
 
-  // Cross-Conversation Interop: drop the onAgentEvent subscription.
+  // Cross-Conversation Interop: drop the digital-human source and every
+  // turn-end subscription.
+  digitalHumanConversations?.dispose()
+  digitalHumanConversations = null
   disposeConversationInterop()
   disposeSpaceMemoryConsolidation()
 

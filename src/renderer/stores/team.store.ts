@@ -115,6 +115,8 @@ interface TeamState {
 
   // ── List / selection ─────────────────────
   loadTeams: (spaceId?: string) => Promise<void>
+  /** The uncoalesced request behind `loadTeams`. */
+  fetchTeams: (spaceId?: string) => Promise<void>
   selectTeam: (teamId: string | null) => void
   loadDetail: (teamId: string) => Promise<void>
   loadEpochs: (teamId: string) => Promise<void>
@@ -230,6 +232,9 @@ async function refreshTeamsCoalesced(load: () => Promise<void>): Promise<void> {
 
 // ── Store ────────────────────────────────────────────────────────────────────
 
+/** In-flight list requests, by space ('' = every space). */
+const teamListRequests = new Map<string, Promise<void>>()
+
 export const useTeamStore = create<TeamState>((set, get) => ({
   teams: [],
   currentTeamId: null,
@@ -253,7 +258,16 @@ export const useTeamStore = create<TeamState>((set, get) => ({
 
   // ── List / selection ─────────────────────
 
-  loadTeams: async (spaceId) => {
+  loadTeams: (spaceId) => {
+    const key = spaceId ?? ''
+    const running = teamListRequests.get(key)
+    if (running) return running
+    const request = get().fetchTeams(spaceId).finally(() => teamListRequests.delete(key))
+    teamListRequests.set(key, request)
+    return request
+  },
+
+  fetchTeams: async (spaceId) => {
     set({ isLoadingList: true, error: null })
     try {
       const res = await api.teamList(spaceId)

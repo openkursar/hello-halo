@@ -9,6 +9,7 @@ import {
 import type {
   ApiResponse,
 } from './_shared'
+import type { AIBrowserActiveView, AIBrowserConversationReleased, AIBrowserLivePage, AIBrowserStopResult, AIBrowserViewGone } from '../../shared/types/ai-browser'
 
 export const browserApi = {
   // ===== Browser (Embedded Browser for Content Canvas) =====
@@ -177,14 +178,34 @@ export const browserApi = {
     onEvent('canvas:tab-action', callback as (data: unknown) => void),
 
   // AI Browser active view change notification
-  // Sent when AI Browser tools create or select a view
-  onAIBrowserActiveViewChanged: (callback: (data: { viewId: string; url: string | null; title: string | null }) => void) =>
+  // Sent when a conversation's AI browser tools create or select a view
+  onAIBrowserActiveViewChanged: (callback: (data: AIBrowserActiveView) => void) =>
     onEvent('ai-browser:active-view-changed', callback as (data: unknown) => void),
 
   // AI Browser view-gone notification
-  // Sent when the AI's active view is destroyed (canvas tab close, tray stop)
-  onAIBrowserViewGone: (callback: (data: { viewId: string }) => void) =>
+  // Sent when an AI-driven view is destroyed (canvas tab close, tray stop, session end)
+  onAIBrowserViewGone: (callback: (data: AIBrowserViewGone) => void) =>
     onEvent('ai-browser:view-gone', callback as (data: unknown) => void),
+
+  // A conversation's browser context ended; it no longer holds any page
+  onAIBrowserConversationReleased: (callback: (data: AIBrowserConversationReleased) => void) =>
+    onEvent('ai-browser:conversation-released', callback as (data: unknown) => void),
+
+  // Tray stop: main refuses unless the page is still this conversation's alone.
+  // Desktop only: remote clients have no BrowserViews to close.
+  stopAIBrowserPage: async (viewId: string, conversationId: string): Promise<AIBrowserStopResult> => {
+    if (!isElectron()) return { stopped: false }
+    const result = await window.halo.stopAIBrowserPage(viewId, conversationId)
+    return result.success && result.data ? result.data : { stopped: false }
+  },
+
+  // Every page AI conversations hold, for a renderer that missed the live
+  // events (reload). Desktop only: remote clients cannot show BrowserViews.
+  listAIBrowserLivePages: async (): Promise<AIBrowserLivePage[]> => {
+    if (!isElectron()) return []
+    const result = await window.halo.listAIBrowserLivePages()
+    return result.success && result.data ? result.data : []
+  },
 
   // ===== Browser Policy (user-extensible allowlist — desktop only) =====
   getBrowserPolicy: async (): Promise<ApiResponse> => {

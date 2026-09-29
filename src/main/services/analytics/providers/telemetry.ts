@@ -169,7 +169,7 @@ const EVENT_WHITELIST: Record<string, readonly string[]> = {
 
   // Digital human lifecycle
   'app.installed':      ['appId', 'specId', 'version', 'type', 'installSource', 'durationMs'],
-  'app.uninstalled':    ['appId', 'specId', 'type'],
+  'app.uninstalled':    ['appId', 'specId', 'type', 'reason'],
   'app.run.started':    ['appId', 'specId', 'runId', 'trigger'],
   'app.run.completed':  ['appId', 'specId', 'runId', 'trigger', 'status', 'durationMs', 'tokensUsed'],
   'app.run.failed':     ['appId', 'specId', 'runId', 'trigger', 'status', 'durationMs', 'tokensUsed', 'errorCode'],

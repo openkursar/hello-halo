@@ -55,7 +55,7 @@ vi.mock('../../../../src/main/services/agent/sdk-config', () => ({
     sdkModel: 'test-model',
     displayModel: 'Test Model',
   }),
-  buildBaseSdkOptions: vi.fn().mockReturnValue({
+  buildUserSessionSdkOptions: vi.fn().mockReturnValue({
     model: 'test-model',
     cwd: '/tmp/test',
     maxTurns: 999,
@@ -2742,6 +2742,32 @@ describe('AppRuntimeService', () => {
       onUninstalled({ id: 'app-gone' })
       expect(sendToRenderer).toHaveBeenCalledWith('app:list_changed', { appId: 'app-gone', change: 'uninstalled' })
       expect(broadcastToAll).toHaveBeenCalledWith('app:list_changed', { appId: 'app-gone', change: 'uninstalled' })
+    })
+  })
+
+  describe('uninstall cleanup', () => {
+    it('deactivates the app when an uninstall reaches it without a prior deactivate', async () => {
+      const appId = randomUUID()
+      const app = {
+        id: appId,
+        specId: 'test-app',
+        spaceId: 'space-001',
+        spec: createTestSpec(),
+        status: 'active' as const,
+        userConfig: {},
+        userOverrides: {},
+        permissions: { granted: [], denied: [] },
+        installedAt: Date.now(),
+      }
+      mockAppManager.getApp.mockReturnValue(app)
+      const service = createService()
+      await service.activate(appId)
+      mockScheduler.removeJob.mockClear()
+
+      mockAppManager.onAppUninstalled.mock.calls[0][0](app, 'space-deleted')
+      await new Promise(resolve => setImmediate(resolve))
+
+      expect(mockScheduler.removeJob).toHaveBeenCalled()
     })
   })
 

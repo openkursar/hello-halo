@@ -1,10 +1,16 @@
 # Cross-Conversation Interop — Backend Core
 
 > Module: `src/main/services/conversation-interop/`
-> Scope: list/read, delivery, `waitForReply`, circuit breaker. Native
-> conversations only (D10) — no digital-human app-chat, no team epoch.
-> The MCP tool layer (`conversation_read` / `conversation_send`) and the
-> renderer consume this module but are separate, later work.
+> Scope: list/read, delivery, `waitForReply`, circuit breaker — over the
+> conversations of every registered `ConversationSource` (§9): the space's own
+> conversations are built in, a digital human's chats are registered by
+> `apps/runtime`. No team epoch. The MCP tool layer (`conversation_read` /
+> `conversation_send`) and the renderer consume this module.
+>
+> Sections 1–8 were written when the module knew only space conversations and
+> describe the rules; where they name `sendMessage`, `getConversation`,
+> `updateMessageById` or `onAgentEvent`, that is the built-in chat source
+> (`chat-source.ts`) doing it on the module's behalf (§9).
 
 ## 1. Why this needed zero changes to `services/agent`
 
@@ -17,8 +23,9 @@ reachable from outside it:
   (the Map itself), `getConsumerHandle(id)` (whose `ConsumerHandle` already
   exposes `isRunning` / `getActiveSessionState()` / `getTeamLifecycleThoughts()`
   publicly), and `hasActiveTeamTasks` (exported from `subagent-handler.ts`).
-- **Turn-end signal for `no_reply`** (`turn-end-watch.ts`) — rather than add a
-  new `TurnSink` hook, this subscribes to the already-public `onAgentEvent`
+- **Turn-end signal for `no_reply`** (`lifecycle.ts`, fed by each source's
+  `onTurnEnd`) — rather than add a new `TurnSink` hook, the chat source
+  subscribes to the already-public `onAgentEvent`
   (`services/agent/events.ts`) for `'agent:complete'` / `'agent:error'`,
   exactly the way `ipc/agent.ts` already does for IPC/WebSocket forwarding.
   The event carries no message content, so it can only ever produce
@@ -172,7 +179,12 @@ written into the persisted message's `metadata.forwardDepth` (and
 `metadata.correlationId` when the delivery was a `waitForReply` call) for
 audit/UI — but runtime depth decisions read ONLY the in-memory map, never the
 metadata, per D18's explicit warning against "translating history": a stale
-delivery from hours ago must not inflate a fresh chain's depth.
+delivery from hours ago must not inflate a fresh chain's depth. For the same reason the
+recorded inbound depth is dropped when the turn it was recorded for ends
+(`lifecycle.ts`): depth travels with the messages of a chain, so a later turn the
+user starts in that conversation begins a chain of its own instead of inheriting a
+limit-sized count. Exceeding the limit is its own failure (`chain_too_deep`), not
+the rate-limit pause.
 
 **D19 — a breach is a HARD STOP, resolved after product input (not this
 module's own default).** The first cut left this as a soft failure (an
@@ -299,13 +311,161 @@ imports; the seam is the only thing standing between broker.ts and the cycle.
 
 ## 8. What is NOT here yet
 
-- `initConversationInterop()` (turn-end-watch.ts) and
-  `setConversationInteropFactory(...)` (broker.ts) are both wired from
-  bootstrap now — the feature is live once the two config keys default on.
 - The renderer (D15/D16 rendering — the "From @X" line, `role:'system'`
-  branch in `MessageRow`/`MessageItem`) — built in parallel,
-  not part of this backend work.
+  branch in `MessageRow`/`MessageItem`) lives in
+  `renderer/components/chat/cross-conversation/`, not here.
 - Slash-command inertness (D8) required no code change: slash parsing lives
   entirely in `InputArea.tsx` (renderer autocomplete only); the send path
   (`sendMessage`/`v2Session.send`) never inspects a leading `/`. Confirmed by
   reading the code, not assumed.
+
+## 9. Conversation sources
+
+Every operation on a conversation goes through a `ConversationSource`
+(`source.ts`): `owns` (syntactic id ownership), `list`, `getMeta`, `shortRef`,
+`readTranscript`, `isBusy`, `hasLiveSession`, `dispatch`, `onTurnEnd`,
+`writeNotice`, plus `capabilities {readable, writable}` and an optional `label`
+that a list line carries. The rules of §2–§7 (reply matching, the breaker, the
+mailbox cap, cycle guard, leak reclamation, paging, resolution) are written once
+against this interface; a source only says where its conversations live and how
+its turns run. `delivery-lifecycle.test.ts` and `multi-source.test.ts` pin the
+behavior with the real module over faked sources.
+
+**Contract points that are easy to get wrong**
+
+- Ids are unique across sources (uuid vs `app-chat:` key); the registry routes
+  every id-only question (`isBusy`, turn end, routing) by `owns`, first
+  registered owner wins.
+- `dispatch(spaceId, id, {turnInput, record})` resolves when the engine has been
+  handed the message — not when the turn ends — and rejects when the turn could
+  not start (the sender sees `unreachable`). `turnInput` is what the model reads
+  (framed); `record` is what the transcript keeps (the sender's raw words plus
+  provenance). The pending-wait arm/clear and forward-depth bookkeeping stay in
+  `delivery.ts`.
+- `onTurnEnd` must fire after `isBusy` can already read false; the module
+  releases the gate slot, settles `no_reply`, then drains the mailbox.
+- `hasLiveSession` is the "definitely not a phantom" probe for reservation
+  reclamation (§ leak reclamation in `delivery.ts`): true while ANY session
+  exists, busy or idle.
+- `readable: false` hides a source from listing, reading and reference
+  resolution; `writable: false` makes deliveries fail as `read_only` before
+  anything is charged or queued. Both shipped sources are read/write.
+- `shortRef` is the handle in `[#Title](conv:<ref>)`. A space conversation keeps
+  its uuid prefix; a digital-human chat's is the first 8 hex of the SHA-1 of its
+  key (`shared/conversation-reference.ts`). Resolution compares handles across
+  every source, so a collision — or a title two sources share — is the existing
+  ambiguity answer with the full ids.
+
+**Registration seam (a lower tier declaring a slot, the upper tier filling it).**
+`registerConversationSource()` is the slot; `apps/runtime` registers the
+digital-human source from `bootstrap/extended.ts` after `initAppRuntime`.
+Ordering: none is required. `initConversationInterop()` registers the built-in
+source and wires turn-end handling to every source registered so far and, through
+`onDidChangeConversationSources`, to every one registered later; registering a
+kind again replaces the previous source (its turn-end subscription is dropped),
+and a stale registration cannot remove its replacement. Sources must therefore
+resolve their own dependencies lazily. `disposeConversationInterop()` unregisters
+only what it registered.
+
+**Built-in chat source** (`chat-source.ts`). Moved over unchanged from the
+earlier code: `sendMessage` then an id-keyed rewrite of the persisted message
+(§2). One tightening: the rewritten message is located by index-then-content
+(`role:'user'` with exactly the turn input), where the cross-conversation path
+used to trust the captured index alone; a delivery it cannot locate is logged and
+left as a plain user message rather than patching whatever sits at that index.
+`writeNotice` is `addMessage` with `source:'cross-conversation-notice'`; a notice
+that cannot be written is logged and never turns the send's answer into an error.
+
+**Digital-human source.** Implemented and documented in `apps/runtime`
+(`conversation-source.ts`, DESIGN §2.20). It exposes only a digital human's
+default and local sessions and delivers through `sendAppChatMessage`. While the
+owner has conversation collaboration switched OFF (read from the app's
+permissions on every call, never cached) its chats are still listed and readable
+by the source, marked `unavailable`; what other conversations' AI may do with
+them is decided in `admission.ts` (§10). The tools are mounted only in the
+digital human's default and local sessions and its scheduled runs
+(`apps/runtime/conversation-collab.ts`): an IM or HTTP session of the owner is not
+listed by this source, so replies to its key could not route back.
+
+**Which keys are a digital human's chat sessions** is `parseNativeChatKey`
+(`shared/apps/im-keys.ts`), used by the source, the tool-mount gate, the browser
+context lifetime and the renderer. Two runtime spots in
+`app-chat.ts`/`app-chat-sink.ts` parse keys themselves on purpose: one maps ANY
+session kind to its registry coordinates, the other only needs the local fork
+marker — neither asks "is this a chat-board session".
+
+**Withheld conversations answer with a reason.** A source marks a conversation
+it owns `unavailable: <model-facing reason>` and still returns it from `list` and
+`getMeta`. Resolution matches reachable conversations first — by exact id, then
+short handle, then title — so a reachable conversation always wins a shared
+handle; only when nothing reachable matched does a caller naming a withheld one
+get `unavailable` + the reason (e.g. "this digital human has conversation
+collaboration turned off") instead of "not found". Reads and sends refuse with
+the same reason.
+
+**Scheduled runs send one-way notices.** A run never acts as its digital human's
+default chat. It gets its own sender key, `app-run:{appId}:{runId}`, owned by the
+run source (`apps/runtime/run-conversation-source.ts`, registered at bootstrap
+next to the digital-human source): not readable, not writable, alive only while
+the run is (`openRunSender` / `closeRunSender` in `execute.ts`). Recipients see it
+as `<name> · scheduled run (<local date time> run)`. Because its source takes no
+messages, a message it sends without `waitForReply` is framed for the recipient as
+a one-way notice whose sender takes no replies; a later send to the run — before
+or after it finished — is refused with that reason and never reaches the digital
+human's chats. The one way back is a `waitForReply` the run is blocked in:
+`admission.ts` exempts a send that answers a wait from the source's `writable`
+flag (never from `unavailable`), so the answer reaches the waiting run while any
+other message to it is refused with the source's `whyNotWritable`. A finished
+run's key still parses and answers `unavailable`, so a late reply is refused with
+a reason instead of "not found". The frame of a
+waiting send names the sender's exact id as the reply target — the only handle
+that resolves to a run, which is never listed or matched by title. If a queued
+waiting send is refused when its turn comes up (e.g. the target's collaboration
+was switched off meanwhile), the sender's wait settles at once as `undelivered`
+with the refusal's reason; a queued message keeps the sender's title captured at
+send time, so a run that finished meanwhile is still named. This is generic:
+any source with `writable: false` gets the same one-way framing and reply rule.
+
+**A target acts with its own authority.** A digital human with collaboration on
+can start a turn in another digital human's default or local session, and that
+turn runs with everything the target is granted. That is the feature, and also a
+prompt-injection amplification path the owner opts into per digital human.
+
+## 10. Directory scope and admission
+
+**The directory is shared.** Global search reads digital-human sessions through
+`getReadableSources()`. It deliberately skips the space-conversation source and
+scans the conversation files itself: going through the source would load each
+conversation through `conversation.service` and evict the conversations the user
+has open from its cache. A third consumer that needs the directory (not just this
+module's delivery) is the trigger to lift it out of `services/conversation-interop`
+into its own module.
+
+**Search borrows the readable flag.** Global search picks its sources with
+`getReadableSources()` (`capabilities.readable`), a flag meant for AI access. Today
+that selects exactly what a user should be able to search — everything but the
+scheduled-run source, which has no conversations to find — so it borrows the flag
+rather than adding its own. A source that is unreadable to AI yet searchable by
+the user would need its own capability.
+
+**Sources report, admission decides.** A source only says what it owns, what kind
+of conversations they are (`capabilities`, `whyNotWritable`) and, per
+conversation, why AI access to it is off right now (`unavailable`). `admission.ts`
+is the one place that turns those facts into "may this be read / messaged", and it
+is asked only for AI-driven access: listing, resolving a target, reading, and
+delivering — on arrival, and again when a queued message is handed over, because
+the target can be switched off or deleted while the message waits (a waiting
+sender is then told `undelivered` with the reason at once). A user's own features
+(global search, opening a chat) read the source directly and are not held back:
+the collaboration switch governs what another conversation's AI may do, not what
+the user can find.
+
+**One switch rule.** Whether a digital human takes part in conversation
+collaboration is `isConversationCollabEnabled` (`shared/apps/app-types`), read
+from the app's permissions on every call. The DH source turns it into
+`unavailable` in one place (`toConversation`); the caller side (mounting the
+tools), the renderer's mention candidates and the settings switch call the same
+function. A new check point calls it; it never re-derives the answer. The mention
+candidates compute it from the renderer's own app list rather than from the
+directory, because the directory is main-process only and reaching it would need a
+new IPC surface for a result the renderer can already compute from the same rule.

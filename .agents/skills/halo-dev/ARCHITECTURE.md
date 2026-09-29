@@ -79,6 +79,11 @@ Foundation Layer (src/main/foundation)  ← bedrock, zero upward deps
   - `platform/memory/sdk.ts` — the agent-SDK `tool()`/`createSdkMcpServer()`
     primitives are injected by bootstrap (`setMemorySdk`) so memory never imports
     `services/agent`.
+  - `services/conversation-interop/source.ts` — the conversation directory behind
+    `conversation_read`/`conversation_send` is a set of registered
+    `ConversationSource`s; the space's own conversations are built in and
+    `apps/runtime` registers the digital-human source from `bootstrap/extended.ts`
+    (`registerConversationSource`). No ordering constraint; see the module DESIGN §9.
   - Pattern mirrors `apps/runtime/im-channels`'s `setActiveImChannelManager`.
   - Type-only imports across a boundary are erased at runtime and are allowed.
 - Shared renderer-safe types belong in `src/shared/*`.
@@ -227,7 +232,10 @@ src/
     │   └── ErrorBoundary.tsx
     ├── stores/                        # Zustand stores (one per domain: app, chat, space, canvas,
     │   │                              # search, apps, apps-page, ai-browser, notification,
-    │   │                              # onboarding, perf, server, team)
+    │   │                              # onboarding, perf, server, team). The chat store serves
+    │   │                              # space AND digital-human conversations through one page
+    │   │                              # (ChatView) — `chat/backend/` dispatches by conversation id;
+    │   │                              # see stores/chat/DESIGN.md before touching either
     │   └── server.store.ts            # Multi-server list for Capacitor (ServerEntry[])
     ├── hooks/                         # useIsMobile, useCanvasLifecycle, useLayoutPreferences,
     │                                  # useConfirmDialog, useFileOperations, useRemoteSubscription,
@@ -830,6 +838,7 @@ When touching a module, read its design doc first:
 - `src/main/services/updater/DESIGN.md` — Auto-update: the two apply paths, why staged update descriptions are signed at build time, and the reversal contract with the native helper
 - `src/main/services/agent/toolsets/DESIGN.md` — Toolset Broker (on-demand in-process MCP loading; how tool capabilities enter a session, including the self-API switch — see §17.1)
 - `src/main/services/ai-terminal/DESIGN.md` — AI Terminal (pty + xterm headless, MCP tools, xterm.js viewer)
+- `src/main/services/conversation-interop/DESIGN.md` — Cross-conversation read/send/wait: delivery rules, circuit breaker, and the `ConversationSource` contract (space conversations built in, digital-human chats registered by `apps/runtime`)
 - `src/main/apps/spec/DESIGN.md`
 - `src/main/apps/manager/DESIGN.md`
 - `src/main/apps/runtime/DESIGN.md`
@@ -841,6 +850,8 @@ When touching a module, read its design doc first:
 - `src/main/platform/background/DESIGN.md`
 - `src/main/apps/runtime/federation/DESIGN.md` — cross-node office federation (read before any team/federation change)
 - `src/main/apps/runtime/federation/log/DESIGN.md` — unified feed substrate (durable outbox / replication)
+- `src/renderer/stores/chat/DESIGN.md` — chat store: one page over space and digital-human conversations (conversation sources, active conversation, turn settle, cache)
+- `src/renderer/components/chat/transcript/DESIGN.md` — transcript scrolling primitives (no virtualization)
 
 ## 22) IM Integration (Plugin Architecture)
 

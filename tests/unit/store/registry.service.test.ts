@@ -89,7 +89,7 @@ function trackSyncSettled(): string[] {
 }
 
 describe("registry.service", () => {
-  const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>()
+  const fetchMock = vi.fn<[RequestInfo | URL], Promise<Response>>()
   let db: DatabaseManager
 
   beforeEach(() => {
@@ -435,7 +435,7 @@ store:
 
     // Rollback must observe deleteApp's precondition (status === 'uninstalled')
     expect(deactivateSpy).toHaveBeenCalledWith("app-rollback-1")
-    expect(uninstallSpy).toHaveBeenCalledWith("app-rollback-1")
+    expect(uninstallSpy).toHaveBeenCalledWith("app-rollback-1", { reason: "system" })
     expect(deleteAppSpy).toHaveBeenCalledWith("app-rollback-1")
     expect(Math.min(...uninstallSpy.mock.invocationCallOrder))
       .toBeLessThan(Math.min(...deleteAppSpy.mock.invocationCallOrder))

@@ -97,6 +97,8 @@ interface AppsState {
 
   // ── App List Management ───────────────────
   loadApps: (spaceId?: string) => Promise<void>
+  /** The uncoalesced request behind `loadApps`. */
+  fetchApps: (spaceId?: string) => Promise<void>
   refreshApp: (appId: string) => Promise<void>
 
   /**
@@ -201,6 +203,9 @@ function eventsAfter(appId: string, revision: number): ActivityEntry[] {
 const LIST_RELOAD_DELAY_MS = 200
 let listReloadTimer: ReturnType<typeof setTimeout> | null = null
 
+/** In-flight list requests, by space ('' = every space). */
+const appListRequests = new Map<string, Promise<void>>()
+
 export const useAppsStore = create<AppsState>((set, get) => ({
   apps: [],
   appStates: {},
@@ -220,7 +225,18 @@ export const useAppsStore = create<AppsState>((set, get) => ({
 
   // ── App List Management ───────────────────
 
-  loadApps: async (spaceId) => {
+  loadApps: (spaceId) => {
+    // Every surface that lists digital humans asks on mount; concurrent asks for
+    // the same list share one request instead of each replacing `apps` again.
+    const key = spaceId ?? ''
+    const running = appListRequests.get(key)
+    if (running) return running
+    const request = get().fetchApps(spaceId).finally(() => appListRequests.delete(key))
+    appListRequests.set(key, request)
+    return request
+  },
+
+  fetchApps: async (spaceId) => {
     set({ isLoading: true, error: null })
     try {
       const res = await api.appList(spaceId ? { spaceId } : undefined)

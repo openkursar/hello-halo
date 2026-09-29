@@ -3,8 +3,9 @@
  */
 import type { ChatSlice } from './internal'
 import { EMPTY_SESSION, EMPTY_SPACE_STATE } from './internal'
+import { selectActiveConversation, selectActiveConversationId } from './active'
 
-export const createGettersSlice: ChatSlice<'getCurrentSpaceState' | 'getSpaceState' | 'getCurrentConversation' | 'getCurrentConversationMeta' | 'getConversations' | 'getCurrentConversationId' | 'getCachedConversation' | 'getCurrentSession' | 'getSession'> = (set, get) => ({
+export const createGettersSlice: ChatSlice<'getCurrentSpaceState' | 'getSpaceState' | 'getCurrentConversation' | 'getCurrentConversationMeta' | 'getConversations' | 'getCurrentConversationId' | 'getCachedConversation' | 'getActiveConversationId' | 'getActiveConversation' | 'getSession'> = (set, get) => ({
   getCurrentSpaceState: () => {
     const { spaceStates, currentSpaceId } = get()
     if (!currentSpaceId) return EMPTY_SPACE_STATE
@@ -46,12 +47,9 @@ export const createGettersSlice: ChatSlice<'getCurrentSpaceState' | 'getSpaceSta
     return get().conversationCache.get(conversationId) || null
   },
 
-  // Get current session state (for the currently viewed conversation)
-  getCurrentSession: () => {
-    const spaceState = get().getCurrentSpaceState()
-    if (!spaceState.currentConversationId) return EMPTY_SESSION
-    return get().sessions.get(spaceState.currentConversationId) || EMPTY_SESSION
-  },
+  getActiveConversationId: () => selectActiveConversationId(get()),
+
+  getActiveConversation: () => selectActiveConversation(get()),
 
   // Get session state for any conversation
   getSession: (conversationId: string) => {

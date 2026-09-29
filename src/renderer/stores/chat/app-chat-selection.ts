@@ -3,12 +3,14 @@
  * the main conversation board's input.
  *
  * Deliberately separate from conversations.ts: this slice never touches the
- * space conversation index or app-chat's own JSONL/registry storage — it only
+ * space conversation index or app-chat's own JSONL/registry storage — it
  * tracks which link (Halo vs a digital human) the input is currently pointed
- * at, plus per-conversation unsent-text drafts. Both are pure UI state.
+ * at, hands a newly selected digital-human conversation to its backend to open,
+ * and keeps per-conversation unsent-text drafts (pure UI state).
  */
 import type { ChatSlice, ChatState } from './internal'
 import { createEmptySpaceState } from './internal'
+import { backendFor } from './backend'
 
 export const createAppChatSelectionSlice: ChatSlice<
   'getComposerDraft' | 'setComposerDraft' | 'clearComposerDraft' | 'selectAppChatConversation' | 'clearAppChatSelection'
@@ -40,6 +42,10 @@ export const createAppChatSelectionSlice: ChatSlice<
       newSpaceStates.set(spaceId, { ...existing, selectedAppChat: { appId, conversationId } })
       return { spaceStates: newSpaceStates }
     })
+    // Show what is cached now; the read (and a running turn) follow.
+    void backendFor(conversationId)
+      .open({ set, get }, { spaceId, conversationId })
+      .catch((error) => console.error('[ChatStore] Failed to open digital-human conversation:', error))
   },
 
   clearAppChatSelection: async (spaceId) => {

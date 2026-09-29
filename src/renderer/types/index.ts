@@ -17,6 +17,15 @@ import type { MemorySettings } from '../../shared/types/memory';
 import type { ApiProvider } from '../../shared/types/ai-sources';
 import type { FileChangesSummary } from '../../shared/file-changes';
 import type { GoalInput } from '../../shared/types/goal';
+import type {
+  TranscriptMessage,
+  ToolCall,
+  ThoughtType,
+  Thought,
+  TaskProgress,
+  ThoughtsSummary,
+  TokenUsage,
+} from '../../shared/types/transcript';
 import type { ApiRetryState } from '../../shared/types/api-retry';
 import { DEFAULT_MAX_TURNS } from '../../shared/constants/agent-limits';
 // Re-export them
@@ -138,7 +147,6 @@ export interface AgentConfig {
   sdkEngine?: 'anthropic' | 'halo' | 'codex';  // Agent SDK engine (requires restart)
   configDirMode?: 'halo' | 'cc' | 'custom';  // Claude CLI config directory mode
   customConfigDir?: string;  // Custom config dir path (when configDirMode === 'custom')
-  enableTeams?: boolean;    // Legacy setting; native CC Teams are disabled
   enableDigitalHumans?: boolean; // Enable Digital Humans MCP tools (automation app management)
   enableConversationInterop?: boolean; // Master switch for Cross-Conversation Interop (conversation_read/conversation_send). Undefined/true = on.
   enableConversationSend?: boolean; // Sub-switch, only meaningful when enableConversationInterop is on: false = read-only (no conversation_send)
@@ -502,6 +510,16 @@ export interface Conversation extends ConversationMeta {
   sessionId?: string;
   version?: number;  // Format version: 2 = thoughts separated into .thoughts.json
   /**
+   * Set for a digital-human conversation (its transcript is read through the
+   * digital-human reader, not the space conversation store).
+   */
+  appId?: string;
+  /**
+   * Older history not loaded yet: `before` is the id of the oldest loaded
+   * message. Only digital-human conversations are paged.
+   */
+  earlier?: { hasMore: boolean; before: string | null };
+  /**
    * Per-conversation model pin (Cursor-style): the AI source + model this
    * conversation uses, independent of the global selection. Stamped at creation
    * from the active selection; read with a fallback to the global selection.
@@ -570,17 +588,7 @@ export interface EngineAvailabilityReport {
 // Message Types
 // ============================================
 
-export interface ToolCall {
-  id: string;
-  name: string;
-  status: ToolStatus;
-  input: Record<string, unknown>;
-  output?: string;
-  error?: string;
-  progress?: number;
-  requiresApproval?: boolean;
-  description?: string;
-}
+export type { ToolCall };
 
 // ============================================
 // Image Attachment Types (for multi-modal messages)
@@ -606,64 +614,20 @@ export interface ImageContentBlock {
 
 export type MessageContentBlock = TextContentBlock | ImageContentBlock;
 
-// Summary of thoughts for a message (used when thoughts are stored separately)
-export interface ThoughtsSummary {
-  count: number;
-  types: Partial<Record<ThoughtType, number>>;
-  duration?: number;  // seconds, from first to last thought timestamp
-}
-
 /**
  * Lightweight file changes summary stored in message metadata.
  * Allows immediate display of file change stats without loading full thoughts.
  */
 export type { FileChangesSummary } from '../../shared/file-changes';
 
-export interface Message {
-  id: string;
-  role: MessageRole;
-  content: string;  // Text content (for backward compatibility)
-  timestamp: string;
-  toolCalls?: ToolCall[];
-  thoughts?: Thought[] | null;  // null = stored separately (not loaded), undefined = none, Array = loaded
-  thoughtsSummary?: ThoughtsSummary;  // Present when thoughts are stored separately
+/** The shared transcript message plus renderer-only streaming state. */
+export interface Message extends TranscriptMessage {
   isStreaming?: boolean;
-  images?: ImageAttachment[];  // Attached images
-  tokenUsage?: TokenUsage;  // Token usage for this assistant message
-  metadata?: {
-    teamTriggerKind?: string;
-    fileChanges?: FileChangesSummary;  // Lightweight file changes for immediate display
-    // Provenance of a `source: 'cross-conversation'` message. Mirrors the flat
-    // shape the delivery path persists — the title is a snapshot taken at
-    // delivery time, so it survives the source being renamed or deleted.
-    fromConversationId?: string;
-    fromConversationTitle?: string;
-    summary?: string;
-    forwardDepth?: number;
-    correlationId?: string;
-    // Provenance of a `source: 'team-message'` message: a team member (or a
-    // system notice) delivered to the space conversation coordinating its
-    // collaboration. fromMemberName is null for system-authored notices.
-    teamId?: string;
-    epochId?: string;
-    teamName?: string;
-    fromMemberName?: string | null;
-    /** The goal the user set with this message (user messages only). */
-    goal?: GoalInput;
-  };
-  error?: string;  // Error message when assistant response failed (e.g., 429 rate limit)
   /**
-   * How the message entered the conversation (SDK-agnostic).
-   * - `injection`: user text folded into an in-flight turn
-   * - `cross-conversation`: delivered by another conversation in the same space;
-   *   persisted as `role: 'system'` so it can never read as the owner speaking
-   * - `cross-conversation-notice`: system notice written into the sending
-   *   conversation (e.g. delivery cooldown)
-   * - `team-message`: a team member's message or a collaboration status notice
-   *   delivered to the coordinating space conversation
+   * Row identity the view keeps when an optimistic message is replaced by its
+   * persisted twin, so the bubble is not rebuilt when the id changes.
    */
-  source?: 'injection' | 'cross-conversation' | 'cross-conversation-notice' | 'team-message';
-  sources?: KBSource[];  // Knowledge-base documents the agent Read this turn (clickable citations)
+  clientKey?: string;
 }
 
 // ============================================
@@ -726,45 +690,7 @@ export type ArtifactViewMode = 'card' | 'tree';
 // Thought Process Types (Agent's real-time reasoning)
 // ============================================
 
-export type ThoughtType = 'thinking' | 'text' | 'tool_use' | 'tool_result' | 'system' | 'result' | 'error';
-
-export interface Thought {
-  id: string;
-  type: ThoughtType;
-  content: string;
-  timestamp: string;
-  // For tool-related thoughts
-  toolName?: string;
-  toolInput?: Record<string, unknown>;
-  toolOutput?: string;
-  isError?: boolean;
-  // For result thoughts
-  duration?: number;
-  // For streaming state (real-time updates)
-  isStreaming?: boolean;  // True while content is being streamed
-  isReady?: boolean;      // True when tool params are complete (for tool_use)
-  // For merged tool result display (tool_use contains its result)
-  toolResult?: {
-    output: string;
-    isError: boolean;
-    timestamp: string;
-  };
-  // Sub-agent support: links this thought to a parent Task tool_use
-  parentToolUseId?: string;
-  // Task/Agent tool progress (updated via task lifecycle events)
-  taskProgress?: TaskProgress;
-}
-
-/** Progress tracking for a Task/Agent tool_use thought */
-export interface TaskProgress {
-  taskId: string;
-  status: 'running' | 'completed' | 'failed' | 'stopped';
-  lastToolName?: string;
-  toolCount: number;
-  durationMs: number;
-  summary?: string;
-  totalTokens?: number;
-}
+export type { ThoughtType, Thought, TaskProgress, ThoughtsSummary };
 
 // Legacy alias for backwards compatibility
 export interface ThinkingBlock {
@@ -778,29 +704,7 @@ export interface ThinkingBlock {
 // Canvas Context Types (AI awareness of user's open tabs)
 // ============================================
 
-/**
- * Canvas Context - Provides AI with awareness of user's currently open tabs
- * Injected into messages to enable natural language understanding of user context
- */
-export interface CanvasContext {
-  isOpen: boolean;
-  tabCount: number;
-  activeTab: {
-    type: string;  // 'browser' | 'code' | 'markdown' | 'image' | 'pdf' | 'text' | 'json' | 'csv' | 'terminal'
-    title: string;
-    url?: string;   // For browser/pdf tabs
-    path?: string;  // For file tabs
-    terminalSessionId?: string;  // For terminal tabs - the pty session id the AI drives via terminal_* tools
-  } | null;
-  tabs: Array<{
-    type: string;
-    title: string;
-    url?: string;
-    path?: string;
-    terminalSessionId?: string;  // For terminal tabs - the pty session id the AI drives via terminal_* tools
-    isActive: boolean;
-  }>;
-}
+export type { CanvasContext } from '../../shared/types/canvas-context';
 
 // ============================================
 // Agent Event Types
@@ -847,14 +751,7 @@ export interface AgentErrorEvent extends AgentEventBase {
 }
 
 // Token usage statistics from SDK result message
-export interface TokenUsage {
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheCreationTokens: number;
-  totalCostUsd: number;
-  contextWindow: number;
-}
+export type { TokenUsage };
 
 export interface AgentCompleteEvent extends AgentEventBase {
   type: 'complete';

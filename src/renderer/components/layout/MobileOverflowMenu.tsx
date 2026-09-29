@@ -10,7 +10,8 @@
 import { useState } from 'react'
 import { MoreHorizontal, Sparkles, Search, Settings, ChevronRight, X, Globe, TerminalSquare, Loader2 } from 'lucide-react'
 import { useAppStore } from '../../stores/app.store'
-import { useChatStore } from '../../stores/chat.store'
+import { useActiveModelTarget } from '../../hooks/useActiveModelTarget'
+import { openPersonModelSettings } from '../../utils/people-navigation'
 import { getModelDisplayName, type AISourcesConfig } from '../../types'
 import { useTranslation } from '../../i18n'
 import { ModelSelectSheet } from './ModelSelector'
@@ -30,14 +31,12 @@ export function MobileOverflowMenu({ onSearch }: MobileOverflowMenuProps) {
   const aiSources: AISourcesConfig = config?.aiSources?.version === 2
     ? config.aiSources
     : { version: 2, currentId: null, sources: [] }
-  // Show the current conversation's pinned model (falls back to global selection).
-  const currentConversation = useChatStore(s => {
-    const conversationId = s.getCurrentSpaceState().currentConversationId
-    return conversationId ? s.conversationCache.get(conversationId) ?? null : null
-  })
-  const currentModelName = getModelDisplayName(
-    aiSources, currentConversation?.modelSourceId, currentConversation?.modelId
-  )
+  // The model the conversation on screen runs on: a regular conversation's own
+  // pin, or the settings of the digital human being talked to.
+  const modelTarget = useActiveModelTarget()
+  const currentModelName = modelTarget.kind === 'digital-human'
+    ? getModelDisplayName(aiSources, modelTarget.modelSourceId, modelTarget.modelId)
+    : getModelDisplayName(aiSources, modelTarget.conversation?.modelSourceId, modelTarget.conversation?.modelId)
 
   const { canOpenBrowser, openBrowser, terminalAvailable, terminalCreating, openTerminal } = useSpaceQuickActions()
 
@@ -98,7 +97,11 @@ export function MobileOverflowMenu({ onSearch }: MobileOverflowMenuProps) {
             <div className="py-1 pb-[env(safe-area-inset-bottom)]">
               {/* Model row: label + current value, chains into ModelSelectSheet */}
               <button
-                onClick={() => closeMenu(() => setIsModelSheetOpen(true))}
+                onClick={() => closeMenu(() => {
+                  // A digital human's model is chosen in its settings, not here.
+                  if (modelTarget.kind === 'digital-human') openPersonModelSettings(modelTarget.appId)
+                  else setIsModelSheetOpen(true)
+                })}
                 className="w-full px-4 py-3 flex items-center gap-3 hover:bg-secondary/80 transition-colors"
               >
                 <Sparkles className="w-4 h-4 text-muted-foreground flex-shrink-0" />

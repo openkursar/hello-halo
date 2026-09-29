@@ -238,7 +238,8 @@ export function SessionDetailView({ appId, runId }: SessionDetailViewProps) {
             messages={messages}
             streamingContent=""
             isGenerating={false}
-            hideBrowserViewButton
+            hideBrowserLiveView
+            hideTerminalOpen
             defaultThoughtsExpanded
             defaultThoughtsMaximized
             onAtBottomStateChange={handleAtBottomStateChange}

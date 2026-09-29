@@ -272,6 +272,8 @@ export function buildAppSystemPrompt(options: AppPromptOptions): string {
     workDir: options.workDir,
     modelInfo: options.modelInfo,
     knowledgeBases: getKBReferencesForApp(options.appId),
+    // A run mounts no digital-human management tools, so it must not be told it can.
+    digitalHumansEnabled: false,
   }
   let basePrompt = options.usesAIBrowser
     ? buildSystemPromptWithAIBrowser(promptCtx, AI_BROWSER_SYSTEM_PROMPT)

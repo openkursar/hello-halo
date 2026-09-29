@@ -3,20 +3,11 @@
  */
 import type { ChatSlice } from './internal'
 import { api, createEmptySessionState } from './internal'
-import type { AgentEventBase, Conversation, ConversationMeta, Thought, ToolCall } from './internal'
-import { isAppChatKey, parseTeamSessionKey } from '../../../shared/apps/im-keys'
-import { isRemoteMemberAppId } from '../team.store'
+import type { AgentEventBase, Thought, ToolCall } from './internal'
 import { nextTextBlockVersion } from './text-block-version'
-
-/**
- * Virtual conversation ids never represent a real user conversation and must
- * never appear in the sidebar or the Pulse panel: "app-chat:{appId}" and IM
- * session keys (digital-human + IM sessions). Real conversations are UUIDs that
- * match a ConversationMeta in spaceStates.
- */
-function isVirtualConversationId(conversationId: string): boolean {
-  return isAppChatKey(conversationId)
-}
+import { selectActiveConversationId } from './active'
+import { conversationKind, backendFor } from './backend'
+import { startedTurnState } from './backend/turn'
 
 export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAgentToolCall' | 'handleAgentToolResult' | 'handleAgentError' | 'handleAgentComplete' | 'handleAgentThought' | 'handleAgentThoughtDelta' | 'handleAgentCompact' | 'handleAgentApiRetry' | 'handleAgentSessionInfo' | 'handleAgentTurnStart' | 'handleAskQuestion'> = (set, get) => ({
   handleAgentMessage: (data) => {
@@ -59,7 +50,6 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
   // Handle tool call for a specific conversation
   handleAgentToolCall: (data) => {
     const { conversationId, ...toolCall } = data
-    console.log(`[ChatStore] handleAgentToolCall [${conversationId}]:`, toolCall.name)
 
     if (toolCall.requiresApproval) {
       set((state) => {
@@ -75,9 +65,7 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
   },
 
   // Handle tool result for a specific conversation
-  handleAgentToolResult: (data) => {
-    const { conversationId, toolId } = data
-    // console.log(`[ChatStore] handleAgentToolResult [${conversationId}]:`, toolId)
+  handleAgentToolResult: () => {
     // Tool results are tracked in thoughts, no additional state needed
   },
 
@@ -117,8 +105,9 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
     })
   },
 
-  // Handle complete - reload conversation from backend (Single Source of Truth)
-  // Key: Only set isGenerating=false AFTER backend data is loaded to prevent flash
+  // A turn ended. The conversation is re-read from its store (the single source
+  // of truth) and the streamed turn is replaced by it in one commit, so the
+  // reply never disappears and reappears. `isGenerating` stays up until then.
   handleAgentComplete: async (data) => {
     const { spaceId, conversationId } = data
     console.log(`[ChatStore] handleAgentComplete [${conversationId}]`)
@@ -129,16 +118,15 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
     // finishes while the user stepped away gets silently marked "seen" and
     // never shows up in the task panel.
     const state = get()
-    const currentSpaceState = state.currentSpaceId ? state.spaceStates.get(state.currentSpaceId) : null
     const isUserViewingThisConversation =
       state.currentSpaceId === spaceId &&
-      currentSpaceState?.currentConversationId === conversationId &&
+      selectActiveConversationId(state) === conversationId &&
       document.hasFocus()
 
-    // Track unseen completion if user is not viewing this conversation.
-    // Skip virtual sessions (digital-human chat, IM, automation runs): they are
-    // not real conversations and must never surface in Pulse or the sidebar.
-    if (!isUserViewingThisConversation && !isVirtualConversationId(conversationId)) {
+    // Track unseen completion if user is not viewing this conversation. Only
+    // space conversations appear in Pulse: digital-human chats, IM sessions and
+    // team members are not listed there.
+    if (!isUserViewingThisConversation && conversationKind(conversationId) === 'space') {
       // Find the conversation title from any space state
       let title = 'Conversation'
       let metaFound = false
@@ -167,13 +155,12 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
         console.error('[ChatStore] taskMarkUnseen error:', err))
     }
 
-    // Capture turnId BEFORE any async work. If a new turn starts (sendMessage or
-    // handleAgentTurnStart) while we're awaiting getConversation, turnId will have
-    // incremented. We use this to avoid overwriting the new turn's session state.
+    // Captured BEFORE any async work: if a new turn starts while the backend
+    // re-reads, turnId has moved on and its state must not be overwritten.
     const completeTurnId = get().sessions.get(conversationId)?.turnId ?? 0
 
-    // First, just stop streaming indicator but keep isGenerating=true
-    // This keeps the streaming bubble visible during backend load
+    // Stop the streaming indicators but keep the streaming bubble visible
+    // (isGenerating and streamingContent stay) until the persisted turn loads.
     set((state) => {
       const newSessions = new Map(state.sessions)
       const session = newSessions.get(conversationId)
@@ -183,146 +170,12 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
           isStreaming: false,
           isThinking: false,
           apiRetry: null
-          // Keep isGenerating=true and streamingContent until backend loads
         })
       }
       return { sessions: newSessions }
     })
 
-    // Reload conversation from backend (Single Source of Truth)
-    // Backend has already saved the complete message with thoughts
-    try {
-      const response = await api.getConversation(spaceId, conversationId)
-      if (response.success && response.data) {
-        const updatedConversation = response.data as Conversation
-
-        // Extract updated metadata
-        const updatedMeta: ConversationMeta = {
-          id: updatedConversation.id,
-          spaceId: updatedConversation.spaceId,
-          title: updatedConversation.title,
-          createdAt: updatedConversation.createdAt,
-          updatedAt: updatedConversation.updatedAt,
-          messageCount: updatedConversation.messages?.length || 0,
-          preview: updatedConversation.messages?.length
-            ? updatedConversation.messages[updatedConversation.messages.length - 1].content.slice(0, 50)
-            : undefined,
-          starred: updatedConversation.starred,
-          // Carry the engine stamp through reload so EngineBadge stays
-          // visible across send-message cycles (otherwise the badge would
-          // flicker off until the user navigates away and back).
-          engineId: updatedConversation.engineId,
-          titleCustomized: updatedConversation.titleCustomized
-        }
-
-        // Now atomically: update cache, metadata, AND clear session state
-        // This prevents flash by doing all in one render
-        set((state) => {
-          // Update cache with fresh data
-          const newCache = new Map(state.conversationCache)
-          newCache.set(conversationId, updatedConversation)
-
-          // Update metadata in space state
-          const newSpaceStates = new Map(state.spaceStates)
-          const currentSpaceState = newSpaceStates.get(spaceId)
-          if (currentSpaceState) {
-            newSpaceStates.set(spaceId, {
-              ...currentSpaceState,
-              conversations: currentSpaceState.conversations.map((c) =>
-                c.id === conversationId ? updatedMeta : c
-              )
-            })
-          }
-
-          // Check if a new turn has started while we were awaiting getConversation.
-          // If so, skip session state clearing to avoid overwriting the new turn's state
-          // (isGenerating, streamingContent, thoughts, etc.).
-          const newSessions = new Map(state.sessions)
-          const currentSession = newSessions.get(conversationId)
-          if (currentSession && currentSession.turnId === completeTurnId) {
-            // Same turn — safe to clear session state
-            // Error is now persisted in message.error, so clear session-level error.
-            // IMPORTANT: interrupted errors arrive AFTER agent:complete via a separate IPC event.
-            // Because this reload is async, handleAgentError may have already written the
-            // interrupted error into the session by the time we get here. We must NOT clear it.
-            newSessions.set(conversationId, {
-              ...currentSession,
-              isGenerating: false,
-              streamingContent: '',
-              compactInfo: null,  // Clear temporary compact notification
-              pendingQuestion: null,  // Clear pending question
-              queuedMessages: [],  // Clear mid-turn queued messages
-              // Preserve interrupted errors — they may have arrived during the async reload
-              error: currentSession.errorType === 'interrupted' ? currentSession.error : null,
-              errorType: currentSession.errorType === 'interrupted' ? currentSession.errorType : null
-            })
-          } else if (currentSession) {
-            console.log(`[ChatStore] Skipping session clear for [${conversationId}]: new turn started (completeTurnId=${completeTurnId}, currentTurnId=${currentSession.turnId})`)
-          }
-
-          return {
-            spaceStates: newSpaceStates,
-            sessions: newSessions,
-            conversationCache: newCache
-          }
-        })
-        console.log(`[ChatStore] Conversation reloaded from backend [${conversationId}]`)
-      } else {
-        // Conversation not found in backend (e.g. virtual conversationIds like "app-chat:*")
-        // Still must clear generating state to unblock UI.
-        // IMPORTANT: also clear thoughts and isThinking here — for IM sessions there is no
-        // sendMessage call to reset these between turns, so stale thoughts from a previous
-        // turn would otherwise accumulate and show up in the next turn's ThoughtProcess.
-        // A remote member has no local conversation to reload from, so the relayed
-        // stream is its only record — preserve it here and just stop the in-progress
-        // indicators, instead of clearing it like a local turn.
-        const teamSession = parseTeamSessionKey(conversationId)
-        const preserveRelayed = !!teamSession && isRemoteMemberAppId(teamSession.appId)
-
-        set((state) => {
-          const newSessions = new Map(state.sessions)
-          const currentSession = newSessions.get(conversationId)
-          if (currentSession && currentSession.turnId === completeTurnId) {
-            newSessions.set(conversationId, {
-              ...currentSession,
-              isGenerating: false,
-              isThinking: false,
-              streamingContent: preserveRelayed ? currentSession.streamingContent : '',
-              thoughts: preserveRelayed ? currentSession.thoughts : [],
-              compactInfo: null,
-              pendingQuestion: null,
-              queuedMessages: [],  // Clear mid-turn queued messages
-              error: currentSession.errorType === 'interrupted' ? currentSession.error : null,
-              errorType: currentSession.errorType === 'interrupted' ? currentSession.errorType : null,
-            })
-          } else if (currentSession) {
-            console.log(`[ChatStore] Skipping session clear for [${conversationId}]: new turn started`)
-          }
-          return { sessions: newSessions }
-        })
-        console.log(`[ChatStore] No backend conversation for [${conversationId}], session ${preserveRelayed ? 'preserved (remote member)' : 'cleared'}`)
-      }
-    } catch (error) {
-      console.error('[ChatStore] Failed to reload conversation:', error)
-      // Even on error, must clear state to avoid stale content — but only if turn hasn't changed
-      set((state) => {
-        const newSessions = new Map(state.sessions)
-        const currentSession = newSessions.get(conversationId)
-        if (currentSession && currentSession.turnId === completeTurnId) {
-          newSessions.set(conversationId, {
-            ...currentSession,
-            isGenerating: false,
-            isThinking: false,
-            streamingContent: '',
-            thoughts: [],
-            compactInfo: null,  // Clear temporary compact notification
-            pendingQuestion: null,  // Clear pending question
-            queuedMessages: [],  // Clear mid-turn queued messages
-          })
-        }
-        return { sessions: newSessions }
-      })
-    }
+    await backendFor(conversationId).settleTurn({ set, get }, { spaceId, conversationId }, completeTurnId)
   },
 
   // Handle thought for a specific conversation.
@@ -355,10 +208,6 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
   // Handle thought delta - incremental update to a streaming thought
   handleAgentThoughtDelta: (data) => {
     const { conversationId, thoughtId, delta, content, toolInput, isComplete, isReady, isToolInput, toolResult, isToolResult, taskProgress } = data
-    // Don't log every delta to reduce console noise (only log on complete, toolResult, or taskProgress)
-    if (isComplete || isToolResult || taskProgress) {
-      console.log(`[ChatStore] handleAgentThoughtDelta [${conversationId}]: thought ${thoughtId} ${isToolResult ? 'toolResult merged' : taskProgress ? 'taskProgress' : 'complete'}`)
-    }
 
     set((state) => {
       const newSessions = new Map(state.sessions)
@@ -465,31 +314,22 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
   // Handle autonomous turn start — CC produced output without user send
   // (e.g., Agent Team sub-agent message triggered a new turn)
   handleAgentTurnStart: (data) => {
-    const { conversationId } = data as AgentEventBase & { autonomous?: boolean }
+    const { spaceId, conversationId } = data as AgentEventBase & { autonomous?: boolean }
+    const startedHere = get().sessions.get(conversationId)?.isGenerating === true
     console.log(`[ChatStore] handleAgentTurnStart [${conversationId}]: autonomous turn detected`)
 
     set((state) => {
       const newSessions = new Map(state.sessions)
-      const prevSession = newSessions.get(conversationId)
-      newSessions.set(conversationId, {
-        isGenerating: true,
-        streamingContent: '',
-        isStreaming: false,
-        thoughts: [],
-        isThinking: true,
-        pendingToolApproval: null,
-        error: null,
-        errorType: null,
-        compactInfo: null,
-        apiRetry: null,
-        textBlockVersion: 0,
-        pendingQuestion: null,
-        queuedMessages: [],
-        turnId: (prevSession?.turnId ?? 0) + 1,
-        turnStartedAt: Date.now(),
-      })
+      newSessions.set(conversationId, startedTurnState(newSessions.get(conversationId)))
       return { sessions: newSessions }
     })
+
+    // A turn this page did not send (another client, another conversation
+    // delivering into this one) has its input written to the transcript only:
+    // read it in so the message it answers is on screen while it streams.
+    if (!startedHere && conversationKind(conversationId) === 'digital-human' && get().conversationCache.has(conversationId)) {
+      void backendFor(conversationId).refresh({ set, get }, { spaceId, conversationId })
+    }
   },
 
   // Handle AskUserQuestion - set pending question on session

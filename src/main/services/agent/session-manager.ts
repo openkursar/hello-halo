@@ -30,7 +30,7 @@ import { isImSessionKey } from '../../../shared/apps/im-keys'
 import { purgeStaleMcpOAuth } from './mcp-auth-state'
 import { emitAgentEvent } from './events'
 import { registerProcess, unregisterProcess, getCurrentInstanceId } from '../health'
-import { resolveCredentialsForSdk, buildBaseSdkOptions, computeCredentialsFingerprint, computeSessionInputsFingerprint } from './sdk-config'
+import { resolveCredentialsForSdk, buildUserSessionSdkOptions, computeCredentialsFingerprint, computeSessionInputsFingerprint } from './sdk-config'
 import { resolveSpaceMemorySession } from './space-memory'
 import { applySessionReasoningEffort } from './reasoning-effort'
 import { startConsumer, type ConsumerHandle, type ConsumerContext } from './session-consumer'
@@ -1083,7 +1083,6 @@ export async function ensureSessionWarm(
 
   const config = getConfig()
   const workDir = getWorkingDir(spaceId)
-  const digitalHumansEnabled = config.agent?.enableDigitalHumans !== false
   const conversation = getConversation(spaceId, conversationId)
   const sessionId = conversation?.sessionId
   const electronPath = getHeadlessElectronPath()
@@ -1116,7 +1115,7 @@ export async function ensureSessionWarm(
   const spaceMemory = resolveSpaceMemorySession(spaceId, conversationId)
 
   // Build SDK options using shared configuration
-  const sdkOptions = await buildBaseSdkOptions({
+  const sdkOptions = await buildUserSessionSdkOptions({
     // Must match send-message.ts: a warmed session is reused for the first
     // turn, so deriving this differently there would hand that turn a process
     // whose credentials disagree with its tools.
@@ -1129,13 +1128,6 @@ export async function ensureSessionWarm(
     stderrHandler: (data: string) => {
       console.error(`[Agent][${conversationId}] CLI stderr (warm):`, data)
     },
-    maxTurns: config.agent?.maxTurns,
-    promptProfile: config.agent?.promptProfile,
-    configDirMode: config.agent?.configDirMode,
-    customConfigDir: config.agent?.customConfigDir,
-    enableTeams: config.agent?.enableTeams,
-    disabledTools: config.agent?.disabledTools,
-    digitalHumansEnabled,
     toolsetIndex: buildToolsetSection(spaceId, conversationId),
     // Must match send-message.ts, whose first turn reuses this session.
     memoryInstructions: spaceMemory?.instructions,

@@ -855,6 +855,8 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
 
   /** One entry point for the menu, so every kind stays keyboard- and click-equal. */
   const selectMentionCandidate = (candidate: MentionCandidate) => {
+    // Shown so the user knows it exists, but its AI could not reach it.
+    if (candidate.kind === 'conversation' && candidate.conversation.unavailable) return
     if (candidate.kind === 'digitalHuman') void selectDigitalHumanMention(candidate.appId)
     else insertMention(candidate.text)
   }
@@ -1236,6 +1238,7 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
                             e.preventDefault()
                             selectMentionCandidate(candidate)
                           }}
+                          aria-disabled={candidate.kind === 'conversation' && candidate.conversation.unavailable ? true : undefined}
                           className={`w-full flex items-center gap-2 text-left min-h-[38px] py-1 border-l-2 ${isSelected ? 'bg-primary/10 border-primary pl-2.5 pr-3' : 'border-transparent pl-2.5 pr-3 hover:bg-muted/50'}`}
                         >
                           {candidate.kind === 'digitalHuman' ? (

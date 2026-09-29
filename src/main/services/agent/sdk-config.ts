@@ -20,6 +20,7 @@ import {
 import type { ApiCredentials, ResolvedModelCapabilities } from './types'
 import { inferOpenAIWireApi, credentialsToBackendConfig, getHeadlessElectronPath } from './helpers'
 import { resolveModelId } from '../../../shared/types/ai-sources'
+import { readUserAgentSettings, INTERNAL_TASK_SETTINGS, type UserAgentSettings } from './user-agent-settings'
 import { buildSystemPrompt, DEFAULT_ALLOWED_TOOLS, hostSystemPromptText, toEngineSystemPrompt } from './system-prompt'
 import { createCanUseTool } from './permission-handler'
 import { DEFAULT_DISABLED_TOOLS, TEAM_TOOLS } from '../../../shared/constants/disabled-tools'
@@ -93,12 +94,6 @@ export interface SdkEnvParams {
   anthropicBaseUrl: string
   /** See ResolvedSdkCredentials.delegatedRoutingHeader. */
   delegatedRoutingHeader?: string
-  /** Claude CLI config directory mode */
-  configDirMode?: 'halo' | 'cc' | 'custom'
-  /** Custom config dir path (when configDirMode === 'custom') */
-  customConfigDir?: string
-  /** Legacy setting retained for config compatibility; Halo Team MCP is always used. */
-  enableTeams?: boolean
   /**
    * Resolved per-model capability numbers (preset + user override merged).
    * When present, drives CLAUDE_CODE_MAX_OUTPUT_TOKENS and
@@ -207,9 +202,11 @@ export function resolveSdkRuntimeLimits(
 }
 
 /**
- * Parameters for building base SDK options
+ * What describes the session itself. The user's global AI settings are not
+ * here: the entry points below read them (see user-agent-settings.ts), so a
+ * caller cannot forget one.
  */
-export interface BaseSdkOptionsParams {
+export interface SessionSdkOptionsParams {
   /** Resolved SDK credentials */
   credentials: ResolvedSdkCredentials
   /** Working directory for the agent */
@@ -224,10 +221,6 @@ export interface BaseSdkOptionsParams {
   stderrHandler?: (data: string) => void
   /** Optional MCP servers configuration */
   mcpServers?: Record<string, any> | null
-  /** Maximum tool call turns per message (from config) */
-  maxTurns?: number
-  /** System prompt profile ('official' | 'halo') */
-  promptProfile?: 'official' | 'halo'
   /**
    * Whether this session gets Halo's self-API credentials.
    *
@@ -238,16 +231,6 @@ export interface BaseSdkOptionsParams {
    * instruction can reach.
    */
   selfApiAccess?: boolean
-  /** Claude CLI config directory mode */
-  configDirMode?: 'halo' | 'cc' | 'custom'
-  /** Custom config dir path (when configDirMode === 'custom') */
-  customConfigDir?: string
-  /** Legacy setting retained for config compatibility; native CC Teams are disabled. */
-  enableTeams?: boolean
-  /** Tools disabled by user (Extended Capabilities toggles) */
-  disabledTools?: string[]
-  /** Whether Digital Humans MCP tools are enabled */
-  digitalHumansEnabled?: boolean
   /**
    * Enabled-toolset guides section for toolset-broker sessions (main chat).
    * Chat callers pass buildToolsetSection(spaceId, conversationId) — possibly ''.
@@ -267,6 +250,15 @@ export interface BaseSdkOptionsParams {
    */
   memoryGuard?: MemoryWriteGuardConfig
 }
+
+/** A session the user is, in effect, running: chat, automation, a team member's turn. */
+export type UserSessionSdkOptionsParams = SessionSdkOptionsParams
+
+/** A background task nobody asked for by name. It carries no session-shaped extras. */
+export type InternalTaskSdkOptionsParams = Pick<
+  SessionSdkOptionsParams,
+  'credentials' | 'workDir' | 'electronPath' | 'spaceId' | 'conversationId' | 'stderrHandler' | 'mcpServers'
+>
 
 // ============================================
 // Hooks
@@ -300,10 +292,7 @@ export function addSdkHooks(sdkOptions: Record<string, any>, hooks: SdkHookMatch
  * When userDisabledTools is undefined (not yet configured), applies defaults.
  * Deduplicates to avoid passing the same tool name twice.
  */
-function buildDisallowedTools(
-  userDisabledTools?: string[],
-  _enableTeams?: boolean
-): string[] {
+function buildDisallowedTools(userDisabledTools?: string[]): string[] {
   const set = new Set<string>()
 
   // User-configured disabled tools, or defaults for unconfigured users
@@ -681,9 +670,10 @@ export function buildSdkEnv(params: SdkEnvParams): Record<string, string | numbe
         }
       : {}),
 
-    // Claude config dir: resolved from configDirMode (halo default / cc default / custom)
+    // Claude config dir: follows the user's configDirMode (halo default / cc default / custom).
+    // Every subprocess needs it — it holds the CLI credential slot — so it is not per-entry.
     CLAUDE_CONFIG_DIR: (() => {
-      const configDir = resolveClaudeConfigDir(params.configDirMode, params.customConfigDir)
+      const configDir = resolveClaudeConfigDir()
       ensureSandboxSettings(configDir)
       return configDir
     })(),
@@ -884,19 +874,43 @@ function validateSpawnInputs(electronPath: string, cliPath: string, workDir: str
 // SDK Options Builder
 // ============================================
 
-/**
- * Build base SDK options.
- *
- * This constructs the common SDK options used by both sendMessage and ensureSessionWarm.
- * Does NOT include dynamic configurations like AI Browser or Thinking mode.
- *
- * @param params - SDK options parameters
- * @returns Base SDK options object
- */
-/** Models already reported as unpriced; buildBaseSdkOptions runs on every send. */
+/** Models already reported as unpriced; the builders run on every send. */
 const unpricedModelsLogged = new Set<string>()
 
-export async function buildBaseSdkOptions(params: BaseSdkOptionsParams): Promise<Record<string, any>> {
+/**
+ * SDK options for a session the user is running: space chat, digital-human
+ * chat, an automation run, a team member's turn.
+ *
+ * The user's global AI settings (`maxTurns`, `disabledTools`, `promptProfile`,
+ * `digitalHumansEnabled`) are read here, never passed in — see
+ * user-agent-settings.ts. Callers add their own MCP servers, hooks and prompt
+ * on the returned options.
+ *
+ * Does NOT include dynamic configurations like AI Browser or Thinking mode.
+ */
+export async function buildUserSessionSdkOptions(
+  params: UserSessionSdkOptionsParams
+): Promise<Record<string, any>> {
+  return assembleSdkOptions(params, readUserAgentSettings())
+}
+
+/**
+ * SDK options for a background task the user did not ask for by name (memory
+ * consolidation, team member proposals). It gets the built-in defaults, not
+ * the user's tool restrictions, turn cap or prompt style: those describe how
+ * the user wants THEIR sessions to behave, and the caller of an internal task
+ * sets whatever it needs on top.
+ */
+export async function buildInternalTaskSdkOptions(
+  params: InternalTaskSdkOptionsParams
+): Promise<Record<string, any>> {
+  return assembleSdkOptions(params, INTERNAL_TASK_SETTINGS)
+}
+
+async function assembleSdkOptions(
+  params: SessionSdkOptionsParams,
+  settings: UserAgentSettings
+): Promise<Record<string, any>> {
   const {
     credentials,
     workDir,
@@ -907,8 +921,8 @@ export async function buildBaseSdkOptions(params: BaseSdkOptionsParams): Promise
     mcpServers
   } = params
 
-  console.log(`[SDK Config] buildBaseSdkOptions: workDir="${workDir}", spaceId="${spaceId}", configDirMode="${params.configDirMode ?? 'halo'}"`)
-  console.debug(`[SDK Config] buildBaseSdkOptions details: model=${credentials.sdkModel}, displayModel=${credentials.displayModel}, maxTurns=${params.maxTurns}, promptProfile=${params.promptProfile}, enableTeams=${params.enableTeams}, disabledTools=[${(params.disabledTools || []).join(', ')}]`)
+  console.log(`[SDK Config] assembleSdkOptions: workDir="${workDir}", spaceId="${spaceId}"`)
+  console.debug(`[SDK Config] assembleSdkOptions details: model=${credentials.sdkModel}, displayModel=${credentials.displayModel}, maxTurns=${settings.maxTurns}, promptProfile=${settings.promptProfile}, disabledTools=[${(settings.disabledTools || []).join(', ')}]`)
 
   // Best-effort: a session still works without Halo's self-API if the loopback
   // listener fails to start (e.g. no port available), just without that capability.
@@ -930,9 +944,6 @@ export async function buildBaseSdkOptions(params: BaseSdkOptionsParams): Promise
     anthropicApiKey: credentials.anthropicApiKey,
     anthropicBaseUrl: credentials.anthropicBaseUrl,
     delegatedRoutingHeader: credentials.delegatedRoutingHeader,
-    configDirMode: params.configDirMode,
-    customConfigDir: params.customConfigDir,
-    enableTeams: params.enableTeams,
     capabilities: credentials.capabilities,
     selfApi,
     spaceId,
@@ -964,11 +975,11 @@ export async function buildBaseSdkOptions(params: BaseSdkOptionsParams): Promise
     systemPrompt: toEngineSystemPrompt(buildSystemPrompt({
       workDir,
       modelInfo: credentials.displayModel,
-      promptProfile: params.promptProfile,
-      digitalHumansEnabled: params.digitalHumansEnabled,
+      promptProfile: settings.promptProfile,
+      digitalHumansEnabled: settings.digitalHumansEnabled,
       toolsetIndex: params.toolsetIndex
     }) + (params.memoryInstructions ? `\n\n${params.memoryInstructions}` : '')),
-    maxTurns: params.maxTurns ?? DEFAULT_MAX_TURNS,
+    maxTurns: settings.maxTurns ?? DEFAULT_MAX_TURNS,
     allowedTools: [...DEFAULT_ALLOWED_TOOLS],
     // Enable Skills loading from $CLAUDE_CONFIG_DIR/skills/ and <workspace>/.claude/skills/
     settingSources: ['user', 'project'],
@@ -998,7 +1009,7 @@ export async function buildBaseSdkOptions(params: BaseSdkOptionsParams): Promise
   }
 
   // Build disallowed tools list from user config + implicit rules
-  const disallowedTools = buildDisallowedTools(params.disabledTools, false)
+  const disallowedTools = buildDisallowedTools(settings.disabledTools)
   if (disallowedTools.length > 0) {
     sdkOptions.disallowedTools = disallowedTools
     console.log(`[SDK Config] Disallowed tools (${disallowedTools.length}): ${disallowedTools.join(', ')}`)

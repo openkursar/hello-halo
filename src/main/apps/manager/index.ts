@@ -59,6 +59,7 @@ export {
   AppAlreadyInstalledError,
   InvalidStatusTransitionError,
   SpaceNotFoundError,
+  AutomationSpaceRequiredError,
   BuiltinAppProtectedError,
 } from './errors'
 

@@ -15,22 +15,9 @@
  */
 
 import { create } from 'zustand'
+import type { SearchResult } from '../../shared/types/search'
 
 export type SearchScope = 'conversation' | 'space' | 'global'
-
-interface SearchResult {
-  conversationId: string
-  conversationTitle: string
-  messageId: string
-  spaceId: string
-  spaceName: string
-  messageRole: 'user' | 'assistant'
-  messageContent: string
-  messageTimestamp: string
-  matchCount: number
-  contextBefore?: string
-  contextAfter?: string
-}
 
 interface SearchState {
   // ===== Search Panel State (Full Screen Edit Mode) =====
@@ -189,6 +176,8 @@ export const useSearchStore = create<SearchState>((set, get) => ({
         messageId: result.messageId,
         spaceId: result.spaceId,
         conversationId: result.conversationId,
+        kind: result.kind,
+        appId: result.appId,
         query: get().highlightQuery,
         resultIndex: validIndex
       }

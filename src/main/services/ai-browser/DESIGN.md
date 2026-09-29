@@ -82,7 +82,7 @@ AI turn so the very first `active-view` event reaches the renderer.
 | Path | File | Context |
 |------|------|---------|
 | Main chat | `services/agent/send-message.ts` | Global singleton (no scoped ctx) |
-| App chat | `apps/runtime/app-chat.ts` | Scoped context |
+| App chat | `apps/runtime/app-chat.ts` | Scoped context bound to the chat's conversationId (`apps/runtime/app-chat-browser.ts`) |
 | Automation | `apps/runtime/execute.ts` | Scoped context |
 
 ### Adding new session-level side effects
@@ -98,7 +98,8 @@ of which caller path is used.
 ```
 BrowserContext (singleton)            — the user's own browsing (Content Canvas / IPC)
 BrowserContext (interactive, per-conv) — used by main chat, one per conversation
-BrowserContext (scoped, per-agent)     — used by app-chat / automation (no UI)
+BrowserContext (scoped, per-chat)      — digital-human chat: hidden pages, announced under its conversationId
+BrowserContext (scoped, per-run)       — automation: hidden pages, no conversation, silent
 ```
 
 Scoped contexts are created via `createScopedBrowserContext()` and passed to
@@ -138,24 +139,57 @@ flag — getting it wrong is silent and destroys the user's work.
 
 The context holds **no BrowserWindow reference**. UI notifications go through a
 process-global event bus (see "View Lifecycle Events"), so delivery is owned by
-the transport layer, not the context. Only the singleton (non-scoped) emits;
-scoped automation contexts stay silent.
+the transport layer, not the context. A context emits iff it has a UI
+(`ctx.hasUi`): the singleton, every interactive per-conversation context, and
+every scoped context created with a `conversationId` (digital-human chat).
+Automation runs (scoped, no conversation) stay silent.
 
 ## View Lifecycle Events
 
-The interactive singleton broadcasts its view lifecycle to `events.ts` (a
+Every context with a UI broadcasts its view lifecycle to `events.ts` (a
 process-global bus, modeled on `ai-terminal/events.ts`). The transport module
 `ipc/ai-browser.ts` subscribes once at startup and fans events to the
 BrowserWindow + remote WebSocket clients:
 
 | Event | Channel | Meaning | Renderer effect |
 |-------|---------|---------|-----------------|
-| active-view | `ai-browser:active-view-changed` | AI created/selected a view | `activeViewId` → "View live feed" attaches the exact view; identity for the operating indicator |
-| gone | `ai-browser:view-gone` | AI's active view destroyed | store clears; live-session tray drops it |
+| active-view | `ai-browser:active-view-changed` | a conversation's AI created/selected a view; payload `{conversationId, spaceId, viewId, url, title}` | renderer store keeps the active view per conversation ("View live feed" and the operating indicator of the conversation on screen) and every page per viewId (the tray) |
+| gone | `ai-browser:view-gone` | a view a UI context held — its active page or any other it opened — was destroyed; payload `{viewId}` | store drops the page and any active entry pointing at it; canvas tabs attached to it close |
+| conversation-released | `ai-browser:conversation-released` | a UI context ended (`release()` or `destroy()`); payload `{conversationId}` | store drops that conversation's views, operating state and owned pages, so a page it only selected (now the user's) is not left listed or stoppable as its own |
 
-`gone` is emitted from `context.handleViewDestroyed(viewId)`, invoked by the
-`browser:destroy` IPC handler (covers canvas-tab close and the live-session tray
-"stop"). This keeps `activeViewId` from dangling on a dead WebContents.
+Payload types live in `shared/types/ai-browser.ts`. The renderer filters by the
+active conversation; events go out with `broadcastToAll` (BrowserViews are
+desktop-only, so remote clients ignore them). An event only fires on change, so a
+renderer that starts late (reload) seeds itself with the request
+`ai-browser:list-live-pages` (`listLivePages()`: every owned or active page of a
+UI context, `active` marking the one it acts on).
+
+**Live-session tray.** Lists every live AI page of the CURRENT space that a
+conversation OPENED ITSELF (`owned` in the event/snapshot), one row each,
+labelled "owner · page" (digital human name, or the space conversation's title)
+with its own stop — not only the on-screen conversation's page. Never listed: a
+page the conversation only selected (the user's own tab, another conversation's
+page), and a page another conversation is currently on (`isPageInUseByOthers`,
+re-checked at stop time) — stopping either would close it under someone else.
+Remote clients get no stop control (no BrowserViews there); a refused stop is
+reported, not swallowed. The decision is the main process's: the tray stop goes
+through `ai-browser:stop-page` (`stopLivePage(viewId, conversationId)`), which
+refuses `not-owned` unless that conversation's context opened the page and
+`in-use` while any other context is on it; the renderer's check is only a fast
+path and can be one event behind. Closing a canvas tab is the user's own action
+and still goes through `browser:destroy` unchecked. The space
+comes from the context (`spaceId`: `getInteractiveBrowserContext(conversationId,
+spaceId)` for space chat, `acquireChatBrowserContext(…, spaceId)` for
+digital-human chat); a page with no space is never listed. Rows are built by
+`renderer/hooks/browser-live-sessions.ts`.
+`gone` is emitted from `notifyViewDestroyed(viewId)`, which reconciles EVERY live
+context and announces once — whenever a context with a UI owned the view or was
+pointing at it, not only for the active page: a page the chat moved away from can
+still be open in a canvas tab. It is wired to `browserViewManager.onViewDestroyed`
+at module load, so whichever path destroyed the view (canvas-tab close, tray
+"stop", an agent closing a tab, window teardown, a context ending) reaches it.
+This keeps `activeViewId` from dangling on a dead WebContents — essential once a
+context outlives a turn.
 
 The renderer reveals the AI's view by **viewId identity** (`attachAIBrowserView`),
 never by re-opening the URL — so the user sees and can take over the exact page
@@ -165,10 +199,38 @@ the AI drives (shared `persist:browser` session across all views).
 
 - **Creation (scoped)**: Caller creates scoped context → passes to MCP server factory
 - **Creation (interactive)**: `getInteractiveBrowserContext(conversationId)`, on demand
-- **Cleanup (scoped)**: Caller calls `ctx.destroy()` when the agent session ends — closes its tabs
+- **Cleanup (scoped)**: Caller calls `ctx.destroy()` when the agent session ends — closes its tabs.
+  Digital-human chat contexts are owned by `apps/runtime/app-chat-browser.ts`,
+  which keeps native chats' contexts resident between turns (idle/cap reaping)
 - **Cleanup (interactive)**: `releaseInteractiveBrowserContext(conversationId)` from the
   toolset broker's per-conversation teardown — leaves the user's tabs open
 - **Cleanup (singleton)**: `cleanupAIBrowser()` called by `bootstrap/extended.ts` on app shutdown
+
+## Live View of a Hidden Page (Digital-Human Chat)
+
+A chat's pages are created on the **offscreen host window** (`offscreen: ctx.isScoped`)
+so the AI keeps a compositing surface (CDP screenshots) with no user-visible
+window. To let the user watch and take over, the "View live feed" button attaches
+the *exact* view (same WebContents) through the ordinary `browser:show` path,
+which `BrowserViewManager` now supports for offscreen-home views:
+
+- `show(viewId)` on an offscreen-home view **reveals** it: removed from the host
+  window, `setBackgroundThrottling(true)`, added to the main window
+  (`revealedViewIds`).
+- `hide(viewId)` on a revealed view **re-homes** it: removed from the main window,
+  added back to the host window, throttling disabled again. Every canvas tab
+  switch is a `hide`/`show` pair, so a revealed view is on the main window only
+  while it is on screen and never lingers detached (which would starve the AI's
+  screenshots).
+- Throttling must be re-enabled BEFORE the view sits on the main window and
+  disabled AFTER it is back on the host: with it disabled on the main window the
+  remove/add round trip evicts the compositor frame for good (see the comment in
+  `create()` and `tests/e2e/specs/browser-view-frame.spec.ts`;
+  `browser-view-reveal.spec.ts` covers the offscreen round trip).
+- `ctx.hasRevealedView()` lets an owner avoid destroying pages the user is
+  watching (idle reaping).
+- Bounds/zoom/policy-block logic uses `isHostedOffscreen` (home-offscreen AND not
+  revealed), not raw membership of `offscreenViewIds`.
 
 ## File Map
 
@@ -176,7 +238,7 @@ the AI drives (shared `persist:browser` session across all views).
 |------|---------------|
 | `index.ts` | Public API: re-exports, system prompt, cleanup, event-bus subscribers |
 | `sdk-mcp-server.ts` | MCP server factory (primary entry point) |
-| `events.ts` | Process-global view-lifecycle bus (active-view / gone); transport subscribes here |
+| `events.ts` | Process-global view-lifecycle bus (active-view / gone); transport subscribes here. Payload types: `shared/types/ai-browser.ts` |
 | `context.ts` | BrowserContext class (state, CDP, element ops, downloads); emits view lifecycle |
 | `snapshot.ts` | Accessibility tree snapshot creation |
 | `download-handler.ts` | Session-level `will-download` handler for silent AI downloads |

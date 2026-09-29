@@ -85,7 +85,7 @@ export function TaskConversation({ messages, activities, epochId, appId, detail,
       if (row.message) {
         const messageId = row.message.id
         const requests = decisions.filter(decision => attached.get(decision.id) === messageId)
-        return <MessageRow key={row.id} message={row.message} hideBrowserViewButton afterThoughts={requests.length ? requests.map(decisionCard) : undefined} />
+        return <MessageRow key={row.id} message={row.message} hideBrowserLiveView hideTerminalOpen afterThoughts={requests.length ? requests.map(decisionCard) : undefined} />
       }
       const updates = row.activities
       const latest = updates[updates.length - 1]

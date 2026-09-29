@@ -14,12 +14,13 @@
  * useful starting point and adding "Halo 助手" on top would clutter the UI.
  */
 
+import { DEFAULT_SPACE_ID } from '../../../shared/apps/install-scope'
 import type { AppManagerService } from './types'
 import type { AutomationSpec } from '../spec'
 import { countBuiltinAppsOnDisk } from './builtin-loader'
 
 /** Space ID for the default temporary space */
-const SEED_SPACE_ID = 'halo-temp'
+const SEED_SPACE_ID = DEFAULT_SPACE_ID
 
 /** Default app spec — no subscriptions (IM / manual-trigger only) */
 const DEFAULT_APP_SPEC: AutomationSpec = {

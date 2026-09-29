@@ -88,6 +88,11 @@ export default defineConfig({
       use: { actionTimeout: 15000 }
     },
     {
+      name: 'digital-human-chat',
+      testMatch: '**/digital-human-chat.spec.ts',
+      use: { actionTimeout: 15000 }
+    },
+    {
       name: 'smoke',
       testMatch: '**/smoke.spec.ts',
       use: {
@@ -111,7 +116,7 @@ export default defineConfig({
     },
     {
       name: 'browser-view-frame',
-      testMatch: '**/browser-view-frame.spec.ts',
+      testMatch: ['**/browser-view-frame.spec.ts', '**/browser-view-reveal.spec.ts'],
       use: {
         actionTimeout: 10000
       }

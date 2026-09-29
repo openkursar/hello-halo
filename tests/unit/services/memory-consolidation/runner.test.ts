@@ -14,7 +14,7 @@ vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
   getEngineCapabilities: vi.fn(() => ({ features: { hooks: true } })),
 }))
 vi.mock('../../../../src/main/services/agent/sdk-config', () => ({
-  buildBaseSdkOptions: vi.fn(async () => ({ includePartialMessages: true })),
+  buildInternalTaskSdkOptions: vi.fn(async () => ({ includePartialMessages: true })),
 }))
 vi.mock('../../../../src/main/services/agent', () => ({
   addSdkHooks: (o: Record<string, any>, h: Record<string, unknown[]>) => { o.hooks = { ...(o.hooks ?? {}), ...h } },

@@ -20,6 +20,7 @@ import os from 'os'
 import { getDataFolderName } from '../../foundation/product-config'
 import type { KBReference } from '../../../shared/types/tlon'
 import { getActiveEngine } from './resolved-sdk'
+import { readUserAgentSettings } from './user-agent-settings'
 
 // ============================================
 // Constants
@@ -66,11 +67,11 @@ export interface SystemPromptContext {
   isGitRepo?: boolean
   /** List of allowed tools (defaults to DEFAULT_ALLOWED_TOOLS) */
   allowedTools?: readonly string[]
-  /** Prompt profile to use (defaults to 'halo') */
+  /** Prompt profile to use. Unset: the user's setting (defaults to 'halo'). */
   promptProfile?: PromptProfile
   /** Claude config directory path (defaults to platform-specific path) */
   claudeConfigDir?: string
-  /** Whether Digital Humans MCP tools are enabled */
+  /** Whether the prompt says Halo can manage digital humans. Unset: the user's setting. */
   digitalHumansEnabled?: boolean
   /**
    * Capability index for toolset-broker sessions (see agent/toolsets).
@@ -567,19 +568,26 @@ function applyTemplateVariables(template: string, ctx: SystemPromptContext): str
  * Build the host system prompt with dynamic context.
  * Selects template based on promptProfile (defaults to 'halo'); on the halo
  * engine the result is only the append to that engine's default prompt, and
- * promptProfile does not apply.
+ * promptProfile does not apply. `promptProfile` and `digitalHumansEnabled`
+ * come from the user's settings unless the context states them, so every
+ * prompt built on this function — digital humans' included — follows them.
  *
  * @param ctx - Dynamic context for the prompt
  * @returns Host system prompt string; pass it to the engine via toEngineSystemPrompt
  */
 export function buildSystemPrompt(ctx: SystemPromptContext): string {
+  const settings = readUserAgentSettings()
+  const promptProfile = ctx.promptProfile ?? settings.promptProfile
   const template = usesEngineDefaultPrompt()
     ? SYSTEM_PROMPT_HALO_CONTEXT
-    : ctx.promptProfile === 'official'
+    : promptProfile === 'official'
       ? SYSTEM_PROMPT_OFFICIAL
       : SYSTEM_PROMPT_HALO
 
-  let prompt = applyTemplateVariables(template, ctx)
+  let prompt = applyTemplateVariables(template, {
+    ...ctx,
+    digitalHumansEnabled: ctx.digitalHumansEnabled ?? settings.digitalHumansEnabled,
+  })
 
   // Toolset-broker sessions (main chat): append the usage guides of currently-
   // enabled optional toolsets. Awareness of disabled ones lives in the

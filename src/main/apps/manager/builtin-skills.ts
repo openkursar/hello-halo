@@ -133,7 +133,7 @@ export async function seedBuiltinSkills(appManager: AppManagerService): Promise<
     for (const row of globalSkills()) {
       if (!isSeededSkillRow(row.spec) || expected.has(row.spec.store?.slug)) continue
       try {
-        await appManager.uninstall(row.id)
+        await appManager.uninstall(row.id, { reason: 'system' })
       } catch {
         /* may already be uninstalled — proceed to delete */
       }

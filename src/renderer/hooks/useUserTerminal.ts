@@ -1,15 +1,18 @@
 /**
  * useUserTerminal — user-initiated terminal sessions for the current space.
  *
- * Availability mirrors the toolset broker's per-conversation catalog (the
- * renderer's platform-availability signal for `ai-terminal`; the entry hides
- * itself on platforms without pty support). Creation goes through the terminal
- * store and reveals the new session in the Canvas.
+ * Availability mirrors the toolset broker's catalog (the renderer's
+ * platform-availability signal for `ai-terminal`; the entry hides itself on
+ * platforms without pty support). The catalog is read per conversation, but the
+ * answer is a property of the platform, so it is read through the space's
+ * regular conversation — the same whether that conversation or a digital
+ * human's is on screen. Creation goes through the terminal store and reveals
+ * the new session in the Canvas.
  */
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useSpaceStore } from '../stores/space.store'
-import { useChatStore } from '../stores/chat.store'
+import { useChatStore, type ChatState } from '../stores/chat.store'
 import { useToolsetsStore } from '../stores/toolsets.store'
 import { useTerminalStore } from '../stores/terminal.store'
 
@@ -22,17 +25,30 @@ interface UserTerminal {
   createAndOpen: () => Promise<void>
 }
 
+/**
+ * The conversation whose toolset catalog stands for the platform: the space's
+ * regular conversation, which exists whatever the user is looking at.
+ */
+export function terminalProbeConversationId(state: Pick<ChatState, 'currentSpaceId' | 'spaceStates'>): string | null {
+  return state.currentSpaceId ? state.spaceStates.get(state.currentSpaceId)?.currentConversationId ?? null : null
+}
+
 export function useUserTerminal(): UserTerminal {
   const [creating, setCreating] = useState(false)
 
   const spaceId = useSpaceStore((s) => s.currentSpace?.id ?? null)
-  const getCurrentConversationId = useChatStore((s) => s.getCurrentConversationId)
-  const conversationId = getCurrentConversationId()
+  const probeId = useChatStore(terminalProbeConversationId)
+  const ensureLoaded = useToolsetsStore((s) => s.ensureLoaded)
   const available = useToolsetsStore((s) =>
-    conversationId
-      ? (s.byConversation.get(conversationId) ?? []).some((ts) => ts.id === 'ai-terminal')
+    probeId
+      ? (s.byConversation.get(probeId) ?? []).some((ts) => ts.id === 'ai-terminal')
       : false
   )
+
+  // With a digital human on screen nothing else loads the regular conversation's catalog.
+  useEffect(() => {
+    if (spaceId && probeId) void ensureLoaded(spaceId, probeId)
+  }, [spaceId, probeId, ensureLoaded])
   const createSession = useTerminalStore((s) => s.createSession)
   const openInCanvas = useTerminalStore((s) => s.openInCanvas)
 

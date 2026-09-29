@@ -7,6 +7,7 @@ import { useState, useEffect } from 'react'
 import { Loader2 } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
+import { clearUpdateSnooze } from '../updater/update-snooze'
 import type { UpdateStatus } from './types'
 
 declare const __BUILD_TIME__: string
@@ -79,8 +80,11 @@ export function AboutSection() {
     return () => unsubscribe()
   }, [])
 
-  // Handle check for updates
+  // An earlier deferral must not swallow the prompt the user is asking for now;
+  // with an update already downloaded, the check re-announces it and the
+  // prompt reopens.
   const handleCheckForUpdates = async () => {
+    clearUpdateSnooze()
     setUpdateStatus({ phase: 'checking' })
     await api.checkForUpdates()
   }

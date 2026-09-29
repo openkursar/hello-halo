@@ -27,6 +27,7 @@ const storeMock = {
   getAppDetail: vi.fn(),
   getAppDocument: vi.fn(),
   installFromStore: vi.fn(),
+  unpackDhpkg: vi.fn(),
   refreshIndex: vi.fn(),
   checkUpdates: vi.fn(),
   getRegistries: vi.fn(),
@@ -38,6 +39,7 @@ const storeMock = {
 
 vi.mock('../../../src/main/store', () => storeMock)
 vi.mock('../../../src/main/apps/manager', () => ({ getAppManager: vi.fn(() => ({ getApp: vi.fn() })) }))
+vi.mock('../../../src/main/apps/runtime', () => ({ getAppRuntime: vi.fn(() => null) }))
 vi.mock('../../../src/main/apps/manager/errors', () => ({
   McpCommandBlockedError: class McpCommandBlockedError extends Error { command = '' },
 }))
@@ -83,5 +85,31 @@ describe('store controller delegation', () => {
     storeMock.getStoreCapabilities.mockRejectedValue(new Error('probe exploded'))
 
     expect(await controller.getStoreCapabilities()).toEqual({ success: false, error: 'probe exploded' })
+  })
+
+  it('queryStoreApps fills page defaults and rejects an unknown app type', async () => {
+    storeMock.queryStore.mockResolvedValue({ items: [], hasMore: false, sources: [] })
+
+    await controller.queryStoreApps({ search: 'x' })
+    expect(storeMock.queryStore).toHaveBeenCalledWith(expect.objectContaining({ search: 'x', page: 1 }))
+    expect(typeof storeMock.queryStore.mock.calls[0][0].pageSize).toBe('number')
+
+    storeMock.queryStore.mockClear()
+    const res = await controller.queryStoreApps({ type: 'bogus' as never })
+    expect(res.success).toBe(false)
+    expect(storeMock.queryStore).not.toHaveBeenCalled()
+  })
+
+  it('listStoreApps rejects an unknown app type instead of dropping it', async () => {
+    const res = await controller.listStoreApps({ type: 'bogus' })
+    expect(res.success).toBe(false)
+    expect(storeMock.listApps).not.toHaveBeenCalled()
+  })
+
+  it('queryStoreApps replaces out-of-range paging with defaults', async () => {
+    storeMock.queryStore.mockResolvedValue({ items: [], hasMore: false, sources: [] })
+    await controller.queryStoreApps({ page: 0, pageSize: -5 })
+    expect(storeMock.queryStore).toHaveBeenCalledWith(expect.objectContaining({ page: 1 }))
+    expect(storeMock.queryStore.mock.calls[0][0].pageSize).toBeGreaterThan(0)
   })
 })

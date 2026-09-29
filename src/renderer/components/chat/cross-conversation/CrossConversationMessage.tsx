@@ -18,7 +18,9 @@ import { ChevronRight, Send, ExternalLink } from 'lucide-react'
 import type { Message } from '../../../types'
 import { useTranslation } from '../../../i18n'
 import { useChatStore } from '../../../stores/chat.store'
-import { navigateToConversation } from '../../../utils/conversation-navigation'
+import { useAppsStore } from '../../../stores/apps.store'
+import { nativeChatAppId, parseRunSenderKey } from '../../../../shared/apps/im-keys'
+import { navigateToAppChat, navigateToConversation } from '../../../utils/conversation-navigation'
 import { formatTimeAgo } from '../../../utils/format-time'
 import { readProvenance } from './message-source'
 
@@ -43,10 +45,15 @@ export function CrossConversationMessage({ message }: CrossConversationMessagePr
   const [isExpanded, setIsExpanded] = useState(isFresh)
 
   const currentSpaceId = useChatStore(s => s.currentSpaceId)
+  // A digital human's chat is not in the space's conversation list; it stays
+  // reachable for as long as its digital human is installed.
+  const sourceAppId = provenance ? nativeChatAppId(provenance.fromConversationId) : null
+  const sourceApp = useAppsStore(s => (sourceAppId ? s.apps.find(a => a.id === sourceAppId) : undefined))
+  const digitalHumanAvailable = !!sourceApp && sourceApp.status !== 'uninstalled' && !!sourceApp.spaceId
   // Resolve the source against the live conversation list so a rename shows the
   // current name; absence means it was deleted and the jump must be disabled.
   const liveTitle = useChatStore(s => {
-    if (!provenance || !currentSpaceId) return undefined
+    if (!provenance || !currentSpaceId || sourceAppId) return undefined
     return s.getSpaceState(currentSpaceId).conversations
       .find(c => c.id === provenance.fromConversationId)?.title
   })
@@ -62,12 +69,19 @@ export function CrossConversationMessage({ message }: CrossConversationMessagePr
 
   if (!provenance) return null
 
-  const isSourceAvailable = liveTitle !== undefined
+  // A scheduled run's notice: named by its own title, with nowhere to open.
+  const fromRun = parseRunSenderKey(provenance.fromConversationId) !== null
+  const isSourceAvailable = sourceAppId ? digitalHumanAvailable : liveTitle !== undefined
   const displayTitle = liveTitle ?? provenance.fromConversationTitle
   const time = formatTimeAgo(new Date(message.timestamp).getTime(), t)
 
   const openSource = () => {
-    if (!isSourceAvailable || !currentSpaceId) return
+    if (!isSourceAvailable) return
+    if (sourceAppId && sourceApp?.spaceId) {
+      navigateToAppChat(sourceApp.spaceId, sourceAppId, provenance.fromConversationId)
+      return
+    }
+    if (!currentSpaceId) return
     navigateToConversation(currentSpaceId, provenance.fromConversationId)
   }
 
@@ -113,7 +127,9 @@ export function CrossConversationMessage({ message }: CrossConversationMessagePr
             <div className="mt-2 pt-1.5 border-t border-dashed border-border/50
               flex flex-wrap items-center gap-x-1 gap-y-0.5 text-[10px] text-muted-foreground/80">
               <span>{t('From conversation')}</span>
-              {isSourceAvailable ? (
+              {fromRun ? (
+                <span>{displayTitle}</span>
+              ) : isSourceAvailable ? (
                 <button
                   onClick={openSource}
                   className="inline-flex items-center gap-0.5 text-primary hover:underline"
@@ -125,7 +141,7 @@ export function CrossConversationMessage({ message }: CrossConversationMessagePr
                 <span className="text-muted-foreground/50 italic">{t('deleted conversation')}</span>
               )}
               <span>· {time} ·</span>
-              <span>{t("sent by that conversation's AI")}</span>
+              <span>{fromRun ? t('one-way notice from a scheduled run, no reply possible') : t("sent by that conversation's AI")}</span>
             </div>
           </div>
         )}

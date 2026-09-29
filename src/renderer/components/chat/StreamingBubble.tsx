@@ -73,7 +73,6 @@ export function StreamingBubble({
       // Skip if already clean: state setters are in the dep array, so an
       // unconditional reset here would loop.
       if (activeSnapshotLen === 0 && segments.length === 0 && scrollOffset === 0) return
-      console.log(`[StreamingBubble] 🆕 New text block detected: version → ${textBlockVersion}`)
       // Reset all state for new text block
       setActiveSnapshotLen(0)
       setSegments([])
@@ -141,7 +140,6 @@ export function StreamingBubble({
   useEffect(() => {
     if (!content && thoughts.length === 0) {
       // Full reset for new conversation
-      console.log(`[StreamingBubble] 🔄 Full reset (new conversation)`)
       setSegments([])
       setScrollOffset(0)
       setCurrentHeight(0)

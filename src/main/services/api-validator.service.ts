@@ -222,7 +222,7 @@ export async function validateApiConnection(params: ValidateApiParams): Promise<
       maxTurns: 1,
       allowedTools: [],
       permissionMode: 'bypassPermissions' as const,
-      // Use the same cli.js path as the agent module (sdk-config.ts buildBaseSdkOptions)
+      // Use the same cli.js path as the agent module (sdk-config.ts)
       // This avoids spawning a full Electron subprocess for headless node usage,
       // which can fail on Windows when the executable path contains spaces or
       // when the Electron binary is not recognized as a Node.js runtime.

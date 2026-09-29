@@ -1,8 +1,13 @@
 /**
- * Chat View - Main chat interface
- * Uses session-based state for multi-conversation support
- * Supports onboarding mode with mock AI response
- * Features smart auto-scroll via react-virtuoso (stops when user reads history)
+ * Chat View - the one chat page, for space conversations and digital-human
+ * conversations alike.
+ *
+ * What differs between the two is decided by the chat store's conversation
+ * sources, not here; this component only reads the conversation on screen
+ * (`selectActiveConversationId`) and a few presentation flags derived from its
+ * kind (composer placeholder, hidden capability controls, header of the empty
+ * state). Uses session-based state for multi-conversation support and supports
+ * onboarding mode with mock AI response.
  *
  * Layout modes:
  * - Full width (isCompact=false): Centered content with max-width
@@ -11,11 +16,12 @@
 
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import type { ReactNode } from 'react'
-import { SquareCheckBig, Code, Bot, FileText, BookOpen } from 'lucide-react'
+import { SquareCheckBig, Code, Bot, FileText, BookOpen, AlertCircle } from 'lucide-react'
 import logoOnDark from '../../assets/brand/halo-logo-icon-on-dark.svg'
 import logoOnLight from '../../assets/brand/halo-logo-icon-on-light.svg'
 import { useSpaceStore } from '../../stores/space.store'
-import { useChatStore } from '../../stores/chat.store'
+import { useChatStore, selectActiveConversationId, conversationKind, digitalHumanAppId } from '../../stores/chat.store'
+import { useAppsStore } from '../../stores/apps.store'
 import { useOnboardingStore } from '../../stores/onboarding.store'
 import { useTaskPanelStore } from '../../stores/taskPanel.store'
 import { MessageList } from './MessageList'
@@ -35,7 +41,8 @@ import { api } from '../../api'
 import type { ImageAttachment, Artifact } from '../../types'
 import type { SlashCommandItem } from '../../types/slash-command'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
-import { AppChatView } from '../apps/AppChatView'
+import { ClearChatControl } from './ClearChatControl'
+import { useWsRecovery } from '../../hooks/useWsRecovery'
 import { useSpaceDigitalHumans } from '../../hooks/useSpaceDigitalHumans'
 import { resolveSpecI18n } from '../../utils/spec-i18n'
 import { getAppChatConversationId } from '../../api/_shared'
@@ -43,6 +50,7 @@ import type { DigitalHumanSelectorConfig } from './DigitalHumanSelector'
 import { useGoalComposer } from '../goal'
 import { showsMessageList } from './conversation-body'
 import type { GoalInput } from '../../../shared/types/goal'
+import { isConversationCollabEnabled } from '../../../shared/apps/app-types'
 
 interface ChatViewProps {
   isCompact?: boolean
@@ -57,7 +65,6 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
   // whole page on every token of every background turn. Actions are stable
   // references; only the fields read below can trigger a render, and the live
   // turn arrives through `session` further down.
-  const getCurrentConversationId = useChatStore(s => s.getCurrentConversationId)
   const getSession = useChatStore(s => s.getSession)
   const sessionInitInfo = useChatStore(s => s.sessionInitInfo)
   const sendMessage = useChatStore(s => s.sendMessage)
@@ -66,6 +73,9 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
   const continueAfterInterrupt = useChatStore(s => s.continueAfterInterrupt)
   const answerQuestion = useChatStore(s => s.answerQuestion)
   const loadMessageThoughts = useChatStore(s => s.loadMessageThoughts)
+  const loadEarlierMessages = useChatStore(s => s.loadEarlierMessages)
+  const refreshConversation = useChatStore(s => s.refreshConversation)
+  const openConversation = useChatStore(s => s.openConversation)
   const currentSpaceId = useChatStore(s => s.currentSpaceId)
   const selectAppChatConversation = useChatStore(s => s.selectAppChatConversation)
   const clearAppChatSelection = useChatStore(s => s.clearAppChatSelection)
@@ -74,6 +84,11 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
   const selectedAppChat = useChatStore(
     s => (currentSpaceId ? s.spaceStates.get(currentSpaceId)?.selectedAppChat ?? null : null)
   )
+  const activeConversationId = useChatStore(selectActiveConversationId)
+  const isDigitalHuman = !!activeConversationId && conversationKind(activeConversationId) === 'digital-human'
+  const activeAppId = activeConversationId ? digitalHumanAppId(activeConversationId) : null
+  const activeApp = useAppsStore(s => activeAppId ? s.apps.find(app => app.id === activeAppId) : undefined)
+  const activeAppName = activeApp ? resolveSpecI18n(activeApp.spec, getCurrentLanguage()).name || activeApp.id : undefined
   // The roster, not the conversation list: a digital human you have never
   // talked to has no conversation rows but still has to be selectable.
   const spaceDigitalHumans = useSpaceDigitalHumans(currentSpaceId ?? null)
@@ -274,35 +289,56 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
     }
   }, [])
 
-  // Get current conversation and its session state
-  const currentConversationId = useChatStore(s =>
-    (s.currentSpaceId ? s.spaceStates.get(s.currentSpaceId)?.currentConversationId : null) ?? null
-  )
+  // The conversation on screen and its live turn. `getSession('')` is the
+  // store's own empty-session constant — a stable identity for "no session
+  // yet", so the fallback does not look like a change to anything downstream.
   const currentConversation = useChatStore(s =>
-    currentConversationId ? s.conversationCache.get(currentConversationId) ?? null : null
+    activeConversationId ? s.conversationCache.get(activeConversationId) ?? null : null
   )
   const isLoadingConversation = useChatStore(s => s.isLoadingConversation)
+  const loadError = useChatStore(s => activeConversationId ? s.conversationLoadErrors.get(activeConversationId) ?? null : null)
+  const session = useChatStore(s => s.sessions.get(activeConversationId ?? '')) ?? getSession('')
+  const { isGenerating, streamingContent, isStreaming, thoughts, isThinking, compactInfo, error, errorType, textBlockVersion, pendingQuestion } = session
+
+  // A digital-human conversation is not in the space index, so "loading" is
+  // simply "not read yet and no read has failed".
+  const isLoading = isDigitalHuman
+    ? !currentConversation && !loadError
+    : isLoadingConversation && !currentConversation
+
+  // A digital-human conversation on screen but not in the cache (evicted while
+  // the space was left, or never read) is read in again. Reads are deduplicated
+  // by the source, and a failed one shows its error instead of retrying here.
+  const isDigitalHumanUncached = isDigitalHuman && !currentConversation && !loadError
+  useEffect(() => {
+    if (isDigitalHumanUncached && activeConversationId) void openConversation(activeConversationId)
+  }, [isDigitalHumanUncached, activeConversationId, openConversation])
 
   // Lazy loader for a message's separated thoughts, bound to the active
   // space + conversation ids. Passed to MessageList's thoughtsLoader prop.
   const thoughtsLoader = useCallback(
     (messageId: string) =>
-      currentSpaceId && currentConversation?.id
-        ? loadMessageThoughts(currentSpaceId, currentConversation.id, messageId)
+      currentSpaceId && activeConversationId
+        ? loadMessageThoughts(currentSpaceId, activeConversationId, messageId)
         : Promise.resolve([]),
-    [loadMessageThoughts, currentSpaceId, currentConversation?.id]
+    [loadMessageThoughts, currentSpaceId, activeConversationId]
   )
-  // The live turn of the conversation on screen. `getSession('')` is the store's
-  // own empty-session constant — a stable identity for "no session yet", so the
-  // fallback does not look like a change to anything downstream.
-  const session = useChatStore(s => s.sessions.get(currentConversationId ?? '')) ?? getSession('')
-  const { isGenerating, streamingContent, isStreaming, thoughts, isThinking, compactInfo, error, errorType, textBlockVersion, pendingQuestion } = session
+
+  // Older messages exist beyond what is loaded (digital-human transcripts are paged).
+  const hasEarlier = !!currentConversation?.earlier?.hasMore
+  const handleLoadEarlier = useCallback(() => {
+    if (activeConversationId) void loadEarlierMessages(activeConversationId)
+  }, [activeConversationId, loadEarlierMessages])
+
+  // Events during a dropped connection are gone: re-read what is on screen.
+  useWsRecovery(useCallback(() => {
+    if (activeConversationId) void refreshConversation(activeConversationId)
+  }, [activeConversationId, refreshConversation]))
 
   // ── Digital-human selector wiring ──
-  // The active conversation is whichever link the selector points at; locking
-  // reads that link's own session so switching is blocked mid-reply no matter
-  // which side (Halo or a digital human) is currently generating.
-  const activeConversationId = selectedAppChat ? selectedAppChat.conversationId : currentConversation?.id ?? null
+  // Locking reads the active conversation's own session so switching is
+  // blocked mid-reply no matter which side (Halo or a digital human) is
+  // currently generating.
   const digitalHumanSelectorLocked = useChatStore(s => {
     const active = s.sessions.get(activeConversationId ?? '')
     return !!active && (active.isGenerating || active.queuedMessages.length > 0)
@@ -326,9 +362,10 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
       sendMessage(content, images, thinkingEnabled, { goal }),
     [sendMessage]
   )
+  // Goals belong to space conversations; a digital human keeps none.
   const goalComposer = useGoalComposer({
     spaceId: currentSpaceId,
-    conversationId: currentConversationId,
+    conversationId: isDigitalHuman ? null : activeConversationId,
     draftKey: activeConversationId ?? undefined,
     isGenerating,
     send: sendWithGoal,
@@ -338,8 +375,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
   // Only reads from SDK slash_commands array.
   // Commands are categorized as 'skill' if they appear in the skills array, otherwise 'builtin'.
   const slashCommands = useMemo<SlashCommandItem[]>(() => {
-    const conversationId = getCurrentConversationId()
-    const initInfo = conversationId ? sessionInitInfo.get(conversationId) : null
+    const initInfo = activeConversationId ? sessionInitInfo.get(activeConversationId) : null
 
     const items: SlashCommandItem[] = []
     const itemsByCommand = new Map<string, SlashCommandItem>()
@@ -367,7 +403,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
     }
 
     return items
-  }, [sessionInitInfo, getCurrentConversationId])
+  }, [sessionInitInfo, activeConversationId])
 
   const onboardingPrompt = getOnboardingPrompt(t)
   const onboardingResponse = getOnboardingAiResponse(t)
@@ -439,8 +475,8 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
 
   // Handle stop - stops the current conversation's generation
   const handleStop = async () => {
-    if (currentConversation) {
-      await stopGeneration(currentConversation.id)
+    if (activeConversationId) {
+      await stopGeneration(activeConversationId)
     }
   }
 
@@ -476,50 +512,40 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
     prevCompactRef.current = isCompact
   }, [isCompact])
 
-  // ── Digital-human mode: delegate to AppChatView ──
-  // AppChatView already fully implements "chat with a digital human" (its own
-  // message loading, send/stop, mentions, WS recovery) — reusing it here keeps
-  // that logic in one place instead of re-deriving it inside ChatView. Only the
-  // input row is shared in spirit: the same DigitalHumanSelector config is
-  // threaded through so the control never visually resets when switching.
-  if (selectedAppChat && currentSpace) {
-    return (
-      <AppChatView
-        key={selectedAppChat.conversationId}
-        appId={selectedAppChat.appId}
-        spaceId={currentSpace.id}
-        conversationId={selectedAppChat.conversationId}
-        digitalHumanSelector={digitalHumanSelector}
-        draftKey={activeConversationId ?? undefined}
-      />
-    )
-  }
-
   // Full-takeover empty state: composer and suggestions centered on screen,
   // no docked input below — matches the prototype, where the composer only
-  // sinks to a bottom dock once the first message is sent. Loading and
-  // compact (canvas-open) states keep the normal docked-input layout.
-  const isFullTakeoverEmpty = !isCompact && !hasMessages && !isLoadingConversation
+  // sinks to a bottom dock once the first message is sent. Loading, compact
+  // (canvas-open) and digital-human conversations keep the docked-input layout.
+  const isFullTakeoverEmpty = !isCompact && !hasMessages && !isLoading && !isDigitalHuman
+
+  const composerPlaceholder = isDigitalHuman
+    ? (activeAppName ? t('Chat with {{name}}...', { name: activeAppName }) : t('Chat with this App...'))
+    : isCompact ? t('Continue conversation...') : (currentSpace?.isTemp ? t('Say something to Halo...') : undefined)
 
   // Built once and handed to whichever position needs it (docked at the
   // bottom, or centered inline in the full-takeover empty state) — only one
   // of those two ever mounts at a time, so there's no duplicate instance,
-  // just two possible slots for the same props.
+  // just two possible slots for the same props. The key follows the
+  // conversation, never its loading state, so opening one does not rebuild the
+  // composer (and lose focus).
   const inputArea = (
     <InputArea
       key={activeConversationId ?? 'none'}
       onSend={handleSend}
       onInject={(content) => {
-        const conversationId = getCurrentConversationId()
-        if (conversationId) injectMessage(conversationId, content)
+        if (activeConversationId) injectMessage(activeConversationId, content)
       }}
       onStop={handleStop}
       isGenerating={isGenerating}
-      placeholder={isCompact ? t('Continue conversation...') : (currentSpace?.isTemp ? t('Say something to Halo...') : undefined)}
+      placeholder={composerPlaceholder}
       isCompact={isCompact}
       slashCommands={slashCommands}
       mentionArtifacts={mentionArtifacts}
-      mentionConversations={mentionConversations}
+      // A digital human's tools and knowledge live in its own settings; it can
+      // only act on a reference to another conversation once collaboration is on.
+      mentionConversations={isDigitalHuman && !(activeApp && isConversationCollabEnabled(activeApp)) ? undefined : mentionConversations}
+      hideToolsetControls={isDigitalHuman}
+      hideKnowledgeControls={isDigitalHuman}
       standalone={isFullTakeoverEmpty}
       digitalHumanSelector={digitalHumanSelector}
       draftKey={activeConversationId ?? undefined}
@@ -560,18 +586,30 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
         <div
           className={`
             h-full animate-fade-up
-            ${isLoadingConversation || !hasMessages ? (isCompact ? 'px-3' : 'px-6') : ''}
+            ${isLoading || loadError || !hasMessages ? (isCompact ? 'px-3' : 'px-6') : ''}
           `}
         >
-          {isLoadingConversation ? (
+          {isLoading ? (
             <LoadingState />
+          ) : loadError && !currentConversation ? (
+            <LoadFailedState
+              message={loadError}
+              onRetry={activeConversationId ? () => void refreshConversation(activeConversationId) : undefined}
+            />
           ) : !hasMessages ? (
-            <EmptyState isCompact />
+            <EmptyState
+              isCompact
+              message={isDigitalHuman
+                ? (activeAppName
+                  ? t('Send a message to start chatting with {{name}}', { name: activeAppName })
+                  : t('Send a message to start chatting with this App'))
+                : undefined}
+            />
           ) : (
             <MessageList
-              key={currentConversation?.id ?? 'empty'}
+              key={activeConversationId ?? 'empty'}
               ref={messageListRef}
-              conversationId={currentConversation?.id}
+              conversationId={activeConversationId ?? undefined}
               thoughtsLoader={thoughtsLoader}
               messages={displayMessages}
               streamingContent={displayStreamingContent}
@@ -582,14 +620,19 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
               compactInfo={compactInfo}
               error={error}
               errorType={errorType}
-              onContinue={currentConversation ? () => continueAfterInterrupt(currentConversation.id) : undefined}
+              onContinue={activeConversationId ? () => continueAfterInterrupt(activeConversationId) : undefined}
               onStop={handleStop}
               isCompact={isCompact}
               textBlockVersion={textBlockVersion}
               pendingQuestion={pendingQuestion}
-              onAnswerQuestion={currentConversation ? (answers) => answerQuestion(currentConversation.id, answers) : undefined}
+              onAnswerQuestion={activeConversationId ? (answers) => answerQuestion(activeConversationId, answers) : undefined}
               onAtBottomStateChange={handleAtBottomStateChange}
-              footerExtra={<TeamCollabPanel conversationId={currentConversation?.id} />}
+              onLoadEarlier={hasEarlier ? handleLoadEarlier : undefined}
+              footerExtra={isDigitalHuman
+                ? (realMessages.length > 0 && !isGenerating && activeConversationId
+                  ? <ClearChatControl conversationId={activeConversationId} />
+                  : null)
+                : <TeamCollabPanel conversationId={activeConversationId ?? undefined} />}
             />
           )}
         </div>
@@ -618,6 +661,25 @@ function LoadingState() {
   )
 }
 
+function LoadFailedState({ message, onRetry }: { message: string; onRetry?: () => void }) {
+  const { t } = useTranslation()
+  return (
+    <div className="h-full flex flex-col items-center justify-center gap-2 text-center max-w-sm mx-auto">
+      <AlertCircle className="w-5 h-5 text-destructive" />
+      <p className="text-sm text-muted-foreground">{t('Failed to load chat')}</p>
+      <p className="text-xs text-muted-foreground/60 break-words">{message}</p>
+      {onRetry && (
+        <button
+          onClick={onRetry}
+          className="mt-1 px-3 py-1 text-xs rounded-sm border border-border text-foreground hover:bg-secondary transition-colors"
+        >
+          {t('Retry')}
+        </button>
+      )}
+    </div>
+  )
+}
+
 // Fixed hover/press treatment shared by every suggestion chip below.
 const CHIP_CLASS = 'group flex items-center gap-[7px] h-[34px] px-3.5 rounded-full border border-border bg-card text-[13px] text-muted-foreground transition-colors ease-halo hover:text-foreground hover:border-primary hover:bg-secondary'
 const CHIP_ICON_CLASS = 'w-[15px] h-[15px] text-subtle-foreground transition-colors ease-halo group-hover:text-primary'
@@ -625,10 +687,13 @@ const CHIP_ICON_CLASS = 'w-[15px] h-[15px] text-subtle-foreground transition-col
 // Empty state component - adapts to compact mode
 function EmptyState({
   isCompact = false,
+  message,
   onSuggestion,
   composer,
 }: {
   isCompact?: boolean
+  /** Replaces the compact hint (a digital human's empty conversation says who to talk to). */
+  message?: string
   onSuggestion?: (prompt: string) => void
   /** Centered composer, only rendered in the full (non-compact) takeover. */
   composer?: ReactNode
@@ -642,7 +707,7 @@ function EmptyState({
       <div className="h-full flex flex-col items-center justify-center text-center px-4">
         <Sparkles className="w-8 h-8 text-primary/70" />
         <p className="mt-4 text-sm text-muted-foreground">
-          {t('Continue the conversation here')}
+          {message ?? t('Continue the conversation here')}
         </p>
       </div>
     )

@@ -46,26 +46,21 @@ export function navigateToConversation(spaceId: string, conversationId: string) 
  * exactly like navigateToConversation above, but landing on the app-chat
  * link (selectAppChatConversation) instead of a regular conversation.
  *
- * @param appSpaceId - The digital human's home space, or null for a global
- *   app — a global app has no space to switch to, so it opens in whichever
- *   space is currently active instead of forcing a jump.
+ * @param appSpaceId - The digital human's home space.
  */
-export function navigateToAppChat(appSpaceId: string | null, appId: string, conversationId: string) {
+export function navigateToAppChat(appSpaceId: string, appId: string, conversationId: string) {
   const chatStore = useChatStore.getState()
   useAppStore.getState().navigate('space')
 
-  const targetSpaceId = appSpaceId ?? chatStore.currentSpaceId
-  if (!targetSpaceId) return
-
-  if (chatStore.currentSpaceId === targetSpaceId) {
-    chatStore.selectAppChatConversation(targetSpaceId, appId, conversationId)
+  if (chatStore.currentSpaceId === appSpaceId) {
+    chatStore.selectAppChatConversation(appSpaceId, appId, conversationId)
     return
   }
 
   const spaceStore = useSpaceStore.getState()
-  const targetSpace = spaceStore.haloSpace?.id === targetSpaceId
+  const targetSpace = spaceStore.haloSpace?.id === appSpaceId
     ? spaceStore.haloSpace
-    : spaceStore.spaces.find(s => s.id === targetSpaceId)
+    : spaceStore.spaces.find(s => s.id === appSpaceId)
   if (!targetSpace) return
 
   useChatStore.setState({ pendingAppChatNavigation: { appId, conversationId } })
@@ -105,7 +100,7 @@ const openingChats = new Map<string, Promise<boolean>>()
  *
  * Returns false when no conversation could be created.
  */
-export function openDigitalHumanChat(appId: string, appSpaceId: string | null): Promise<boolean> {
+export function openDigitalHumanChat(appId: string, appSpaceId: string): Promise<boolean> {
   const pending = openingChats.get(appId)
   if (pending) return pending
   const opening = (async () => {
@@ -116,4 +111,31 @@ export function openDigitalHumanChat(appId: string, appSpaceId: string | null): 
   })().finally(() => openingChats.delete(appId))
   openingChats.set(appId, opening)
   return opening
+}
+
+/** The parts of a global-search hit that decide which conversation it lands in. */
+export interface SearchResultTarget {
+  spaceId: string
+  conversationId: string
+  messageId: string
+  kind?: 'chat' | 'digital-human'
+  appId?: string
+}
+
+/**
+ * Open the conversation a search hit lives in, with the hit's message loaded.
+ * The caller has already switched to the hit's space. A space conversation is
+ * selected whole; a digital human's is opened on the main board and, being
+ * paged, widened back to the hit — however far back it is.
+ */
+export async function openSearchResultConversation(result: SearchResultTarget): Promise<void> {
+  const chat = useChatStore.getState()
+  await chat.loadConversations(result.spaceId)
+
+  if (result.kind === 'digital-human' && result.appId) {
+    chat.selectAppChatConversation(result.spaceId, result.appId, result.conversationId)
+    await chat.ensureMessageLoaded(result.conversationId, result.messageId)
+    return
+  }
+  await chat.selectConversation(result.conversationId)
 }

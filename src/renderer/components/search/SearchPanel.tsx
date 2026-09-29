@@ -28,30 +28,18 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { api } from '@/api'
-import { useChatStore } from '@/stores/chat.store'
+import { useChatStore, selectActiveConversationId } from '@/stores/chat.store'
 import { useSpaceStore } from '@/stores/space.store'
 import { useAppStore } from '@/stores/app.store'
 import { useAppsPageStore } from '@/stores/apps-page.store'
 import { useTlonStore } from '@/stores/tlon.store'
 import { useSearchStore } from '@/stores/search.store'
 import { useTranslation } from '@/i18n'
+import { openSearchResultConversation } from '@/utils/conversation-navigation'
+import type { SearchResult as SearchResultItem } from '../../../shared/types/search'
 import { useQuickJumpCandidates, type QuickJumpItem, type QuickJumpType } from './useQuickJumpCandidates'
 
 export type SearchScope = 'conversation' | 'space' | 'global'
-
-interface SearchResultItem {
-  conversationId: string
-  conversationTitle: string
-  messageId: string
-  spaceId: string
-  spaceName: string
-  messageRole: 'user' | 'assistant'
-  messageContent: string
-  messageTimestamp: string
-  matchCount: number
-  contextBefore?: string
-  contextAfter?: string
-}
 
 interface SearchPanelProps {
   isOpen: boolean
@@ -73,12 +61,10 @@ export function SearchPanel({ isOpen, onClose }: SearchPanelProps) {
   const { t } = useTranslation()
   const { navigate } = useAppStore()
 
-  const { currentSpaceId, selectConversation, setCurrentSpace, loadConversations, createConversation, spaceStates } = useChatStore()
-  // currentConversationId lives per-space in spaceStates, not at the store's
-  // top level — the pre-existing destructure here read a field that doesn't
-  // exist on ChatState (always undefined, silently degrading conversation
-  // scope to space scope).
-  const currentConversationId = currentSpaceId ? spaceStates.get(currentSpaceId)?.currentConversationId ?? null : null
+  const { currentSpaceId, selectConversation, setCurrentSpace, loadConversations, createConversation } = useChatStore()
+  // The conversation on screen (a selected digital human's, else the regular one)
+  // is what "this conversation" means for a search scope.
+  const currentConversationId = useChatStore(selectActiveConversationId)
   const { spaces, haloSpace, setCurrentSpace: setSpaceStoreCurrentSpace } = useSpaceStore()
 
   const {
@@ -255,8 +241,7 @@ export function SearchPanel({ isOpen, onClose }: SearchPanelProps) {
         setCurrentSpace(result.spaceId)
         await new Promise(resolve => setTimeout(resolve, 100))
       }
-      await loadConversations(result.spaceId)
-      await selectConversation(result.conversationId)
+      await openSearchResultConversation(result)
 
       const resultsArray = results ?? []
       showHighlightBar(searchedQuery, resultsArray, resultsArray.findIndex(r => r.messageId === result.messageId))
@@ -426,7 +411,7 @@ export function SearchPanel({ isOpen, onClose }: SearchPanelProps) {
                         </div>
                       </div>
                       <span className="text-xs px-2 py-1 rounded bg-primary/10 text-primary flex-shrink-0">
-                        {result.messageRole === 'user' ? t('You') : 'AI'}
+                        {result.messageRole === 'user' ? t('You') : result.messageRole === 'system' ? t('System') : 'AI'}
                       </span>
                     </div>
                     <div className="text-sm text-foreground bg-muted/30 p-2 rounded mt-2 border-l-2 border-primary/50">

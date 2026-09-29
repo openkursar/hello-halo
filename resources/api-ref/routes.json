@@ -744,6 +744,10 @@
   },
   {
     "method": "POST",
+    "path": "/api/apps/:appId/chat/inject"
+  },
+  {
+    "method": "POST",
     "path": "/api/apps/:appId/chat/stop",
     "group": "digital-human"
   },
@@ -756,6 +760,14 @@
     "method": "GET",
     "path": "/api/apps/:appId/chat/messages",
     "group": "digital-human"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/:appId/chat/transcript"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/:appId/chat/messages/:messageId/thoughts"
   },
   {
     "method": "GET",

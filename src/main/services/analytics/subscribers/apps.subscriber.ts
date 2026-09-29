@@ -59,11 +59,12 @@ export function installAppsSubscribers(
   )
 
   unsubscribers.push(
-    appManager.onAppUninstalled((app: InstalledApp) => {
+    appManager.onAppUninstalled((app: InstalledApp, reason) => {
       void analytics.track(AnalyticsEvents.APP_UNINSTALLED, {
         appId: app.id,
         specId: app.specId,
         type: app.spec.type,
+        reason,
       })
     })
   )

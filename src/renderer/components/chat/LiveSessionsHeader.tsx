@@ -15,7 +15,7 @@ import { useEffect, useState } from 'react'
 import { TerminalSquare, Globe, ArrowUpRight, X, ChevronDown, Zap } from 'lucide-react'
 import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
-import { useLiveSessions, type LiveSession } from '../../hooks/useLiveSessions'
+import { useLiveSessions, type LiveSession, type StopOutcome } from '../../hooks/useLiveSessions'
 import { useAppStore } from '../../stores/app.store'
 import { useNotificationStore } from '../../stores/notification.store'
 import { useTranslation } from '../../i18n'
@@ -69,13 +69,15 @@ function SessionRow({ session, isOnSpacePage, onOpen, onStop }: SessionRowProps)
       >
         <ArrowUpRight size={13} />
       </button>
-      <button
-        onClick={onStop}
-        title={t('Stop')}
-        className="shrink-0 p-1 rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
-      >
-        <X size={13} />
-      </button>
+      {session.stoppable && (
+        <button
+          onClick={onStop}
+          title={t('Stop')}
+          className="shrink-0 p-1 rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+        >
+          <X size={13} />
+        </button>
+      )}
     </div>
   )
 }
@@ -102,7 +104,26 @@ export function LiveSessionsHeader() {
   const confirmStop = async () => {
     const target = pendingStop
     setPendingStop(null)
-    if (target) await stop(target)
+    if (!target) return
+    const outcome = await stop(target).catch((err): StopOutcome => {
+      console.error('[LiveSessionsHeader] Failed to stop session:', err)
+      return { stopped: false, reason: 'failed' }
+    })
+    if (!outcome.stopped) {
+      // Only a failed stop is worth retrying; the other refusals are decisions.
+      const body =
+        outcome.reason === 'in-use' ? t('Another conversation is using this page right now, so it was left open.')
+        : outcome.reason === 'not-owned' ? t('This page was not opened by the AI, so it was left open.')
+        : outcome.reason === 'gone' ? t('This page is already closed.')
+        : t('The session may still be running. Try again.')
+      useNotificationStore.getState().show({
+        id: 'live-session-stop-error',
+        title: t('Could not stop session'),
+        body,
+        variant: 'error',
+        duration: 6000,
+      })
+    }
   }
 
   // One message for every way revealing can fail — no space to land in, or the
@@ -186,7 +207,9 @@ export function LiveSessionsHeader() {
       {pendingStop && (
         <ConfirmDialog
           title={t('Stop this session?')}
-          message={t('The running process will be terminated.')}
+          message={pendingStop.kind === 'browser'
+            ? t('The page will be closed.')
+            : t('The running process will be terminated.')}
           confirmLabel={t('Stop')}
           cancelLabel={t('Cancel')}
           variant="danger"

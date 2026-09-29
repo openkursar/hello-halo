@@ -6,7 +6,7 @@
  * streaming text) for the selected IM session.
  *
  * No input area — IM interactions happen in the external IM channel.
- * Reuses the same atomic chat components as AppChatView for consistency.
+ * Reuses the same atomic chat components as the main chat page for consistency.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react'
@@ -126,7 +126,7 @@ export function ImChatView({ appId, spaceId, session, clearKey, footerAction }: 
   }, [isGenerating, appId, spaceId, session.channel, session.chatType, session.chatId])
 
   // ── WebSocket reconnect recovery (remote/Capacitor only) ──
-  // Same pattern as AppChatView — reload messages and reconcile session state
+  // Same pattern as the main chat page — reload messages and reconcile session state
   // after a WebSocket reconnect to recover any events lost during the gap.
   useWsRecovery(useCallback(() => {
     console.log(`[ImChatView] WS reconnected — reloading messages for ${conversationId}`)
@@ -293,7 +293,8 @@ export function ImChatView({ appId, spaceId, session, clearKey, footerAction }: 
               textBlockVersion={textBlockVersion}
               onStop={() => setShowStopConfirm(true)}
               onAtBottomStateChange={handleAtBottomStateChange}
-              hideBrowserViewButton
+              hideBrowserLiveView
+              hideTerminalOpen
             />
           </div>
         )}

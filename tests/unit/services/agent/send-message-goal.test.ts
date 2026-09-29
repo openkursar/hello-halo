@@ -56,7 +56,7 @@ vi.mock('../../../../src/main/services/agent/image-attachments', () => ({
 }))
 vi.mock('../../../../src/main/services/agent/sdk-config', () => ({
   resolveCredentialsForSdk: vi.fn(async () => ({ displayModel: 'm', capabilities: {} })),
-  buildBaseSdkOptions: vi.fn(async () => ({})),
+  buildUserSessionSdkOptions: vi.fn(async () => ({})),
 }))
 vi.mock('../../../../src/main/services/agent/space-memory', () => ({
   resolveSpaceMemorySession: vi.fn(() => null),

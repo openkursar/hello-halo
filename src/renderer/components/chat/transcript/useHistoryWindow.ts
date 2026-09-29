@@ -9,7 +9,12 @@
  * the failure mode of list virtualization. Rows that are mounted but off-screen
  * are left to `content-visibility` (see `row.ts`).
  *
- * Rows must carry `data-transcript-index={absoluteIndex}`.
+ * When the list itself grows at the front (older history read in from the
+ * source), the window follows the rows it was showing and the view stays on the
+ * same row, exactly as when it mounts older rows it already has.
+ *
+ * Rows must carry `data-transcript-index={absoluteIndex}` and be keyed by a
+ * stable row key, so an older page does not rebuild the rows below it.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
@@ -21,6 +26,11 @@ export interface HistoryWindowOptions {
   page?: number
   /** Distance in px above the viewport at which the next page is mounted. */
   preloadMargin?: number
+  /**
+   * The reader reached the oldest mounted row and nothing older is left to
+   * mount: ask the source for more. Pass only while more exists.
+   */
+  onReachStart?: () => void
 }
 
 export interface HistoryWindow {
@@ -50,32 +60,67 @@ export function windowStartAfterCountChange(prev: { start: number; count: number
   return fresh ? Math.max(0, count - initial) : prev.start
 }
 
+/**
+ * The window after the list changed. A list that grew at the front keeps the
+ * window on the rows it showed (`prepended` is how many rows arrived in front);
+ * anything else follows `windowStartAfterCountChange`.
+ */
+export function windowAfterKeysChange(
+  prev: { start: number; count: number; firstKey: string | null },
+  keys: readonly string[],
+  initial: number
+): { start: number; count: number; firstKey: string | null; prepended: number } {
+  const firstKey: string | null = keys.length > 0 ? keys[0] : null
+  const prependedAt = prev.count > 0 && prev.firstKey !== null && firstKey !== prev.firstKey
+    ? keys.indexOf(prev.firstKey)
+    : -1
+  if (prependedAt > 0 && prev.start < prev.count) {
+    return { start: prev.start + prependedAt, count: keys.length, firstKey, prepended: prependedAt }
+  }
+  return { start: windowStartAfterCountChange(prev, keys.length, initial), count: keys.length, firstKey, prepended: 0 }
+}
+
 function rowAt(scroller: HTMLElement, index: number): HTMLElement | null {
   return scroller.querySelector<HTMLElement>(`[data-transcript-index="${index}"]`)
 }
 
 export function useHistoryWindow(
-  count: number,
+  keys: readonly string[],
   scroller: HTMLElement | null,
-  { initial = 40, page = 30, preloadMargin = 1500 }: HistoryWindowOptions = {}
+  { initial = 40, page = 30, preloadMargin = 1500, onReachStart }: HistoryWindowOptions = {}
 ): HistoryWindow {
-  const [windowState, setWindowState] = useState(() => ({ start: Math.max(0, count - initial), count }))
+  const count = keys.length
+  const firstKey: string | null = keys.length > 0 ? keys[0] : null
+  const [windowState, setWindowState] = useState(() => ({ start: Math.max(0, count - initial), count, firstKey }))
+  const pendingAnchor = useRef<{ el: HTMLElement | null; top: number } | null>(null)
 
   let start = windowState.start
-  if (windowState.count !== count) {
-    start = windowStartAfterCountChange(windowState, count, initial)
-    setWindowState({ start, count })
+  if (windowState.count !== count || windowState.firstKey !== firstKey) {
+    const next = windowAfterKeysChange(windowState, keys, initial)
+    if (next.prepended > 0 && scroller && !pendingAnchor.current) {
+      // Older rows are about to appear above the first mounted one: remember
+      // where it is so the layout effect can put the view back on it.
+      const first = rowAt(scroller, windowState.start)
+      pendingAnchor.current = { el: first, top: first?.getBoundingClientRect().top ?? 0 }
+    }
+    start = next.start
+    setWindowState({ start: next.start, count: next.count, firstKey: next.firstKey })
   }
   const startRef = useRef(start)
   startRef.current = start
+  const onReachStartRef = useRef(onReachStart)
+  onReachStartRef.current = onReachStart
 
   const [sentinel, setSentinel] = useState<HTMLElement | null>(null)
-  const pendingAnchor = useRef<{ el: HTMLElement | null; top: number } | null>(null)
   const pendingReveal = useRef<{ index: number; onMounted: (el: HTMLElement) => void } | null>(null)
   const recheckFrame = useRef(0)
 
   const loadOlder = useCallback(() => {
-    if (!scroller || startRef.current <= 0 || pendingAnchor.current) return
+    if (!scroller || pendingAnchor.current) return
+    if (startRef.current <= 0) {
+      onReachStartRef.current?.()
+      return
+    }
     const first = rowAt(scroller, startRef.current)
     pendingAnchor.current = { el: first, top: first?.getBoundingClientRect().top ?? 0 }
     setWindowState(s => ({ ...s, start: Math.max(0, s.start - page) }))

@@ -16,19 +16,15 @@
  * A digital human with no conversations contributes no rows.
  */
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
-import { api } from '../api'
+import { useEffect, useMemo, useSyncExternalStore } from 'react'
+import { acquireAppChatSessions, getAppChatSessions, subscribeAppChatSessions } from '../stores/app-chat-sessions'
 import { useAppChatPinsStore } from '../stores/app-chat-pins.store'
 import { useSpaceDigitalHumans } from './useSpaceDigitalHumans'
 import { getCurrentLanguage } from '../i18n'
 import { resolveSpecI18n } from '../utils/spec-i18n'
 import { getAppChatConversationId } from '../api/_shared'
 import { buildLocalSessionKey } from '../../shared/apps/im-keys'
-import type { ImSessionRecord } from '../../shared/types/im-channel'
 import type { AppStatus } from '../../shared/apps/app-types'
-
-/** Poll interval for the registry summary — matches ImSessionsSection's cadence. */
-const POLL_INTERVAL_MS = 15_000
 
 export interface AppChatConversationRow {
   /** conversationId — native default ("app-chat:{appId}") or a 5-segment local key. */
@@ -54,41 +50,21 @@ export interface AppChatConversationRow {
 }
 
 /**
- * Read all app-chat conversation rows in scope for a space. Digital-human
- * data is intentionally NOT scoped by appId when calling imSessionsList —
- * one unscoped call covers every app, mirroring ImSessionsSection's global
- * mode instead of one round trip per app.
+ * Read all app-chat conversation rows in scope for a space. The records come
+ * from one registry feed shared by every caller (`stores/app-chat-sessions`);
+ * `enabled: false` keeps this caller from asking for fresh data or re-rendering
+ * on it, for callers that only need rows some of the time.
  */
-export function useAppChatConversationRows(spaceId: string | null): AppChatConversationRow[] {
+const noSubscription = () => () => {}
+
+export function useAppChatConversationRows(spaceId: string | null, { enabled = true }: { enabled?: boolean } = {}): AppChatConversationRow[] {
   // Soft-deleted apps stay in: their past conversations remain listed (faded)
   // so reinstalling restores them instead of silently losing the history.
   const digitalHumans = useSpaceDigitalHumans(spaceId, { includeUninstalled: true })
   const pinnedForSpace = useAppChatPinsStore(s => (spaceId ? s.pinned[spaceId] : undefined))
-  const [sessions, setSessions] = useState<ImSessionRecord[]>([])
+  const sessions = useSyncExternalStore(enabled ? subscribeAppChatSessions : noSubscription, getAppChatSessions)
 
-  const fetchSessions = useCallback(async () => {
-    try {
-      const res = await api.imSessionsList()
-      if (res.success && Array.isArray(res.data)) {
-        setSessions(res.data as ImSessionRecord[])
-      }
-    } catch (err) {
-      console.error('[useAppChatConversationRows] fetchSessions error:', err)
-    }
-  }, [])
-
-  useEffect(() => {
-    fetchSessions()
-    const interval = setInterval(fetchSessions, POLL_INTERVAL_MS)
-    return () => clearInterval(interval)
-  }, [fetchSessions])
-
-  // Real-time refresh on send/clear/delete — the poll above is only the
-  // fallback for events missed while the tab was backgrounded.
-  useEffect(() => {
-    const unsub = api.onImSessionUpdated?.(() => { fetchSessions() })
-    return () => { unsub?.() }
-  }, [fetchSessions])
+  useEffect(() => (enabled ? acquireAppChatSessions() : undefined), [enabled])
 
   return useMemo(() => {
     if (!spaceId) return []

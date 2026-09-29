@@ -1190,7 +1190,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     const app = appManager.getApp(appId)
     const spaceId = app?.spaceId ?? null
     try {
-      await appManager.uninstall(appId, { purge: true })
+      await appManager.uninstall(appId, { purge: true, reason: 'system' })
       await appManager.deleteApp(appId)
       console.log(`${LOG_TAG} cleanupOrphanApp: deleted app=${appId}`)
     } catch (err) {
@@ -1718,7 +1718,7 @@ export async function proposeMembersViaSdk(goal: string, owningSpaceId: string):
     const workDir = helpers.getWorkingDir(owningSpaceId)
     const electronPath = helpers.getHeadlessElectronPath()
 
-    const options = await sdkConfig.buildBaseSdkOptions({
+    const options = await sdkConfig.buildInternalTaskSdkOptions({
       credentials: resolvedCreds,
       workDir,
       electronPath,

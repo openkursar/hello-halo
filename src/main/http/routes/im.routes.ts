@@ -2,6 +2,7 @@
  * Im REST API routes (remote access).
  * Split from the monolithic routes/index.ts; mirrors the IPC API for this domain.
  */
+import { DEFAULT_SPACE_ID } from '../../../shared/apps/install-scope'
 import type { Express, Request, Response } from 'express'
 import {
   ILINK_BASE_URL,
@@ -147,7 +148,7 @@ export function registerImRoutes(app: Express): void {
       }
       const prefix = String(req.body?.botIdPrefix ?? '').slice(0, 8) || 'bot'
       const spec = buildDefaultAssistantSpec(prefix)
-      const appId = await manager.install('halo-temp', spec)
+      const appId = await manager.install(DEFAULT_SPACE_ID, spec)
       res.json({ success: true, data: { appId, appName: spec.name } })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
@@ -240,7 +241,7 @@ export function registerImRoutes(app: Express): void {
       }
       const suffix = String(req.body?.appIdSuffix ?? '').slice(0, 8) || 'bot'
       const spec = buildFeishuAssistantSpec(suffix)
-      const appId = await manager.install('halo-temp', spec)
+      const appId = await manager.install(DEFAULT_SPACE_ID, spec)
       res.json({ success: true, data: { appId, appName: spec.name } })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })

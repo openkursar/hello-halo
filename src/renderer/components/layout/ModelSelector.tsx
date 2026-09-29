@@ -8,9 +8,11 @@
  */
 
 import { useState, useRef, useEffect } from 'react'
-import { Brain, ChevronDown, Plus, Sparkles, X, Check, RefreshCw } from 'lucide-react'
+import { Brain, ChevronDown, ChevronRight, Plus, Sparkles, X, Check, RefreshCw } from 'lucide-react'
 import { useAppStore } from '../../stores/app.store'
 import { useChatStore } from '../../stores/chat.store'
+import { useActiveModelTarget, type ActiveModelTarget } from '../../hooks/useActiveModelTarget'
+import { openPersonModelSettings } from '../../utils/people-navigation'
 import { api } from '../../api'
 import {
   getModelDisplayName,
@@ -34,16 +36,14 @@ function useAiSources(): AISourcesConfig {
 }
 
 /**
- * Read the current conversation (full, from cache) so the selector can reflect
- * and mutate its per-conversation model pin. Returns null when no conversation
- * is active or it isn't cached yet. Selecting the conversation object by
- * reference keeps this subscription from re-rendering on every streaming token.
+ * The regular conversation whose model pin the selector reflects and mutates.
+ * Null when none is active, it isn't cached yet, or a digital human is on
+ * screen — a digital human's model is edited in its own settings, so this list
+ * has nothing to write to then.
  */
 function useCurrentConversation(): Conversation | null {
-  return useChatStore(s => {
-    const conversationId = s.getCurrentSpaceState().currentConversationId
-    return conversationId ? s.conversationCache.get(conversationId) ?? null : null
-  })
+  const target = useActiveModelTarget()
+  return target.kind === 'conversation' ? target.conversation : null
 }
 
 /**
@@ -62,7 +62,9 @@ function ModelList({ onDone }: { onDone: () => void }) {
 
   // Current conversation's model pin drives the checkmark; falls back to the
   // global selection for legacy conversations without a pin.
-  const currentConversation = useCurrentConversation()
+  const target = useActiveModelTarget()
+  const conversationId = target.kind === 'conversation' ? target.conversationId : null
+  const currentConversation = target.kind === 'conversation' ? target.conversation : null
   const pinSourceId = currentConversation?.modelSourceId
   const pinModelId = currentConversation?.modelId
 
@@ -85,7 +87,6 @@ function ModelList({ onDone }: { onDone: () => void }) {
     // 1. Persist the per-conversation pin
     const chat = useChatStore.getState()
     const spaceId = chat.currentSpaceId
-    const conversationId = chat.getCurrentSpaceState().currentConversationId
     if (spaceId && conversationId) {
       await chat.setConversationModel(spaceId, conversationId, sourceId, modelId)
     }
@@ -117,7 +118,6 @@ function ModelList({ onDone }: { onDone: () => void }) {
     const targetSource = aiSources.sources.find(s => s.id === sourceId)
     const chat = useChatStore.getState()
     const spaceId = chat.currentSpaceId
-    const conversationId = chat.getCurrentSpaceState().currentConversationId
     if (spaceId && conversationId && targetSource?.model) {
       await chat.setConversationModel(spaceId, conversationId, sourceId, targetSource.model)
     }
@@ -374,7 +374,40 @@ export function ModelSelectSheet({ onClose }: { onClose: () => void }) {
   )
 }
 
+/**
+ * Header model control while a digital human is on screen: shows the model that
+ * digital human is configured with and opens its settings. Read-only by design.
+ */
+function DigitalHumanModelButton({ target }: { target: Extract<ActiveModelTarget, { kind: 'digital-human' }> }) {
+  const { t } = useTranslation()
+  const aiSources = useAiSources()
+  const modelName = getModelDisplayName(aiSources, target.modelSourceId, target.modelId)
+  const title = t('{{name}} uses {{model}} — change it in its settings', { name: target.appName, model: modelName })
+
+  return (
+    <button
+      onClick={() => openPersonModelSettings(target.appId)}
+      className="h-8 flex items-center gap-1.5 px-2.5 rounded-sm border border-border bg-card text-xs text-foreground hover:border-primary transition-colors ease-halo"
+      title={title}
+      aria-label={title}
+    >
+      <Sparkles className="w-4 h-4 sm:hidden" />
+      <div className="hidden sm:flex items-center gap-1.5 min-w-0">
+        <Brain className="w-3.5 h-3.5 shrink-0 translate-y-px" />
+        <span className="truncate max-w-[140px]">{modelName}</span>
+      </div>
+      <ChevronRight className="w-3.5 h-3.5" />
+    </button>
+  )
+}
+
 export function ModelSelector() {
+  const target = useActiveModelTarget()
+  if (target.kind === 'digital-human') return <DigitalHumanModelButton target={target} />
+  return <ConversationModelSelector />
+}
+
+function ConversationModelSelector() {
   const isMobile = useIsMobile()
   const config = useAppStore(s => s.config)
   const [isOpen, setIsOpen] = useState(false)

@@ -158,10 +158,17 @@ export type StatusChangeHandler = (appId: string, oldStatus: AppStatus, newStatu
 export type AppInstalledHandler = (app: InstalledApp) => void
 
 /**
+ * Why an app went away: the user uninstalled it, an AI acting for the user did,
+ * the app cleaned up after itself (built-in retirement, rolled-back install,
+ * disposable team members), or its whole space was deleted.
+ */
+export type AppUninstallReason = 'user' | 'ai' | 'system' | 'space-deleted'
+
+/**
  * Callback fired after a successful uninstall. Receives the app record captured
  * just before the status transition so subscribers still see the full spec.
  */
-export type AppUninstalledHandler = (app: InstalledApp) => void
+export type AppUninstalledHandler = (app: InstalledApp, reason: AppUninstallReason) => void
 
 /** Unsubscribe function returned by event registration */
 export type Unsubscribe = () => void
@@ -170,6 +177,8 @@ export type Unsubscribe = () => void
 export interface UninstallOptions {
   /** If true, delete the App's work directory. Default: false (preserve data). */
   purge?: boolean
+  /** Who asked, for the uninstall notification. Default: 'user'. */
+  reason?: Exclude<AppUninstallReason, 'space-deleted'>
 }
 
 /**
@@ -226,10 +235,11 @@ export interface AppManagerService {
    * at `{space.path}/.halo/apps/{appId}/` (for space-scoped apps) or
    * `{haloDir}/apps/{appId}/` (for global apps).
    *
-   * @param spaceId - Target space ID, or null for global install
+   * @param spaceId - Target space ID, or null for a global install (MCP servers and skills only)
    * @param spec - Validated AppSpec
    * @param userConfig - User-provided config values (optional)
    * @returns The generated App ID (UUID)
+   * @throws AutomationSpaceRequiredError if a digital human is installed with a null spaceId
    * @throws AppAlreadyInstalledError if same specId+spaceId combination exists
    */
   install(spaceId: string | null, spec: AppSpec, userConfig?: Record<string, unknown>): Promise<string>
@@ -399,6 +409,7 @@ export interface AppManagerService {
    * @param newSpaceId - Target space ID, or null to move to global scope
    * @throws AppNotFoundError if the App does not exist
    * @throws SpaceNotFoundError if newSpaceId is non-null and space does not exist
+   * @throws AutomationSpaceRequiredError if a digital human is moved to global scope
    * @throws AppAlreadyInstalledError if target scope already has the same specId
    */
   moveToSpace(appId: string, newSpaceId: string | null): Promise<void>

@@ -19,13 +19,11 @@ import { getSpace, touchSpaceActivity } from './space.service'
 import { getSeedKBIds } from './tlon'
 import { getConfig } from '../foundation/config.service'
 import { v4 as uuidv4 } from 'uuid'
-import type { FileChangesSummary } from '../../shared/file-changes'
 import { titleFromFirstMessage } from '../../shared/conversation-title'
 import { splitAttachedPaths } from '../../shared/attached-paths'
 import { DEFAULT_TOOLSETS } from '../../shared/constants/toolsets'
-import type { KBSource } from '../../shared/types/tlon'
-import type { ImageAttachment } from '../../shared/types/image-attachment'
-import type { GoalInput } from '../../shared/types/goal'
+import type { Thought, TranscriptMessage } from '../../shared/types/transcript'
+import { summarizeThoughts } from '../../shared/transcript'
 
 // Re-export for existing consumers
 export type { FileChangesSummary } from '../../shared/file-changes'
@@ -34,100 +32,11 @@ export type { FileChangesSummary } from '../../shared/file-changes'
 // Type Definitions
 // ============================================================================
 
-type ThoughtType = 'thinking' | 'text' | 'tool_use' | 'tool_result' | 'system' | 'result' | 'error'
-
-interface Thought {
-  id: string
-  type: ThoughtType
-  content: string
-  timestamp: string
-  toolName?: string
-  toolInput?: Record<string, unknown>
-  toolOutput?: string
-  isError?: boolean
-  duration?: number
-  isStreaming?: boolean
-  isReady?: boolean
-  toolResult?: {
-    output: string
-    isError: boolean
-    timestamp: string
-  }
-}
-
-interface TokenUsage {
-  inputTokens: number
-  outputTokens: number
-  cacheReadTokens: number
-  cacheCreationTokens: number
-  totalCostUsd: number
-  contextWindow: number
-}
-
-interface ThoughtsSummary {
-  count: number
-  types: Partial<Record<ThoughtType, number>>
-  /** Wall-clock seconds between the first and last thought; absent for a single thought. */
-  duration?: number
-}
-
-export interface Message {
-  id: string
-  role: 'user' | 'assistant' | 'system'
-  content: string
-  timestamp: string
-  toolCalls?: ToolCall[]
-  thoughts?: Thought[] | null  // null = stored separately, undefined = none, Array = loaded/inline
-  thoughtsSummary?: ThoughtsSummary
-  images?: ImageAttachment[]
-  tokenUsage?: TokenUsage
-  metadata?: {
-    fileChanges?: FileChangesSummary
-    /**
-     * Present on a message delivered by another conversation (role:'system',
-     * source:'cross-conversation'). fromConversationTitle is a snapshot taken
-     * at delivery time — the source may since be renamed or deleted, so the
-     * collapsed label falls back to it when the live title can't be resolved.
-     */
-    fromConversationId?: string
-    fromConversationTitle?: string
-    summary?: string
-    /**
-     * Audit trail: the correlation id (if this delivery was a `waitForReply`
-     * call) and the forward-chain depth it carried. Runtime forward-depth
-     * decisions read the in-memory tracking in circuit-breaker.ts, never this
-     * field — it exists for audit/UI display only.
-     */
-    correlationId?: string
-    forwardDepth?: number
-    /**
-     * Present on a message delivered by a team member to the space
-     * conversation coordinating its collaboration (role:'system',
-     * source:'team-message'). fromMemberName is null for system-authored
-     * notices (turn-end reports).
-     */
-    teamId?: string
-    epochId?: string
-    teamName?: string
-    fromMemberName?: string | null
-    teamTriggerKind?: string
-    /** The goal the user set with this message (user messages only). */
-    goal?: GoalInput
-  }
-  error?: string  // Error message when assistant response failed (e.g., 429 rate limit)
-  source?: string  // How the message entered the conversation (e.g., 'injection', 'cross-conversation')
-  sources?: KBSource[]  // Knowledge-base documents the agent Read this turn (clickable citations)
-}
-
-interface ToolCall {
-  id: string
-  name: string
-  status: 'pending' | 'running' | 'success' | 'error' | 'waiting_approval'
-  input: Record<string, unknown>
-  output?: string
-  error?: string
-  progress?: number
-}
+/**
+ * The message shape is shared with the renderer and every transcript reader
+ * (shared/types/transcript.ts); `Message` stays as this module's name for it.
+ */
+export type Message = TranscriptMessage
 
 export interface ConversationMeta {
   id: string
@@ -432,24 +341,6 @@ function atomicWriteFileSync(filePath: string, data: string): void {
 }
 
 // ============================================================================
-// Thoughts Summary Computation
-// ============================================================================
-
-function computeThoughtsSummary(thoughts: Thought[]): ThoughtsSummary {
-  const types: Partial<Record<ThoughtType, number>> = {}
-  for (const t of thoughts) {
-    types[t.type] = (types[t.type] || 0) + 1
-  }
-  let duration: number | undefined
-  if (thoughts.length >= 2) {
-    const first = new Date(thoughts[0].timestamp).getTime()
-    const last = new Date(thoughts[thoughts.length - 1].timestamp).getTime()
-    duration = (last - first) / 1000
-  }
-  return { count: thoughts.length, types, duration }
-}
-
-// ============================================================================
 // Migration: v1 (inline thoughts) -> v2 (separated thoughts)
 // ============================================================================
 
@@ -475,7 +366,7 @@ function migrateConversationV1toV2(conversationsDir: string, conversation: Conve
   for (const message of conversation.messages) {
     if (Array.isArray(message.thoughts) && message.thoughts.length > 0) {
       thoughtsData[message.id] = message.thoughts
-      message.thoughtsSummary = computeThoughtsSummary(message.thoughts)
+      message.thoughtsSummary = summarizeThoughts(message.thoughts)
       message.thoughts = null
       hasAnyThoughts = true
     }
@@ -990,7 +881,7 @@ export function updateLastMessage(
   // Handle thoughts separation
   if (thoughtsToStore) {
     // Compute summary for the main file
-    lastMessage.thoughtsSummary = computeThoughtsSummary(thoughtsToStore)
+    lastMessage.thoughtsSummary = summarizeThoughts(thoughtsToStore)
     lastMessage.thoughts = null  // Marker: thoughts exist but stored separately
 
     // Write thoughts file first (crash safety: if this succeeds but main fails,

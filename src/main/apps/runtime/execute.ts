@@ -41,17 +41,19 @@ import { FileExportGate } from './file-export-gate'
 import { getImSessionRegistry } from './im-session-registry'
 import { autoSyncRunResult } from './im-auto-sync'
 import { getApiCredentials, getApiCredentialsForSource, getHeadlessElectronPath, getMcpServersForRequires } from '../../services/agent/helpers'
-import { resolveCredentialsForSdk, buildBaseSdkOptions } from '../../services/agent/sdk-config'
+import { resolveCredentialsForSdk, buildUserSessionSdkOptions } from '../../services/agent/sdk-config'
 import { toEngineSystemPrompt } from '../../services/agent/system-prompt'
 import { applyReasoningEffort } from '../../services/agent/reasoning-effort'
 import { getOrCreateV2Session } from '../../services/agent/session-manager'
 import { createAIBrowserMcpServer, createScopedBrowserContext } from '../../services/ai-browser'
 import { createTerminalMcpServer, getGlobalTerminalContext, isTerminalAvailable } from '../../services/ai-terminal'
-import { createWebSearchMcpServer } from '../../services/web-search'
 import { createOcrMcpServer } from '../../services/ocr'
 import { createApiRefMcpServer, HALO_API_TOOLSET_ID } from '../../services/api-ref'
-import { createOfficialDocsSession } from '../../services/official-docs-mcp'
+import { buildBaseToolset } from '../../services/agent/toolsets/base'
 import { createEmailMcpServer } from '../../services/email-mcp'
+import { createConversationCollabMcpServer, resolveConversationCollab } from './conversation-collab'
+import { buildRunSenderKey } from '../../../shared/apps/im-keys'
+import { closeRunSender, openRunSender } from './run-conversation-source'
 import { getConfig, resolveClaudeConfigDir } from '../../foundation/config.service'
 import { openSessionWriter, type SessionWriter } from './session-store'
 import {
@@ -256,6 +258,9 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
   // Session reference for cleanup
   let session: any = null
 
+  // Sender key while the run can message other conversations (opened in try, closed in finally)
+  let runSenderKey: string | undefined
+
   // Scoped browser context for this run (created in try, cleaned up in finally)
   let scopedBrowserCtx: ReturnType<typeof createScopedBrowserContext> | undefined
 
@@ -308,6 +313,14 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     // sensible default for an automation that never needs it. A spec can still
     // declare it, and the user can grant it in Capabilities.
     const usesHaloApi = resolvePermission(app, HALO_API_TOOLSET_ID, false)
+    // Off unless the owner switched conversation collaboration on. A run is always
+    // the owner's, and acts under its own sender key: what it sends is a one-way
+    // notice, and nothing sent back can reach its digital human's chats.
+    const runSender = buildRunSenderKey(app.id, runId)
+    const conversationCollab = resolveConversationCollab(app, { conversationId: runSender, delegated: false, team: false })
+    if (conversationCollab) {
+      runSenderKey = openRunSender({ appId: app.id, runId, spaceId: app.spaceId!, name: app.spec.name, startedAt })
+    }
 
     // ── Merge config_schema defaults into userConfig ─────
     //    Ensures defaults are available even if the user never opened the config panel.
@@ -411,7 +424,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
 
     // Resolve plans directory for file-based data_path guidance in report_to_user.
     // Uses the same CC config directory that the SDK session uses for consistency.
-    const configDir = resolveClaudeConfigDir(config.agent?.configDirMode)
+    const configDir = resolveClaudeConfigDir()
     const plansDir = join(configDir, 'plans')
 
     const reportContext: ReportToolContext = {
@@ -476,13 +489,12 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       app.spaceId!
     )
 
-    // A run has no person to ask what a screen looks like, so the one context
-    // that most needs Halo's own documentation was the one that shipped
-    // without it. The authoring gate the session half carries is unused here:
-    // spec creation is not a tool a run holds.
-    const { server: docsMcpServer } = createOfficialDocsSession()
+    // Starts from the base toolset. Excluded: `halo-apps` — an unattended run
+    // does not manage digital humans. Documentation stays: a run has no person
+    // to ask what a screen looks like.
+    const baseToolset = buildBaseToolset({ spaceId: app.spaceId!, exclude: ['halo-apps'] })
 
-    const sdkOptions = await buildBaseSdkOptions({
+    const sdkOptions = await buildUserSessionSdkOptions({
       selfApiAccess: usesHaloApi,
       credentials: resolvedCreds,
       workDir,
@@ -493,22 +505,25 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
         console.error(`[Runtime][${app.id}] CLI stderr:`, data)
       },
       memoryGuard: appMemoryGuard(memoryScope, runTag, memorySettings),
-      maxTurns: config.agent?.maxTurns,
       // Built-in server ids below are mirrored in shared/apps/builtin-mcp.ts — keep in sync.
       mcpServers: {
         ...requiredMcpServers,              // declared MCP dependencies
         ...(memoryMcpServer ? { 'halo-memory': memoryMcpServer } : {}), // built-in: persistent memory
         'halo-report': reportMcpServer,     // built-in: completion signal
         'halo-notify': notifyMcpServer,     // built-in: user notification
-        'halo-docs': docsMcpServer,         // built-in: Halo's own documentation
         'halo-person-context': createPersonContextMcpServer({ authority: 'owner', appId: app.id, environmentSpaceId: app.spaceId!, capabilityMode: 'automation' }),
-        'web-search': createWebSearchMcpServer(), // built-in: web search
+        ...baseToolset,                     // built-in: web search, Halo documentation
         'ocr': createOcrMcpServer(),              // built-in: on-device image OCR
         ...(usesAIBrowser ? { 'ai-browser': createAIBrowserMcpServer(scopedBrowserCtx, workDir) } : {}),
         ...(usesTerminal
           ? { 'ai-terminal': createTerminalMcpServer(getGlobalTerminalContext(workDir), { spaceId: app.spaceId!, workDir }) }
           : {}),
         ...(usesHaloApi ? { 'halo-api-ref': createApiRefMcpServer() } : {}),
+        // Acts under the run's own sender key: what it sends is a one-way notice,
+        // and only a reply to a wait the run is blocked in reaches it.
+        ...(conversationCollab
+          ? { 'halo-conversations': await createConversationCollabMcpServer({ spaceId: app.spaceId!, conversationId: runSender }, conversationCollab) }
+          : {}),
         ...(usesEmail && config.notificationChannels?.email?.enabled
           ? { 'halo-email': createEmailMcpServer(config.notificationChannels.email) }
           : {}),
@@ -849,6 +864,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     //    The run-detail view detects completion from the app runtime status
     //    (broadcast separately by the service) and reloads the JSONL transcript.
     unregisterActiveRun(runId)
+    if (runSenderKey) closeRunSender(runSenderKey)
 
     // ── 9. Close session ────────────────────────────────────
     // Always close the session. Escalation follow-up recovers context

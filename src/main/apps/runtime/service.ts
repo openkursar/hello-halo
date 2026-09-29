@@ -58,6 +58,7 @@ import { getSpace } from '../../services/space.service'
 import { getEscalationQuestions, formatEscalationAnswer } from '../../../shared/apps/app-types'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
 import { broadcastToAll } from '../../http/websocket'
+import { destroyChatBrowserContextsForApp } from './app-chat-browser'
 import { sendToRenderer } from '../../foundation/window.service'
 import { notifyAppEvent } from '../../services/notification.service'
 
@@ -1699,6 +1700,12 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
   appManager.onAppUninstalled((app: InstalledApp) => {
     for (const [key, controller] of runningAbortControllers) if (key.startsWith(`${app.id}:`)) controller.abort()
     for (const controller of queuedAutomatic.get(app.id) ?? []) controller.abort()
+    destroyChatBrowserContextsForApp(app.id, 'app-uninstalled')
+    // Idempotent: a user uninstall already deactivated it, but a space delete or
+    // a system cleanup reaches here with the schedule and subscriptions still live.
+    void service.deactivate(app.id).catch(err => {
+      console.warn(`[Runtime] Deactivate after uninstall failed for app=${app.id}:`, err)
+    })
     announceListChange(app.id, 'uninstalled')
   })
 

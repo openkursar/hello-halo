@@ -1,7 +1,7 @@
 /**
  * useBrowserToolCalls - Shared hook for extracting browser tool calls from streaming thoughts.
  *
- * Replaces identical useMemo blocks duplicated across MessageList, AppChatView, and ImChatView.
+ * Replaces identical useMemo blocks duplicated across MessageList and ImChatView.
  */
 
 import { useMemo } from 'react'

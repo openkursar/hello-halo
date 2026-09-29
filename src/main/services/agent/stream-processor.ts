@@ -327,7 +327,7 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
   //   setting it — corrupting the stream_event path's merge/overwrite logic.
   //
   //   Current impact: IM channels (app-chat.ts) now bypass this by extracting text
-  //   directly from raw SDK messages (same principle as JSONL → AppChatView path).
+  //   directly from raw SDK messages (same principle as the JSONL transcript path).
   //   Halo UI uses frontend delta accumulation (unaffected).
   //   The main chat path (send-message.ts) persists finalContent via updateLastMessage —
   //   investigate whether this path is also affected under certain provider/adapter configs.

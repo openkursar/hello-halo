@@ -44,16 +44,17 @@ import {
   getDbMcpServers
 } from '../../services/agent/helpers'
 import { emitAgentEvent } from '../../services/agent/events'
-import { resolveCredentialsForSdk, buildBaseSdkOptions, addSdkHooks } from '../../services/agent/sdk-config'
+import { resolveCredentialsForSdk, buildUserSessionSdkOptions, addSdkHooks } from '../../services/agent/sdk-config'
 import { toEngineSystemPrompt } from '../../services/agent/system-prompt'
 import { getEngineCapabilities } from '../../services/agent/resolved-sdk'
 import { applyReasoningEffort } from '../../services/agent/reasoning-effort'
 import { createCanUseTool } from '../../services/agent/permission-handler'
 import { getImPermissionContext } from './im-permission-registry'
-import { createAIBrowserMcpServer, createScopedBrowserContext } from '../../services/ai-browser'
+import { createAIBrowserMcpServer } from '../../services/ai-browser'
 import { createTerminalMcpServer, getGlobalTerminalContext, isTerminalAvailable } from '../../services/ai-terminal'
-import type { BrowserContext } from '../../services/ai-browser/context'
-import { buildMessageContent } from '../../services/agent/message-utils'
+import { acquireChatBrowserContext, endChatBrowserTurn, destroyChatBrowserContext } from './app-chat-browser'
+import { buildMessageContent, formatCanvasContext } from '../../services/agent/message-utils'
+import type { CanvasContext } from '../../services/agent/types'
 import { prepareNonVisionImageFallback } from '../../services/agent/image-attachments'
 import {
   getOrCreateV2Session,
@@ -121,14 +122,14 @@ import {
   noteInstanceTurnEnded,
   noteInstanceTurnStarted,
 } from './live-instances'
-import { createHaloAppsMcpServer } from '../conversation-mcp'
-import { createOfficialDocsSession } from '../../services/official-docs-mcp'
-import { createWebSearchMcpServer } from '../../services/web-search'
+import { buildBaseToolset } from '../../services/agent/toolsets/base'
 import { createOcrMcpServer } from '../../services/ocr'
 import { createApiRefMcpServer, HALO_API_TOOLSET_ID } from '../../services/api-ref'
 import { createEmailMcpServer } from '../../services/email-mcp'
+import { createConversationCollabMcpServer, resolveConversationCollab } from './conversation-collab'
 import { getSpace, getSpaceDir, isSpaceMemoryEnabled } from '../../services/space.service'
-import { readSessionMessages, saveChatSessionId, loadChatSessionId, deleteChatSessionId, copySessionJsonl } from './session-store'
+import { readSessionMessages, readSessionTranscript, readSessionMessageThoughts, saveChatSessionId, loadChatSessionId, deleteChatSessionId, copySessionJsonl } from './session-store'
+import type { Thought, TranscriptPage, TranscriptPageRequest, TranscriptProvenance } from '../../../shared/types/transcript'
 import { getAppMemoryService, getActivityStore } from './index'
 import { resolveExecutionEnvironment, validateExecutionEnvironment, legacySessionEnvironmentKey, resolveChatEnvironment, appChatRunId, validateEnvironmentConnections } from './execution-environment'
 import { createPersonContextMcpServer, personContextPrompt } from './person-context-tool'
@@ -192,6 +193,8 @@ export interface AppChatRequest {
   attachedFiles?: string[]
   /** Enable extended thinking mode */
   thinkingEnabled?: boolean
+  /** What the user has open in the canvas, so the agent can refer to it naturally. */
+  canvasContext?: CanvasContext
   /**
    * Optional callback invoked with each progress event during AI execution.
    * Used by IM channel adapters for real-time streaming progress to the IM channel.
@@ -256,6 +259,12 @@ export interface AppChatRequest {
    * before reaching the engine.
    */
   onMessageAccepted?: () => void
+  /**
+   * What the transcript keeps for this message when it differs from the text the
+   * model reads — a delivery from another conversation is framed for the model
+   * but shown as its sender wrote it, with its provenance.
+   */
+  recorded?: { content: string; provenance: TranscriptProvenance }
 }
 
 // ============================================
@@ -275,14 +284,6 @@ const CHAT_RUN_ID = 'chat'
 export function deriveRunId(conversationId: string, appId: string): string {
   return appChatRunId(conversationId, appId)
 }
-
-/**
- * Scoped browser contexts for app chat sessions.
- * Each app chat gets its own context so activeViewId is isolated
- * from the user's browser and other concurrent sessions.
- * Cleaned up when the V2 session is closed (on error) or explicitly.
- */
-const scopedContexts = new Map<string, BrowserContext>()
 
 /** Registry coordinates (channel/chatId/chatType) a conversationId maps to. */
 interface SessionRegistryTarget {
@@ -463,14 +464,13 @@ async function runAppChatTurn(
   registerExternalChatSession(conversationId, app.id, {
     displayName: senderIdentity?.name,
     lastSender: senderIdentity?.name,
-    lastMessage: message,
+    lastMessage: request.recorded?.content ?? message,
   })
 
   const memory = getAppMemoryService()
   if (!memory) throw new Error('Memory service not initialized')
 
   const config = getConfig()
-  const digitalHumansEnabled = config.agent?.enableDigitalHumans !== false
   const credentials = app.userOverrides?.modelSourceId
     ? await getApiCredentialsForSource(config, app.userOverrides.modelSourceId, app.userOverrides.modelId)
     : await getApiCredentials(config)
@@ -553,6 +553,15 @@ async function runAppChatTurn(
   const usesHaloApi =
     resolvePermission(app, HALO_API_TOOLSET_ID, false) && permCtx?.isOwner !== false
 
+  // Off unless the owner switched it on, and never on someone else's turn (an IM
+  // guest, a teammate borrowing this digital human), in a team channel, or in an
+  // IM/HTTP session.
+  const conversationCollab = resolveConversationCollab(app, {
+    conversationId,
+    delegated: permCtx?.isOwner === false || (!!teamContext && isBorrowedTeamTurn(teamContext.kind, !!imSession)),
+    team: !!teamContext,
+  })
+
   // Three-layer prompt assembly. The assembler is channel-agnostic;
   // this call site is the only place that knows whether the entry is
   // IM (group/direct) or native UI. See src/main/apps/runtime/prompt/
@@ -567,6 +576,7 @@ async function runAppChatTurn(
     usesHaloApi,
     workDir,
     modelInfo: resolvedCreds.displayModel,
+    withholdDigitalHumans: disposableMember,
     disabledCapabilities: buildDisabledCapabilitiesGuidance(app) ?? undefined,
     unconfiguredCapabilities: buildUnconfiguredCapabilitiesGuidance(app, {
       emailChannelConfigured: notifyAvail.emailChannelConfigured,
@@ -628,16 +638,13 @@ async function runAppChatTurn(
     ? Object.fromEntries(Object.entries(dbMcpServersRaw).filter(([id]) => !disabledMcpIds.has(id)))
     : dbMcpServersRaw
 
-  // Get or create scoped browser context for this chat session
-  let scopedBrowserCtx: BrowserContext | undefined
-  if (usesAIBrowser) {
-    scopedBrowserCtx = scopedContexts.get(conversationId)
-    if (!scopedBrowserCtx) {
-      scopedBrowserCtx = createScopedBrowserContext()
-      scopedContexts.set(conversationId, scopedBrowserCtx)
-      console.log(`[AppChat][${appId}] Created scoped browser context`)
-    }
-  }
+  // The chat's own browser context (native chats keep it between turns; see
+  // app-chat-browser). Losing the permission ends it: a context nobody may use
+  // would otherwise keep its pages alive until the idle reaper finds it.
+  const scopedBrowserCtx = usesAIBrowser
+    ? acquireChatBrowserContext(conversationId, appId, spaceId)
+    : undefined
+  if (!usesAIBrowser) destroyChatBrowserContext(conversationId, 'ai-browser-disabled')
 
   // Notify tool: allows AI to send notifications to channels and IM contacts.
   // FileExportGate roots = the space's working directory (matches the AI's
@@ -684,25 +691,30 @@ async function runAppChatTurn(
   }
 
   // Built-in server ids below are mirrored in shared/apps/builtin-mcp.ts — keep in sync.
-  // Documentation is unconditional: the digital-humans switch decides whether
-  // apps can be managed here, not whether Halo can describe itself.
-  const { server: docsMcpServer, guideConsulted } = createOfficialDocsSession()
+  // Starts from the base toolset. Excluded: `halo-apps` for a disposable member,
+  // whose digital-human tools would create artifacts that outlive the team
+  // (see `disposableMember`). An IM guest keeps `halo-apps` here; the capability
+  // policy below decides whether the guest may use it.
   const mcpServers: Record<string, any> = {
     ...(dbMcpServers ?? {}),
     ...(memoryMcpServer ? { 'halo-memory': memoryMcpServer } : {}),
     'halo-notify': notifyMcpServer,
-    'halo-docs': docsMcpServer,
     ...(personCaller.authority !== 'guest' ? { 'halo-person-context': createPersonContextMcpServer(personCaller) } : {}),
-    ...(digitalHumansEnabled && !disposableMember
-      ? { 'halo-apps': createHaloAppsMcpServer(spaceId, guideConsulted, { omitPersonContext: true }) }
-      : {}),
-    'web-search': createWebSearchMcpServer(),
+    ...buildBaseToolset({
+      spaceId,
+      exclude: disposableMember ? ['halo-apps'] : [],
+      // Mounted above for the caller's own authority.
+      omitPersonContext: true,
+    }),
     'ocr': createOcrMcpServer(),
     ...(usesAIBrowser ? { 'ai-browser': createAIBrowserMcpServer(scopedBrowserCtx, workDir) } : {}),
     ...(usesTerminal
       ? { 'ai-terminal': createTerminalMcpServer(getGlobalTerminalContext(workDir), { spaceId, workDir }) }
       : {}),
     ...(usesHaloApi ? { 'halo-api-ref': createApiRefMcpServer() } : {}),
+    ...(conversationCollab
+      ? { 'halo-conversations': await createConversationCollabMcpServer({ spaceId, conversationId }, conversationCollab) }
+      : {}),
     ...(usesEmail && config.notificationChannels?.email?.enabled
       ? {
           'halo-email': createEmailMcpServer(config.notificationChannels.email, {
@@ -749,6 +761,9 @@ async function runAppChatTurn(
             ...(getActiveTeamRuntime()!.readArtifact
               ? { readArtifact: getActiveTeamRuntime()!.readArtifact }
               : {}),
+            ...(getActiveTeamRuntime()!.readMemberRecord
+              ? { readMemberRecord: getActiveTeamRuntime()!.readMemberRecord }
+              : {}),
             checks: getActiveTeamRuntime()!.checks,
             digest: getActiveTeamRuntime()!.digest,
             archive: getActiveTeamRuntime()!.archive,
@@ -774,7 +789,7 @@ async function runAppChatTurn(
   )
 
   // ── 5. Build SDK options ─────────────────────────────
-  const sdkOptions = await buildBaseSdkOptions({
+  const sdkOptions = await buildUserSessionSdkOptions({
     selfApiAccess: usesHaloApi,
     credentials: resolvedCreds,
     workDir,
@@ -785,7 +800,6 @@ async function runAppChatTurn(
       console.error(`[AppChat][${appId}] CLI stderr:`, data)
     },
     mcpServers,
-    maxTurns: config.agent?.maxTurns,
     memoryGuard: appMemoryGuard(memoryScope, `chat:${conversationId.slice(0, 8)}`, memorySettings),
   })
 
@@ -965,7 +979,7 @@ async function runAppChatTurn(
       sdkOptions,
       resumeSessionId,
       workDir,
-      { displayModel: resolvedCreds.displayModel, sink },
+      { displayModel: resolvedCreds.displayModel, contextWindow: resolvedCreds.capabilities?.contextWindow, sink },
       undefined,
       undefined,
       undefined,
@@ -979,7 +993,7 @@ async function runAppChatTurn(
     // A reused session keeps the consumer it was created with; refresh the model
     // label so thought parsing stays correct after a model switch that did not
     // force a rebuild.
-    updateConsumerDisplayModel(conversationId, resolvedCreds.displayModel)
+    updateConsumerDisplayModel(conversationId, resolvedCreds.displayModel, resolvedCreds.capabilities?.contextWindow)
 
     // Member status is derived from the ledger registered above, so the pulse
     // must follow that write — an earlier one re-reads the member as idle.
@@ -1007,7 +1021,12 @@ async function runAppChatTurn(
     // ── 7. Persist the user message for reload recovery ──
     // Original images are persisted regardless of the vision fallback — they
     // feed the chat bubble display, not the model.
-    sink.writeUserMessage(message, images, teamContext ? { kind: teamContext.kind ?? 'human_message', correlationId: teamContext.correlationId } : undefined)
+    sink.writeUserMessage(
+      request.recorded?.content ?? message,
+      images,
+      teamContext ? { kind: teamContext.kind ?? 'human_message', correlationId: teamContext.correlationId } : undefined,
+      request.recorded?.provenance
+    )
 
     // ── 8. Dispatch and wait for this message's turn ────
     // Every session opens with the digital human's memory, the same way an
@@ -1044,7 +1063,7 @@ async function runAppChatTurn(
     // With the non-vision fallback active, image blocks are replaced by the
     // injected attachment-paths block.
     const messageContent = buildMessageContent(
-      memoryPreamble + livePreamble + (imageFallback?.contextBlock ?? '') + message,
+      memoryPreamble + livePreamble + formatCanvasContext(request.canvasContext) + (imageFallback?.contextBlock ?? '') + message,
       imageFallback ? undefined : images
     )
 
@@ -1089,39 +1108,19 @@ async function runAppChatTurn(
       error: err.message || 'Unknown error during app chat'
     })
 
-    // Destroy scoped browser context on error for IM sessions only.
-    // The native app-chat context (defaultConvId) is reused across messages — preserve it
-    // so the next message can resume with the same browser state (cookies, session storage).
-    // IM session contexts are per-conversation and can be recreated cheaply.
-    const defaultConvId = getAppChatConversationId(appId)
-    if (conversationId !== defaultConvId) {
-      const ctx = scopedContexts.get(conversationId)
-      if (ctx) {
-        ctx.destroy()
-        scopedContexts.delete(conversationId)
-        console.log(`[AppChat][${appId}] IM scoped browser context destroyed (error)`)
-      }
-    }
-
     // Let the caller close out its transport (IM stream, HTTP client).
     throw err
   } finally {
-    // For IM sessions (not the native app-chat key), destroy scoped browser context
-    // on successful completion. The native app-chat key reuses its context across messages,
-    // but IM sessions can accumulate unboundedly — clean up to prevent memory leaks.
+    // Native chats keep their browser context (and its pages) for the next
+    // message, failed turn or not; every other session's ends with the turn.
+    endChatBrowserTurn(conversationId)
+
     const defaultConvId = getAppChatConversationId(appId)
     if (conversationId !== defaultConvId) {
       // Round is over — drop the streaming handle registered by dispatch-inbound
       // so stopImSession can no longer reach it. Stale handles left from a prior
       // round would let stop() finish/dispose a stream that's already complete.
       clearImStreamHandle(conversationId)
-
-      const ctx = scopedContexts.get(conversationId)
-      if (ctx) {
-        ctx.destroy()
-        scopedContexts.delete(conversationId)
-        console.log(`[AppChat][${appId}] IM scoped browser context destroyed (completion)`)
-      }
     }
 
     console.log(`[AppChat][${appId}] Active session cleaned up`)
@@ -1374,6 +1373,31 @@ export function loadChatMessagesForConversation(
 }
 
 /**
+ * One page of an app-chat conversation's transcript, newest first. Messages
+ * carry `thoughts: null` + `thoughtsSummary`; see loadChatMessageThoughts.
+ */
+export function loadChatTranscriptForConversation(
+  spacePath: string,
+  appId: string,
+  conversationId: string,
+  request?: TranscriptPageRequest
+): TranscriptPage {
+  const path = sessionStoragePath(appId, conversationId, spacePath)
+  return readSessionTranscript(path, appId, deriveRunId(conversationId, appId), request)
+}
+
+/** The thought process of one message of an app-chat conversation. */
+export function loadChatMessageThoughts(
+  spacePath: string,
+  appId: string,
+  conversationId: string,
+  messageId: string
+): Thought[] {
+  const path = sessionStoragePath(appId, conversationId, spacePath)
+  return readSessionMessageThoughts(path, appId, deriveRunId(conversationId, appId), messageId)
+}
+
+/**
  * Get session state for recovery after page refresh.
  *
  * @param appId - App ID
@@ -1394,22 +1418,6 @@ export function getAppChatSessionState(appId: string, conversationId?: string): 
     isActive: state.isActive || hasActiveAppChatRound(convId),
     thoughts: state.thoughts,
     spaceId: state.spaceId,
-  }
-}
-
-/**
- * Clean up scoped browser context for an app chat session.
- * Call when deleting an app, resetting chat, or shutting down.
- *
- * @param appId - App ID
- */
-export function cleanupAppChatBrowserContext(appId: string): void {
-  const conversationId = getAppChatConversationId(appId)
-  const ctx = scopedContexts.get(conversationId)
-  if (ctx) {
-    ctx.destroy()
-    scopedContexts.delete(conversationId)
-    console.log(`[AppChat][${appId}] Scoped browser context cleaned up`)
   }
 }
 
@@ -1449,12 +1457,7 @@ async function clearSessionByConversationId(
   closeV2Session(conversationId)
 
   // 3. Clean up scoped browser context
-  const ctx = scopedContexts.get(conversationId)
-  if (ctx) {
-    ctx.destroy()
-    scopedContexts.delete(conversationId)
-    console.log(`[AppChat][${appId}] Scoped browser context cleaned up`)
-  }
+  destroyChatBrowserContext(conversationId, 'session-cleared')
 
   // 4. Clear the JSONL file and saved sessionId
   const spacePath = sessionStoragePath(appId, conversationId, getSpace(spaceId)?.path ?? '')
@@ -1615,14 +1618,11 @@ export async function restartAppChat(
       //    with the up-to-date system prompt; saved sessionId resumes history.
       closeV2Session(convId)
 
-      // 3. Destroy any per-session browser context. The next message rebuilds
-      //    it on demand; keeping a stale context tied to a dead CC process is
-      //    pointless and wastes resources.
-      const ctx = scopedContexts.get(convId)
-      if (ctx) {
-        ctx.destroy()
-        scopedContexts.delete(convId)
-      }
+      // 3. A manual restart is a reset, so the chat's browser pages go too and
+      //    the next message rebuilds them on demand. Automatic config-change
+      //    restarts leave them: pages are independent of the CC process, and
+      //    the user may be watching one.
+      if (interruptActive) destroyChatBrowserContext(convId, 'manual-restart')
 
       closed++
     } catch (err) {
@@ -1709,11 +1709,7 @@ export async function closeTeamSession(
   // Close the V2 process; the saved sessionId on disk allows SDK resume later.
   closeV2Session(conversationId)
   // Drop the per-session browser context (rebuilt on demand if the run resumes).
-  const ctx = scopedContexts.get(conversationId)
-  if (ctx) {
-    ctx.destroy()
-    scopedContexts.delete(conversationId)
-  }
+  destroyChatBrowserContext(conversationId, 'team-session-closed')
   console.log(`[AppChat][${appId}] Team session closed (history preserved): ${conversationId}`)
 }
 

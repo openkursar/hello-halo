@@ -338,8 +338,7 @@ async function handleAnthropicPassthrough(
   }
 
   const toolCount = anthropicRequest.tools?.length ?? 0
-  console.log(`[RequestHandler] Anthropic passthrough tools=${toolCount}`)
-  console.log(`[RequestHandler] POST ${targetUrl} (stream=${anthropicRequest.stream ?? false})`)
+  const pipeMode = isNativeAnthropicHost(backendUrl) ? 'raw' : 'repair'
 
   // Use raw body buffer when neither interceptors nor model override modified the request.
   // This avoids a JSON.stringify round-trip — the upstream receives byte-identical body from SDK.
@@ -361,8 +360,7 @@ async function handleAnthropicPassthrough(
     const upstreamResp = await fetchAnthropicUpstream(
       targetUrl, apiKey, fetchBody, timeoutMs, sdkHeaders, customHeaders, clientAbort.signal
     )
-    console.log(`[RequestHandler] Anthropic upstream response: ${upstreamResp.status}`)
-    console.log(`[RequestHandler] upstream_ok wire=anthropic status=${upstreamResp.status} duration_ms=${Date.now() - anthUpstreamStartTs} url=${targetUrl}`)
+    console.log(`[RequestHandler] upstream_ok wire=anthropic status=${upstreamResp.status} duration_ms=${Date.now() - anthUpstreamStartTs} stream=${anthropicRequest.stream ?? false} tools=${toolCount} url=${targetUrl}`)
 
     // Handle errors — forward upstream response transparently (status + headers + body)
     if (!upstreamResp.ok) {
@@ -385,11 +383,10 @@ async function handleAnthropicPassthrough(
       res.setHeader('Cache-Control', 'no-cache')
       res.setHeader('Connection', 'keep-alive')
 
-      if (isNativeAnthropicHost(backendUrl)) {
+      if (pipeMode === 'raw') {
         // Genuine first-party Anthropic: forward SSE verbatim. The repair
         // pipeline (below) would drop interleaved thinking text, so it must be
         // bypassed for well-formed native streams.
-        console.log('[RequestHandler] Anthropic passthrough (raw pipe)')
         await pipeAnthropicPassthrough(upstreamResp.body, res)
       } else {
         // Third-party Anthropic-compatible providers: re-serialize through the
@@ -404,7 +401,7 @@ async function handleAnthropicPassthrough(
           deferInputTokensEstimate(anthropicRequest)
         )
       }
-      console.log(`[RequestHandler] stream_end wire=anthropic status=${upstreamResp.status} duration_ms=${Date.now() - anthUpstreamStartTs} client_aborted=${clientAbort.signal.aborted} url=${targetUrl}`)
+      console.log(`[RequestHandler] stream_end wire=anthropic pipe=${pipeMode} status=${upstreamResp.status} duration_ms=${Date.now() - anthUpstreamStartTs} client_aborted=${clientAbort.signal.aborted} url=${targetUrl}`)
       return
     }
 
@@ -446,7 +443,6 @@ async function handleOpenAIConversion(
 ): Promise<void> {
   const { debug = false, timeoutMs = DEFAULT_TIMEOUT_MS, sdkHeaders } = options
   const { url: backendUrl, key: apiKey, model, headers: customHeaders, apiType: configApiType, adapterId } = config
-  console.log(`[RequestHandler] adapterId: ${adapterId || 'none'}`)
 
   // Validate URL has valid endpoint suffix
   if (!isValidEndpointUrl(backendUrl)) {
@@ -460,8 +456,6 @@ async function handleOpenAIConversion(
   if (model) {
     anthropicRequest.model = model
   }
-
-  console.log(`[RequestHandler] model=${anthropicRequest.model} apiKey=${apiKey ? apiKey.slice(0, 8) + '...' : 'none'}`)
 
   // Requests are deliberately NOT serialized per backend: a single slow stream
   // (e.g. a multi-minute reasoning turn) must never block other sessions.
@@ -492,14 +486,11 @@ async function handleOpenAIConversion(
       : convertAnthropicToOpenAIChat(requestToSend, convertOptions).request
 
     const toolCount = (openaiRequest as any).tools?.length ?? 0
-    console.log(`[RequestHandler] wire=${apiType} tools=${toolCount}`)
     if (debug && toolCount > 0) {
       // Tool schemas are resent every turn and usually dominate input tokens;
       // the stringify is the reason this stays behind the debug flag.
       console.log(`[RequestHandler] tools_payload_chars=${JSON.stringify((openaiRequest as any).tools).length}`)
     }
-    console.log(`[RequestHandler] POST ${backendUrl} (stream=${wantStream ?? false})`)
-
     const requestHeaders: Record<string, string> = {
       ...(customHeaders || {}),
       ...pickSessionAffinityHeaders(sdkHeaders),
@@ -514,14 +505,9 @@ async function handleOpenAIConversion(
       adapterId,
       adapterContext
     )
-    if (adapter) {
-      console.log(`[RequestHandler] Applied provider adapter: ${adapter.name}`)
-    }
-
     // Make upstream request - URL is used directly, no modification
     let upstreamResp = await fetchUpstream(backendUrl, apiKey, openaiRequest, timeoutMs, clientAbort.signal, requestHeaders)
-    console.log(`[RequestHandler] Upstream response: ${upstreamResp.status}`)
-    console.log(`[RequestHandler] upstream_ok wire=openai api_type=${apiType} status=${upstreamResp.status} duration_ms=${Date.now() - oaiUpstreamStartTs} url=${backendUrl}`)
+    console.log(`[RequestHandler] upstream_ok wire=openai api_type=${apiType} status=${upstreamResp.status} duration_ms=${Date.now() - oaiUpstreamStartTs} model=${anthropicRequest.model} stream=${wantStream ?? false} tools=${toolCount} adapter=${adapter?.name ?? adapterId ?? 'none'} url=${backendUrl}`)
 
     // Handle errors - use upstream error type if available, else map from status
     if (!upstreamResp.ok) {
@@ -650,8 +636,7 @@ export async function handleMessagesRequest(
   res: ExpressResponse,
   options: RequestHandlerOptions = {}
 ): Promise<void> {
-  const { url: backendUrl, apiType: configApiType } = config
-  console.log('[RequestHandler] handleMessagesRequest', backendUrl)
+  const { apiType: configApiType } = config
 
   // Run interceptors on Anthropic-format request (before any conversion)
   const interceptResult = await runInterceptors(

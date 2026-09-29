@@ -21,6 +21,7 @@ import { getAppManager } from '../apps/manager'
 import { AppAlreadyInstalledError } from '../apps/manager/errors'
 import { getAppRuntime } from '../apps/runtime'
 import type { AppSpec, SkillSpec } from '../apps/spec/schema'
+import { resolveInstallSpaceId } from '../../shared/apps/install-scope'
 import type {
   RegistryEntry,
   RegistrySource,
@@ -503,7 +504,7 @@ async function acquireSpec(
  * then delegates to the App Manager for installation.
  *
  * @param slug - The app slug to install
- * @param spaceId - The target space ID
+ * @param spaceId - The target space ID; null lands a digital human in the Halo space and other types globally
  * @param userConfig - Optional user configuration values
  * @returns The installed app ID
  */
@@ -551,7 +552,8 @@ export async function installFromStore(
     throw new Error('App Manager is not yet initialized')
   }
 
-  const appId = await manager.install(spaceId, specWithStore, userConfig)
+  const targetSpaceId = resolveInstallSpaceId(spaceId, specWithStore.type)
+  const appId = await manager.install(targetSpaceId, specWithStore, userConfig)
 
   // Auto-activate in runtime if available
   const runtime = getAppRuntime()
@@ -589,7 +591,7 @@ export async function installFromStore(
         }
       }
 
-      await installRequiredSkills(specWithStore, spaceId, bundledSkillSpecs)
+      await installRequiredSkills(specWithStore, targetSpaceId, bundledSkillSpecs)
     } catch (err) {
       // deleteApp() only accepts 'uninstalled' apps, and the app may already
       // be runtime-active — deactivate and soft-delete before hard-deleting.
@@ -599,7 +601,7 @@ export async function installFromStore(
             await runtime.deactivate(appId)
           } catch { /* activation above may have failed — proceed with deletion */ }
         }
-        await manager.uninstall(appId)
+        await manager.uninstall(appId, { reason: 'system' })
         await manager.deleteApp(appId)
       } catch (rollbackErr) {
         console.error(
@@ -610,7 +612,7 @@ export async function installFromStore(
     }
   }
 
-  console.log(`[RegistryService] Installed "${entry.name}" (${slug}) as ${appId} in space ${spaceId}`)
+  console.log(`[RegistryService] Installed "${entry.name}" (${slug}) as ${appId} in space ${targetSpaceId}`)
   return appId
 }
 

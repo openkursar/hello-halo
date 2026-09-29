@@ -175,6 +175,20 @@ The coupling is inverted through `TeamDeliveryHooks` (see "Integration seam").
   the model sees absolute paths everywhere, and only the relative form survives
   the trip to a teammate whose copy of the project sits elsewhere. Symlinks are
   resolved before the containment test.
+- `member-record.ts` — the location-transparent logic behind `team_read_member`,
+  the LEAD's read of what a member said and was told in this run. Lines are the
+  member's team-channel transcript numbered by `seq` (1-based ordinal — the same
+  number the federation history plane uses, so a page cursor means the same on a
+  local and a remote member). Local members come from the injected `readLocal`
+  (`readTeamMemberMessages`, backed by the transcript parse cache); remote ones
+  from `fetchMemberHistory`, an unreachable owner becoming an honest "unavailable"
+  message, a replica served while the owner is down flagged stale. Pages run from
+  the newest backwards under an 8000-character budget (`tailStartWithinBudget`, at
+  least one message per page, a single oversized message cut with a note) and carry
+  messages only — an assistant line says how many thinking/tool steps it took. The
+  tool is registered only for a lead (member servers omit it; the space coordinator,
+  always the lead, has it) and refuses in a turn whose origin is external: a raw
+  record is the owner's reach, not a stranger's.
 - `artifact-read.ts` — the location-transparent logic behind
   `team_read_artifact`. Resolves the producing member through the published-ref
   SSOT (`apps/team/artifact-refs`: a finding's ref OR a task's resultRef), then
@@ -657,7 +671,8 @@ the store — keeping the blackboard decoupled from session state.
 
 `createTeamMcpServer(context) → halo-team` with tools `team_send`,
 `team_post_task`, `team_update_task`, `team_post_finding`, `team_read_board`,
-`team_read_artifact`, `team_schedule`, `team_unschedule`, `team_complete`
+`team_read_artifact`, `team_read_member` (lead only), `team_schedule`,
+`team_unschedule`, `team_complete`
 (`report` is the existing report_to_user, owned by the session layer — NOT here).
 `team_read_board`'s snapshot carries the epoch's periodic `checks`, so the tool
 that answers "what is already assigned" also answers "what is already watched".

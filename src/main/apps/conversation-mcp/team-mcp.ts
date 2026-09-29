@@ -58,7 +58,8 @@ export const TEAM_TOOLSET_GUIDE =
   'goal, the inputs, the success criteria and the expected output form.\n' +
   '- Sending a message is not completion. Members work in the background and their replies and ' +
   'turn-end notices arrive as new turns of yours; reconcile with `team_read_board` instead of ' +
-  'guessing, and read deliverables with `team_read_artifact`.\n' +
+  'guessing, read deliverables with `team_read_artifact`, and check what a member actually did ' +
+  'with `team_read_member`.\n' +
   '- Never claim work is done that a member has not reported done. When the goal is met, call ' +
   '`team_complete` with a summary. If the user wants to keep the team, call `collab_save`.\n' +
   '- The user can watch the whole collaboration in the Team view (Content Canvas); mention it ' +
@@ -115,6 +116,7 @@ export function createSpaceTeamMcpServer(scope: SpaceTeamMcpScope) {
       blackboard: runtime.blackboard,
       callerWorkDir: workDir,
       ...(runtime.readArtifact ? { readArtifact: runtime.readArtifact } : {}),
+      ...(runtime.readMemberRecord ? { readMemberRecord: runtime.readMemberRecord } : {}),
       digest: runtime.digest,
       archive: runtime.archive,
       requestComplete: (summary) => {
