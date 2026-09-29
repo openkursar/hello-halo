@@ -22,7 +22,8 @@ import logoIconOnLight from '../../assets/brand/halo-logo-icon-on-light.svg'
 import { useAppStore } from '../../stores/app.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useTaskPanelStore } from '../../stores/taskPanel.store'
-import { useTaskCount, useTaskBeacon } from '../../stores/task.store'
+import { countTaskItems, useTaskCount, useTaskItems } from '../../stores/task.store'
+import { capCount, trackHome, trackNavigate } from '../../services/home-telemetry'
 import { useTranslation } from '../../i18n'
 import { cn } from '../../lib/utils'
 import { useIsNarrowShell } from '../../hooks/useIsMobile'
@@ -64,18 +65,15 @@ interface NavItemProps {
    * button is a deliberate size step up (prototype: `.task-btn` vs
    * `.nav-item`), not a general size option. */
   size?: 'default' | 'lg'
-  /** Count badge, bottom-right of the icon. Pending tasks are signalled by
-   * this alone — a background fill would read as the selected state. */
+  /** Count badge, bottom-right of the icon — a background fill would read
+   * as the selected state. */
   badge?: number
-  /** Small spinning ring, top-right of the icon — an in-progress indicator
-   * (e.g. a task currently generating), independent of `badge`'s count. */
-  spinning?: boolean
 }
 
 /**
  * Single rail button — a floating rounded icon block (not a full-width bar),
- * matching the prototype. Selected state is a soft fill + accent-tinted icon
- * on the block itself — the prototype's CSS also defines a left edge
+ * matching the prototype. Selected state is a neutral fill + solid accent
+ * icon on the block itself — the prototype's CSS also defines a left edge
  * indicator bar, but it's positioned outside the app's own bounds (`left:
  * -12px` inside an `overflow:hidden` root) and never actually renders, so
  * it's intentionally not reproduced here.
@@ -84,7 +82,7 @@ interface NavItemProps {
  * element (not a CSS pseudo-element) with `role="tooltip"` and wired via
  * `aria-describedby` so screen readers get it too.
  */
-function NavItem({ icon, label, tip, active, onClick, size = 'default', badge, spinning }: NavItemProps) {
+function NavItem({ icon, label, tip, active, onClick, size = 'default', badge }: NavItemProps) {
   const tooltipId = useId()
   const isLg = size === 'lg'
 
@@ -98,15 +96,12 @@ function NavItem({ icon, label, tip, active, onClick, size = 'default', badge, s
         'group relative flex items-center justify-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-card',
         isLg ? 'w-11 h-11 rounded-lg' : 'w-10 h-10 rounded-md',
         active
-          ? 'bg-primary/[0.18] text-accent-on-dark'
+          ? 'bg-secondary text-primary'
           : 'text-subtle-foreground hover:bg-secondary hover:text-foreground'
       )}
     >
       {icon}
 
-      {spinning && (
-        <span className="absolute top-[5px] right-[5px] w-[9px] h-[9px] rounded-full border-2 border-primary border-t-transparent animate-spin" />
-      )}
       {!!badge && (
         <span className="absolute bottom-[3px] right-[3px] min-w-4 h-4 px-1 rounded-sm border-[1.5px] border-card bg-primary text-primary-foreground text-[10px] font-bold tabular-nums flex items-center justify-center">
           {badge > 99 ? '99+' : badge}
@@ -131,30 +126,50 @@ export function NavRail() {
   const active = useActiveDestination()
   const isNarrow = useIsNarrowShell()
   const taskCount = useTaskCount()
-  const taskBeacon = useTaskBeacon()
+  const taskItems = useTaskItems()
   const toggleTaskPanel = useTaskPanelStore(s => s.toggle)
   const isTaskPanelOpen = useTaskPanelStore(s => s.isOpen)
   const platform = usePlatform()
   const isMacElectron = isElectron() && platform.isMac
 
-  const goChat = useGoToConversation()
+  const goToConversation = useGoToConversation()
+  const goChat = () => {
+    trackNavigate('space', 'rail', 'nav_rail')
+    goToConversation()
+  }
   const goDigitalHumans = () => {
+    trackNavigate('apps', 'rail', 'nav_rail')
     useAppsPageStore.getState().setCurrentTab('my-digital-humans')
     navigate('apps')
   }
-  const goStore = () => navigate('store')
-  const goKnowledge = () => navigate('tlon')
-  const goSettings = () => navigate('settings')
+  const goStore = () => {
+    trackNavigate('store', 'rail', 'nav_rail')
+    navigate('store')
+  }
+  const goKnowledge = () => {
+    trackNavigate('tlon', 'rail', 'nav_rail')
+    navigate('tlon')
+  }
+  const goSettings = () => {
+    trackNavigate('settings', 'rail', 'nav_rail')
+    navigate('settings')
+  }
+  const handleToggleTasks = () => {
+    const counts = countTaskItems(taskItems)
+    trackHome('nav.task_panel.toggle', {
+      open: !isTaskPanelOpen,
+      surface: 'rail',
+      continueCount: capCount(counts.continueCount),
+      runningCount: capCount(counts.runningCount),
+      pinnedCount: capCount(counts.pinnedCount),
+    })
+    toggleTaskPanel()
+  }
 
   if (isNarrow) return null
 
-  // Tooltip swaps to reflect task state.
   const taskLabel = t('Tasks')
-  const taskTip = taskCount > 0
-    ? t('Tasks · {{count}} pending', { count: taskCount })
-    : taskBeacon === 'running'
-      ? t('Tasks · Running')
-      : taskLabel
+  const taskTip = taskCount > 0 ? `${taskLabel} · ${taskCount}` : taskLabel
 
   return (
     // pt-3/pb-3.5 (12px/14px) matches the prototype's `.sidebar{padding:12px
@@ -194,26 +209,26 @@ export function NavRail() {
 
       <nav className="flex-1 w-full flex flex-col items-center gap-1.5">
         <NavItem
-          icon={<ChatNavIcon className="w-5 h-5" active={active === 'chat'} />}
+          icon={<ChatNavIcon className="w-[22px] h-[22px]" active={active === 'chat'} />}
           label={t('Conversation')}
           active={active === 'chat'}
           onClick={goChat}
         />
         <NavItem
-          icon={<DigitalHumanNavIcon className="w-5 h-5" active={active === 'digital-humans'} />}
+          icon={<DigitalHumanNavIcon className="w-[22px] h-[22px]" active={active === 'digital-humans'} />}
           label={t('Digital Humans')}
           tip={t('Digital Humans · Extensions')}
           active={active === 'digital-humans'}
           onClick={goDigitalHumans}
         />
         <NavItem
-          icon={<KnowledgeNavIcon className="w-5 h-5" active={active === 'knowledge'} />}
+          icon={<KnowledgeNavIcon className="w-[22px] h-[22px]" active={active === 'knowledge'} />}
           label={t('Knowledge Base')}
           active={active === 'knowledge'}
           onClick={goKnowledge}
         />
         <NavItem
-          icon={<StoreNavIcon className="w-5 h-5" active={active === 'store'} />}
+          icon={<StoreNavIcon className="w-[22px] h-[22px]" active={active === 'store'} />}
           label={t('Store')}
           tip={t('Explore · Store')}
           active={active === 'store'}
@@ -223,17 +238,16 @@ export function NavRail() {
 
       <div className="w-full flex flex-col items-center gap-1.5">
         <NavItem
-          icon={<TasksNavIcon className="w-5 h-5" active={isTaskPanelOpen} />}
+          icon={<TasksNavIcon className="w-[22px] h-[22px]" active={isTaskPanelOpen} />}
           label={taskLabel}
           tip={taskTip}
           size="lg"
           active={isTaskPanelOpen}
           badge={taskCount}
-          spinning={taskBeacon === 'running'}
-          onClick={toggleTaskPanel}
+          onClick={handleToggleTasks}
         />
         <NavItem
-          icon={<Settings className="w-5 h-5" strokeWidth={1.6} />}
+          icon={<Settings className="w-[22px] h-[22px]" strokeWidth={1.6} />}
           label={t('Settings')}
           active={view === 'settings'}
           onClick={goSettings}

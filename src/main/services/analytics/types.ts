@@ -3,6 +3,7 @@
  */
 
 import type { HostIdentity } from '../../foundation/host-identity'
+import { HOME_EVENT_NAMES } from '../../../shared/analytics/home-telemetry'
 
 /**
  * Predefined analytics events.
@@ -100,6 +101,7 @@ export const RENDERER_ALLOWED_EVENTS = new Set<string>([
   'store.unpublish',
   AnalyticsEvents.APPS_CREATE_OPEN,
   AnalyticsEvents.APPS_CREATE_SUBMIT,
+  ...HOME_EVENT_NAMES,
 ])
 
 /**

@@ -39,6 +39,7 @@ export class TaskStateStore {
   private readonly stmtSetKept: Database.Statement
   private readonly stmtDelete: Database.Statement
   private readonly stmtDeleteAllInSpace: Database.Statement
+  private readonly stmtDeleteByPrefix: Database.Statement
   private readonly stmtDeleteExpiredRead: Database.Statement
   private readonly stmtListAll: Database.Statement
 
@@ -87,6 +88,11 @@ export class TaskStateStore {
 
     this.stmtDeleteAllInSpace = db.prepare(`
       DELETE FROM conversation_task_state WHERE space_id = ?
+    `)
+
+    this.stmtDeleteByPrefix = db.prepare(`
+      DELETE FROM conversation_task_state
+      WHERE conversation_id = @id OR substr(conversation_id, 1, length(@prefix)) = @prefix
     `)
 
     this.stmtDeleteExpiredRead = db.prepare(`
@@ -146,6 +152,11 @@ export class TaskStateStore {
 
   deleteAllInSpace(spaceId: string): void {
     this.stmtDeleteAllInSpace.run(spaceId)
+  }
+
+  /** Deletes the row for `id` and every row whose id extends it with `:`. */
+  deleteIdAndChildren(id: string): void {
+    this.stmtDeleteByPrefix.run({ id, prefix: `${id}:` })
   }
 
   /** Deletes expired, non-kept 'read' rows. Returns the number of rows removed. */

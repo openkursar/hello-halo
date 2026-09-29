@@ -58,7 +58,10 @@ function isValidPayload(
   if (typeof payload !== 'object' || payload === null) return false
   const p = payload as Record<string, unknown>
   if (typeof p.event !== 'string' || p.event.length === 0) return false
-  if (p.properties !== undefined && (typeof p.properties !== 'object' || p.properties === null)) {
+  if (
+    p.properties !== undefined &&
+    (typeof p.properties !== 'object' || p.properties === null || Array.isArray(p.properties))
+  ) {
     return false
   }
   return true

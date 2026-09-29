@@ -35,6 +35,7 @@ import { analytics } from '../../services/analytics/analytics.service'
 import { AnalyticsEvents } from '../../services/analytics/types'
 import { resolvePermission } from '../../../shared/apps/app-types'
 import type { MemoryCallerScope } from '../../platform/memory'
+import { getTaskStateService } from '../../platform/task-state'
 import { getConfig } from '../../foundation/config.service'
 import {
   getApiCredentials,
@@ -1463,6 +1464,8 @@ export async function clearAppChat(appId: string, spaceId: string, conversationI
     }
   }
   await clearSessionByConversationId(convId, appId, spaceId)
+  // A cleared conversation has nothing left to come back to.
+  getTaskStateService()?.remove(convId)
   console.log(`[AppChat][${appId}] Chat history cleared: ${convId}`)
 }
 
@@ -1790,6 +1793,7 @@ export async function deleteNativeChatSession(
 
   await clearSessionByConversationId(conversationId, appId, spaceId)
   getImSessionRegistry()?.removeSession(appId, parsed.channel, parsed.chatId)
+  getTaskStateService()?.remove(conversationId)
   emitSessionUpdated(appId, { channel: parsed.channel, chatId: parsed.chatId, chatType: parsed.chatType }, {})
   console.log(`[AppChat][${appId}] Native local session deleted: ${conversationId}`)
 }

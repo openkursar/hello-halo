@@ -457,8 +457,8 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
           {/* Copy button */}
           <button
             onClick={handleCopyMessage}
-            className="flex items-center gap-1.5 px-2 py-1 text-xs text-muted-foreground/60
-              hover:text-foreground hover:bg-white/5 rounded-md transition-all"
+            className="flex items-center gap-1.5 px-2 py-1 text-xs text-faint-foreground
+              hover:text-foreground hover:bg-secondary rounded-md transition-all"
             title={t('Copy message')}
           >
             {copied ? (

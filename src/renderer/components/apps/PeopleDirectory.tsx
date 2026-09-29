@@ -87,8 +87,8 @@ export function PeopleDirectory({ spaceMap, onCreate }: { spaceMap: Record<strin
   )
   // Removed people share one flat list: they have no runtime status to group by.
   const groups = showRemoved ? [] : groupRows(rows)
-  return <div ref={scroll} onScroll={event => usePeopleViewStore.setState({ directoryScroll: event.currentTarget.scrollTop })} className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-8">
-    <div className="mx-auto max-w-6xl">
+  return <div ref={scroll} onScroll={event => usePeopleViewStore.setState({ directoryScroll: event.currentTarget.scrollTop })} className="min-h-0 flex-1 overflow-y-auto px-6 py-4 sm:px-10 sm:py-8">
+    <div>
       <header className="mb-6 flex flex-wrap items-start justify-between gap-4"><div><h1 className="text-2xl font-semibold">{t('My Digital Humans')} <span className="text-base font-normal text-muted-foreground">{total}</span></h1><p className="mt-2 text-sm text-muted-foreground">{t('Your digital humans, their work, and the teams they belong to.')}</p></div><button onClick={onCreate} className="flex min-h-10 items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground"><Plus size={16} />{t('Create Digital Human')}</button></header>
       {(showRemoved || (data?.removedTotal ?? 0) > 0) && <button onClick={() => { setShowRemoved(value => !value); prefs.setFilters({ page: 1 }) }} className="mb-4 min-h-8 text-xs text-muted-foreground hover:text-primary">{showRemoved ? t('Show installed digital humans') : t('View removed digital humans')}</button>}
       <div className="mb-5 flex flex-wrap gap-2">

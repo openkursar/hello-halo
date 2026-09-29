@@ -50,6 +50,7 @@ import { hasAnyAISource } from './types'
 import { openWorkNotification, type WorkNavigationTarget } from './utils/people-navigation'
 import { useTeamStore } from './stores/team.store'
 import { canvasLifecycle } from './services/canvas-lifecycle'
+import { trackNavigate } from './services/home-telemetry'
 import type { TeamUpdatedEvent, TeamBlackboardEvent, TeamMessageEvent, TeamPresenceEvent, TeamOfficeStatusEvent } from '../shared/apps/team-types'
 
 // Lazy load heavy page components for better initial load performance
@@ -737,7 +738,9 @@ export default function App() {
     // announced — which may be a team's, not this digital human's own.
     const unsubNavigate = api.onAppNavigate((data) => {
       const target = data as WorkNavigationTarget
-      if (target.appId) void openWorkNotification(target)
+      if (!target.appId) return
+      trackNavigate('apps', 'notification', 'notification')
+      void openWorkNotification(target)
     })
 
     return () => {
@@ -847,6 +850,7 @@ export default function App() {
           ? {
             label: t('View'),
             onClick: () => {
+              trackNavigate('apps', 'notification', 'notification')
               setInitialAppId(appId)
               navigate('apps')
             },
@@ -930,7 +934,7 @@ export default function App() {
       const metaKey = isMac ? e.metaKey : e.ctrlKey
       if (metaKey && e.key === 'k' && !e.shiftKey) {
         e.preventDefault()
-        openSearch()
+        openSearch('global', 'shortcut')
         return
       }
     }

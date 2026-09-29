@@ -32,6 +32,7 @@ import type { Message, ImageAttachment, Artifact } from '../../types'
 import type { SlashCommandItem } from '../../types/slash-command'
 import { getAppChatConversationId } from '../../../shared/apps/im-keys'
 import type { DigitalHumanSelectorConfig } from '../chat/DigitalHumanSelector'
+import { noteTurnEnded, noteTurnSent } from '../../services/home-telemetry'
 
 interface AppChatViewProps {
   /** App ID */
@@ -253,6 +254,7 @@ export function AppChatView({ appId, spaceId, conversationId: conversationIdProp
     setMessages(prev => [...prev, userMsg])
     setLoadState('loaded')
 
+    noteTurnSent(conversationId, 'digital_human')
     try {
       const res = await api.appChatSend({
         appId,
@@ -264,6 +266,7 @@ export function AppChatView({ appId, spaceId, conversationId: conversationIdProp
       })
       if (!res.success) {
         console.error('[AppChatView] Send failed:', res.error)
+        noteTurnEnded(conversationId, 'error')
         // Surface error via chat store session state (rendered by error UI below)
         useChatStore.getState().setSessionError(conversationId, String(res.error || t('Failed to send message')))
       }
@@ -272,11 +275,13 @@ export function AppChatView({ appId, spaceId, conversationId: conversationIdProp
       requestAnimationFrame(() => messageListRef.current?.scrollToBottom('auto'))
     } catch (err) {
       console.error('[AppChatView] Send error:', err)
+      noteTurnEnded(conversationId, 'error')
       useChatStore.getState().setSessionError(conversationId, String((err as Error).message || t('Failed to send message')))
     }
   }, [appId, spaceId, conversationId, resetSession, t])
 
   const handleStop = useCallback(async () => {
+    noteTurnEnded(conversationId, 'stopped')
     try {
       await api.appChatStop(appId, conversationId)
       markSessionStopped(conversationId)

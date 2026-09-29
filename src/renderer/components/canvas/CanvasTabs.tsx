@@ -33,6 +33,7 @@ import { FileIcon } from '../icons/ToolIcons'
 import { api } from '../../api'
 import { useTranslation } from '../../i18n'
 import { getBrowserHomepage } from '../../utils/browser-homepage'
+import { trackToolOpen } from '../../services/tool-session-telemetry'
 
 interface CanvasTabsProps {
   tabs: TabState[]
@@ -482,7 +483,7 @@ export function CanvasTabBar() {
 
   // Handle new tab - opens configured homepage (respects browser policy)
   const handleNewTab = useCallback(() => {
-    getBrowserHomepage().then(url => openUrl(url, t('New Tab')))
+    trackToolOpen('browser', 'canvas_new_tab', getBrowserHomepage().then(url => openUrl(url, t('New Tab'))))
   }, [openUrl, t])
 
   // Handle combined maximize toggle: window maximize + canvas fullscreen

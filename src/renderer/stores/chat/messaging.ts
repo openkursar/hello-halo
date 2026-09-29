@@ -4,6 +4,7 @@
 import type { ChatSlice } from './internal'
 import { api, canvasLifecycle, createEmptySessionState } from './internal'
 import type { CanvasContext, Message } from './internal'
+import { noteTurnEnded, noteTurnSent, trackHome } from '../../services/home-telemetry'
 
 export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 'injectMessage' | 'approveTool' | 'rejectTool' | 'continueAfterInterrupt'> = (set, get) => ({
   sendMessage: async (content, images, thinkingEnabled) => {
@@ -123,6 +124,7 @@ export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 
       })
     } catch (error) {
       console.error('Failed to send message:', error)
+      noteTurnEnded(conversationId, 'error')
       // Update session error state
       set((state) => {
         const newSessions = new Map(state.sessions)
@@ -141,6 +143,7 @@ export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 
   // Stop generation for a specific conversation
   stopGeneration: async (conversationId?: string) => {
     const targetId = conversationId || get().getCurrentSpaceState().currentConversationId
+    if (targetId) noteTurnEnded(targetId, 'stopped')
     try {
       await api.stopGeneration(targetId ?? undefined)
 
@@ -241,6 +244,8 @@ export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 
     const state = get()
     const spaceState = state.spaceStates.get(state.currentSpaceId || '')
     if (spaceState?.currentConversationId === conversationId) {
+      trackHome('home.composer.send', { source: 'continue', recipient: 'halo', hasImages: false, imageCount: 0, isInject: false })
+      noteTurnSent(conversationId, 'halo')
       state.sendMessage('continue')
     }
   },

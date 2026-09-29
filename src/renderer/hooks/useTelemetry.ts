@@ -14,6 +14,7 @@
 
 import { useEffect, useRef } from 'react'
 import { api } from '../api'
+import { currentShell, setCurrentView } from '../services/home-telemetry'
 
 /**
  * Track renderer session lifecycle and page navigation.
@@ -48,6 +49,8 @@ export function useTelemetry(view: string): void {
 
   // page.view on view change
   useEffect(() => {
+    setCurrentView(view)
+
     // Skip the initial render — session.start already covers it
     if (prevViewRef.current === null) {
       prevViewRef.current = view
@@ -55,9 +58,12 @@ export function useTelemetry(view: string): void {
     }
 
     if (view !== prevViewRef.current) {
+      const from = prevViewRef.current
       prevViewRef.current = view
       api.trackEvent('page.view', {
         view,
+        from,
+        shell: currentShell(),
       })
     }
   }, [view])

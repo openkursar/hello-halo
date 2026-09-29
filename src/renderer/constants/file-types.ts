@@ -3,7 +3,6 @@
  *
  * Used by:
  * - canvas-lifecycle.ts (Content Canvas file opening)
- * - ArtifactCard.tsx (Card view click handling)
  * - ArtifactTree.tsx (Tree view click handling)
  */
 

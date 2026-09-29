@@ -19,7 +19,8 @@ import { ChatNavIcon, DigitalHumanNavIcon, KnowledgeNavIcon, StoreNavIcon, Tasks
 import { useAppStore } from '../../stores/app.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useTaskPanelStore } from '../../stores/taskPanel.store'
-import { useTaskCount } from '../../stores/task.store'
+import { countTaskItems, useTaskCount, useTaskItems } from '../../stores/task.store'
+import { capCount, trackHome, trackNavigate } from '../../services/home-telemetry'
 import { useTranslation } from '../../i18n'
 import { useGoToConversation } from '../../hooks/useGoToConversation'
 
@@ -28,6 +29,7 @@ export function NarrowNavSheet() {
   const navigate = useAppStore(s => s.navigate)
   const goToConversation = useGoToConversation()
   const taskCount = useTaskCount()
+  const taskItems = useTaskItems()
   const openTaskPanel = useTaskPanelStore(s => s.toggle)
   const [isOpen, setIsOpen] = useState(false)
   const [isAnimatingOut, setIsAnimatingOut] = useState(false)
@@ -41,15 +43,40 @@ export function NarrowNavSheet() {
     }, 200)
   }
 
-  const goChat = () => close(goToConversation)
-  const goDigitalHumans = () => close(() => {
-    useAppsPageStore.getState().setCurrentTab('my-digital-humans')
-    navigate('apps')
-  })
-  const goKnowledge = () => close(() => navigate('tlon'))
-  const goStore = () => close(() => navigate('store'))
-  const goSettings = () => close(() => navigate('settings'))
-  const goTasks = () => close(openTaskPanel)
+  const goChat = () => {
+    trackNavigate('space', 'sheet', 'nav_sheet')
+    close(goToConversation)
+  }
+  const goDigitalHumans = () => {
+    trackNavigate('apps', 'sheet', 'nav_sheet')
+    close(() => {
+      useAppsPageStore.getState().setCurrentTab('my-digital-humans')
+      navigate('apps')
+    })
+  }
+  const goKnowledge = () => {
+    trackNavigate('tlon', 'sheet', 'nav_sheet')
+    close(() => navigate('tlon'))
+  }
+  const goStore = () => {
+    trackNavigate('store', 'sheet', 'nav_sheet')
+    close(() => navigate('store'))
+  }
+  const goSettings = () => {
+    trackNavigate('settings', 'sheet', 'nav_sheet')
+    close(() => navigate('settings'))
+  }
+  const goTasks = () => {
+    const counts = countTaskItems(taskItems)
+    trackHome('nav.task_panel.toggle', {
+      open: !useTaskPanelStore.getState().isOpen,
+      surface: 'sheet',
+      continueCount: capCount(counts.continueCount),
+      runningCount: capCount(counts.runningCount),
+      pinnedCount: capCount(counts.pinnedCount),
+    })
+    close(openTaskPanel)
+  }
 
   return (
     <>

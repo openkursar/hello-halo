@@ -40,6 +40,16 @@ import { useSpaceDigitalHumans } from '../../hooks/useSpaceDigitalHumans'
 import { resolveSpecI18n } from '../../utils/spec-i18n'
 import { getAppChatConversationId } from '../../api/_shared'
 import type { DigitalHumanSelectorConfig } from './DigitalHumanSelector'
+import { countTaskItems, useTaskItems } from '../../stores/task.store'
+import {
+  capCount,
+  markEntry,
+  noteTurnSent,
+  peekEntry,
+  setComposerOrigin,
+  trackHome,
+  trackHomeOnce,
+} from '../../services/home-telemetry'
 
 interface ChatViewProps {
   isCompact?: boolean
@@ -318,6 +328,12 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
     locked: digitalHumanSelectorLocked,
     onChange: (appId, conversationId) => {
       if (!currentSpaceId) return
+      trackHome('home.composer.recipient.switch', {
+        to: appId ? 'digital_human' : 'halo',
+        appId: appId ?? undefined,
+        surface: 'selector',
+        entry: peekEntry(),
+      })
       if (appId === null) {
         void clearAppChatSelection(currentSpaceId)
       } else {
@@ -424,6 +440,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
     // Can send if has text OR has images
     if ((!content.trim() && (!images || images.length === 0)) || isGenerating) return
 
+    if (currentConversationId) noteTurnSent(currentConversationId, 'halo')
     await sendMessage(content, images, thinkingEnabled)
   }
 
@@ -518,6 +535,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
     return (
       <div className="flex-1 flex flex-col h-full bg-background">
         <EmptyState
+          conversationId={currentConversationId}
           // Prototype's chips fill the composer, they don't send — the user
           // reviews/edits the canned prompt before deciding to send it.
           onSuggestion={(prompt) => {
@@ -610,18 +628,47 @@ const CHIP_CLASS = 'group flex items-center gap-[7px] h-[34px] px-3.5 rounded-fu
 const CHIP_ICON_CLASS = 'w-[15px] h-[15px] text-subtle-foreground transition-colors ease-halo group-hover:text-primary'
 
 // Empty state component - adapts to compact mode
+type EmptyStateChip = 'continue_task' | 'generate_code' | 'create_dh' | 'analyze_doc' | 'mount_kb'
+
 function EmptyState({
   isCompact = false,
+  conversationId,
   onSuggestion,
   composer,
 }: {
   isCompact?: boolean
+  conversationId?: string | null
   onSuggestion?: (prompt: string) => void
   /** Centered composer, only rendered in the full (non-compact) takeover. */
   composer?: ReactNode
 }) {
   const { t } = useTranslation()
   const openTaskPanel = useTaskPanelStore(s => s.open)
+  const taskItems = useTaskItems()
+
+  useEffect(() => {
+    if (isCompact) return
+    trackHomeOnce(`empty:${conversationId ?? 'none'}`, 'home.empty_state.view', { chipCount: 5 })
+  }, [isCompact, conversationId])
+
+  const handleChip = (chip: EmptyStateChip, prompt?: string) => {
+    trackHome('home.chip.click', { chip })
+    markEntry('home_chip')
+    if (prompt === undefined) {
+      const counts = countTaskItems(taskItems)
+      trackHome('nav.task_panel.toggle', {
+        open: true,
+        surface: 'chip',
+        continueCount: capCount(counts.continueCount),
+        runningCount: capCount(counts.runningCount),
+        pinnedCount: capCount(counts.pinnedCount),
+      })
+      openTaskPanel()
+      return
+    }
+    setComposerOrigin({ source: 'chip', chip })
+    onSuggestion?.(prompt)
+  }
 
   // Compact mode shows minimal UI
   if (isCompact) {
@@ -672,23 +719,23 @@ function EmptyState({
             still handles narrow viewports — this only matters once the
             viewport has the room to use it. */}
         <div className="mt-[18px] w-full max-w-[900px] flex flex-wrap items-center justify-center gap-2">
-          <button onClick={openTaskPanel} className={CHIP_CLASS}>
+          <button onClick={() => handleChip('continue_task')} className={CHIP_CLASS}>
             <SquareCheckBig className={CHIP_ICON_CLASS} strokeWidth={1.8} />
             {t('Continue recent task')}
           </button>
-          <button onClick={() => onSuggestion?.(t('Help me generate code'))} className={CHIP_CLASS}>
+          <button onClick={() => handleChip('generate_code', t('Help me generate code'))} className={CHIP_CLASS}>
             <Code className={CHIP_ICON_CLASS} strokeWidth={1.8} />
             {t('Generate code')}
           </button>
-          <button onClick={() => onSuggestion?.(t('Help me create a digital human'))} className={CHIP_CLASS}>
+          <button onClick={() => handleChip('create_dh', t('Help me create a digital human'))} className={CHIP_CLASS}>
             <Bot className={CHIP_ICON_CLASS} strokeWidth={1.8} />
             {t('Create digital human')}
           </button>
-          <button onClick={() => onSuggestion?.(t('Help me analyze this document'))} className={CHIP_CLASS}>
+          <button onClick={() => handleChip('analyze_doc', t('Help me analyze this document'))} className={CHIP_CLASS}>
             <FileText className={CHIP_ICON_CLASS} strokeWidth={1.8} />
             {t('Analyze document')}
           </button>
-          <button onClick={() => onSuggestion?.(t('Mount my knowledge base'))} className={CHIP_CLASS}>
+          <button onClick={() => handleChip('mount_kb', t('Mount my knowledge base'))} className={CHIP_CLASS}>
             <BookOpen className={CHIP_ICON_CLASS} strokeWidth={1.8} />
             {t('Mount knowledge base')}
           </button>

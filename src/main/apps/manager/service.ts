@@ -42,6 +42,7 @@ import {
 } from './errors'
 import { isMcpCommandBlocked } from '../../services/security-policy'
 import { seedAppKnowledgeBases, unbindAppFromAllKBs } from '../../services/tlon'
+import { getTaskStateService } from '../../platform/task-state'
 import type { McpAppChange } from '../../services/app-bridge'
 import { syncSkillToFilesystem, removeSkillFromFilesystem } from './skill-sync'
 import { withSkillMdName } from '../../../shared/skill-frontmatter'
@@ -611,6 +612,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       // dangling reference. Only done here (not on soft uninstall) — see
       // unbindAppFromAllKBs's doc comment.
       unbindAppFromAllKBs(appId)
+      getTaskStateService()?.removeAppConversations(appId)
 
       // Hard-delete the database record
       store.delete(appId)

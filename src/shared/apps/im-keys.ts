@@ -112,6 +112,27 @@ export function isLocalSessionKey(conversationId: string): boolean {
   return parsed !== null && parsed.channel === LOCAL_SESSION_CHANNEL
 }
 
+/**
+ * The owning appId when a conversationId is a digital-human conversation the
+ * desktop user holds directly — the native default session or a local session
+ * — as opposed to an IM, HTTP or team channel. Null otherwise.
+ */
+export function parseDirectAppChatKey(conversationId: string): string | null {
+  if (!conversationId.startsWith('app-chat:')) return null
+  const parts = conversationId.split(':')
+  if (parts.length === 2) return parts[1] || null
+  return isLocalSessionKey(conversationId) ? parts[1] : null
+}
+
+/**
+ * Whether a finished turn in this conversation is the user's to come back to:
+ * regular conversations and the digital-human conversations listed beside
+ * them, not IM, HTTP or team channel sessions.
+ */
+export function isFollowedConversationId(conversationId: string): boolean {
+  return !conversationId.startsWith('app-chat:') || parseDirectAppChatKey(conversationId) !== null
+}
+
 /** Parsed components of a channel-qualified app-chat conversation key. */
 export interface ParsedAppChatKey {
   appId: string

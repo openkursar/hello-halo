@@ -48,6 +48,7 @@ import { TeamTabContent } from '../components/team'
 import { useTranslation, getCurrentLanguage } from '../i18n'
 import { resolveSpecI18n } from '../utils/spec-i18n'
 import { api } from '../api'
+import { takeEntry, trackHome } from '../services/home-telemetry'
 import { ArrowLeft, ChevronLeft, ChevronRight } from 'lucide-react'
 
 export function AppsPage() {
@@ -106,6 +107,9 @@ export function AppsPage() {
     void openMarketplaceFilteredBy(type)
   }, [openMarketplaceFilteredBy])
 
+  useEffect(() => {
+    trackHome('apps.view', { tab: useAppsPageStore.getState().currentTab, entry: takeEntry() })
+  }, [])
   useEffect(() => { void useTeamStore.getState().loadTeams() }, [])
   useEffect(() => {
     if (currentTab === 'team' || currentTab === 'my-skills' || currentTab === 'my-mcp' || detailView?.type === 'app-config') void loadApps()

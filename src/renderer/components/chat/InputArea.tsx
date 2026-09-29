@@ -43,6 +43,14 @@ import { decideConversationMentionCandidates } from './mentionMenuDecision'
 import { formatConversationReference } from '../../../shared/conversation-reference'
 import { DigitalHumanSelector, type DigitalHumanSelectorConfig } from './DigitalHumanSelector'
 import { AutomationAvatar } from '../apps/AutomationAvatar'
+import {
+  lenBucket,
+  takeComposerOrigin,
+  takeEntry,
+  trackHome,
+  trackHomeThrottled,
+  type ComposerOrigin,
+} from '../../services/home-telemetry'
 
 // ── mention helpers ──
 //
@@ -116,6 +124,14 @@ function mentionGroupLabel(kind: MentionCandidate['kind'], t: (key: string) => s
     case 'conversation': return t('Conversations')
     case 'artifact': return t('Files')
   }
+}
+
+type MentionTelemetryType = 'digital_human' | 'file' | 'conversation'
+
+const MENTION_TELEMETRY_TYPE: Record<MentionCandidate['kind'], MentionTelemetryType> = {
+  digitalHuman: 'digital_human',
+  artifact: 'file',
+  conversation: 'conversation',
 }
 
 /**
@@ -285,6 +301,13 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  // Only the home composer wires the recipient selector, so it also scopes
+  // the home.composer.* events.
+  const isHomeComposer = !!digitalHumanSelector
+  // What produced the current draft, credited to its send.
+  const composerOriginRef = useRef<ComposerOrigin | null>(null)
+  const mentionInsertedRef = useRef(false)
+
   // Consume a composer prefill requested for this space (e.g. a skill's slash
   // command from the store's "Use" action, or SkillsTab's row click): fill
   // the box once, focus, cursor to end. Cleared immediately so it never
@@ -296,6 +319,7 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
     const text = pendingComposerInput.text
     const slashPreview = pendingComposerInput.slashPreview
     useChatStore.setState({ pendingComposerInput: null })
+    composerOriginRef.current = takeComposerOrigin()
     setContent(text)
     // A prefilled slash command (skill "use" actions always fill one) opens
     // the same autocomplete menu the user would see typing it — it's the
@@ -499,8 +523,18 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
 
   // Handle image button click (from attachment menu)
   const handleImageButtonClick = () => {
+    if (isHomeComposer) trackHome('home.composer.attach', { action: 'image' })
     setShowAttachMenu(false)
     fileInputRef.current?.click()
+  }
+
+  const handleAttachMenuChange = (open: boolean) => {
+    if (open && isHomeComposer) trackHome('home.composer.attach', { action: 'open' })
+    setShowAttachMenu(open)
+  }
+
+  const trackMentionOpen = (type?: MentionTelemetryType) => {
+    if (isHomeComposer) trackHomeThrottled('mention-open', 1000, 'home.composer.mention', { action: 'open', type })
   }
 
   /**
@@ -510,7 +544,9 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
    * entries land in this one menu, so the kinds can never drift apart into
    * two pickers with their own filtering and keyboard behavior.
    */
-  const handleOpenMentionMenu = () => {
+  const handleOpenMentionMenu = (via: 'digital_human' | 'conversation') => {
+    if (isHomeComposer) trackHome('home.composer.attach', { action: via })
+    trackMentionOpen(via)
     setShowAttachMenu(false)
     const cursor = textareaRef.current?.selectionStart ?? content.length
     const before = content.slice(0, cursor)
@@ -693,6 +729,7 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
     const nextCursor = content.slice(0, match.start).length + mentionText.length + (needsTrailingSpace ? 1 : 0)
 
     setContent(nextContent)
+    mentionInsertedRef.current = true
     handleMentionClose()
 
     requestAnimationFrame(() => {
@@ -737,11 +774,16 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
 
   /** One entry point for the menu, so every kind stays keyboard- and click-equal. */
   const selectMentionCandidate = (candidate: MentionCandidate) => {
+    if (isHomeComposer) trackHome('home.composer.mention', { action: 'select', type: MENTION_TELEMETRY_TYPE[candidate.kind] })
     if (candidate.kind === 'digitalHuman') void selectDigitalHumanMention(candidate.appId)
     else insertMention(candidate.text)
   }
 
   const handleSlashSelect = (item: SlashCommandItem) => {
+    if (isHomeComposer) {
+      // Command names are never sent: non-skill commands include user-defined ones.
+      trackHome('home.composer.slash', { action: 'select', kind: item.category })
+    }
     const newContent = item.command + ' '
     setContent(newContent)
     setSlashMenuOpen(false)
@@ -759,6 +801,28 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
     })
   }
 
+  const trackSend = (text: string, sentImages: ImageAttachment[], isInject: boolean) => {
+    const origin = composerOriginRef.current
+    const mentioned = mentionInsertedRef.current
+    composerOriginRef.current = null
+    mentionInsertedRef.current = false
+    // The onboarding send is a scripted demo, not a real turn.
+    if (!digitalHumanSelector || isOnboardingSendStep) return
+    const appId = digitalHumanSelector.current ?? undefined
+    trackHome('home.composer.send', {
+      source: origin?.source ?? (text.startsWith('/') ? 'slash' : mentioned ? 'mention' : 'manual'),
+      chip: origin?.source === 'chip' ? origin.chip : undefined,
+      recipient: appId ? 'digital_human' : 'halo',
+      appId,
+      hasImages: sentImages.length > 0,
+      imageCount: sentImages.length,
+      thinking: isInject ? undefined : thinkingEnabled,
+      isInject,
+      lenBucket: lenBucket(text.length),
+      entry: takeEntry(),
+    })
+  }
+
   // Handle send — routes to inject path when generation is in progress
   const handleSend = () => {
     const textToSend = isOnboardingSendStep ? onboardingPrompt : content.trim()
@@ -766,6 +830,7 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
     if (isGenerating) {
       // Mid-turn inject: text only (no images, no thinking toggle)
       if (textToSend && onInject) {
+        trackSend(textToSend, [], true)
         onInject(textToSend)
         setContent('')
         if (draftKey) useChatStore.getState().clearComposerDraft(draftKey)
@@ -779,6 +844,7 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
     const hasContent = textToSend || images.length > 0
     if (hasContent) {
       const sentImages = images
+      trackSend(textToSend, sentImages, false)
       const result = onSend(textToSend, sentImages.length > 0 ? sentImages : undefined, thinkingEnabled)
       if (draftKey) inputDrafts.delete(draftKey)
       if (draftKey && result instanceof Promise) {
@@ -1097,6 +1163,10 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
                 if (isOnboardingSendStep) return
                 const val = e.target.value
                 setContent(val)
+                if (!val) {
+                  composerOriginRef.current = null
+                  mentionInsertedRef.current = false
+                }
                 // Real typing always falls back to the session's live command
                 // list — a stale prefill preview shouldn't keep overriding it.
                 setSlashPreviewOverride(null)
@@ -1113,6 +1183,9 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
                   !afterSlash.includes('\n') &&
                   afterSlash.length <= maxCommandLen
                 if (looksLikeCommand) {
+                  if (!slashMenuOpen && isHomeComposer) {
+                    trackHomeThrottled('slash-open', 1000, 'home.composer.slash', { action: 'open' })
+                  }
                   setSlashMenuOpen(true)
                   setSlashSelectedIndex(0)
                   setMentionMenuOpen(false)
@@ -1130,6 +1203,7 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
                   && digitalHumanSelector.options.some(o => !query || o.name.toLowerCase().includes(query.trim().toLowerCase()))
                 const hasConversations = decideConversationMentionCandidates({ query, conversations: mentionConversations }).shouldOpenMenu
                 if (nextMentionMatch && (hasPeople || hasConversations || mentionArtifacts.length > 0)) {
+                  if (!mentionMenuOpen) trackMentionOpen()
                   setMentionMenuOpen(true)
                   setMentionSelectedIndex(0)
                 } else {
@@ -1166,7 +1240,7 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
             thinkingEnabled={thinkingEnabled}
             onThinkingToggle={() => setThinkingEnabled(!thinkingEnabled)}
             showAttachMenu={showAttachMenu}
-            onAttachMenuChange={setShowAttachMenu}
+            onAttachMenuChange={handleAttachMenuChange}
             onImageClick={handleImageButtonClick}
             imageCount={images.length}
             maxImages={MAX_IMAGES}
@@ -1214,7 +1288,7 @@ interface InputToolbarProps {
   imageCount: number
   maxImages: number
   /** Inserts "@" and opens the mention menu — same code path as typing "@" by hand. Backs both menu entries that lead there. */
-  onOpenMentionMenu: () => void
+  onOpenMentionMenu: (via: 'digital_human' | 'conversation') => void
   /** Why "Chat with a digital human" cannot be used now, or null. Disables — never hides — the entry, so it stays discoverable. */
   digitalHumanBlockedReason: string | null
   /** Why "Reference a conversation" cannot be used now, or null. Same disable-never-hide rule. */
@@ -1281,7 +1355,7 @@ function InputToolbar({
                 transition-colors ease-halo
                 ${imageCount > 0
                   ? 'bg-primary/[0.12] text-accent-on-dark'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
+                  : 'text-faint-foreground hover:text-foreground hover:bg-secondary'
                 }
                 ${(isProcessingImages || imageCount >= maxImages) ? 'opacity-50 cursor-not-allowed' : ''}
               `}
@@ -1302,7 +1376,7 @@ function InputToolbar({
                   transition-all duration-150
                   ${showAttachMenu
                     ? 'bg-primary/[0.12] text-accent-on-dark'
-                    : 'text-muted-foreground/60 hover:text-muted-foreground hover:bg-secondary'
+                    : 'text-faint-foreground hover:text-foreground hover:bg-secondary'
                   }
                   ${isProcessingImages ? 'opacity-50 cursor-not-allowed' : ''}
                 `}
@@ -1341,7 +1415,7 @@ function InputToolbar({
                     "talk to someone" and one who thinks in "point at a past
                     conversation" each find their own way in. */}
                 <button
-                  onClick={onOpenMentionMenu}
+                  onClick={() => onOpenMentionMenu('digital_human')}
                   disabled={!!digitalHumanBlockedReason}
                   className={`w-full px-3 py-2 flex items-center gap-3 text-sm
                     transition-colors duration-150
@@ -1356,7 +1430,7 @@ function InputToolbar({
                   <span>{t('Chat with a digital human')}</span>
                 </button>
                 <button
-                  onClick={onOpenMentionMenu}
+                  onClick={() => onOpenMentionMenu('conversation')}
                   disabled={!!conversationBlockedReason}
                   className={`w-full px-3 py-2 flex items-center gap-3 text-sm
                     transition-colors duration-150

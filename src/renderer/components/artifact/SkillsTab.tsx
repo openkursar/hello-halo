@@ -25,13 +25,20 @@ import { useTranslation } from '../../i18n'
 import type { AvailableSkill } from '../../../shared/apps/app-types'
 import { SpaceResourceRow } from './SpaceResourceRow'
 import { AppTypeIcon } from '../store/AppTypeIcon'
+import { setComposerOrigin, trackHome } from '../../services/home-telemetry'
 
-export function SkillsTab() {
+interface SkillsTabProps {
+  /** Receives the skill count once known (null while loading) and whether the fetch succeeded. */
+  onItemsChange?: (count: number | null, ok?: boolean) => void
+}
+
+export function SkillsTab({ onItemsChange }: SkillsTabProps) {
   const { t } = useTranslation()
   const spaceId = useSpaceStore(state => state.currentSpace?.id ?? '')
 
   const [skills, setSkills] = useState<AvailableSkill[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadFailed, setLoadFailed] = useState(false)
 
   useEffect(() => {
     if (!spaceId) {
@@ -41,18 +48,30 @@ export function SkillsTab() {
     }
     let cancelled = false
     setLoading(true)
+    setLoadFailed(false)
     api.appListAvailableSkillsForSpace(spaceId)
       .then(res => {
         if (cancelled) return
         setSkills(res.success && Array.isArray(res.data) ? res.data : [])
+        setLoadFailed(!res.success)
       })
-      .catch(() => { if (!cancelled) setSkills([]) })
+      .catch(() => {
+        if (cancelled) return
+        setSkills([])
+        setLoadFailed(true)
+      })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [spaceId])
 
+  useEffect(() => {
+    onItemsChange?.(loading ? null : skills.length, !loadFailed)
+  }, [onItemsChange, loading, skills.length, loadFailed])
+
   const handleUse = (skill: AvailableSkill) => {
     if (!spaceId) return
+    trackHome('home.rail.item.click', { tab: 'skill', action: 'use' })
+    setComposerOrigin({ source: 'skill_use' })
     useChatStore.setState({
       pendingComposerInput: {
         spaceId,
@@ -70,6 +89,7 @@ export function SkillsTab() {
   // command above ultimately invokes, opened read-only in the canvas so
   // there's room to actually read it instead of squeezing it into the rail.
   const handleViewDetail = (skill: AvailableSkill) => {
+    trackHome('home.rail.item.click', { tab: 'skill', action: 'open' })
     useCanvasStore.getState().openFile(`${skill.path}/SKILL.md`, skill.name)
   }
 

@@ -18,6 +18,7 @@ import { useSpaceStore } from '../../stores/space.store'
 import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 import { useTranslation } from '../../i18n'
 import { formatTimeAgo } from '../../utils/format-time'
+import { trackHome } from '../../services/home-telemetry'
 
 interface SpaceCardProps {
   space: Space
@@ -50,6 +51,7 @@ export function SpaceCard({ space, summary, onOpen, onOpenTab }: SpaceCardProps)
   const handleOpenFolder = useCallback((e: React.MouseEvent) => {
     e.stopPropagation()
     setMenuOpen(false)
+    trackHome('home.space.action', { action: 'reveal', surface: 'manage' })
     void openSpaceFolder(space.id)
   }, [space.id, openSpaceFolder])
 
@@ -69,7 +71,9 @@ export function SpaceCard({ space, summary, onOpen, onOpenTab }: SpaceCardProps)
       cancelLabel: t('Cancel'),
       variant: 'danger',
     })
-    if (confirmed) await deleteSpace(space.id)
+    if (!confirmed) return
+    trackHome('home.space.action', { action: 'delete', surface: 'manage' })
+    await deleteSpace(space.id)
   }, [space, showConfirm, t, deleteSpace])
 
   const handleForget = useCallback(async () => {
@@ -81,7 +85,9 @@ export function SpaceCard({ space, summary, onOpen, onOpenTab }: SpaceCardProps)
       cancelLabel: t('Cancel'),
       variant: 'danger',
     })
-    if (confirmed) await forgetSpace(space.id)
+    if (!confirmed) return
+    trackHome('home.space.action', { action: 'forget', surface: 'manage' })
+    await forgetSpace(space.id)
   }, [space.id, showConfirm, t, forgetSpace])
 
   const name = space.isTemp ? t('Halo Workspace') : space.name
@@ -175,7 +181,10 @@ export function SpaceCard({ space, summary, onOpen, onOpenTab }: SpaceCardProps)
           <EditSpaceDialog
             space={space}
             onClose={() => setEditing(false)}
-            onSaved={() => setEditing(false)}
+            onSaved={() => {
+              trackHome('home.space.action', { action: 'rename', surface: 'manage' })
+              setEditing(false)
+            }}
           />
         </div>
       )}

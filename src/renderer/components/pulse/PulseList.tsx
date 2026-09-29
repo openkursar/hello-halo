@@ -28,8 +28,9 @@ import { useTaskItems } from '../../stores/task.store'
 import { useTeamStore } from '../../stores/team.store'
 import { useAppStore } from '../../stores/app.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
-import { navigateToConversation } from '../../utils/conversation-navigation'
+import { navigateToAppChat, navigateToConversation } from '../../utils/conversation-navigation'
 import { AutomationAvatar } from '../apps/AutomationAvatar'
+import { markEntry, trackHome, trackNavigate } from '../../services/home-telemetry'
 import { useTranslation } from '../../i18n'
 import { cn } from '../../lib/utils'
 import type { TaskItem, TaskItemStatus } from '../../types'
@@ -62,6 +63,34 @@ const STATUS_TEXT_CLASS: Record<TaskItemStatus, string> = {
   'completed-unseen': 'text-halo-success',
   'error': 'text-halo-error',
   'idle': 'text-muted-foreground',
+}
+
+const TELEMETRY_STATUS: Record<TaskItemStatus, string> = {
+  'running': 'running',
+  'waiting': 'waiting',
+  'completed-unseen': 'completed',
+  'error': 'error',
+  'idle': 'idle',
+}
+
+/** The panel section each status is grouped under (see the filters in PulseList). */
+const TELEMETRY_SECTION: Record<TaskItemStatus, string> = {
+  'running': 'running',
+  'waiting': 'continue',
+  'completed-unseen': 'continue',
+  'error': 'continue',
+  'idle': 'pinned',
+}
+
+/** Same vocabulary as the conversation list's telemetry. */
+function telemetryKind(item: TaskItem): string {
+  return item.source === 'conversation' && item.appId ? 'digital_human' : item.source
+}
+
+/** A conversation click may land on the current view, where no navigation is recorded; the intent is still credited. */
+function trackTaskNavigate(to: 'space' | 'apps') {
+  trackNavigate(to, 'task_panel', 'home_task')
+  markEntry('home_task')
 }
 
 /** Open a team's workbench, which lives on the Apps page under the Teams tab. */
@@ -109,6 +138,9 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
   const currentConversationId = useChatStore(state =>
     state.currentSpaceId ? state.spaceStates.get(state.currentSpaceId)?.currentConversationId ?? null : null
   )
+  const selectedAppChatId = useChatStore(state =>
+    state.currentSpaceId ? state.spaceStates.get(state.currentSpaceId)?.selectedAppChat?.conversationId ?? null : null
+  )
   const selectedAppId = useAppsPageStore(state => state.selectedAppId)
   const selectedTeamId = useTeamStore(state => state.currentTeamId)
   const appView = useAppStore(state => state.view)
@@ -124,11 +156,22 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
   }, [hasRunning])
 
   const handleItemClick = useCallback((item: TaskItem) => {
-    if (item.source === 'conversation' && item.conversationId) {
+    trackHome('home.task.item.click', {
+      kind: telemetryKind(item),
+      status: TELEMETRY_STATUS[item.status],
+      section: TELEMETRY_SECTION[item.status],
+    })
+    if (item.source === 'conversation' && item.conversationId && item.appId) {
+      trackTaskNavigate('space')
+      navigateToAppChat(item.spaceId, item.appId, item.conversationId)
+    } else if (item.source === 'conversation' && item.conversationId) {
+      trackTaskNavigate('space')
       navigateToConversation(item.spaceId!, item.conversationId)
     } else if (item.source === 'team' && item.teamId) {
+      trackTaskNavigate('apps')
       navigateToTeam(item.teamId)
     } else {
+      if (item.appId) trackTaskNavigate('apps')
       navigateToAutomation(item)
     }
     onItemClick?.()
@@ -139,17 +182,22 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
   const handleTogglePin = useCallback((e: React.MouseEvent, item: TaskItem) => {
     e.stopPropagation()
     if (!item.conversationId) return
+    trackHome('home.task.item.action', { action: item.starred ? 'unpin' : 'pin', kind: telemetryKind(item) })
     useChatStore.getState().toggleStarConversation(item.spaceId!, item.conversationId, !item.starred)
   }, [])
 
   const handleKeep = useCallback((e: React.MouseEvent, item: TaskItem) => {
     e.stopPropagation()
-    if (item.conversationId) useChatStore.getState().keepPulseItem(item.conversationId)
+    if (!item.conversationId) return
+    trackHome('home.task.item.action', { action: 'keep', kind: telemetryKind(item) })
+    useChatStore.getState().keepPulseItem(item.conversationId)
   }, [])
 
   const handleRemove = useCallback((e: React.MouseEvent, item: TaskItem) => {
     e.stopPropagation()
-    if (item.conversationId) useChatStore.getState().removePulseItem(item.conversationId)
+    if (!item.conversationId) return
+    trackHome('home.task.item.action', { action: 'remove', kind: telemetryKind(item) })
+    useChatStore.getState().removePulseItem(item.conversationId)
   }, [])
 
   // "Continue" = needs the user (waiting for input, done but unseen, or
@@ -190,6 +238,8 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
 
   const renderItem = (item: TaskItem) => {
     const isConversation = item.source === 'conversation'
+    // A digital-human conversation: conversation lifecycle, digital-human face.
+    const isAppChat = isConversation && !!item.appId
     const isTeam = item.source === 'team'
     // Grace-period item: user already looked at it, counting down to
     // auto-hide (chat.store `pulseReadAt`, 60s) unless kept. Automation
@@ -204,8 +254,10 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
     // selected conversation around even while the user is on the Apps page
     // (and vice versa for apps-page.store), so without this guard both a
     // conversation and a digital human could show as selected at once.
-    const isSelected = isConversation
-      ? appView === 'space' && item.spaceId === currentSpaceId && item.conversationId === currentConversationId
+    const isSelected = isAppChat
+      ? appView === 'space' && item.conversationId === selectedAppChatId
+      : isConversation
+      ? appView === 'space' && item.spaceId === currentSpaceId && item.conversationId === currentConversationId && !selectedAppChatId
       : appView === 'apps' && (isTeam ? item.teamId === selectedTeamId : item.appId === selectedAppId)
 
     return (
@@ -213,26 +265,19 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
         key={item.key}
         onClick={() => handleItemClick(item)}
         className={cn(
+          // Lighter fill plus a faint edge lifts cards off the panel; the
+          // selected one only swaps its edge to a light accent.
           'group/tk flex items-center gap-[11px] rounded-lg border cursor-pointer transition-colors ease-halo mx-2 mb-1.5',
           px, py,
           isSelected
-            ? 'border-blue-500 bg-blue-500/[0.12]'
-            : cn(
-                'border-border',
-                isSeen
-                  ? 'opacity-[.62] hover:opacity-100 hover:bg-secondary'
-                  : isReady
-                    ? isConversation
-                      ? 'bg-secondary hover:bg-surface-hover'
-                      : 'bg-card hover:bg-surface-hover'
-                    : 'bg-transparent hover:bg-secondary'
-              )
+            ? 'border-primary/40 bg-background'
+            : cn('border-border/60 bg-background hover:bg-secondary', isSeen && 'opacity-[.62] hover:opacity-100')
         )}
       >
         {/* Identity icon — MessageSquare for a conversation, Users for a team,
             the digital human's own generated face for automation. Never a
             status dot: status is conveyed by the section and elapsed text. */}
-        {isConversation || isTeam ? (
+        {(isConversation && !isAppChat) || isTeam ? (
           <div className={cn(
             'w-[30px] h-[30px] flex-shrink-0 rounded-sm flex items-center justify-center',
             isReady && !isSeen ? 'bg-primary/[0.12] text-accent-on-dark' : 'bg-secondary text-subtle-foreground'
@@ -325,6 +370,9 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
           </div>
         ) : isConversation ? (
           <>
+            {/* Pinning is a regular-conversation index flag; digital-human
+                sessions pin from the conversation list instead. */}
+            {!isAppChat && (
             <button
               onClick={(e) => handleTogglePin(e, item)}
               className={cn(
@@ -338,6 +386,7 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
             >
               <Pin className="w-[13px] h-[13px]" strokeWidth={1.8} />
             </button>
+            )}
             {/* A kept item has no countdown left to end it, so Remove stays reachable. */}
             {item.kept && !!item.readAt && (
               <button
@@ -353,8 +402,7 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
         <ChevronRight
           className={cn(
             'w-4 h-4 flex-shrink-0 transition-[transform,color] ease-halo',
-            'text-subtle-foreground group-hover/tk:translate-x-0.5 group-hover/tk:text-foreground',
-            isReady && !isSeen && 'text-accent-on-dark'
+            'text-faint-foreground group-hover/tk:translate-x-0.5 group-hover/tk:text-foreground'
           )}
         />
       </div>

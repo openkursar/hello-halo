@@ -46,6 +46,9 @@ export interface SessionState {
   pendingToolApproval: ToolCall | null
   error: string | null
   errorType: AgentErrorType | null  // Special error type for custom UI handling
+  // The user has opened this error; it stays on screen but no longer needs
+  // them. Set instead of clearing where the error lives only in this session.
+  errorSeen?: boolean
   // Compact notification
   compactInfo: CompactInfo | null
   // Text block version - increments on each new text block (for StreamingBubble reset)

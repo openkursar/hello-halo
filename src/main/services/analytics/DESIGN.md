@@ -248,6 +248,18 @@ Runs once per launch after both AppManager and Runtime are initialized
 | Capacitor / remote | `POST /api/analytics/report`   | the same `RENDERER_ALLOWED_EVENTS` set, imported from the same module |
 | Main-native | `analytics.track(...)` direct  | full event catalogue                                                |
 
+HTTP-mode clients batch in the renderer (`renderer/api/analytics-batch.ts`):
+reports are queued synchronously (so one reported during unload still makes
+the final flush) and leave together after 5s, when 50 are queued, or when the
+page is hidden/unloaded, so a burst no longer takes connection slots from the
+page's own requests. Only the hide/unload flush uses `keepalive` — a keepalive
+request needing a CORS preflight (Capacitor) is unreliable. The route accepts
+a batch `{ events: [...] }` (each report must be an object with plain-object
+properties and an allow-listed name — disallowed names are logged once each
+and skipped — at most 100 per request) as well as the single `{ event, properties }` older clients send;
+a client that gets the single-report 400 back from an older server falls back
+to single reports for the rest of the session.
+
 `RENDERER_ALLOWED_EVENTS` is defined once and imported by both the IPC
 handler and the HTTP route — it used to be a private constant duplicated
 in `ipc/analytics.ts`, which meant the HTTP route accepted any event name a

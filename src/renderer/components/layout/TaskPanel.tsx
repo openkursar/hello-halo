@@ -1,8 +1,8 @@
 /**
  * TaskPanel - rail-triggered task panel
  *
- * Surfaces active tasks and unseen completions (PulseList, same
- * useTaskCount() the rail badge reads) from a rail click, visible from
+ * Surfaces active tasks and unseen completions (PulseList; the rail badge
+ * counts the same items via useTaskCount()) from a rail click, visible from
  * every RAIL_VIEWS page instead of only when a space's sidebar happens to
  * be open.
  *
@@ -15,22 +15,27 @@
 
 import { X, SquareCheckBig } from 'lucide-react'
 import { PulseList } from '../pulse/PulseList'
-import { useTaskItems } from '../../stores/task.store'
+import { countTaskItems, useTaskItems } from '../../stores/task.store'
 import { useTaskPanelStore } from '../../stores/taskPanel.store'
 import { useIsNarrowShell } from '../../hooks/useIsMobile'
 import { useTranslation } from '../../i18n'
+import { trackHome } from '../../services/home-telemetry'
 
 export function TaskPanel() {
   const { t } = useTranslation()
   const items = useTaskItems()
-  const close = useTaskPanelStore(s => s.close)
+  const closePanel = useTaskPanelStore(s => s.close)
   const isNarrow = useIsNarrowShell()
 
-  const continueCount = items.filter(i => i.status === 'waiting' || i.status === 'completed-unseen' || i.status === 'error').length
-  const runningCount = items.filter(i => i.status === 'running').length
+  const { continueCount, runningCount } = countTaskItems(items)
+
+  const close = () => {
+    trackHome('nav.task_panel.toggle', { open: false, surface: 'panel' })
+    closePanel()
+  }
 
   const header = (
-    <div className="flex-shrink-0 px-3 pt-3 pb-2.5 border-b border-border flex items-center justify-between">
+    <div className="flex-shrink-0 px-3 pt-3 pb-2.5 flex items-center justify-between">
       <div className="flex items-center gap-2">
         <SquareCheckBig className="w-[17px] h-[17px]" strokeWidth={1.8} />
         <span className="text-sm font-semibold">{t('Tasks')}</span>

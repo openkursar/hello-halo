@@ -43,12 +43,12 @@ export interface LiveSessionsApi {
    * Reveal a session's surface in the Canvas, navigating to the Space view
    * first when the click came from elsewhere.
    *
-   * Resolves true only once the surface is actually open. False means no space
-   * could be resolved to land in; callers must say so rather than drop it —
-   * a click that does nothing visible is the symptom this control exists to
-   * avoid.
+   * Resolves with the tab id only once the surface is actually open. Null
+   * means no space could be resolved to land in; callers must say so rather
+   * than drop it — a click that does nothing visible is the symptom this
+   * control exists to avoid.
    */
-  open: (session: LiveSession) => Promise<boolean>
+  open: (session: LiveSession) => Promise<string | null>
   /** Stop the underlying resource (terminates the process/view). */
   stop: (session: LiveSession) => Promise<void>
 }
@@ -107,14 +107,14 @@ export function useLiveSessions(): LiveSessionsApi {
     .sort((a, b) => b.lastActivityAt - a.lastActivityAt)
   const busy = sessions.some(s => s.busy)
 
-  const open = async (session: LiveSession): Promise<boolean> => {
+  const open = async (session: LiveSession): Promise<string | null> => {
     // The Canvas lives in the Space view, so a click from Apps or Settings has
     // to land somewhere first. currentSpace is null on pages that never mount
     // SpaceSelector, and after a space is deleted; halo-temp always exists, so
     // it is the fallback rather than a full selectDefaultSpace() lookup.
     const spaceStore = useSpaceStore.getState()
     const target = spaceStore.currentSpace ?? spaceStore.haloSpace
-    if (!target) return false
+    if (!target) return null
     if (spaceStore.currentSpace?.id !== target.id) spaceStore.setCurrentSpace(target)
     useAppStore.getState().navigate('space')
 
@@ -122,12 +122,10 @@ export function useLiveSessions(): LiveSessionsApi {
     // a previous space cannot run over the tab opened next.
     await canvasLifecycle.enterSpace(target.id)
     if (session.kind === 'terminal') {
-      await openTerminalInCanvas(session.id, session.title)
-    } else {
-      // Attach the exact AI-driven BrowserView (same WebContents).
-      await canvasLifecycle.attachAIBrowserView(session.id, aiUrl || '', session.title)
+      return openTerminalInCanvas(session.id, session.title)
     }
-    return true
+    // Attach the exact AI-driven BrowserView (same WebContents).
+    return canvasLifecycle.attachAIBrowserView(session.id, aiUrl || '', session.title)
   }
 
   const stop = async (session: LiveSession) => {
