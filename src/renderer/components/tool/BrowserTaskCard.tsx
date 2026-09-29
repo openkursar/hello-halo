@@ -28,6 +28,7 @@ import {
 import { useCanvasStore } from '../../stores/canvas.store'
 import { useAIBrowserStore, useActiveConversationBrowserView } from '../../stores/ai-browser.store'
 import { useChatStore, selectActiveConversationId } from '../../stores/chat.store'
+import { trackToolOpen } from '../../services/tool-session-telemetry'
 import type { ToolCall } from '../../types'
 import { useTranslation } from '../../i18n'
 
@@ -315,7 +316,7 @@ export function BrowserTaskCard({ browserToolCalls, isActive, showViewButton = t
   const handleViewLive = () => {
     if (!activeViewId) return
     const urlToOpen = view?.url || currentUrl || ''
-    attachAIBrowserView(activeViewId, urlToOpen, t('🤖 AI Browser'))
+    trackToolOpen('browser', 'task_card', attachAIBrowserView(activeViewId, urlToOpen, t('🤖 AI Browser')))
   }
 
   // Don't render if no browser tool calls

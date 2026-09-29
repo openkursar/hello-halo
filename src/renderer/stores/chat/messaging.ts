@@ -8,6 +8,7 @@ import type { ChatSlice } from './internal'
 import { api, createEmptySessionState } from './internal'
 import { selectActiveConversationId } from './active'
 import { conversationKind, backendFor } from './backend'
+import { noteTurnEnded, noteTurnSent, trackHome } from '../../services/home-telemetry'
 
 export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 'injectMessage' | 'dequeueMessage' | 'approveTool' | 'rejectTool' | 'continueAfterInterrupt'> = (set, get) => ({
   sendMessage: async (content, images, thinkingEnabled, options) => {
@@ -16,7 +17,9 @@ export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 
       console.error('[ChatStore] No conversation or space selected')
       return false
     }
-    return backendFor(conversationId).send({ set, get }, conversationId, { content, images, thinkingEnabled, options })
+    const sent = await backendFor(conversationId).send({ set, get }, conversationId, { content, images, thinkingEnabled, options })
+    if (!sent) noteTurnEnded(conversationId, 'error')
+    return sent
   },
 
   // Stop generation for a specific conversation (default: the one on screen)
@@ -30,6 +33,7 @@ export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 
       }
       return
     }
+    noteTurnEnded(targetId, 'stopped')
     await backendFor(targetId).stop({ set, get }, targetId)
   },
 
@@ -117,7 +121,11 @@ export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 
       return { sessions: newSessions }
     })
 
-    if (conversationKind(conversationId) === 'virtual') return
+    const kind = conversationKind(conversationId)
+    if (kind === 'virtual') return
+    const recipient = kind === 'digital-human' ? 'digital_human' : 'halo'
+    trackHome('home.composer.send', { source: 'continue', recipient, hasImages: false, imageCount: 0, isInject: false })
+    noteTurnSent(conversationId, recipient)
     void backendFor(conversationId)
       .send({ set, get }, conversationId, { content: 'continue' })
       .catch((error) => console.error('[ChatStore] continueAfterInterrupt failed:', error))

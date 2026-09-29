@@ -1,6 +1,6 @@
 import { useShallow } from 'zustand/react/shallow'
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { ArrowUpRight, ChevronDown, FolderInput, LayoutGrid, List, MessageSquare, MoreVertical, Play, Plus, Search, Unplug, Users } from 'lucide-react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { ArrowUpRight, ChevronDown, ChevronRight, FolderInput, MessageSquare, MoreVertical, Play, Plus, Search, Unplug, Users } from 'lucide-react'
 import { usePeopleDirectoryStore } from '../../stores/people-directory.store'
 import { api } from '../../api'
 import { useAppsStore } from '../../stores/apps.store'
@@ -13,7 +13,7 @@ import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { AutomationAvatar } from './AutomationAvatar'
 import { WorkspaceMigrationDialog } from './WorkspaceMigrationDialog'
 import { needsAttention } from '../../../shared/apps/app-types'
-import type { PeopleDirectorySummary } from '../../../shared/apps/people-directory'
+import type { PeopleDirectoryQuery, PeopleDirectorySummary } from '../../../shared/apps/people-directory'
 
 interface DirectoryGroup {
   key: string
@@ -52,17 +52,16 @@ function groupRows(rows: PeopleDirectorySummary[]): DirectoryGroup[] {
 
 export function PeopleDirectory({ spaceMap, onCreate }: { spaceMap: Record<string, string>; onCreate: () => void }) {
   const { t } = useTranslation()
-  const prefs = usePeopleViewStore(useShallow(state => ({ query: state.query, team: state.team, space: state.space, attention: state.attention, view: state.view, page: state.page, setFilters: state.setFilters })))
+  const prefs = usePeopleViewStore(useShallow(state => ({ query: state.query, team: state.team, space: state.space, page: state.page, setFilters: state.setFilters })))
   const teams = useTeamStore(state => state.teams).filter(team => !team.ephemeral)
   const { data, loading, error, load, refresh } = usePeopleDirectoryStore()
-  const [showRemoved, setShowRemoved] = useState(false)
   const scroll = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => { if (scroll.current) scroll.current.scrollTop = usePeopleViewStore.getState().directoryScroll }, [])
   const language = getCurrentLanguage()
   useEffect(() => {
-    const timer = setTimeout(() => void load({ q: prefs.query, language, teamId: prefs.team || undefined, spaceId: prefs.space || undefined, attention: prefs.attention, removed: showRemoved, limit: 24, offset: (prefs.page - 1) * 24 }), 150)
+    const timer = setTimeout(() => void load({ q: prefs.query, language, teamId: prefs.team || undefined, spaceId: prefs.space || undefined, limit: 24, offset: (prefs.page - 1) * 24 }), 150)
     return () => clearTimeout(timer)
-  }, [prefs.query, prefs.team, prefs.space, prefs.attention, prefs.page, showRemoved, language, load])
+  }, [prefs.query, prefs.team, prefs.space, prefs.page, language, load])
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined
     const update = () => { if (!timer) timer = setTimeout(() => { timer = undefined; void refresh() }, 250) }
@@ -73,7 +72,7 @@ export function PeopleDirectory({ spaceMap, onCreate }: { spaceMap: Record<strin
   const total = data?.total ?? 0
   const page = prefs.page
   const waiting = data?.attentionTotal ?? 0
-  const filtering = !!(prefs.query || prefs.team || prefs.space || prefs.attention)
+  const filtering = !!(prefs.query || prefs.team || prefs.space)
   useEffect(() => { if (!loading && data && page > 1 && data.total <= (page - 1) * 24) prefs.setFilters({ page: Math.max(1, Math.ceil(data.total / 24)) }) }, [data, loading, page, prefs.setFilters])
   const open = (app: PeopleDirectorySummary, chat = false) => {
     usePeopleViewStore.setState({ returnInbox: false, returnTeam: null })
@@ -81,56 +80,134 @@ export function PeopleDirectory({ spaceMap, onCreate }: { spaceMap: Record<strin
     else if (chat && app.spaceId) void openDigitalHumanChat(app.id, app.spaceId)
     else useAppsPageStore.getState().openActivityThread(app.id)
   }
-  const rowContainerClass = prefs.view === 'cards' ? 'grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3' : 'divide-y divide-border rounded-xl border border-border'
   const renderRows = (items: PeopleDirectorySummary[]) => (
-    <div className={rowContainerClass}>{items.map(app => <PersonCard key={app.id} app={app} view={prefs.view} spaceMap={spaceMap} onOpen={open} />)}</div>
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">{items.map(app => <PersonCard key={app.id} app={app} spaceMap={spaceMap} onOpen={open} />)}</div>
   )
-  // Removed people share one flat list: they have no runtime status to group by.
-  const groups = showRemoved ? [] : groupRows(rows)
-  return <div ref={scroll} onScroll={event => usePeopleViewStore.setState({ directoryScroll: event.currentTarget.scrollTop })} className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-8">
-    <div className="mx-auto max-w-6xl">
-      <header className="mb-6 flex flex-wrap items-start justify-between gap-4"><div><h1 className="text-2xl font-semibold">{t('My Digital Humans')} <span className="text-base font-normal text-muted-foreground">{total}</span></h1><p className="mt-2 text-sm text-muted-foreground">{t('Your digital humans, their work, and the teams they belong to.')}</p></div><button onClick={onCreate} className="flex min-h-10 items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground"><Plus size={16} />{t('Create Digital Human')}</button></header>
-      {(showRemoved || (data?.removedTotal ?? 0) > 0) && <button onClick={() => { setShowRemoved(value => !value); prefs.setFilters({ page: 1 }) }} className="mb-4 min-h-8 text-xs text-muted-foreground hover:text-primary">{showRemoved ? t('Show installed digital humans') : t('View removed digital humans')}</button>}
+  const groups = groupRows(rows)
+  const removedTotal = data?.removedTotal ?? 0
+  return <div ref={scroll} onScroll={event => usePeopleViewStore.setState({ directoryScroll: event.currentTarget.scrollTop })} className="min-h-0 flex-1 overflow-y-auto px-6 py-4 sm:px-10 sm:py-8">
+    <div>
+      <header className="mb-6 flex flex-wrap items-start justify-between gap-4"><div><h1 className="text-xl font-semibold mb-1">{t('My Digital Humans')} <span className="text-sm font-normal text-muted-foreground">{total}</span></h1><p className="text-[13px] text-muted-foreground">{t('Your digital humans, their work, and the teams they belong to.')}</p></div><button onClick={onCreate} className="flex min-h-10 items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground"><Plus size={16} />{t('Create Digital Human')}</button></header>
       <div className="mb-5 flex flex-wrap gap-2">
-        <label className="relative min-w-0 grow sm:max-w-sm"><Search size={16} className="absolute left-3 top-3 text-muted-foreground" /><input aria-label={t('Search digital humans')} placeholder={t('Search names, roles, or teams')} value={prefs.query} onChange={event => prefs.setFilters({ query: event.target.value })} className="min-h-10 w-full rounded-lg border border-border bg-background py-2 pl-9 pr-3 text-sm" /></label>
+        <label className="relative min-w-0 grow sm:max-w-sm"><Search size={16} className="absolute left-3 top-3 text-muted-foreground" /><input aria-label={t('Search digital humans')} placeholder={t('Search names, roles, or teams')} value={prefs.query} onChange={event => prefs.setFilters({ query: event.target.value })} className="min-h-10 w-full rounded-lg border border-border/60 bg-card py-2 pl-9 pr-3 text-sm focus:outline-none focus:border-primary" /></label>
         <div className="relative max-w-full">
-          <select aria-label={t('Filter by team')} value={prefs.team} onChange={event => prefs.setFilters({ team: event.target.value })} className="min-h-10 w-full appearance-none rounded-lg border border-border bg-background pl-3 pr-9 text-xs"><option value="">{t('All teams')}</option>{teams.map(team => <option value={team.id} key={team.id}>{team.name}</option>)}</select>
+          <select aria-label={t('Filter by team')} value={prefs.team} onChange={event => prefs.setFilters({ team: event.target.value })} className="min-h-10 w-full appearance-none rounded-lg border border-border/60 bg-card pl-3 pr-9 text-xs hover:border-border transition-colors focus:outline-none focus:ring-1 focus:ring-primary"><option value="">{t('All teams')}</option>{teams.map(team => <option value={team.id} key={team.id}>{team.name}</option>)}</select>
           <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
         </div>
         <div className="relative max-w-full">
-          <select aria-label={t('Filter by workspace')} value={prefs.space} onChange={event => prefs.setFilters({ space: event.target.value })} className="min-h-10 w-full appearance-none rounded-lg border border-border bg-background pl-3 pr-9 text-xs"><option value="">{t('All workspaces')}</option>{Object.entries(spaceMap).map(([id, name]) => <option value={id} key={id}>{name}</option>)}</select>
+          <select aria-label={t('Filter by workspace')} value={prefs.space} onChange={event => prefs.setFilters({ space: event.target.value })} className="min-h-10 w-full appearance-none rounded-lg border border-border/60 bg-card pl-3 pr-9 text-xs hover:border-border transition-colors focus:outline-none focus:ring-1 focus:ring-primary"><option value="">{t('All workspaces')}</option>{Object.entries(spaceMap).map(([id, name]) => <option value={id} key={id}>{name}</option>)}</select>
           <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
         </div>
-        <button aria-pressed={prefs.attention} onClick={() => prefs.setFilters({ attention: !prefs.attention })} className={`min-h-10 rounded-lg border px-3 text-xs ${prefs.attention ? 'border-halo-warning text-halo-warning' : 'border-border text-muted-foreground'}`}>{t('Needs my attention')}</button>
-        <div className="ml-auto flex rounded-lg border border-border p-1">{(['cards', 'list'] as const).map(view => <button key={view} aria-label={view === 'cards' ? t('Card view') : t('List view')} aria-pressed={prefs.view === view} onClick={() => prefs.setFilters({ view })} className={`rounded p-2 ${prefs.view === view ? 'bg-secondary' : 'text-muted-foreground'}`}>{view === 'cards' ? <LayoutGrid size={16} /> : <List size={16} />}</button>)}</div>
+        {/* The only way into the requests inbox. `waiting` counts the whole
+            directory, so this cannot hang off the page's own "Needs you" group:
+            the server orders by install date, and the people waiting may all be
+            on another page or outside the filters. */}
+        {waiting > 0 && (
+          <button onClick={() => useAppsPageStore.getState().setCurrentTab('inbox')} className="ml-auto flex min-h-10 items-center gap-1 text-xs text-halo-warning hover:underline">
+            {t('Handle all ({{count}})', { count: waiting })}<ArrowUpRight size={13} />
+          </button>
+        )}
       </div>
       {error && <div role="alert" className="mb-4 rounded-lg border border-destructive/30 p-3 text-sm text-destructive">{t('Could not load digital humans.')} <button onClick={() => void refresh()} className="underline">{t('Retry')}</button></div>}
       {(!data || loading) && !error && !rows.length && <p role="status" className="py-12 text-center text-muted-foreground">{t('Loading…')}</p>}
-      {data && !loading && !error && !rows.length && <div className="rounded-xl border border-dashed border-border p-10 text-center"><Users className="mx-auto mb-3 text-muted-foreground" /><h2 className="font-medium">{filtering ? t('No matching digital humans') : t('No digital humans yet')}</h2><button onClick={() => filtering ? prefs.setFilters({ query: '', team: '', space: '', attention: false }) : onCreate()} className="mt-3 text-sm text-primary">{filtering ? t('Clear filters') : t('Create Digital Human')}</button></div>}
-      {showRemoved ? renderRows(rows) : groups.map(group => (
+      {data && !loading && !error && !rows.length && <div className="rounded-xl border border-dashed border-border p-10 text-center"><Users className="mx-auto mb-3 text-muted-foreground" /><h2 className="font-medium">{filtering ? t('No matching digital humans') : t('No digital humans yet')}</h2><button onClick={() => filtering ? prefs.setFilters({ query: '', team: '', space: '' }) : onCreate()} className="mt-3 text-sm text-primary">{filtering ? t('Clear filters') : t('Create Digital Human')}</button></div>}
+      {groups.map(group => (
         <section key={group.key} className="mb-6">
           <div className="mb-2 flex flex-wrap items-center gap-2 px-1">
             <h2 className={`text-[11px] font-semibold uppercase tracking-wider ${group.key === 'needs-me' ? 'text-halo-warning' : 'text-muted-foreground'}`}>
               {group.key === 'needs-me' && <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-halo-warning align-middle" />}
               {t(group.label)} <span className="font-normal normal-case tracking-normal">({group.apps.length})</span>
             </h2>
-            {group.key === 'needs-me' && waiting > 0 && (
-              <button onClick={() => useAppsPageStore.getState().setCurrentTab('inbox')} className="ml-auto flex min-h-8 items-center gap-1 text-xs text-halo-warning hover:underline">
-                {t('Handle all ({{count}})', { count: waiting })}<ArrowUpRight size={13} />
-              </button>
-            )}
           </div>
           {renderRows(group.apps)}
         </section>
       ))}
       {total > 24 && <div className="mt-5 flex items-center justify-between text-sm"><button disabled={page === 1} onClick={() => prefs.setFilters({ page: page - 1 })} className="rounded-lg border border-border px-3 py-2 disabled:opacity-40">{t('Previous')}</button><span className="text-muted-foreground">{t('Page {{page}} of {{count}}', { page, count: Math.ceil(total / 24) })}</span><button disabled={page * 24 >= total} onClick={() => prefs.setFilters({ page: page + 1 })} className="rounded-lg border border-border px-3 py-2 disabled:opacity-40">{t('Next')}</button></div>}
+      {removedTotal > 0 && (
+        <RemovedPeopleSection
+          total={removedTotal}
+          query={{ q: prefs.query, language, teamId: prefs.team || undefined, spaceId: prefs.space || undefined }}
+          renderRows={renderRows}
+        />
+      )}
     </div>
   </div>
 }
 
-function PersonCard({ app, view, spaceMap, onOpen }: {
+const REMOVED_PAGE_SIZE = 24
+
+/**
+ * Removed people sit below everyone else, collapsed. They have no runtime
+ * status to group by and are rarely needed, so they are fetched only once the
+ * section is opened rather than on every directory load. `total` is counted
+ * with the same filters this list applies.
+ */
+function RemovedPeopleSection({ total, query, renderRows }: {
+  total: number
+  query: Omit<PeopleDirectoryQuery, 'removed' | 'limit' | 'offset'>
+  renderRows: (items: PeopleDirectorySummary[]) => ReactNode
+}) {
+  const { t } = useTranslation()
+  const [expanded, setExpanded] = useState(false)
+  const [items, setItems] = useState<PeopleDirectorySummary[]>([])
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const request = useRef(0)
+  const loadFrom = (offset: number) => {
+    const id = ++request.current
+    setStatus('loading')
+    api.appListPeople({ ...query, removed: true, limit: REMOVED_PAGE_SIZE, offset })
+      .then(response => {
+        if (id !== request.current) return
+        if (!response.success || !response.data) throw new Error(response.error ?? 'Removed query rejected')
+        const page = response.data.items
+        setItems(previous => offset === 0 ? page : [...previous, ...page])
+        setStatus('ready')
+      })
+      .catch(error => {
+        if (id !== request.current) return
+        console.warn('[PeopleDirectory] Removed query failed', { offset, error })
+        setStatus('error')
+      })
+  }
+  // Opening, a new filter, or a change in the count starts over from the first page.
+  useEffect(() => {
+    if (!expanded) return
+    setItems([])
+    loadFrom(0)
+    return () => { request.current++ }
+  }, [expanded, total, query.q, query.language, query.teamId, query.spaceId])
+  return (
+    <section className="mt-8">
+      <button
+        onClick={() => setExpanded(value => !value)}
+        aria-expanded={expanded}
+        className="mb-2 flex items-center gap-1.5 px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors"
+      >
+        <ChevronRight className={`h-3 w-3 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+        {t('Removed')} <span className="font-normal normal-case tracking-normal">({total})</span>
+      </button>
+      {expanded && (
+        <>
+          {items.length > 0 && renderRows(items)}
+          {status === 'error' ? (
+            <div role="alert" className="mt-3 px-1 text-sm text-destructive">
+              {t('Could not load removed digital humans.')} <button onClick={() => loadFrom(items.length)} className="underline">{t('Retry')}</button>
+            </div>
+          ) : status === 'loading' ? (
+            <p role="status" className="mt-3 px-1 text-sm text-muted-foreground">{t('Loading…')}</p>
+          ) : items.length < total && (
+            <button onClick={() => loadFrom(items.length)} className="mt-4 rounded-lg border border-border px-3 py-2 text-sm hover:bg-secondary transition-colors">
+              {t('Show more')}
+            </button>
+          )}
+        </>
+      )}
+    </section>
+  )
+}
+
+function PersonCard({ app, spaceMap, onOpen }: {
   app: PeopleDirectorySummary
-  view: 'cards' | 'list'
   spaceMap: Record<string, string>
   onOpen: (app: PeopleDirectorySummary, chat?: boolean) => void
 }) {
@@ -140,7 +217,7 @@ function PersonCard({ app, view, spaceMap, onOpen }: {
   return (
     <article
       onClick={() => onOpen(app)}
-      className={`group cursor-pointer transition-colors ${view === 'cards' ? 'min-w-0 rounded-xl border border-border bg-background p-5 hover:border-primary/40' : 'flex min-w-0 flex-wrap items-center gap-4 p-4 hover:bg-secondary/30'}`}
+      className={`group min-w-0 cursor-pointer rounded-xl border bg-card p-5 transition-[border-color,opacity] ${app.status === 'uninstalled' ? 'border-dashed border-border opacity-60 hover:opacity-100' : 'border-border hover:border-primary/40'}`}
     >
       <div className="flex min-w-0 items-center gap-3">
         <button onClick={event => { event.stopPropagation(); onOpen(app) }} className="flex min-w-0 flex-1 items-center gap-3 text-left"><AutomationAvatar name={app.name} size={42} /><h2 className="min-w-0 truncate font-medium" title={app.name}>{app.name}</h2></button>
@@ -153,7 +230,7 @@ function PersonCard({ app, view, spaceMap, onOpen }: {
       </div>
       <p className="my-3 min-w-0 flex-1 truncate text-sm text-muted-foreground" title={app.description}>{app.description || t('Digital human')}</p>
       <button onClick={event => { event.stopPropagation(); useAppsPageStore.getState().openAppTeams(app.id) }} className="flex max-w-full items-center gap-1.5 text-xs text-muted-foreground hover:text-primary"><Users size={14} /><span className="truncate">{memberships.length ? memberships.slice(0, 2).map(team => team.name).join(' · ') : t('No teams yet')}</span>{memberships.length > 2 && <span>+{memberships.length - 2}</span>}</button>
-      <div className={`flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground ${view === 'cards' ? 'mt-4 border-t border-border pt-3' : ''}`}><span>{app.spaceId ? spaceMap[app.spaceId] ?? t('Workspace unavailable') : t('Global')}</span>{/* Ordered so the strongest claim wins: stopping a person also turns its
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3 text-xs text-muted-foreground"><span>{app.spaceId ? spaceMap[app.spaceId] ?? t('Workspace unavailable') : t('Global')}</span>{/* Ordered so the strongest claim wins: stopping a person also turns its
           automatic tasks off, so in any other order a stop reads as the owner's
           own pause. */}
       <span>{app.status === 'uninstalled' ? t('Uninstalled') : state?.blocked ? t('Stopped, waiting for you') : (state?.pendingDecisionCount ?? 0) > 0 ? t('{{count}} waiting', { count: state!.pendingDecisionCount }) : state?.status === 'running' ? t('Working') : state?.automaticEnabled === false || app.status === 'paused' ? t('Automatic tasks paused') : !state ? t('Status unavailable') : t('Ready')}</span></div>

@@ -12,6 +12,7 @@ import { cacheConversation } from './cache'
 import { recoverSessionState } from './recover'
 import { beginTurn, endTurnWithError, finishedTurnState } from './turn'
 import type { ChatBackend, SendRequest, BackendContext } from './types'
+import { noteTurnEnded } from '../../../services/home-telemetry'
 
 function metaFromConversation(conversation: Conversation): ConversationMeta {
   return {
@@ -197,6 +198,7 @@ async function send(ctx: BackendContext, conversationId: string, request: SendRe
       withdraw(null)
       return false
     }
+    noteTurnEnded(conversationId, 'error')
     set((state) => {
       const sessions = new Map(state.sessions)
       sessions.set(conversationId, endTurnWithError(sessions.get(conversationId), i18n.t('Failed to send message')))

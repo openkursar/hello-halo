@@ -24,6 +24,7 @@ import { SortableSpaceList } from '../components/space/SortableSpaceList'
 import { useSpaceStore } from '../stores/space.store'
 import { useAppStore } from '../stores/app.store'
 import { useTranslation } from '../i18n'
+import { capCount, takeEntry, trackHome, trackHomeThrottled } from '../services/home-telemetry'
 import type { Space, ArtifactRailTab } from '../types'
 
 const GRID_CLASSES = 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5'
@@ -48,17 +49,30 @@ export function SpacesPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [showCreateDialog, setShowCreateDialog] = useState(false)
 
+  const spaceCount = capCount((haloSpace ? 1 : 0) + spaces.length)
+
   useEffect(() => {
-    loadSpaces()
+    const entry = takeEntry()
+    void loadSpaces().finally(() => {
+      const loaded = useSpaceStore.getState()
+      trackHome('home.spaces.view', {
+        entry,
+        spaceCount: capCount((loaded.haloSpace ? 1 : 0) + loaded.spaces.length),
+      })
+    })
     loadSpaceSummaries()
     // Load once on entry — the header's refresh button covers staying current.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const handleRefresh = useCallback(() => {
+    trackHome('home.space.action', { action: 'refresh', surface: 'manage' })
     loadSpaces()
     loadSpaceSummaries(true)
   }, [loadSpaces, loadSpaceSummaries])
+
+  const trimmedQuery = searchQuery.trim().toLowerCase()
+  const isSearching = trimmedQuery.length > 0
 
   // Card / asset-chip click: switch to the workspace, optionally requesting
   // a resource-rail tab, then enter it. Disconnected workspaces can only be
@@ -66,22 +80,54 @@ export function SpacesPage() {
   const openSpace = useCallback((space: Space, tab?: ArtifactRailTab) => {
     if (space.isMissing) return
     if (space.id !== currentSpace?.id) {
+      trackHome('home.space.switch', {
+        kind: 'select',
+        surface: 'manage',
+        toHalo: space.id === haloSpace?.id,
+        spaceCount,
+        searched: isSearching,
+      })
       setCurrentSpace(space)
       void refreshCurrentSpace()
     }
     if (tab) setPendingArtifactRailTab(tab)
     navigate('space')
-  }, [currentSpace, setCurrentSpace, refreshCurrentSpace, setPendingArtifactRailTab, navigate])
+  }, [currentSpace, haloSpace, spaceCount, isSearching, setCurrentSpace, refreshCurrentSpace, setPendingArtifactRailTab, navigate])
+
+  const openCreateDialog = () => {
+    trackHome('home.space.action', { action: 'create_open', surface: 'manage' })
+    setShowCreateDialog(true)
+  }
+
+  const handleSearchChange = (value: string) => {
+    setSearchQuery(value)
+    const query = value.trim().toLowerCase()
+    if (!query) return
+    trackHomeThrottled('spaces-page-search', 1500, 'home.space.action', {
+      action: 'search',
+      surface: 'manage',
+      zero: !spaces.some(s => s.name.toLowerCase().includes(query)),
+    })
+  }
+
+  const handleReorder = (ids: string[]) => {
+    trackHome('home.space.action', { action: 'reorder', surface: 'manage' })
+    void reorderSpaces(ids)
+  }
 
   const handleSpaceCreated = (space: Space) => {
+    trackHome('home.space.switch', {
+      kind: 'create',
+      surface: 'manage',
+      toHalo: false,
+      spaceCount,
+      searched: false,
+    })
     setShowCreateDialog(false)
     setCurrentSpace(space)
     void refreshCurrentSpace()
     navigate('space')
   }
-
-  const trimmedQuery = searchQuery.trim().toLowerCase()
-  const isSearching = trimmedQuery.length > 0
 
   const availableSpaces = spaces.filter(s => !s.isMissing)
   const missingSpaces = spaces.filter(s => s.isMissing)
@@ -126,7 +172,7 @@ export function SpacesPage() {
           <input
             type="text"
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={(e) => handleSearchChange(e.target.value)}
             placeholder={t('Search workspaces')}
             className="w-full pl-9 pr-3 py-2 text-[13px] bg-card border border-border/60 rounded-lg focus:outline-none focus:border-primary focus:shadow-[inset_0_0_0_1px_var(--primary)] text-foreground placeholder:text-muted-foreground/50"
           />
@@ -140,7 +186,7 @@ export function SpacesPage() {
           <RefreshCw className={`w-4 h-4 ${summariesLoading ? 'animate-spin' : ''}`} />
         </button>
         <button
-          onClick={() => setShowCreateDialog(true)}
+          onClick={openCreateDialog}
           className="flex-shrink-0 flex items-center gap-1.5 px-3 py-2 text-[13px] border border-border/60 bg-card text-muted-foreground rounded-lg hover:text-foreground hover:border-border transition-colors"
         >
           <Plus className="w-4 h-4" />
@@ -181,11 +227,11 @@ export function SpacesPage() {
                   doesn't affect drag behavior. */}
               <SortableSpaceList
                 items={filteredAvailable}
-                onReorder={(ids) => { void reorderSpaces(ids) }}
+                onReorder={handleReorder}
                 className="contents"
                 renderItem={renderCard}
               />
-              <NewSpaceCard onClick={() => setShowCreateDialog(true)} />
+              <NewSpaceCard onClick={openCreateDialog} />
             </div>
           )}
         </section>

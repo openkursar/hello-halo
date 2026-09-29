@@ -21,8 +21,8 @@ interface UserTerminal {
   available: boolean
   /** A create request is in flight. */
   creating: boolean
-  /** Create a user-owned session and open it in the Canvas. */
-  createAndOpen: () => Promise<void>
+  /** Create a user-owned session and open it in the Canvas; resolves with the tab id, null when nothing opened. */
+  createAndOpen: () => Promise<string | null>
 }
 
 /**
@@ -53,11 +53,11 @@ export function useUserTerminal(): UserTerminal {
   const openInCanvas = useTerminalStore((s) => s.openInCanvas)
 
   const createAndOpen = useCallback(async () => {
-    if (!spaceId || creating) return
+    if (!spaceId || creating) return null
     setCreating(true)
     try {
       const info = await createSession(spaceId)
-      if (info) await openInCanvas(info.id, info.title)
+      return info ? await openInCanvas(info.id, info.title) : null
     } finally {
       setCreating(false)
     }

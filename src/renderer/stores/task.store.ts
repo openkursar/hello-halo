@@ -9,15 +9,18 @@
  * reaching into a domain store directly.
  */
 import { useMemo } from 'react'
-import i18n from '../i18n'
+import i18n, { getCurrentLanguage } from '../i18n'
 import { usePulseItems } from './chat.store'
-import { useAutomationTaskItems } from './apps.store'
+import { useAppsStore, useAutomationTaskItems } from './apps.store'
+import { resolveSpecI18n } from '../utils/spec-i18n'
 import { useSpaceStore } from './space.store'
 import { useTeamStore } from './team.store'
 import type { PulseItem, TaskItem, TaskItemStatus } from '../types'
+import type { InstalledApp } from '../../shared/apps/app-types'
 import type { TeamListItem } from '../../shared/apps/team-types'
 
-function conversationToTaskItem(item: PulseItem): TaskItem {
+function conversationToTaskItem(item: PulseItem, apps: InstalledApp[]): TaskItem {
+  if (item.appId) return digitalHumanConversationToTaskItem(item, item.appId, apps)
   return {
     key: `conv:${item.conversationId}`,
     source: 'conversation',
@@ -33,6 +36,31 @@ function conversationToTaskItem(item: PulseItem): TaskItem {
     starred: item.starred,
     readAt: item.readAt,
     kept: item.kept,
+  }
+}
+
+/**
+ * A digital-human conversation: named and placed by its app, since the chat
+ * store only knows the session. Its space is the app's home space (null for a
+ * global digital human), which is also where opening it lands.
+ */
+function digitalHumanConversationToTaskItem(item: PulseItem, appId: string, apps: InstalledApp[]): TaskItem {
+  const app = apps.find(a => a.id === appId)
+  const name = app ? resolveSpecI18n(app.spec, getCurrentLanguage()).name || app.spec.name : appId
+  return {
+    key: `conv:${item.conversationId}`,
+    source: 'conversation',
+    status: item.status === 'generating' ? 'running' : item.status,
+    title: name,
+    detail: '',
+    spaceId: app ? app.spaceId ?? null : item.spaceId || null,
+    spaceName: '',
+    updatedAt: new Date(item.updatedAt).getTime(),
+    conversationId: item.conversationId,
+    readAt: item.readAt,
+    kept: item.kept,
+    appId,
+    appName: name,
   }
 }
 
@@ -72,6 +100,8 @@ const STATUS_PRIORITY: Record<TaskItemStatus, number> = {
 export function useTaskItems(): TaskItem[] {
   const pulseItems = usePulseItems()
   const automationItems = useAutomationTaskItems()
+  const apps = useAppsStore(state => state.apps)
+  const hasFullAppList = useAppsStore(state => state.hasFullList)
   const teams = useTeamStore(state => state.teams)
   const haloSpace = useSpaceStore(state => state.haloSpace)
   const spaces = useSpaceStore(state => state.spaces)
@@ -84,8 +114,20 @@ export function useTaskItems(): TaskItem[] {
       return space ? (space.isTemp ? 'Halo' : space.name) : spaceId
     }
 
+    // A deleted or uninstalled digital human has no chat left to open. Absence
+    // only proves deletion once the full (not space-filtered) list is loaded.
+    const isGoneApp = (appId: string): boolean => {
+      const app = apps.find(a => a.id === appId)
+      return app ? app.status === 'uninstalled' : hasFullAppList
+    }
+
     const items: TaskItem[] = [
-      ...pulseItems.map(conversationToTaskItem),
+      ...pulseItems
+        .filter(item => !item.appId || !isGoneApp(item.appId))
+        .map(item => {
+          const task = conversationToTaskItem(item, apps)
+          return task.appId ? { ...task, spaceName: resolveSpaceName(task.spaceId) } : task
+        }),
       ...automationItems.map(item => ({ ...item, spaceName: resolveSpaceName(item.spaceId) })),
       ...teams.filter(team => !team.ephemeral && team.hasWaitingUser).map(teamToTaskItem),
     ]
@@ -94,29 +136,39 @@ export function useTaskItems(): TaskItem[] {
       const priorityDiff = STATUS_PRIORITY[a.status] - STATUS_PRIORITY[b.status]
       return priorityDiff !== 0 ? priorityDiff : b.updatedAt - a.updatedAt
     })
-  }, [pulseItems, automationItems, teams, haloSpace, spaces])
+  }, [pulseItems, automationItems, apps, hasFullAppList, teams, haloSpace, spaces])
 }
 
-/** Count of items needing the user's attention (waiting, error, or an unseen completion). */
+export interface TaskItemCounts {
+  /** Needing the user: waiting, error, or an unseen completion. */
+  continueCount: number
+  runningCount: number
+  /** Kept in the list with nothing pending. */
+  pinnedCount: number
+}
+
+export function countTaskItems(items: TaskItem[]): TaskItemCounts {
+  const counts: TaskItemCounts = { continueCount: 0, runningCount: 0, pinnedCount: 0 }
+  for (const item of items) {
+    switch (item.status) {
+      case 'waiting':
+      case 'error':
+      case 'completed-unseen':
+        counts.continueCount++
+        break
+      case 'running':
+        counts.runningCount++
+        break
+      case 'idle':
+        counts.pinnedCount++
+        break
+    }
+  }
+  return counts
+}
+
+/** Tasks in the panel, whatever their state. Pinned idle conversations are not tasks. */
 export function useTaskCount(): number {
   const items = useTaskItems()
-  return useMemo(
-    () => items.filter(i => i.status === 'waiting' || i.status === 'error' || i.status === 'completed-unseen').length,
-    [items]
-  )
-}
-
-/**
- * The single most urgent status across all items — drives the nav rail's
- * badge color and spinning-ring indicator.
- */
-export function useTaskBeacon(): TaskItemStatus | null {
-  const items = useTaskItems()
-  return useMemo(() => {
-    if (items.some(i => i.status === 'waiting')) return 'waiting'
-    if (items.some(i => i.status === 'completed-unseen')) return 'completed-unseen'
-    if (items.some(i => i.status === 'running')) return 'running'
-    if (items.some(i => i.status === 'error')) return 'error'
-    return null
-  }, [items])
+  return useMemo(() => items.filter(item => item.status !== 'idle').length, [items])
 }

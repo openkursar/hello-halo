@@ -8,30 +8,47 @@
  * reachable even when the rail is collapsed.
  */
 
+import { useState } from 'react'
 import { Globe, TerminalSquare, Loader2, MoreHorizontal } from 'lucide-react'
 import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
 import { useSpaceQuickActions } from '../../hooks/useSpaceQuickActions'
 import { useTranslation } from '../../i18n'
+import { trackHome } from '../../services/home-telemetry'
+import { trackToolOpen } from '../../services/tool-session-telemetry'
 
 export function HeaderMoreMenu() {
   const { t } = useTranslation()
   const { canOpenBrowser, openBrowser, terminalAvailable, terminalCreating, openTerminal } = useSpaceQuickActions()
+  const [isOpen, setIsOpen] = useState(false)
 
   if (!canOpenBrowser && !terminalAvailable) return null
 
+  const handleOpenChange = (open: boolean) => {
+    if (open && !isOpen) trackHome('home.header.action', { action: 'more', surface: 'desktop' })
+    setIsOpen(open)
+  }
+
+  const handleOpenBrowser = () => {
+    trackToolOpen('browser', 'more_menu', openBrowser())
+  }
+
+  const handleOpenTerminal = () => {
+    trackToolOpen('terminal', 'more_menu', openTerminal())
+  }
+
   return (
     <div className="hidden sm:block">
-      <Popover>
+      <Popover open={isOpen} onOpenChange={handleOpenChange}>
         <PopoverTrigger
           title={t('More')}
-          className="p-1.5 hover:bg-secondary rounded-lg transition-colors text-muted-foreground hover:text-foreground"
+          className="p-1.5 hover:bg-secondary rounded-lg transition-colors text-faint-foreground hover:text-foreground"
         >
           <MoreHorizontal className="w-5 h-5" />
         </PopoverTrigger>
         <PopoverContent align="end" className="w-56 py-1">
           {canOpenBrowser && (
             <button
-              onClick={openBrowser}
+              onClick={handleOpenBrowser}
               className="w-full flex items-start gap-2.5 px-3 py-2 text-left hover:bg-secondary/80 transition-colors"
             >
               <Globe className="w-4 h-4 text-blue-500 flex-shrink-0 mt-0.5" />
@@ -43,7 +60,7 @@ export function HeaderMoreMenu() {
           )}
           {terminalAvailable && (
             <button
-              onClick={openTerminal}
+              onClick={handleOpenTerminal}
               disabled={terminalCreating}
               className="w-full flex items-start gap-2.5 px-3 py-2 text-left hover:bg-secondary/80 transition-colors disabled:opacity-60"
             >

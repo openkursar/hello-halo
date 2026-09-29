@@ -4,6 +4,7 @@
 import type { ChatSlice, ChatState } from './internal'
 import { api, createEmptySpaceState } from './internal'
 import type { Conversation, ConversationMeta } from './internal'
+import { readTransition } from './task-read'
 import { useGoalStore } from '../goal.store'
 import { useGoalUiStore } from '../goal-ui.store'
 import { cacheConversation } from './backend/cache'
@@ -223,10 +224,9 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'openConver
     // Subscribe to conversation events (for remote mode)
     api.subscribeToConversation(conversationId)
 
-    // Update the pointer + move unseen/error items to readAt grace period.
-    // Persistence (taskMarkRead) happens after set() resolves, since a task
-    // for this conversation may transition here via either branch below.
-    let markReadTask: { spaceId: string; title: string; originalStatus: 'completed-unseen' | 'error' } | null = null
+    // Update the pointer, and move a pending finish/error into the task
+    // panel's read grace period (persisted once set() resolves).
+    let persistRead: (() => void) | undefined
 
     set((state) => {
       const newSpaceStates = new Map(state.spaceStates)
@@ -239,64 +239,20 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'openConver
         selectedAppChat: null
       })
 
-      const newUnseenCompletions = new Map(state.unseenCompletions)
-      const newPulseReadAt = new Map(state.pulseReadAt)
-      const newSessions = new Map(state.sessions)
-      const now = Date.now()
-
-      // If this conversation had an unseen completion, move to readAt grace period
-      const unseenInfo = newUnseenCompletions.get(conversationId)
-      if (unseenInfo) {
-        newPulseReadAt.set(conversationId, {
-          readAt: now,
-          originalStatus: 'completed-unseen',
-          spaceId: unseenInfo.spaceId,
-          title: unseenInfo.title
-        })
-        newUnseenCompletions.delete(conversationId)
-        markReadTask = { spaceId: unseenInfo.spaceId, title: unseenInfo.title, originalStatus: 'completed-unseen' }
+      let meta: ConversationMeta | undefined
+      for (const [, ss] of state.spaceStates) {
+        meta = ss.conversations.find(c => c.id === conversationId)
+        if (meta) break
       }
-
-      // If this conversation had an error session, move to readAt grace period and clear session error
-      // The error is now persisted in message.error and will render from MessageItem on reload
-      const session = newSessions.get(conversationId)
-      if (session?.error && session.errorType !== 'interrupted') {
-        // Find conversation meta for title/spaceId
-        let meta: ConversationMeta | undefined
-        for (const [, ss] of state.spaceStates) {
-          meta = ss.conversations.find(c => c.id === conversationId)
-          if (meta) break
-        }
-        const spaceId = meta?.spaceId || currentSpaceId
-        const title = meta?.title || 'Conversation'
-        newPulseReadAt.set(conversationId, {
-          readAt: now,
-          originalStatus: 'error',
-          spaceId,
-          title
-        })
-        // Clear session error — persisted error in message.error handles display after reload
-        newSessions.set(conversationId, {
-          ...session,
-          error: null,
-          errorType: null
-        })
-        markReadTask = { spaceId, title, originalStatus: 'error' }
-      }
-
-      return {
-        spaceStates: newSpaceStates,
-        unseenCompletions: newUnseenCompletions,
-        pulseReadAt: newPulseReadAt,
-        sessions: newSessions
-      }
+      const read = readTransition(state, conversationId, {
+        spaceId: meta?.spaceId || currentSpaceId!,
+        title: meta?.title || 'Conversation'
+      })
+      persistRead = read?.persist
+      return { spaceStates: newSpaceStates, ...read?.patch }
     })
 
-    if (markReadTask) {
-      const { spaceId: taskSpaceId, title: taskTitle, originalStatus } = markReadTask
-      api.taskMarkRead(conversationId, taskSpaceId, taskTitle, originalStatus).catch(err =>
-        console.error('[ChatStore] taskMarkRead error:', err))
-    }
+    persistRead?.()
 
     // Ensure store-level cleanup is scheduled (independent of sidebar mount state)
     get().cleanupPulseReadAt()

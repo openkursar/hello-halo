@@ -21,13 +21,20 @@ import { resolveSpecI18n } from '../../utils/spec-i18n'
 import type { InstalledApp } from '../../../shared/apps/app-types'
 import { SpaceResourceRow } from './SpaceResourceRow'
 import { AppTypeIcon } from '../store/AppTypeIcon'
+import { trackHome, trackNavigate } from '../../services/home-telemetry'
 
-export function McpTab() {
+interface McpTabProps {
+  /** Receives the server count once known (null while loading) and whether the fetch succeeded. */
+  onItemsChange?: (count: number | null, ok?: boolean) => void
+}
+
+export function McpTab({ onItemsChange }: McpTabProps) {
   const { t } = useTranslation()
   const spaceId = useSpaceStore(state => state.currentSpace?.id ?? '')
 
   const [mcpApps, setMcpApps] = useState<InstalledApp[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadFailed, setLoadFailed] = useState(false)
 
   useEffect(() => {
     if (!spaceId) {
@@ -37,17 +44,29 @@ export function McpTab() {
     }
     let cancelled = false
     setLoading(true)
+    setLoadFailed(false)
     api.appListEffectiveMcpApps(spaceId)
       .then(res => {
         if (cancelled) return
         setMcpApps(res.success && Array.isArray(res.data) ? res.data : [])
+        setLoadFailed(!res.success)
       })
-      .catch(() => { if (!cancelled) setMcpApps([]) })
+      .catch(() => {
+        if (cancelled) return
+        setMcpApps([])
+        setLoadFailed(true)
+      })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [spaceId])
 
+  useEffect(() => {
+    onItemsChange?.(loading ? null : mcpApps.length, !loadFailed)
+  }, [onItemsChange, loading, mcpApps.length, loadFailed])
+
   const openDetail = useCallback((app: InstalledApp) => {
+    trackHome('home.rail.item.click', { tab: 'mcp', action: 'open', appId: app.id })
+    trackNavigate('apps', 'rail_tab', 'home_rail_mcp')
     useAppStore.getState().navigate('apps')
     const store = useAppsPageStore.getState()
     store.setCurrentTab(tabForAppType('mcp'))

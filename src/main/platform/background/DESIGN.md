@@ -104,12 +104,22 @@ IP addresses (v4 and v6) are used as-is for the partition name.
 
 Existing assets found in `resources/tray/`:
 - `trayTemplate.png` / `trayTemplate@2x.png` (macOS template images)
+- `tray-win-white.ico` / `tray-win-black.ico` — the macOS glyph at 16–48px
 - `tray-16.png` / `tray-16@2x.png` / `tray-24.png` / `tray-24@2x.png`
 
 macOS: Use `trayTemplate.png` (Electron auto-selects @2x). Template images
 automatically adapt to light/dark menu bar.
 
-Windows: Use `tray-16.png` as the base icon. Windows tray icons should be 16x16.
+Windows: Has no template images, so the glyph comes in white (dark taskbar) and
+black (light taskbar). They are .ico files because Windows builds the tray icon
+from a PNG's 1x bitmap only (no @2x); an .ico supplies each DPI's size. The
+taskbar follows the registry value `SystemUsesLightTheme`, not the app mode
+`nativeTheme` reports, so `taskbar-theme.ts` reads it via `reg query` at start
+and on every `nativeTheme` `updated` event (the newest read wins; a failed read
+keeps the current icon). An icon set without the `tray-win-*` files (a brand
+`trayIconDir`) falls back to `tray-16.png`.
+
+Linux: `tray-16.png`.
 
 ### 2.6 Online/Offline Status
 

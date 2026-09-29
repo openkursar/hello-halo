@@ -18,6 +18,7 @@ import { recoverSessionState } from './recover'
 import { buildCanvasContext } from './canvas-context'
 import { endTurnWithError, finishedTurnState, startedTurnState } from './turn'
 import type { ConversationRef, ChatBackend, SendRequest, BackendContext } from './types'
+import { noteTurnEnded } from '../../../services/home-telemetry'
 
 const LOG_TAG = '[ChatStore/DigitalHuman]'
 
@@ -220,6 +221,7 @@ async function send(ctx: BackendContext, conversationId: string, request: SendRe
   } catch (error) {
     console.error(`${LOG_TAG} Failed to send message:`, error)
     // The request may have reached main: keep the bubble and report the failure.
+    noteTurnEnded(conversationId, 'error')
     ctx.set((state) => {
       const sessions = new Map(state.sessions)
       sessions.set(conversationId, endTurnWithError(sessions.get(conversationId), String((error as Error)?.message || i18n.t('Failed to send message'))))

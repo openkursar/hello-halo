@@ -6,11 +6,13 @@
  * space conversation index or app-chat's own JSONL/registry storage — it
  * tracks which link (Halo vs a digital human) the input is currently pointed
  * at, hands a newly selected digital-human conversation to its backend to open,
- * and keeps per-conversation unsent-text drafts (pure UI state).
+ * keeps per-conversation unsent-text drafts, and (on selection) moves the
+ * task-panel read state the way regular conversations do.
  */
 import type { ChatSlice, ChatState } from './internal'
 import { createEmptySpaceState } from './internal'
 import { backendFor } from './backend'
+import { readTransition } from './task-read'
 
 export const createAppChatSelectionSlice: ChatSlice<
   'getComposerDraft' | 'setComposerDraft' | 'clearComposerDraft' | 'selectAppChatConversation' | 'clearAppChatSelection'
@@ -36,12 +38,19 @@ export const createAppChatSelectionSlice: ChatSlice<
   },
 
   selectAppChatConversation: (spaceId, appId, conversationId) => {
+    let persistRead: (() => void) | undefined
     set((state: ChatState) => {
       const newSpaceStates = new Map(state.spaceStates)
       const existing = newSpaceStates.get(spaceId) || createEmptySpaceState()
       newSpaceStates.set(spaceId, { ...existing, selectedAppChat: { appId, conversationId } })
-      return { spaceStates: newSpaceStates }
+      // Same read lifecycle as a regular conversation; the task panel names
+      // digital-human items itself, so no title is kept here.
+      const read = readTransition(state, conversationId, { spaceId, title: '' })
+      persistRead = read?.persist
+      return { spaceStates: newSpaceStates, ...read?.patch }
     })
+    persistRead?.()
+    get().cleanupPulseReadAt()
     // Show what is cached now; the read (and a running turn) follow.
     void backendFor(conversationId)
       .open({ set, get }, { spaceId, conversationId })

@@ -73,7 +73,7 @@ describe('BrowserTaskCard live view', () => {
   beforeEach(() => {
     env.activeConversationId = DH_KEY
     env.views = {}
-    env.attach.mockReset()
+    env.attach.mockReset().mockResolvedValue('tab-1')
     env.setOperating.mockReset()
   })
 

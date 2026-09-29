@@ -15,6 +15,7 @@ import { useSourceQuota } from '../../hooks/useSourceQuota'
 import { resolveLocalizedText } from '../../../shared/types'
 import { formatQuotaNumber } from './quotaFormat'
 import { QuotaPopover } from './QuotaPopover'
+import { trackHome } from '../../services/home-telemetry'
 
 interface QuotaPillProps {
   /** Current active source id; undefined disables the pill entirely. */
@@ -39,6 +40,7 @@ export function QuotaPill({ sourceId }: QuotaPillProps) {
   const unitLabel = !symbol && unit ? resolveLocalizedText(unit, getCurrentLanguage()) : ''
 
   const toggle = () => {
+    if (!open) trackHome('home.header.action', { action: 'quota', surface: 'desktop' })
     setOpen(prev => {
       const next = !prev
       if (next) refresh()

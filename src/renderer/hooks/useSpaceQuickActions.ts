@@ -18,11 +18,13 @@ const isWebMode = api.isRemoteMode()
 interface SpaceQuickActions {
   /** Browser opens a local BrowserView — unavailable in Web mode. */
   canOpenBrowser: boolean
-  openBrowser: () => void
+  /** Resolves with the id of the tab the browser opened in. */
+  openBrowser: () => Promise<string>
   /** Terminal works over remote transport, so it survives Web mode. */
   terminalAvailable: boolean
   terminalCreating: boolean
-  openTerminal: () => Promise<void>
+  /** Resolves with the id of the terminal's tab, null when nothing opened. */
+  openTerminal: () => Promise<string | null>
 }
 
 export function useSpaceQuickActions(): SpaceQuickActions {
@@ -30,11 +32,10 @@ export function useSpaceQuickActions(): SpaceQuickActions {
   const { openUrl } = useCanvasLifecycle()
   const { available: terminalAvailable, creating: terminalCreating, createAndOpen: openTerminal } = useUserTerminal()
 
-  const openBrowser = useCallback(() => {
-    getBrowserHomepage().then(url => {
-      openUrl(url, t('Browser'))
-    })
-  }, [openUrl, t])
+  const openBrowser = useCallback(
+    () => getBrowserHomepage().then(url => openUrl(url, t('Browser'))),
+    [openUrl, t]
+  )
 
   return {
     canOpenBrowser: !isWebMode,

@@ -23,6 +23,7 @@ import { CreateKBDialog } from '../components/tlon/CreateKBDialog'
 import { EmptyState } from '../components/tlon/EmptyState'
 import { CanvasTableOpener, ContentCanvas, TerminalCloseGuard } from '../components/canvas'
 import { useCanvasIsOpen } from '../stores/canvas.store'
+import { takeEntry, trackHome } from '../services/home-telemetry'
 
 export function TlonPage() {
   const { t } = useTranslation()
@@ -43,6 +44,10 @@ export function TlonPage() {
   const [isDraggingChat, setIsDraggingChat] = useState(false)
   const [dragChatWidth, setDragChatWidth] = useState(effectiveChatWidth)
   const detailRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    trackHome('kb.view', { entry: takeEntry() })
+  }, [])
 
   useEffect(() => {
     if (!isDraggingChat) setDragChatWidth(effectiveChatWidth)

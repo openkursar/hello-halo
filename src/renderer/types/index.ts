@@ -422,6 +422,8 @@ export type TaskStatus = 'generating' | 'waiting' | 'completed-unseen' | 'error'
 // Item in the Pulse panel
 export interface PulseItem {
   conversationId: string;
+  /** Set for a digital-human conversation; its name and home space come from the app, not this item. */
+  appId?: string;
   spaceId: string;
   spaceName: string;
   title: string;
@@ -682,9 +684,6 @@ export interface ArtifactTreeUpdateEvent {
   updatedDirs: Array<{ dirPath: string; children: ArtifactTreeNode[] }>;
   changes: ArtifactChangeEvent[];
 }
-
-// View mode for artifact display
-export type ArtifactViewMode = 'card' | 'tree';
 
 // ============================================
 // Thought Process Types (Agent's real-time reasoning)

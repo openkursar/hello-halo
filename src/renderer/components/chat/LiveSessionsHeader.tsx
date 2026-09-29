@@ -19,6 +19,7 @@ import { useLiveSessions, type LiveSession, type StopOutcome } from '../../hooks
 import { useAppStore } from '../../stores/app.store'
 import { useNotificationStore } from '../../stores/notification.store'
 import { useTranslation } from '../../i18n'
+import { trackToolOpen } from '../../services/tool-session-telemetry'
 
 /** Compact "3m" style age from a ms epoch. */
 function ago(ms: number): string {
@@ -188,8 +189,10 @@ export function LiveSessionsHeader() {
                   onOpen={() => {
                     // Dismiss only once the surface is actually open; a failure
                     // keeps the list up so the row is still there to retry.
-                    open(session).then(ok => {
-                      if (ok) setListOpen(false)
+                    const opening = open(session)
+                    trackToolOpen(session.kind, 'live_session', opening)
+                    opening.then(tabId => {
+                      if (tabId) setListOpen(false)
                       else showOpenError()
                     }).catch(err => {
                       console.error('[LiveSessionsHeader] Failed to open session:', err)

@@ -6,28 +6,18 @@
  */
 
 import { useState } from 'react'
-import { ArrowLeft, RotateCcw, Trash2, AlertTriangle } from 'lucide-react'
+import { RotateCcw, Trash2, AlertTriangle } from 'lucide-react'
 import { useAppsStore } from '../../stores/apps.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { resolveSpecI18n } from '../../utils/spec-i18n'
 import { isBuiltinApp } from '../../../shared/apps/app-types'
 import { appTypeLabel } from './appTypeUtils'
-import type { AppType } from '../../../shared/apps/spec-types'
 
 interface UninstalledDetailViewProps {
   appId: string
   /** Space name to display */
   spaceName?: string
-}
-
-/** Same source strings as each type's own list tab / detail-page back button. */
-function backLabelForType(type: AppType, t: (s: string) => string): string {
-  switch (type) {
-    case 'skill': return t('My Skills')
-    case 'mcp':   return t('My MCP')
-    default:      return t('My Digital Humans')
-  }
 }
 
 export function UninstalledDetailView({ appId, spaceName }: UninstalledDetailViewProps) {
@@ -80,16 +70,6 @@ export function UninstalledDetailView({ appId, spaceName }: UninstalledDetailVie
 
   return (
     <div className="flex-1 overflow-y-auto">
-      <div className="px-4 sm:px-10 pt-6">
-        <button
-          onClick={clearSelection}
-          className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          {backLabelForType(app.spec.type, t)}
-        </button>
-      </div>
-
       <div className="max-w-lg mx-auto px-4 sm:px-10 py-6 space-y-6">
         {/* App identity */}
         <div className="text-center">

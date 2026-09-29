@@ -156,6 +156,8 @@ interface AppsPageState {
   lastAutomationTab: AutomationDetailTab
   /** The sibling list beside a detail page is folded to icons (persisted) */
   switcherCollapsed: boolean
+  /** Width of that list when unfolded, in px (persisted) */
+  switcherWidth: number
 
   // ── Store Tab State ────────────────────────
   storeApps: RegistryEntry[]
@@ -255,6 +257,7 @@ export const useAppsPageStore = create<AppsPageState>()(
   currentTab: 'my-digital-humans',
   lastAutomationTab: 'activity',
   switcherCollapsed: false,
+  switcherWidth: 220,
 
   // ── Store Tab State ────────────────────────
   storeApps: [],
@@ -689,6 +692,7 @@ export const useAppsPageStore = create<AppsPageState>()(
       partialize: (state) => ({
         lastAutomationTab: state.lastAutomationTab,
         switcherCollapsed: state.switcherCollapsed,
+        switcherWidth: state.switcherWidth,
       }),
     }
   )

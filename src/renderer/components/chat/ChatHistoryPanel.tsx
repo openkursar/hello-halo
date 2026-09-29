@@ -20,6 +20,7 @@ import { useAppChatPinsStore } from '../../stores/app-chat-pins.store'
 import { useAppChatConversationRows, type AppChatConversationRow } from '../../hooks/useAppChatConversationRows'
 import { TaskStatusDot } from '../pulse/TaskStatusDot'
 import { appChatSessionLabel } from './conversation-row-format'
+import { trackHome } from '../../services/home-telemetry'
 
 /** One line of the list: a section heading, a space conversation, or a digital human's. */
 type HistoryItem =
@@ -200,15 +201,26 @@ export function ChatHistoryPanel() {
     if (isExpanded) {
       handleClose()
     } else {
+      if (isMobile) trackHome('home.header.action', { action: 'history', surface: 'mobile_sheet' })
       setIsExpanded(true)
     }
   }
 
-  const handleSelectConversation = (id: string) => {
+  const handleSelectConversation = (conv: ConversationMeta) => {
     // Don't select if we're editing
     if (editingId) return
 
-    useChatStore.getState().selectConversation(id)
+    trackHome('home.conversation.select', { kind: 'normal', pinned: !!conv.starred })
+    useChatStore.getState().selectConversation(conv.id)
+    handleClose()
+  }
+
+  const handleCreateConversation = () => {
+    const spaceId = useSpaceStore.getState().currentSpace?.id
+    if (spaceId) {
+      trackHome('home.conversation.create', { surface: 'list' })
+      useChatStore.getState().createConversation(spaceId)
+    }
     handleClose()
   }
 
@@ -238,6 +250,7 @@ export function ChatHistoryPanel() {
   // Save edited title
   const handleSaveEdit = () => {
     if (editingId && editingTitle.trim()) {
+      trackHome('home.conversation.action', { action: 'rename', kind: 'normal' })
       const spaceId = useSpaceStore.getState().currentSpace?.id
       if (spaceId) useChatStore.getState().renameConversation(spaceId, editingId, editingTitle.trim())
     }
@@ -273,7 +286,7 @@ export function ChatHistoryPanel() {
   // Render a single conversation item (used by Virtuoso)
   const renderHistoryItem = useCallback((_index: number, conv: ConversationMeta) => (
     <div
-      onClick={() => handleSelectConversation(conv.id)}
+      onClick={() => handleSelectConversation(conv)}
       className={`
         w-full px-4 py-3 text-left transition-all duration-150
         hover:bg-white/5 group relative cursor-pointer
@@ -383,6 +396,7 @@ export function ChatHistoryPanel() {
                   <button
                       onClick={(e) => {
                         e.stopPropagation()
+                        trackHome('home.conversation.action', { action: conv.starred ? 'unpin' : 'pin', kind: 'normal' })
                         const spaceId = useSpaceStore.getState().currentSpace?.id
                         if (spaceId) useChatStore.getState().toggleStarConversation(spaceId, conv.id, !conv.starred)
                         setMenuOpenId(null)
@@ -405,6 +419,7 @@ export function ChatHistoryPanel() {
                     <button
                       onClick={(e) => {
                         e.stopPropagation()
+                        trackHome('home.conversation.action', { action: 'delete', kind: 'normal' })
                         const spaceId = useSpaceStore.getState().currentSpace?.id
                         if (spaceId) useChatStore.getState().deleteConversation(spaceId, conv.id)
                         setMenuOpenId(null)
@@ -618,11 +633,7 @@ export function ChatHistoryPanel() {
                 </div>
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={() => {
-                      const spaceId = useSpaceStore.getState().currentSpace?.id
-                      if (spaceId) useChatStore.getState().createConversation(spaceId)
-                      handleClose()
-                    }}
+                    onClick={handleCreateConversation}
                     className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium
                       bg-primary/10 hover:bg-primary/20 text-primary rounded-lg transition-colors"
                   >
@@ -668,11 +679,7 @@ export function ChatHistoryPanel() {
                   </p>
                 </div>
                 <button
-                  onClick={() => {
-                    const spaceId = useSpaceStore.getState().currentSpace?.id
-                    if (spaceId) useChatStore.getState().createConversation(spaceId)
-                    handleClose()
-                  }}
+                  onClick={handleCreateConversation}
                   className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium
                     bg-primary/10 hover:bg-primary/20 text-primary rounded-lg transition-colors"
                 >

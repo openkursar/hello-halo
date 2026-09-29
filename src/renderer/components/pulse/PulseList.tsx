@@ -6,7 +6,7 @@
  * (stores/task.store.ts). Used by TaskPanel.
  *
  * Responsibilities:
- * - Renders grouped items: "Continue" (waiting / completed-unseen / error —
+ * - Renders grouped items: "Needs you" (waiting / completed-unseen / error —
  *   needs the user) and "Running", each with a header + count, then pinned
  *   idle conversations last
  * - Source-specific identity: MessageSquare icon for conversations,
@@ -28,8 +28,9 @@ import { useTaskItems } from '../../stores/task.store'
 import { useTeamStore } from '../../stores/team.store'
 import { useAppStore } from '../../stores/app.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
-import { navigateToConversation } from '../../utils/conversation-navigation'
+import { navigateToAppChat, navigateToConversation } from '../../utils/conversation-navigation'
 import { AutomationAvatar } from '../apps/AutomationAvatar'
+import { markEntry, trackHome, trackNavigate } from '../../services/home-telemetry'
 import { useTranslation } from '../../i18n'
 import { cn } from '../../lib/utils'
 import type { TaskItem, TaskItemStatus } from '../../types'
@@ -49,7 +50,7 @@ function formatElapsed(ms: number): string {
 // Status stays legible regardless: it drives the detail line's color, and the
 // section the item is grouped under.
 const STATUS_LABEL: Partial<Record<TaskItemStatus, string>> = {
-  'running': 'Generating...',
+  'running': 'Running',
   'waiting': 'Waiting for your input',
   'completed-unseen': 'Completed',
   'error': 'Error',
@@ -62,6 +63,34 @@ const STATUS_TEXT_CLASS: Record<TaskItemStatus, string> = {
   'completed-unseen': 'text-halo-success',
   'error': 'text-halo-error',
   'idle': 'text-muted-foreground',
+}
+
+const TELEMETRY_STATUS: Record<TaskItemStatus, string> = {
+  'running': 'running',
+  'waiting': 'waiting',
+  'completed-unseen': 'completed',
+  'error': 'error',
+  'idle': 'idle',
+}
+
+/** The panel section each status is grouped under (see the filters in PulseList). */
+const TELEMETRY_SECTION: Record<TaskItemStatus, string> = {
+  'running': 'running',
+  'waiting': 'continue',
+  'completed-unseen': 'continue',
+  'error': 'continue',
+  'idle': 'pinned',
+}
+
+/** Same vocabulary as the conversation list's telemetry. */
+function telemetryKind(item: TaskItem): string {
+  return item.source === 'conversation' && item.appId ? 'digital_human' : item.source
+}
+
+/** A conversation click may land on the current view, where no navigation is recorded; the intent is still credited. */
+function trackTaskNavigate(to: 'space' | 'apps') {
+  trackNavigate(to, 'task_panel', 'home_task')
+  markEntry('home_task')
 }
 
 /** Open a team's workbench, which lives on the Apps page under the Teams tab. */
@@ -123,11 +152,23 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
   }, [hasRunning])
 
   const handleItemClick = useCallback((item: TaskItem) => {
-    if (item.source === 'conversation' && item.conversationId) {
+    trackHome('home.task.item.click', {
+      kind: telemetryKind(item),
+      status: TELEMETRY_STATUS[item.status],
+      section: TELEMETRY_SECTION[item.status],
+    })
+    if (item.source === 'conversation' && item.conversationId && item.appId) {
+      if (!item.spaceId) return
+      trackTaskNavigate('space')
+      navigateToAppChat(item.spaceId, item.appId, item.conversationId)
+    } else if (item.source === 'conversation' && item.conversationId) {
+      trackTaskNavigate('space')
       navigateToConversation(item.spaceId!, item.conversationId)
     } else if (item.source === 'team' && item.teamId) {
+      trackTaskNavigate('apps')
       navigateToTeam(item.teamId)
     } else {
+      if (item.appId) trackTaskNavigate('apps')
       navigateToAutomation(item)
     }
     onItemClick?.()
@@ -138,20 +179,25 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
   const handleTogglePin = useCallback((e: React.MouseEvent, item: TaskItem) => {
     e.stopPropagation()
     if (!item.conversationId) return
+    trackHome('home.task.item.action', { action: item.starred ? 'unpin' : 'pin', kind: telemetryKind(item) })
     useChatStore.getState().toggleStarConversation(item.spaceId!, item.conversationId, !item.starred)
   }, [])
 
   const handleKeep = useCallback((e: React.MouseEvent, item: TaskItem) => {
     e.stopPropagation()
-    if (item.conversationId) useChatStore.getState().keepPulseItem(item.conversationId)
+    if (!item.conversationId) return
+    trackHome('home.task.item.action', { action: 'keep', kind: telemetryKind(item) })
+    useChatStore.getState().keepPulseItem(item.conversationId)
   }, [])
 
   const handleRemove = useCallback((e: React.MouseEvent, item: TaskItem) => {
     e.stopPropagation()
-    if (item.conversationId) useChatStore.getState().removePulseItem(item.conversationId)
+    if (!item.conversationId) return
+    trackHome('home.task.item.action', { action: 'remove', kind: telemetryKind(item) })
+    useChatStore.getState().removePulseItem(item.conversationId)
   }, [])
 
-  // "Continue" = needs the user (waiting for input, done but unseen, or
+  // "Needs you" = needs the user (waiting for input, done but unseen, or
   // errored) — conversations and digital humans both land here. "Running"
   // covers both actively-generating conversations and running/queued apps.
   const continueItems = items.filter(i => i.status === 'waiting' || i.status === 'completed-unseen' || i.status === 'error')
@@ -189,6 +235,8 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
 
   const renderItem = (item: TaskItem) => {
     const isConversation = item.source === 'conversation'
+    // A digital-human conversation: conversation lifecycle, digital-human face.
+    const isAppChat = isConversation && !!item.appId
     const isTeam = item.source === 'team'
     // Grace-period item: user already looked at it, counting down to
     // auto-hide (chat.store `pulseReadAt`, 60s) unless kept. Automation
@@ -212,26 +260,19 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
         key={item.key}
         onClick={() => handleItemClick(item)}
         className={cn(
+          // Lighter fill plus a faint edge lifts cards off the panel; the
+          // selected one only swaps its edge to a light accent.
           'group/tk flex items-center gap-[11px] rounded-lg border cursor-pointer transition-colors ease-halo mx-2 mb-1.5',
           px, py,
           isSelected
-            ? 'border-blue-500 bg-blue-500/[0.12]'
-            : cn(
-                'border-border',
-                isSeen
-                  ? 'opacity-[.62] hover:opacity-100 hover:bg-secondary'
-                  : isReady
-                    ? isConversation
-                      ? 'bg-secondary hover:bg-surface-hover'
-                      : 'bg-card hover:bg-surface-hover'
-                    : 'bg-transparent hover:bg-secondary'
-              )
+            ? 'border-primary/40 bg-background'
+            : cn('border-border/60 bg-background hover:bg-secondary', isSeen && 'opacity-[.62] hover:opacity-100')
         )}
       >
         {/* Identity icon — MessageSquare for a conversation, Users for a team,
             the digital human's own generated face for automation. Never a
             status dot: status is conveyed by the section and elapsed text. */}
-        {isConversation || isTeam ? (
+        {(isConversation && !isAppChat) || isTeam ? (
           <div className={cn(
             'w-[30px] h-[30px] flex-shrink-0 rounded-sm flex items-center justify-center',
             isReady && !isSeen ? 'bg-primary/[0.12] text-accent-on-dark' : 'bg-secondary text-subtle-foreground'
@@ -273,15 +314,8 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
               </span>
             )}
             {isRunning && (
-              <span className="ml-auto flex items-center flex-shrink-0 text-[11px] text-subtle-foreground tabular-nums">
-                {isQueued ? (
-                  t('Queued')
-                ) : (
-                  <>
-                    <span className="inline-block w-2.5 h-2.5 rounded-full border-[1.5px] border-subtle-foreground border-t-transparent opacity-70 mr-[5px] animate-spin" />
-                    {formatElapsed(runningElapsedMs)}
-                  </>
-                )}
+              <span className="ml-auto flex-shrink-0 text-[11px] text-subtle-foreground tabular-nums">
+                {isQueued ? t('Queued') : formatElapsed(runningElapsedMs)}
               </span>
             )}
           </div>
@@ -324,6 +358,9 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
           </div>
         ) : isConversation ? (
           <>
+            {/* Pinning is a regular-conversation index flag; digital-human
+                sessions pin from the conversation list instead. */}
+            {!isAppChat && (
             <button
               onClick={(e) => handleTogglePin(e, item)}
               className={cn(
@@ -337,6 +374,7 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
             >
               <Pin className="w-[13px] h-[13px]" strokeWidth={1.8} />
             </button>
+            )}
             {/* A kept item has no countdown left to end it, so Remove stays reachable. */}
             {item.kept && !!item.readAt && (
               <button
@@ -352,8 +390,7 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
         <ChevronRight
           className={cn(
             'w-4 h-4 flex-shrink-0 transition-[transform,color] ease-halo',
-            'text-subtle-foreground group-hover/tk:translate-x-0.5 group-hover/tk:text-foreground',
-            isReady && !isSeen && 'text-accent-on-dark'
+            'text-faint-foreground group-hover/tk:translate-x-0.5 group-hover/tk:text-foreground'
           )}
         />
       </div>
@@ -362,10 +399,10 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
 
   return (
     <div className="overflow-auto scrollbar-thin pt-2" style={maxHeight ? { maxHeight } : undefined}>
-      {/* Continue: waiting for input, done but unseen, or errored */}
+      {/* Needs you: waiting for input, done but unseen, or errored */}
       {continueItems.length > 0 && (
         <div className="pb-1">
-          {renderSectionHeader(t('Continue'), continueItems.length, 'ready')}
+          {renderSectionHeader(t('Needs you'), continueItems.length, 'ready')}
           {continueItems.map(renderItem)}
         </div>
       )}

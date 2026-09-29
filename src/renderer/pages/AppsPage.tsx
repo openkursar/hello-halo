@@ -48,6 +48,7 @@ import { TeamTabContent } from '../components/team'
 import { useTranslation, getCurrentLanguage } from '../i18n'
 import { resolveSpecI18n } from '../utils/spec-i18n'
 import { api } from '../api'
+import { takeEntry, trackHome } from '../services/home-telemetry'
 import { ArrowLeft, ChevronLeft, ChevronRight } from 'lucide-react'
 
 export function AppsPage() {
@@ -106,6 +107,9 @@ export function AppsPage() {
     void openMarketplaceFilteredBy(type)
   }, [openMarketplaceFilteredBy])
 
+  useEffect(() => {
+    trackHome('apps.view', { tab: useAppsPageStore.getState().currentTab, entry: takeEntry() })
+  }, [])
   useEffect(() => { void useTeamStore.getState().loadTeams() }, [])
   useEffect(() => {
     if (currentTab === 'team' || currentTab === 'my-skills' || currentTab === 'my-mcp' || detailView?.type === 'app-config') void loadApps()
@@ -308,7 +312,7 @@ export function AppsPage() {
           once something is opened (a person, a skill, an MCP server, a team):
           those screens navigate by their own back link, so browse-level tabs
           on top of them only offer a second, competing way out. */}
-      {!inTeamWorkbench && !showsAppDetail && <div className="flex items-center gap-1 px-3 sm:px-4 py-2 border-b border-border flex-shrink-0 overflow-x-auto">
+      {!inTeamWorkbench && !showsAppDetail && <div className="flex items-center gap-1 px-3 sm:px-4 py-2 border-b border-border/50 flex-shrink-0 overflow-x-auto">
         {/* The request inbox has no tab of its own: it is reached from the
             directory's "Needs you" group, so it highlights this tab. */}
         <TabButton
@@ -338,10 +342,11 @@ export function AppsPage() {
         selectedAppId && !selectedApp ? <div className="flex-1 p-6"><button onClick={clearSelection} className="mb-5 min-h-9 text-sm text-primary">{t('All digital humans')}</button>{detailFailed ? <p role="alert" className="text-sm text-destructive">{t('Could not load this digital human.')} <button onClick={() => setDetailRevision(value => value + 1)} className="underline">{t('Retry')}</button></p> : <p role="status" className="text-sm text-muted-foreground">{t('Loading…')}</p>}</div> : selectedAppId && selectedApp ? <div className="flex min-h-0 flex-1">
           <div className="hidden md:flex"><PeopleSwitcher selectedAppId={selectedAppId} onSelect={switchPerson} /></div>
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <div className="flex shrink-0 flex-wrap items-center gap-3 px-6 pt-3 text-sm sm:px-10">
+            {/* A run's breadcrumb already leads back to its person. */}
+            {!isSessionDetail && <div className="flex shrink-0 flex-wrap items-center gap-3 px-6 pt-3 text-sm sm:px-10">
               <button onClick={clearSelection} className="inline-flex min-h-8 items-center gap-1.5 text-muted-foreground transition-colors ease-halo hover:text-primary"><ArrowLeft className="w-4 h-4" />{t('All digital humans')}</button>
               <PersonReturnLink />
-            </div>
+            </div>}
             {isSessionDetail ? <SessionBreadcrumb appName={selectedAppName ?? ''} runId={(detailView as { runId: string }).runId} onBack={() => openActivityThread(selectedApp.id)} /> : !isUninstalledDetail && <AutomationHeader appId={selectedAppId} spaceName={selectedApp.spaceId ? spaceMap[selectedApp.spaceId] : t('Global')} />}
             {showLoginNotice && resolvedSpec?.browser_login && detailView?.type === 'activity-thread' && <LoginNoticeBar browserLogin={resolvedSpec.browser_login} onDismiss={() => void updateAppOverrides(selectedAppId, { loginNoticeDismissed: true })} onOpenBrowser={(url, label) => api.openLoginWindow(url, label)} />}
             <div className={`min-h-0 flex-1 ${isFullBleedDetail ? 'overflow-hidden' : 'overflow-y-auto'}`}>{renderDetail()}</div>

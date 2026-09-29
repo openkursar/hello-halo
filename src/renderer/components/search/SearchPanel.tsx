@@ -38,6 +38,8 @@ import { useTranslation } from '@/i18n'
 import { openSearchResultConversation } from '@/utils/conversation-navigation'
 import type { SearchResult as SearchResultItem } from '../../../shared/types/search'
 import { useQuickJumpCandidates, type QuickJumpItem, type QuickJumpType } from './useQuickJumpCandidates'
+import { searchSession } from './search-session'
+import { trackNavigate } from '@/services/home-telemetry'
 
 export type SearchScope = 'conversation' | 'space' | 'global'
 
@@ -91,6 +93,15 @@ export function SearchPanel({ isOpen, onClose }: SearchPanelProps) {
   // box — show its results/progress instead of the quick-jump layer.
   const showDeepSearch = isSearching || results !== null
 
+  // Every way the panel closes (Esc, backdrop, a pick, the highlight bar
+  // taking over) flips isOpen, so the session is closed here and nowhere else.
+  useEffect(() => {
+    if (!isOpen) return
+    const state = useSearchStore.getState()
+    searchSession.open(state.openSurface, state.searchScope, state.query)
+    return () => searchSession.close()
+  }, [isOpen])
+
   useEffect(() => {
     if (!isOpen) return
     const unsubscribe = api.onSearchProgress((data: unknown) => {
@@ -130,14 +141,22 @@ export function SearchPanel({ isOpen, onClose }: SearchPanelProps) {
     return candidates.filter(c => c.title.toLowerCase().includes(q))
   }, [candidates, query])
 
+  // Hits in the order they are rendered (grouped by type), for pick ranks.
+  const displayedHits = useMemo(
+    () => GROUP_ORDER.flatMap(type => quickHits.filter(h => h.type === type)),
+    [quickHits]
+  )
+
   const openQuickJumpItem = async (item: QuickJumpItem) => {
     if (item.type === 'agent' && item.appId) {
+      trackNavigate('apps', 'search', 'search')
       navigate('apps')
       useAppsPageStore.getState().selectApp(item.appId)
       onClose()
       return
     }
     if (item.type === 'kb' && item.kbId) {
+      trackNavigate('tlon', 'search', 'search')
       navigate('tlon')
       useTlonStore.getState().selectKB(item.kbId)
       onClose()
@@ -158,12 +177,14 @@ export function SearchPanel({ isOpen, onClose }: SearchPanelProps) {
   }
 
   const runNewConversation = async () => {
+    trackNavigate('space', 'search', 'search')
     navigate('space')
     if (currentSpaceId) await createConversation(currentSpaceId)
     onClose()
   }
-  const runNewAgent = () => { navigate('apps'); onClose() }
+  const runNewAgent = () => { trackNavigate('apps', 'search', 'search'); navigate('apps'); onClose() }
   const runSwitchSpace = () => {
+    trackNavigate('space', 'search', 'search')
     navigate('space')
     onClose()
     // Delay lets SpacePage (and SpaceSelector within it) finish mounting if
@@ -171,15 +192,15 @@ export function SearchPanel({ isOpen, onClose }: SearchPanelProps) {
     // handleResultClick already uses for the same reason.
     setTimeout(() => window.dispatchEvent(new CustomEvent('space-selector:open')), 300)
   }
-  const runOpenKnowledgeBase = () => { navigate('tlon'); onClose() }
-  const runOpenSettings = () => { navigate('settings'); onClose() }
+  const runOpenKnowledgeBase = () => { trackNavigate('tlon', 'search', 'search'); navigate('tlon'); onClose() }
+  const runOpenSettings = () => { trackNavigate('settings', 'search', 'search'); navigate('settings'); onClose() }
 
   const quickActions = useMemo(() => [
-    { key: 'action:new-conv', icon: SquarePen, label: t('New Conversation'), run: runNewConversation },
-    { key: 'action:new-agent', icon: Bot, label: t('New Digital Human'), run: runNewAgent },
-    { key: 'action:switch-space', icon: FolderKanban, label: t('Switch Workspace'), run: runSwitchSpace },
-    { key: 'action:open-kb', icon: BookOpen, label: t('Open Knowledge Base'), run: runOpenKnowledgeBase },
-    { key: 'action:open-settings', icon: Settings, label: t('Open Settings'), run: runOpenSettings },
+    { key: 'action:new-conv', type: 'new_conv', icon: SquarePen, label: t('New Conversation'), run: runNewConversation },
+    { key: 'action:new-agent', type: 'new_agent', icon: Bot, label: t('New Digital Human'), run: runNewAgent },
+    { key: 'action:switch-space', type: 'switch_space', icon: FolderKanban, label: t('Switch Workspace'), run: runSwitchSpace },
+    { key: 'action:open-kb', type: 'open_kb', icon: BookOpen, label: t('Open Knowledge Base'), run: runOpenKnowledgeBase },
+    { key: 'action:open-settings', type: 'open_settings', icon: Settings, label: t('Open Settings'), run: runOpenSettings },
     // eslint-disable-next-line react-hooks/exhaustive-deps
   ], [currentSpaceId, t])
 
@@ -190,49 +211,55 @@ export function SearchPanel({ isOpen, onClose }: SearchPanelProps) {
     setResults([])
     setSearchedQuery(query)
 
-    try {
-      let actualScope = searchScope
-      let actualConvId: string | undefined
-      let actualSpaceId: string | undefined
+    let actualScope = searchScope
+    let actualConvId: string | undefined
+    let actualSpaceId: string | undefined
 
-      switch (searchScope) {
-        case 'conversation':
-          if (currentConversationId && currentSpaceId) {
-            actualConvId = currentConversationId
-            actualSpaceId = currentSpaceId
-          } else if (currentSpaceId) {
-            actualScope = 'space'
-            actualSpaceId = currentSpaceId
-          } else {
-            actualScope = 'global'
-          }
-          break
-        case 'space':
-          if (currentSpaceId) {
-            actualSpaceId = currentSpaceId
-          } else {
-            actualScope = 'global'
-          }
-          break
-        case 'global':
+    switch (searchScope) {
+      case 'conversation':
+        if (currentConversationId && currentSpaceId) {
+          actualConvId = currentConversationId
+          actualSpaceId = currentSpaceId
+        } else if (currentSpaceId) {
+          actualScope = 'space'
+          actualSpaceId = currentSpaceId
+        } else {
           actualScope = 'global'
-          break
-      }
+        }
+        break
+      case 'space':
+        if (currentSpaceId) {
+          actualSpaceId = currentSpaceId
+        } else {
+          actualScope = 'global'
+        }
+        break
+      case 'global':
+        actualScope = 'global'
+        break
+    }
 
+    const runId = searchSession.queryStarted(actualScope, query.length)
+    try {
       const response = await api.search(query, actualScope, actualConvId, actualSpaceId)
       if (response.success && response.data) {
-        setResults(response.data as SearchResultItem[])
+        const found = response.data as SearchResultItem[]
+        setResults(found)
+        searchSession.queryEnded(runId, 'done', found.length)
       } else {
         console.error('[Search] Error:', response.error)
+        searchSession.queryEnded(runId, 'error')
       }
     } catch (error) {
       console.error('[Search] Exception:', error)
+      searchSession.queryEnded(runId, 'error')
     } finally {
       setIsSearching(false)
     }
   }
 
-  const handleResultClick = async (result: SearchResultItem) => {
+  const handleResultClick = async (result: SearchResultItem, index: number) => {
+    searchSession.pick('message_result', 'message', index + 1)
     try {
       if (result.spaceId !== currentSpaceId) {
         const targetSpace = result.spaceId === 'halo-temp' && haloSpace ? haloSpace : spaces.find(s => s.id === result.spaceId)
@@ -259,8 +286,28 @@ export function SearchPanel({ isOpen, onClose }: SearchPanelProps) {
   }
 
   const handleCancel = async () => {
+    searchSession.queryCancelled()
     await api.cancelSearch()
     setIsSearching(false)
+  }
+
+  type QuickAction = (typeof quickActions)[number]
+
+  const activateAction = (action: QuickAction, index: number) => {
+    searchSession.pick('action', action.type, index + 1)
+    return action.run()
+  }
+  const activateRecent = (item: QuickJumpItem, index: number) => {
+    searchSession.pick('recent', 'conv', index + 1)
+    return openQuickJumpItem(item)
+  }
+  const activateHit = (item: QuickJumpItem) => {
+    searchSession.pick('quick_hit', item.type, displayedHits.indexOf(item) + 1)
+    return openQuickJumpItem(item)
+  }
+  const activateSearchMessages = (rank: number) => {
+    searchSession.pick('search_messages', 'message', rank)
+    return handleSearch()
   }
 
   // Flat, keyboard-navigable row list for the quick-jump layer (empty-query
@@ -270,13 +317,13 @@ export function SearchPanel({ isOpen, onClose }: SearchPanelProps) {
     if (showDeepSearch) return []
     if (!query.trim()) {
       return [
-        ...quickActions.map(a => ({ key: a.key, onActivate: a.run })),
-        ...recentConversations.map(c => ({ key: c.key, onActivate: () => openQuickJumpItem(c) })),
+        ...quickActions.map((a, i) => ({ key: a.key, onActivate: () => activateAction(a, i) })),
+        ...recentConversations.map((c, i) => ({ key: c.key, onActivate: () => activateRecent(c, i) })),
       ]
     }
     return [
-      ...quickHits.map(h => ({ key: h.key, onActivate: () => openQuickJumpItem(h) })),
-      { key: 'action:search-messages', onActivate: handleSearch },
+      ...quickHits.map(h => ({ key: h.key, onActivate: () => activateHit(h) })),
+      { key: 'action:search-messages', onActivate: () => activateSearchMessages(quickHits.length + 1) },
     ]
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showDeepSearch, query, quickActions, recentConversations, quickHits])
@@ -284,6 +331,7 @@ export function SearchPanel({ isOpen, onClose }: SearchPanelProps) {
   useEffect(() => { setSelectedIndex(0) }, [query, showDeepSearch])
 
   const handleQueryChange = (value: string) => {
+    searchSession.noteQuery(value)
     setQuery(value)
     // A fresh keystroke always drops back to the quick-jump layer — without
     // this, editing the box after a message-content search keeps showing
@@ -304,7 +352,7 @@ export function SearchPanel({ isOpen, onClose }: SearchPanelProps) {
     } else if (e.key === 'Enter') {
       e.preventDefault()
       if (rows.length) rows[selectedIndex]?.onActivate()
-      else handleSearch()
+      else activateSearchMessages(1)
     }
   }
 
@@ -395,7 +443,7 @@ export function SearchPanel({ isOpen, onClose }: SearchPanelProps) {
                 {results.map((result, idx) => (
                   <button
                     key={idx}
-                    onClick={() => handleResultClick(result)}
+                    onClick={() => handleResultClick(result, idx)}
                     className="w-full text-left p-3 border border-border rounded hover:bg-muted/50 transition-colors text-sm"
                   >
                     <div className="flex items-start justify-between mb-2 gap-2">
@@ -442,7 +490,7 @@ export function SearchPanel({ isOpen, onClose }: SearchPanelProps) {
                   icon={action.icon}
                   title={action.label}
                   selected={i === selectedIndex}
-                  onClick={action.run}
+                  onClick={() => activateAction(action, i)}
                   onMouseMove={() => setSelectedIndex(i)}
                 />
               ))}
@@ -460,7 +508,7 @@ export function SearchPanel({ isOpen, onClose }: SearchPanelProps) {
                         title={item.title}
                         meta={item.meta}
                         selected={idx === selectedIndex}
-                        onClick={() => openQuickJumpItem(item)}
+                        onClick={() => activateRecent(item, i)}
                         onMouseMove={() => setSelectedIndex(idx)}
                       />
                     )
@@ -498,7 +546,7 @@ export function SearchPanel({ isOpen, onClose }: SearchPanelProps) {
                             title={item.title}
                             meta={item.meta}
                             selected={idx === selectedIndex}
-                            onClick={() => openQuickJumpItem(item)}
+                            onClick={() => activateHit(item)}
                             onMouseMove={() => setSelectedIndex(idx)}
                           />
                         )
@@ -512,7 +560,7 @@ export function SearchPanel({ isOpen, onClose }: SearchPanelProps) {
                   icon={Search}
                   title={t('Search message content for "{{query}}"', { query })}
                   selected={quickHits.length === selectedIndex}
-                  onClick={handleSearch}
+                  onClick={() => activateSearchMessages(quickHits.length + 1)}
                   onMouseMove={() => setSelectedIndex(quickHits.length)}
                 />
               </div>

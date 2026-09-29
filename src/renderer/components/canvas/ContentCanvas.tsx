@@ -41,6 +41,7 @@ import { GoalEditor } from '../goal'
 import { api } from '../../api'
 import { useTranslation } from '../../i18n'
 import { getBrowserHomepage } from '../../utils/browser-homepage'
+import { trackToolOpen } from '../../services/tool-session-telemetry'
 import { ErrorBoundary } from '../ErrorBoundary'
 
 // Office viewers ship heavy parsers (SheetJS, docx-preview, pdfjs) — lazy
@@ -79,7 +80,7 @@ export function ContentCanvas({ className = '' }: ContentCanvasProps) {
       // Cmd/Ctrl + T: New browser tab (works globally)
       if ((e.metaKey || e.ctrlKey) && e.key === 't') {
         e.preventDefault()
-        getBrowserHomepage().then(url => openUrl(url, t('New Tab')))
+        trackToolOpen('browser', 'shortcut', getBrowserHomepage().then(url => openUrl(url, t('New Tab'))))
         return
       }
 

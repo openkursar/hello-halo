@@ -8,6 +8,7 @@ import { nextTextBlockVersion } from './text-block-version'
 import { selectActiveConversationId } from './active'
 import { conversationKind, backendFor } from './backend'
 import { startedTurnState } from './backend/turn'
+import { noteTurnEnded } from '../../services/home-telemetry'
 
 export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAgentToolCall' | 'handleAgentToolResult' | 'handleAgentError' | 'handleAgentComplete' | 'handleAgentThought' | 'handleAgentThoughtDelta' | 'handleAgentCompact' | 'handleAgentApiRetry' | 'handleAgentSessionInfo' | 'handleAgentTurnStart' | 'handleAskQuestion'> = (set, get) => ({
   handleAgentMessage: (data) => {
@@ -73,6 +74,8 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
   handleAgentError: (data) => {
     const { conversationId, error, errorType } = data
     console.log(`[ChatStore] handleAgentError [${conversationId}]:`, error, errorType ? `(type: ${errorType})` : '')
+    // A user stop is recorded when requested, so any interruption reaching here is a failure.
+    noteTurnEnded(conversationId, 'error')
 
     // Add error thought to session (only for non-interrupted errors)
     // Interrupted errors get special UI treatment, not shown as error thought
@@ -91,6 +94,7 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
         ...session,
         error,
         errorType: errorType || null,
+        errorSeen: false,
         isGenerating: false,
         isThinking: false,
         apiRetry: null,
@@ -111,6 +115,8 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
   handleAgentComplete: async (data) => {
     const { spaceId, conversationId } = data
     console.log(`[ChatStore] handleAgentComplete [${conversationId}]`)
+    const endedSession = get().sessions.get(conversationId)
+    noteTurnEnded(conversationId, endedSession?.error ? 'error' : 'ok')
 
     // Check if user is currently viewing this conversation. `document.hasFocus()`
     // guards against the window being backgrounded (minimized, another app
@@ -118,18 +124,19 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
     // finishes while the user stepped away gets silently marked "seen" and
     // never shows up in the task panel.
     const state = get()
+    const kind = conversationKind(conversationId)
     const isUserViewingThisConversation =
       state.currentSpaceId === spaceId &&
       selectActiveConversationId(state) === conversationId &&
       document.hasFocus()
 
-    // Track unseen completion if user is not viewing this conversation. Only
-    // space conversations appear in Pulse: digital-human chats, IM sessions and
-    // team members are not listed there.
-    if (!isUserViewingThisConversation && conversationKind(conversationId) === 'space') {
-      // Find the conversation title from any space state
-      let title = 'Conversation'
-      let metaFound = false
+    // Track unseen completion if user is not viewing this conversation. Space
+    // and digital-human conversations are followed; IM sessions and team
+    // members are not.
+    if (!isUserViewingThisConversation && kind !== 'virtual') {
+      // Digital-human items are named by the task panel, not from the index.
+      let title = kind === 'digital-human' ? '' : 'Conversation'
+      let metaFound = kind === 'digital-human'
       for (const [, ss] of state.spaceStates) {
         const meta = ss.conversations.find(c => c.id === conversationId)
         if (meta) { title = meta.title; metaFound = true; break }

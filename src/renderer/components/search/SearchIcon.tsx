@@ -1,9 +1,8 @@
 /**
- * Global search entry for the Header — prototype `.hsearch`: a bordered pill
- * with an icon, a "Search" label, and a ⌘K hint badge (not a bare icon
- * button). Lives in the Header's left slot, right after the space/page
- * identity, on every page — the prototype's `.hsearch` has no `chat-only`
- * class, so it's present in both chat and plain header modes.
+ * Global search entry for the Header: a filled, borderless pill with an
+ * icon, a "Search" label, and a ⌘K hint badge. Lives in the Header's left
+ * slot, right after the space/page identity, in both chat and plain header
+ * modes.
  *
  * Default behavior:
  * - On chat page: opens conversation-scoped search
@@ -33,7 +32,7 @@ export function SearchIcon({ onClick, isInSpace = false }: SearchIconProps) {
   return (
     <button
       onClick={handleClick}
-      className="flex items-center gap-[7px] h-8 px-[9px] rounded-sm border border-border bg-card text-subtle-foreground text-xs hover:border-primary transition-colors ease-halo flex-shrink-0"
+      className="flex items-center gap-[7px] h-8 px-[9px] rounded-sm bg-secondary/60 text-subtle-foreground text-xs hover:bg-secondary hover:text-foreground transition-colors ease-halo flex-shrink-0"
       title={t('Search (Cmd+K)')}
       aria-label={t('Search')}
     >

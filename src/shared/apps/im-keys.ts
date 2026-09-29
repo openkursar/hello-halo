@@ -112,6 +112,15 @@ export function isLocalSessionKey(conversationId: string): boolean {
   return parsed !== null && parsed.channel === LOCAL_SESSION_CHANNEL
 }
 
+/**
+ * Whether a finished turn in this conversation is the user's to come back to:
+ * regular conversations and the digital-human conversations listed beside
+ * them, not IM, HTTP or team channel sessions.
+ */
+export function isFollowedConversationId(conversationId: string): boolean {
+  return !isAppChatKey(conversationId) || nativeChatAppId(conversationId) !== null
+}
+
 /** Parsed components of a channel-qualified app-chat conversation key. */
 export interface ParsedAppChatKey {
   appId: string

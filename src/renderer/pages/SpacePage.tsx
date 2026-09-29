@@ -43,7 +43,17 @@ import { SearchIcon } from '../components/search/SearchIcon'
 import { useSearchShortcuts } from '../hooks/useSearchShortcuts'
 import { useTranslation } from '../i18n'
 import { useIsMobile } from '../hooks/useIsMobile'
+import { useSpaceDigitalHumans } from '../hooks/useSpaceDigitalHumans'
+import {
+  capCount,
+  msBucket,
+  resetHomeExposure,
+  takeEntry,
+  takeHomePaintTiming,
+  trackHome,
+} from '../services/home-telemetry'
 import type { LayoutConfig } from '../types'
+import type { HomeEntry } from '../../shared/analytics/home-telemetry'
 
 /** Persist a partial layout update to backend config + sync in-memory store */
 function persistLayout(update: Partial<LayoutConfig>) {
@@ -58,6 +68,10 @@ function persistLayout(update: Partial<LayoutConfig>) {
 
 export function SpacePage() {
   const { t } = useTranslation()
+
+  // Children's mount effects run before this page's, so a new visit's exposure
+  // dedupe has to reset during the first render.
+  useState(resetHomeExposure)
 
   // Precise selectors — only subscribe to what SpacePage needs for layout orchestration
   const mockBashMode = useAppStore(state => state.mockBashMode)
@@ -110,6 +124,21 @@ export function SpacePage() {
     chatWidthMin,
     chatWidthMax,
   } = useLayoutPreferences(currentSpace?.id, isMaximized)
+
+  const digitalHumans = useSpaceDigitalHumans(currentSpace?.id ?? null)
+  // Read by the async space init, whose closure would otherwise see mount-time values.
+  const homeViewStateRef = useRef({ dhCount: 0, railOpen: false })
+  homeViewStateRef.current = { dhCount: digitalHumans.length, railOpen: !isMobile && effectiveRailExpanded }
+  const pendingHomeViewEntryRef = useRef<HomeEntry | null>(null)
+
+  useEffect(() => {
+    pendingHomeViewEntryRef.current = takeEntry()
+    const frame = requestAnimationFrame(() => {
+      const timing = takeHomePaintTiming()
+      if (timing) trackHome('home.first_paint', { cold: timing.cold, sinceLaunchBucket: msBucket(timing.ms) })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [])
 
   // Chat width drag state
   const [isDraggingChat, setIsDraggingChat] = useState(false)
@@ -211,6 +240,19 @@ export function SpacePage() {
       // After loading, check if we need to select or create a conversation
       const store = useChatStore.getState()
       const spaceState = store.getSpaceState(currentSpace.id)
+
+      const entry = pendingHomeViewEntryRef.current
+      if (entry !== null) {
+        pendingHomeViewEntryRef.current = null
+        trackHome('home.view', {
+          spaceKind: currentSpace.isTemp ? 'halo' : 'user',
+          multiSpace: spaces.filter(s => !s.isTemp).length >= 2,
+          convCount: capCount(spaceState.conversations.length),
+          dhCount: capCount(homeViewStateRef.current.dhCount),
+          railOpen: homeViewStateRef.current.railOpen,
+          entry,
+        })
+      }
 
       // Consume pending digital-human navigation (cross-space jump from the
       // detail page's "Chat" button or the resource rail's hover action).
@@ -323,7 +365,7 @@ export function SpacePage() {
   // Setup search shortcuts
   useSearchShortcuts({
     enabled: true,
-    onSearch: (scope) => openSearch(scope)
+    onSearch: (scope) => openSearch(scope, 'shortcut')
   })
 
   if (!currentSpace) {
@@ -365,7 +407,13 @@ export function SpacePage() {
                   quota/model/rail icons. Hidden on mobile (reachable via the
                   overflow menu instead). */}
               <div className="hidden sm:block">
-                <SearchIcon onClick={openSearch} isInSpace={true} />
+                <SearchIcon
+                  onClick={(scope) => {
+                    trackHome('home.header.action', { action: 'search', surface: 'desktop' })
+                    openSearch(scope, 'icon')
+                  }}
+                  isInSpace={true}
+                />
               </div>
 
               {/* Mobile: Chat History Panel as bottom sheet */}
@@ -390,14 +438,21 @@ export function SpacePage() {
                   rail via its own floating trigger button. Prototype `#railBtn`
                   is a folder glyph (Files/Skill/MCP = "space resources"), not a
                   generic panel icon — and `.icon-btn`: 32×32, rounded-sm(8px),
-                  17×17 icon, active state tints when the rail is open. */}
+                  17×17 icon, pressed (not accented) while the rail is open. */}
               <div className="hidden sm:block">
                 <button
-                  onClick={() => setRailExpanded(!effectiveRailExpanded)}
+                  onClick={() => {
+                    const open = !effectiveRailExpanded
+                    trackHome('home.rail.toggle', { open, surface: 'header_button' })
+                    setRailExpanded(open)
+                  }}
                   className={`w-8 h-8 rounded-sm flex items-center justify-center transition-colors ease-halo ${
+                    // Open reads as pressed, not highlighted: the rail itself
+                    // already shows the state, and accent color is kept for
+                    // where-you-are navigation.
                     effectiveRailExpanded
-                      ? 'bg-primary/[0.12] text-accent-on-dark'
-                      : 'text-subtle-foreground hover:bg-secondary hover:text-foreground'
+                      ? 'bg-secondary text-foreground'
+                      : 'text-faint-foreground hover:bg-secondary hover:text-foreground'
                   }`}
                   title={effectiveRailExpanded ? t('Close workspace resources') : t('Open workspace resources')}
                   aria-pressed={effectiveRailExpanded}
@@ -409,7 +464,7 @@ export function SpacePage() {
               <HeaderMoreMenu />
 
               {/* Mobile: overflow menu collapses model/search/settings */}
-              <MobileOverflowMenu onSearch={() => openSearch('space')} />
+              <MobileOverflowMenu onSearch={() => openSearch('space', 'mobile_menu')} />
             </>
           }
         />

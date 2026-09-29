@@ -16,6 +16,8 @@ import { getModelDisplayName, type AISourcesConfig } from '../../types'
 import { useTranslation } from '../../i18n'
 import { ModelSelectSheet } from './ModelSelector'
 import { useSpaceQuickActions } from '../../hooks/useSpaceQuickActions'
+import { trackHome, trackNavigate } from '../../services/home-telemetry'
+import { trackToolOpen } from '../../services/tool-session-telemetry'
 
 interface MobileOverflowMenuProps {
   onSearch: () => void
@@ -49,10 +51,28 @@ export function MobileOverflowMenu({ onSearch }: MobileOverflowMenuProps) {
     }, 200)
   }
 
+  const openMenu = () => {
+    trackHome('home.header.action', { action: 'more', surface: 'mobile_sheet' })
+    setIsMenuOpen(true)
+  }
+
+  const runAction = (action: 'model' | 'search', after: () => void) => {
+    trackHome('home.header.action', { action, surface: 'mobile_sheet' })
+    closeMenu(after)
+  }
+
+  const handleOpenBrowser = () => closeMenu(() => trackToolOpen('browser', 'mobile_menu', openBrowser()))
+  const handleOpenTerminal = () => closeMenu(() => trackToolOpen('terminal', 'mobile_menu', openTerminal()))
+
+  const goSettings = () => {
+    trackNavigate('settings', 'header', 'header')
+    closeMenu(() => navigate('settings'))
+  }
+
   return (
     <div className="sm:hidden">
       <button
-        onClick={() => setIsMenuOpen(true)}
+        onClick={openMenu}
         className="p-1.5 hover:bg-secondary rounded-lg transition-colors"
         title={t('More')}
         aria-label={t('More')}
@@ -97,7 +117,7 @@ export function MobileOverflowMenu({ onSearch }: MobileOverflowMenuProps) {
             <div className="py-1 pb-[env(safe-area-inset-bottom)]">
               {/* Model row: label + current value, chains into ModelSelectSheet */}
               <button
-                onClick={() => closeMenu(() => {
+                onClick={() => runAction('model', () => {
                   // A digital human's model is chosen in its settings, not here.
                   if (modelTarget.kind === 'digital-human') openPersonModelSettings(modelTarget.appId)
                   else setIsModelSheetOpen(true)
@@ -113,7 +133,7 @@ export function MobileOverflowMenu({ onSearch }: MobileOverflowMenuProps) {
               </button>
 
               <button
-                onClick={() => closeMenu(onSearch)}
+                onClick={() => runAction('search', onSearch)}
                 className="w-full px-4 py-3 flex items-center gap-3 hover:bg-secondary/80 transition-colors"
               >
                 <Search className="w-4 h-4 text-muted-foreground flex-shrink-0" />
@@ -121,7 +141,7 @@ export function MobileOverflowMenu({ onSearch }: MobileOverflowMenuProps) {
               </button>
 
               <button
-                onClick={() => closeMenu(() => navigate('settings'))}
+                onClick={goSettings}
                 className="w-full px-4 py-3 flex items-center gap-3 hover:bg-secondary/80 transition-colors"
               >
                 <Settings className="w-4 h-4 text-muted-foreground flex-shrink-0" />
@@ -130,7 +150,7 @@ export function MobileOverflowMenu({ onSearch }: MobileOverflowMenuProps) {
 
               {canOpenBrowser && (
                 <button
-                  onClick={() => closeMenu(openBrowser)}
+                  onClick={handleOpenBrowser}
                   className="w-full px-4 py-3 flex items-center gap-3 hover:bg-secondary/80 transition-colors"
                 >
                   <Globe className="w-4 h-4 text-blue-500 flex-shrink-0" />
@@ -140,7 +160,7 @@ export function MobileOverflowMenu({ onSearch }: MobileOverflowMenuProps) {
 
               {terminalAvailable && (
                 <button
-                  onClick={() => closeMenu(openTerminal)}
+                  onClick={handleOpenTerminal}
                   disabled={terminalCreating}
                   className="w-full px-4 py-3 flex items-center gap-3 hover:bg-secondary/80 transition-colors disabled:opacity-60"
                 >

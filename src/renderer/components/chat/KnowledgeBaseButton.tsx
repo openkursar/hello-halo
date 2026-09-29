@@ -25,6 +25,7 @@ import { useSpaceStore } from '../../stores/space.store'
 import { useAppStore } from '../../stores/app.store'
 import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
 import { BookOpen, Check, Star, Pin, ArrowRight } from 'lucide-react'
+import { trackNavigate } from '../../services/home-telemetry'
 
 const NO_IDS: string[] = []
 
@@ -92,6 +93,7 @@ export function KnowledgeBaseButton() {
 
   const openKnowledgePage = () => {
     setOpen(false)
+    trackNavigate('tlon', 'composer', 'composer')
     navigate('tlon')
   }
 

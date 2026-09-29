@@ -13,6 +13,7 @@ import {
   getAppChatConversationId,
   buildImSessionKey,
   buildLocalSessionKey,
+  isFollowedConversationId,
   buildTeamSessionKey,
   isImSessionKey,
   isLocalSessionKey,
@@ -219,5 +220,18 @@ describe('run sender keys', () => {
     expect(isAppChatKey(key)).toBe(false)
     expect(parseRunSenderKey(getAppChatConversationId('app-1'))).toBeNull()
     expect(parseRunSenderKey('app-run:app-1')).toBeNull()
+  })
+})
+
+describe('isFollowedConversationId', () => {
+  it('follows regular conversations and the chat-board sessions of a digital human', () => {
+    expect(isFollowedConversationId('conv-uuid')).toBe(true)
+    expect(isFollowedConversationId(getAppChatConversationId('app-1'))).toBe(true)
+    expect(isFollowedConversationId(buildLocalSessionKey('app-1', 'uuid-1'))).toBe(true)
+  })
+
+  it('does not follow IM or team sessions', () => {
+    expect(isFollowedConversationId('app-chat:app-1:wecom:direct:user1')).toBe(false)
+    expect(isFollowedConversationId('app-chat:app-1:team:team1:epoch1')).toBe(false)
   })
 })
