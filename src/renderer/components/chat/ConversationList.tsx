@@ -6,7 +6,7 @@
 
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, memo } from 'react'
 import { createPortal } from 'react-dom'
-import { Virtuoso } from 'react-virtuoso'
+import { Virtuoso, type Components } from 'react-virtuoso'
 import { Plus } from '../icons/ToolIcons'
 import { EllipsisVertical, Pin, Pencil, Trash2, ChevronRight } from 'lucide-react'
 import { useTranslation } from '../../i18n'
@@ -132,6 +132,23 @@ type ConversationRow =
    *  Pinned), so they carry the avatar/name context the section header would
    *  otherwise provide. */
   | { type: 'dh-item'; key: string; row: AppChatConversationRow; standalone: boolean }
+
+/**
+ * The scroller takes no padding: Virtuoso's viewport is absolutely positioned
+ * at top 0 and width 100% of the scroller's padding box, so side padding shifts
+ * rows right without narrowing them (clipping their right edge) and vertical
+ * padding is ignored. Side spacing lives on each row instead, and the top and
+ * bottom spacing are Header/Footer spacers. `flow-root` keeps a header row's
+ * top margin inside the row, where Virtuoso measures it.
+ */
+const PaddedRow: Components<ConversationRow>['Item'] = ({ children, item: _item, context: _context, ...props }) => (
+  <div {...props} className="flow-root px-2 pb-0.5">{children}</div>
+)
+const listComponents: Components<ConversationRow> = {
+  Item: PaddedRow,
+  Header: () => <div className="h-1" />,
+  Footer: () => <div className="h-3" />,
+}
 
 /**
  * Build the full flat row list:
@@ -817,7 +834,8 @@ export const ConversationList = memo(function ConversationList({
             // Virtuoso's scroller only sets overflow-y, which leaves overflow-x
             // resolving to `auto` — a stray pixel of row width then shows a
             // horizontal scrollbar under a list that never scrolls sideways.
-            className="px-2 pt-1 pb-3 overflow-x-hidden"
+            className="overflow-x-hidden"
+            components={listComponents}
             itemContent={(index, row) => {
               if (row.type === 'header') {
                 // No uppercase/letter-spacing: both are no-ops on CJK labels

@@ -6,7 +6,7 @@
  * (stores/task.store.ts). Used by TaskPanel.
  *
  * Responsibilities:
- * - Renders grouped items: "Continue" (waiting / completed-unseen / error —
+ * - Renders grouped items: "Needs you" (waiting / completed-unseen / error —
  *   needs the user) and "Running", each with a header + count, then pinned
  *   idle conversations last
  * - Source-specific identity: MessageSquare icon for conversations,
@@ -50,7 +50,7 @@ function formatElapsed(ms: number): string {
 // Status stays legible regardless: it drives the detail line's color, and the
 // section the item is grouped under.
 const STATUS_LABEL: Partial<Record<TaskItemStatus, string>> = {
-  'running': 'Generating...',
+  'running': 'Running',
   'waiting': 'Waiting for your input',
   'completed-unseen': 'Completed',
   'error': 'Error',
@@ -200,7 +200,7 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
     useChatStore.getState().removePulseItem(item.conversationId)
   }, [])
 
-  // "Continue" = needs the user (waiting for input, done but unseen, or
+  // "Needs you" = needs the user (waiting for input, done but unseen, or
   // errored) — conversations and digital humans both land here. "Running"
   // covers both actively-generating conversations and running/queued apps.
   const continueItems = items.filter(i => i.status === 'waiting' || i.status === 'completed-unseen' || i.status === 'error')
@@ -319,15 +319,8 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
               </span>
             )}
             {isRunning && (
-              <span className="ml-auto flex items-center flex-shrink-0 text-[11px] text-subtle-foreground tabular-nums">
-                {isQueued ? (
-                  t('Queued')
-                ) : (
-                  <>
-                    <span className="inline-block w-2.5 h-2.5 rounded-full border-[1.5px] border-subtle-foreground border-t-transparent opacity-70 mr-[5px] animate-spin" />
-                    {formatElapsed(runningElapsedMs)}
-                  </>
-                )}
+              <span className="ml-auto flex-shrink-0 text-[11px] text-subtle-foreground tabular-nums">
+                {isQueued ? t('Queued') : formatElapsed(runningElapsedMs)}
               </span>
             )}
           </div>
@@ -411,10 +404,10 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
 
   return (
     <div className="overflow-auto scrollbar-thin pt-2" style={maxHeight ? { maxHeight } : undefined}>
-      {/* Continue: waiting for input, done but unseen, or errored */}
+      {/* Needs you: waiting for input, done but unseen, or errored */}
       {continueItems.length > 0 && (
         <div className="pb-1">
-          {renderSectionHeader(t('Continue'), continueItems.length, 'ready')}
+          {renderSectionHeader(t('Needs you'), continueItems.length, 'ready')}
           {continueItems.map(renderItem)}
         </div>
       )}

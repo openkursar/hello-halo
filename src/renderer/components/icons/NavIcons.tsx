@@ -111,25 +111,27 @@ export const KnowledgeNavIcon: FC<NavIconProps> = ({ className, active }) => {
   )
 }
 
-/** Squircle rather than a circle so it stays distinct from the digital-human glyph. */
+/** Box with the tick breaking out of its corner; also the task panel's header mark. */
 export const TasksNavIcon: FC<NavIconProps> = ({ className, active }) => {
   const mask = useMaskId()
-  const check = 'M8.4 12.2l2.5 2.5 4.9-5.1'
   if (!active) {
     return (
       <Glyph className={className}>
-        <rect x="3.4" y="3.4" width="17.2" height="17.2" rx="6" />
-        <path d={check} />
+        <path d="M20.6 11.2V17.6a3 3 0 0 1-3 3H6.4a3 3 0 0 1-3-3V6.4a3 3 0 0 1 3-3h10.2" />
+        <path d="M8.6 11l3 3L21 4.6" />
       </Glyph>
     )
   }
+  // The tick is cut out and runs on through the corner, which is cut away
+  // too, so the solid form keeps the outline's open corner.
   return (
     <Glyph className={className}>
       <mask id={mask}>
         <rect width="24" height="24" fill="white" />
-        <path d={check} stroke="black" strokeWidth={1.9} fill="none" />
+        <path d="M8.6 11l3 3L24 1.6" stroke="black" strokeWidth={2.2} />
+        <path d="M16.6 1H25V9.4Z" fill="black" stroke="none" />
       </mask>
-      <rect x="2.6" y="2.6" width="18.8" height="18.8" rx="6.8" fill="currentColor" stroke="none" mask={`url(#${mask})`} />
+      <rect x="2.6" y="2.6" width="18.8" height="18.8" rx="3.8" fill="currentColor" stroke="none" mask={`url(#${mask})`} />
     </Glyph>
   )
 }

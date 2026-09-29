@@ -13,7 +13,8 @@
  * there's no room to dock a 340px column on a narrow layout).
  */
 
-import { X, SquareCheckBig } from 'lucide-react'
+import { X } from 'lucide-react'
+import { TasksNavIcon } from '../icons/NavIcons'
 import { PulseList } from '../pulse/PulseList'
 import { countTaskItems, useTaskItems } from '../../stores/task.store'
 import { useTaskPanelStore } from '../../stores/taskPanel.store'
@@ -37,15 +38,16 @@ export function TaskPanel() {
   const header = (
     <div className="flex-shrink-0 px-3 pt-3 pb-2.5 flex items-center justify-between">
       <div className="flex items-center gap-2">
-        <SquareCheckBig className="w-[17px] h-[17px]" strokeWidth={1.8} />
+        <TasksNavIcon className="w-[17px] h-[17px]" />
         <span className="text-sm font-semibold">{t('Tasks')}</span>
         {(continueCount > 0 || runningCount > 0) && (
           <span className="text-[11px] font-normal text-subtle-foreground tabular-nums">
+            {/* Same words as the list's section titles below, so the counts read as their totals. */}
             {continueCount > 0 && runningCount > 0
-              ? t('{{continue}} to continue · {{running}} running', { continue: continueCount, running: runningCount })
+              ? t('Needs you {{continue}} · Running {{running}}', { continue: continueCount, running: runningCount })
               : continueCount > 0
-                ? t('{{continue}} to continue', { continue: continueCount })
-                : t('{{running}} running', { running: runningCount })}
+                ? t('Needs you {{continue}}', { continue: continueCount })
+                : t('Running {{running}}', { running: runningCount })}
           </span>
         )}
       </div>
@@ -79,7 +81,7 @@ export function TaskPanel() {
   }
 
   return (
-    <div className="w-[340px] h-full flex-shrink-0 bg-card border-r border-border flex flex-col animate-fade-up">
+    <div className="w-[340px] h-full flex-shrink-0 bg-card border-r border-border/50 flex flex-col animate-fade-up">
       {header}
       <PulseList />
     </div>
