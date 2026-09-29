@@ -130,6 +130,11 @@ export interface ModelOption {
  */
 export const AVAILABLE_MODELS: ModelOption[] = [
   {
+    id: 'claude-sonnet-5-5',
+    name: 'Claude Sonnet 5.5',
+    description: 'Best combination of speed and intelligence, suitable for most tasks'
+  },
+  {
     id: 'claude-sonnet-5',
     name: 'Claude Sonnet 5',
     description: 'Best combination of speed and intelligence, suitable for most tasks'
@@ -152,11 +157,6 @@ export const AVAILABLE_MODELS: ModelOption[] = [
   {
     id: 'claude-opus-5',
     name: 'Claude Opus 5',
-    description: 'Most capable model for complex agentic coding and enterprise work'
-  },
-  {
-    id: 'claude-opus-4-8',
-    name: 'Claude Opus 4.8',
     description: 'Most capable model for complex agentic coding and enterprise work'
   },
   {

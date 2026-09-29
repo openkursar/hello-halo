@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "updatedAt": "2026-09-25",
+    "updatedAt": "2026-09-29",
     "unit": "USD per 1M tokens",
     "notes": [
       "Official pay-as-you-go list prices from each vendor's own API; aggregators and resellers bill their own rates.",
@@ -12,7 +12,7 @@
     "sources": {
       "anthropic": {
         "url": "https://platform.claude.com/docs/en/about-claude/pricing",
-        "retrievedAt": "2026-09-25",
+        "retrievedAt": "2026-09-29",
         "currency": "USD"
       },
       "openai": {
@@ -139,6 +139,13 @@
       "outputPerMtk": 75,
       "cacheCreationPerMtk": 18.75,
       "cacheReadPerMtk": 1.5
+    },
+    "claude-sonnet-5-5": {
+      "source": "anthropic",
+      "inputPerMtk": 2,
+      "outputPerMtk": 10,
+      "cacheCreationPerMtk": 2.5,
+      "cacheReadPerMtk": 0.2
     },
     "claude-sonnet-5": {
       "source": "anthropic",
