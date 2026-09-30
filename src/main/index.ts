@@ -238,6 +238,7 @@ import { isServerMode } from './foundation/runtime-mode'
 import { initializeApp } from './foundation/config.service'
 import { applyDisplayScale, currentDisplayScale, nudgeDisplayScale, setDisplayScale, DISPLAY_STEP, registerDisplayHandlers } from './services/display.service'
 import { MAC_TRAFFIC_LIGHT_POSITION } from '../shared/constants/mac-traffic-lights'
+import { TITLE_BAR_OVERLAY_HEIGHT } from '../shared/constants/app-header'
 import { flushAllPendingIndexWrites } from './services/conversation.service'
 import { shutdownRemoteAccess } from './services/remote'
 import { registerDeepLinkHandling, handleDeepLinkArgv } from './services/deep-link.service'
@@ -477,11 +478,7 @@ function createWindow(): void {
     titleBarOverlay: !isMac ? {
       color: '#0c0e12',
       symbolColor: '#e7e9ee',
-      // One pixel short of Header's actual 48px height (h-12): tall enough
-      // to vertically center the caption buttons in it, but leaves the
-      // header's own 1px bottom border un-overpainted by the overlay's
-      // opaque fill so it doesn't visually vanish under the buttons.
-      height: 47
+      height: TITLE_BAR_OVERLAY_HEIGHT
     } : undefined,
     backgroundColor: '#0c0e12',
     webPreferences: {

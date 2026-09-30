@@ -138,7 +138,7 @@ export const MODULE: RouteModuleMeta = {
       summary: 'Create an empty conversation',
       body: '{"title":"Weekly report"}',
       returns: '{"success":true,"data":{"id":"<uuid>","title":"Weekly report"}}',
-      notes: 'Creates it empty. Make Halo reply in it with POST /api/agent/message — a conversation you made yourself is the safe target for that, since a turn you start there cannot interrupt one the user is having.',
+      notes: 'Optional body field: reasoningEffort (off|minimal|low|medium|high|xhigh|max) — how hard it thinks; omit to follow the model\'s configured effort. Creates it empty. Make Halo reply in it with POST /api/agent/message — a conversation you made yourself is the safe target for that, since a turn you start there cannot interrupt one the user is having.',
     },
 
     'GET /api/spaces/:spaceId/conversations/:conversationId': {

@@ -11,6 +11,7 @@ import { api } from '../../api'
 import type { Conversation, ConversationMeta, Message, ToolCall, Artifact, Thought, AgentEventBase, ImageAttachment, CompactInfo, ApiRetryNotice, CanvasContext, AgentErrorType, PendingQuestion, Question, TaskStatus, PulseItem, PulseReadInfo, TaskProgress } from '../../types'
 import type { SessionInitInfo } from '../../types/slash-command'
 import { PULSE_READ_GRACE_PERIOD_MS } from '../../types'
+import type { ReasoningEffortLevel } from '../../../shared/constants/reasoning-effort'
 import { canvasLifecycle } from '../../services/canvas-lifecycle'
 import type { StoreApi } from 'zustand'
 import type { GoalInput } from '../../../shared/types/goal'
@@ -211,6 +212,7 @@ export interface ChatState {
   renameConversation: (spaceId: string, conversationId: string, newTitle: string) => Promise<boolean>
   toggleStarConversation: (spaceId: string, conversationId: string, starred: boolean) => Promise<boolean>
   setConversationModel: (spaceId: string, conversationId: string, modelSourceId: string, modelId: string) => Promise<boolean>
+  setConversationReasoningEffort: (spaceId: string, conversationId: string, level: ReasoningEffortLevel) => Promise<boolean>
   attachKnowledgeBase: (spaceId: string, conversationId: string, kbId: string) => Promise<void>
   detachKnowledgeBase: (spaceId: string, conversationId: string, kbId: string) => Promise<void>
 

@@ -39,9 +39,10 @@ Outside `stores/`, import only from `chat.store` (it re-exports the selectors,
 `conversationKind`, `digitalHumanAppId` and the `ChatState` type); `chat/*` files
 are the store's internals.
 
-`isLoadingConversation` belongs to the space backend. A digital-human conversation
-reads as loading while it is neither cached nor failed; a second writer of the
-shared flag ended one backend's load while the other's was still running.
+`isLoadingConversation` belongs to the space backend. `ChatView` shows any
+conversation on screen as loading while it is neither cached nor failed; a second
+writer of the shared flag ended one backend's load while the other's was still
+running.
 
 ## The conversation on screen
 

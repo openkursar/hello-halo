@@ -15,20 +15,22 @@ import {
   resolveAnthropicEffort,
   resolveCodexReasoningEffort,
   resolveRequestEffort,
+  pickReasoningEffort,
   resolveThinkingBudget,
 } from '../../../../src/main/services/agent/reasoning-effort'
 import {
   MIN_ANSWER_TOKENS,
   REASONING_EFFORT_LEVELS,
 } from '../../../../src/shared/constants/reasoning-effort'
+import type { ResolvedModelCapabilities } from '../../../../src/main/services/agent/types'
 
 /** `EffortLevel` in @anthropic-ai/claude-agent-sdk. */
 const ANTHROPIC_ENUM = ['low', 'medium', 'high', 'max']
 /** `ModelReasoningEffort` in @openai/codex-sdk. */
 const CODEX_ENUM = ['minimal', 'low', 'medium', 'high', 'xhigh']
 
-const caps = (maxOutputTokens: number, reasoningEffort?: string) =>
-  ({ maxOutputTokens, contextWindow: 200_000, reasoningEffort })
+const caps = (maxOutputTokens: number, reasoningEffort?: string): ResolvedModelCapabilities =>
+  ({ maxOutputTokens, contextWindow: 200_000, reasoningEffort, maxOutputTokensConfigured: true })
 
 describe('resolveRequestEffort', () => {
   it('reports off while the Deep Thinking toggle is off', () => {
@@ -42,6 +44,25 @@ describe('resolveRequestEffort', () => {
 
   it('defaults to the budget Halo used before the ladder existed', () => {
     expect(resolveThinkingBudget(resolveRequestEffort(true, undefined), undefined)).toBe(10_240)
+  })
+
+  it('lets a level picked for this send override both the toggle and the config', () => {
+    expect(resolveRequestEffort(false, 'low', 'max')).toBe('max')
+    expect(resolveRequestEffort(true, 'high', 'off')).toBe('off')
+  })
+
+  it('ignores a requested value that is not a ladder level', () => {
+    expect(resolveRequestEffort(true, 'low', 'ultra')).toBe('low')
+    expect(resolveRequestEffort(false, 'low', 3)).toBe('off')
+  })
+})
+
+describe('pickReasoningEffort', () => {
+  it('lets a bad stored value fall through to the next source', () => {
+    expect(pickReasoningEffort('ultra', 'low')).toBe('low')
+    expect(pickReasoningEffort(undefined, 'off')).toBe('off')
+    expect(pickReasoningEffort('high', 'low')).toBe('high')
+    expect(pickReasoningEffort(3, null)).toBeUndefined()
   })
 })
 
@@ -115,6 +136,25 @@ describe('applyReasoningEffort', () => {
     expect(sdkOptions.maxThinkingTokens).toBe(budget)
   })
 
+  it('sizes the budget from a level picked for this send', () => {
+    const sdkOptions: Record<string, any> = {}
+    expect(applyReasoningEffort(sdkOptions, true, caps(64_000, 'high'), 'low')).toBe(2_048)
+    expect(sdkOptions.reasoningEffort).toBe('low')
+  })
+
+  it('records the pick apart from the resolved level, for the router key', () => {
+    const picked: Record<string, any> = {}
+    applyReasoningEffort(picked, true, caps(64_000, 'high'), 'high')
+    expect(picked.pickedReasoningEffort).toBe('high')
+
+    // Without a pick the Model Config value applies, and the router must still
+    // forward it verbatim — so nothing is recorded, even over a stale pick.
+    const unpicked: Record<string, any> = { pickedReasoningEffort: 'low' }
+    applyReasoningEffort(unpicked, false, caps(64_000, 'high'), 'ultra')
+    expect(unpicked.reasoningEffort).toBe('off')
+    expect(unpicked).not.toHaveProperty('pickedReasoningEffort')
+  })
+
   it('leaves the thinking options unset when the toggle is off', () => {
     const sdkOptions: Record<string, any> = {}
     expect(applyReasoningEffort(sdkOptions, false, caps(64_000))).toBeNull()
@@ -146,5 +186,30 @@ describe('applySessionReasoningEffort', () => {
     applySessionReasoningEffort(sdkOptions, caps(64_000))
 
     expect(sdkOptions.effort).toBe('high')
+    expect(sdkOptions).not.toHaveProperty('pickedReasoningEffort')
+  })
+
+  it('records the conversation\'s own level as the pick', () => {
+    const sdkOptions: Record<string, any> = {}
+    applySessionReasoningEffort(sdkOptions, caps(64_000, 'high'), 'off')
+
+    expect(sdkOptions.pickedReasoningEffort).toBe('off')
+  })
+
+  it('spawns at the level the first send will resolve', () => {
+    const warm: Record<string, any> = {}
+    const send: Record<string, any> = {}
+    applySessionReasoningEffort(warm, caps(64_000, 'high'), 'low')
+    applyReasoningEffort(send, true, caps(64_000, 'high'), 'low')
+
+    expect(warm.reasoningEffort).toBe(send.reasoningEffort)
+    expect(warm.effort).toBe(send.effort)
+  })
+
+  it('ignores a requested value that is not a ladder level', () => {
+    const sdkOptions: Record<string, any> = {}
+    applySessionReasoningEffort(sdkOptions, caps(64_000, 'medium'), 'ultra')
+
+    expect(sdkOptions.reasoningEffort).toBe('medium')
   })
 })

@@ -124,7 +124,7 @@ vi.mock('../../../../src/main/services/agent/control', () => ({
   getSessionState: () => ({ isActive: false, thoughts: [] }),
 }))
 vi.mock('../../../../src/main/services/agent/events', () => ({ emitAgentEvent: vi.fn() }))
-vi.mock('../../../../src/main/services/agent/reasoning-effort', () => ({ applyReasoningEffort: () => 0 }))
+vi.mock('../../../../src/main/services/agent/reasoning-effort', () => ({ applyReasoningEffort: () => 0, pickReasoningEffort: () => undefined }))
 vi.mock('../../../../src/main/services/agent/message-utils', () => ({
   buildMessageContent: (text: string) => text,
   formatCanvasContext: () => '',

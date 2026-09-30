@@ -12,7 +12,7 @@
 | SDK stream → Thought[] translation | `stream-processor.ts` | Second largest. Incremental push, partial tool calls, interruption recovery. |
 | SDK invocation & configuration | `sdk-config.ts`, `resolved-sdk.ts`, `codex/`, `dsh/` | Provider selection, model resolution, SDK option assembly through two named entries (`buildUserSessionSdkOptions`, `buildInternalTaskSdkOptions`; see §11). Alternate SDK engines are loaded only through `resolved-sdk.ts`; engine-specific translation is isolated under `codex/` and `dsh/`. |
 | User AI settings | `user-agent-settings.ts` | The one reader of the user's global AI settings for a session (`maxTurns`, `disabledTools`, `promptProfile`, digital-humans switch). Entries never pass them. See §11. |
-| Thinking depth → engine options | `reasoning-effort.ts` | Combines the per-request Deep Thinking toggle with the per-model effort level into `effort` / `maxThinkingTokens` / Codex `model_reasoning_effort`. Every SDK call site goes through `applyReasoningEffort`. See §9. |
+| Thinking depth → engine options | `reasoning-effort.ts` | Combines a picked level (conversation / digital human / API send), the per-request thinking flag and the per-model effort level into `effort` / `maxThinkingTokens` / Codex `model_reasoning_effort` / the router's picked level. Every SDK call site goes through `applyReasoningEffort`. See §9. |
 | Engine availability probe | `engine-availability.ts` | Detects which engine runtimes shipped in this build (manifest + entry file, platform binary for Codex, interpreter version for dsh) so `resolved-sdk.ts` can fall back instead of crashing at startup. Probed per engine on first demand and cached per process: startup asks only for the configured engine plus `FALLBACK_ORDER`, Settings asks for all of them (`agent:get-engine-availability`). |
 | System prompt composition | `system-prompt.ts` | Space context, conversation context, tool availability injection. `buildKnowledgeSection` is exported separately for creation-time append. On the `halo` engine the Claude Code-derived template is not used: `buildSystemPrompt` yields only Halo's product context, and every site that sets `sdkOptions.systemPrompt` wraps it with `toEngineSystemPrompt` into the engine's `{ preset: 'default', append }`. Code that later extends or reads the prompt goes through `appendToSystemPrompt` / `hostSystemPromptText`, never assumes a string. |
 | Knowledge context resolution | `knowledge-context.ts` | Conversation `knowledgeBaseIds` → injectable `KBReference[]` (agent→tlon dependency collector). Cheap id-only variant feeds the session knowledge fingerprint. |
@@ -254,33 +254,65 @@ behavior do not inject — they go through the normal send path and queue.
 
 Two inputs decide how hard a model thinks, and they are orthogonal:
 
-- **Whether** — the chat's Deep Thinking toggle, per request. IM and automation
-  runs have no toggle and always think.
+- **Whether** — `thinkingEnabled`, per request. The composer always sends
+  true (its slider's `'off'` is a picked level instead); IM and automation
+  runs always think; only an HTTP caller can send false.
 - **How hard** — `reasoningEffort` on the model's user override
   (Settings > Provider > Model Config), per model.
 
-`reasoning-effort.ts` is the only place they combine. Call sites pass both to
-`applyReasoningEffort(sdkOptions, thinkingEnabled, capabilities)` and never set
-a thinking option themselves; it writes the names the downstream consumers
-read:
+The composer's thinking slider adds a picked level that wins over both, `'off'`
+included: a space conversation's own `reasoningEffort` (on the conversation,
+like its model pin), a digital human's `userOverrides.chatReasoningEffort` (one
+level for all its chat sessions, applied only to sends from the chat surfaces —
+IM, team and federation dispatch and automation runs keep the configured
+effort), else a level an HTTP caller put on the send. `pickReasoningEffort`
+takes the first ladder level in that order, so a bad stored value falls
+through; both stored fields are also validated where they are written. The
+renderer's last-used level only seeds a new conversation — passed to
+`createConversation`, so the warm-up that follows spawns at it — and never
+rides on a send, so a conversation without its own level runs at the model
+config.
+
+`reasoning-effort.ts` is the only place they combine. Call sites pass them to
+`applyReasoningEffort(sdkOptions, thinkingEnabled, capabilities, requestedEffort)`
+and never set a thinking option themselves; it writes the names the downstream
+consumers read:
 
 | Option | Read by | Ladder |
 |---|---|---|
 | `effort` | Claude Agent SDK (`--effort`) | `low` `medium` `high` `max` |
 | `maxThinkingTokens` | Claude Agent SDK (`--max-thinking-tokens`) | token budget |
 | `reasoningEffort` | `codex/options.ts` → `model_reasoning_effort` | `minimal` `low` `medium` `high` `xhigh` |
+| `pickedReasoningEffort` | `codex/options.ts` → router key | the picked level alone |
+
+The OpenAI-compat router cannot read a picked level off the wire: Claude Code
+sends a non-Claude model name only `thinking: {type: 'adaptive'}` plus an
+`output_config.effort` the router does not read, and Codex's effort reaches it
+only as "thinking on". So the pick travels in the router key
+(`BackendRequestConfig.pickedReasoningEffort`) next to the Model Config value.
+The Claude path encodes the key before SDK options exist, so each call site
+computes the pick once and hands the same value to both
+`resolveCredentialsForSdk` and `applyReasoningEffort`; Codex encodes its key
+from `sdkOptions.pickedReasoningEffort`. The router's converter
+(`resolveReasoningEffortValue`) takes the pick first, clamped to the model's
+profile (`'off'` → its disable value), then the Model Config value verbatim,
+then a level inferred from the request.
 
 Depth is frozen when the engine spawns: `--effort` is a launch argument and
 Codex reads `model_reasoning_effort` at thread start, while the SDK's only
-runtime setter is `setMaxThinkingTokens`. `ensureSessionWarm` therefore applies
-the level through `applySessionReasoningEffort` — a session warmed without one
-can never acquire it, and warm-up runs on every conversation switch, so leaving
-it out disables the feature for most of main chat.
+runtime setter is `setMaxThinkingTokens`. The resolved level
+(`sdkOptions.reasoningEffort`) and the pick (`sdkOptions.pickedReasoningEffort`)
+are therefore part of `computeCredentialsFingerprint`: a changed level rebuilds the session like a
+changed model, and the renderer re-warms right after saving a conversation's
+level so the rebuild happens off the send path. `ensureSessionWarm` applies the
+conversation's own level through `applySessionReasoningEffort` — it must
+resolve the same level the first send will, or the warmed session is rebuilt
+on that send; and a session warmed without a level can never acquire one.
 
 What this does *not* express is switching thinking off: with no `thinking`
 option set, a model whose default is adaptive keeps reasoning, and
-`setMaxThinkingTokens(null)` clears the limit rather than stopping it. The
-Deep Thinking toggle therefore only lowers the budget today. Making it a true
+`setMaxThinkingTokens(null)` clears the limit rather than stopping it. A
+send with thinking off therefore only lowers the budget on that path today. Making it a true
 off switch means sending `thinking: { type: 'disabled' }`, which is a
 deliberate behavior change and not part of this contract yet.
 

@@ -13,7 +13,7 @@ import type { SettingsNavItem } from './types'
 export const SETTINGS_NAV_ITEMS: SettingsNavItem[] = [
   {
     id: 'ai-model',
-    // Same glyph as the chat header's ModelSelector (layout/ModelSelector.tsx)
+    // Same glyph as the chat header's ModelSelector (ai-config/ModelSelector.tsx)
     // — one icon for "AI model" everywhere it appears, not two.
     labelKey: 'AI Model',
     icon: Brain

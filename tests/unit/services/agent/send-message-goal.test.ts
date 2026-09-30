@@ -62,7 +62,7 @@ vi.mock('../../../../src/main/services/agent/space-memory', () => ({
   resolveSpaceMemorySession: vi.fn(() => null),
   buildSpaceMemoryPreamble: vi.fn(async () => ''),
 }))
-vi.mock('../../../../src/main/services/agent/reasoning-effort', () => ({ applyReasoningEffort: vi.fn(() => 0) }))
+vi.mock('../../../../src/main/services/agent/reasoning-effort', () => ({ applyReasoningEffort: vi.fn(() => 0), pickReasoningEffort: vi.fn(() => undefined) }))
 vi.mock('../../../../src/main/services/agent/conversation-sink', () => ({ createConversationSink: vi.fn() }))
 vi.mock('../../../../src/main/services/agent/goal', () => ({
   prepareGoalInput: m.prepareGoalInput,

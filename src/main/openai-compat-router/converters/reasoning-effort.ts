@@ -4,13 +4,15 @@
  * A level the user declared in Model Config is sent as-is, including values
  * Halo does not recognize: it states what that model accepts, so a new
  * provider level works the day it ships, and a wrong one surfaces the
- * upstream's own error instead of being silently downgraded. Only a level Halo
- * *inferred* from the request is clamped to what the model is known to accept.
+ * upstream's own error instead of being silently downgraded. A level picked
+ * for the session, or one Halo *inferred* from the request, is clamped to what
+ * the model is known to accept.
  */
 
 import {
   clampReasoningEffort,
   inferReasoningEffortFromBudget,
+  isReasoningEffortLevel,
   type ReasoningEffortSetting,
 } from '../../../shared/constants/reasoning-effort'
 import { reasoningEffortProfileById } from '../../../shared/constants/model-capabilities'
@@ -29,13 +31,25 @@ export interface AnthropicThinkingConfig {
  *        Claude models use, where depth lives in the effort level rather than
  *        a token budget, so there is no budget to read.
  * @param declared Level from the user's Model Config, forwarded verbatim.
+ * @param picked Level picked for this session (a conversation's or digital
+ *        human's own). Wins over both the request and `declared`, since the
+ *        request cannot carry it: the engine sends a non-Claude model only an
+ *        adaptive block. Anything that is not a ladder level is ignored — it
+ *        arrives decoded from the request's key.
  */
 export function resolveReasoningEffortValue(
   thinking: AnthropicThinkingConfig | undefined,
   declared: ReasoningEffortSetting | undefined,
-  modelId: string
+  modelId: string,
+  picked?: unknown
 ): string | undefined {
   const profile = reasoningEffortProfileById(modelId)
+
+  if (isReasoningEffortLevel(picked)) {
+    return picked === 'off'
+      ? profile.disableValue
+      : clampReasoningEffort(picked, profile.levels)
+  }
 
   const thinkingOff = !thinking || thinking.type === 'disabled' || declared === 'off'
   if (thinkingOff) return profile.disableValue

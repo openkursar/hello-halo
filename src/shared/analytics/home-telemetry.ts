@@ -21,18 +21,23 @@ export const HOME_EVENT_PROPS = {
   'home.first_paint':               ['cold', 'sinceLaunchBucket'],
 
   'home.chip.click':                ['chip'],
-  'home.composer.send':             ['source', 'chip', 'recipient', 'appId', 'hasImages', 'imageCount', 'thinking',
+  'home.composer.send':             ['source', 'chip', 'recipient', 'appId', 'hasImages', 'imageCount',
                                      'isInject', 'lenBucket', 'entry'],
   'home.composer.reply':            ['outcome', 'recipient', 'latencyBucket'],
   'home.composer.mention':          ['action', 'type'],
   'home.composer.slash':            ['action', 'kind'],
   'home.composer.attach':           ['action'],
   'home.composer.recipient.switch': ['to', 'appId', 'surface', 'entry'],
+  // Controls beside the composer's send button.
+  'home.composer.model':            ['action', 'kind'],
+  'home.composer.quota':            ['action', 'low'],
+  'home.composer.thinking':         ['level', 'kind'],
 
   'home.conversation.select':       ['kind', 'pinned', 'appId'],
   'home.conversation.create':       ['surface'],
   'home.conversation.action':       ['action', 'kind'],
   'home.dh_group.toggle':           ['collapsed'],
+  'home.conversation.section':      ['section', 'action'],
 
   'home.rail.toggle':               ['open', 'surface'],
   'home.rail.tab.view':             ['tab', 'firstOpen', 'itemCount', 'empty', 'loadBucket', 'ok'],

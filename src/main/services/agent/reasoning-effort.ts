@@ -1,11 +1,12 @@
 /**
  * Reasoning effort → engine thinking options.
  *
- * The chat "Deep Thinking" toggle is a boolean; how hard the model then thinks
- * is a per-model setting (Settings > Provider > Model Config). This module is
- * the single place those two combine, so every SDK call site — space chat,
- * digital-human chat, automation runs — derives the same options from the same
- * inputs.
+ * How hard a model thinks comes from, first match wins: a level picked for the
+ * session (a conversation's or digital human's own, or one an API send
+ * carried), the send's thinking flag (false = off), and the model's configured
+ * effort (Settings > Provider > Model Config). This module is the single place
+ * they combine, so every SDK call site — space chat, digital-human chat,
+ * automation runs — derives the same options from the same inputs.
  *
  * Each engine takes a different subset of the ladder, and the subsets are not
  * nested, so a level is clamped per engine rather than forwarded. Unlike the
@@ -44,15 +45,43 @@ function toLevel(effort: ReasoningEffortSetting): ReasoningEffortLevel {
 }
 
 /**
- * Effective effort for one request: the toggle decides whether the model
- * thinks at all, the model config decides how hard.
+ * Effective effort for one request. A level the user picked for this send
+ * wins outright ('off' included); otherwise the toggle decides whether the
+ * model thinks at all and the model config decides how hard. Anything that is
+ * not a ladder level is ignored, since it arrives from the transport.
  */
 export function resolveRequestEffort(
   thinkingEnabled: boolean | undefined,
-  configured: ReasoningEffortSetting | undefined
+  configured: ReasoningEffortSetting | undefined,
+  requested?: unknown
 ): ReasoningEffortSetting {
+  if (isReasoningEffortLevel(requested)) return requested
   if (!thinkingEnabled) return 'off'
   return configured || DEFAULT_REASONING_EFFORT
+}
+
+/**
+ * First candidate that is a ladder level. Stored levels arrive through
+ * unvalidated update paths, so a bad one must fall through to the next source
+ * instead of shadowing it.
+ */
+export function pickReasoningEffort(...candidates: unknown[]): ReasoningEffortLevel | undefined {
+  return candidates.find(isReasoningEffortLevel)
+}
+
+/**
+ * Record the picked level on its own, apart from the resolved one.
+ *
+ * The OpenAI-compat router cannot read it off the wire — Claude Code sends a
+ * non-Claude model only an adaptive thinking block — so it travels in the
+ * router key, and must stay distinguishable from a Model Config value, which
+ * the router forwards verbatim instead of clamping. The Claude path encodes
+ * the key before these options exist, from the same pick passed to
+ * `resolveCredentialsForSdk`; the Codex adapter encodes it from this option.
+ */
+function setPickedEffort(sdkOptions: Record<string, any>, picked: ReasoningEffortLevel | undefined): void {
+  if (picked) sdkOptions.pickedReasoningEffort = picked
+  else delete sdkOptions.pickedReasoningEffort
 }
 
 /**
@@ -67,9 +96,10 @@ export function resolveThinkingBudget(
   effort: ReasoningEffortSetting,
   maxOutputTokens: number | undefined
 ): number | null {
-  if (effort === 'off') return null
+  const level = toLevel(effort)
+  if (level === 'off') return null
 
-  const budget = REASONING_EFFORT_THINKING_BUDGET[toLevel(effort)]
+  const budget = REASONING_EFFORT_THINKING_BUDGET[level]
   if (!maxOutputTokens) return budget
 
   const ceiling = maxOutputTokens - MIN_ANSWER_TOKENS
@@ -103,15 +133,21 @@ export function resolveCodexReasoningEffort(effort: ReasoningEffortSetting): str
  * setter is for the token budget. A session warmed without a level can
  * therefore never acquire one. Whether the model thinks is left to that
  * setter, so no budget is written here.
+ *
+ * `requested` is the conversation's own level: the first send resolves the
+ * same one, so the warmed session is reused rather than rebuilt.
  */
 export function applySessionReasoningEffort(
   sdkOptions: Record<string, any>,
-  capabilities: ResolvedModelCapabilities | undefined
+  capabilities: ResolvedModelCapabilities | undefined,
+  requested?: unknown
 ): void {
-  const configured = capabilities?.reasoningEffort || DEFAULT_REASONING_EFFORT
+  const picked = pickReasoningEffort(requested)
+  const effort = picked ?? (capabilities?.reasoningEffort || DEFAULT_REASONING_EFFORT)
 
-  sdkOptions.reasoningEffort = configured
-  const anthropicEffort = resolveAnthropicEffort(configured)
+  sdkOptions.reasoningEffort = effort
+  setPickedEffort(sdkOptions, picked)
+  const anthropicEffort = resolveAnthropicEffort(effort)
   if (anthropicEffort) sdkOptions.effort = anthropicEffort
 }
 
@@ -119,20 +155,24 @@ export function applySessionReasoningEffort(
  * Derive every thinking-related SDK option for one request and write them into
  * `sdkOptions`, returning the thinking budget for the session's runtime setter.
  *
- * Three names carry the same decision because three consumers read different
- * ones: `effort` and `maxThinkingTokens` are the Claude Agent SDK's own option
- * names, while `reasoningEffort` is Halo's unclamped level, which the Codex
- * adapter needs because its ladder has levels Anthropic's does not.
+ * Several names carry the same decision because several consumers read
+ * different ones: `effort` and `maxThinkingTokens` are the Claude Agent SDK's
+ * own option names; `reasoningEffort` is Halo's unclamped level, which the
+ * Codex adapter needs because its ladder has levels Anthropic's does not; and
+ * `pickedReasoningEffort` is the picked level alone, for the OpenAI-compat
+ * router (see {@link setPickedEffort}).
  */
 export function applyReasoningEffort(
   sdkOptions: Record<string, any>,
   thinkingEnabled: boolean | undefined,
-  capabilities: ResolvedModelCapabilities | undefined
+  capabilities: ResolvedModelCapabilities | undefined,
+  requestedEffort?: unknown
 ): number | null {
-  const effort = resolveRequestEffort(thinkingEnabled, capabilities?.reasoningEffort)
+  const effort = resolveRequestEffort(thinkingEnabled, capabilities?.reasoningEffort, requestedEffort)
   const budget = resolveThinkingBudget(effort, capabilities?.maxOutputTokens)
 
   sdkOptions.reasoningEffort = effort
+  setPickedEffort(sdkOptions, pickReasoningEffort(requestedEffort))
   const anthropicEffort = resolveAnthropicEffort(effort)
   if (anthropicEffort) sdkOptions.effort = anthropicEffort
   if (budget !== null) sdkOptions.maxThinkingTokens = budget

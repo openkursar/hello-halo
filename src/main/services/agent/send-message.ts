@@ -49,7 +49,7 @@ import {
 import { prepareNonVisionImageFallback, OCR_TOOLSET_ID } from './image-attachments'
 import { resolveCredentialsForSdk, buildUserSessionSdkOptions } from './sdk-config'
 import { resolveSpaceMemorySession, buildSpaceMemoryPreamble } from './space-memory'
-import { applyReasoningEffort } from './reasoning-effort'
+import { applyReasoningEffort, pickReasoningEffort } from './reasoning-effort'
 import { createConversationSink } from './conversation-sink'
 import { prepareGoalInput, setGoalForTurn } from './goal'
 import { flushToolStats } from './stream-processor'
@@ -137,7 +137,9 @@ export async function sendMessage(
     console.log(`[Agent] sendMessage using: ${credentials.provider}, model: ${credentials.model}, prompt: ${config.agent?.promptProfile ?? 'halo'}`)
     console.log(`[Agent] turn_start conv=${conversationId} model=${credentials.model} ts=${Date.now()}`)
 
-    const resolvedCredentials = await resolveCredentialsForSdk(credentials)
+    // The conversation's own level wins over one the send carries (API callers).
+    const pickedEffort = pickReasoningEffort(conversation?.reasoningEffort, request.reasoningEffort)
+    const resolvedCredentials = await resolveCredentialsForSdk(credentials, pickedEffort)
     const electronPath = getHeadlessElectronPath()
 
     // Non-vision models can't receive image blocks: persist images to files and
@@ -209,9 +211,8 @@ export async function sendMessage(
       memoryGuard: spaceMemory?.guard,
     })
 
-    // Apply dynamic configurations (Thinking mode)
     const thinkingBudget = applyReasoningEffort(
-      sdkOptions, thinkingEnabled, resolvedCredentials.capabilities
+      sdkOptions, thinkingEnabled, resolvedCredentials.capabilities, pickedEffort
     )
 
     const t0 = Date.now()

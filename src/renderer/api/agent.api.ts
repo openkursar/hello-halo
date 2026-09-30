@@ -12,6 +12,7 @@ import type {
   ApiResponse,
 } from './_shared'
 import type { Goal, GoalInput } from '../../shared/types/goal'
+import type { ReasoningEffortLevel } from '../../shared/constants/reasoning-effort'
 
 export const agentApi = {
   // ===== Agent =====
@@ -29,6 +30,7 @@ export const agentApi = {
       size?: number
     }>
     thinkingEnabled?: boolean  // Enable extended thinking mode
+    reasoningEffort?: ReasoningEffortLevel  // Depth picked for this send; overrides thinkingEnabled
     knowledgeBaseId?: string  // Chat-with-knowledge-base turn
     goal?: GoalInput  // Set as the conversation goal before this message runs
     canvasContext?: {  // Canvas context for AI awareness

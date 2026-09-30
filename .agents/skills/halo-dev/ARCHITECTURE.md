@@ -216,7 +216,9 @@ src/
     │   ├── chat/                      #   Chat stream + tool-result/ + transcript/ (native
     │   │                              #   transcript scrolling for every chat surface — no
     │   │                              #   list virtualization; see transcript/DESIGN.md)
-    │   ├── layout/                    #   Header, ModelSelector, SpaceSelector, etc.
+    │   ├── ai-config/                 #   Model/source controls: ModelSelector + thinking
+    │   │                              #   slider, quota ring, provider picker
+    │   ├── layout/                    #   Header, NavRail, SpaceSelector, TaskPanel, etc.
     │   ├── settings/                  #   Settings sections
     │   ├── setup/                     #   Sub-components: LoginSelector, SetupProviderConfig, ServerConnect
     │   ├── store/                     #   App Store UI

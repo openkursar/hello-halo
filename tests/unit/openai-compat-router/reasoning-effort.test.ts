@@ -151,6 +151,39 @@ describe('resolveReasoningEffortValue', () => {
     expect(resolveReasoningEffortValue(adaptive, undefined, 'some-proxy-model')).toBe('high')
     expect(resolveReasoningEffortValue(adaptive, 'max', 'deepseek-v4-pro')).toBe('max')
   })
+
+  describe('with a level picked for the session', () => {
+    // Claude Code sends a non-Claude model only an adaptive block, so the pick
+    // is the one place the conversation's level reaches the router.
+    it('wins over both the adaptive request and the Model Config value', () => {
+      expect(resolveReasoningEffortValue(adaptive, undefined, 'some-proxy-model', 'low')).toBe('low')
+      expect(resolveReasoningEffortValue(adaptive, 'high', 'some-proxy-model', 'low')).toBe('low')
+      expect(resolveReasoningEffortValue(adaptive, 'off', 'glm-5.2', 'max')).toBe('max')
+    })
+
+    it('clamps to what the model accepts rather than forwarding verbatim', () => {
+      expect(resolveReasoningEffortValue(adaptive, undefined, 'some-proxy-model', 'max')).toBe('high')
+      expect(resolveReasoningEffortValue(adaptive, undefined, 'glm-5.3', 'max')).toBe('max')
+      expect(resolveReasoningEffortValue(adaptive, undefined, 'glm-5.3', 'medium')).toBe('low')
+      expect(resolveReasoningEffortValue(adaptive, undefined, 'glm-5.2', 'low')).toBe('high')
+    })
+
+    it('turns thinking off through the model\'s own disable value', () => {
+      expect(resolveReasoningEffortValue(adaptive, 'high', 'glm-5.2', 'off')).toBe('none')
+      // Always-thinking models cannot stop; off lands on their lowest level.
+      expect(resolveReasoningEffortValue(adaptive, undefined, 'glm-5.3', 'off')).toBe('low')
+      expect(resolveReasoningEffortValue(adaptive, undefined, 'gpt-4o', 'off')).toBeUndefined()
+    })
+
+    it('omits the field for models whose API has none', () => {
+      expect(resolveReasoningEffortValue(adaptive, undefined, 'glm-5', 'high')).toBeUndefined()
+    })
+
+    it('ignores a value that is not a ladder level', () => {
+      expect(resolveReasoningEffortValue(adaptive, 'max', 'some-proxy-model', 'ultra')).toBe('max')
+      expect(resolveReasoningEffortValue(adaptive, undefined, 'some-proxy-model', 3)).toBe('high')
+    })
+  })
 })
 
 describe('isThinkingEffort', () => {

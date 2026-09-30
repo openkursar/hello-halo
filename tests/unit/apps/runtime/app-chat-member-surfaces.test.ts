@@ -146,6 +146,7 @@ vi.mock('../../../../src/main/services/agent/sdk-config', () => ({
 }))
 vi.mock('../../../../src/main/services/agent/reasoning-effort', () => ({
   applyReasoningEffort: () => 0,
+  pickReasoningEffort: () => undefined,
 }))
 
 vi.mock('../../../../src/main/services/agent/permission-handler', () => ({

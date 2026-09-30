@@ -24,6 +24,7 @@ import {
   onAgentBroadcast
 } from '../services/agent'
 import type { GoalInput } from '../../shared/types/goal'
+import type { ReasoningEffortLevel } from '../../shared/constants/reasoning-effort'
 import { getEngineCapabilities, getActiveEngine, getDegradedFromEngine } from '../services/agent/resolved-sdk'
 import { getEngineAvailability } from '../services/agent/engine-availability'
 import { defaultCapabilitiesFor } from '../services/agent/capabilities'
@@ -101,6 +102,7 @@ export function registerAgentHandlers(): void {
           size?: number
         }>
         thinkingEnabled?: boolean  // Enable extended thinking mode
+        reasoningEffort?: ReasoningEffortLevel  // Depth picked for this send
         goal?: GoalInput  // Set as the conversation goal before this message runs
       }
     ) => {

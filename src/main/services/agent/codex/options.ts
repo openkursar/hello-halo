@@ -22,7 +22,7 @@
 import path from 'path'
 import { mkdirSync } from 'fs'
 import { getApiCredentials, credentialsToBackendConfig } from '../helpers'
-import { resolveCodexReasoningEffort } from '../reasoning-effort'
+import { pickReasoningEffort, resolveCodexReasoningEffort } from '../reasoning-effort'
 import { getConfig, getHaloDir } from '../../../foundation/config.service'
 import { getCleanUserEnv } from '../sdk-config'
 import { ensureOpenAICompatRouter, encodeBackendConfig } from '../../../openai-compat-router'
@@ -252,7 +252,13 @@ async function buildThreadConfig(
     const upstreamApiType = credentials.apiType || inferCodexUpstreamApiType(credentials.baseUrl)
     const backendUrl = normalizeBackendEndpointUrl(credentials.baseUrl, upstreamApiType)
     const apiKey = encodeBackendConfig(
-      credentialsToBackendConfig(credentials, { url: backendUrl, apiType: upstreamApiType }),
+      credentialsToBackendConfig(credentials, {
+        url: backendUrl,
+        apiType: upstreamApiType,
+        // Codex's own effort reaches the router only as "thinking on", so the
+        // picked level rides in the key, as on the Claude path.
+        pickedReasoningEffort: pickReasoningEffort(sdkOptions.pickedReasoningEffort),
+      }),
     )
 
     // Codex removed `wire_api = "chat"` (see codex-rs/model-provider-info

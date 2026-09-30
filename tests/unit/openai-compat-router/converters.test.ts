@@ -197,6 +197,21 @@ describe('Request Converters', () => {
       expect(result.request.reasoning_effort).toBeUndefined()
     })
 
+    it('should send the level picked for the session over an adaptive request and Model Config', () => {
+      const request: AnthropicRequest = {
+        model: 'glm-5.3',
+        max_tokens: 1024,
+        messages: [{ role: 'user', content: 'Hello' }],
+        thinking: { type: 'adaptive' }
+      }
+
+      const chat = convertAnthropicToOpenAIChat(request, { reasoningEffort: 'high', pickedReasoningEffort: 'max' })
+      expect(chat.request.reasoning_effort).toBe('max')
+
+      const responses = convertAnthropicToOpenAIResponses(request, { reasoningEffort: 'high', pickedReasoningEffort: 'off' })
+      expect(responses.request.reasoning).toEqual({ effort: 'low' })
+    })
+
     // ====================================================================
     // reasoning_content injection from thinking blocks
     // ====================================================================
@@ -479,7 +494,7 @@ describe('Request Converters', () => {
   describe('non-vision model image stripping', () => {
     const PNG_SOURCE = {
       type: 'base64' as const,
-      media_type: 'image/png',
+      media_type: 'image/png' as const,
       data: 'abc123'
     }
 
@@ -675,7 +690,7 @@ describe('Request Converters', () => {
   describe('vision override', () => {
     const PNG_SOURCE = {
       type: 'base64' as const,
-      media_type: 'image/png',
+      media_type: 'image/png' as const,
       data: 'abc123'
     }
 

@@ -458,7 +458,7 @@ export function ModelConfigPanel({
                       )}
                     </select>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      {t('How hard this model thinks while Deep Thinking is on.')}
+                      {t('How hard this model thinks unless a conversation picks its own level.')}
                     </p>
                     {isCustomEffort && (
                       <div className="flex items-start gap-1.5 mt-1 text-xs text-amber-600 dark:text-amber-500">

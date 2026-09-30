@@ -32,7 +32,7 @@ import { emitAgentEvent } from './events'
 import { registerProcess, unregisterProcess, getCurrentInstanceId } from '../health'
 import { resolveCredentialsForSdk, buildUserSessionSdkOptions, computeCredentialsFingerprint, computeSessionInputsFingerprint } from './sdk-config'
 import { resolveSpaceMemorySession } from './space-memory'
-import { applySessionReasoningEffort } from './reasoning-effort'
+import { applySessionReasoningEffort, pickReasoningEffort } from './reasoning-effort'
 import { startConsumer, type ConsumerHandle, type ConsumerContext } from './session-consumer'
 import { createConversationSink } from './conversation-sink'
 import { hasActiveTeamTasks } from './subagent-handler'
@@ -1095,8 +1095,10 @@ export async function ensureSessionWarm(
   const credentials = await getApiCredentialsForConversation(config, conversation)
   console.log(`[Agent] Session warm using: ${credentials.provider}, model: ${credentials.model}`)
 
-  // Resolve credentials for SDK (handles OpenAI compat router for non-Anthropic providers)
-  const resolvedCredentials = await resolveCredentialsForSdk(credentials)
+  // Resolve credentials for SDK (handles OpenAI compat router for non-Anthropic providers).
+  // The conversation's own level, as the first send will resolve it.
+  const pickedEffort = pickReasoningEffort(conversation?.reasoningEffort)
+  const resolvedCredentials = await resolveCredentialsForSdk(credentials, pickedEffort)
 
   // Creation-time MCP servers: assembled lazily at actual session creation
   // (must match sendMessage exactly to avoid a session rebuild on the first message).
@@ -1136,7 +1138,7 @@ export async function ensureSessionWarm(
     memoryGuard: spaceMemory?.guard,
   })
 
-  applySessionReasoningEffort(sdkOptions, resolvedCredentials.capabilities)
+  applySessionReasoningEffort(sdkOptions, resolvedCredentials.capabilities, pickedEffort)
 
   try {
     const session = await getOrCreateV2Session(

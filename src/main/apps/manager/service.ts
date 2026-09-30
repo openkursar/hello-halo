@@ -14,6 +14,7 @@
 import { existsSync, mkdirSync, readdirSync, rmSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import { v4 as uuidv4 } from 'uuid'
+import { isReasoningEffortLevel } from '../../../shared/constants/reasoning-effort'
 
 import type { AppSpec, SkillSpec } from '../spec'
 import { validateAppSpec } from '../spec'
@@ -792,6 +793,8 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       for (const [key, value] of Object.entries(partial as Record<string, unknown>)) {
         if (value == null) {
           delete merged[key]
+        } else if (key === 'chatReasoningEffort' && !isReasoningEffortLevel(value)) {
+          throw new Error(`Invalid chatReasoningEffort: ${String(value)}`)
         } else {
           // Memory settings merge field by field, so a change to one never
           // resets another that a concurrent change just saved.

@@ -34,7 +34,7 @@ export interface TrayCallbacks {
  *   The tray icon appears in the top menu bar.
  * - Windows: A white or black glyph matching the macOS one, picked to
  *   contrast with the taskbar and swapped when the system theme changes.
- * - Linux: The colored 16x16 icon; panel themes vary too much to pick a glyph.
+ * - Linux: A brand-blue glyph; panel themes vary too much to pick black or white.
  */
 export class TrayManager {
   private tray: Tray | null = null
@@ -190,7 +190,10 @@ export class TrayManager {
       if (icon) return icon
     }
 
-    return nativeImage.createFromPath(join(resourcesPath, 'tray-16.png'))
+    // Brand-blue glyph: reads on light and dark panels alike. `tray-16.png` is
+    // the fallback for icon sets that predate it.
+    const colored = nativeImage.createFromPath(join(resourcesPath, 'tray-color.png'))
+    return colored.isEmpty() ? nativeImage.createFromPath(join(resourcesPath, 'tray-16.png')) : colored
   }
 
   private refreshWindowsIcon(): void {
@@ -208,7 +211,7 @@ export class TrayManager {
  * White glyph for a dark taskbar, black for a light one. An .ico, since
  * Windows builds the tray icon from the image's 1x bitmap only and loads other
  * sizes only from an .ico. Null when the icon set predates these files (a
- * brand `trayIconDir`), so the caller falls back to the colored icon instead
+ * brand `trayIconDir`), so the caller falls back to the brand-blue icon instead
  * of showing a blank slot.
  */
 function createWindowsGlyph(resourcesPath: string, taskbarIsDark: boolean): Electron.NativeImage | null {

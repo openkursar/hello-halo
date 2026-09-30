@@ -18,6 +18,7 @@ import {
   DELEGATED_ROUTING_HEADER
 } from '../../openai-compat-router'
 import type { ApiCredentials, ResolvedModelCapabilities } from './types'
+import type { ReasoningEffortLevel } from '../../../shared/constants/reasoning-effort'
 import { inferOpenAIWireApi, credentialsToBackendConfig, getHeadlessElectronPath } from './helpers'
 import { resolveModelId } from '../../../shared/types/ai-sources'
 import { readUserAgentSettings, INTERNAL_TASK_SETTINGS, type UserAgentSettings } from './user-agent-settings'
@@ -322,10 +323,14 @@ function buildDisallowedTools(userDisabledTools?: string[]): string[] {
  * be switched dynamically via setModel(). See config.service.ts getAiSourcesSignature().
  *
  * @param credentials - Raw API credentials from getApiCredentials()
+ * @param pickedReasoningEffort - Level picked for this session, which a router
+ *        upstream is told directly (see `setPickedEffort` in reasoning-effort.ts).
+ *        Must be the same pick later handed to `applyReasoningEffort`.
  * @returns Resolved credentials ready for SDK
  */
 export async function resolveCredentialsForSdk(
-  credentials: ApiCredentials
+  credentials: ApiCredentials,
+  pickedReasoningEffort?: ReasoningEffortLevel
 ): Promise<ResolvedSdkCredentials> {
   console.debug(`[SDK Config] resolveCredentialsForSdk: provider=${credentials.provider}, model=${credentials.model}, baseUrl=${credentials.baseUrl}`)
 
@@ -355,9 +360,9 @@ export async function resolveCredentialsForSdk(
       || (credentials.provider === 'oauth' ? 'chat_completions' : inferOpenAIWireApi(credentials.baseUrl))
 
     // Encode with real wire id BEFORE sdkModel decoration so [1m] never leaks upstream.
-    anthropicApiKey = encodeBackendConfig(credentialsToBackendConfig(credentials, { apiType }))
+    anthropicApiKey = encodeBackendConfig(credentialsToBackendConfig(credentials, { apiType, pickedReasoningEffort }))
 
-    console.log(`[SDK Config] ${credentials.provider} provider: routing via ${anthropicBaseUrl}, apiType=${apiType}, sdkModel=${sdkModel}`)
+    console.log(`[SDK Config] ${credentials.provider} provider: routing via ${anthropicBaseUrl}, apiType=${apiType}, sdkModel=${sdkModel}${pickedReasoningEffort ? `, effort=${pickedReasoningEffort}` : ''}`)
   }
 
   const decoratedSdkModel = applyCC1mContextUnlock(sdkModel, credentials.capabilities)
@@ -419,6 +424,12 @@ export function computeCredentialsFingerprint(sdkOptions: Record<string, any>): 
     String(sdkOptions.model ?? ''),
     String(env.ANTHROPIC_BASE_URL ?? ''),
     keyIdentity,
+    // Claude's `--effort` and Codex's thread effort are fixed at spawn, so a
+    // changed thinking level must rebuild the session like a changed model.
+    String(sdkOptions.reasoningEffort ?? ''),
+    // So is the picked level baked into the router key. It can change while
+    // the level above does not: picking the value Model Config already has.
+    String(sdkOptions.pickedReasoningEffort ?? ''),
   ].join('|')
   return createHash('sha256').update(material).digest('hex').slice(0, 16)
 }

@@ -97,7 +97,8 @@ export function convertAnthropicToOpenAIResponses(
   const effort = resolveReasoningEffortValue(
     anthropicRequest.thinking,
     options?.reasoningEffort,
-    anthropicRequest.model
+    anthropicRequest.model,
+    options?.pickedReasoningEffort
   )
   if (effort) {
     request.reasoning = { effort }

@@ -479,7 +479,8 @@ async function handleOpenAIConversion(
     const requestToSend = { ...anthropicRequest, stream: wantStream }
     const convertOptions = {
       visionOverride: config.visionOverride,
-      reasoningEffort: config.reasoningEffort
+      reasoningEffort: config.reasoningEffort,
+      pickedReasoningEffort: config.pickedReasoningEffort
     }
     const openaiRequest = apiType === 'responses'
       ? convertAnthropicToOpenAIResponses(requestToSend, convertOptions).request

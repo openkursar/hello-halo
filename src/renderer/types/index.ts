@@ -425,7 +425,6 @@ export interface PulseItem {
   /** Set for a digital-human conversation; its name and home space come from the app, not this item. */
   appId?: string;
   spaceId: string;
-  spaceName: string;
   title: string;
   status: TaskStatus;
   starred: boolean;
@@ -529,6 +528,8 @@ export interface Conversation extends ConversationMeta {
    */
   modelSourceId?: string;
   modelId?: string;
+  /** How hard this conversation's model thinks; absent until the user picks one. */
+  reasoningEffort?: import('../../shared/constants/reasoning-effort').ReasoningEffortLevel;
   /** Knowledge bases (Tlon) loaded into this conversation; injected per turn. */
   knowledgeBaseIds?: string[];
 }

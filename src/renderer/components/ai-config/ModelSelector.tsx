@@ -8,8 +8,9 @@
  */
 
 import { useState, useRef, useEffect } from 'react'
-import { Brain, ChevronDown, ChevronRight, Plus, Sparkles, X, Check, RefreshCw } from 'lucide-react'
+import { ChevronDown, ChevronRight, Plus, Sparkles, X, Check, RefreshCw } from 'lucide-react'
 import { useAppStore } from '../../stores/app.store'
+import { useAppsStore } from '../../stores/apps.store'
 import { useChatStore } from '../../stores/chat.store'
 import { useActiveModelTarget, type ActiveModelTarget } from '../../hooks/useActiveModelTarget'
 import { openPersonModelSettings } from '../../utils/people-navigation'
@@ -23,9 +24,10 @@ import {
   type Conversation,
   type ModelOption
 } from '../../types'
+import { ThinkingLevelControl } from './ThinkingLevelControl'
 import { useTranslation } from '../../i18n'
 import { useIsMobile } from '../../hooks/useIsMobile'
-import { getCurrentView, trackHome } from '../../services/home-telemetry'
+import { trackHome } from '../../services/home-telemetry'
 import { isAnthropicProvider } from '../../types'
 
 /** Read v2 aiSources config with empty fallback */
@@ -85,6 +87,7 @@ function ModelList({ onDone }: { onDone: () => void }) {
   // 2. Update the global "last-used" selection so newly created conversations
   //    inherit this choice and non-pinned surfaces keep a sensible default.
   const handleSelectModel = async (sourceId: string, modelId: string) => {
+    trackHome('home.composer.model', { action: 'select', kind: 'conversation' })
     // 1. Persist the per-conversation pin
     const chat = useChatStore.getState()
     const spaceId = chat.currentSpaceId
@@ -102,28 +105,6 @@ function ModelList({ onDone }: { onDone: () => void }) {
       }
     }
     const result = await api.aiSourcesSetModel(modelId)
-    if (result.success && result.data) {
-      setConfig({ ...config, aiSources: result.data as AISourcesConfig })
-    }
-    onDone()
-  }
-
-  // Handle switching source only (adopts that source's last selected model).
-  // Pins the current conversation to the target source + its model too, so the
-  // conversation's checkmark and the active-source indicator stay consistent.
-  const handleSwitchSource = async (sourceId: string, e: React.MouseEvent) => {
-    e.stopPropagation()
-
-    if (aiSources.currentId === sourceId) return
-
-    const targetSource = aiSources.sources.find(s => s.id === sourceId)
-    const chat = useChatStore.getState()
-    const spaceId = chat.currentSpaceId
-    if (spaceId && conversationId && targetSource?.model) {
-      await chat.setConversationModel(spaceId, conversationId, sourceId, targetSource.model)
-    }
-
-    const result = await api.aiSourcesSwitchSource(sourceId)
     if (result.success && result.data) {
       setConfig({ ...config, aiSources: result.data as AISourcesConfig })
     }
@@ -200,59 +181,51 @@ function ModelList({ onDone }: { onDone: () => void }) {
         const models = getModelsForSource(source)
         const displayName = getSourceDisplayName(source)
 
+        const userName = source.authType === 'oauth' ? source.user?.name : undefined
+
         return (
-          <div key={source.id}>
-            <div
-              className={`px-3 py-2 text-xs font-medium flex items-center justify-between gap-3 cursor-pointer hover:bg-secondary/50 transition-colors ${isActiveSource ? 'text-primary' : 'text-muted-foreground'}`}
+          <div key={source.id} className="px-1.5 pb-1.5">
+            {/* Group header: toggles its models. Picking a model is what
+                switches sources, so the header carries no separate control. */}
+            <button
+              type="button"
               onClick={(e) => toggleSection(source.id, e)}
+              aria-expanded={isExpanded}
+              title={userName ? `${displayName} · ${userName}` : displayName}
+              className={`w-full flex items-center gap-1.5 rounded-md px-2.5 py-2 text-xs hover:bg-secondary hover:text-foreground transition-colors ease-halo ${
+                isExpanded ? 'text-foreground' : 'text-muted-foreground'
+              }`}
             >
-              <div className="flex items-center gap-2 min-w-0">
-                <ChevronDown className={`w-3 h-3 shrink-0 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
-                <span className="truncate">{displayName}</span>
-                {source.authType === 'oauth' && source.user?.name && (
-                  <span className="text-xs text-muted-foreground shrink-0 whitespace-nowrap">({source.user.name})</span>
-                )}
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                {isActiveSource ? (
-                  <span className="w-2.5 h-2.5 rounded-full bg-primary" title={t('Active')} />
-                ) : (
-                  <button
-                    onClick={(e) => handleSwitchSource(source.id, e)}
-                    className="w-2.5 h-2.5 rounded-full border border-muted-foreground hover:border-primary hover:bg-primary/20 transition-colors"
-                    title={t('Switch to this source')}
-                  />
-                )}
-              </div>
-            </div>
+              <ChevronRight className={`w-3 h-3 shrink-0 transition-transform ease-halo ${isExpanded ? 'rotate-90' : ''}`} />
+              <span className="min-w-0 flex-1 truncate text-left">
+                <span className="font-medium">{displayName}</span>
+                {userName && <span className="text-subtle-foreground"> · {userName}</span>}
+              </span>
+              {isActiveSource && <span className="w-1.5 h-1.5 shrink-0 rounded-full bg-primary" title={t('Active')} />}
+            </button>
 
-            {isExpanded && (
-              <div className="bg-secondary/10 pb-1">
-                {models.map((model) => {
-                  const modelId = typeof model === 'string' ? model : model.id
-                  const modelName = typeof model === 'string' ? model : (model.name || model.id)
-                  // When the conversation has a pin, the checkmark follows it;
-                  // otherwise fall back to the global active source + model.
-                  const isSelected = pinSourceId
-                    ? (pinSourceId === source.id && pinModelId === modelId)
-                    : (isActiveSource && source.model === modelId)
+            {isExpanded && models.map((model) => {
+              const modelId = typeof model === 'string' ? model : model.id
+              const modelName = typeof model === 'string' ? model : (model.name || model.id)
+              // When the conversation has a pin, the checkmark follows it;
+              // otherwise fall back to the global active source + model.
+              const isSelected = pinSourceId
+                ? (pinSourceId === source.id && pinModelId === modelId)
+                : (isActiveSource && source.model === modelId)
 
-                  return (
-                    <button
-                      key={modelId}
-                      onClick={() => handleSelectModel(source.id, modelId)}
-                      className={`w-full rounded-sm px-2.5 py-2 text-left text-sm transition-colors ease-halo hover:bg-secondary flex items-center gap-2 pl-8 ${
-                        isSelected ? 'text-accent-on-dark' : 'text-foreground'
-                      }`}
-                    >
-                      {isSelected ? <Check className="w-3 h-3" /> : <span className="w-3" />}
-                      {modelName}
-                    </button>
-                  )
-                })}
-              </div>
-            )}
-            <div className="border-t border-border/50" />
+              return (
+                <button
+                  key={modelId}
+                  onClick={() => handleSelectModel(source.id, modelId)}
+                  className={`w-full flex items-center gap-2 rounded-md py-2 pl-7 pr-2.5 text-left text-[13px] transition-colors ease-halo hover:bg-secondary ${
+                    isSelected ? 'bg-secondary/60 font-medium text-foreground' : 'text-foreground'
+                  }`}
+                >
+                  <span className="min-w-0 flex-1 truncate">{modelName}</span>
+                  {isSelected && <Check className="w-3.5 h-3.5 shrink-0 text-primary" />}
+                </button>
+              )
+            })}
           </div>
         )
       })}
@@ -277,7 +250,7 @@ function ModelList({ onDone }: { onDone: () => void }) {
           {t('Add AI Provider')}
         </button>
       ) : (
-        <div className="flex items-center justify-between px-3 py-2">
+        <div className="mt-1 flex items-center justify-between border-t border-border/50 px-4 pt-2.5 pb-1.5">
           <button
             onClick={handleAddSource}
             className="text-left text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-2"
@@ -366,8 +339,12 @@ export function ModelSelectSheet({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
+        <div className="px-4 py-3 border-b border-border/50">
+          <ConversationThinkingLevel />
+        </div>
+
         {/* Model list */}
-        <div className="overflow-auto" style={{ maxHeight: 'calc(60vh - 80px)' }}>
+        <div className="overflow-auto" style={{ maxHeight: 'calc(60vh - 150px)' }}>
           <ModelList onDone={handleClose} />
         </div>
       </div>
@@ -376,29 +353,91 @@ export function ModelSelectSheet({ onClose }: { onClose: () => void }) {
 }
 
 /**
- * Header model control while a digital human is on screen: shows the model that
- * digital human is configured with and opens its settings. Read-only by design.
+ * Closes an open dropdown on a click outside `ref` or on Escape. The click
+ * path is fixed at dispatch, so a click whose target that same click swaps out
+ * (the model card's name opening the list) still counts as inside.
+ */
+function useDismiss(ref: React.RefObject<HTMLElement>, open: boolean, close: () => void) {
+  const closeRef = useRef(close)
+  closeRef.current = close
+  useEffect(() => {
+    if (!open) return
+    const handleClick = (event: MouseEvent) => {
+      if (ref.current && !event.composedPath().includes(ref.current)) closeRef.current()
+    }
+    const handleKey = (event: KeyboardEvent) => { if (event.key === 'Escape') closeRef.current() }
+    // Deferred so the click that opened it doesn't close it.
+    const timer = setTimeout(() => document.addEventListener('click', handleClick), 0)
+    document.addEventListener('keydown', handleKey)
+    return () => {
+      clearTimeout(timer)
+      document.removeEventListener('click', handleClick)
+      document.removeEventListener('keydown', handleKey)
+    }
+  }, [open, ref])
+}
+
+/**
+ * A digital human's model is set in its own settings, so its card is read-only
+ * apart from how hard it thinks on this send, with a way to those settings.
  */
 function DigitalHumanModelButton({ target }: { target: Extract<ActiveModelTarget, { kind: 'digital-human' }> }) {
   const { t } = useTranslation()
   const aiSources = useAiSources()
+  const [isOpen, setIsOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
   const modelName = getModelDisplayName(aiSources, target.modelSourceId, target.modelId)
-  const title = t('{{name}} uses {{model}} — change it in its settings', { name: target.appName, model: modelName })
+  const source = target.modelSourceId ? aiSources.sources.find(s => s.id === target.modelSourceId) : getCurrentSource(aiSources)
+  const modelId = target.modelId ?? source?.model
+  const app = useAppsStore(state => state.apps.find(a => a.id === target.appId))
+
+  useDismiss(ref, isOpen, () => setIsOpen(false))
 
   return (
-    <button
-      onClick={() => openPersonModelSettings(target.appId)}
-      className="h-8 flex items-center gap-1.5 px-2.5 rounded-sm border border-border bg-card text-xs text-foreground hover:border-primary transition-colors ease-halo"
-      title={title}
-      aria-label={title}
-    >
-      <Sparkles className="w-4 h-4 sm:hidden" />
-      <div className="hidden sm:flex items-center gap-1.5 min-w-0">
-        <Brain className="w-3.5 h-3.5 shrink-0 translate-y-px" />
-        <span className="truncate max-w-[140px]">{modelName}</span>
-      </div>
-      <ChevronRight className="w-3.5 h-3.5" />
-    </button>
+    <div className="relative flex items-center" ref={ref}>
+      <button
+        onClick={() => {
+          if (!isOpen) trackHome('home.composer.model', { action: 'open', kind: 'digital_human' })
+          setIsOpen(open => !open)
+        }}
+        className="h-8 flex items-center gap-1 pl-1.5 pr-2 rounded-sm text-xs text-foreground hover:bg-secondary transition-colors ease-halo"
+        title={modelName}
+      >
+        <Sparkles className="w-4 h-4 sm:hidden" />
+        <span className="hidden sm:inline truncate max-w-[140px]">{modelName}</span>
+        <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+      </button>
+      {isOpen && (
+        <div className="absolute right-0 bottom-full mb-1 w-64 bg-card border border-border rounded-xl shadow-pop z-50 p-3">
+          <div className="text-center text-xs text-muted-foreground">{t('{{name}} uses', { name: target.appName })}</div>
+          <div className="mt-0.5 text-center text-[15px] font-semibold text-foreground break-all">{modelName}</div>
+          <div className="mt-3">
+            {/* One level for the whole digital human, across its sessions. */}
+            <ThinkingLevelControl
+              key={target.appId}
+              value={app?.userOverrides?.chatReasoningEffort}
+              configured={modelId ? source?.modelOverrides?.[modelId]?.reasoningEffort : undefined}
+              onChange={level => {
+                trackHome('home.composer.thinking', { level, kind: 'digital_human' })
+                void useAppsStore.getState().updateAppOverrides(target.appId, { chatReasoningEffort: level })
+              }}
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              trackHome('home.composer.model', { action: 'settings', kind: 'digital_human' })
+              setIsOpen(false)
+              openPersonModelSettings(target.appId)
+            }}
+            className="mt-3 flex h-8 w-full items-center justify-center gap-1 rounded-sm border border-border text-xs text-foreground hover:bg-secondary transition-colors ease-halo"
+          >
+            {t('Change in its settings')}
+            <ChevronRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -408,10 +447,100 @@ export function ModelSelector() {
   return <ConversationModelSelector />
 }
 
+/** Context sizes as users read them: 200K, 1M. */
+function formatContextWindow(tokens: number): string {
+  if (tokens >= 1_000_000) return `${+(tokens / 1_000_000).toFixed(1)}M`
+  return `${Math.round(tokens / 1000)}K`
+}
+
+/** The source and model the open conversation runs on (its pin, else the global selection). */
+function useConversationModel() {
+  const aiSources = useAiSources()
+  const conversation = useCurrentConversation()
+  const fallback = getCurrentSource(aiSources)
+  const source = (conversation?.modelSourceId && aiSources.sources.find(s => s.id === conversation.modelSourceId)) || fallback
+  const modelId = conversation?.modelSourceId === source?.id && conversation?.modelId ? conversation.modelId : source?.model
+  const model = source?.availableModels.find(m => m.id === modelId)
+  const configuredEffort = modelId ? source?.modelOverrides?.[modelId]?.reasoningEffort : undefined
+  return { aiSources, source, modelId, model, configuredEffort }
+}
+
+/**
+ * First step of the dropdown: what this conversation runs on, with switching
+ * one click further. Facts the catalog doesn't report are left out.
+ */
+function CurrentModelCard({ onSwitch }: { onSwitch: () => void }) {
+  const { t } = useTranslation()
+  const { aiSources, source, modelId, model } = useConversationModel()
+  const name = getModelDisplayName(aiSources, source?.id, modelId)
+  const contextWindow = model?.capabilities?.contextWindow
+
+  return (
+    <div className="p-3">
+      {/* The name is the way into the list — shaded like a picker field so it
+          reads as clickable before hover. */}
+      <button
+        type="button"
+        onClick={onSwitch}
+        title={t('Switch model')}
+        className="group flex w-full items-center gap-2 rounded-lg bg-secondary/60 px-3 py-2 text-left hover:bg-secondary transition-colors ease-halo"
+      >
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate text-[15px] font-semibold text-foreground">{name}</span>
+          {source && <span className="mt-0.5 truncate text-xs text-muted-foreground">{source.name}</span>}
+        </span>
+        <ChevronRight className="w-4 h-4 shrink-0 text-subtle-foreground group-hover:text-foreground transition-colors ease-halo" />
+      </button>
+      <dl className="mt-2 space-y-1.5 px-1.5 text-xs">
+        {contextWindow ? (
+          <div className="flex justify-between gap-3">
+            <dt className="text-muted-foreground">{t('Context window')}</dt>
+            <dd className="tabular-nums text-foreground">{formatContextWindow(contextWindow)}</dd>
+          </div>
+        ) : null}
+        {model?.supportsVision !== undefined && (
+          <div className="flex justify-between gap-3">
+            <dt className="text-muted-foreground">{t('Image input')}</dt>
+            <dd className="text-foreground">{model.supportsVision ? t('Supported') : t('Not supported')}</dd>
+          </div>
+        )}
+      </dl>
+      <div className="mt-3 px-1.5">
+        <ConversationThinkingLevel />
+      </div>
+    </div>
+  )
+}
+
+/** The slider bound to the open conversation, saved on it. */
+function ConversationThinkingLevel() {
+  const { configuredEffort } = useConversationModel()
+  const target = useActiveModelTarget()
+  const conversationId = target.kind === 'conversation' ? target.conversationId : null
+  const conversation = target.kind === 'conversation' ? target.conversation : null
+  const spaceId = useChatStore(state => state.currentSpaceId)
+  return (
+    <ThinkingLevelControl
+      key={conversationId ?? 'none'}
+      value={conversation?.reasoningEffort}
+      configured={configuredEffort}
+      onChange={spaceId && conversationId
+        ? level => {
+          trackHome('home.composer.thinking', { level, kind: 'conversation' })
+          void useChatStore.getState().setConversationReasoningEffort(spaceId, conversationId, level)
+        }
+        : level => { trackHome('home.composer.thinking', { level, kind: 'conversation' }) }}
+    />
+  )
+}
+
 function ConversationModelSelector() {
   const isMobile = useIsMobile()
   const config = useAppStore(s => s.config)
   const [isOpen, setIsOpen] = useState(false)
+  // Desktop opens on the current-model card; the list is one step further.
+  const [showList, setShowList] = useState(false)
+  const [maxHeight, setMaxHeight] = useState<number>()
   const dropdownRef = useRef<HTMLDivElement>(null)
 
   const aiSources = useAiSources()
@@ -420,62 +549,35 @@ function ConversationModelSelector() {
     aiSources, currentConversation?.modelSourceId, currentConversation?.modelId
   )
 
-  // Close dropdown when clicking outside (desktop only)
-  useEffect(() => {
-    if (!isOpen || isMobile) return
-
-    function handleClickOutside(event: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsOpen(false)
-      }
-    }
-
-    // Use setTimeout to avoid the click event that opened the dropdown
-    const timeoutId = setTimeout(() => {
-      document.addEventListener('click', handleClickOutside)
-    }, 0)
-
-    return () => {
-      clearTimeout(timeoutId)
-      document.removeEventListener('click', handleClickOutside)
-    }
-  }, [isOpen, isMobile])
-
-  // Handle escape key (desktop; sheet handles its own)
-  useEffect(() => {
-    if (!isOpen || isMobile) return
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') setIsOpen(false)
-    }
-
-    document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [isOpen, isMobile])
+  // The mobile sheet handles its own dismissal.
+  useDismiss(dropdownRef, isOpen && !isMobile, () => setIsOpen(false))
 
   if (!config) return null
 
   const toggle = () => {
-    if (!isOpen && getCurrentView() === 'space') {
-      trackHome('home.header.action', { action: 'model', surface: 'desktop' })
+    if (!isOpen) trackHome('home.composer.model', { action: 'open', kind: 'conversation' })
+    if (!isOpen && dropdownRef.current) {
+      // It opens upward, so it may use only the room above the trigger.
+      const above = dropdownRef.current.getBoundingClientRect().top - 12
+      setMaxHeight(Math.max(160, Math.min(above, window.innerHeight * 0.6)))
     }
+    setShowList(false)
     setIsOpen(!isOpen)
   }
 
   return (
-    <div className="relative" ref={dropdownRef}>
+    <div className="relative flex items-center" ref={dropdownRef}>
       {/* Icon only on mobile, text on desktop. Borderless so the header stays
           quiet; the fill appears on hover. */}
       <button
         onClick={toggle}
-        className="h-8 flex items-center gap-1.5 px-2.5 rounded-sm text-xs text-foreground hover:bg-secondary transition-colors ease-halo"
+        className="h-8 flex items-center gap-1 pl-1.5 pr-2 rounded-sm text-xs text-foreground hover:bg-secondary transition-colors ease-halo"
         title={currentModelName}
       >
         {/* Mobile: show Sparkles icon */}
         <Sparkles className="w-4 h-4 sm:hidden" />
-        {/* Desktop: Brain icon + model name */}
+        {/* Desktop: model name */}
         <div className="hidden sm:flex items-center gap-1.5 min-w-0">
-          <Brain className="w-3.5 h-3.5 shrink-0 translate-y-px" />
           <span className="truncate max-w-[140px]">{currentModelName}</span>
         </div>
         <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
@@ -486,8 +588,16 @@ function ConversationModelSelector() {
         isMobile ? (
           <ModelSelectSheet onClose={() => setIsOpen(false)} />
         ) : (
-          <div className="absolute right-0 top-full mt-1 w-64 bg-card border border-border rounded-xl shadow-pop z-50 py-1 max-h-[60vh] overflow-y-auto">
-            <ModelList onDone={() => setIsOpen(false)} />
+          <div
+            className={`absolute right-0 bottom-full mb-1 w-72 bg-card border border-border rounded-xl shadow-pop z-50 overflow-y-auto ${showList ? 'py-1.5' : ''}`}
+            style={{ maxHeight }}
+          >
+            {showList
+              ? <ModelList onDone={() => setIsOpen(false)} />
+              : <CurrentModelCard onSwitch={() => {
+                  trackHome('home.composer.model', { action: 'list', kind: 'conversation' })
+                  setShowList(true)
+                }} />}
           </div>
         )
       )}

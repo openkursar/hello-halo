@@ -83,7 +83,8 @@ export function convertAnthropicToOpenAIChat(
   const reasoningEffort = resolveReasoningEffortValue(
     anthropicRequest.thinking,
     options?.reasoningEffort,
-    anthropicRequest.model
+    anthropicRequest.model,
+    options?.pickedReasoningEffort
   )
   if (reasoningEffort) {
     openaiRequest.reasoning_effort = reasoningEffort

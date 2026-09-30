@@ -41,7 +41,7 @@ POST   /api/agent/message                                          Start a new H
      # out: {success:true}  // no data — the turn runs after the call returns
      # note: This really starts Halo working, and the reply is produced after the response comes back. success:true means accepted, not answered.
      # note: Poll GET /api/agent/generating/<conversationId> for progress — back off (2s, then double), do not tight-loop.
-     # note: Optional body fields: resumeSessionId, thinkingEnabled (boolean), knowledgeBaseId, images (base64 attachments).
+     # note: Optional body fields: resumeSessionId, thinkingEnabled (boolean), reasoningEffort (off|minimal|low|medium|high|xhigh|max; overrides thinkingEnabled, but a level the user picked for this conversation wins over it), knowledgeBaseId, images (base64 attachments).
      # note: Create the conversation you target with POST /api/spaces/$HALO_SPACE_ID/conversations. Nothing tells you which id in GET /api/agent/sessions is your own, so picking one from there risks talking to yourself, and nothing stops the turn you start from messaging you back.
      # note: A turn you start can stop to ask a question, and answering it is not open to you — the user answers it in the Halo app. Do not start one you are unwilling to leave pending.
 
@@ -79,7 +79,7 @@ POST   /api/spaces/$HALO_SPACE_ID/conversations                    Create an emp
           -d '{"title":"Weekly report"}'
      # body: {"title":"Weekly report"}
      # out: {"success":true,"data":{"id":"<uuid>","title":"Weekly report"}}
-     # note: Creates it empty. Make Halo reply in it with POST /api/agent/message — a conversation you made yourself is the safe target for that, since a turn you start there cannot interrupt one the user is having.
+     # note: Optional body field: reasoningEffort (off|minimal|low|medium|high|xhigh|max) — how hard it thinks; omit to follow the model's configured effort. Creates it empty. Make Halo reply in it with POST /api/agent/message — a conversation you made yourself is the safe target for that, since a turn you start there cannot interrupt one the user is having.
 
 GET    /api/spaces/$HALO_SPACE_ID/conversations/<conversationId>   Read a conversation with its messages
      curl -s "$HALO_API_URL/api/spaces/$HALO_SPACE_ID/conversations/<conversationId>" -H "Authorization: Bearer $HALO_API_TOKEN"

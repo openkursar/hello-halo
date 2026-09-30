@@ -653,7 +653,7 @@ export function registerAppHandlers(): void {
         // Fire-and-forget: streaming events are pushed to renderer via agent:* channels.
         // We don't await the full completion here because the renderer listens for
         // real-time events (agent:message, agent:thought, etc.) keyed by conversationId.
-        sendAppChatMessage(request).catch((error: unknown) => {
+        sendAppChatMessage({ ...request, useChatThinkingLevel: true }).catch((error: unknown) => {
           const err = error as Error
           console.error(`[AppIPC] app:chat-send background error:`, err.message)
         })

@@ -2,7 +2,7 @@
  * Shared options for the Anthropic -> OpenAI request converters (Chat + Responses).
  */
 
-import type { ReasoningEffortSetting } from '../../../../shared/constants/reasoning-effort'
+import type { ReasoningEffortLevel, ReasoningEffortSetting } from '../../../../shared/constants/reasoning-effort'
 
 export interface ConvertRequestOptions {
   /**
@@ -18,4 +18,9 @@ export interface ConvertRequestOptions {
    * from the request.
    */
   reasoningEffort?: ReasoningEffortSetting
+  /**
+   * Level picked for this session (see `BackendRequestConfig`). Wins over
+   * `reasoningEffort` and is clamped to what the upstream accepts.
+   */
+  pickedReasoningEffort?: ReasoningEffortLevel
 }

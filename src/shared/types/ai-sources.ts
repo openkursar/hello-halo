@@ -17,7 +17,7 @@
 
 import { v4 as uuidv4 } from 'uuid'
 import type { CatalogModelCapability, ModelCapabilityOverride } from './model-capabilities'
-import type { ReasoningEffortSetting } from '../constants/reasoning-effort'
+import type { ReasoningEffortLevel, ReasoningEffortSetting } from '../constants/reasoning-effort'
 
 // ============================================================================
 // Localization Utilities
@@ -413,6 +413,15 @@ export interface BackendRequestConfig {
    * the level from the request's thinking budget.
    */
   reasoningEffort?: ReasoningEffortSetting
+  /**
+   * Level picked for this session — a conversation's or digital human's own
+   * level, or one an API send carried — which wins over `reasoningEffort`.
+   * It rides here because the engine cannot state it on the wire: Claude Code
+   * sends a non-Claude model only an adaptive thinking block. A Halo ladder
+   * level, not a value typed for this model, so the converter clamps it to
+   * what the upstream accepts.
+   */
+  pickedReasoningEffort?: ReasoningEffortLevel
   /**
    * The CLI subprocess authenticates itself; `key` carries no credential.
    * Routes the SDK env away from `ANTHROPIC_API_KEY` and tells the router to

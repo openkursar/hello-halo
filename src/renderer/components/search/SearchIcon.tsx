@@ -1,8 +1,6 @@
 /**
- * Global search entry for the Header: a filled, borderless pill with an
- * icon, a "Search" label, and a ⌘K hint badge. Lives in the Header's left
- * slot, right after the space/page identity, in both chat and plain header
- * modes.
+ * Global search entry for the Header: an icon-only button in the right slot,
+ * with its label and ⌘K hint shown in a hover tooltip.
  *
  * Default behavior:
  * - On chat page: opens conversation-scoped search
@@ -13,6 +11,7 @@ import { Search } from 'lucide-react'
 import { SearchScope } from './SearchPanel'
 import { useTranslation } from '../../i18n'
 import { usePlatform } from '../layout/Header'
+import { Tooltip } from '../ui/Tooltip'
 
 interface SearchIconProps {
   onClick: (scope: SearchScope) => void
@@ -30,17 +29,14 @@ export function SearchIcon({ onClick, isInSpace = false }: SearchIconProps) {
   }
 
   return (
-    <button
-      onClick={handleClick}
-      className="flex items-center gap-[7px] h-8 px-[9px] rounded-sm bg-secondary/60 text-subtle-foreground text-xs hover:bg-secondary hover:text-foreground transition-colors ease-halo flex-shrink-0"
-      title={t('Search (Cmd+K)')}
-      aria-label={t('Search')}
-    >
-      <Search className="w-3.5 h-3.5 flex-shrink-0" />
-      <span className="hidden sm:inline">{t('Search')}</span>
-      <span className="hidden sm:inline text-[10px] border border-border rounded px-1 leading-[15px]">
-        {isMac ? '⌘K' : 'Ctrl K'}
-      </span>
-    </button>
+    <Tooltip label={t('Search')} shortcut={isMac ? '⌘K' : 'Ctrl K'} side="bottom" align="end" className="flex-shrink-0">
+      <button
+        onClick={handleClick}
+        className="w-8 h-8 rounded-sm flex items-center justify-center text-faint-foreground hover:bg-secondary hover:text-foreground transition-colors ease-halo"
+        aria-label={t('Search')}
+      >
+        <Search className="w-[17px] h-[17px]" strokeWidth={1.8} />
+      </button>
+    </Tooltip>
   )
 }

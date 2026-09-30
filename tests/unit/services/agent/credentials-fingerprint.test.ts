@@ -99,6 +99,23 @@ describe('computeCredentialsFingerprint', () => {
     expect(off).not.toBe(on)
   })
 
+  it('changes when the thinking level changes', () => {
+    // Claude's --effort and Codex's thread effort are fixed at spawn.
+    const low = computeCredentialsFingerprint({ ...sdkOptionsWithEncodedKey(), reasoningEffort: 'low' })
+    const high = computeCredentialsFingerprint({ ...sdkOptionsWithEncodedKey(), reasoningEffort: 'high' })
+    expect(low).not.toBe(high)
+  })
+
+  it('changes when a level is picked that equals the Model Config one', () => {
+    // The router clamps a pick but forwards Model Config verbatim, so the
+    // encoded key differs even though the resolved level does not.
+    const configured = computeCredentialsFingerprint({ ...sdkOptionsWithEncodedKey(), reasoningEffort: 'high' })
+    const picked = computeCredentialsFingerprint({
+      ...sdkOptionsWithEncodedKey(), reasoningEffort: 'high', pickedReasoningEffort: 'high',
+    })
+    expect(configured).not.toBe(picked)
+  })
+
   it('handles direct (non-encoded) Anthropic keys as stable opaque values', () => {
     const opts = (key: string, model: string): Record<string, unknown> => ({
       model,

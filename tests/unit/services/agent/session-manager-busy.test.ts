@@ -22,7 +22,7 @@ vi.mock('../../../../src/main/services/agent/session-consumer', () => ({ startCo
 vi.mock('../../../../src/main/services/agent/conversation-sink', () => ({ createConversationSink: vi.fn() }))
 vi.mock('../../../../src/main/services/agent/mcp-auth-state', () => ({ purgeStaleMcpOAuth: vi.fn(async () => {}) }))
 vi.mock('../../../../src/main/services/agent/events', () => ({ emitAgentEvent: vi.fn() }))
-vi.mock('../../../../src/main/services/agent/reasoning-effort', () => ({ applySessionReasoningEffort: vi.fn() }))
+vi.mock('../../../../src/main/services/agent/reasoning-effort', () => ({ applySessionReasoningEffort: vi.fn(), pickReasoningEffort: vi.fn(() => undefined) }))
 vi.mock('../../../../src/main/services/agent/knowledge-context', () => ({
   resolveConversationKnowledgeBases: vi.fn(() => []),
   resolveConversationKnowledgeBaseIds: vi.fn(() => []),

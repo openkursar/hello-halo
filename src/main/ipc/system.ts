@@ -8,6 +8,7 @@ import { dirname, extname } from 'path'
 import { readFile, stat } from 'fs/promises'
 import log from 'electron-log/main.js'
 import type { PickedLocalEntry } from '../../shared/attached-paths'
+import { TITLE_BAR_OVERLAY_HEIGHT } from '../../shared/constants/app-header'
 import { setAutoLaunch, getAutoLaunch } from '../foundation/config.service'
 import { getMainWindow, onMainWindowChange } from '../foundation/window.service'
 import { logFatal } from '../foundation/logging'
@@ -88,8 +89,7 @@ export function registerSystemHandlers(): void {
           mainWindow.setTitleBarOverlay({
             color: options.color,
             symbolColor: options.symbolColor,
-            // One pixel short of Header's 48px — see main/index.ts.
-            height: 47
+            height: TITLE_BAR_OVERLAY_HEIGHT
           })
         }
         return { success: true }

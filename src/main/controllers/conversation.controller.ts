@@ -39,9 +39,9 @@ export function listConversations(spaceId: string): ControllerResponse {
 /**
  * Create a new conversation
  */
-export function createConversation(spaceId: string, title?: string): ControllerResponse {
+export function createConversation(spaceId: string, title?: string, reasoningEffort?: unknown): ControllerResponse {
   try {
-    const conversation = serviceCreateConversation(spaceId, title)
+    const conversation = serviceCreateConversation(spaceId, title, reasoningEffort)
     return { success: true, data: conversation }
   } catch (error: unknown) {
     const err = error as Error

@@ -51,6 +51,7 @@ import type {
 } from './_shared'
 import { resolveAppChatTarget, resolveUserInjectTarget, type AppChatTarget } from '../../controllers/app-chat-target.controller'
 import type { EscalationAnswerPayload } from '../../../shared/apps/app-types'
+import { isReasoningEffortLevel } from '../../../shared/constants/reasoning-effort'
 import type { ImageAttachment } from '../../../shared/types/image-attachment'
 import type { CanvasContext } from '../../../shared/types/canvas-context'
 import { getStudioSummary, listPeopleDirectory, getAppCapabilityInventory, getAppSpaceChangePreview, moveAppDefaultSpace, readAppRunMessages, getDigitalHumanMemoryStatus, consolidateDigitalHumanMemoryNow } from '../../apps/runtime'
@@ -1061,6 +1062,7 @@ export function registerAppsRoutes(app: Express): void {
         message?: unknown
         images?: ImageAttachment[]
         thinkingEnabled?: unknown
+        reasoningEffort?: unknown
         canvasContext?: unknown
       }
       if (typeof body.spaceId !== 'string' || !body.spaceId) {
@@ -1085,6 +1087,8 @@ export function registerAppsRoutes(app: Express): void {
         conversationId,
         ...(Array.isArray(body.images) && body.images.length > 0 ? { images: body.images } : {}),
         ...(body.thinkingEnabled !== undefined ? { thinkingEnabled: !!body.thinkingEnabled } : {}),
+        ...(isReasoningEffortLevel(body.reasoningEffort) ? { reasoningEffort: body.reasoningEffort } : {}),
+        useChatThinkingLevel: true,
         ...(canvasContext ? { canvasContext } : {}),
         ...(target.teamContext ? { teamContext: target.teamContext } : {}),
       }

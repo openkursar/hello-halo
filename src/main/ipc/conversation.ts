@@ -31,9 +31,9 @@ export function registerConversationHandlers(): void {
     },
 
     // Create a new conversation
-    createConversation: async (spaceId: string, title?: string) => {
+    createConversation: async (spaceId: string, title?: string, reasoningEffort?: unknown) => {
       try {
-        const conversation = createConversation(spaceId, title)
+        const conversation = createConversation(spaceId, title, reasoningEffort)
         return { success: true, data: conversation }
       } catch (error: unknown) {
         const err = error as Error
@@ -45,6 +45,7 @@ export function registerConversationHandlers(): void {
     getConversation: async (spaceId: string, conversationId: string) => {
       try {
         const conversation = getConversation(spaceId, conversationId)
+        if (!conversation) return { success: false, error: 'Conversation not found' }
         return { success: true, data: conversation }
       } catch (error: unknown) {
         const err = error as Error

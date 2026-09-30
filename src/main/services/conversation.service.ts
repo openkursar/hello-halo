@@ -15,6 +15,7 @@
 
 import { join } from 'path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, renameSync } from 'fs'
+import { isReasoningEffortLevel, type ReasoningEffortLevel } from '../../shared/constants/reasoning-effort'
 import { getSpace, touchSpaceActivity } from './space.service'
 import { getSeedKBIds } from './tlon'
 import { getConfig } from '../foundation/config.service'
@@ -105,6 +106,11 @@ export interface Conversation extends ConversationMeta {
    */
   modelSourceId?: string
   modelId?: string
+  /**
+   * How hard this conversation's model thinks, picked on the composer's model
+   * card. Wins over the level a send carries; absent until the user picks one.
+   */
+  reasoningEffort?: ReasoningEffortLevel
 }
 
 // Thoughts file structure
@@ -619,8 +625,14 @@ export function listConversations(spaceId: string): ConversationMeta[] {
   return metas
 }
 
-// Create a new conversation (always v2 format)
-export function createConversation(spaceId: string, title?: string): Conversation {
+/**
+ * Create a new conversation (always v2 format).
+ *
+ * @param reasoningEffort Level it starts at (the composer passes its last-used
+ *        pick). Taken at creation so the warm-up that follows spawns the
+ *        session at this level; anything that is not a ladder level is dropped.
+ */
+export function createConversation(spaceId: string, title?: string, reasoningEffort?: unknown): Conversation {
   const id = uuidv4()
   const now = new Date().toISOString()
 
@@ -689,6 +701,7 @@ export function createConversation(spaceId: string, title?: string): Conversatio
     ...(toolsets.length > 0 ? { toolsets: [...toolsets] } : {}),
     // Only persist knowledge bases when the space/default seed is non-empty.
     ...(knowledgeBaseIds.length > 0 ? { knowledgeBaseIds: [...knowledgeBaseIds] } : {}),
+    ...(isReasoningEffortLevel(reasoningEffort) ? { reasoningEffort } : {}),
   }
 
   const conversationsDir = getConversationsDir(spaceId)
@@ -731,6 +744,16 @@ export function updateConversation(
 
   const { conversation, filePath, conversationsDir } = result
 
+  // A thinking level must be a ladder level; anything else is dropped here so
+  // it can never be stored.
+  if ('reasoningEffort' in updates && updates.reasoningEffort !== undefined && !isReasoningEffortLevel(updates.reasoningEffort)) {
+    const { reasoningEffort: _invalid, ...rest } = updates
+    updates = rest
+  }
+  // Adjusting how hard a conversation thinks isn't activity on it, so it
+  // doesn't move the conversation up the list.
+  const levelOnly = Object.keys(updates).length === 1 && 'reasoningEffort' in updates
+
   // A title arriving through an update is a user rename — mark it so the
   // first-message auto-title in addMessage never clobbers it afterwards.
   const titleCustomized = 'title' in updates ? true : conversation.titleCustomized
@@ -739,7 +762,7 @@ export function updateConversation(
     ...conversation,
     ...updates,
     ...(titleCustomized ? { titleCustomized } : {}),
-    updatedAt: new Date().toISOString()
+    updatedAt: levelOnly ? conversation.updatedAt : new Date().toISOString()
   }
 
   cachedWrite(conversationId, updated, filePath, conversationsDir, spaceId)

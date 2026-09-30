@@ -9,6 +9,7 @@ import {
 import type {
   ApiResponse,
 } from './_shared'
+import type { ReasoningEffortLevel } from '../../shared/constants/reasoning-effort'
 
 export const conversationApi = {
   // ===== Conversation =====
@@ -19,11 +20,15 @@ export const conversationApi = {
     return httpRequest('GET', `/api/spaces/${spaceId}/conversations`)
   },
 
-  createConversation: async (spaceId: string, title?: string): Promise<ApiResponse> => {
+  createConversation: async (
+    spaceId: string,
+    title?: string,
+    reasoningEffort?: ReasoningEffortLevel
+  ): Promise<ApiResponse> => {
     if (isElectron()) {
-      return window.halo.createConversation(spaceId, title)
+      return window.halo.createConversation(spaceId, title, reasoningEffort)
     }
-    return httpRequest('POST', `/api/spaces/${spaceId}/conversations`, { title })
+    return httpRequest('POST', `/api/spaces/${spaceId}/conversations`, { title, reasoningEffort })
   },
 
   getConversation: async (

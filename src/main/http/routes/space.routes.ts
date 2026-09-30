@@ -109,8 +109,8 @@ export function registerSpaceRoutes(app: Express): void {
   })
 
   app.post('/api/spaces/:spaceId/conversations', async (req: Request, res: Response) => {
-    const { title } = req.body
-    const result = conversationController.createConversation(req.params.spaceId, title)
+    const { title, reasoningEffort } = req.body
+    const result = conversationController.createConversation(req.params.spaceId, title, reasoningEffort)
     res.json(result)
   })
 
