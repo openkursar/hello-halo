@@ -19,6 +19,7 @@ import type { SkillSpec } from '../spec/schema'
 import { readSkillFiles } from './builtin-loader'
 import { extractFrontmatterField } from '../../../shared/skill-frontmatter'
 import { AppAlreadyInstalledError } from './errors'
+import { bundleKey, isBundleSeeded, markBundleSeeded } from './bundle-seed-stamp'
 
 /** Slug namespace identifying rows this seeder owns (install + GC scope). */
 const BUILTIN_SKILL_SLUG_PREFIX = 'halo-builtin-skills/'
@@ -70,10 +71,19 @@ function isSeededSkillRow(spec: { type: string; store?: { slug?: string } }): bo
   return spec.type === 'skill' && (spec.store?.slug ?? '').startsWith(BUILTIN_SKILL_SLUG_PREFIX)
 }
 
+/** Which skills ship and when each SKILL.md changed — cheap stats, no file reads. */
+function skillsBundleKey(root: string, dirNames: string[]): string {
+  return dirNames.map(name => {
+    const md = join(root, name, 'SKILL.md')
+    return `${name}:${existsSync(md) ? statSync(md).mtimeMs : 0}`
+  }).join(',')
+}
+
 /**
  * Scan resources/builtin-skills/, install/refresh each skill globally, and GC
  * seeded rows whose source directory no longer ships. Failures are isolated
  * per skill and logged — a broken built-in skill never blocks the others.
+ * Skipped when the shipped set is the one the last complete run applied.
  */
 export async function seedBuiltinSkills(appManager: AppManagerService): Promise<void> {
   const t0 = performance.now()
@@ -83,24 +93,33 @@ export async function seedBuiltinSkills(appManager: AppManagerService): Promise<
     return
   }
 
+  const dirNames = readdirSync(root, { withFileTypes: true })
+    .filter(entry => entry.isDirectory() && statSync(join(root, entry.name)).isDirectory())
+    .map(entry => entry.name)
+    .sort()
+  const stampKey = bundleKey(skillsBundleKey(root, dirNames))
+  if (isBundleSeeded('builtin-skills', stampKey)) return
+
   const specs: SkillSpec[] = []
-  for (const entry of readdirSync(root, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue
-    if (!statSync(join(root, entry.name)).isDirectory()) continue
-    const spec = buildSkillSpec(root, entry.name)
+  for (const name of dirNames) {
+    const spec = buildSkillSpec(root, name)
     if (spec) specs.push(spec)
   }
 
-  const globalSkills = () => appManager.listApps({ spaceId: null, type: 'skill' })
+  // Read once and again only after an install: listApps() parses every row.
+  let skillRows: ReturnType<AppManagerService['listApps']> | null = null
+  const globalSkills = () => (skillRows ??= appManager.listApps({ spaceId: null, type: 'skill' }))
 
   let installed = 0
   let refreshed = 0
+  let failures = 0
   for (const spec of specs) {
     try {
       const slug = spec.store?.slug
       const existing = globalSkills().find(a => a.spec.store?.slug === slug)
 
       if (!existing) {
+        skillRows = null
         await appManager.install(null, spec, {})
         installed++
         console.log(`[BuiltinSkills] Installed "${spec.name}" v${spec.version}`)
@@ -121,6 +140,7 @@ export async function seedBuiltinSkills(appManager: AppManagerService): Promise<
       }
     } catch (err) {
       if (err instanceof AppAlreadyInstalledError) continue
+      failures++
       console.warn(`[BuiltinSkills] Failed to seed "${spec.name}":`, err)
     }
   }
@@ -142,10 +162,13 @@ export async function seedBuiltinSkills(appManager: AppManagerService): Promise<
         removed++
         console.log(`[BuiltinSkills] GC: removed stale built-in skill "${row.specId}"`)
       } catch (err) {
+        failures++
         console.warn(`[BuiltinSkills] GC: failed to remove "${row.specId}":`, err)
       }
     }
   }
+
+  if (failures === 0) markBundleSeeded('builtin-skills', stampKey)
 
   const dt = performance.now() - t0
   console.log(

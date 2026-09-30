@@ -18,7 +18,8 @@
  *           index.js                    (and any other companion files)
  *           ...
  *
- * Lifecycle (runs once per launch as a Tier-3 idle task):
+ * Lifecycle (a Tier-3 idle task; skipped outright when the bundle is the one
+ * the last complete run applied — see bundle-seed-stamp.ts):
  *   1. Locate manifest.json (dev: app.getAppPath()/resources/builtin-apps/,
  *      packaged: process.resourcesPath/builtin-apps/).
  *   2. For each manifest entry:
@@ -34,10 +35,11 @@
  *         - Present, status='uninstalled': respect user choice; skip refresh.
  *           User can re-enable via the standard reinstall flow at any time.
  *         - Present, version unchanged: no-op (cheap by-spec lookup, no I/O).
- *         - Present, version differs: in-place spec refresh via updateSpec().
+ *         - Present, bundled version newer: in-place spec refresh via updateSpec()
+ *           (never a downgrade — a newer row from the store is left alone).
  *           userConfig / status / overrides are preserved automatically because
  *           updateSpec only touches the spec_json column. Bundled skills are
- *           refreshed by content diff regardless of parent version; non-bundled
+ *           refreshed the same way regardless of parent version; non-bundled
  *           skills are (re)installed from the store if missing.
  *   3. Garbage-collect: any installed app marked install_source='builtin' that
  *      is no longer in the current manifest (renamed, removed, swapped to a
@@ -48,10 +50,11 @@
  *      them alone.
  *
  * Performance notes:
- *   - Runs as a Tier-3 idle task (registerIdleTask) so it never delays the UI.
- *   - The "no change since last boot" path is the common case and is bounded
- *     by N spec.yaml reads + N version comparisons. For a typical bundle of
- *     5 apps × 3 skills, that's ~20 small file reads — negligible.
+ *   - An idle task still runs on the main thread, so the unchanged-bundle
+ *     launch (the common case) must not run at all: it is gated on the stamp.
+ *   - Installed rows are read once per run (InstalledView): listApps() parses
+ *     every row's spec, bundled skill files included, so a lookup per entry
+ *     or per skill made the run grow with everything the user installed.
  *   - When changes are detected, only the diff incurs SQLite writes.
  *
  * Open-source builds with no `builtinApps` field in product.json end up with
@@ -63,12 +66,14 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'fs'
 import { join, resolve } from 'path'
 import { app } from 'electron'
 
-import type { AppManagerService } from './types'
+import type { AppManagerService, InstalledApp } from './types'
 import { isBuiltinApp } from './types'
-import type { AppSpec, SkillSpec } from '../spec/schema'
+import type { AppSpec, AppType, SkillSpec } from '../spec/schema'
 import { parseAppSpec, validateAppSpec, AppSpecParseError, AppSpecValidationError } from '../spec'
 import { extractFrontmatterField } from '../../../shared/skill-frontmatter'
+import { compareDotVersions } from '../../../shared/store/version-compare'
 import { AppAlreadyInstalledError } from './errors'
+import { bundleKey, isBundleSeeded, markBundleSeeded } from './bundle-seed-stamp'
 
 // ---------------------------------------------------------------------------
 // Manifest types — kept in sync with scripts/sync-builtin-apps.mjs output
@@ -273,14 +278,44 @@ async function installRequiredSkillsForBuiltin(
   spec: AppSpec,
   spaceId: string | null,
   bundledSkills: SkillSpec[],
-): Promise<void> {
-  if (!spec.requires?.skills?.length) return
+): Promise<boolean> {
+  if (!spec.requires?.skills?.length) return true
   try {
     const { installRequiredSkills } = await import('../../store/registry.service')
     const bundledMap = new Map(bundledSkills.map(s => [s.name, s]))
     await installRequiredSkills(spec, spaceId, bundledMap)
+    return true
   } catch (err) {
     console.warn(`[BuiltinLoader] Failed to install required skills for "${spec.name}":`, err)
+    return false
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Installed rows
+// ---------------------------------------------------------------------------
+
+/**
+ * Installed rows, read once per run and again only after this run installs
+ * something. Same space semantics as listApps: null means global only.
+ */
+interface InstalledView {
+  all(): InstalledApp[]
+  list(spaceId: string | null, type?: AppType): InstalledApp[]
+  invalidate(): void
+}
+
+function createInstalledView(appManager: AppManagerService): InstalledView {
+  let rows: InstalledApp[] | null = null
+  const all = (): InstalledApp[] => (rows ??= appManager.listApps())
+  return {
+    all,
+    list(spaceId, type) {
+      return all().filter(a => a.spaceId === spaceId && (!type || a.spec.type === type))
+    },
+    invalidate() {
+      rows = null
+    },
   }
 }
 
@@ -299,6 +334,14 @@ interface ProcessedSpecIds {
    * not trigger removal of an otherwise-healthy DB row.
    */
   parseFailed: Set<string>
+  /** Steps that failed and must be retried, so the bundle is not stamped. */
+  failures: number
+  /**
+   * Store installs retrying a dependency an earlier launch failed to fetch.
+   * Not awaited by the run: an unreachable store would hold every idle task
+   * queued behind this one for the registry timeout, on every launch.
+   */
+  retries: Promise<boolean>[]
 }
 
 /**
@@ -315,6 +358,7 @@ async function processEntry(
   entry: ManifestAppEntry,
   rootDir: string,
   appManager: AppManagerService,
+  installed: InstalledView,
   processed: ProcessedSpecIds,
 ): Promise<ProcessEntryResult> {
   const appDir = join(rootDir, entry.specId)
@@ -353,7 +397,7 @@ async function processEntry(
   // to that space. Coercing null → undefined here would broaden the lookup to
   // ALL spaces and mistakenly match a same-named app in another space, causing
   // the loader to silently skip the install.
-  const existing = appManager.listApps({ spaceId: entry.spaceId })
+  const existing = installed.list(entry.spaceId)
     .find(a => a.specId === stampedSpec.name)
 
   if (!existing) {
@@ -362,6 +406,7 @@ async function processEntry(
     try {
       installedAppId = await appManager.install(entry.spaceId, stampedSpec, {})
     } catch (err) {
+      processed.failures++
       if (err instanceof AppAlreadyInstalledError) {
         // Race or stale state — fall through to refresh path on next launch.
         console.warn(`[BuiltinLoader] Race detected installing "${stampedSpec.name}"; will retry next launch`)
@@ -369,11 +414,14 @@ async function processEntry(
       }
       console.warn(`[BuiltinLoader] Failed to install "${stampedSpec.name}":`, err)
       return { parsed: true }
+    } finally {
+      installed.invalidate()
     }
 
     // Install every declared skill dependency — bundled (from `skills/` on
     // disk) and non-bundled (fetched from the store by slug) alike.
-    await installRequiredSkillsForBuiltin(stampedSpec, entry.spaceId, bundledSkills)
+    if (!await installRequiredSkillsForBuiltin(stampedSpec, entry.spaceId, bundledSkills)) processed.failures++
+    installed.invalidate()
 
     // Activate runtime so subscriptions and event sources wire up.
     // Dynamic import keeps the apps/runtime module graph (and its transitive
@@ -398,6 +446,7 @@ async function processEntry(
       try {
         appManager.pause(installedAppId)
       } catch (err) {
+        processed.failures++
         console.warn(`[BuiltinLoader] Failed to pause newly-installed builtin "${stampedSpec.name}":`, err)
       }
     }
@@ -430,8 +479,9 @@ async function processEntry(
     return { parsed: true }
   }
 
-  // Auto-upgrade if the bundled spec moved forward.
-  if (existing.spec.version !== stampedSpec.version) {
+  // Upgrade only: a row the store already moved past the bundle keeps its
+  // newer version.
+  if (compareDotVersions(stampedSpec.version, existing.spec.version) > 0) {
     try {
       appManager.updateSpec(existing.id, stampedSpec as unknown as Record<string, unknown>)
       console.log(
@@ -439,6 +489,7 @@ async function processEntry(
         `${existing.spec.version} → ${stampedSpec.version}`
       )
     } catch (err) {
+      processed.failures++
       console.warn(`[BuiltinLoader] Failed to upgrade "${stampedSpec.name}":`, err)
     }
   }
@@ -446,7 +497,7 @@ async function processEntry(
   // Refresh bundled skills regardless of parent version — skills can change
   // independently and updateSpec is idempotent on equal content.
   for (const skillSpec of bundledSkills) {
-    const existingSkill = appManager.listApps({ spaceId: entry.spaceId, type: 'skill' })
+    const existingSkill = installed.list(entry.spaceId, 'skill')
       .find(a => a.specId === skillSpec.name)
 
     if (!existingSkill) {
@@ -454,9 +505,11 @@ async function processEntry(
         await appManager.install(entry.spaceId, skillSpec, {})
       } catch (err) {
         if (!(err instanceof AppAlreadyInstalledError)) {
+          processed.failures++
           console.warn(`[BuiltinLoader] Failed to install missing bundled skill "${skillSpec.name}":`, err)
         }
       }
+      installed.invalidate()
       continue
     }
 
@@ -469,10 +522,11 @@ async function processEntry(
 
     if (existingSkill.status === 'uninstalled') continue
 
-    if (existingSkill.spec.version !== skillSpec.version) {
+    if (compareDotVersions(skillSpec.version, existingSkill.spec.version) > 0) {
       try {
         appManager.updateSpec(existingSkill.id, skillSpec as unknown as Record<string, unknown>)
       } catch (err) {
+        processed.failures++
         console.warn(`[BuiltinLoader] Failed to refresh bundled skill "${skillSpec.name}":`, err)
       }
     }
@@ -496,7 +550,7 @@ async function processEntry(
   const missingNonBundledDeps = stampedSpec.requires?.skills?.filter(dep => {
     if (typeof dep !== 'string' && dep.bundled === true) return false
     const skillId = typeof dep === 'string' ? dep : dep.id
-    return !appManager.listApps({ spaceId: entry.spaceId, type: 'skill' })
+    return !installed.list(entry.spaceId, 'skill')
       .some(a => a.spec.store?.slug === skillId)
   })
 
@@ -505,7 +559,7 @@ async function processEntry(
       ...stampedSpec,
       requires: { ...stampedSpec.requires, skills: missingNonBundledDeps },
     }
-    await installRequiredSkillsForBuiltin(nonBundledSpec, entry.spaceId, [])
+    processed.retries.push(installRequiredSkillsForBuiltin(nonBundledSpec, entry.spaceId, []))
   }
 
   return { parsed: true }
@@ -530,9 +584,10 @@ async function processEntry(
  */
 async function garbageCollectStaleBuiltins(
   appManager: AppManagerService,
+  installed: InstalledView,
   processed: ProcessedSpecIds,
 ): Promise<void> {
-  const all = appManager.listApps()
+  const all = installed.all()
   let removed = 0
   for (const app of all) {
     if (!isBuiltinApp(app)) continue
@@ -557,6 +612,7 @@ async function garbageCollectStaleBuiltins(
       removed++
       console.log(`[BuiltinLoader] GC: removed stale builtin "${app.specId}" (${app.id})`)
     } catch (err) {
+      processed.failures++
       console.warn(`[BuiltinLoader] GC: failed to remove stale builtin "${app.specId}":`, err)
     }
   }
@@ -612,19 +668,24 @@ export async function loadBuiltinApps(appManager: AppManagerService): Promise<vo
     return
   }
 
-  // Count how many built-in rows currently live in the DB. Used to decide
-  // whether the empty-manifest case is safe to GC.
-  const existingBuiltinCount = appManager.listApps().filter(isBuiltinApp).length
+  const stampKey = bundleKey(`${manifest.generatedAt}|${JSON.stringify(manifest.apps)}`)
+  if (isBundleSeeded('builtin-apps', stampKey)) return
+
+  const installed = createInstalledView(appManager)
 
   if (manifest.apps.length === 0) {
+    // Built-in rows in the DB decide whether the empty-manifest case is safe to GC.
+    const existingBuiltinCount = installed.all().filter(isBuiltinApp).length
     if (manifest.intentionalEmpty) {
       // Build author explicitly declared zero builtins (product.json has
       // `builtinApps.apps: []`). This is the supported way to clean up after
       // switching variants — we run GC.
-      await garbageCollectStaleBuiltins(appManager, {
+      await garbageCollectStaleBuiltins(appManager, installed, {
         parents: new Set(),
         skills: new Set(),
         parseFailed: new Set(),
+        failures: 0,
+        retries: [],
       })
       console.log('[BuiltinLoader] Manifest declares zero builtins (intentional) — GC complete.')
     } else if (existingBuiltinCount > 0) {
@@ -645,11 +706,13 @@ export async function loadBuiltinApps(appManager: AppManagerService): Promise<vo
     parents: new Set(),
     skills: new Set(),
     parseFailed: new Set(),
+    failures: 0,
+    retries: [],
   }
   let unhandledErrors = 0
   for (const entry of manifest.apps) {
     try {
-      await processEntry(entry, root, appManager, processed)
+      await processEntry(entry, root, appManager, installed, processed)
     } catch (err) {
       // Defensive — processEntry already swallows known errors. Anything that
       // escapes is logged so a single bad built-in cannot crash the loader.
@@ -661,7 +724,13 @@ export async function loadBuiltinApps(appManager: AppManagerService): Promise<vo
     }
   }
 
-  await garbageCollectStaleBuiltins(appManager, processed)
+  await garbageCollectStaleBuiltins(appManager, installed, processed)
+
+  if (processed.parseFailed.size === 0 && unhandledErrors === 0 && processed.failures === 0) {
+    void Promise.all(processed.retries).then(results => {
+      if (results.every(Boolean)) markBundleSeeded('builtin-apps', stampKey)
+    })
+  }
 
   const dt = performance.now() - t0
   const parseFailNote = processed.parseFailed.size > 0

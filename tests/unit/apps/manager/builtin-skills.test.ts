@@ -97,6 +97,20 @@ describe('seedBuiltinSkills', () => {
     )
   })
 
+  it('skips the next launch once a complete run has applied the same bundle', async () => {
+    mkdirSync(join(globalThis.__HALO_TEST_DIR__, '.halo'), { recursive: true })
+    writeSkill('office-check', '1.0.0')
+    const first = createStubManager([])
+    await seedBuiltinSkills(first.manager)
+    expect(first.install).toHaveBeenCalledTimes(1)
+
+    const listApps = vi.fn(() => [])
+    const second = createStubManager([])
+    await seedBuiltinSkills({ ...second.manager, listApps } as unknown as AppManagerService)
+    expect(listApps).not.toHaveBeenCalled()
+    expect(second.install).not.toHaveBeenCalled()
+  })
+
   it('refreshes via updateSpec only on version drift', async () => {
     writeSkill('drift', '2.0.0')
     writeSkill('stable', '1.0.0')

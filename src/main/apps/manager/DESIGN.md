@@ -243,7 +243,12 @@ bundled-and-managed approach mirrors VSCode's built-in extension model:
   `appManager.install()` path (so all existing IPC, runtime, and analytics
   hooks just work), refreshes `spec_json` when the bundled version moves
   forward, and garbage-collects rows whose `specId` no longer appears in the
-  manifest.
+  manifest. It runs only when the bundle differs from the one its last
+  complete run applied (`bundle-seed-stamp.ts`, keyed by app version + the
+  manifest; `builtin-skills.ts` uses the same stamp keyed by its SKILL.md
+  set) — an idle task still blocks the main thread, and an unchanged bundle
+  has nothing to do. Within a run, installed rows are read once, since
+  `listApps()` parses every row's spec including bundled skill files.
 - **User state preservation**: `userConfig`, `userOverrides`, and `status`
   live in DB columns that the loader never touches when refreshing — only
   `spec_json` and `spec_id` are updated via `service.updateSpec`.
@@ -345,6 +350,8 @@ src/main/apps/manager/
   skill-sync.ts       -- Filesystem sync for skill apps (SDK-discoverable .md files)
   seed.ts             -- One-shot "Halo 助手" placeholder when no apps exist
   builtin-loader.ts   -- Built-in (bundled) digital human loader; runs as Tier-3 idle task
+  builtin-skills.ts   -- Repo-authored global skills seeder; Tier-3 idle task
+  bundle-seed-stamp.ts -- Which bundle each seeder last applied in full (skip when unchanged)
   knowledge-backfill.ts -- One-shot KB seed for apps predating knowledge_seeded; Tier-3 idle task
 ```
 
