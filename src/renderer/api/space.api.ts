@@ -134,15 +134,6 @@ export const spaceApi = {
     return httpRequest('PUT', '/api/spaces/reorder', { spaceIds })
   },
 
-  // Per-space asset counts (files/digital humans/skills/MCP) for the
-  // workspace management page's cards
-  listSpaceSummaries: async (): Promise<ApiResponse> => {
-    if (isElectron()) {
-      return window.halo.listSpaceSummaries()
-    }
-    return httpRequest('GET', '/api/spaces/summaries')
-  },
-
   // Remove an unreachable space's registry entry (does not touch disk)
   forgetSpace: async (spaceId: string): Promise<ApiResponse> => {
     if (isElectron()) {

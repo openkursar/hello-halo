@@ -36,10 +36,8 @@ export function SpacesPage() {
     haloSpace,
     spaces,
     currentSpace,
-    summaries,
-    summariesLoading,
+    isLoading,
     loadSpaces,
-    loadSpaceSummaries,
     setCurrentSpace,
     refreshCurrentSpace,
     reorderSpaces,
@@ -60,7 +58,6 @@ export function SpacesPage() {
         spaceCount: capCount((loaded.haloSpace ? 1 : 0) + loaded.spaces.length),
       })
     })
-    loadSpaceSummaries()
     // Load once on entry — the header's refresh button covers staying current.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -68,8 +65,7 @@ export function SpacesPage() {
   const handleRefresh = useCallback(() => {
     trackHome('home.space.action', { action: 'refresh', surface: 'manage' })
     loadSpaces()
-    loadSpaceSummaries(true)
-  }, [loadSpaces, loadSpaceSummaries])
+  }, [loadSpaces])
 
   const trimmedQuery = searchQuery.trim().toLowerCase()
   const isSearching = trimmedQuery.length > 0
@@ -142,7 +138,6 @@ export function SpacesPage() {
     <SpaceCard
       key={space.id}
       space={space}
-      summary={summaries[space.id]}
       onOpen={() => openSpace(space)}
       onOpenTab={(tab) => openSpace(space, tab)}
     />
@@ -179,11 +174,11 @@ export function SpacesPage() {
         </div>
         <button
           onClick={handleRefresh}
-          disabled={summariesLoading}
+          disabled={isLoading}
           title={t('Refresh')}
           className="flex-shrink-0 p-2 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-colors disabled:opacity-50"
         >
-          <RefreshCw className={`w-4 h-4 ${summariesLoading ? 'animate-spin' : ''}`} />
+          <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
         </button>
         <button
           onClick={openCreateDialog}

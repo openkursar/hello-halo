@@ -17,7 +17,7 @@ import { SpaceAvatar } from '../space/SpaceAvatar'
 import { CreateSpaceDialog } from '../space/CreateSpaceDialog'
 import { useTranslation } from '../../i18n'
 import { capCount, trackHome, trackNavigate } from '../../services/home-telemetry'
-import type { Space, SpaceSummary } from '../../types'
+import type { Space } from '../../types'
 
 /** Minimum interval between loadSpaces calls (ms) */
 const LOAD_THROTTLE_MS = 5_000
@@ -28,7 +28,7 @@ const SEARCH_MIN_SPACES = 4
 export function SpaceSelector() {
   const { t } = useTranslation()
   const { navigate } = useAppStore()
-  const { haloSpace, spaces, currentSpace, summaries, setCurrentSpace, refreshCurrentSpace, loadSpaces, loadSpaceSummaries, isLoading } = useSpaceStore()
+  const { haloSpace, spaces, currentSpace, setCurrentSpace, refreshCurrentSpace, loadSpaces, isLoading } = useSpaceStore()
   const [isOpen, setIsOpen] = useState(false)
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -48,14 +48,10 @@ export function SpaceSelector() {
     throttledLoadSpaces()
   }, [throttledLoadSpaces])
 
-  // Refresh spaces when dropdown opens (throttled). Summaries feed the rows'
-  // asset chips and carry their own TTL in the store.
+  // Refresh spaces when dropdown opens (throttled)
   useEffect(() => {
-    if (isOpen) {
-      throttledLoadSpaces()
-      void loadSpaceSummaries()
-    }
-  }, [isOpen, throttledLoadSpaces, loadSpaceSummaries])
+    if (isOpen) throttledLoadSpaces()
+  }, [isOpen, throttledLoadSpaces])
 
   // Close on click outside
   useEffect(() => {
@@ -248,7 +244,6 @@ export function SpaceSelector() {
               {haloSpace && (
                 <SpaceDropdownRow
                   space={haloSpace}
-                  summary={summaries[haloSpace.id]}
                   isActive={haloSpace.id === currentSpace?.id}
                   onSelect={handleSelectSpace}
                 />
@@ -258,7 +253,6 @@ export function SpaceSelector() {
                 <SpaceDropdownRow
                   key={space.id}
                   space={space}
-                  summary={summaries[space.id]}
                   isActive={space.id === currentSpace?.id}
                   onSelect={handleSelectSpace}
                 />
@@ -317,16 +311,14 @@ export function SpaceSelector() {
 }
 
 /** A single space row inside the SpaceSelector dropdown — switch only, see
- * the workspace management page (SpacesPage) for rename/delete/reorder and
- * the full asset counts. The path stays on the row's tooltip. */
+ * the workspace management page (SpacesPage) for rename/delete/reorder.
+ * The path stays on the row's tooltip. */
 function SpaceDropdownRow({
   space,
-  summary,
   isActive,
   onSelect,
 }: {
   space: Space
-  summary?: SpaceSummary
   isActive: boolean
   onSelect: (space: Space) => void
 }) {
@@ -353,11 +345,6 @@ function SpaceDropdownRow({
     >
       <SpaceAvatar space={space} size={24} className={space.isMissing ? 'opacity-60' : ''} />
       <span className="flex-1 min-w-0 truncate text-[13px] font-medium">{name}</span>
-      {!space.isMissing && summary && (
-        <span className="flex-shrink-0 text-[11px] tabular-nums text-subtle-foreground">
-          {t('{{count}} conversations', { count: summary.conversationCount })}
-        </span>
-      )}
       {space.isMissing && (
         <Unplug className="w-3.5 h-3.5 flex-shrink-0" aria-label={t('Unavailable')} />
       )}

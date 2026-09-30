@@ -366,21 +366,6 @@ export interface Space {
   sortOrder?: number;  // User-defined display order (lower = earlier); absent on legacy spaces
 }
 
-// Per-space asset counts for the workspace management page's cards.
-// `skillCount`/`mcpCount` are installed-in-this-space only; the matching
-// `global*Count` covers global items also usable here (see main's
-// space.controller.ts buildSpaceSummary for the exact split).
-export interface SpaceSummary {
-  spaceId: string;
-  fileCount: number;
-  digitalHumanCount: number;
-  skillCount: number;
-  mcpCount: number;
-  globalSkillCount: number;
-  globalMcpCount: number;
-  conversationCount: number;
-}
-
 export interface CreateSpaceInput {
   name: string;
   icon: string;

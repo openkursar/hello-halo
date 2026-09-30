@@ -196,7 +196,6 @@ export const MODULE: RouteModuleMeta = {
       returns: '{"success":true}',
       impact: 'reversible',
     },
-    'GET /api/spaces/summaries': { expose: 'internal' },
     'POST /api/spaces/:spaceId/forget': { expose: 'internal' },
   },
 }

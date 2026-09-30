@@ -10,7 +10,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { FolderOpen, MoreHorizontal, Pencil, Trash2, Unplug } from 'lucide-react'
-import type { Space, SpaceSummary, ArtifactRailTab } from '../../types'
+import type { Space, ArtifactRailTab } from '../../types'
 import { SpaceAvatar } from './SpaceAvatar'
 import { SpaceAssetChips } from './SpaceAssetChips'
 import { EditSpaceDialog } from './EditSpaceDialog'
@@ -22,7 +22,6 @@ import { trackHome } from '../../services/home-telemetry'
 
 interface SpaceCardProps {
   space: Space
-  summary?: SpaceSummary
   /** Switch to this workspace and enter it. */
   onOpen: () => void
   /** Switch to this workspace, enter it, and land the resource rail on a
@@ -30,7 +29,7 @@ interface SpaceCardProps {
   onOpenTab: (tab: ArtifactRailTab) => void
 }
 
-export function SpaceCard({ space, summary, onOpen, onOpenTab }: SpaceCardProps) {
+export function SpaceCard({ space, onOpen, onOpenTab }: SpaceCardProps) {
   const { t } = useTranslation()
   const { openSpaceFolder, deleteSpace, forgetSpace } = useSpaceStore()
   const { showConfirm, DialogComponent } = useConfirmDialog()
@@ -92,10 +91,7 @@ export function SpaceCard({ space, summary, onOpen, onOpenTab }: SpaceCardProps)
 
   const name = space.isTemp ? t('Halo Workspace') : space.name
   const lastActiveMs = space.lastActiveAt ? new Date(space.lastActiveAt).getTime() : undefined
-  const metaLine = [
-    summary && summary.conversationCount > 0 ? t('{{count}} conversations', { count: summary.conversationCount }) : null,
-    lastActiveMs ? formatTimeAgo(lastActiveMs, t) : null,
-  ].filter(Boolean).join(' · ')
+  const metaLine = lastActiveMs ? formatTimeAgo(lastActiveMs, t) : ''
 
   return (
     <div
@@ -164,7 +160,7 @@ export function SpaceCard({ space, summary, onOpen, onOpenTab }: SpaceCardProps)
       </div>
 
       <div className="mt-3">
-        <SpaceAssetChips summary={summary} onSelectTab={onOpenTab} />
+        <SpaceAssetChips onSelectTab={onOpenTab} />
       </div>
 
       {metaLine && (

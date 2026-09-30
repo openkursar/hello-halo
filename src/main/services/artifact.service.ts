@@ -13,7 +13,6 @@ import { promises as fsAsync, type Stats } from 'fs'
 import { join, extname, basename, dirname, sep } from 'path'
 import { shell } from 'electron'
 import { getTempSpacePath } from '../foundation/config.service'
-import { CPP_LEVEL_IGNORE_DIRS } from '../../shared/constants/ignore-patterns'
 import { MAX_PREVIEW_DOCUMENT_SIZE, formatPreviewSize } from '../../shared/constants/artifact-preview'
 import { getSpace } from './space.service'
 import {
@@ -91,44 +90,6 @@ export async function listArtifacts(spaceId: string, maxDepth: number = 2): Prom
 
   console.log(`[Artifact] listArtifacts: spaceId=${spaceId} count=${artifacts.length}`)
   return artifacts
-}
-
-/** Dependency/VCS/build directories are noise in a file count, and recursing
- * into node_modules would dominate the scan time. */
-const COUNT_IGNORE_DIRS = new Set<string>(CPP_LEVEL_IGNORE_DIRS)
-
-/**
- * How many files a space holds, capped at `limit`.
- *
- * Deliberately not listArtifacts(): that path initializes the space's artifact
- * cache and starts a file watcher for it. Fine for the space you're in, far too
- * much to pay for a number on a card — a caller summarizing every space would
- * leave one watcher running per space.
- */
-export async function countSpaceFiles(spaceId: string, limit: number, maxDepth = 2): Promise<number> {
-  const workDir = getWorkingDir(spaceId)
-  if (!existsSync(workDir)) return 0
-  return countFilesInDir(workDir, maxDepth, limit)
-}
-
-async function countFilesInDir(dir: string, depth: number, limit: number): Promise<number> {
-  let entries
-  try {
-    entries = await fsAsync.readdir(dir, { withFileTypes: true })
-  } catch {
-    return 0
-  }
-
-  let count = 0
-  for (const entry of entries) {
-    if (count >= limit) break
-    if (entry.isFile()) {
-      count += 1
-    } else if (entry.isDirectory() && depth > 0 && !COUNT_IGNORE_DIRS.has(entry.name)) {
-      count += await countFilesInDir(join(dir, entry.name), depth - 1, limit - count)
-    }
-  }
-  return Math.min(count, limit)
 }
 
 // Get artifact by ID

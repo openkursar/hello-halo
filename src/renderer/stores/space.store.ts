@@ -6,24 +6,16 @@ import { useCallback } from 'react'
 import { create } from 'zustand'
 import { api } from '../api'
 import { useChatStore } from './chat.store'
-import type { Space, CreateSpaceInput, SpacePreferences, SpaceSummary, ArtifactRailTab } from '../types'
+import type { Space, CreateSpaceInput, SpacePreferences, ArtifactRailTab } from '../types'
 
 /** A summary is a filesystem scan per workspace; the selector dropdown asks
  * for one every time it opens, so repeat opens reuse the last result. */
-const SUMMARY_TTL_MS = 30_000
-let lastSummariesLoad = 0
 
 interface SpaceState {
   // Spaces data
   haloSpace: Space | null
   spaces: Space[]
   currentSpace: Space | null
-
-  // Asset counts per workspace, keyed by spaceId. Loaded on demand by the
-  // surfaces that show them (management cards, selector dropdown) — building
-  // them costs a filesystem scan per workspace.
-  summaries: Record<string, SpaceSummary>
-  summariesLoading: boolean
 
   /** One-shot: a workspace card's asset chip asked to land on a specific
    * rail tab. SpacePage consumes and clears this after switching space. */
@@ -57,8 +49,6 @@ interface SpaceState {
   forgetSpace: (spaceId: string) => Promise<boolean>
   openSpaceFolder: (spaceId: string) => Promise<void>
   refreshCurrentSpace: () => Promise<void>
-  /** Reuses the last result within SUMMARY_TTL_MS unless `force`. */
-  loadSpaceSummaries: (force?: boolean) => Promise<void>
 
   // Preferences actions
   /** Resolves to whether the preferences were saved. */
@@ -74,8 +64,6 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
   haloSpace: null,
   spaces: [],
   currentSpace: null,
-  summaries: {},
-  summariesLoading: false,
   pendingArtifactRailTab: null,
   setPendingArtifactRailTab: (tab) => set({ pendingArtifactRailTab: tab }),
   isLoading: false,
@@ -373,27 +361,6 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
       set({ spaces: prevSpaces, error: 'Failed to reorder spaces' })
     }
   },
-
-  loadSpaceSummaries: async (force = false) => {
-    const now = Date.now()
-    if (!force && now - lastSummariesLoad < SUMMARY_TTL_MS) return
-    lastSummariesLoad = now
-    try {
-      set({ summariesLoading: true })
-      const response = await api.listSpaceSummaries()
-      if (response.success && Array.isArray(response.data)) {
-        const summaries: Record<string, SpaceSummary> = {}
-        for (const summary of response.data as SpaceSummary[]) {
-          summaries[summary.spaceId] = summary
-        }
-        set({ summaries })
-      }
-    } catch (error) {
-      console.error('[SpaceStore] loadSpaceSummaries error:', error)
-    } finally {
-      set({ summariesLoading: false })
-    }
-  }
 }))
 
 /** Display name for a space id; falls back to the id while spaces are still loading. */

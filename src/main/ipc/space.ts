@@ -14,7 +14,6 @@ import {
   updateSpace,
   reorderSpaces
 } from '../services/space.service'
-import { listSpaceSummaries } from '../controllers/space.controller'
 import * as spaceController from '../controllers/space.controller'
 import { getSpacesDir } from '../foundation/config.service'
 import { spaceRpc } from '../../shared/rpc/contracts/space.contract'
@@ -180,13 +179,6 @@ export function registerSpaceHandlers(): void {
         return { success: false, error: err.message }
       }
     },
-
-    // Per-space asset counts for the workspace management page. Spans four
-    // domains (apps/skills/conversations/artifacts), so this delegates to
-    // the controller instead of a space.service function — the HTTP route
-    // needs the exact same aggregation, and the controller is the one place
-    // both already share.
-    listSpaceSummaries: async () => listSpaceSummaries(),
   })
 
 }

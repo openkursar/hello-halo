@@ -31,12 +31,6 @@ export function registerSpaceRoutes(app: Express): void {
     res.json(result)
   })
 
-  // Must be before :spaceId route to avoid matching "summaries" as an id
-  app.get('/api/spaces/summaries', async (req: Request, res: Response) => {
-    const result = await spaceController.listSpaceSummaries()
-    res.json(result)
-  })
-
   app.post('/api/spaces', async (req: Request, res: Response) => {
     const { name, icon, color, customPath } = req.body
     const result = spaceController.createSpace({ name, icon, color, customPath })

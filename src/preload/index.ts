@@ -144,7 +144,6 @@ export interface HaloAPI {
   getSpaceMemoryStatus: (spaceId: string) => Promise<IpcResponse<MemoryStatus>>
   consolidateSpaceMemory: (spaceId: string) => Promise<IpcResponse<{ started: boolean; reason?: string }>>
   reorderSpaces: (spaceIds: string[]) => Promise<IpcResponse>
-  listSpaceSummaries: () => Promise<IpcResponse>
   forgetSpace: (spaceId: string) => Promise<IpcResponse>
 
   // Conversation

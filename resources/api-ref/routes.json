@@ -86,10 +86,6 @@
     "group": "workspace"
   },
   {
-    "method": "GET",
-    "path": "/api/spaces/summaries"
-  },
-  {
     "method": "POST",
     "path": "/api/spaces",
     "group": "workspace"
