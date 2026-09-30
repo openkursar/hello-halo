@@ -32,6 +32,7 @@ import { getTeamService } from '../team'
 import { getActiveTeamRuntime } from '../runtime/team'
 import { buildCoordinationTools } from '../runtime/team/team-tools'
 import type { TeamMcpContext } from '../runtime/team/team-tools'
+import type { TeamRuntime, TeamFolderPaths } from '../runtime/team'
 import {
   AI_MEMBER_HARD_LIMIT,
   SPACE_COORDINATOR_MEMBER_NAME,
@@ -92,6 +93,16 @@ export interface SpaceTeamMcpScope {
 
 export function createSpaceTeamMcpServer(scope: SpaceTeamMcpScope) {
   const { spaceId, conversationId, workDir } = scope
+  const callerAppId = spaceCoordinatorAppId(conversationId)
+  // The coordinator's folder for the current piece of work, resolved once per
+  // epoch instead of on every tool call. A failed resolution is retried.
+  let folderCache: { epochId: string; folder: TeamFolderPaths } | null = null
+  function coordinatorFolder(runtime: TeamRuntime, teamId: string, epochId: string): TeamFolderPaths | null {
+    if (folderCache?.epochId === epochId) return folderCache.folder
+    const folder = runtime.teamFolders.forMember(teamId, epochId, callerAppId)
+    folderCache = folder ? { epochId, folder } : null
+    return folder
+  }
 
   /**
    * The coordination tools' team context: the ACTIVE collaboration bound to
@@ -109,12 +120,14 @@ export function createSpaceTeamMcpServer(scope: SpaceTeamMcpScope) {
     return {
       teamId: collab.teamId,
       epochId: collab.epochId,
-      callerAppId: spaceCoordinatorAppId(conversationId),
+      callerAppId,
       collabMode: team.collabMode,
       selfIsLead: true,
       bus: runtime.bus,
       blackboard: runtime.blackboard,
       callerWorkDir: workDir,
+      callerTeamFolder: coordinatorFolder(runtime, collab.teamId, collab.epochId),
+      teamFolders: runtime.teamFolders,
       ...(runtime.readArtifact ? { readArtifact: runtime.readArtifact } : {}),
       ...(runtime.readMemberRecord ? { readMemberRecord: runtime.readMemberRecord } : {}),
       digest: runtime.digest,
@@ -154,7 +167,7 @@ export function createSpaceTeamMcpServer(scope: SpaceTeamMcpScope) {
       const service = getTeamService()
       if (!service) return textResult(NOT_READY, true)
       try {
-        const { team } = await service.createCollab({
+        const { team, epochId } = await service.createCollab({
           owningSpaceId: spaceId,
           conversationId,
           name,
@@ -164,12 +177,17 @@ export function createSpaceTeamMcpServer(scope: SpaceTeamMcpScope) {
         const roster = members
           .map((m) => `- ${m.memberName} (${m.role}) — ${m.responsibility}`)
           .join('\n')
+        const runtime = getActiveTeamRuntime()
+        const folder = runtime ? coordinatorFolder(runtime, team.id, epochId) : null
+        const folderNote = folder
+          ? `\n\nScratch folder for temporary collaboration files (reviews, notes, drafts): ${folder.self}`
+          : ''
         return textResult(
           `Collaboration "${team.name}" is ready (team id: ${team.id}). Members:\n${roster}\n\n` +
             `You are the coordinator ("${SPACE_COORDINATOR_MEMBER_NAME}"). Dispatch self-contained work with ` +
             'team_send or team_post_task now. Members reply asynchronously — their messages and turn-end ' +
             'notices arrive as new turns. Tell the user the team is working and that they can watch it in ' +
-            'the Team view.'
+            `the Team view.${folderNote}`
         )
       } catch (error) {
         console.error(`${LOG_TAG} collab_start failed: conversation=${conversationId}`, error)

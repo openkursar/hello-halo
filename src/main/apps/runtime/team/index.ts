@@ -13,6 +13,8 @@ import { createTeamChecks } from './checks'
 import { createBoardDigest } from './board-digest'
 import { createBoardArchive } from './board-archive'
 import { createTurnReport } from './turn-report'
+import { createTeamFolders } from './team-folder'
+import type { TeamFolders } from './team-folder'
 import type { NoteTurnEndedInput } from './turn-report'
 import type { TeamChecks } from './checks'
 import type { BoardDigest } from './board-digest'
@@ -149,6 +151,8 @@ export interface TeamRuntime {
    * on this machine — it describes this computer, not the office.
    */
   recordToolAudit(entry: TeamToolAudit): void
+  /** Where each piece of work keeps its in-between files on this machine (see `team-folder.ts`). */
+  teamFolders: TeamFolders
   /** Location-transparent read of a published team artifact (see {@link ReadTeamArtifact}). */
   readArtifact?: ReadTeamArtifact
   /** Location-transparent read of a member's record for the lead (see {@link ReadTeamMemberRecord}). */
@@ -236,8 +240,8 @@ export interface TeamRuntime {
   sealConversationEpoch(teamId: string, epochId: string, endReason?: EpochEndReason, summary?: string | null): Promise<void>
   requestSeal(teamId: string, epochId: string, summary: string): void
   captureReport(correlationId: string, outcome: TurnCompletion): void
-  /** The team layers of a member's system prompt — stable per (team, member). */
-  buildPromptContext(teamId: string, selfAppId: string): TeamPromptContext | null
+  /** The team layers of a member's system prompt — stable per (team, member, epoch). */
+  buildPromptContext(teamId: string, selfAppId: string, epochId: string): TeamPromptContext | null
   /**
    * What this team is called. Separate from `buildPromptContext` because a name
    * is not membership: that one answers null for an app that is not on the
@@ -378,6 +382,12 @@ export interface CreateTeamRuntimeDeps {
    * dead busy-gate.
    */
   isLeadGenerating: (sessionKey: string) => boolean
+  /**
+   * The directory holding every team folder on this machine. Required for the
+   * same reason as `isLeadGenerating`: its one caller must not be able to forget
+   * it and silently send members back to writing reports into the project.
+   */
+  teamFolderRoot: string
 }
 
 export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
@@ -395,6 +405,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
   // no message can be sent before the runtime finishes constructing.
   let board: Blackboard | null = null
 
+  const teamFolders = createTeamFolders({ store, root: deps.teamFolderRoot })
   const digest = createBoardDigest({ store })
   const archive = createBoardArchive({ store })
   // Printouts are regenerated on demand, so anything left from an earlier run is
@@ -443,6 +454,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     onTaskClosed: deps.onTaskClosed,
     describeChatKey: deps.describeChatKey,
     getMemberDescription: deps.getMemberDescription,
+    teamFolders,
     renderDigest: (teamId, epochId, viewerAppId) => digest.render({ teamId, epochId, viewerAppId }),
     noteTurnEnded: (input) => turnReport.noteTurnEnded(input),
     // A 'stopped' epoch (pause) is reopenable — noteEpochTurn wakes it back up
@@ -512,6 +524,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     checks,
     digest,
     archive,
+    teamFolders,
     getDelegatedPolicy: (teamId, appId) => store.getMember(teamId, appId)?.delegatedPolicy ?? null,
     recordToolAudit: (entry) => store.insertToolAudit(entry),
     ...(deps.readArtifact ? { readArtifact: deps.readArtifact } : {}),
@@ -553,8 +566,8 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     },
     requestSeal: (teamId, epochId, summary) => orchestration!.requestSeal(teamId, epochId, summary),
     captureReport: (correlationId, outcome) => orchestration!.captureReport(correlationId, outcome),
-    buildPromptContext: (teamId, selfAppId) =>
-      orchestration!.buildPromptContext(teamId, selfAppId),
+    buildPromptContext: (teamId, selfAppId, epochId) =>
+      orchestration!.buildPromptContext(teamId, selfAppId, epochId),
     getTeamName: (teamId) => store.getTeamById(teamId)?.name ?? null,
     describeTaskSource: (teamId, epochId) => {
       const team = store.getTeamById(teamId)
@@ -676,6 +689,7 @@ export {
   createTeamArtifactOpener,
   createLocalArtifactResolver,
   createLocalArtifactPathResolver,
+  createMemberWorkDirResolver,
   defaultSharedCopyRoot,
   pruneSharedFileCopies,
   RemoteArtifactError,
@@ -693,8 +707,10 @@ export type {
   MemberRecordLine,
   RemoteRecordRow,
 } from './member-record'
-export { resolveArtifactRef } from './artifact-path'
+export { resolveArtifactRef, resolvePublishedRef } from './artifact-path'
 export type { ArtifactRefResolution, ArtifactRefRejection } from './artifact-path'
+export { teamFolderDir } from './team-folder'
+export type { TeamFolders, TeamFolderPaths } from './team-folder'
 export { createTeamTriggerScheduler, TEAM_JOB_KIND } from './team-triggers'
 export type { TeamTriggerScheduler } from './team-triggers'
 export { TEAM_CHECK_JOB_KIND, TeamCheckError, describeSchedule, renderCheckWake } from './checks'

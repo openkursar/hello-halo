@@ -27,6 +27,7 @@ function makeCtx(overrides: Partial<TeamPromptContext> = {}): TeamPromptContext 
     selfIsLead: true,
     selfIsDisposable: false,
     roster: [],
+    teamFolder: null,
     ...overrides,
   }
 }
@@ -218,5 +219,28 @@ describe('what a teammate IS, alongside what it does here', () => {
     expect(entry).toContain('- researcher — Research')
     expect(entry).not.toContain('About:')
     expect(entry).not.toMatch(/- researcher — Research\n\s*\n/)
+  })
+})
+
+describe('buildTeamEntry — where files go', () => {
+  const folder = { shared: '/halo/team-work/abc123def456', self: '/halo/team-work/abc123def456/reviewer' }
+
+  it('tells the member where temporary collaboration files go', () => {
+    const out = buildTeamEntry(makeCtx({ teamFolder: folder }))
+    expect(out).toContain(`Scratch folder for this piece of work: ${folder.self}.`)
+    expect(out).toContain('or inside your scratch folder')
+    // Members read each other's files through team_read_artifact, not the shared path.
+    expect(out).not.toContain(`${folder.shared}\n`)
+  })
+
+  it('keeps the unique-name rule word for word', () => {
+    const out = buildTeamEntry(makeCtx({ teamFolder: folder }))
+    expect(out).toContain('- A published name belongs to one member only. Your working directory is')
+  })
+
+  it('renders exactly the working-directory wording when no scratch folder could be prepared', () => {
+    const out = buildTeamEntry(makeCtx({ teamFolder: null }))
+    expect(out).not.toContain('scratch folder')
+    expect(out).toContain('"docs/design.md"); a file outside it cannot be shared this way. Publishing')
   })
 })

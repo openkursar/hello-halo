@@ -516,7 +516,7 @@ async function runAppChatTurn(
   // contract) decides which surfaces the turn mounts — a disposable member gets
   // no memory and no digital-human management.
   const teamPromptCtx = teamContext
-    ? getActiveTeamRuntime()?.buildPromptContext(teamContext.teamId, appId) ?? null
+    ? getActiveTeamRuntime()?.buildPromptContext(teamContext.teamId, appId, teamContext.epochId) ?? null
     : null
   const disposableMember = teamPromptCtx?.selfIsDisposable === true
   // A disposable member has no memory of its own; an owner can also turn it off.
@@ -770,6 +770,9 @@ async function runAppChatTurn(
             // The agent's own cwd: published refs are resolved against it, so it
             // must be the very directory this turn runs in.
             callerWorkDir: workDir,
+            // The same folder the Entry above points the member at.
+            callerTeamFolder: teamPromptCtx.teamFolder,
+            teamFolders: getActiveTeamRuntime()!.teamFolders,
             bus: getActiveTeamRuntime()!.bus,
             blackboard: getActiveTeamRuntime()!.blackboard,
             // Location-transparent artifact read (wired by bootstrap); absent →

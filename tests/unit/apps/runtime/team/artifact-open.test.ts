@@ -3,7 +3,8 @@
  * runs when someone clicks a shared file on the team board.
  *
  * Proven:
- *   - a same-machine producer's file is opened in place, never copied;
+ *   - a same-machine producer's file is opened in place, never copied — a
+ *     team-folder file included;
  *   - a ref two members published is refused, not picked;
  *   - a teammate's file is fetched and written here as a read-only copy;
  *   - without a remote fetch, and when the owner is offline, the failure is
@@ -32,6 +33,7 @@ import {
   MAX_OPEN_COPY_BYTES,
   RemoteArtifactError,
 } from '../../../../../src/main/apps/runtime/team/artifact-read'
+import { teamFolderDir } from '../../../../../src/main/apps/runtime/team/team-folder'
 
 const TEAM_ID = 'team-1'
 const EPOCH_A = 'epoch-a'
@@ -46,6 +48,7 @@ describe('team artifact opener', () => {
   let store: TeamStore
   let workDir: string
   let copyDir: string
+  let folderRoot: string
 
   function publish(ref: string, authorAppId: string, epochId = EPOCH_A): void {
     store.insertFinding({
@@ -65,6 +68,7 @@ describe('team artifact opener', () => {
       resolveLocalPath: createLocalArtifactPathResolver({
         store,
         getWorkDirForApp: (appId) => (appId === LOCAL_APP ? workDir : null),
+        getTeamFolderDir: (teamId, epochId) => teamFolderDir(folderRoot, teamId, epochId),
       }),
       copyDir,
       ...(fetchRemote ? { fetchRemote } : {}),
@@ -96,6 +100,7 @@ describe('team artifact opener', () => {
     }
     workDir = mkdtempSync(join(tmpdir(), 'halo-open-work-'))
     copyDir = mkdtempSync(join(tmpdir(), 'halo-open-copies-'))
+    folderRoot = mkdtempSync(join(tmpdir(), 'halo-open-folders-'))
   })
 
   afterEach(() => {
@@ -103,6 +108,18 @@ describe('team artifact opener', () => {
     rmSync(workDir, { recursive: true, force: true })
     // Copies are written read-only; lift that so the temp dir can be removed.
     rmSync(copyDir, { recursive: true, force: true })
+    rmSync(folderRoot, { recursive: true, force: true })
+  })
+
+  it('opens a same-machine team-folder file in place', async () => {
+    const dir = join(teamFolderDir(folderRoot, TEAM_ID, EPOCH_A), 'local')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'review.md'), 'review')
+    publish('team:local/review.md', LOCAL_APP)
+
+    const res = await makeOpener()({ teamId: TEAM_ID, epochId: EPOCH_A, ref: 'team:local/review.md' })
+    expect(res).toMatchObject({ ok: true, copied: false, owner: null })
+    expect(res.path).toBe(realpathSync(join(dir, 'review.md')))
   })
 
   it('opens a same-machine file in place', async () => {

@@ -16,6 +16,7 @@ import type { TeamChecks } from './checks'
 import type { BoardDigest } from './board-digest'
 import type { BoardArchive } from './board-archive'
 import type { ReadTeamArtifact } from './index'
+import type { TeamFolderPaths, TeamFolders } from './team-folder'
 import { renderMemberRecord, type ReadTeamMemberRecord } from './member-record'
 import type { CollabMode, TaskStatus, TeamCheckSchedule } from '../../../../shared/apps/team-types'
 
@@ -37,6 +38,14 @@ export interface TeamMcpContext {
    * that owns the agent rather than be looked up here.
    */
   callerWorkDir: string
+  /**
+   * The caller's team folder for this piece of work — where its reviews and
+   * notes go, and the other place a ref may be published from. Null/absent →
+   * only working-directory files can be published.
+   */
+  callerTeamFolder?: TeamFolderPaths | null
+  /** Resolves a task assignee's folder, so a lead can attach that member's file to its task. */
+  teamFolders?: Pick<TeamFolders, 'ofTaskAssignee'>
   /**
    * Location-transparent read of a published team artifact. Absent → the tool is
    * still registered but reports the capability is unavailable (non-federated
@@ -133,24 +142,30 @@ function record(ctx: TeamMcpContext, input: Omit<PostActivityInput, 'teamId' | '
  * file and the reader believing it had never been sent — neither holding enough
  * of the truth to fix it. The stored form is the portable one this returns.
  *
- * The uniqueness check has the same shape: a ref is a path inside the publisher's
- * OWN working directory, so two members reach for one name and the board holds a
- * single indistinguishable string. Here is the last instant they can be told
- * apart, and the member holding the file is the one who can rename it.
+ * The uniqueness check has the same shape: a working-directory ref is a path
+ * inside the publisher's OWN working directory, so two members reach for one name
+ * and the board holds a single indistinguishable string. Here is the last instant
+ * they can be told apart, and the member holding the file is the one who can
+ * rename it. A `team:` ref carries its producer's folder and so cannot collide
+ * this way; it still passes through the check, which then costs nothing.
  */
 function acceptRef(
   ctx: TeamMcpContext,
   ref: string,
   claim: PublishedRefClaim
 ): { ok: true; ref: string; receipt: string } | { ok: false; message: string } {
-  const resolved = resolveArtifactRef(ctx.callerWorkDir, ref)
+  const teamFolder = ctx.callerTeamFolder ?? null
+  const claimantFolder =
+    claim.kind === 'task' ? ctx.teamFolders?.ofTaskAssignee(ctx.teamId, ctx.epochId, claim.taskId) ?? null : null
+  const resolved = resolveArtifactRef({ workDir: ctx.callerWorkDir, teamFolder, claimantFolder }, ref)
   if (!resolved.ok) {
     console.warn(
-      `${LOG_TAG} rejected ref="${ref}" from=${ctx.callerAppId} workDir="${ctx.callerWorkDir}": ${resolved.reason}`
+      `${LOG_TAG} rejected ref="${ref}" from=${ctx.callerAppId} workDir="${ctx.callerWorkDir}" ` +
+        `teamFolder="${teamFolder?.self ?? ''}": ${resolved.reason}`
     )
     return {
       ok: false,
-      message: explainArtifactRefRejection(resolved.reason, { ref, workDir: ctx.callerWorkDir }),
+      message: explainArtifactRefRejection(resolved.reason, { ref, workDir: ctx.callerWorkDir, teamFolder }),
     }
   }
   // Compared in the STORED form: two refs collide as the board holds them, not
@@ -341,8 +356,8 @@ function buildUpdateTaskTool(resolve: ResolveTeamMcpContext) {
         .optional()
         .describe(
           'The file this task produced, as a path relative to your working directory (e.g. ' +
-            '"docs/design.md"). It must already exist, and its name must be unused by other ' +
-            'teammates — the update is refused otherwise. ' +
+            '"docs/design.md") or a path in your scratch folder. It must already exist, and its ' +
+            'name must be unused by other teammates — the update is refused otherwise. ' +
             'Omit this when the task produced no file; put the outcome in note instead.'
         ),
       note: z.string().optional().describe('Short note (e.g. rejection reason or blocker).'),
@@ -407,10 +422,10 @@ function buildPostFindingTool(resolve: ResolveTeamMcpContext) {
         .string()
         .optional()
         .describe(
-          'A file inside your working directory, as a path relative to it (e.g. "docs/design.md"). ' +
-            'The file must already exist — it is checked now, and publishing fails if it is not ' +
-            'there or is outside your working directory. The name must also be unused by other ' +
-            'teammates, so prefer one that is clearly yours. Required if content is omitted.'
+          'A file inside your working directory, as a path relative to it (e.g. "docs/design.md"), ' +
+            'or a file in your scratch folder. The file must already exist — it is checked now, and ' +
+            'publishing fails if it is not there or is anywhere else. The name must also be unused ' +
+            'by other teammates, so prefer one that is clearly yours. Required if content is omitted.'
         ),
     },
     async (input) => {

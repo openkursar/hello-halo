@@ -21,7 +21,14 @@
  *     unavailable (honest degradation, not a fake not-found);
  *   - remote failures map to calm guidance per classified failure — raw
  *     transport codes never reach the agent-facing message;
- *   - a remote fetch success decodes exactly like a local read.
+ *   - a remote fetch success decodes exactly like a local read;
+ *   - a `team:` ref resolves in the folder of its piece of work, whoever
+ *     produced it — including the coordinating space conversation, whose
+ *     placeholder appId has no working directory of its own;
+ *   - a `team:` ref from a remote producer is fetched from its owner, not looked
+ *     up here, and is never confused with a same-named project path;
+ *   - the member work-dir lookup resolves a coordinator's working directory from
+ *     the team's owning space (its repo refs were unreadable before).
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
@@ -35,10 +42,14 @@ import { TeamStore } from '../../../../../src/main/apps/team/store'
 import { MIGRATION_NAMESPACE, migrations } from '../../../../../src/main/apps/team/migrations'
 import type { Team, TeamEpoch } from '../../../../../src/main/apps/team/types'
 import {
+  createLocalArtifactPathResolver,
   createLocalArtifactResolver,
+  createMemberWorkDirResolver,
   createTeamArtifactReader,
   RemoteArtifactError,
 } from '../../../../../src/main/apps/runtime/team/artifact-read'
+import { teamFolderDir } from '../../../../../src/main/apps/runtime/team/team-folder'
+import { spaceCoordinatorAppId } from '../../../../../src/shared/apps/team-types'
 
 const TEAM_ID = 'team-1'
 const EPOCH_ID = 'epoch-1'
@@ -347,6 +358,173 @@ describe('artifact-read', () => {
       expect(res.ok).toBe(false)
       expect(res.reason).toBe('error')
       expect(res.message).not.toContain('ECONNRESET')
+    })
+  })
+  describe('team folder refs', () => {
+    const COORDINATOR = spaceCoordinatorAppId('conv-1')
+    let folderRoot: string
+
+    beforeEach(() => {
+      folderRoot = mkdtempSync(join(tmpdir(), 'halo-artifact-read-folders-'))
+      store.addMember({
+        teamId: TEAM_ID,
+        appId: COORDINATOR,
+        memberName: 'coordinator',
+        role: 'Coordinator',
+        isLead: false,
+        aiProvisioned: false,
+        addedAt: Date.now(),
+      })
+    })
+
+    afterEach(() => {
+      rmSync(folderRoot, { recursive: true, force: true })
+    })
+
+    function makeFolderReader(overrides?: Partial<Parameters<typeof createTeamArtifactReader>[0]>) {
+      const readLocalBytes = createLocalArtifactResolver({
+        store,
+        // The coordinator deliberately has no work dir here: a team ref must not need one.
+        getWorkDirForApp: (appId) => (appId === LOCAL_APP ? workDir : null),
+        getTeamFolderDir: (teamId, epochId) => teamFolderDir(folderRoot, teamId, epochId),
+      })
+      return createTeamArtifactReader({ store, readLocalBytes, ...overrides })
+    }
+
+    function writeTeamFile(memberFolder: string, name: string, content: string): void {
+      const dir = join(teamFolderDir(folderRoot, TEAM_ID, EPOCH_ID), memberFolder)
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, name), content)
+    }
+
+    it('reads a member\u2019s team-folder file', async () => {
+      writeTeamFile('local', 'review.md', 'LGTM with two nits')
+      publishFinding('team:local/review.md')
+
+      const res = await makeFolderReader()({ teamId: TEAM_ID, epochId: EPOCH_ID, ref: 'team:local/review.md' })
+      expect(res.ok).toBe(true)
+      expect(res.content).toBe('LGTM with two nits')
+      expect(res.producer).toBe('local')
+    })
+
+    it('reads a file the coordinating conversation published from its team folder', async () => {
+      writeTeamFile('coordinator', 'brief.md', 'the plan')
+      publishFinding('team:coordinator/brief.md', COORDINATOR)
+
+      const res = await makeFolderReader()({ teamId: TEAM_ID, epochId: EPOCH_ID, ref: 'team:coordinator/brief.md' })
+      expect(res.ok).toBe(true)
+      expect(res.content).toBe('the plan')
+      expect(res.producer).toBe('coordinator')
+    })
+
+    it('keeps each piece of work in its own folder', async () => {
+      writeTeamFile('local', 'review.md', 'this run')
+      publishFinding('team:local/review.md')
+      const otherRun = join(teamFolderDir(folderRoot, TEAM_ID, 'epoch-other'), 'local')
+      mkdirSync(otherRun, { recursive: true })
+      writeFileSync(join(otherRun, 'review.md'), 'another run')
+
+      const res = await makeFolderReader()({ teamId: TEAM_ID, epochId: EPOCH_ID, ref: 'team:local/review.md' })
+      expect(res.content).toBe('this run')
+    })
+
+    it('never serves a same-named project file for a team ref', async () => {
+      mkdirSync(join(workDir, 'team:local'), { recursive: true })
+      writeFileSync(join(workDir, 'team:local', 'review.md'), 'project file')
+      publishFinding('team:local/review.md')
+
+      const res = await makeFolderReader()({ teamId: TEAM_ID, epochId: EPOCH_ID, ref: 'team:local/review.md' })
+      expect(res.ok).toBe(false)
+      expect(res.reason).toBe('not-found')
+    })
+
+    it('refuses a published team ref that climbs out of the folder', async () => {
+      writeFileSync(join(workDir, 'secret.txt'), 'secret')
+      const ref = `team:local/${'../'.repeat(8)}${workDir.slice(1)}/secret.txt`
+      publishFinding(ref)
+
+      const res = await makeFolderReader()({ teamId: TEAM_ID, epochId: EPOCH_ID, ref })
+      expect(res.ok).toBe(false)
+    })
+
+    it('never serves a local file for a team ref published in a remote member\u2019s name', async () => {
+      writeTeamFile('local', 'draft.md', 'unpublished local draft')
+      publishFinding('team:local/draft.md', REMOTE_APP)
+      const resolvePath = createLocalArtifactPathResolver({
+        store,
+        getWorkDirForApp: () => null,
+        getTeamFolderDir: (teamId, epochId) => teamFolderDir(folderRoot, teamId, epochId),
+      })
+
+      expect(resolvePath({ teamId: TEAM_ID, epochId: EPOCH_ID, ref: 'team:local/draft.md' })).toBeNull()
+    })
+
+    it('fetches a remote producer\u2019s team ref from its owner', async () => {
+      publishFinding('team:remote/analysis.md', REMOTE_APP)
+      const asked: string[] = []
+
+      const res = await makeFolderReader({
+        fetchRemote: async ({ ref }) => {
+          asked.push(ref)
+          return new TextEncoder().encode('from Alice')
+        },
+      })({ teamId: TEAM_ID, epochId: EPOCH_ID, ref: 'team:remote/analysis.md' })
+      expect(res.ok).toBe(true)
+      expect(res.content).toBe('from Alice')
+      // The ref travels unchanged; the owner resolves it with the same rule.
+      expect(asked).toEqual(['team:remote/analysis.md'])
+    })
+  })
+
+  describe('createMemberWorkDirResolver', () => {
+    const resolveWorkDir = () =>
+      createMemberWorkDirResolver({
+        store,
+        getAppSpaceId: (appId) => (appId === LOCAL_APP ? 'space-member' : null),
+        getSpaceWorkDir: (spaceId) => (spaceId === 'space-a' ? '/work/project' : spaceId === 'space-member' ? '/work/member' : ''),
+      })
+
+    it('resolves an app through its own space', () => {
+      expect(resolveWorkDir()(LOCAL_APP, TEAM_ID)).toBe('/work/member')
+    })
+
+    it('resolves a coordinating conversation through the team\u2019s owning space', () => {
+      expect(resolveWorkDir()(spaceCoordinatorAppId('conv-1'), TEAM_ID)).toBe('/work/project')
+    })
+
+    it('answers null when nothing is known', () => {
+      expect(resolveWorkDir()('app-unknown', TEAM_ID)).toBeNull()
+      expect(resolveWorkDir()(spaceCoordinatorAppId('conv-1'), 'team-missing')).toBeNull()
+    })
+
+    it('lets a coordinator\u2019s repo ref be read by its members', async () => {
+      writeFileSync(join(workDir, 'plan.md'), 'coordinator plan')
+      store.addMember({
+        teamId: TEAM_ID,
+        appId: spaceCoordinatorAppId('conv-1'),
+        memberName: 'coordinator',
+        role: 'Coordinator',
+        isLead: false,
+        aiProvisioned: false,
+        addedAt: Date.now(),
+      })
+      publishFinding('plan.md', spaceCoordinatorAppId('conv-1'))
+      const readLocalBytes = createLocalArtifactResolver({
+        store,
+        getWorkDirForApp: createMemberWorkDirResolver({
+          store,
+          getAppSpaceId: () => null,
+          getSpaceWorkDir: (spaceId) => (spaceId === 'space-a' ? workDir : null),
+        }),
+      })
+
+      const res = await createTeamArtifactReader({ store, readLocalBytes })({
+        teamId: TEAM_ID,
+        epochId: EPOCH_ID,
+        ref: 'plan.md',
+      })
+      expect(res.ok).toBe(true)
+      expect(res.content).toBe('coordinator plan')
     })
   })
 })

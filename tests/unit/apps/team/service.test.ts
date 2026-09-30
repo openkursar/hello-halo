@@ -110,6 +110,12 @@ function makeRuntime(store: TeamStore) {
     // every member reads idle. Individual tests override to simulate a live turn.
     getObservableStatus: vi.fn((teamId: string) => store.getTeamById(teamId)?.status ?? 'idle'),
     getMemberStatus: vi.fn((_appId: string): 'idle' | 'working' | 'waiting_user' | 'error' => 'idle'),
+  teamFolders: {
+    forMember: () => null,
+    sharedDir: (teamId: string, epochId: string) => `/halo/team-work/${teamId}/${epochId}`,
+    remove: vi.fn(async () => {}),
+    prune: vi.fn(async () => {}),
+  },
   }
 }
 
@@ -347,6 +353,17 @@ describe('TeamService', () => {
       expect(broadcastToAll).toHaveBeenCalledWith('team:updated', expect.objectContaining({ teamId: team.id, removed: true }))
     })
 
+    it('removes the team folders of every piece of work the team had', async () => {
+      const team = await ctx.service.createTeam(manualInput({ memberSourcing: 'manual', members: [] }))
+      for (const id of ['epoch-a', 'epoch-b']) {
+        ctx.store.insertEpoch({ id, teamId: team.id, startedAt: Date.now(), endedAt: null, endReason: null, summary: null, lifecycle: 'run' })
+      }
+
+      await ctx.service.dissolveTeam(team.id)
+
+      expect(ctx.runtime.teamFolders.remove).toHaveBeenCalledWith(team.id, expect.arrayContaining(['epoch-a', 'epoch-b']))
+    })
+
     it('deletes AI member apps + their spaces on dissolve', async () => {
       const proposal: ProposedMember[] = [{ memberName: 'ai1', role: 'r', responsibility: 'x' }]
       const team = await ctx.service.createTeam(manualInput({ memberSourcing: 'ai', members: [] }), proposal)
@@ -497,7 +514,7 @@ describe('TeamService', () => {
         snapshot: {
           team: {
             id: 'shadow-office', name: 'Shadow', goal: 'g', leadAppId: LEAD,
-            collabMode: 'structured', epochId: EPOCH, status: 'running',
+            collabMode: 'structured', hostNodeId: NODE_HOST, epochId: EPOCH, status: 'running',
           },
           members: [
             { appId: LEAD, memberName: 'lead', role: 'Lead', isLead: true, ownerNodeId: NODE_HOST, memberIdentity: 'id-host', status: 'idle' },
@@ -549,7 +566,7 @@ describe('TeamService', () => {
         snapshot: {
           team: {
             id: 'shadow-office', name: 'Shadow', goal: 'g', leadAppId: 'shadow-lead',
-            collabMode: 'structured', status: 'running',
+            collabMode: 'structured', hostNodeId: NODE_HOST, status: 'running',
           },
           members: [
             { appId: WORKER, memberName: 'worker', role: 'Analyst', isLead: false, ownerNodeId: NODE_HOST, memberIdentity: 'id-host', status: 'idle' },
@@ -586,7 +603,7 @@ describe('TeamService', () => {
         snapshot: {
           team: {
             id: 'shadow-office', name: 'Shadow', goal: 'g', leadAppId: HOST_LEAD,
-            collabMode: 'structured', epochId: 'epoch-host-run',
+            collabMode: 'structured', hostNodeId: NODE_HOST, epochId: 'epoch-host-run',
             status: 'waiting_user',
           },
           members: [

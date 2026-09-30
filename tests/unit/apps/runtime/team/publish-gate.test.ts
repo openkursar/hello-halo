@@ -19,7 +19,11 @@
  *     attach a member's file to that member's task without tripping the gate;
  *   - a refused resultRef leaves the task status untouched too (no half-applied
  *     update that shows work as delivered without its deliverable);
- *   - a finding with content and no ref is unaffected by the gate.
+ *   - a finding with content and no ref is unaffected by the gate;
+ *   - a file in the caller's team folder is published as a `team:` ref, and a
+ *     teammate's team-folder file is refused with nothing written;
+ *   - two members publishing the same file name from their team folders do not
+ *     collide, while the same name in the working directory still does.
  *
  * The SDK's tool() wrapper is mocked to expose the handler directly; the
  * blackboard, store and filesystem underneath are real.
@@ -65,6 +69,8 @@ describe('team tools publish gate', () => {
   let store: TeamStore
   let workDir: string
   let outside: string
+  let teamShared: string
+  let teamSelf: string
   let call: (toolName: string, input: Record<string, unknown>) => Promise<ToolReply>
 
   beforeEach(() => {
@@ -123,6 +129,10 @@ describe('team tools publish gate', () => {
     outside = join(root, 'elsewhere')
     mkdirSync(workDir)
     mkdirSync(outside)
+    teamShared = join(root, 'team-work', 'abc123def456')
+    teamSelf = join(teamShared, 'writer')
+    mkdirSync(teamSelf, { recursive: true })
+    mkdirSync(join(teamShared, 'analyst'), { recursive: true })
 
     const ctx: TeamMcpContext = {
       teamId: TEAM_ID,
@@ -133,6 +143,11 @@ describe('team tools publish gate', () => {
       bus: {} as MessageBus,
       blackboard: createBlackboard({ store }),
       callerWorkDir: workDir,
+      callerTeamFolder: { shared: teamShared, self: teamSelf },
+      teamFolders: {
+        ofTaskAssignee: (_teamId, _epochId, taskId) =>
+          store.getTaskById(taskId)?.assigneeAppId === PEER_APP_ID ? join(teamShared, 'analyst') : null,
+      },
       requestComplete: () => {},
     }
     const server = createTeamMcpServer(ctx) as unknown as {
@@ -148,6 +163,7 @@ describe('team tools publish gate', () => {
   afterEach(() => {
     dbManager.closeAll()
     rmSync(workDir, { recursive: true, force: true })
+    rmSync(teamShared, { recursive: true, force: true })
   })
 
   const findings = () => store.listFindingsByEpoch(TEAM_ID, EPOCH_ID)
@@ -259,6 +275,75 @@ describe('team tools publish gate', () => {
       expect(res.isError).toBeUndefined()
       expect(findings()[0]?.body).toBe('competitor dropped prices')
       expect(findings()[0]?.ref).toBeNull()
+    })
+  })
+
+  describe('team folder', () => {
+    it('publishes a file from the caller\u2019s team folder as a team ref', async () => {
+      writeFileSync(join(teamSelf, 'review.md'), 'two nits')
+
+      const res = await call(TEAM_TOOL_NAMES.postFinding, { ref: join(teamSelf, 'review.md') })
+      expect(res.isError).toBeUndefined()
+      expect(res.content[0].text).toContain('team:writer/review.md')
+      expect(findings()[0]?.ref).toBe('team:writer/review.md')
+    })
+
+    it('refuses a teammate\u2019s team-folder file and writes nothing', async () => {
+      writeFileSync(join(teamShared, 'analyst', 'draft.md'), 'not mine')
+
+      const res = await call(TEAM_TOOL_NAMES.postFinding, { ref: 'team:analyst/draft.md' })
+      expect(res.isError).toBe(true)
+      expect(res.content[0].text).toContain('Nothing was published')
+      expect(res.content[0].text).toContain(teamSelf)
+      expect(findings()).toHaveLength(0)
+    })
+
+    it('does not collide with a teammate who used the same file name', async () => {
+      writeFileSync(join(teamSelf, 'report.md'), 'mine')
+      peerPublished('team:analyst/report.md')
+
+      const res = await call(TEAM_TOOL_NAMES.postFinding, { ref: 'team:writer/report.md' })
+      expect(res.isError).toBeUndefined()
+      expect(findings().map((f) => f.ref).sort()).toEqual(['team:analyst/report.md', 'team:writer/report.md'])
+    })
+
+    it('attaches a team-folder file to a task as resultRef', async () => {
+      const taskId = seedTask()
+      writeFileSync(join(teamSelf, 'design-review.md'), 'ok')
+
+      const res = await call(TEAM_TOOL_NAMES.updateTask, { taskId, status: 'done', resultRef: 'team:writer/design-review.md' })
+      expect(res.isError).toBeUndefined()
+      expect(store.getTaskById(taskId)?.resultRef).toBe('team:writer/design-review.md')
+    })
+
+    it('lets the lead attach a member\u2019s scratch file to that member\u2019s task', async () => {
+      const taskId = seedTask(PEER_APP_ID, 'task-peer')
+      writeFileSync(join(teamShared, 'analyst', 'findings.md'), 'the analyst\u2019s work')
+
+      const res = await call(TEAM_TOOL_NAMES.updateTask, { taskId, status: 'done', resultRef: 'team:analyst/findings.md' })
+      expect(res.isError).toBeUndefined()
+      expect(store.getTaskById(taskId)?.resultRef).toBe('team:analyst/findings.md')
+    })
+
+    it('still refuses that file on another member\u2019s task or as the lead\u2019s own finding', async () => {
+      const own = seedTask(APP_ID, 'task-own')
+      writeFileSync(join(teamShared, 'analyst', 'findings.md'), 'x')
+
+      const onOwnTask = await call(TEAM_TOOL_NAMES.updateTask, { taskId: own, status: 'done', resultRef: 'team:analyst/findings.md' })
+      expect(onOwnTask.isError).toBe(true)
+      expect(store.getTaskById(own)?.status).toBe('in_progress')
+      const asFinding = await call(TEAM_TOOL_NAMES.postFinding, { ref: 'team:analyst/findings.md' })
+      expect(asFinding.isError).toBe(true)
+      expect(findings()).toHaveLength(0)
+    })
+
+    it('names both places when a file is outside them', async () => {
+      writeFileSync(join(outside, 'secret.md'), 'hello')
+
+      const res = await call(TEAM_TOOL_NAMES.postFinding, { ref: join(outside, 'secret.md') })
+      expect(res.isError).toBe(true)
+      expect(res.content[0].text).toContain(workDir)
+      expect(res.content[0].text).toContain(teamSelf)
     })
   })
 

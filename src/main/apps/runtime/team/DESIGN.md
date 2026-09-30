@@ -164,17 +164,64 @@ The coupling is inverted through `TeamDeliveryHooks` (see "Integration seam").
   one rename away. Ownership is the ref's FUTURE owner, not the caller: a task's
   resultRef belongs to the assignee, so a lead attaching a member's own file to
   that member's task is not a collision. Republishing your own ref is an update.
-- `artifact-path.ts` — what a published `ref` MEANS: a file inside the producing
-  member's WORKING directory, stored relative to it. Two rules earn their own
-  module because publishing and reading must never disagree about them. First,
-  the root is the directory the agent actually works in (`getSpaceDir`), never
-  the space's internal bookkeeping path — for a space pointed at a project
-  folder the two differ, and resolving against the wrong one makes every
-  artifact unreadable while every default-space test stays green. Second, an
-  absolute path INSIDE that root is folded back to relative rather than refused:
-  the model sees absolute paths everywhere, and only the relative form survives
-  the trip to a teammate whose copy of the project sits elsewhere. Symlinks are
-  resolved before the containment test.
+  A `team:` ref carries its producer's folder and cannot collide this way; it
+  still passes the check, which then costs nothing and guards the odd case.
+- `artifact-path.ts` — what a published `ref` MEANS. Two forms: `team:<member
+  folder>/<path>` names a file in the TEAM FOLDER of the piece of work (below);
+  any other ref names a file inside the producing member's WORKING directory,
+  stored relative to it. The rules earn their own module because publishing
+  (`resolveArtifactRef`) and reading (`resolvePublishedRef`) must never disagree
+  about them. First, the working-directory root is the directory the agent
+  actually works in (`getSpaceDir`), never the space's internal bookkeeping path
+  — for a space pointed at a project folder the two differ, and resolving
+  against the wrong one makes every artifact unreadable while every
+  default-space test stays green. Second, an absolute path INSIDE either root is
+  folded back to its portable form rather than refused: the model sees absolute
+  paths everywhere, and only the portable form survives the trip to a teammate
+  whose copy sits elsewhere. The team folder is tested first — it is the
+  narrower place, and a working directory as wide as the home folder would
+  otherwise claim it. Third, a `team:` file publishes only from the sub-folder
+  of the member that will OWN the ref — the caller's, or a task assignee's when
+  a lead attaches that member's file to its task (`TeamFolders.ofTaskAssignee`,
+  local assignees only) — so the ref always carries its real producer's name;
+  reading accepts any sub-folder, because the board already says whose it is.
+  But only a producer on this machine is served locally: a `team:` ref needs no
+  working-directory lookup, so without that check a ref published in a remote
+  member's name could reach a local member's unpublished file. A bare
+  relative path the working directory lacks is also tried in the caller's own
+  folder (models name team files that way as often as by ref); the working
+  directory wins when it has the file. A `team:`
+  ref is never tried as a project path (the colon cannot occur in a Windows file
+  name). Symlinks are resolved before every containment test.
+- `team-folder.ts` — where a collaboration's in-between output lives:
+  `<haloDir>/team-work/<id>/<member folder>/` (root: `getTeamFolderRoot` in
+  `foundation/config`, beside the other data-directory paths), `id` = the first 12 hex of
+  sha256(teamId, epochId). A member's working directory is often the user's own
+  repository, and reviews and reports left there were litter the user had to
+  clean up. Models are told about it the way Claude Code tells them about its
+  scratchpad — one line naming the member's own sub-folder as the "scratch
+  folder" for temporary collaboration files, and one clause in the ref rule;
+  the working directory stays THE working directory. Wherever no folder could
+  be prepared, the prompt and every rejection message are byte-identical to the
+  wording before the folder existed. The coordinating space conversation learns
+  its path from the `collab_start` result, never from its system prompt, which
+  was fixed before the collaboration existed. Per epoch because an epoch is one
+  piece of work, and because published refs already resolve per (team, epoch);
+  derived rather than stored so every machine of an office computes the same
+  folder, and a `team:` ref travels to its owner unchanged. Under the Halo data
+  directory, not the OS temp dir (shared by every Halo instance) and not a space
+  (a team spans spaces; a remote member's machine has no copy of the owning
+  one). Member folder names are file-system safe and unique within the team even
+  case-insensitively (a later member whose name reduces to an earlier one's gets
+  its app id appended). `forMember` creates the folder it hands out and answers
+  null when it cannot — a member is never pointed at a folder it cannot write
+  to. Folders outlive the epoch (the Team view still opens them, and a paused
+  epoch reopens); they go when the team is dissolved (`TeamService`) and an idle
+  startup task prunes those no local epoch accounts for, skipping any touched in
+  the last hour (by the top-level folder's mtime, which moves when a member
+  sub-folder is created — not on writes inside one) so a folder created ahead
+  of its epoch row is never taken. The coordinating space conversation resolves
+  its own folder once per epoch and caches it; a failed resolution is retried.
 - `member-record.ts` — the location-transparent logic behind `team_read_member`,
   the LEAD's read of what a member said and was told in this run. Lines are the
   member's team-channel transcript numbered by `seq` (1-based ordinal — the same
@@ -194,7 +241,11 @@ The coupling is inverted through `TeamDeliveryHooks` (see "Integration seam").
   SSOT (`apps/team/artifact-refs`: a finding's ref OR a task's resultRef), then
   reads bytes locally (`createLocalArtifactResolver`, resolving through
   `artifact-path`, shared with the federation owner-serve path) or through the
-  injected remote fetch. A ref claimed by two members resolves to `ambiguous`
+  injected remote fetch. A `team:` ref resolves in the team folder with no
+  lookup of the producer's working directory; any other ref through
+  `createMemberWorkDirResolver`, which also knows the coordinating space
+  conversation — a roster entry with a placeholder appId no app record carries,
+  whose files were unreadable while the lookup went through the app manager. A ref claimed by two members resolves to `ambiguous`
   and is refused by name — the publish gate above makes that rare, but it cannot
   be made impossible (two nodes publishing at once each see a free name until
   replication catches up), and a guess here is undetectable to the model that
@@ -687,11 +738,19 @@ interface TeamMcpContext {
   collabMode: CollabMode
   bus: MessageBus
   blackboard: Blackboard
+  callerWorkDir: string
+  callerTeamFolder?: TeamFolderPaths | null
   checks?: TeamChecks
   digest?: BoardDigest
   archive?: BoardArchive
 }
 ```
+
+`callerWorkDir` and `callerTeamFolder` are the two places a ref may be published
+from. A member's come from its turn (`app-chat`: the agent's cwd, and the folder
+its Team Entry names — one value, so the prompt and the gate cannot disagree);
+the space coordinator's from its conversation's scope and
+`runtime.teamFolders.forMember`, looked up per call like the rest of its context.
 
 `team_send` / `team_post_task` resolve `assignee`/`to` member names → appIds and
 enforce topology; unknown members and topology violations return
@@ -730,7 +789,9 @@ files here allowed to.
   team — tasks/findings retained for history). Subscribes `bus.onBreach` →
   escalate-to-user + seal. Provides `captureReport` (report sink), the
   `getMemberStatus` projection (working when the member's team session is
-  mid-turn), and `buildPromptContext(teamId, selfAppId)` (roster + topology).
+  mid-turn), and `buildPromptContext(teamId, selfAppId, epochId)` (roster +
+  topology + the member's team folder for the epoch its session serves; a team
+  session is per epoch, so the folder is as stable as the rest of the Entry).
   An escalation always marks the member as owing its own person an answer —
   `escalationRouting` never changes that here (see "The escalation preference is
   a prompt, not a gate"). Owns `reconcileAwaitingDecision` — what the office reads

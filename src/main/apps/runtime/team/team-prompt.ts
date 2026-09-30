@@ -4,6 +4,7 @@
  */
 
 import type { CollabMode, EscalationRouting } from '../../../../shared/apps/team-types'
+import type { TeamFolderPaths } from './team-folder'
 
 export interface TeamPromptRosterEntry {
   memberName: string
@@ -62,6 +63,13 @@ export interface TeamPromptContext {
    */
   selfIsDisposable: boolean
   roster: TeamPromptRosterEntry[]
+  /**
+   * This member's team folder for the piece of work the session serves. Stable
+   * for the session: a team session is per epoch, and so is the folder. Null
+   * when it could not be prepared — the Entry then points only at the working
+   * directory, never at a folder the member cannot write to.
+   */
+  teamFolder: TeamFolderPaths | null
 }
 
 // ── Entry layer ──
@@ -104,19 +112,7 @@ export function buildTeamEntry(ctx: TeamPromptContext): string {
     '- `team_send` hands the message over and returns; it does not wait. If they',
     '  answer, that arrives later as a new turn of yours. So dispatch what you',
     '  can, then carry on — do not idle waiting for a response inside this turn.',
-    '- Put large outputs in a file and share the file, not the text: publish it',
-    '  with `team_post_finding(ref)` or attach it to your task as `resultRef`,',
-    '  and teammates open it with `team_read_artifact(ref)`. A ref must name a',
-    '  file inside your working directory, written relative to it (e.g.',
-    '  "docs/design.md"); a file outside it cannot be shared this way. Publishing',
-    '  checks the file on the spot, so a successful publish means teammates can',
-    '  really read it — and a failure tells you what to fix. Never paste big',
-    '  content into a message.',
-    '- A published name belongs to one member only. Your working directory is',
-    '  your own, so the obvious name ("report.md") is the one a teammate is',
-    '  publishing too — and one name over two files leaves nobody able to say',
-    '  whose is whose. Name yours so it could only be yours. If a teammate got',
-    '  there first, publishing is refused: rename the file and publish again.',
+    ...renderFileSharing(ctx.teamFolder),
     '- Use `team_read_board()` to reconcile shared state (tasks, findings,',
     '  roster, and the record of what has happened). Your own context may have',
     '  been compacted, and the board is where you recover facts from — but it is',
@@ -158,6 +154,43 @@ export function buildTeamEntry(ctx: TeamPromptContext): string {
   ]
 
   return lines.filter((l) => l !== '').join('\n')
+}
+
+function renderFileSharing(folder: TeamFolderPaths | null): string[] {
+  const refRule = folder
+    ? [
+        '  and teammates open it with `team_read_artifact(ref)`. A ref must name a',
+        '  file inside your working directory (written relative to it, e.g.',
+        '  "docs/design.md") or inside your scratch folder; a file elsewhere cannot',
+        '  be shared this way. Publishing checks the file on the spot, so a',
+        '  successful publish means teammates can really read it — and a failure',
+        '  tells you what to fix. Never paste big content into a message.',
+      ]
+    : [
+        '  and teammates open it with `team_read_artifact(ref)`. A ref must name a',
+        '  file inside your working directory, written relative to it (e.g.',
+        '  "docs/design.md"); a file outside it cannot be shared this way. Publishing',
+        '  checks the file on the spot, so a successful publish means teammates can',
+        '  really read it — and a failure tells you what to fix. Never paste big',
+        '  content into a message.',
+      ]
+  return [
+    ...(folder
+      ? [
+          `- Scratch folder for this piece of work: ${folder.self}. Put temporary`,
+          '  collaboration files there — reviews, reports, notes, drafts for',
+          '  teammates — not in your working directory.',
+        ]
+      : []),
+    '- Put large outputs in a file and share the file, not the text: publish it',
+    '  with `team_post_finding(ref)` or attach it to your task as `resultRef`,',
+    ...refRule,
+    '- A published name belongs to one member only. Your working directory is',
+    '  your own, so the obvious name ("report.md") is the one a teammate is',
+    '  publishing too — and one name over two files leaves nobody able to say',
+    '  whose is whose. Name yours so it could only be yours. If a teammate got',
+    '  there first, publishing is refused: rename the file and publish again.',
+  ]
 }
 
 function renderRoster(ctx: TeamPromptContext): string[] {
