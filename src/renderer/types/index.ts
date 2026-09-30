@@ -144,7 +144,7 @@ export interface SystemConfig {
 export interface AgentConfig {
   maxTurns: number;         // Maximum tool call turns per message
   promptProfile?: 'official' | 'halo';  // System prompt profile
-  sdkEngine?: 'anthropic' | 'halo' | 'codex';  // Agent SDK engine (requires restart)
+  sdkEngine?: 'anthropic' | 'halo' | 'codex' | 'dsh';  // Agent SDK engine (requires restart)
   configDirMode?: 'halo' | 'cc' | 'custom';  // Claude CLI config directory mode
   customConfigDir?: string;  // Custom config dir path (when configDirMode === 'custom')
   enableDigitalHumans?: boolean; // Enable Digital Humans MCP tools (automation app management)
@@ -393,7 +393,7 @@ export interface CreateSpaceInput {
 // ============================================
 
 /** Agent engine that owns a conversation. Used for the EngineBadge UI. */
-export type EngineId = 'anthropic' | 'halo' | 'codex';
+export type EngineId = 'anthropic' | 'halo' | 'codex' | 'dsh';
 
 // Lightweight metadata for conversation list (no messages)
 // Used by listConversations for fast loading
@@ -575,6 +575,8 @@ export interface EngineAvailability {
   available: boolean;
   version: string;
   fingerprint: string;
+  /** Why the engine is unavailable, for Settings. Not localized. */
+  reason?: string;
 }
 
 /** Payload of `agent:get-engine-availability`. */

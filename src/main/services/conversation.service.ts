@@ -52,7 +52,7 @@ export interface ConversationMeta {
    * Conversation object by `toMeta()` so the conversation list can render
    * the engine badge without loading the full conversation.
    */
-  engineId?: 'anthropic' | 'halo' | 'codex' | null
+  engineId?: 'anthropic' | 'halo' | 'codex' | 'dsh' | null
   /**
    * Set when the user renamed the conversation. Suppresses the first-message
    * auto-title, so a rename survives even if it happens before the first user
@@ -87,7 +87,7 @@ export interface Conversation extends ConversationMeta {
    * for UI display (EngineBadge) — engine selection at runtime is still
    * process-bound (see resolved-sdk.ts), changing it requires a restart.
    */
-  engineId?: 'anthropic' | 'halo' | 'codex' | null
+  engineId?: 'anthropic' | 'halo' | 'codex' | 'dsh' | null
   /**
    * Per-conversation model pin (Cursor-style). Pins this conversation to a
    * specific AI source + model independent of the global "current" selection,
@@ -627,7 +627,7 @@ export function createConversation(spaceId: string, title?: string): Conversatio
   // Stamp the conversation with the engine that created it. Cheap to read
   // (single config field) and avoids needing a separate IPC call from
   // the renderer when displaying the engine badge.
-  let engineId: 'anthropic' | 'halo' | 'codex' = 'anthropic'
+  let engineId: 'anthropic' | 'halo' | 'codex' | 'dsh' = 'anthropic'
   // Stamp the active global model selection so a new conversation inherits the
   // last-used source + model (Cursor-style). Left undefined when no source is
   // configured — the credential resolver falls back to the global selection.
@@ -647,7 +647,7 @@ export function createConversation(spaceId: string, title?: string): Conversatio
   try {
     const cfg = getConfig()
     const cfgEngine = cfg?.agent?.sdkEngine
-    if (cfgEngine === 'halo' || cfgEngine === 'codex') engineId = cfgEngine
+    if (cfgEngine === 'halo' || cfgEngine === 'codex' || cfgEngine === 'dsh') engineId = cfgEngine
 
     const aiSources = cfg?.aiSources
     if (aiSources?.version === 2 && aiSources.currentId) {

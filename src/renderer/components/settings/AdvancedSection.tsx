@@ -26,7 +26,7 @@ import {
  * render site as `t()` literals — i18next-parser only extracts literal keys,
  * so moving the copy into this table would drop the existing translations.
  */
-const ENGINE_IDS: readonly EngineId[] = ['anthropic', 'halo', 'codex']
+const ENGINE_IDS: readonly EngineId[] = ['anthropic', 'halo', 'codex', 'dsh']
 
 // ─── Built-in MCP Extensions ────────────────────────────────────────────────────
 
@@ -115,11 +115,11 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
   const { showConfirm, DialogComponent: RestartDialogComponent } = useConfirmDialog()
 
   const [maxTurns, setMaxTurnsState] = useState(config?.agent?.maxTurns ?? DEFAULT_MAX_TURNS)
-  const [sdkEngine, setSdkEngineState] = useState<'anthropic' | 'halo' | 'codex'>(
+  const [sdkEngine, setSdkEngineState] = useState<EngineId>(
     config?.agent?.sdkEngine ?? 'anthropic'
   )
   // Track whether the SDK engine was changed from the initial value (needs restart)
-  const [sdkEngineInitial] = useState<'anthropic' | 'halo' | 'codex'>(
+  const [sdkEngineInitial] = useState<EngineId>(
     config?.agent?.sdkEngine ?? 'anthropic'
   )
   const [disabledTools, setDisabledToolsState] = useState<string[]>(
@@ -172,6 +172,30 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
     return engineAvailability.engines.find(e => e.engineId === engineId)?.available ?? false
   }
 
+  const engineUnavailableReason = (engineId: EngineId) =>
+    engineAvailability?.engines.find(e => e.engineId === engineId)?.reason
+
+  // Built inside the component so every string stays a literal `t(...)` call
+  // and reaches the extractor.
+  const ENGINE_COPY: Record<EngineId, { title: string; description: string }> = {
+    anthropic: {
+      title: t('Claude Code SDK'),
+      description: t('Powered by the official Anthropic Claude Code engine. Works with a wide range of frontier models. (Default)'),
+    },
+    halo: {
+      title: t('Halo SDK'),
+      description: t('The official Halo agent engine. Lightweight on resources, faster startup, optimized for open-source models. Experimental.'),
+    },
+    codex: {
+      title: t('Codex SDK'),
+      description: t('Powered by the official OpenAI Codex SDK. Better suited for GPT-family models. Experimental.'),
+    },
+    dsh: {
+      title: t('DeepSeek dsh'),
+      description: t('Powered by the open-source DeepSeek dsh runtime, which upstream is still changing and has not stabilized. Best used with DeepSeek models. Experimental.'),
+    },
+  }
+
   // ─── Helpers ────────────────────────────────────────────────────────────────
 
   const isCapabilityEnabled = (group: CapabilityGroup) => {
@@ -193,7 +217,7 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
 
   // ─── Handlers ───────────────────────────────────────────────────────────────
 
-  const handleSdkEngineChange = async (engine: 'anthropic' | 'halo' | 'codex') => {
+  const handleSdkEngineChange = async (engine: EngineId) => {
     if (engine === sdkEngine) return
     setSdkEngineState(engine)
     try {
@@ -358,7 +382,10 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
 
           <div className="space-y-2">
             {ENGINE_IDS.map(engineId => {
-              const available = isEngineAvailable(engineId)
+              const copy = ENGINE_COPY[engineId]
+              // The active engine stays selectable even if its runtime went
+              // missing, so the user is never locked out of their own setting.
+              const available = isEngineAvailable(engineId) || sdkEngine === engineId
               return (
                 <label
                   key={engineId}
@@ -375,22 +402,19 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
                     onChange={() => handleSdkEngineChange(engineId)}
                     className="mt-0.5 accent-primary"
                   />
-                  <div>
+                  <div className="min-w-0">
                     <p className="font-medium text-sm">
-                      {engineId === 'anthropic' && t('Claude Code SDK')}
-                      {engineId === 'halo' && t('Halo SDK')}
-                      {engineId === 'codex' && t('Codex SDK')}
+                      {copy.title}
                       {!available && (
                         <span className="ml-2 text-xs font-normal text-muted-foreground">
                           {t('Not included in this build')}
                         </span>
                       )}
                     </p>
-                    <p className="text-xs text-muted-foreground">
-                      {engineId === 'anthropic' && t('Powered by the official Anthropic Claude Code engine. Works with a wide range of frontier models. (Default)')}
-                      {engineId === 'halo' && t('The official Halo agent engine. Lightweight on resources, faster startup, optimized for open-source models. Experimental.')}
-                      {engineId === 'codex' && t('Powered by the official OpenAI Codex SDK. Better suited for GPT-family models. Experimental.')}
-                    </p>
+                    <p className="text-xs text-muted-foreground">{copy.description}</p>
+                    {!available && engineUnavailableReason(engineId) && (
+                      <p className="mt-1 text-xs text-muted-foreground">{engineUnavailableReason(engineId)}</p>
+                    )}
                   </div>
                 </label>
               )

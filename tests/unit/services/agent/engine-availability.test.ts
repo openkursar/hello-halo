@@ -138,6 +138,7 @@ describe('engine availability', () => {
     )
     const after = await getEngineAvailability()
 
-    expect(after).toBe(before)
+    expect(after).toEqual(before)
+    expect(after.find(e => e.engineId === 'halo')!.available).toBe(false)
   })
 })

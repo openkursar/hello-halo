@@ -13,6 +13,7 @@ import type { EngineAvailability } from '../../../../src/main/services/agent/eng
 
 let configuredEngine: unknown = 'anthropic'
 let availability: EngineAvailability[] = []
+let probedEngines: readonly string[] | undefined
 
 function engines(overrides: Partial<Record<'anthropic' | 'halo' | 'codex', boolean>>): EngineAvailability[] {
   return (['anthropic', 'halo', 'codex'] as const).map(engineId => ({
@@ -29,7 +30,10 @@ vi.mock('../../../../src/main/foundation/config.service', async (importOriginal)
 })
 
 vi.mock('../../../../src/main/services/agent/engine-availability', () => ({
-  getEngineAvailability: async () => availability,
+  getEngineAvailability: async (engineIds?: readonly string[]) => {
+    probedEngines = engineIds
+    return availability
+  },
 }))
 
 // The CC SDK is the fallback target in every degraded case; a stub keeps the
@@ -63,6 +67,21 @@ describe('startup engine resolution', () => {
     expect(sdk.isInitialized()).toBe(true)
     expect(sdk.getActiveEngine()).toBe('anthropic')
     expect(sdk.getDegradedFromEngine()).toBeNull()
+  })
+
+  it('does not probe an opt-in engine the config did not select', async () => {
+    await initFresh()
+
+    expect(probedEngines).toBeDefined()
+    expect(probedEngines).not.toContain('dsh')
+  })
+
+  it('probes the opt-in engine when the config selects it', async () => {
+    configuredEngine = 'dsh'
+
+    await initFresh()
+
+    expect(probedEngines?.[0]).toBe('dsh')
   })
 
   it('degrades to an available engine when the configured one did not ship', async () => {

@@ -25,7 +25,7 @@ const SKILLS = path.join(ROOT, 'resources', 'builtin-skills')
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'office-skills-'))
 
 if (!fs.existsSync(RUNTIME)) {
-  console.error(`Bundled runtime missing: ${RUNTIME}\nRun: node scripts/prepare-office-runtime.mjs`)
+  console.error(`Bundled runtime missing: ${RUNTIME}\nRun: node runtimes/office/build.mjs`)
   process.exit(1)
 }
 

@@ -29,7 +29,16 @@
 const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { ENGINE_RUNTIMES, VALID_ENGINES, entryCandidates } = require('./engine-runtimes.cjs');
+const { ENGINE_RUNTIMES, VALID_ENGINES, entryCandidates, engineArtifactPaths } = require('./engine-runtimes.cjs');
+const {
+  RUNTIME_DIR,
+  RUNTIME_ENTRY,
+  EXTERNAL_PACKAGES,
+  PRIVATE_EXTERNALS,
+  TARGET_PLATFORMS,
+  allNativeCompanions,
+  nativeCompanionsFor,
+} = require('../runtimes/dsh/manifest.cjs');
 const { signLocalApp } = require('./lib/mac-local-signing.cjs');
 
 // electron-builder Arch enum: 0=ia32, 1=x64, 2=armv7l, 3=arm64, 4=universal
@@ -198,6 +207,89 @@ function swapBetterSqlite3Binary(context) {
 
   const sizeMB = (fs.statSync(targetNode).size / 1024 / 1024).toFixed(1);
   console.log(`[afterPack] ${key}: swapped better-sqlite3 binary (${sizeMB} MB)`);
+}
+
+/**
+ * Install the dsh runtime's own node_modules into the packaged output.
+ *
+ * electron-builder drops `node_modules` directories it finds under a `files`
+ * glob — it collects node_modules from the dependency graph instead — so the
+ * tree `runtimes/dsh/build.mjs` plants beside the bundle (private
+ * externals with their dependencies, native companions for every platform)
+ * never reaches the artifact on its own. It is copied from the project here,
+ * minus the native companions of other platforms.
+ */
+function installDshPrivateExternals(context) {
+  const projectRoot = path.resolve(__dirname, '..');
+  const runtimeSegments = RUNTIME_DIR.split('/');
+  const srcModules = path.join(projectRoot, ...runtimeSegments, 'node_modules');
+  const destRuntimeDir = path.join(getUnpackedDir(context), ...runtimeSegments);
+
+  if (!fs.existsSync(destRuntimeDir)) {
+    console.log('[afterPack] dsh runtime bundle not in the unpacked output, skipping its node_modules');
+    return;
+  }
+  if (!fs.existsSync(srcModules)) {
+    throw new Error(`[afterPack] dsh runtime has no node_modules at ${srcModules}. Run "npm run runtime:dsh".`);
+  }
+
+  const key = `${context.electronPlatformName}-${ARCH_NAMES[context.arch] || String(context.arch)}`;
+  if (!TARGET_PLATFORMS.includes(key)) {
+    throw new Error(`[afterPack] no dsh native companion mapping for ${key} in runtimes/dsh/manifest.cjs`);
+  }
+  const keep = new Set(nativeCompanionsFor(key));
+  const skip = new Set(allNativeCompanions().filter(name => !keep.has(name)));
+
+  const destModules = path.join(destRuntimeDir, 'node_modules');
+  fs.cpSync(srcModules, destModules, {
+    recursive: true,
+    dereference: true,
+    filter: (src) => {
+      const segments = path.relative(srcModules, src).split(path.sep);
+      const name = segments[0].startsWith('@') ? segments.slice(0, 2).join('/') : segments[0];
+      return !skip.has(name);
+    },
+  });
+  console.log(
+    `[afterPack] ${key}: dsh runtime node_modules installed ` +
+    `(private: ${PRIVATE_EXTERNALS.map(e => e.name).join(', ')}; native: ${[...keep].join(', ') || 'none'})`
+  );
+}
+
+/**
+ * Prune the dsh runtime's private node-pty to what the target loads.
+ *
+ * The copy runtimes/dsh/build.mjs plants beside the bundle carries every
+ * platform's prebuilds plus the sources node-pty compiles itself from. It is
+ * pruned here, separately from the app's own node-pty (cleanNodePtyPrebuilds),
+ * so dsh packaging cannot change what Halo's terminal ships.
+ */
+function cleanDshRuntimeNodePty(context) {
+  const key = `${context.electronPlatformName}-${ARCH_NAMES[context.arch] || String(context.arch)}`;
+  const pkgDir = path.join(getUnpackedDir(context), ...RUNTIME_DIR.split('/'), 'node_modules', 'node-pty');
+  if (!fs.existsSync(pkgDir)) return;
+
+  const prebuildsDir = path.join(pkgDir, 'prebuilds');
+  const targetDir = NODE_PTY_PREBUILD_TARGETS[key];
+  if (fs.existsSync(prebuildsDir)) {
+    for (const entry of fs.readdirSync(prebuildsDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const entryPath = path.join(prebuildsDir, entry.name);
+      if (entry.name !== targetDir) {
+        fs.rmSync(entryPath, { recursive: true });
+        continue;
+      }
+      for (const pdb of fs.readdirSync(entryPath).filter(f => f.endsWith('.pdb'))) {
+        fs.rmSync(path.join(entryPath, pdb));
+      }
+    }
+  }
+  // Sources and toolchain files node-pty needs only to compile itself; the
+  // runtime loads `prebuilds/<platform>-<arch>/`, which carries its own conpty.
+  for (const entry of ['build', 'src', 'deps', 'node-addon-api', 'third_party', 'scripts', 'typings', 'binding.gyp']) {
+    fs.rmSync(path.join(pkgDir, entry), { recursive: true, force: true });
+  }
+  console.log(`[afterPack] ${key}: dsh runtime node-pty pruned to prebuilds/${targetDir ?? '(none)'}`);
 }
 
 /**
@@ -726,18 +818,20 @@ function validateEngineRuntimes(pkg) {
   const missing = [];
 
   for (const engineId of VALID_ENGINES) {
-    const { name, packageId, fix } = ENGINE_RUNTIMES[engineId];
-    const pkgDir = path.join('node_modules', ...packageId.split('/'));
-    const manifestPath = path.join(pkgDir, 'package.json');
+    const engine = ENGINE_RUNTIMES[engineId];
+    const { name, fix } = engine;
+    const { pkgDir, manifestPath, entryPaths, label } = engineArtifactPaths(engine);
 
     let reason = null;
     if (!pkg.exists(manifestPath)) {
-      reason = 'package not in the artifact';
+      reason = engine.prebuilt ? 'prebuilt runtime not in the artifact' : 'package not in the artifact';
     } else {
       const manifest = JSON.parse(pkg.read(manifestPath).toString('utf-8'));
-      const entry = entryCandidates(manifest).find(candidate => pkg.exists(path.join(pkgDir, candidate)));
+      const candidates = entryPaths
+        ?? entryCandidates(manifest).map(candidate => path.join(pkgDir, candidate));
+      const entry = candidates.find(candidate => pkg.exists(candidate));
       if (!entry) {
-        reason = 'package present but its entry file was excluded';
+        reason = 'present but its entry file was excluded';
       } else {
         console.log(`[afterPack] Engine bundled: ${name} v${manifest.version ?? 'unknown'}`);
       }
@@ -745,7 +839,7 @@ function validateEngineRuntimes(pkg) {
 
     if (!reason) continue;
     if (required.includes(engineId)) {
-      missing.push(`${name} (${packageId}): ${reason}. Fix: ${fix}`);
+      missing.push(`${name} (${label}): ${reason}. Fix: ${fix}`);
     } else {
       console.log(`[afterPack] Engine not bundled: ${name} — ${reason} (not required by this build)`);
     }
@@ -825,6 +919,42 @@ function validateUpdateHelper(context, product) {
   console.log('[afterPack] Windows update helper present');
 }
 
+/**
+ * Assert the dsh runtime can load in the packaged app: its entry, every
+ * external it imports (all carried beside it, never the app's), and the
+ * target's native companions.
+ */
+function validateDshRuntimeBundle(context) {
+  const runtimeDir = path.join(getUnpackedDir(context), ...RUNTIME_DIR.split('/'));
+
+  if (!fs.existsSync(runtimeDir)) {
+    console.log('[afterPack] dsh runtime bundle not in the unpacked output — skipping bundle check');
+    return;
+  }
+
+  const entry = path.join(runtimeDir, ...RUNTIME_ENTRY.split('/'));
+  if (!fs.existsSync(entry)) {
+    throw new Error(
+      `[afterPack] dsh runtime directory is present but its entry is missing: ${entry}. ` +
+      `Check that asarUnpack covers "${RUNTIME_DIR}/**/*".`
+    );
+  }
+
+  const key = `${context.electronPlatformName}-${ARCH_NAMES[context.arch] || String(context.arch)}`;
+  const missing = [...EXTERNAL_PACKAGES, ...nativeCompanionsFor(key)].filter(
+    name => !fs.existsSync(path.join(runtimeDir, 'node_modules', ...name.split('/'), 'package.json'))
+  );
+  if (missing.length > 0) {
+    throw new Error(
+      `[afterPack] ${key}: dsh runtime is missing ${missing.join(', ')} beside its bundle. ` +
+      `Run "npm run runtime:dsh" and check installDshPrivateExternals.`
+    );
+  }
+
+  const sizeMB = (fs.statSync(entry).size / 1024 / 1024).toFixed(1);
+  console.log(`[afterPack] ${key}: dsh runtime bundle present (${sizeMB} MB)`);
+}
+
 function validatePackagedArtifact(context) {
   console.log('[afterPack] Validating packaged artifact...');
   const pkg = createPackageReader(context);
@@ -841,6 +971,12 @@ module.exports = async function(context) {
 
   // Swap better-sqlite3 native binary for the target platform
   swapBetterSqlite3Binary(context);
+
+  // Give the dsh bundle its own node_modules and native companions for this
+  // target, then prune its private node-pty. None of this touches packages the
+  // rest of the app uses.
+  installDshPrivateExternals(context);
+  cleanDshRuntimeNodePty(context);
 
   // Clean non-target node-pty prebuild directories and strip .pdb files
   cleanNodePtyPrebuilds(context);
@@ -866,6 +1002,8 @@ module.exports = async function(context) {
   // contains the engines, product config and updater metadata it needs.
   // Throwing here fails the build, which is the point — a broken package must
   // never reach a user.
+  validateDshRuntimeBundle(context);
+
   validatePackagedArtifact(context);
 
   // macOS signing (other platforms skip)

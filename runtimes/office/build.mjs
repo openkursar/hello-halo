@@ -4,7 +4,7 @@
  * Materialize the bundled Office library runtime.
  *
  * Installs the locked set of pure-JS packages declared in
- * office-runtime-src/package.json into resources/office-runtime/node_modules,
+ * runtimes/office/package.json into resources/office-runtime/node_modules,
  * which ships as an extraResource and is exposed to agent sessions via the
  * halo-node shim + NODE_PATH (src/main/services/office-runtime/).
  *
@@ -13,8 +13,8 @@
  * every platform except the build host.
  *
  * Usage:
- *   node scripts/prepare-office-runtime.mjs           # skip when up to date
- *   node scripts/prepare-office-runtime.mjs --force   # always rebuild
+ *   node runtimes/office/build.mjs           # skip when up to date
+ *   node runtimes/office/build.mjs --force   # always rebuild
  */
 
 import fs from 'node:fs'
@@ -24,8 +24,8 @@ import { execFileSync, execSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const PROJECT_ROOT = path.resolve(__dirname, '..')
-const STAGING_DIR = path.join(PROJECT_ROOT, 'office-runtime-src')
+const PROJECT_ROOT = path.resolve(__dirname, '..', '..')
+const STAGING_DIR = __dirname
 const OUTPUT_DIR = path.join(PROJECT_ROOT, 'resources', 'office-runtime')
 const STAMP_FILE = path.join(OUTPUT_DIR, '.stamp')
 const FONTS_DIR = path.join(OUTPUT_DIR, 'fonts')
@@ -75,7 +75,7 @@ const KEEP_FILE_PATTERN = /^(licen[cs]e|notice)/i
  * Per-package prunes for a require()-only runtime: browser bundles, ESM
  * duplicates and legacy typings that the CJS entry never touches. Paths are
  * relative to the package root and tied to the locked versions — revisit when
- * bumping a version in office-runtime-src/package.json. The require smoke test
+ * bumping a version in runtimes/office/package.json. The require smoke test
  * at the end of this script catches a prune that breaks an entry point.
  */
 const PACKAGE_PRUNE_PATHS = {
@@ -267,7 +267,7 @@ async function main() {
   const force = process.argv.includes('--force')
 
   if (!fs.existsSync(path.join(STAGING_DIR, 'package-lock.json'))) {
-    fail('office-runtime-src/package-lock.json missing — commit a lockfile first.')
+    fail('runtimes/office/package-lock.json missing — commit a lockfile first.')
   }
 
   await ensureFonts()

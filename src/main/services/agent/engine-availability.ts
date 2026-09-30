@@ -11,6 +11,14 @@
  * The probe never imports an engine module — it inspects packaged files
  * (package.json + entry file), so it is safe to call before initSdk().
  *
+ * dsh is the one exception: it also needs an interpreter newer than the Node
+ * this Electron bundles, and the only way to know whether one exists is to ask
+ * `node --version`. Without it the engine reads as available and fails on the
+ * user's first message instead of in Settings, which is where the fix is.
+ * That spawn is why each engine is probed on first demand rather than all at
+ * once: startup asks only for the engines it may load, so an experimental
+ * engine nobody selected costs nothing until Settings lists it.
+ *
  * `fingerprint` exists because package version is not a reliable identity for
  * every engine: `@hello-halo/agent-sdk` is a local path dependency whose version
  * is static across rebuilds, so two different SDK builds are indistinguishable by
@@ -32,6 +40,8 @@ export interface EngineAvailability {
   version: string
   /** Short content hash of the entry file; empty when unavailable or not hashable. */
   fingerprint: string
+  /** Why the engine is unavailable, for logs and Settings. Not localized. */
+  reason?: string
 }
 
 /**
@@ -42,7 +52,7 @@ export interface EngineAvailability {
  * about whether the engine can run. Its real requirement is the platform-native
  * `codex` binary, probed separately via `resolveBundledCodexBinary()`.
  */
-const ENGINE_PACKAGES: Record<Exclude<EngineId, 'codex'>, string> = {
+const ENGINE_PACKAGES: Record<Exclude<EngineId, 'codex' | 'dsh'>, string> = {
   anthropic: '@anthropic-ai/claude-agent-sdk',
   halo: '@hello-halo/agent-sdk',
 }
@@ -50,47 +60,43 @@ const ENGINE_PACKAGES: Record<Exclude<EngineId, 'codex'>, string> = {
 /** Package that carries the Codex version metadata (binary lives in its platform subpackage). */
 const CODEX_VERSION_PACKAGE = '@openai/codex-sdk'
 
-export const ALL_ENGINE_IDS: EngineId[] = ['anthropic', 'halo', 'codex']
+export const ALL_ENGINE_IDS: EngineId[] = ['anthropic', 'halo', 'codex', 'dsh']
 
-let cached: EngineAvailability[] | null = null
+const probes = new Map<EngineId, Promise<EngineAvailability>>()
 
 /**
- * Probe every engine. Result is cached for the process lifetime — packaged
- * files cannot change while the app runs.
+ * Probe the given engines, every engine by default. Each result is cached for
+ * the process lifetime — packaged files cannot change while the app runs.
  */
-export async function getEngineAvailability(): Promise<EngineAvailability[]> {
-  if (cached) return cached
+export async function getEngineAvailability(
+  engineIds: readonly EngineId[] = ALL_ENGINE_IDS
+): Promise<EngineAvailability[]> {
+  const fresh = engineIds.filter(id => !probes.has(id))
+  for (const engineId of fresh) probes.set(engineId, probeEngine(engineId))
 
-  const results: EngineAvailability[] = []
-  for (const engineId of ALL_ENGINE_IDS) {
-    results.push(engineId === 'codex' ? await probeCodex() : probePackageEngine(engineId))
+  const results = await Promise.all(engineIds.map(id => probes.get(id)!))
+
+  if (fresh.length > 0) {
+    const summary = results
+      .filter(r => fresh.includes(r.engineId))
+      .map(r => `${r.engineId}=${r.available ? `${r.version || 'unknown'}${r.fingerprint ? `#${r.fingerprint}` : ''}` : 'missing'}`)
+      .join(' ')
+    console.log(`[SDK] Engine availability: ${summary}`)
   }
-
-  cached = results
-  const summary = results
-    .map(r => `${r.engineId}=${r.available ? `${r.version || 'unknown'}${r.fingerprint ? `#${r.fingerprint}` : ''}` : 'missing'}`)
-    .join(' ')
-  console.log(`[SDK] Engine availability: ${summary}`)
   return results
 }
 
-/** Availability of a single engine. */
-export async function isEngineAvailable(engineId: EngineId): Promise<boolean> {
-  const all = await getEngineAvailability()
-  return all.find(e => e.engineId === engineId)?.available ?? false
-}
-
-/** Descriptor of a single engine, or null when the id is unknown. */
-export async function getEngineDescriptor(engineId: EngineId): Promise<EngineAvailability | null> {
-  const all = await getEngineAvailability()
-  return all.find(e => e.engineId === engineId) ?? null
+function probeEngine(engineId: EngineId): Promise<EngineAvailability> {
+  if (engineId === 'codex') return probeCodex()
+  if (engineId === 'dsh') return probeDsh()
+  return Promise.resolve(probePackageEngine(engineId))
 }
 
 // ============================================
 // Probes
 // ============================================
 
-function probePackageEngine(engineId: Exclude<EngineId, 'codex'>): EngineAvailability {
+function probePackageEngine(engineId: Exclude<EngineId, 'codex' | 'dsh'>): EngineAvailability {
   const absent: EngineAvailability = { engineId, available: false, version: '', fingerprint: '' }
 
   const pkgDir = findPackageDir(ENGINE_PACKAGES[engineId])
@@ -124,6 +130,42 @@ async function probeCodex(): Promise<EngineAvailability> {
   } catch (error) {
     console.warn('[SDK] Codex availability probe failed:', (error as Error).message)
     return { engineId: 'codex', available: false, version, fingerprint: '' }
+  }
+}
+
+async function probeDsh(): Promise<EngineAvailability> {
+  const absent = (reason: string): EngineAvailability =>
+    ({ engineId: 'dsh', available: false, version: '', fingerprint: '', reason })
+
+  // Asking the module that launches the engine, rather than re-deriving the
+  // path here, is what keeps the probe from reporting an engine the launcher
+  // cannot find (or the reverse).
+  let resolver: typeof import('./dsh/runtime')
+  try {
+    resolver = await import('./dsh/runtime')
+  } catch (error) {
+    console.warn('[SDK] dsh availability probe failed:', (error as Error).message)
+    return absent('the dsh adapter failed to load')
+  }
+  const { describeMinNodeVersion, resolveDshInterpreter, resolveDshRuntime } = resolver
+
+  const runtime = resolveDshRuntime()
+  if (!runtime) {
+    return absent('the dsh runtime bundle (resources/dsh-runtime) did not ship in this build')
+  }
+
+  if (!resolveDshInterpreter()) {
+    return absent(
+      `the dsh runtime needs Node >= ${describeMinNodeVersion()}; this build's Electron bundles ` +
+      `${process.versions.node} and no newer "node" was found on PATH`
+    )
+  }
+
+  return {
+    engineId: 'dsh',
+    available: true,
+    version: runtime.version,
+    fingerprint: fingerprintFile(runtime.entryPath),
   }
 }
 

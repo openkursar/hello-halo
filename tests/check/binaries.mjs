@@ -36,7 +36,7 @@ import { execSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import engineRuntimes from '../../scripts/engine-runtimes.cjs'
 
-const { ENGINE_RUNTIMES, VALID_ENGINES, resolveEngineEntry } = engineRuntimes
+const { ENGINE_RUNTIMES, VALID_ENGINES, resolveEngineEntry, engineArtifactPaths } = engineRuntimes
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PROJECT_ROOT = path.resolve(__dirname, '../..')
@@ -341,35 +341,37 @@ const BINARY_DEPENDENCIES = [
  */
 function checkEngine(engineId) {
   const engine = ENGINE_RUNTIMES[engineId]
-  const pkgDir = path.join(PROJECT_ROOT, 'node_modules', ...engine.packageId.split('/'))
-  const manifestPath = path.join(pkgDir, 'package.json')
+  const { pkgDir, manifestPath, entryPaths, label } = engineArtifactPaths(engine)
+  const absoluteManifest = path.join(PROJECT_ROOT, manifestPath)
 
-  if (!fs.existsSync(manifestPath)) {
-    return { engineId, name: engine.name, status: 'missing', path: engine.packageId, fix: engine.fix }
+  if (!fs.existsSync(absoluteManifest)) {
+    return { engineId, name: engine.name, status: 'missing', path: label, fix: engine.fix }
   }
 
   let manifest
   try {
-    manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'))
+    manifest = JSON.parse(fs.readFileSync(absoluteManifest, 'utf-8'))
   } catch (error) {
     return {
       engineId,
       name: engine.name,
       status: 'invalid',
-      path: engine.packageId,
+      path: label,
       info: `unreadable package.json (${error.message})`,
       fix: engine.fix
     }
   }
 
-  const entry = resolveEngineEntry(pkgDir, manifest)
+  const entry = entryPaths
+    ? entryPaths.map(p => path.join(PROJECT_ROOT, p)).find(fs.existsSync)
+    : resolveEngineEntry(path.join(PROJECT_ROOT, pkgDir), manifest)
   if (!entry) {
     return {
       engineId,
       name: engine.name,
       status: 'invalid',
-      path: engine.packageId,
-      info: 'package present but has no loadable entry file',
+      path: label,
+      info: 'present but has no loadable entry file',
       fix: engine.fix
     }
   }
@@ -379,7 +381,7 @@ function checkEngine(engineId) {
     engineId,
     name: engine.name,
     status: 'ok',
-    path: engine.packageId,
+    path: label,
     info: `v${manifest.version ?? 'unknown'} #${fingerprint}`
   }
 }

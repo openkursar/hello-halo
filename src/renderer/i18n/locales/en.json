@@ -2839,5 +2839,9 @@
   "Zoom in": "Zoom in",
   "Zoom in (+)": "Zoom in (+)",
   "Zoom out": "Zoom out",
-  "Zoom out (-)": "Zoom out (-)"
+  "Zoom out (-)": "Zoom out (-)",
+  "DeepSeek Harness": "DeepSeek Harness",
+  "DSH": "DSH",
+  "Halo's built-in tools, MCP servers, skills and approval prompts do not reach this engine — it only runs the tools its own runtime configures. Stopping a reply restarts the engine process and ends the session.": "Halo's built-in tools, MCP servers, skills and approval prompts do not reach this engine — it only runs the tools its own runtime configures. Stopping a reply restarts the engine process and ends the session.",
+  "Powered by the open-source DeepSeek Harness runtime, running as a separate process with one provider and model fixed at startup. Experimental.": "Powered by the open-source DeepSeek Harness runtime, running as a separate process with one provider and model fixed at startup. Experimental."
 }

@@ -28,7 +28,8 @@ import { getCleanUserEnv } from '../sdk-config'
 import { ensureOpenAICompatRouter, encodeBackendConfig } from '../../../openai-compat-router'
 import type { ApiCredentials } from '../types'
 import type { AskForApproval, SandboxMode, ThreadStartParams } from './types/codex-protocol'
-import { prepareCodexMcpServers, type CodexSdkMcpBridge } from './mcp-bridge'
+import { prepareCodexMcpServers } from './mcp-config'
+import type { SdkMcpBridge } from '../mcp/sdk-bridge'
 
 export interface CodexResolvedOptions {
   /** Process env passed to the app-server child. */
@@ -50,7 +51,7 @@ export interface CodexResolvedOptions {
   /** MCP servers (used by the event normalizer to populate system.init.tools). */
   mcpServers: Record<string, any>
   /** Local bridge for SDK-backed MCP servers. Owned by CodexAppServerSession. */
-  mcpBridge?: CodexSdkMcpBridge
+  mcpBridge?: SdkMcpBridge
   /**
    * Mirrors Claude Code SDK's `includePartialMessages`:
    *   - true  → consumer wants stream_event (token-level deltas) for live UI.
@@ -281,7 +282,7 @@ function inferCodexUpstreamApiType(apiUrl: string): 'responses' | 'chat_completi
   return 'chat_completions'
 }
 
-function normalizeBackendEndpointUrl(apiUrl: string, apiType: 'responses' | 'chat_completions'): string {
+function normalizeBackendEndpointUrl(apiUrl: string, apiType: NonNullable<ApiCredentials['apiType']>): string {
   const baseUrl = normalizeCodexBaseUrl(apiUrl)
   return apiType === 'responses' ? `${baseUrl}/responses` : `${baseUrl}/chat/completions`
 }

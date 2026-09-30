@@ -13,6 +13,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { RUNTIME_DIR, RUNTIME_ENTRY } = require('../runtimes/dsh/manifest.cjs');
 
 const ENGINE_RUNTIMES = {
   anthropic: {
@@ -32,6 +33,15 @@ const ENGINE_RUNTIMES = {
     name: 'Codex SDK engine',
     packageId: '@openai/codex-sdk',
     fix: 'npm install',
+  },
+  // The only engine that is not an npm package in the artifact: it is compiled
+  // into one file by runtimes/dsh/build.mjs, and the package tree it was
+  // built from is excluded from packaging. Naming a `packageId` here would make
+  // every check look for something the artifact deliberately does not carry.
+  dsh: {
+    name: 'DeepSeek Harness engine',
+    prebuilt: { dir: RUNTIME_DIR, entry: RUNTIME_ENTRY },
+    fix: 'node runtimes/dsh/build.mjs',
   },
 };
 
@@ -75,4 +85,31 @@ function resolveEngineEntry(pkgDir, manifest) {
   return null;
 }
 
-module.exports = { ENGINE_RUNTIMES, VALID_ENGINES, entryCandidates, resolveEngineEntry };
+/**
+ * Where an engine's identity lives, relative to whatever root the caller is
+ * inspecting: the artifact, or the project's node_modules.
+ *
+ * Both shapes answer the same two questions — which file to fingerprint, and
+ * which manifest carries the version — so callers can treat them uniformly
+ * instead of branching on how the engine happens to be delivered.
+ */
+function engineArtifactPaths(engine) {
+  if (engine.prebuilt) {
+    return {
+      manifestPath: path.join(engine.prebuilt.dir, 'package.json'),
+      entryPaths: [path.join(engine.prebuilt.dir, ...engine.prebuilt.entry.split('/'))],
+      label: `${engine.prebuilt.dir}/${engine.prebuilt.entry}`,
+    };
+  }
+
+  const pkgDir = path.join('node_modules', ...engine.packageId.split('/'));
+  return { pkgDir, manifestPath: path.join(pkgDir, 'package.json'), label: engine.packageId };
+}
+
+module.exports = {
+  ENGINE_RUNTIMES,
+  VALID_ENGINES,
+  entryCandidates,
+  resolveEngineEntry,
+  engineArtifactPaths,
+};

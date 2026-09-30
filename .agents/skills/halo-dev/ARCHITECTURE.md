@@ -254,7 +254,9 @@ Outside `src/`: `gateway/` is a standalone Go module (the federation relay gatew
 a dumb frame router for off-LAN offices; see §24), `win-update-helper/` is a standalone
 Go module shipping two binaries (the Windows update helper that performs the directory
 swap, and the packer that builds update archives — see `services/updater/DESIGN.md`),
-and `tests/decentralized/` is the cluster regression tier that boots REAL multi-process
+`runtimes/` holds the runtimes that ship inside the installer with their own dependency
+manifest (`dsh/`, `office/`; one self-contained directory each, output in
+`resources/<name>-runtime/`, see its README.md), and `tests/decentralized/` is the cluster regression tier that boots REAL multi-process
 nodes (see its README.md).
 
 ## 5) Data Types

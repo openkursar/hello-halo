@@ -3,7 +3,7 @@
  *
  * The app ships a locked set of pure-JS office libraries (exceljs, docx,
  * pptxgenjs, mammoth, pdf-lib, ...) under resources/office-runtime/node_modules
- * (materialized at build time by scripts/prepare-office-runtime.mjs). This
+ * (materialized at build time by runtimes/office/build.mjs). This
  * module exposes them to the agent's subprocesses with zero user setup:
  *
  *   - a `halo-node` shim (sh / .cmd), generated into userData, that execs the
@@ -120,7 +120,7 @@ export function ensureOfficeRuntimeShim(): string | null {
     if (!missingRuntimeLogged) {
       missingRuntimeLogged = true
       console.log(
-        '[OfficeRuntime] Bundled runtime not found (run scripts/prepare-office-runtime.mjs); ' +
+        '[OfficeRuntime] Bundled runtime not found (run runtimes/office/build.mjs); ' +
         'halo-node shim disabled for this session.'
       )
     }

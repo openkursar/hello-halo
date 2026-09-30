@@ -2839,5 +2839,9 @@
   "{{who}} joined \"{{office}}\".": "{{who}} ist \"{{office}}\" beigetreten.",
   "{{who}} · {{when}}": "{{who}} · {{when}}",
   "← → to switch files": "← → zum Wechseln der Dateien",
-  "🤖 AI Browser": "🤖 AI-Browser"
+  "🤖 AI Browser": "🤖 AI-Browser",
+  "DeepSeek Harness": "",
+  "DSH": "",
+  "Halo's built-in tools, MCP servers, skills and approval prompts do not reach this engine — it only runs the tools its own runtime configures. Stopping a reply restarts the engine process and ends the session.": "",
+  "Powered by the open-source DeepSeek Harness runtime, running as a separate process with one provider and model fixed at startup. Experimental.": ""
 }

@@ -51,7 +51,7 @@ const PROJECT_ROOT = resolve(__dirname, '..')
 const NO_CACHE = ['--composite', 'false', '--incremental', 'false']
 
 const PROJECTS = [
-  { config: 'tsconfig.node.json', owns: (f) => /^src\/(main|preload|shared|worker)\//.test(f) },
+  { config: 'tsconfig.node.json', owns: (f) => /^src\/(main|preload|shared|worker)\//.test(f) || /^runtimes\/[^/]+\/plugins\//.test(f) },
   { config: 'tsconfig.web.json', owns: (f) => /^src\/(renderer|shared)\//.test(f) },
   // Playwright and vitest transpile without typechecking, so nothing else ever
   // reads these files as types. The perf harness produces every number this

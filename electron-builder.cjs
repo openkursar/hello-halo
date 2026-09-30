@@ -19,6 +19,7 @@
 
 const fs = require('node:fs')
 const path = require('node:path')
+const { runtimeAsarUnpackGlob } = require('./runtimes/dsh/manifest.cjs')
 
 const ROOT = __dirname
 const PRODUCT_FILE = path.join(ROOT, 'product.json')
@@ -115,10 +116,26 @@ function resolveProviderFiles() {
     .map((p) => p.path.trim().replace(/^\.\//, ''))
 }
 
+/**
+ * asarUnpack, static entries plus the dsh runtime bundle.
+ *
+ * The bundle is unpacked for the same reason as the native binaries listed in
+ * package.json#build: the dsh engine is a plain Node child process, and a plain
+ * Node process cannot read inside an asar archive. It is added here rather than
+ * there because it is a build product — a vanilla checkout has no
+ * resources/dsh-runtime until runtimes/dsh/build.mjs has run.
+ */
+function resolveAsarUnpack(base) {
+  return [...new Set([...(base.asarUnpack || []), runtimeAsarUnpackGlob()])]
+}
+
+const base = loadBaseConfig()
+
 module.exports = {
-  ...loadBaseConfig(),
+  ...base,
+  asarUnpack: resolveAsarUnpack(base),
   productName: field('name'),
   appId: field('appId'),
   publish: resolvePublish(),
-  files: [...(loadBaseConfig().files ?? []), ...resolveProviderFiles()]
+  files: [...(base.files ?? []), ...resolveProviderFiles()]
 }
