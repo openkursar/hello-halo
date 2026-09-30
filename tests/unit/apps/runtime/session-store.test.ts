@@ -1,5 +1,5 @@
 /**
- * Unit tests for apps/runtime/session-store — convertEventsToMessages()
+ * Unit tests for apps/runtime/session-transcript — convertEventsToMessages() (with the session-store writer)
  *
  * Tests the event-to-message conversion that powers three display scenarios:
  * - Digital human chat (Halo Chat)
@@ -15,11 +15,13 @@ import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
-  convertEventsToMessages,
   openSessionWriter,
   readSessionMessages,
-  type StoredEvent,
 } from '../../../../src/main/apps/runtime/session-store'
+import {
+  convertEventsToMessages,
+  type StoredEvent,
+} from '../../../../src/main/apps/runtime/session-transcript'
 import { TEAM_MCP_SERVER_NAME, TEAM_TOOL_NAMES } from '../../../../src/shared/apps/team-types'
 
 // ============================================

@@ -88,10 +88,7 @@ vi.mock('../../../../src/main/apps/runtime/im-session-registry', () => ({
 vi.mock('../../../../src/main/services/space.service', () => ({ getSpace: () => ({ id: 'space-1', path: '/spaces/space-1' }) }))
 vi.mock('../../../../src/main/apps/runtime/app-chat', () => ({
   sendAppChatMessage: (...args: unknown[]) => h.sendAppChatMessage(...args),
-  loadChatTranscriptForConversation: (_path: string, _app: string, key: string) => {
-    const messages = h.state.dhTranscripts.get(key) ?? []
-    return { messages, hasMoreBefore: false, cursor: messages[0]?.id ?? null, total: messages.length }
-  },
+  loadChatMessagesForConversation: (_path: string, _app: string, key: string) => h.state.dhTranscripts.get(key) ?? [],
 }))
 vi.mock('../../../../src/main/apps/runtime/app-chat-live-turn', () => ({
   isAppChatConversationGenerating: (id: string) => h.state.dhBusy.has(id),

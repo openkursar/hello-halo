@@ -402,9 +402,16 @@ function registerExternalChatSession(
  */
 export async function sendAppChatMessage(request: AppChatRequest): Promise<void> {
   const conversationId = request.conversationId ?? getAppChatConversationId(request.appId)
+  const browserTurn: BrowserTurnHold = { held: false }
   try {
-    await runAppChatTurn(request)
+    await runAppChatTurn(request, browserTurn)
   } catch (error: unknown) {
+    // A failure while the turn was still being set up leaves the browser turn
+    // it took; returned, it no longer protects the context from reaping.
+    if (browserTurn.held) {
+      browserTurn.held = false
+      endChatBrowserTurn(conversationId)
+    }
     const message = error instanceof Error ? error.message : String(error)
     console.error(`[AppChat][${request.appId}] Chat could not start: ${message}`)
     emitAgentEvent('agent:error', request.spaceId, conversationId, { type: 'error', error: message })
@@ -423,8 +430,14 @@ export async function sendAppChatMessage(request: AppChatRequest): Promise<void>
  *
  * @param request - Chat request parameters
  */
+/** Whether a turn holds its chat's browser context (between acquire and release). */
+interface BrowserTurnHold {
+  held: boolean
+}
+
 async function runAppChatTurn(
-  request: AppChatRequest
+  request: AppChatRequest,
+  browserTurn: BrowserTurnHold
 ): Promise<void> {
   const {
     appId, message, images, thinkingEnabled, onReply, onProgress,
@@ -557,9 +570,10 @@ async function runAppChatTurn(
   // Off unless the owner switched it on, and never on someone else's turn (an IM
   // guest, a teammate borrowing this digital human), in a team channel, or in an
   // IM/HTTP session.
+  const borrowedTeamTurn = !!teamContext && isBorrowedTeamTurn(teamContext.kind, !!imSession)
   const conversationCollab = resolveConversationCollab(app, {
     conversationId,
-    delegated: permCtx?.isOwner === false || (!!teamContext && isBorrowedTeamTurn(teamContext.kind, !!imSession)),
+    delegated: permCtx?.isOwner === false || borrowedTeamTurn,
     team: !!teamContext,
   })
 
@@ -645,6 +659,7 @@ async function runAppChatTurn(
   const scopedBrowserCtx = usesAIBrowser
     ? acquireChatBrowserContext(conversationId, appId, spaceId)
     : undefined
+  browserTurn.held = !!scopedBrowserCtx
   if (!usesAIBrowser) destroyChatBrowserContext(conversationId, 'ai-browser-disabled')
 
   // Notify tool: allows AI to send notifications to channels and IM contacts.
@@ -838,7 +853,6 @@ async function runAppChatTurn(
   // `resolveDelegationMode`).
   //
   // permCtx was read earlier (before system prompt build) for ownerIds injection.
-  const borrowedTeamTurn = !!teamContext && isBorrowedTeamTurn(teamContext.kind, !!imSession)
   let delegation: { policy: CapabilityPolicy | undefined; mode: CapabilityMode } | null = null
   if (permCtx && !permCtx.isOwner) {
     delegation = { policy: permCtx.guestPolicy, mode: 'strict' }
@@ -1114,7 +1128,10 @@ async function runAppChatTurn(
   } finally {
     // Native chats keep their browser context (and its pages) for the next
     // message, failed turn or not; every other session's ends with the turn.
-    endChatBrowserTurn(conversationId)
+    if (browserTurn.held) {
+      browserTurn.held = false
+      endChatBrowserTurn(conversationId)
+    }
 
     const defaultConvId = getAppChatConversationId(appId)
     if (conversationId !== defaultConvId) {

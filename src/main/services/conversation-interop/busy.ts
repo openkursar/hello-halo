@@ -2,13 +2,9 @@
  * Cross-Conversation Interop — native conversation busyness.
  *
  * A native conversation's session key is its own conversation id
- * (session-manager.ts). `session-manager`'s own busyness check
- * (`isSessionBusy`) is private; this rebuilds the identical check from the
- * primitives the `services/agent` index exports: a session is busy
- * if a legacy `activeSessions` entry is live, or its consumer is running a
- * turn right now, or — idle between turns — it still has team agents working
- * that a future turn must not be torn down under (mirrors session-manager's
- * own idle-timeout guard).
+ * (session-manager.ts), so busyness is the engine's own `isSessionBusy`:
+ * a turn in flight, or — idle between turns — team agents still working that a
+ * future turn must not be torn down under.
  *
  * `session-manager.ts` itself imports FROM `toolsets/broker.ts` (session
  * creation seeds its MCP servers via `buildCreationTimeServers`). A static
@@ -18,14 +14,10 @@
  * loop never closes.
  */
 
-import { activeSessions, getConsumerHandle, hasActiveTeamTasks, v2Sessions } from '../agent'
+import { isSessionBusy, v2Sessions } from '../agent'
 
 export function isNativeConversationBusy(conversationId: string): boolean {
-  if (activeSessions.has(conversationId)) return true
-  const consumer = getConsumerHandle(conversationId)
-  if (!consumer?.isRunning) return false
-  if (consumer.getActiveSessionState()) return true
-  return hasActiveTeamTasks(consumer.getTeamLifecycleThoughts())
+  return isSessionBusy(conversationId)
 }
 
 /**

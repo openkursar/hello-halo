@@ -576,8 +576,12 @@ function applyTemplateVariables(template: string, ctx: SystemPromptContext): str
  * @returns Host system prompt string; pass it to the engine via toEngineSystemPrompt
  */
 export function buildSystemPrompt(ctx: SystemPromptContext): string {
-  const settings = readUserAgentSettings()
-  const promptProfile = ctx.promptProfile ?? settings.promptProfile
+  // Read the user's settings only for what the context leaves open: the SDK
+  // options builder states both, and reading config means reading the file.
+  const settings = ctx.promptProfile === undefined || ctx.digitalHumansEnabled === undefined
+    ? readUserAgentSettings()
+    : null
+  const promptProfile = ctx.promptProfile ?? settings?.promptProfile
   const template = usesEngineDefaultPrompt()
     ? SYSTEM_PROMPT_HALO_CONTEXT
     : promptProfile === 'official'
@@ -586,7 +590,7 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
 
   let prompt = applyTemplateVariables(template, {
     ...ctx,
-    digitalHumansEnabled: ctx.digitalHumansEnabled ?? settings.digitalHumansEnabled,
+    digitalHumansEnabled: ctx.digitalHumansEnabled ?? settings?.digitalHumansEnabled,
   })
 
   // Toolset-broker sessions (main chat): append the usage guides of currently-

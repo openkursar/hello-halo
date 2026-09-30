@@ -10,7 +10,7 @@ import { conversationKind } from './kind'
 import { spaceBackend } from './space'
 import { digitalHumanBackend } from './digital-human'
 import { virtualBackend } from './virtual'
-import type { ChatBackend } from './types'
+import type { ChatBackend, BackendContext, ConversationRef } from './types'
 
 export function backendFor(conversationId: string): ChatBackend {
   switch (conversationKind(conversationId)) {
@@ -18,6 +18,24 @@ export function backendFor(conversationId: string): ChatBackend {
     case 'virtual': return virtualBackend
     case 'space': return spaceBackend
   }
+}
+
+const opening = new Map<string, Promise<void>>()
+
+/**
+ * Open a conversation — read it in if uncached, pick up a running turn, warm its
+ * session — once at a time: selecting a conversation and the page reading in the
+ * uncached one on screen ask together, and a second open would repeat the
+ * session probe and the warm-up, not just the read.
+ */
+export function openOnce(ctx: BackendContext, ref: ConversationRef): Promise<void> {
+  const existing = opening.get(ref.conversationId)
+  if (existing) return existing
+  const run = backendFor(ref.conversationId)
+    .open(ctx, ref)
+    .finally(() => opening.delete(ref.conversationId))
+  opening.set(ref.conversationId, run)
+  return run
 }
 
 export { conversationKind, digitalHumanAppId } from './kind'

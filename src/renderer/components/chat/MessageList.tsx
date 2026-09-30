@@ -30,7 +30,7 @@ import type { Message, Thought, CompactInfo, AgentErrorType, PendingQuestion } f
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { useChatStore } from '../../stores/chat.store'
 import { useAppsStore } from '../../stores/apps.store'
-import { isAppChatKey } from '../../../shared/apps/im-keys'
+import { appChatAppId } from '../../../shared/apps/im-keys'
 import { resolveSpecI18n } from '../../utils/spec-i18n'
 import { messageRowKeys } from '../../utils/message-row-key'
 
@@ -208,8 +208,8 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   // loaded yet, mirroring DigitalHumansTab's own fallback).
   const apps = useAppsStore(s => s.apps)
   const senderName = useMemo(() => {
-    if (!conversationId || !isAppChatKey(conversationId)) return t('Halo')
-    const appId = conversationId.split(':')[1]
+    const appId = conversationId ? appChatAppId(conversationId) : null
+    if (!appId) return t('Halo')
     const app = apps.find(a => a.id === appId)
     if (!app) return appId
     return resolveSpecI18n(app.spec, getCurrentLanguage()).name || appId

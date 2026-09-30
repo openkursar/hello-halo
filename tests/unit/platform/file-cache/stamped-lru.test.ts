@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { createStampedLru } from '../../../../src/main/apps/runtime/stamped-lru'
+import { createStampedLru } from '../../../../src/main/platform/file-cache'
 
 describe('createStampedLru', () => {
   let dir: string

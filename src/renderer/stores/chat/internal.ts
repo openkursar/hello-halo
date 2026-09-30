@@ -163,8 +163,8 @@ export interface ChatState {
   isLoading: boolean
   isLoadingConversation: boolean  // Loading full conversation
 
-  // Digital-human conversations whose transcript could not be read, with the
-  // reason; cleared when a read succeeds.
+  // Conversations that could not be read into the cache, with the reason;
+  // cleared when a read succeeds.
   conversationLoadErrors: Map<string, string>
 
   // In-memory (non-persisted) composer draft per conversationId — switching

@@ -212,9 +212,11 @@ export function markTurnInitReceived(conversationId: string): void {
 /**
  * Check if a session is busy (has an in-flight request).
  * Covers both legacy activeSessions (app-chat/execute) and
- * consumer-based chat conversations.
+ * consumer-based chat conversations. A consumer idle between turns whose team
+ * agents are still working counts as busy: tearing it down would lose their
+ * results.
  */
-function isSessionBusy(conversationId: string): boolean {
+export function isSessionBusy(conversationId: string): boolean {
   if (activeSessions.has(conversationId)) return true
   const consumer = consumers.get(conversationId)
   if (!consumer?.isRunning) return false

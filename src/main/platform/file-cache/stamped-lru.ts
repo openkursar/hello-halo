@@ -31,11 +31,20 @@ export interface StampedLru<T> {
   readonly size: number
 }
 
+/** Paths already reported unreadable: every read asks again, the log says it once. */
+const reportedUnreadable = new Set<string>()
+
 function stampOf(path: string): { stamp: string; weight: number } | null {
   try {
     const st = statSync(path)
     return { stamp: `${st.size}:${st.mtimeMs}:${st.ino}`, weight: st.size }
-  } catch {
+  } catch (error) {
+    // A missing file is an ordinary answer ("nothing written yet"); anything
+    // else would otherwise read as an empty file with no trace of why.
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && !reportedUnreadable.has(path)) {
+      reportedUnreadable.add(path)
+      console.warn(`[FileCache] Cannot stat ${path}; treating it as unreadable:`, error)
+    }
     return null
   }
 }

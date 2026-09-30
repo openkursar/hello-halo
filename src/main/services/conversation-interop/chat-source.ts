@@ -14,7 +14,7 @@
 
 import { addMessage, getConversation, listConversations, updateMessageById } from '../conversation.service'
 import { onAgentEvent, sendMessage } from '../agent'
-import { isAppChatKey, parseRunSenderKey } from '../../../shared/apps/im-keys'
+import { isSpaceConversationId } from '../../../shared/apps/im-keys'
 import { shortConversationId } from '../../../shared/conversation-reference'
 import { isNativeConversationBusy, hasLiveNativeSession } from './busy'
 import type { ConversationSource, DispatchedMessage, DispatchOutcome, SourceConversation } from './source'
@@ -45,7 +45,7 @@ export function createChatConversationSource(): ConversationSource {
     kind: CHAT_SOURCE_KIND,
     capabilities: { readable: true, writable: true },
 
-    owns: (conversationId) => !isAppChatKey(conversationId) && !parseRunSenderKey(conversationId),
+    owns: isSpaceConversationId,
 
     list(spaceId): SourceConversation[] {
       return listConversations(spaceId).map((meta) => ({
@@ -111,10 +111,10 @@ export function createChatConversationSource(): ConversationSource {
 
     onTurnEnd(listener) {
       // Both events reach here for every turn's end — success, error, and the
-      // consumer's safety-net fallback. Digital-human keys are another source's.
+      // consumer's safety-net fallback. Other sources report their own.
       return onAgentEvent((event) => {
         if (event.channel !== 'agent:complete' && event.channel !== 'agent:error') return
-        if (isAppChatKey(event.conversationId)) return
+        if (!isSpaceConversationId(event.conversationId)) return
         listener(event.conversationId)
       })
     },

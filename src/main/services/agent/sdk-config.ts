@@ -975,7 +975,8 @@ async function assembleSdkOptions(
     systemPrompt: toEngineSystemPrompt(buildSystemPrompt({
       workDir,
       modelInfo: credentials.displayModel,
-      promptProfile: settings.promptProfile,
+      // Stated, never left open: an open value makes the prompt builder read config again.
+      promptProfile: settings.promptProfile ?? 'halo',
       digitalHumansEnabled: settings.digitalHumansEnabled,
       toolsetIndex: params.toolsetIndex
     }) + (params.memoryInstructions ? `\n\n${params.memoryInstructions}` : '')),

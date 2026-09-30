@@ -1,5 +1,5 @@
 /**
- * Digital humans usable in a space: installed in that space, or global.
+ * Digital humans usable in a space: those installed in it.
  *
  * The conversation list, the input's recipient selector and the resource rail
  * must agree on who is available — keeping the rule here stops the three from

@@ -310,19 +310,18 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
   const session = useChatStore(s => s.sessions.get(activeConversationId ?? '')) ?? getSession('')
   const { isGenerating, streamingContent, isStreaming, thoughts, isThinking, compactInfo, error, errorType, textBlockVersion, pendingQuestion } = session
 
-  // A digital-human conversation is not in the space index, so "loading" is
-  // simply "not read yet and no read has failed".
-  const isLoading = isDigitalHuman
-    ? !currentConversation && !loadError
-    : isLoadingConversation && !currentConversation
-
-  // A digital-human conversation on screen but not in the cache (evicted while
-  // the space was left, or never read) is read in again. Reads are deduplicated
-  // by the source, and a failed one shows its error instead of retrying here.
-  const isDigitalHumanUncached = isDigitalHuman && !currentConversation && !loadError
+  // A conversation on screen that is not in the cache (evicted, never read, or
+  // landed on without a read — the next one after a delete, the regular
+  // conversation behind a digital human) is read in here, whatever brought it on
+  // screen. Reads are deduplicated by the backend, and a failed one shows its
+  // error with a retry instead of retrying here.
+  const isUncached = !!activeConversationId && !currentConversation && !loadError
   useEffect(() => {
-    if (isDigitalHumanUncached && activeConversationId) void openConversation(activeConversationId)
-  }, [isDigitalHumanUncached, activeConversationId, openConversation])
+    if (isUncached && activeConversationId) void openConversation(activeConversationId)
+  }, [isUncached, activeConversationId, openConversation])
+
+  // Until that read lands the page says it is loading, never "no messages yet".
+  const isLoading = isUncached || (isLoadingConversation && !currentConversation)
 
   // Lazy loader for a message's separated thoughts, bound to the active
   // space + conversation ids. Passed to MessageList's thoughtsLoader prop.
@@ -612,7 +611,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
           ) : loadError && !currentConversation ? (
             <LoadFailedState
               message={loadError}
-              onRetry={activeConversationId ? () => void refreshConversation(activeConversationId) : undefined}
+              onRetry={activeConversationId ? () => void openConversation(activeConversationId) : undefined}
             />
           ) : !hasMessages ? (
             <EmptyState

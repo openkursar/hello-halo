@@ -768,7 +768,7 @@ export class CodexEventNormalizer {
    *
    * Why per-block aggregate (vs one aggregate at message close):
    *   - tool_use must arrive BEFORE its tool_result for id-based linking in
-   *     `apps/runtime/session-store.convertEventsToMessages` (toolUseMap is
+   *     `apps/runtime/session-transcript.convertEventsToMessages` (toolUseMap is
    *     populated lazily as assistant messages arrive). Codex emits
    *     `userWithToolResult` immediately on item.completed; emitting the
    *     aggregate at message close would put tool_use AFTER tool_result and
@@ -799,7 +799,7 @@ export class CodexEventNormalizer {
       //
       // Known trade-off: app-chat.ts persists aggregate `assistant` events
       // to JSONL (stream_event is filtered out per app-chat.ts:581). With
-      // text suppressed here, session-store.convertEventsToMessages can no
+      // text suppressed here, session-transcript.convertEventsToMessages can no
       // longer reconstruct the bubble text for Codex digital-human chat
       // history replay. Mitigation paths if that bites:
       //   a) Stop filtering stream_event from JSONL for Codex sessions

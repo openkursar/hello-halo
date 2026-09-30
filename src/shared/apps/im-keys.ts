@@ -282,6 +282,22 @@ export function isAppChatKey(conversationId: string): boolean {
 }
 
 /**
+ * Whether an id names one of a space's own conversations rather than a
+ * digital-human session or a scheduled run's sender key. Space conversations
+ * have no prefix of their own, so this is the complement of every other key
+ * family defined here — a new family must be excluded here too.
+ */
+export function isSpaceConversationId(conversationId: string): boolean {
+  return !isAppChatKey(conversationId) && parseRunSenderKey(conversationId) === null
+}
+
+/** The digital human any app-chat key belongs to (chat board, IM, HTTP, team); null for other ids. */
+export function appChatAppId(conversationId: string): string | null {
+  if (!isAppChatKey(conversationId)) return null
+  return conversationId.split(':')[1] || null
+}
+
+/**
  * Allowed charset for the caller-controlled segments of an externally-supplied
  * conversation key (an HTTP chatId, a team key's teamId/epochId).
  *

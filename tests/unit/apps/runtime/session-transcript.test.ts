@@ -9,13 +9,15 @@ import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
-  convertEventsToMessages,
   openSessionWriter,
   readSessionMessages,
   readSessionMessageThoughts,
   readSessionTranscript,
-  type StoredEvent,
 } from '../../../../src/main/apps/runtime/session-store'
+import {
+  convertEventsToMessages,
+  type StoredEvent,
+} from '../../../../src/main/apps/runtime/session-transcript'
 
 const ts = (n: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, n)).toISOString()
 

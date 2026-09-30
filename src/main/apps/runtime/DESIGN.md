@@ -683,11 +683,17 @@ JSONL storage is unchanged (append-only, written by `session-store`).
   (`readSessionMessages`, used by IM, team-member and run-detail views) is
   unchanged. On a 13–16 MB team-member transcript the first 50-message page is
   ~0.13 MB over IPC versus 2–5 MB for the full read.
-- **Parse cache** (`stamped-lru.ts`): the converted messages of a file are kept
-  while its stamp (size + mtime + inode) is unchanged, LRU bounded to 8 files /
-  32 MB of file bytes (the parsed form costs 2–3x that on the heap). Appends change the stamp, so a growing file re-parses on
-  its next read (cold parse of a 16 MB file ≈ 100–160 ms; a warm page is
-  sub-millisecond). Callers get a copy of the array, never the cached one.
+- **Parse cache** (`platform/file-cache`, `createStampedLru`): the converted
+  messages of a file are kept while its stamp (size + mtime + inode) is
+  unchanged, LRU bounded to 8 files / 32 MB of file bytes (the parsed form costs
+  2–3x that on the heap). Appends change the stamp, so a growing file re-parses
+  on its next read (cold parse of a 16 MB file ≈ 100–160 ms; a warm page is
+  sub-millisecond). Callers get a copy of the array; the message objects in it
+  are shared with the cache and must be treated as read-only. Global search
+  over many sessions cycles this cache, so the open chat may re-parse once
+  afterwards.
+- **Codec** (`session-transcript.ts`): the event → message conversion is pure
+  and lives apart from the file I/O and the cache in `session-store.ts`.
 - **Provenance.** A user-side record may carry `_source`
   (`injection` | `cross-conversation` | `cross-conversation-notice` |
   `team-message`) and `_metadata` (the flat fields space conversations persist:
@@ -741,11 +747,13 @@ sessions are unbounded (`MAX_RESIDENT_BROWSER_CONTEXTS`, `RESIDENT_BROWSER_IDLE_
   `persist:browser` session, so only tabs and scroll state are lost;
 - at most 6 contexts may hold pages; a new one evicts the least recently used
   idle one;
-- never mid-turn (asked of `isAppChatConversationGenerating`, not of a flag kept
-  here — a turn that died before reporting back cannot pin a context) and never
-  while the user is watching one of its tabs (`ctx.hasRevealedView()`); over the
-  cap rather than kill a live turn.
-- a per-turn context still present after 5 minutes lost its cleanup and is
+- never mid-turn (asked of `isAppChatConversationGenerating`) nor while a turn is
+  starting — acquired and not yet ended, trusted for `TURN_TRUST_MS` (5 minutes)
+  so a slow engine start is covered, after which only the live-turn answer
+  counts, so a turn that died before reporting back cannot pin a context — and
+  never while the user is watching one of its tabs (`ctx.hasRevealedView()`);
+  over the cap rather than kill a live turn.
+- a per-turn context still present after `TURN_TRUST_MS` lost its cleanup and is
   reclaimed by the same sweep.
 
 **Teardown paths** (each one goes through `destroyChatBrowserContext`, which logs
@@ -788,9 +796,12 @@ conversation key (`shared/conversation-reference.ts`, a pure implementation so
 the composer and the resolver derive the same handle). Collisions go through the
 resolver's ambiguity answer with full ids; existing references stay valid.
 
-**Reading.** `readTranscript` walks `loadChatTranscriptForConversation` pages back
-to the start (thoughts never loaded); interop applies its own paging and 8000
-character budget on top, identical for every source.
+**Reading.** `readTranscript` maps the session's parsed messages
+(`loadChatMessagesForConversation`, served from the parse cache while the file is
+unchanged) to clean lines in one pass, carrying no thoughts; interop applies its
+own paging and 8000 character budget on top, identical for every source. The
+parse of the file is the real cost and a tail read would pay it too, so the
+source contract stays "the whole clean transcript" rather than growing a window.
 
 **Delivering.** `dispatch` runs an ordinary `sendAppChatMessage` for the target's
 conversation key, so the turn is assembled exactly like one the user typed. Two
@@ -914,8 +925,8 @@ src/main/apps/runtime/
   im-session-registry.ts     -- Persistent IM session list (per app + channel + chatId)
   pending-relays.ts          -- Cross-session relay spool + <relay-from> rendering (§2.14)
   progress-formatter.ts      -- Format streaming progress events for IM transports
-  session-store.ts           -- JSONL persistence for chat history + SDK session IDs; the transcript read model (§2.18)
-  stamped-lru.ts             -- File-stamped LRU used by session-store's parse cache (§2.18)
+  session-store.ts           -- JSONL persistence for chat history + SDK session IDs; transcript reads, paging and the parse cache (§2.18)
+  session-transcript.ts      -- Pure codec: stored SDK events → `TranscriptMessage` (ids, thoughts, provenance; §2.18)
   file-export-gate.ts        -- Filesystem boundary for AI-attached file delivery
 
   -- App chat system prompt (Identity / Entry / Constraint layers) — see §2.12:

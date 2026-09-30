@@ -60,7 +60,7 @@ const {
   isResidentChatKey,
   RESIDENT_BROWSER_IDLE_MS,
   MAX_RESIDENT_BROWSER_CONTEXTS,
-  TURN_START_GRACE_MS,
+  TURN_TRUST_MS,
 } = await import('../../../../src/main/apps/runtime/app-chat-browser')
 
 const DEFAULT_KEY = 'app-chat:dh1'
@@ -225,7 +225,7 @@ describe('app chat browser contexts', () => {
       endChatBrowserTurn(DEFAULT_KEY)
       apps.set('dh1', app('active', ['ai-browser']))
 
-      sweepChatBrowserContexts(Date.now() + TURN_START_GRACE_MS)
+      sweepChatBrowserContexts()
 
       expect(ctx.destroyed).toBe(true)
     })
@@ -235,10 +235,10 @@ describe('app chat browser contexts', () => {
       endChatBrowserTurn(DEFAULT_KEY)
       apps.set('dh1', app('active', ['ai-browser']))
       generating.add(DEFAULT_KEY)
-      sweepChatBrowserContexts(Date.now() + TURN_START_GRACE_MS)
+      sweepChatBrowserContexts()
       generating.clear()
       ctx.revealed = true
-      sweepChatBrowserContexts(Date.now() + TURN_START_GRACE_MS)
+      sweepChatBrowserContexts()
 
       expect(ctx.destroyed).toBe(false)
     })
@@ -295,8 +295,6 @@ describe('app chat browser contexts', () => {
         vi.advanceTimersByTime(1000)
         keys.push(key)
       }
-      // Past the window in which a context still counts as starting a turn.
-      vi.advanceTimersByTime(TURN_START_GRACE_MS)
       return keys
     }
 
@@ -331,6 +329,31 @@ describe('app chat browser contexts', () => {
 
       expect(hasChatBrowserContext(keys[0])).toBe(true)
       expect(hasChatBrowserContext(keys[1])).toBe(false)
+    })
+
+    it('still protects a starting turn whose session takes longer than a minute to build', () => {
+      const keys = fillToCap()
+      acquireChatBrowserContext(keys[0], 'dh1', 'space-1')
+      vi.advanceTimersByTime(3 * 60_000)
+      // The others were used since, so the starting turn's context is the least recently used.
+      keys.slice(1).forEach((k) => { acquireChatBrowserContext(k, 'dh1', 'space-1'); endChatBrowserTurn(k) })
+
+      acquireChatBrowserContext('app-chat:dh1:local:direct:new', 'dh1', 'space-1')
+
+      expect(hasChatBrowserContext(keys[0])).toBe(true)
+      expect(hasChatBrowserContext(keys[1])).toBe(false)
+    })
+
+    it('stops trusting a turn that acquired its context and never reported back', () => {
+      const keys = fillToCap()
+      acquireChatBrowserContext(keys[0], 'dh1', 'space-1')
+      vi.advanceTimersByTime(TURN_TRUST_MS)
+      // Keep the others more recent so keys[0] is the one to go.
+      keys.slice(1).forEach((k) => { acquireChatBrowserContext(k, 'dh1', 'space-1'); endChatBrowserTurn(k) })
+
+      acquireChatBrowserContext('app-chat:dh1:local:direct:new', 'dh1', 'space-1')
+
+      expect(hasChatBrowserContext(keys[0])).toBe(false)
     })
 
     it('goes over the cap rather than kill a live turn', () => {

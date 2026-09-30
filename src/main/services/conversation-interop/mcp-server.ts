@@ -24,7 +24,6 @@ import { resolveConversationTarget } from './target-resolution'
 import { sourceOfConversation } from './source'
 import { withheldReason } from './admission'
 import type { WaitOutcome } from './types'
-import { parseRunSenderKey } from '../../../shared/apps/im-keys'
 
 export interface ConversationInteropScope {
   spaceId: string
@@ -390,8 +389,8 @@ function formatWaitOutcome(
   }
   return textResult(
     `Timed out waiting for a reply from [${target}] after ${timeoutSec}s. ` +
-      // A run takes no messages outside a wait, so a late answer is refused.
-      (parseRunSenderKey(scope.conversationId)
+      // A caller that takes no messages outside a wait (a scheduled run) refuses a late answer.
+      (sourceOfConversation(scope.conversationId)?.capabilities.writable === false
         ? 'A late reply will not be delivered to this run. (status: timeout)'
         : 'It may still reply later; this call is no longer waiting. (status: timeout)')
   )

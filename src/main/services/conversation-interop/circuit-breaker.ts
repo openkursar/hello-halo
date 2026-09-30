@@ -48,7 +48,7 @@ export interface CircuitLimits {
   windowMs: number
   /** Fixed hard-stop duration once a rate guard trips — independent of `windowMs`. */
   cooldownMs: number
-  /** Forward-chain depth ceiling (each hop increments, never resets). */
+  /** Forward-chain depth ceiling (each hop of one chain increments it; a new turn starts a new chain). */
   maxForwardDepth: number
   /** Message body size ceiling, in characters. */
   maxMessageChars: number
@@ -121,6 +121,8 @@ export interface CircuitBreaker {
   /** The turn that carried this depth is over: a later turn of the conversation starts a chain of its own. */
   clearInboundForwardDepth(conversationId: string): void
   onBreach(listener: (event: CircuitBreachEvent) => void): () => void
+  /** Pair/source rate and cooldown entries currently held (diagnostics). */
+  trackedEntryCount(): number
 }
 
 function pruneOld(timestamps: number[], now: number, windowMs: number): number[] {
@@ -138,6 +140,29 @@ export function createCircuitBreaker(limits: CircuitLimits = DEFAULT_CIRCUIT_LIM
   const sourceCooldownUntil = new Map<string, number>()
   const inboundForwardDepth = new Map<string, number>()
   const breachEmitter = new Emitter<CircuitBreachEvent>()
+  let lastSweepAt = 0
+
+  /**
+   * Drop the keys that no longer affect any answer — a history whose sends all
+   * left the window, a cooldown that has ended — so a long-running process
+   * does not keep one entry for every pair that ever exchanged a message.
+   * Runs at most once per window, on the charging path; no timer.
+   */
+  function sweepExpired(now: number): void {
+    if (now - lastSweepAt < limits.windowMs) return
+    lastSweepAt = now
+    const cutoff = now - limits.windowMs
+    for (const sends of [pairSends, sourceSends]) {
+      for (const [key, timestamps] of sends) {
+        if (timestamps.length === 0 || timestamps[timestamps.length - 1] <= cutoff) sends.delete(key)
+      }
+    }
+    for (const cooldowns of [pairCooldownUntil, sourceCooldownUntil]) {
+      for (const [key, until] of cooldowns) {
+        if (until <= now) cooldowns.delete(key)
+      }
+    }
+  }
 
   function fire(reason: CircuitRejectReason, fromConversationId: string, toConversationId: string): void {
     breachEmitter.fire({ reason, fromConversationId, toConversationId })
@@ -160,6 +185,7 @@ export function createCircuitBreaker(limits: CircuitLimits = DEFAULT_CIRCUIT_LIM
     }
 
     const now = Date.now()
+    sweepExpired(now)
     const pairKey = `${fromConversationId}:${toConversationId}`
 
     const pairCooldown = pairCooldownUntil.get(pairKey)
@@ -221,7 +247,18 @@ export function createCircuitBreaker(limits: CircuitLimits = DEFAULT_CIRCUIT_LIM
     return () => disposable.dispose()
   }
 
-  return { checkAndCharge, recordInboundForwardDepth, getInboundForwardDepth, clearInboundForwardDepth, onBreach }
+  function trackedEntryCount(): number {
+    return pairSends.size + sourceSends.size + pairCooldownUntil.size + sourceCooldownUntil.size
+  }
+
+  return {
+    checkAndCharge,
+    recordInboundForwardDepth,
+    getInboundForwardDepth,
+    clearInboundForwardDepth,
+    onBreach,
+    trackedEntryCount,
+  }
 }
 
 /** Shared instance — see the `CircuitBreaker` doc comment for why this isn't a bare factory export. */

@@ -307,6 +307,8 @@ vi.mock('../../../../src/main/services/memory-consolidation', () => ({
 // ============================================
 
 import { sendAppChatMessage } from '../../../../src/main/apps/runtime/app-chat'
+import { hasChatBrowserContext } from '../../../../src/main/apps/runtime/app-chat-browser'
+import { createScopedBrowserContext } from '../../../../src/main/services/ai-browser'
 import { getOrCreateV2Session, updateConsumerDisplayModel } from '../../../../src/main/services/agent/session-manager'
 import { resolveCredentialsForSdk } from '../../../../src/main/services/agent/sdk-config'
 import { requestAppMemoryConsolidation } from '../../../../src/main/apps/runtime/turn/memory-lifecycle'
@@ -462,6 +464,17 @@ describe('a restricted borrowed turn keeps every tool-call watcher', () => {
     vi.mocked(getOrCreateV2Session).mockClear()
     await expect(sendAppChatMessage(memberTurn())).rejects.toThrow(/cannot hold/)
     expect(getOrCreateV2Session).not.toHaveBeenCalled()
+  })
+
+  it('a turn refused while being set up gives back the browser context it took', async () => {
+    getEngineCapabilities.mockReturnValue({ features: { permissionRules: false, hooks: false } })
+    vi.mocked(createScopedBrowserContext).mockClear()
+
+    await expect(sendAppChatMessage(memberTurn())).rejects.toThrow(/cannot hold/)
+
+    // A team session's context lives for the turn: released, it is gone.
+    expect(createScopedBrowserContext).toHaveBeenCalledTimes(1)
+    expect(hasChatBrowserContext(CONVERSATION)).toBe(false)
   })
 
   const fileBoundaryMatchers = ['Read', 'Glob', 'Grep', 'Edit', 'MultiEdit', 'NotebookEdit']

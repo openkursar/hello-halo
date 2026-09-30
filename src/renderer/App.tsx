@@ -972,7 +972,7 @@ export default function App() {
       console.log(`[App] search:navigate-to-result event - space=${spaceId}, conv=${conversationId}, msg=${messageId}`)
 
       try {
-        // Step 1: If switching spaces, update both stores
+        // Switching spaces: update both stores
         if (spaceId !== currentSpaceId) {
           console.log(`[App] Switching to space: ${spaceId}`)
 
@@ -1001,12 +1001,12 @@ export default function App() {
           await new Promise(resolve => setTimeout(resolve, 50))
         }
 
-        // Step 2: Open the conversation (space conversation or digital human)
+        // Open the conversation (space conversation or digital human)
         // with the result's message loaded
         console.log(`[App] Opening conversation: ${conversationId}`)
         await openSearchResultConversation({ spaceId, conversationId, messageId, kind, appId })
 
-        // Step 4: Dispatch navigation event for ChatView to handle
+        // Dispatch navigation event for ChatView to handle
         // ChatView asks MessageList to bring the message into view (mounting older
         // history if needed), then applies DOM highlighting — no need to pre-check
         // DOM existence here.

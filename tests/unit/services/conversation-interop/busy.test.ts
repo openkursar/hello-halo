@@ -1,82 +1,31 @@
 /**
  * Unit tests for conversation-interop/busy.
  *
- * `isNativeConversationBusy` reconstructs `session-manager.ts`'s private
- * `isSessionBusy` from primitives that are already exported (`activeSessions`,
- * `getConsumerHandle`, `hasActiveTeamTasks`) rather than adding a new export
- * to `services/agent` — see the module doc. This test mocks those exports and
- * asserts the composition matches the private function's documented logic
- * exactly: legacy `activeSessions` wins first, then an actively-processing
- * consumer, then a team-task-holding idle consumer, else not busy.
+ * Busyness is the engine's own `isSessionBusy` (covered by
+ * services/agent/session-manager-busy.test.ts); this module must ask it rather
+ * than keep a copy of the rule.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const { activeSessions, getConsumerHandle, v2Sessions } = vi.hoisted(() => ({
-  activeSessions: new Map<string, unknown>(),
-  getConsumerHandle: vi.fn(),
+const { isSessionBusy, v2Sessions } = vi.hoisted(() => ({
+  isSessionBusy: vi.fn(),
   v2Sessions: new Map<string, unknown>(),
 }))
-vi.mock('../../../../src/main/services/agent/session-manager', () => ({ activeSessions, getConsumerHandle, v2Sessions }))
-
-const { hasActiveTeamTasks } = vi.hoisted(() => ({ hasActiveTeamTasks: vi.fn() }))
-vi.mock('../../../../src/main/services/agent/subagent-handler', () => ({ hasActiveTeamTasks }))
+vi.mock('../../../../src/main/services/agent', () => ({ isSessionBusy, v2Sessions }))
 
 import { isNativeConversationBusy, hasLiveNativeSession } from '../../../../src/main/services/conversation-interop/busy'
 
 describe('isNativeConversationBusy', () => {
   beforeEach(() => {
-    activeSessions.clear()
-    v2Sessions.clear()
-    getConsumerHandle.mockReset()
-    hasActiveTeamTasks.mockReset()
+    isSessionBusy.mockReset()
   })
 
-  it('is busy when a legacy activeSessions entry exists, before even checking the consumer', () => {
-    activeSessions.set('conv-1', {})
+  it('answers with the engine\'s own busyness check', () => {
+    isSessionBusy.mockReturnValueOnce(true).mockReturnValueOnce(false)
     expect(isNativeConversationBusy('conv-1')).toBe(true)
-    expect(getConsumerHandle).not.toHaveBeenCalled()
-  })
-
-  it('is not busy when there is no consumer at all', () => {
-    getConsumerHandle.mockReturnValue(null)
-    expect(isNativeConversationBusy('conv-1')).toBe(false)
-  })
-
-  it('is not busy when the consumer exists but is not running', () => {
-    getConsumerHandle.mockReturnValue({ isRunning: false, getActiveSessionState: () => null, getTeamLifecycleThoughts: () => [] })
-    expect(isNativeConversationBusy('conv-1')).toBe(false)
-  })
-
-  it('is busy when the consumer is actively processing a turn', () => {
-    getConsumerHandle.mockReturnValue({
-      isRunning: true,
-      getActiveSessionState: () => ({ someTurnState: true }),
-      getTeamLifecycleThoughts: () => [],
-    })
-    expect(isNativeConversationBusy('conv-1')).toBe(true)
-  })
-
-  it('is busy when idle between turns but team agents are still working', () => {
-    const thoughts = [{ type: 'tool_use' }]
-    getConsumerHandle.mockReturnValue({
-      isRunning: true,
-      getActiveSessionState: () => null,
-      getTeamLifecycleThoughts: () => thoughts,
-    })
-    hasActiveTeamTasks.mockReturnValue(true)
-    expect(isNativeConversationBusy('conv-1')).toBe(true)
-    expect(hasActiveTeamTasks).toHaveBeenCalledWith(thoughts)
-  })
-
-  it('is not busy when idle between turns with no active team agents', () => {
-    getConsumerHandle.mockReturnValue({
-      isRunning: true,
-      getActiveSessionState: () => null,
-      getTeamLifecycleThoughts: () => [],
-    })
-    hasActiveTeamTasks.mockReturnValue(false)
-    expect(isNativeConversationBusy('conv-1')).toBe(false)
+    expect(isNativeConversationBusy('conv-2')).toBe(false)
+    expect(isSessionBusy.mock.calls).toEqual([['conv-1'], ['conv-2']])
   })
 })
 

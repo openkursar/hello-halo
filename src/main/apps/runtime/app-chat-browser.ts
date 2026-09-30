@@ -16,9 +16,10 @@
  *  - IM, HTTP and team sessions are PER-TURN: nobody can watch them, and they
  *    can be minted without limit, so the context ends with the turn.
  *
- * A context is never reaped mid-turn or while the user is watching one of its
- * tabs. "Mid-turn" is the live-turn module's answer, not a flag kept here, so a
- * turn that failed before it could report back cannot pin a context forever.
+ * A context is never reaped mid-turn, while a turn is starting, or while the
+ * user is watching one of its tabs. "Mid-turn" is the live-turn module's answer;
+ * a starting turn is trusted only for {@link TURN_TRUST_MS}, so a turn that
+ * failed before it could report back cannot pin a context forever.
  */
 
 import { createScopedBrowserContext, type BrowserContext } from '../../services/ai-browser'
@@ -31,14 +32,14 @@ const LOG_TAG = '[AppChatBrowser]'
 
 export const RESIDENT_BROWSER_IDLE_MS = 30 * 60_000
 export const MAX_RESIDENT_BROWSER_CONTEXTS = 6
-/** A per-turn context still around after this long lost its turn's cleanup. */
-const ORPHAN_GRACE_MS = 5 * 60_000
 /**
- * A context touched this recently is never reaped or evicted: between acquiring
- * it and the turn registering as running there is a session build, during which
- * "not generating" does not mean "not in use".
+ * How long a turn that acquired a context and has not ended is trusted without
+ * the live-turn module confirming it runs. It covers the session build between
+ * acquiring and the turn registering (a cold engine start can take well over a
+ * minute on a loaded machine); past it, a turn that never reported back cannot
+ * pin its context, and a per-turn context is treated as orphaned.
  */
-export const TURN_START_GRACE_MS = 60_000
+export const TURN_TRUST_MS = 5 * 60_000
 const SWEEP_INTERVAL_MS = 60_000
 const STATE_LOG_EVERY_SWEEPS = 5
 
@@ -145,13 +146,13 @@ export function hasChatBrowserContext(conversationId: string): boolean {
   return entries.has(conversationId)
 }
 
-/** Whether a context may be reaped: no turn running or starting, and nobody watching its tabs. */
+/**
+ * Whether a context may be reaped: no turn starting (acquired, not ended, still
+ * within {@link TURN_TRUST_MS}) or running, and nobody watching its tabs.
+ */
 function isReapable(conversationId: string, entry: Entry, now = Date.now()): boolean {
-  return (
-    now - entry.lastUsedAt >= TURN_START_GRACE_MS &&
-    !isAppChatConversationGenerating(conversationId) &&
-    !entry.ctx.hasRevealedView()
-  )
+  const turnStarting = entry.turns > 0 && now - entry.lastUsedAt < TURN_TRUST_MS
+  return !turnStarting && !isAppChatConversationGenerating(conversationId) && !entry.ctx.hasRevealedView()
 }
 
 function evictOverCap(exceptConversationId: string): void {
@@ -191,7 +192,7 @@ export function sweepChatBrowserContexts(now = Date.now()): void {
     const idleMs = now - entry.lastUsedAt
     if (entry.resident && idleMs >= RESIDENT_BROWSER_IDLE_MS && isReapable(conversationId, entry, now)) {
       destroyChatBrowserContext(conversationId, 'idle')
-    } else if (!entry.resident && idleMs >= ORPHAN_GRACE_MS) {
+    } else if (!entry.resident && idleMs >= TURN_TRUST_MS) {
       destroyChatBrowserContext(conversationId, 'orphaned')
     }
   }

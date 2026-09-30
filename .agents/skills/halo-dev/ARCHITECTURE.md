@@ -50,6 +50,8 @@ Platform Layer (src/main/platform)
   - background  : keep-alive + tray + daemon browser
   - turn-gate   : generic "one turn per session key" lock + FIFO mailbox
                   (shared by apps/runtime/team and services/agent; see its DESIGN.md)
+  - file-cache  : caches of values derived from files, valid while the file's
+                  stamp (size + mtime + inode) is unchanged (`createStampedLru`)
 
 Foundation Layer (src/main/foundation)  ← bedrock, zero upward deps
   - config.service, config-encryption, crypto-envelope, credential-safety

@@ -12,6 +12,12 @@ const env = vi.hoisted(() => ({
   destroy: vi.fn(),
 }))
 
+// The hook is called as a plain function here; memoization has nothing to keep between calls.
+vi.mock('react', async (original) => ({
+  ...await original<typeof import('react')>(),
+  useMemo: (fn: () => unknown) => fn(),
+  useCallback: (fn: unknown) => fn,
+}))
 vi.mock('../../../src/renderer/i18n', () => ({ useTranslation: () => ({ t: (s: string) => s }) }))
 vi.mock('../../../src/renderer/api', () => ({ api: { stopAIBrowserPage: (...a: unknown[]) => env.destroy(...a) } }))
 vi.mock('../../../src/renderer/api/transport', () => ({ isElectron: () => env.electron }))

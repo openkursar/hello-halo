@@ -12,17 +12,16 @@
 > `updateMessageById` or `onAgentEvent`, that is the built-in chat source
 > (`chat-source.ts`) doing it on the module's behalf (§9).
 
-## 1. Why this needed zero changes to `services/agent`
+## 1. What this module takes from `services/agent`
 
 Three capabilities looked at first like they needed a new export or hook
-inside the human-gated `services/agent` wall. Each turned out to already be
-reachable from outside it:
+inside the human-gated `services/agent` wall. Two are reached through what the
+engine already exposes; busyness is the engine's own check, exported for it:
 
-- **Busyness** (`busy.ts`) — `session-manager.ts`'s private `isSessionBusy`
-  is reconstructed from primitives it already exports: `activeSessions`
-  (the Map itself), `getConsumerHandle(id)` (whose `ConsumerHandle` already
-  exposes `isRunning` / `getActiveSessionState()` / `getTeamLifecycleThoughts()`
-  publicly), and `hasActiveTeamTasks` (exported from `subagent-handler.ts`).
+- **Busyness** (`busy.ts`) — `session-manager.ts`'s `isSessionBusy`, exported
+  from the agent barrel. It was first rebuilt here from the engine's
+  primitives; a copy of a busyness rule drifting from the engine's is a stuck
+  mailbox waiting to happen, so the copy was replaced by the original.
 - **Turn-end signal for `no_reply`** (`lifecycle.ts`, fed by each source's
   `onTurnEnd`) — rather than add a new `TurnSink` hook, the chat source
   subscribes to the already-public `onAgentEvent`
@@ -203,6 +202,12 @@ every target from that source. Forward-depth is NOT a rate state — exceeding
 it rejects that one message structurally and starts no cooldown (`onBreach`
 still fires for observability, `cooldownJustStarted` is always false for it).
 
+The per-pair and per-source state is swept on the charging path, at most once
+per window: a history whose sends have all left the window and a cooldown that
+has ended answer exactly like an absent key, so dropping them changes no
+decision and keeps a long-running process from holding one entry per pair that
+ever talked.
+
 `checkAndCharge`'s `cooldownJustStarted` flag fires exactly once per
 activation (repeated rejections during an active cooldown report `false`), so
 `delivery.ts` can write the D19 user-visible notice — into the SOURCE
@@ -335,7 +340,11 @@ behavior with the real module over faked sources.
 
 - Ids are unique across sources (uuid vs `app-chat:` key); the registry routes
   every id-only question (`isBusy`, turn end, routing) by `owns`, first
-  registered owner wins.
+  registered owner wins. The built-in source owns what `isSpaceConversationId`
+  (`shared/apps/im-keys`) accepts — the complement of every other key family,
+  kept beside those families' definitions so this module never lists another
+  tier's key formats. It decides by shape, not by what is registered, so an id
+  whose source is missing is refused, never delivered as a space turn.
 - `dispatch(spaceId, id, {turnInput, record})` resolves when the engine has been
   handed the message — not when the turn ends — and rejects when the turn could
   not start (the sender sees `unreachable`). `turnInput` is what the model reads
@@ -469,3 +478,14 @@ function. A new check point calls it; it never re-derives the answer. The mentio
 candidates compute it from the renderer's own app list rather than from the
 directory, because the directory is main-process only and reaching it would need a
 new IPC surface for a result the renderer can already compute from the same rule.
+
+**What admission does not cover.** Admission governs this module's tools
+(`conversation_read` / `conversation_send`) only. Halo's self-API is a separate
+door: an agent holding the `halo-api-ref` toolset can call
+`GET /api/apps/:appId/chat/messages` and `POST /api/apps/:appId/chat/send`
+(both listed for AI in `apps.routes.meta.ts`), and those routes serve the
+user's own remote client as well, so they do not consult the collaboration
+switch. The switch is therefore "this digital human is not in the
+conversation directory", not "no agent can ever reach its chats": an owner who
+grants a digital human the self-API has already granted it the operate-Halo
+surface.

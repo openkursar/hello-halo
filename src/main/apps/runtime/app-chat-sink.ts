@@ -243,7 +243,7 @@ class AppChatSink implements TurnSink {
     // granular for JSONL (hundreds per response) and the engine adapters are
     // required to ALSO emit aggregate top-level `assistant`/`user` envelopes
     // (see services/agent/codex/event-normalizer.ts → aggregateBlock). The
-    // aggregates are what session-store.convertEventsToMessages reconstructs
+    // aggregates are what session-transcript.convertEventsToMessages reconstructs
     // the chat history from. Engine-specific persistence gates here are a
     // protocol-conformance smell; if a future engine needs them, fix the engine
     // adapter, not this consumer.

@@ -81,8 +81,13 @@ rows it was showing when the list grows at the front).
 - `conversationCache` is bounded (`CONVERSATION_CACHE_SIZE`), oldest-cached-first
   via `backend/cache.ts`, which never evicts the conversation on screen, either
   pointer of the current space, any space's selected digital human, or one with a
-  generating session. If a selected digital-human conversation is uncached anyway,
-  `ChatView` reads it in again (`openConversation`).
+  generating session. Whatever conversation is on screen but uncached anyway —
+  evicted, or landed on by a path that only moved a pointer (the next
+  conversation after a delete, the regular conversation behind a digital human)
+  — `ChatView` reads in (`openConversation`) and shows as loading until it lands.
+  Both backends deduplicate concurrent reads of one conversation, and a failed
+  read is recorded in `conversationLoadErrors` (shown with a retry), never
+  retried in a loop.
 - A digital-human turn that ends while its conversation is not cached is not read
   (nothing shows it); one whose history was cleared after the read is not merged.
 - Opening a cached conversation shows it at once and merges a background re-read;

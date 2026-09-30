@@ -10,6 +10,8 @@
 
 import { describe, it, expect } from 'vitest'
 import {
+  appChatAppId,
+  isSpaceConversationId,
   getAppChatConversationId,
   buildImSessionKey,
   buildLocalSessionKey,
@@ -233,5 +235,33 @@ describe('isFollowedConversationId', () => {
   it('does not follow IM or team sessions', () => {
     expect(isFollowedConversationId('app-chat:app-1:wecom:direct:user1')).toBe(false)
     expect(isFollowedConversationId('app-chat:app-1:team:team1:epoch1')).toBe(false)
+  })
+})
+
+describe('appChatAppId', () => {
+  it('names the digital human of every app-chat key family', () => {
+    expect(appChatAppId(getAppChatConversationId('app-1'))).toBe('app-1')
+    expect(appChatAppId(buildLocalSessionKey('app-1', 'uuid-1'))).toBe('app-1')
+    expect(appChatAppId(buildImSessionKey('app-1', 'wecom-bot', 'direct', 'u1'))).toBe('app-1')
+    expect(appChatAppId(buildTeamSessionKey('app-1', 'team-1', 'epoch-1'))).toBe('app-1')
+  })
+
+  it('is null for space conversations and a key with no app id', () => {
+    expect(appChatAppId('conv-uuid')).toBeNull()
+    expect(appChatAppId('app-chat:')).toBeNull()
+  })
+})
+
+describe('isSpaceConversationId', () => {
+  it('accepts a space conversation id', () => {
+    expect(isSpaceConversationId('0f8fad5b-d9cb-469f-a165-70867728950e')).toBe(true)
+  })
+
+  it('rejects every digital-human key family and a run sender key', () => {
+    expect(isSpaceConversationId(getAppChatConversationId('app-1'))).toBe(false)
+    expect(isSpaceConversationId(buildLocalSessionKey('app-1', 'uuid-1'))).toBe(false)
+    expect(isSpaceConversationId(buildImSessionKey('app-1', 'wecom-bot', 'direct', 'u1'))).toBe(false)
+    expect(isSpaceConversationId(buildTeamSessionKey('app-1', 'team-1', 'epoch-1'))).toBe(false)
+    expect(isSpaceConversationId(buildRunSenderKey('app-1', 'run-1'))).toBe(false)
   })
 })

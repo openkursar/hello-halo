@@ -72,6 +72,23 @@ beforeEach(() => {
 })
 
 describe('buildUserSessionSdkOptions', () => {
+  it('reads the user AI settings from config once per build', async () => {
+    const reads = { promptProfile: 0, enableDigitalHumans: 0 }
+    state.config.agent = {
+      get promptProfile() {
+        reads.promptProfile++
+        return undefined
+      },
+      get enableDigitalHumans() {
+        reads.enableDigitalHumans++
+        return true
+      },
+    }
+    await buildUserSessionSdkOptions(params())
+
+    expect(reads).toEqual({ promptProfile: 1, enableDigitalHumans: 1 })
+  })
+
   it('reads the user AI settings itself', async () => {
     state.config.agent = { maxTurns: 12, disabledTools: ['Foo'], promptProfile: 'official', enableDigitalHumans: false }
     const options = await buildUserSessionSdkOptions(params())

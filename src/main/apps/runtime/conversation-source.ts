@@ -33,7 +33,7 @@ import type {
 } from '../../services/conversation-interop'
 import { hasActiveAppChatRound, peekAppChatSink } from './app-chat-sink'
 import { isAppChatConversationGenerating } from './app-chat-live-turn'
-import { loadChatTranscriptForConversation, sendAppChatMessage } from './app-chat'
+import { loadChatMessagesForConversation, sendAppChatMessage } from './app-chat'
 import { getImSessionRegistry } from './im-session-registry'
 import {
   buildLocalSessionKey,
@@ -43,6 +43,7 @@ import {
   type NativeChatKey,
 } from '../../../shared/apps/im-keys'
 import { digitalHumanChatTitle, shortConversationId } from '../../../shared/conversation-reference'
+import type { TranscriptMessage } from '../../../shared/types/transcript'
 import { isConversationCollabEnabled } from '../../../shared/apps/app-types'
 import { COLLAB_OFF_REASON } from './conversation-collab'
 import type { InstalledApp } from '../../../shared/apps/app-types'
@@ -153,19 +154,16 @@ export function createDigitalHumanConversationSource(): ConversationSource {
       const spacePath = getSpace(spaceId)?.path
       if (!ref || !app || !spacePath) return null
 
-      // Pages arrive newest first and hold no thought process, so walking back
-      // to the start reads only what a clean transcript is made of.
-      const lines: TranscriptLine[] = []
-      let before: string | undefined
-      for (;;) {
-        const page = loadChatTranscriptForConversation(spacePath, ref.appId, conversationId, { before, limit: 200 })
-        lines.unshift(
-          ...page.messages.map((m) => ({ id: m.id, role: m.role, content: m.content, timestamp: m.timestamp, source: m.source }))
-        )
-        if (!page.hasMoreBefore || !page.cursor) break
-        before = page.cursor
-      }
-      return lines
+      // One pass over the session's parsed messages (cached per file while it is
+      // unchanged); only the clean fields are carried, never the thoughts.
+      const messages: TranscriptMessage[] = loadChatMessagesForConversation(spacePath, ref.appId, conversationId)
+      return messages.map((m): TranscriptLine => ({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        timestamp: m.timestamp,
+        source: m.source,
+      }))
     },
 
     // A dispatched message not yet claimed by a turn counts: the round is queued

@@ -11,8 +11,7 @@
 import { create } from 'zustand'
 import { api } from '../api'
 import { canvasLifecycle } from '../services/canvas-lifecycle'
-import { useChatStore } from './chat.store'
-import { selectActiveConversationId } from './chat/active'
+import { useChatStore, selectActiveConversationId } from './chat.store'
 import type { AIBrowserActiveView, AIBrowserLivePage } from '../../shared/types/ai-browser'
 
 // ============================================

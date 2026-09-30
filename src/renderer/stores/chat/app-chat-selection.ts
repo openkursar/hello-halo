@@ -11,7 +11,7 @@
  */
 import type { ChatSlice, ChatState } from './internal'
 import { createEmptySpaceState } from './internal'
-import { backendFor } from './backend'
+import { openOnce } from './backend'
 import { readTransition } from './task-read'
 
 export const createAppChatSelectionSlice: ChatSlice<
@@ -52,8 +52,7 @@ export const createAppChatSelectionSlice: ChatSlice<
     persistRead?.()
     get().cleanupPulseReadAt()
     // Show what is cached now; the read (and a running turn) follow.
-    void backendFor(conversationId)
-      .open({ set, get }, { spaceId, conversationId })
+    void openOnce({ set, get }, { spaceId, conversationId })
       .catch((error) => console.error('[ChatStore] Failed to open digital-human conversation:', error))
   },
 

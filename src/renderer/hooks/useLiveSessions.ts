@@ -15,6 +15,7 @@
  * identity does, rather than being restated by each caller.
  */
 
+import { useCallback, useMemo } from 'react'
 import { useTerminalStore } from '../stores/terminal.store'
 import { useAIBrowserStore, isPageInUseByOthers } from '../stores/ai-browser.store'
 import { useChatStore } from '../stores/chat.store'
@@ -92,7 +93,9 @@ export function useLiveSessions(): LiveSessionsApi {
   // closed tab, so the tray is where it stays perceivable and stoppable. A pure
   // user terminal the AI never touched is closed with its tab and never lands
   // here.
-  const terminalSessions: LiveSession[] = [...terminalSessionsMap.values()]
+  // Memoized: the tray re-renders on every chat/app store change, while these
+  // rows change only with their own inputs.
+  const terminalSessions = useMemo((): LiveSession[] => [...terminalSessionsMap.values()]
     .filter(s => s.state === 'running' && s.aiTouched && s.spaceId === currentSpaceId)
     .sort((a, b) => b.lastActivityAt - a.lastActivityAt)
     .map(s => ({
@@ -102,27 +105,31 @@ export function useLiveSessions(): LiveSessionsApi {
       busy: aiWriting.has(s.id),
       lastActivityAt: s.lastActivityAt,
       stoppable: true,
-    }))
+    })), [terminalSessionsMap, aiWriting, currentSpaceId])
 
-  const ownerLabel = (conversationId: string): string => {
-    const native = parseNativeChatKey(conversationId)
-    if (native) return apps.find(a => a.id === native.appId)?.spec.name || t('Digital human')
-    return spaceConversations?.find(c => c.id === conversationId)?.title || t('Conversation')
-  }
-  const browserSessions: LiveSession[] = buildBrowserLiveSessions({
-    pages: browserPages,
-    views: browserViews,
-    spaceId: currentSpaceId,
-    operating: browserOperating,
-    ownerLabel,
-    untitled: t('AI Browser'),
-  }).map(s => ({ ...s, stoppable: isElectron() }))
+  const browserSessions = useMemo((): LiveSession[] => {
+    const ownerLabel = (conversationId: string): string => {
+      const native = parseNativeChatKey(conversationId)
+      if (native) return apps.find(a => a.id === native.appId)?.spec.name || t('Digital human')
+      return spaceConversations?.find(c => c.id === conversationId)?.title || t('Conversation')
+    }
+    return buildBrowserLiveSessions({
+      pages: browserPages,
+      views: browserViews,
+      spaceId: currentSpaceId,
+      operating: browserOperating,
+      ownerLabel,
+      untitled: t('AI Browser'),
+    }).map(s => ({ ...s, stoppable: isElectron() }))
+  }, [browserPages, browserViews, currentSpaceId, browserOperating, apps, spaceConversations, t])
 
-  const sessions = [...browserSessions, ...terminalSessions]
-    .sort((a, b) => b.lastActivityAt - a.lastActivityAt)
+  const sessions = useMemo(
+    () => [...browserSessions, ...terminalSessions].sort((a, b) => b.lastActivityAt - a.lastActivityAt),
+    [browserSessions, terminalSessions]
+  )
   const busy = sessions.some(s => s.busy)
 
-  const open = async (session: LiveSession): Promise<string | null> => {
+  const open = useCallback(async (session: LiveSession): Promise<string | null> => {
     // The Canvas lives in the Space view, so a click from Apps or Settings has
     // to land somewhere first. currentSpace is null on pages that never mount
     // SpaceSelector, and after a space is deleted; halo-temp always exists, so
@@ -141,9 +148,9 @@ export function useLiveSessions(): LiveSessionsApi {
     }
     // Attach the exact AI-driven BrowserView (same WebContents).
     return canvasLifecycle.attachAIBrowserView(session.id, session.url || '', session.title)
-  }
+  }, [openTerminalInCanvas])
 
-  const stop = async (session: LiveSession): Promise<StopOutcome> => {
+  const stop = useCallback(async (session: LiveSession): Promise<StopOutcome> => {
     if (session.kind === 'terminal') {
       await killTerminalSession(session.id)
       return { stopped: true }
@@ -161,7 +168,7 @@ export function useLiveSessions(): LiveSessionsApi {
       if (!result.stopped) console.warn(`[LiveSessions] Stop of ${session.id} refused: ${result.reason ?? 'unavailable'}`)
       return result.stopped ? { stopped: true } : { stopped: false, reason: result.reason ?? 'failed' }
     }
-  }
+  }, [killTerminalSession])
 
   return { sessions, busy, open, stop }
 }

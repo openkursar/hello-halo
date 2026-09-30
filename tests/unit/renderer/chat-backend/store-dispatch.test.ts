@@ -25,6 +25,7 @@ const apiMock = vi.hoisted(() => ({
   taskMarkUnseen: vi.fn(() => Promise.resolve()),
   taskMarkRead: vi.fn(() => Promise.resolve()),
   listConversations: vi.fn(),
+  deleteConversation: vi.fn(),
 }))
 
 vi.mock('../../../../src/renderer/api', () => ({ api: apiMock }))
@@ -622,6 +623,77 @@ describe('space conversations through the same verbs', () => {
     expect(store.getState().sessions.get('c1')).toMatchObject({ isGenerating: false, streamingContent: '' })
     expect(store.getState().unseenCompletions.has('c1')).toBe(true)
     expect(store.getState().conversationCache.get('c1')!.messages).toHaveLength(1)
+  })
+})
+
+describe('opening a space conversation that is not cached', () => {
+  const meta = (id: string) => ({ id, spaceId: SPACE, title: id, createdAt: 't', updatedAt: 't', messageCount: 1 })
+  const full = (id: string) => ({ ...meta(id), messages: [m(`${id}-m`, 'user', 'hi')] }) as unknown as Conversation
+
+  function twoConversations() {
+    const store = makeStore()
+    store.setState({
+      spaceStates: new Map([[SPACE, { conversations: [meta('c1'), meta('c2')], currentConversationId: 'c1' }]]),
+      conversationCache: new Map([['c1', full('c1')]]),
+    })
+    return store
+  }
+
+  it('deleting the conversation on screen lands on the next one, which is then read in by opening it', async () => {
+    const store = twoConversations()
+    apiMock.deleteConversation.mockResolvedValue({ success: true })
+    apiMock.getConversation.mockResolvedValue({ success: true, data: full('c2') })
+
+    await store.getState().deleteConversation(SPACE, 'c1')
+    expect(selectActiveConversationId(store.getState())).toBe('c2')
+    expect(store.getState().conversationCache.has('c2')).toBe(false)
+
+    // What ChatView does for an uncached conversation on screen.
+    await store.getState().openConversation('c2')
+    expect(store.getState().conversationCache.get('c2')?.messages).toHaveLength(1)
+  })
+
+  it('opens a conversation once when selecting it and the page ask together', async () => {
+    const store = twoConversations()
+    let resolve!: (value: unknown) => void
+    apiMock.getConversation.mockReturnValue(new Promise((r) => { resolve = r }))
+
+    const selecting = store.getState().selectConversation('c2')
+    const opening = store.getState().openConversation('c2')
+    resolve({ success: true, data: full('c2') })
+    await Promise.all([selecting, opening])
+
+    expect(apiMock.getConversation).toHaveBeenCalledTimes(1)
+    expect(apiMock.getSessionState).toHaveBeenCalledTimes(1)
+    expect(apiMock.ensureSessionWarm).toHaveBeenCalledTimes(1)
+    expect(store.getState().conversationCache.has('c2')).toBe(true)
+    expect(store.getState().isLoadingConversation).toBe(false)
+  })
+
+  it('records a failed read so the page can show it, and a successful retry clears it', async () => {
+    const store = twoConversations()
+    apiMock.getConversation.mockResolvedValueOnce({ success: false, error: 'Conversation not found' })
+
+    await store.getState().openConversation('c2')
+    expect(store.getState().conversationLoadErrors.get('c2')).toBe('Conversation not found')
+    expect(store.getState().conversationCache.has('c2')).toBe(false)
+
+    // Retry (the failed-load view's button) opens it again.
+    apiMock.getConversation.mockResolvedValueOnce({ success: true, data: full('c2') })
+    await store.getState().openConversation('c2')
+    expect(store.getState().conversationLoadErrors.has('c2')).toBe(false)
+    expect(store.getState().conversationCache.has('c2')).toBe(true)
+  })
+
+  it('a conversation no space can be found for is reported, not left loading', async () => {
+    const store = makeStore()
+    store.setState({ currentSpaceId: null })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await store.getState().openConversation('orphan')
+
+    expect(store.getState().conversationLoadErrors.get('orphan')).toBe('Conversation not found')
+    expect(apiMock.getConversation).not.toHaveBeenCalled()
   })
 })
 

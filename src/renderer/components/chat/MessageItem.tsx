@@ -33,7 +33,7 @@ import { TokenUsageIndicator } from './TokenUsageIndicator'
 import { truncateText, getToolFriendlyFormat } from './thought-utils'
 import type { Message, Thought, ThoughtsSummary } from '../../types'
 import { useTranslation } from '../../i18n'
-import { useChatStore } from '../../stores/chat.store'
+import { useChatStore, selectActiveConversationId } from '../../stores/chat.store'
 import { SourceChips } from './SourceChips'
 import { GoalSetBadge } from '../goal'
 import { AttachedPathChips } from './AttachedPathChips'
@@ -247,11 +247,11 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
   const isStreaming = (message as any).isStreaming
   const [copied, setCopied] = useState(false)
   const { t } = useTranslation()
-  const { loadMessageThoughts, currentSpaceId, currentConversationId } = useChatStore(s => ({
-    loadMessageThoughts: s.loadMessageThoughts,
-    currentSpaceId: s.currentSpaceId,
-    currentConversationId: s.getActiveConversationId(),
-  }))
+  // One selector per value: an object selector is a new object on every store
+  // update, which would re-render every row on every streamed token.
+  const loadMessageThoughts = useChatStore(s => s.loadMessageThoughts)
+  const currentSpaceId = useChatStore(s => s.currentSpaceId)
+  const currentConversationId = useChatStore(selectActiveConversationId)
 
   // Whether thoughts are stored separately (null = separated, not yet loaded)
   const hasThoughts = Array.isArray(message.thoughts) && message.thoughts.length > 0

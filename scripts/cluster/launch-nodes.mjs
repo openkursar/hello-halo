@@ -285,7 +285,6 @@ function seedNodeConfig(nodeDir, index, port, model, gatewayUrl) {
     },
     appearance: { theme: 'dark' },
     system: { autoLaunch: false },
-    // Agent Teams must be on for multi-agent + federation collaboration.
     agent: { maxTurns: 999, promptProfile: 'halo' },
     // Remote access pre-enabled: the extended-init idle task auto-restores the
     // HTTP server on this port using the plaintext PIN below as the token.

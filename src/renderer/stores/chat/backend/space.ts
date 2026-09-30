@@ -34,27 +34,40 @@ function metaFromConversation(conversation: Conversation): ConversationMeta {
 
 let loadsInFlight = 0
 
-async function open(ctx: BackendContext, { spaceId, conversationId }: { spaceId: string; conversationId: string }): Promise<void> {
-  const { set, get } = ctx
+function withLoadError(state: { conversationLoadErrors: Map<string, string> }, conversationId: string, error: string | null) {
+  const errors = new Map(state.conversationLoadErrors)
+  if (error === null) errors.delete(conversationId)
+  else errors.set(conversationId, error)
+  return errors
+}
 
-  if (!get().conversationCache.has(conversationId)) {
-    loadsInFlight++
-    set({ isLoadingConversation: true })
-    console.log(`[ChatStore] Loading full conversation: ${conversationId}`)
-    try {
-      const response = await api.getConversation(spaceId, conversationId)
-      if (response.success && response.data) {
-        const fullConversation = response.data as Conversation
-        set((state) => ({ conversationCache: cacheConversation(state, fullConversation) }))
-        console.log(`[ChatStore] Loaded conversation with ${fullConversation.messages?.length || 0} messages`)
-      }
-    } catch (error) {
-      console.error('[ChatStore] Failed to load conversation:', error)
-    } finally {
-      loadsInFlight--
-      if (loadsInFlight === 0) set({ isLoadingConversation: false })
-    }
+async function load(ctx: BackendContext, spaceId: string, conversationId: string): Promise<void> {
+  const { set } = ctx
+  loadsInFlight++
+  set({ isLoadingConversation: true })
+  console.log(`[ChatStore] Loading full conversation: ${conversationId}`)
+  try {
+    const response = await api.getConversation(spaceId, conversationId)
+    if (!response.success || !response.data) throw new Error(response.error || i18n.t('Failed to load chat'))
+    const fullConversation = response.data as Conversation
+    set((state) => ({
+      conversationCache: cacheConversation(state, fullConversation),
+      conversationLoadErrors: withLoadError(state, conversationId, null),
+    }))
+    console.log(`[ChatStore] Loaded conversation with ${fullConversation.messages?.length || 0} messages`)
+  } catch (error) {
+    // Recorded so the page shows the failure with a retry, instead of an
+    // empty conversation that looks like it has no messages.
+    console.error(`[ChatStore] Failed to load conversation ${conversationId}:`, error)
+    set((state) => ({ conversationLoadErrors: withLoadError(state, conversationId, String((error as Error)?.message ?? error)) }))
+  } finally {
+    loadsInFlight--
+    if (loadsInFlight === 0) set({ isLoadingConversation: false })
   }
+}
+
+async function open(ctx: BackendContext, { spaceId, conversationId }: { spaceId: string; conversationId: string }): Promise<void> {
+  if (!ctx.get().conversationCache.has(conversationId)) await load(ctx, spaceId, conversationId)
 
   await recoverSessionState(ctx, conversationId)
 
@@ -72,7 +85,10 @@ async function refresh(ctx: BackendContext, { spaceId, conversationId }: { space
     const response = await api.getConversation(spaceId, conversationId)
     if (!response.success || !response.data) return
     const updated = response.data as Conversation
-    ctx.set((state) => ({ conversationCache: cacheConversation(state, updated) }))
+    ctx.set((state) => ({
+      conversationCache: cacheConversation(state, updated),
+      conversationLoadErrors: withLoadError(state, conversationId, null),
+    }))
   } catch (error) {
     console.error('[ChatStore] Failed to refresh conversation:', error)
   }

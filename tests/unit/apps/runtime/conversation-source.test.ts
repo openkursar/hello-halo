@@ -24,7 +24,7 @@ const h = vi.hoisted(() => {
   return {
     state,
     sendAppChatMessage: vi.fn(),
-    loadChatTranscriptForConversation: vi.fn(),
+    loadChatMessagesForConversation: vi.fn(),
     agentDispose: vi.fn(),
   }
 })
@@ -49,7 +49,7 @@ vi.mock('../../../../src/main/services/space.service', () => ({
 }))
 vi.mock('../../../../src/main/apps/runtime/app-chat', () => ({
   sendAppChatMessage: (...args: unknown[]) => h.sendAppChatMessage(...args),
-  loadChatTranscriptForConversation: (...args: unknown[]) => h.loadChatTranscriptForConversation(...args),
+  loadChatMessagesForConversation: (...args: unknown[]) => h.loadChatMessagesForConversation(...args),
 }))
 vi.mock('../../../../src/main/apps/runtime/app-chat-live-turn', () => ({
   isAppChatConversationGenerating: (id: string) => h.state.generating.has(id) || h.state.activeRounds.has(id),
@@ -98,7 +98,7 @@ beforeEach(() => {
   s.agentListener = null
   h.sendAppChatMessage.mockReset()
   h.agentDispose.mockClear()
-  h.loadChatTranscriptForConversation.mockReset()
+  h.loadChatMessagesForConversation.mockReset()
 })
 
 describe('what it exposes', () => {
@@ -193,31 +193,29 @@ describe('reading', () => {
     h.state.records = [record('app-1', 'native', 'default', { messageCount: 1 })]
   })
 
-  it('walks the transcript pages back to the start and returns clean lines oldest first', () => {
-    const msg = (id: string, role: string, content: string, source?: string) => ({ id, role, content, timestamp: `t-${id}`, source, thoughts: null })
-    const pages = [
-      { messages: [msg('m4', 'assistant', 'd'), msg('m5', 'system', 'e', 'cross-conversation')], hasMoreBefore: true, cursor: 'm4', total: 5 },
-      { messages: [msg('m2', 'user', 'b'), msg('m3', 'assistant', 'c')], hasMoreBefore: true, cursor: 'm2', total: 5 },
-      { messages: [msg('m1', 'user', 'a')], hasMoreBefore: false, cursor: 'm1', total: 5 },
-    ]
-    h.loadChatTranscriptForConversation.mockImplementation((_path: string, _app: string, _key: string, request: { before?: string }) =>
-      request.before === undefined ? pages[0] : request.before === 'm4' ? pages[1] : pages[2]
-    )
+  it('returns the clean lines of the whole session oldest first, without thoughts', () => {
+    const msg = (id: string, role: string, content: string, source?: string) => ({
+      id, role, content, timestamp: `t-${id}`, source, thoughts: [{ id: `th-${id}`, type: 'thinking', content: 'private' }],
+    })
+    h.loadChatMessagesForConversation.mockReturnValue([
+      msg('m1', 'user', 'a'),
+      msg('m2', 'assistant', 'b'),
+      msg('m3', 'system', 'c', 'cross-conversation'),
+    ])
 
     const lines = source.readTranscript(SPACE, key)
 
     expect(lines).toEqual([
       { id: 'm1', role: 'user', content: 'a', timestamp: 't-m1', source: undefined },
-      { id: 'm2', role: 'user', content: 'b', timestamp: 't-m2', source: undefined },
-      { id: 'm3', role: 'assistant', content: 'c', timestamp: 't-m3', source: undefined },
-      { id: 'm4', role: 'assistant', content: 'd', timestamp: 't-m4', source: undefined },
-      { id: 'm5', role: 'system', content: 'e', timestamp: 't-m5', source: 'cross-conversation' },
+      { id: 'm2', role: 'assistant', content: 'b', timestamp: 't-m2', source: undefined },
+      { id: 'm3', role: 'system', content: 'c', timestamp: 't-m3', source: 'cross-conversation' },
     ])
-    expect(h.loadChatTranscriptForConversation).toHaveBeenNthCalledWith(1, '/spaces/space-1', 'app-1', key, { before: undefined, limit: 200 })
+    expect(h.loadChatMessagesForConversation).toHaveBeenCalledTimes(1)
+    expect(h.loadChatMessagesForConversation).toHaveBeenCalledWith('/spaces/space-1', 'app-1', key)
   })
 
   it('returns an empty transcript for a session with no messages yet', () => {
-    h.loadChatTranscriptForConversation.mockReturnValue({ messages: [], hasMoreBefore: false, cursor: null, total: 0 })
+    h.loadChatMessagesForConversation.mockReturnValue([])
     expect(source.readTranscript(SPACE, key)).toEqual([])
   })
 
@@ -226,7 +224,7 @@ describe('reading', () => {
     expect(source.readTranscript(SPACE, 'app-chat:missing')).toBeNull()
     h.state.spacePath = undefined
     expect(source.readTranscript(SPACE, key)).toBeNull()
-    expect(h.loadChatTranscriptForConversation).not.toHaveBeenCalled()
+    expect(h.loadChatMessagesForConversation).not.toHaveBeenCalled()
   })
 })
 
@@ -379,10 +377,10 @@ describe('conversation collaboration switched off', () => {
 
   it('still knows and reads its chats: the switch governs other conversations\' AI, not the user', () => {
     off()
-    h.loadChatTranscriptForConversation.mockReturnValue({ messages: [], hasMoreBefore: false, cursor: null })
+    h.loadChatMessagesForConversation.mockReturnValue([])
     expect(source.getMeta(SPACE, local)).toMatchObject({ id: local, title: 'Analyst: Q3', unavailable: COLLAB_OFF_REASON })
     source.readTranscript(SPACE, local)
-    expect(h.loadChatTranscriptForConversation).toHaveBeenCalled()
+    expect(h.loadChatMessagesForConversation).toHaveBeenCalled()
   })
 
   it('does not mark a chat it does not own or that does not exist', () => {

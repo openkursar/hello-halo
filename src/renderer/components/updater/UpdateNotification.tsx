@@ -91,7 +91,7 @@ export function UpdateNotification() {
           title,
           body: withRequiredNote(notes || (isInstaller
             ? t('Halo will close and the installer will guide you through it')
-            : t('Applies in a few seconds, then Halo reopens'))),
+            : t('Restarting takes only a few seconds'))),
           bodyFormat: notes ? 'markdown' : 'text',
           variant: 'success',
           duration: 0,

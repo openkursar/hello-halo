@@ -8,7 +8,8 @@ import { readTransition } from './task-read'
 import { useGoalStore } from '../goal.store'
 import { useGoalUiStore } from '../goal-ui.store'
 import { cacheConversation } from './backend/cache'
-import { deleteAppChatSession, digitalHumanSpaceId, backendFor } from './backend'
+import { deleteAppChatSession, digitalHumanSpaceId, backendFor, openOnce } from './backend'
+import i18n from '../../i18n'
 import { readEngineSessionState } from './backend/recover'
 
 /**
@@ -258,7 +259,7 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'openConver
     get().cleanupPulseReadAt()
 
     // Read it in (if not cached), pick up a running turn, warm the session.
-    await backendFor(conversationId).open({ set, get }, { spaceId: currentSpaceId, conversationId })
+    await openOnce({ set, get }, { spaceId: currentSpaceId, conversationId })
   },
 
   // Older page of a paged conversation (digital-human transcripts).
@@ -307,8 +308,17 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'openConver
 
   openConversation: async (conversationId) => {
     const ref = refFor(get(), conversationId)
-    if (!ref) return warnNoSpace('openConversation', conversationId)
-    await backendFor(conversationId).open({ set, get }, ref)
+    if (!ref) {
+      warnNoSpace('openConversation', conversationId)
+      // Recorded so a page waiting for this conversation stops showing it as loading.
+      set((state) => {
+        const errors = new Map(state.conversationLoadErrors)
+        errors.set(conversationId, i18n.t('Conversation not found'))
+        return { conversationLoadErrors: errors }
+      })
+      return
+    }
+    await openOnce({ set, get }, ref)
   },
 
   // Delete conversation

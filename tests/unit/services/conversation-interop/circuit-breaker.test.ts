@@ -169,4 +169,62 @@ describe('circuit-breaker', () => {
     // Unrelated conversations are unaffected.
     expect(breaker.getInboundForwardDepth('C')).toBe(0)
   })
+
+  describe('expired-state sweep', () => {
+    const send = (breaker: ReturnType<typeof createCircuitBreaker>, from: string, to: string) =>
+      breaker.checkAndCharge({ fromConversationId: from, toConversationId: to, forwardDepth: 0, messageLength: 1 })
+
+    it('keeps a cooldown that is still running when a later send sweeps', () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(0)
+      const breaker = createCircuitBreaker({ ...BASE_LIMITS, pairLimit: 1 })
+      send(breaker, 'A', 'B')
+      expect(send(breaker, 'A', 'B')).toMatchObject({ ok: false, reason: 'pair_limit', cooldownJustStarted: true })
+
+      // Past the window (a sweep runs) but inside the 5-minute cooldown.
+      vi.setSystemTime(BASE_LIMITS.windowMs + 1)
+      expect(send(breaker, 'C', 'D')).toEqual({ ok: true })
+      expect(send(breaker, 'A', 'B')).toEqual({ ok: false, reason: 'pair_limit', cooldownJustStarted: false })
+    })
+
+    it('keeps sends still inside the window when a sweep runs', () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(0)
+      const breaker = createCircuitBreaker({ ...BASE_LIMITS, pairLimit: 2 })
+      send(breaker, 'C', 'D')
+      vi.setSystemTime(BASE_LIMITS.windowMs - 10)
+      send(breaker, 'A', 'B')
+      send(breaker, 'A', 'B')
+
+      // The sweep at this send drops C→D's expired history but not A→B's live one.
+      vi.setSystemTime(BASE_LIMITS.windowMs + 1)
+      expect(send(breaker, 'A', 'B')).toMatchObject({ ok: false, reason: 'pair_limit' })
+    })
+
+    it('drops the entries of pairs whose sends and cooldowns have all expired', () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(0)
+      const breaker = createCircuitBreaker({ ...BASE_LIMITS, pairLimit: 1 })
+      send(breaker, 'A', 'B')
+      send(breaker, 'A', 'B') // trips: pair cooldown
+      send(breaker, 'C', 'D')
+      expect(breaker.trackedEntryCount()).toBe(5) // 2 pair histories, 2 source histories, 1 cooldown
+
+      vi.setSystemTime(BASE_LIMITS.cooldownMs + BASE_LIMITS.windowMs + 1)
+      send(breaker, 'E', 'F')
+
+      expect(breaker.trackedEntryCount()).toBe(2) // only E→F's pair and source history
+    })
+
+    it('an expired cooldown and window leave the pair as if new', () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(0)
+      const breaker = createCircuitBreaker({ ...BASE_LIMITS, pairLimit: 1 })
+      send(breaker, 'A', 'B')
+      send(breaker, 'A', 'B')
+
+      vi.setSystemTime(BASE_LIMITS.cooldownMs + BASE_LIMITS.windowMs + 1)
+      expect(send(breaker, 'A', 'B')).toEqual({ ok: true })
+    })
+  })
 })
