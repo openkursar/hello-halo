@@ -2,6 +2,7 @@
  * Apps REST API routes (remote access).
  * Split from the monolithic routes/index.ts; mirrors the IPC API for this domain.
  */
+import { isReasoningEffortLevel } from '../../../shared/constants/reasoning-effort'
 import type { Express, Request, Response } from 'express'
 import {
   AppAlreadyInstalledError,
@@ -1061,6 +1062,7 @@ export function registerAppsRoutes(app: Express): void {
         message?: unknown
         images?: ImageAttachment[]
         thinkingEnabled?: unknown
+        reasoningEffort?: unknown
         canvasContext?: unknown
       }
       if (typeof body.spaceId !== 'string' || !body.spaceId) {
@@ -1085,6 +1087,8 @@ export function registerAppsRoutes(app: Express): void {
         conversationId,
         ...(Array.isArray(body.images) && body.images.length > 0 ? { images: body.images } : {}),
         ...(body.thinkingEnabled !== undefined ? { thinkingEnabled: !!body.thinkingEnabled } : {}),
+        ...(isReasoningEffortLevel(body.reasoningEffort) ? { reasoningEffort: body.reasoningEffort } : {}),
+        useChatThinkingLevel: true,
         ...(canvasContext ? { canvasContext } : {}),
         ...(target.teamContext ? { teamContext: target.teamContext } : {}),
       }

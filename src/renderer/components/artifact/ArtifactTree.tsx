@@ -628,22 +628,24 @@ export function ArtifactTree({ spaceId, onRootCountChange }: ArtifactTreeProps) 
     loadingPaths
   }), [loadChildren, loadingPaths])
 
-  const toolbarButtonClass = 'w-6 h-6 flex items-center justify-center rounded-sm text-faint-foreground transition-colors ease-halo hover:bg-surface-hover hover:text-foreground'
+  // Recede at rest: thin strokes, and below full strength until the pointer
+  // enters the toolbar, where they return to the 3:1 faint color.
+  const toolbarButtonClass = 'w-6 h-6 flex items-center justify-center rounded-sm text-faint-foreground opacity-60 group-hover/toolbar:opacity-100 focus-visible:opacity-100 transition-[color,opacity] ease-halo hover:bg-surface-hover hover:text-foreground'
   const refreshButton = (
     <button
       onClick={() => { api.reconcileArtifacts(spaceId) }}
       className={toolbarButtonClass}
       title={t('Refresh file tree')}
     >
-      <RefreshCw className="w-3.5 h-3.5" strokeWidth={1.8} />
+      <RefreshCw className="w-3.5 h-3.5" strokeWidth={1.5} />
     </button>
   )
   const openFolderButton = isWebMode ? (
     <span
-      className="w-6 h-6 flex items-center justify-center text-faint-foreground cursor-not-allowed"
+      className="w-6 h-6 flex items-center justify-center text-faint-foreground opacity-60 group-hover/toolbar:opacity-100 transition-opacity ease-halo cursor-not-allowed"
       title={t('Please open folder in client')}
     >
-      <Monitor className="w-3.5 h-3.5" strokeWidth={1.8} />
+      <Monitor className="w-3.5 h-3.5" strokeWidth={1.5} />
     </span>
   ) : (
     <button
@@ -654,13 +656,13 @@ export function ArtifactTree({ spaceId, onRootCountChange }: ArtifactTreeProps) 
       className={toolbarButtonClass}
       title={workspaceRoot ? `${t('Open folder')}: ${workspaceRoot}` : t('Open folder')}
     >
-      <FolderOpen className="w-3.5 h-3.5" strokeWidth={1.8} />
+      <FolderOpen className="w-3.5 h-3.5" strokeWidth={1.5} />
     </button>
   )
   // No title: the rail's selected tab already names this as Files. The folder
   // itself sits on the left, actions on its contents on the right.
   const toolbar = (actions: React.ReactNode) => (
-    <div className="flex-shrink-0 bg-secondary/60 px-1.5 py-1 flex items-center justify-between">
+    <div className="group/toolbar flex-shrink-0 bg-secondary/60 px-1.5 py-1 flex items-center justify-between">
       {openFolderButton}
       <div className="flex flex-shrink-0 gap-0.5">{actions}</div>
     </div>
@@ -701,10 +703,10 @@ export function ArtifactTree({ spaceId, onRootCountChange }: ArtifactTreeProps) 
           {toolbar(
             <>
               <button onClick={handleNewFile} className={toolbarButtonClass} title={t('New File')}>
-                <FilePlus className="w-3.5 h-3.5" strokeWidth={1.8} />
+                <FilePlus className="w-3.5 h-3.5" strokeWidth={1.5} />
               </button>
               <button onClick={handleNewFolder} className={toolbarButtonClass} title={t('New Folder')}>
-                <FolderPlus className="w-3.5 h-3.5" strokeWidth={1.8} />
+                <FolderPlus className="w-3.5 h-3.5" strokeWidth={1.5} />
               </button>
               {refreshButton}
             </>

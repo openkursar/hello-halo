@@ -2,6 +2,7 @@
  * Space Store - Workspace state management
  */
 
+import { useCallback } from 'react'
 import { create } from 'zustand'
 import { api } from '../api'
 import { useChatStore } from './chat.store'
@@ -394,3 +395,14 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
     }
   }
 }))
+
+/** Display name for a space id; falls back to the id while spaces are still loading. */
+export function useSpaceNameResolver(): (spaceId: string) => string {
+  const haloSpace = useSpaceStore(state => state.haloSpace)
+  const spaces = useSpaceStore(state => state.spaces)
+  return useCallback((spaceId: string) => {
+    const space = haloSpace?.id === spaceId ? haloSpace : spaces.find(s => s.id === spaceId)
+    if (!space) return spaceId
+    return space.isTemp ? 'Halo' : space.name
+  }, [haloSpace, spaces])
+}

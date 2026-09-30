@@ -81,6 +81,12 @@ export interface InstalledApp {
     modelSourceId?: string
     /** Override model within the selected AI source. Used together with modelSourceId. */
     modelId?: string
+    /**
+     * How hard this digital human thinks in chat, picked on the composer's
+     * model card; applies to every one of its chat sessions. Automation runs
+     * keep the model's configured effort.
+     */
+    chatReasoningEffort?: import('../constants/reasoning-effort').ReasoningEffortLevel
     /** When true, the login notice bar is permanently dismissed for this app */
     loginNoticeDismissed?: boolean
     /**

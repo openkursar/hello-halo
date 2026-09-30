@@ -17,6 +17,7 @@ import type { CapabilityInventory } from '../../shared/apps/capability-inventory
 import type { AppSpaceChangePreview } from '../../shared/apps/app-environment'
 import type { ImageAttachment } from '../../shared/types/image-attachment'
 import type { CanvasContext } from '../../shared/types/canvas-context'
+import type { ReasoningEffortLevel } from '../../shared/constants/reasoning-effort'
 import type { MemoryStatus } from '../../shared/types/memory'
 import type { Thought, TranscriptPage } from '../../shared/types/transcript'
 
@@ -395,7 +396,7 @@ export const appsApi = {
   // App Chat
   // conversationId addresses a specific native/local session; omit for the app's
   // native default session.
-  appChatSend: async (request: { appId: string; spaceId: string; message: string; images?: ImageAttachment[]; thinkingEnabled?: boolean; canvasContext?: CanvasContext; conversationId?: string; teamContext?: unknown }): Promise<ApiResponse<{ conversationId: string }>> => {
+  appChatSend: async (request: { appId: string; spaceId: string; message: string; images?: ImageAttachment[]; thinkingEnabled?: boolean; reasoningEffort?: ReasoningEffortLevel; canvasContext?: CanvasContext; conversationId?: string; teamContext?: unknown }): Promise<ApiResponse<{ conversationId: string }>> => {
     // Subscribe to agent events so remote/Capacitor clients receive streaming updates.
     // The view also subscribes on mount (via useRemoteSubscription), but the API-level
     // subscription mirrors sendMessage's pattern and ensures coverage if the API is

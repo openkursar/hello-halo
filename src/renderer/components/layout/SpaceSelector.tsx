@@ -191,7 +191,7 @@ export function SpaceSelector() {
           workspace" signal (SpaceAvatar + displayName in the trigger). */}
       <button
         onClick={handleGoToWorkspaces}
-        className="hidden sm:flex items-center h-9 px-2 flex-shrink-0 rounded-sm text-sm text-muted-foreground hover:bg-secondary hover:text-foreground hover:underline underline-offset-[3px] transition-colors ease-halo"
+        className="hidden sm:flex items-center h-8 px-2 flex-shrink-0 rounded-sm text-[13px] text-muted-foreground hover:bg-secondary hover:text-foreground hover:underline underline-offset-[3px] transition-colors ease-halo"
         title={t('Manage workspaces')}
       >
         {t('Workspace')}
@@ -201,7 +201,7 @@ export function SpaceSelector() {
       <div className="relative" ref={dropdownRef}>
         <button
           onClick={() => setIsOpen(!isOpen)}
-          className="h-9 pl-1.5 pr-2 flex items-center gap-2 border border-transparent rounded-sm text-sm hover:bg-secondary hover:border-primary/[0.18] transition-colors ease-halo max-w-[140px] sm:max-w-[180px]"
+          className="h-8 pl-1.5 pr-2 flex items-center gap-2 border border-transparent rounded-sm text-[13px] hover:bg-secondary hover:border-primary/[0.18] transition-colors ease-halo max-w-[140px] sm:max-w-[180px]"
           title={t('Current workspace: {{name}} — click to switch', { name: displayName })}
         >
           <SpaceAvatar space={currentSpace ?? { id: 'halo', name: displayName, isTemp: true }} size={20} />

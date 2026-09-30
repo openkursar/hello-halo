@@ -10,8 +10,9 @@
  * - Capacitor: safe area padding on top (status bar)
  * - Browser/Mobile: no extra padding needed (pl-3 pr-1.5)
  *
- * Height: 48px, matching the prototype's `.header{height:48px}` — its own
- * `.hbtn` (36px) needs more breathing room than a 40px row leaves.
+ * Height: 40px (APP_HEADER_HEIGHT, which the main process also sizes the
+ * Windows/Linux caption-button overlay from). Controls placed in it are at
+ * most 32px tall so they keep 4px of breathing room.
  *
  * Single persistent instance, mounted once by `HeaderShell` in the app shell.
  * Pages don't render a `<header>` element themselves — they call `<Header
@@ -163,14 +164,14 @@ export function HeaderShell({ children }: HeaderShellProps) {
         // Bare drag strip: same footprint a maximized canvas needs (draggable)
         // with no chrome content on top of it. Matches the real header's height.
         <div
-          className="h-12 flex-shrink-0 bg-background"
+          className="h-10 flex-shrink-0 bg-background"
           style={{ WebkitAppRegion: 'drag' } as CSSProperties}
         />
       ) : (
         <header
           style={chromeInset}
           className={`
-            flex items-center justify-between h-12 flex-shrink-0
+            flex items-center justify-between h-10 flex-shrink-0
             border-b border-border/50 ${dragClass}
             ${platformPadding}
           `.trim().replace(/\s+/g, ' ')}

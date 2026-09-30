@@ -3,6 +3,7 @@
  * by the space's own conversation ids. Everything here is the behavior the chat
  * store always had for them, gathered behind the backend interface.
  */
+import { lastUsedThinkingLevel } from '../../thinking-level.store'
 import { api } from '../internal'
 import type { Conversation, ConversationMeta, Message, Thought } from '../internal'
 import i18n from '../../../i18n'
@@ -178,6 +179,8 @@ async function send(ctx: BackendContext, conversationId: string, request: SendRe
       message: content,
       images,
       thinkingEnabled,
+      // The composer's slider applies to every send in this chat, not per message.
+      reasoningEffort: lastUsedThinkingLevel(),
       canvasContext: buildCanvasContext(),
       ...(goal ? { goal } : {})
     })

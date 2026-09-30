@@ -9,7 +9,7 @@
  * - Renders grouped items: "Needs you" (waiting / completed-unseen / error —
  *   needs the user) and "Running", each with a header + count, then pinned
  *   idle conversations last
- * - Source-specific identity: MessageSquare icon for conversations,
+ * - Source-specific identity: the rail's conversation glyph for conversations,
  *   AutomationAvatar for digital humans — never a generic status dot
  * - Pin/unpin toggle and grace-period "seen" Keep/Remove — conversation
  *   items only; automation items never enter the seen/auto-remove flow
@@ -22,7 +22,8 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { Pin, SquareCheckBig, ChevronRight, MessageSquare, Users } from 'lucide-react'
+import { Pin, SquareCheckBig, ChevronRight, Users } from 'lucide-react'
+import { ChatNavIcon } from '../icons/NavIcons'
 import { useChatStore, selectActiveConversationId } from '../../stores/chat.store'
 import { useTaskItems } from '../../stores/task.store'
 import { useTeamStore } from '../../stores/team.store'
@@ -269,17 +270,19 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
             : cn('border-border/60 bg-background hover:bg-secondary', isSeen && 'opacity-[.62] hover:opacity-100')
         )}
       >
-        {/* Identity icon — MessageSquare for a conversation, Users for a team,
-            the digital human's own generated face for automation. Never a
-            status dot: status is conveyed by the section and elapsed text. */}
+        {/* Identity icon — the rail's conversation glyph, Users for a team,
+            the digital human's own generated face for automation. No tile
+            behind it: on the card's own fill a gray tile only muddies it.
+            Never a status dot: status is conveyed by the section and elapsed
+            text. */}
         {(isConversation && !isAppChat) || isTeam ? (
           <div className={cn(
-            'w-[30px] h-[30px] flex-shrink-0 rounded-sm flex items-center justify-center',
-            isReady && !isSeen ? 'bg-primary/[0.12] text-accent-on-dark' : 'bg-secondary text-subtle-foreground'
+            'w-[30px] h-[30px] flex-shrink-0 flex items-center justify-center',
+            isReady && !isSeen ? 'text-primary' : 'text-subtle-foreground'
           )}>
             {isTeam
-              ? <Users className="w-4 h-4" strokeWidth={1.8} />
-              : <MessageSquare className="w-4 h-4" strokeWidth={1.8} />}
+              ? <Users className="w-[18px] h-[18px]" strokeWidth={1.6} />
+              : <ChatNavIcon className="w-[18px] h-[18px]" />}
           </div>
         ) : (
           <div className="w-[30px] h-[30px] flex-shrink-0 rounded-sm overflow-hidden">
@@ -296,28 +299,30 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
             <p className="text-[13px] font-semibold truncate text-foreground">
               {item.title}
             </p>
-            {/* Space rides beside the title as a muted pill, same treatment as
-                AutomationCard's — it's context for where clicking lands you,
-                not something to scan for. Native `title` rather than the
+            {/* Space name holds the top-right corner at rest and gives way to
+                the item's actions on hover — context for where clicking lands
+                you, not something to scan for. Native `title` rather than the
                 Tooltip component: its bubble is absolutely positioned and
                 `whitespace-nowrap`, which overflows this 340px panel's
                 scroll box sideways. */}
-            {/* Teams span workspaces, so they carry no workspace pill. */}
-            {!isTeam && (
-              <span
-                title={item.spaceId
-                  ? t('Workspace: {{name}}', { name: item.spaceName })
-                  : t('Global — runs outside any workspace')}
-                className="flex-shrink-0 max-w-[45%] truncate text-[10px] text-muted-foreground px-1.5 py-0.5 rounded bg-secondary/70"
-              >
-                {item.spaceName}
-              </span>
-            )}
-            {isRunning && (
-              <span className="ml-auto flex-shrink-0 text-[11px] text-subtle-foreground tabular-nums">
-                {isQueued ? t('Queued') : formatElapsed(runningElapsedMs)}
-              </span>
-            )}
+            <div className="ml-auto flex min-w-0 max-w-[45%] flex-shrink-0 items-center gap-[6px]">
+              {/* Teams span workspaces, so they carry no workspace pill. */}
+              {!isTeam && (
+                <span
+                  title={item.spaceId
+                    ? t('Workspace: {{name}}', { name: item.spaceName })
+                    : t('Global — runs outside any workspace')}
+                  className={cn('min-w-0 truncate text-[11px] text-subtle-foreground group-hover/tk:hidden', isSelected && 'hidden')}
+                >
+                  {item.spaceName}
+                </span>
+              )}
+              {isRunning && (
+                <span className="flex-shrink-0 text-[11px] text-subtle-foreground tabular-nums">
+                  {isQueued ? t('Queued') : formatElapsed(runningElapsedMs)}
+                </span>
+              )}
+            </div>
           </div>
           <div className="mt-0.5">
             <span className={cn('block text-[11px] truncate', STATUS_TEXT_CLASS[item.status])}>
@@ -345,13 +350,13 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
             </span>
             <button
               onClick={(e) => handleKeep(e, item)}
-              className="h-[26px] px-[9px] rounded-sm border border-primary/[0.18] text-[11px] text-accent-on-dark transition-colors ease-halo hover:bg-primary/[0.12] hover:border-primary"
+              className="h-[22px] px-[9px] rounded-sm border border-primary/[0.18] text-[11px] text-accent-on-dark transition-colors ease-halo hover:bg-primary/[0.12] hover:border-primary"
             >
               {t('Keep')}
             </button>
             <button
               onClick={(e) => handleRemove(e, item)}
-              className="h-[26px] px-[9px] rounded-sm border border-border bg-card text-[11px] text-muted-foreground transition-colors ease-halo hover:bg-surface-hover hover:text-foreground"
+              className="h-[22px] px-[9px] rounded-sm border border-border bg-card text-[11px] text-muted-foreground transition-colors ease-halo hover:bg-surface-hover hover:text-foreground"
             >
               {t('Remove')}
             </button>
@@ -365,9 +370,9 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
               onClick={(e) => handleTogglePin(e, item)}
               className={cn(
                 'w-[22px] h-[22px] flex-shrink-0 rounded-[6px] flex items-center justify-center transition-colors',
-                item.starred
-                  ? 'text-blue-500'
-                  : 'hidden group-hover/tk:flex text-subtle-foreground hover:bg-surface-hover hover:text-foreground'
+                'hidden group-hover/tk:flex hover:bg-surface-hover',
+                // Pinned items already sit under Pinned; the pin shows only on hover.
+                item.starred ? 'text-primary' : 'text-subtle-foreground hover:text-foreground'
               )}
               title={item.starred ? t('Unpin') : t('Pin')}
               aria-pressed={item.starred}
@@ -379,7 +384,7 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
             {item.kept && !!item.readAt && (
               <button
                 onClick={(e) => handleRemove(e, item)}
-                className="hidden group-hover/tk:block h-[26px] px-[9px] flex-shrink-0 rounded-sm border border-border bg-card text-[11px] text-muted-foreground transition-colors ease-halo hover:bg-surface-hover hover:text-foreground"
+                className="hidden group-hover/tk:block h-[22px] px-[9px] flex-shrink-0 rounded-sm border border-border bg-card text-[11px] text-muted-foreground transition-colors ease-halo hover:bg-surface-hover hover:text-foreground"
               >
                 {t('Remove')}
               </button>
@@ -387,12 +392,16 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
           </>
         ) : null}
 
+        {/* Hover-only except on the open item, which keeps it (in place of its
+            space name) to mark where you are. */}
         <ChevronRight
           className={cn(
             'w-4 h-4 flex-shrink-0 transition-[transform,color] ease-halo',
-            'text-faint-foreground group-hover/tk:translate-x-0.5 group-hover/tk:text-foreground'
+            'text-faint-foreground group-hover/tk:block group-hover/tk:translate-x-0.5 group-hover/tk:text-foreground',
+            isSelected ? 'block' : 'hidden'
           )}
         />
+
       </div>
     )
   }

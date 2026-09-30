@@ -48,7 +48,8 @@ import { emitAgentEvent } from '../../services/agent/events'
 import { resolveCredentialsForSdk, buildUserSessionSdkOptions, addSdkHooks } from '../../services/agent/sdk-config'
 import { toEngineSystemPrompt } from '../../services/agent/system-prompt'
 import { getEngineCapabilities } from '../../services/agent/resolved-sdk'
-import { applyReasoningEffort } from '../../services/agent/reasoning-effort'
+import { applyReasoningEffort, pickReasoningEffort } from '../../services/agent/reasoning-effort'
+import type { ReasoningEffortLevel } from '../../../shared/constants/reasoning-effort'
 import { createCanUseTool } from '../../services/agent/permission-handler'
 import { getImPermissionContext } from './im-permission-registry'
 import { createAIBrowserMcpServer } from '../../services/ai-browser'
@@ -194,6 +195,14 @@ export interface AppChatRequest {
   attachedFiles?: string[]
   /** Enable extended thinking mode */
   thinkingEnabled?: boolean
+  /** Depth picked for this send; overrides thinkingEnabled and the model config. */
+  reasoningEffort?: ReasoningEffortLevel
+  /**
+   * Set by the chat surfaces (IPC and HTTP send) so the digital human's own
+   * chat level applies. IM, team and federation dispatch leave it unset, so
+   * their replies keep the model's configured effort.
+   */
+  useChatThinkingLevel?: boolean
   /** What the user has open in the canvas, so the agent can refer to it naturally. */
   canvasContext?: CanvasContext
   /**
@@ -427,7 +436,7 @@ async function runAppChatTurn(
   request: AppChatRequest
 ): Promise<void> {
   const {
-    appId, message, images, thinkingEnabled, onReply, onProgress,
+    appId, message, images, thinkingEnabled, reasoningEffort, onReply, onProgress,
     imFileSend, senderIdentity, imSession, teamContext, relayOrigin, onMessageAccepted,
   } = request
   const conversationId = request.conversationId ?? getAppChatConversationId(appId)
@@ -804,7 +813,11 @@ async function runAppChatTurn(
     memoryGuard: appMemoryGuard(memoryScope, `chat:${conversationId.slice(0, 8)}`, memorySettings),
   })
 
-  const thinkingBudget = applyReasoningEffort(sdkOptions, thinkingEnabled, resolvedCreds.capabilities)
+  // In chat the digital human's own level wins; the send carries the last-used one.
+  const thinkingBudget = applyReasoningEffort(
+    sdkOptions, thinkingEnabled, resolvedCreds.capabilities,
+    pickReasoningEffort(request.useChatThinkingLevel ? app.userOverrides?.chatReasoningEffort : undefined, reasoningEffort)
+  )
 
   // Override for app chat context
   sdkOptions.systemPrompt = toEngineSystemPrompt(systemPrompt)

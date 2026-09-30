@@ -95,9 +95,9 @@ export function TlonPage() {
           left={
             <>
               <span className="text-sm font-semibold text-foreground whitespace-nowrap">{t('Knowledge Base')}</span>
-              <SearchIcon onClick={() => openSearch('global')} />
             </>
           }
+          right={<SearchIcon onClick={() => openSearch('global')} />}
         />
 
         {/* Page title area — hidden when on the detail page */}

@@ -16,6 +16,7 @@ import {
 import type { ImageAttachment } from '../../shared/types/image-attachment'
 import { markIntentionalStop } from '../apps/runtime'
 import type { GoalInput } from '../../shared/types/goal'
+import type { ReasoningEffortLevel } from '../../shared/constants/reasoning-effort'
 
 export interface SendMessageRequest {
   spaceId: string
@@ -24,6 +25,7 @@ export interface SendMessageRequest {
   resumeSessionId?: string
   images?: ImageAttachment[]  // Optional images for multi-modal messages
   thinkingEnabled?: boolean   // Enable extended thinking mode
+  reasoningEffort?: ReasoningEffortLevel  // Depth picked for this send
   knowledgeBaseId?: string           // Chat-with-knowledge-base turn
   goal?: GoalInput                   // Set as the conversation goal before this message runs
 }

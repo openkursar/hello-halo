@@ -303,9 +303,9 @@ export function AppsPage() {
         left={
           <>
             <span className="text-sm font-semibold text-foreground whitespace-nowrap">{t('Digital Humans · Extensions')}</span>
-            <SearchIcon onClick={() => openSearch('global')} />
           </>
         }
+        right={<SearchIcon onClick={() => openSearch('global')} />}
       />
 
       {/* Tab bar — kept provider-agnostic via TabButton sub-component. Hidden

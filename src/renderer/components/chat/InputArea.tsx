@@ -19,8 +19,9 @@
  * - Bottom toolbar for future extensibility
  */
 
+import { useThinkingLevelStore } from '../../stores/thinking-level.store'
 import { useState, useRef, useEffect, useMemo, useCallback, KeyboardEvent, ClipboardEvent, DragEvent } from 'react'
-import { Plus, ImagePlus, Paperclip, Loader2, AlertCircle, Lightbulb, MessagesSquare, Bot, Target } from 'lucide-react'
+import { Plus, ImagePlus, Paperclip, Loader2, AlertCircle, MessagesSquare, Bot, Target } from 'lucide-react'
 import { useAppStore } from '../../stores/app.store'
 import { useChatStore } from '../../stores/chat.store'
 import { useOnboardingStore } from '../../stores/onboarding.store'
@@ -177,6 +178,8 @@ interface InputAreaProps {
   placeholder?: string
   isCompact?: boolean
   toolbarSlot?: React.ReactNode
+  /** Controls placed just left of the send button (e.g. model and quota). */
+  sendSlot?: React.ReactNode
   /** Available slash commands for the "/" quick-input autocomplete */
   slashCommands?: SlashCommandItem[]
   /** Files available in the @ menu. */
@@ -254,7 +257,7 @@ interface ImageError {
   message: string
 }
 
-export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder, isCompact = false, toolbarSlot, draftKey, slashCommands = [], mentionArtifacts = [], mentionConversations = [], hideToolsetControls = false, hideKnowledgeControls = false, standalone = false, digitalHumanSelector, goal }: InputAreaProps) {
+export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder, isCompact = false, toolbarSlot, sendSlot, draftKey, slashCommands = [], mentionArtifacts = [], mentionConversations = [], hideToolsetControls = false, hideKnowledgeControls = false, standalone = false, digitalHumanSelector, goal }: InputAreaProps) {
   const { t } = useTranslation()
   const sendKeyMode = useAppStore(state => state.config?.chat?.sendKeyMode ?? 'enter')
 
@@ -302,7 +305,8 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
   const [isDragOver, setIsDragOver] = useState(false)
   const [isProcessingImages, setIsProcessingImages] = useState(false)
   const [imageError, setImageError] = useState<ImageError | null>(null)
-  const [thinkingEnabled, setThinkingEnabled] = useState(true)  // Extended thinking mode
+  // Picked on the model card (see thinking-level.store); unset keeps thinking on.
+  const thinkingEnabled = useThinkingLevelStore(state => state.level !== 'off')
   const [showAttachMenu, setShowAttachMenu] = useState(false)  // Attachment menu visibility
   // Slash-command autocomplete
   const [slashMenuOpen, setSlashMenuOpen] = useState(false)
@@ -1008,7 +1012,6 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
         }
         handleMentionClose()
         handleSlashClose()
-        // Don't reset thinkingEnabled - user might want to keep it on
         // Reset height
         if (textareaRef.current) {
           textareaRef.current.style.height = 'auto'
@@ -1254,7 +1257,7 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
             relative flex flex-col border bg-card shadow-soft
             transition-colors ease-halo
             ${cardRadius}
-            ${isFocused ? 'border-primary ring-[3px] ring-primary/[0.12]' : 'border-border'}
+            border-border ${isFocused ? 'ring-[3px] ring-foreground/[0.03]' : ''}
             ${isDragOver ? 'ring-2 ring-primary/50 bg-primary/5' : ''}
           `}
           onDragOver={handleDragOver}
@@ -1482,7 +1485,6 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
             isGenerating={isGenerating}
             isOnboarding={isOnboardingSendStep}
             thinkingEnabled={thinkingEnabled}
-            onThinkingToggle={() => setThinkingEnabled(!thinkingEnabled)}
             showAttachMenu={showAttachMenu}
             onAttachMenuToggle={handleAttachMenuToggle}
             plusTriggerRef={plusTriggerRef}
@@ -1492,6 +1494,7 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
             onStop={onStop}
             sendKeyMode={sendKeyMode}
             toolbarSlot={toolbarSlot}
+            sendSlot={sendSlot}
             hideKnowledgeControls={hideKnowledgeControls}
             digitalHumanSelector={digitalHumanSelector}
             sendTitle={goalMode ? goal.sendTitle : undefined}
@@ -1509,10 +1512,10 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
  */
 interface InputToolbarProps {
   toolbarSlot?: React.ReactNode
+  sendSlot?: React.ReactNode
   isGenerating: boolean
   isOnboarding: boolean
   thinkingEnabled: boolean
-  onThinkingToggle: () => void
   showAttachMenu: boolean
   onAttachMenuToggle: () => void
   plusTriggerRef: React.RefObject<HTMLButtonElement>
@@ -1530,10 +1533,10 @@ interface InputToolbarProps {
 
 function InputToolbar({
   toolbarSlot,
+  sendSlot,
   isGenerating,
   isOnboarding,
   thinkingEnabled,
-  onThinkingToggle,
   showAttachMenu,
   onAttachMenuToggle,
   plusTriggerRef,
@@ -1595,24 +1598,6 @@ function InputToolbar({
           </button>
         )}
 
-        {/* Thinking mode toggle - always show full label, no expansion */}
-        {!isGenerating && !isOnboarding && (
-          <button
-            onClick={onThinkingToggle}
-            className={`h-8 shrink-0 flex items-center gap-[5px] px-[9px] rounded-sm
-              transition-colors ease-halo
-              ${thinkingEnabled
-                ? 'bg-primary/[0.12] text-accent-on-dark'
-                : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
-              }
-            `}
-            title={thinkingEnabled ? t('Disable Deep Thinking') : t('Enable Deep Thinking')}
-          >
-            <Lightbulb size={17} />
-            <span className="hidden sm:inline text-xs whitespace-nowrap">{t('Deep Thinking')}</span>
-          </button>
-        )}
-
         {/* Knowledge base loader */}
         {!isGenerating && !isOnboarding && !hideKnowledgeControls && <KnowledgeBaseButton />}
 
@@ -1621,6 +1606,7 @@ function InputToolbar({
 
       {/* Right section: Stop (when generating) + Send — fixed, never scrolls */}
       <div className="flex flex-nowrap items-center gap-1 shrink-0">
+        {sendSlot && !isOnboarding && <div className="flex items-center">{sendSlot}</div>}
         {isGenerating && onStop && (
           <button
             onClick={onStop}

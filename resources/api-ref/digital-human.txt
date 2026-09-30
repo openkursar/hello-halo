@@ -115,7 +115,7 @@ POST   /api/apps/<appId>/chat/send                                 Send a messag
      # note: Only the "local" and "http" channels are accepted; a thread whose source is "im" is refused, because this API must not put words into a real conversation with a person. 400 with the expected form when the id is malformed, and chatId must match [A-Za-z0-9_-].
      # note: Returns before the digital human has read anything. Poll GET /api/apps/<appId>/chat/status until isGenerating is false, then read the reply with GET /api/apps/<appId>/chat/messages, passing the same conversationId.
      # note: Nothing here paces you: each send starts another full agent process immediately. Send one at a time and wait for the reply — never loop over this route.
-     # note: Optional body fields: thinkingEnabled, images.
+     # note: Optional body fields: thinkingEnabled, reasoningEffort (off|minimal|low|medium|high|xhigh|max; overrides thinkingEnabled, but the digital human's own chatReasoningEffort wins over it), images.
 
 GET    /api/apps/<appId>/chat/status                               Check whether a digital human chat is currently generating a reply
      curl -s "$HALO_API_URL/api/apps/<appId>/chat/status" -H "Authorization: Bearer $HALO_API_TOKEN"
@@ -219,7 +219,7 @@ PATCH  /api/apps/<appId>/overrides                                 Merge-patch p
           -d '{"notificationLevel":"important"}'
      # body: {"notificationLevel": "important"}
      # out: {success:true}
-     # note: Other fields you can set the same way: modelSourceId, modelId, spaceMemoryAccess (true lets the digital human read its space's memory topics), memory ({enabled, autoConsolidate, cadence: "diligent"|"balanced"|"economical"} — sent as a whole object). JSON Merge Patch semantics: send null to clear a field (e.g. {"modelSourceId":null} to fall back to the global model). The run schedule is NOT set here — use POST /:appId/frequency.
+     # note: Other fields you can set the same way: modelSourceId, modelId, spaceMemoryAccess (true lets the digital human read its space's memory topics), chatReasoningEffort (off|minimal|low|medium|high|xhigh|max — how hard it thinks in chat; IM replies and scheduled runs keep the model's configured effort), memory ({enabled, autoConsolidate, cadence: "diligent"|"balanced"|"economical"} — sent as a whole object). JSON Merge Patch semantics: send null to clear a field (e.g. {"modelSourceId":null} to fall back to the global model). The run schedule is NOT set here — use POST /:appId/frequency.
 
 POST   /api/apps/<appId>/pause                                     Pause a digital human (stops scheduling)
      # note: reversible — can be undone or corrected afterward.

@@ -85,10 +85,6 @@ function _computePulseItems(state: ChatState): PulseItem[] {
   const items: PulseItem[] = []
   const addedIds = new Set<string>()
 
-  const getSpaceName = (spaceId: string): string => {
-    return spaceId === 'halo-temp' ? 'Halo' : spaceId
-  }
-
   const findMeta = (conversationId: string): ConversationMeta | undefined => {
     for (const [, ss] of state.spaceStates) {
       const meta = ss.conversations.find(c => c.id === conversationId)
@@ -111,7 +107,6 @@ function _computePulseItems(state: ChatState): PulseItem[] {
         conversationId,
         appId,
         spaceId: '',
-        spaceName: '',
         title: '',
         status,
         starred: false,
@@ -127,7 +122,6 @@ function _computePulseItems(state: ChatState): PulseItem[] {
     items.push({
       conversationId,
       spaceId: meta.spaceId,
-      spaceName: getSpaceName(meta.spaceId),
       title: meta.title,
       status,
       starred: !!meta.starred,
@@ -145,7 +139,6 @@ function _computePulseItems(state: ChatState): PulseItem[] {
       conversationId,
       appId: digitalHumanAppId(conversationId) ?? undefined,
       spaceId: info.spaceId,
-      spaceName: getSpaceName(info.spaceId),
       title: meta?.title || info.title,
       status: 'completed-unseen',
       starred: !!meta?.starred,
@@ -162,7 +155,6 @@ function _computePulseItems(state: ChatState): PulseItem[] {
       items.push({
         conversationId: conv.id,
         spaceId: conv.spaceId,
-        spaceName: getSpaceName(conv.spaceId),
         title: conv.title,
         status: 'idle',
         starred: true,
@@ -182,7 +174,6 @@ function _computePulseItems(state: ChatState): PulseItem[] {
       conversationId,
       appId: digitalHumanAppId(conversationId) ?? undefined,
       spaceId: info.spaceId,
-      spaceName: getSpaceName(info.spaceId),
       title: info.title,
       status: info.originalStatus,
       starred: false,

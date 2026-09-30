@@ -11,6 +11,7 @@
 import { useMemo } from 'react'
 import { useChatStore, usePulseItems } from '@/stores/chat.store'
 import { useAppsStore } from '@/stores/apps.store'
+import { useSpaceNameResolver } from '@/stores/space.store'
 import { useTlonStore } from '@/stores/tlon.store'
 import { useTranslation } from '@/i18n'
 
@@ -33,6 +34,7 @@ export function useQuickJumpCandidates(): QuickJumpItem[] {
   const currentSpaceId = useChatStore(state => state.currentSpaceId)
   const spaceStates = useChatStore(state => state.spaceStates)
   const pulseItems = usePulseItems()
+  const spaceName = useSpaceNameResolver()
   const apps = useAppsStore(state => state.apps)
   const kbs = useTlonStore(state => state.kbs)
 
@@ -57,7 +59,7 @@ export function useQuickJumpCandidates(): QuickJumpItem[] {
         type: 'task',
         key: `task:${p.conversationId}`,
         title: p.title,
-        meta: p.spaceName,
+        meta: spaceName(p.spaceId),
         updatedAt: p.updatedAt,
         conversationId: p.conversationId,
         spaceId: p.spaceId,
@@ -86,5 +88,5 @@ export function useQuickJumpCandidates(): QuickJumpItem[] {
     }
 
     return items
-  }, [currentSpaceId, spaceStates, pulseItems, apps, kbs, t])
+  }, [currentSpaceId, spaceStates, pulseItems, spaceName, apps, kbs, t])
 }

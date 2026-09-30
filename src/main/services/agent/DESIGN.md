@@ -223,10 +223,19 @@ Two inputs decide how hard a model thinks, and they are orthogonal:
 - **How hard** — `reasoningEffort` on the model's user override
   (Settings > Provider > Model Config), per model.
 
-`reasoning-effort.ts` is the only place they combine. Call sites pass both to
-`applyReasoningEffort(sdkOptions, thinkingEnabled, capabilities)` and never set
-a thinking option themselves; it writes the names the downstream consumers
-read:
+The composer's thinking slider adds a picked level that wins over both, `'off'`
+included: a space conversation's own `reasoningEffort` (on the conversation,
+like its model pin), a digital human's `userOverrides.chatReasoningEffort` (one
+level for all its chat sessions, applied only to sends from the chat surfaces —
+IM, team and federation dispatch and automation runs keep the configured
+effort), else the last-used level the send carries. `pickReasoningEffort` takes
+the first ladder level in that order, so a bad stored value falls through; both
+stored fields are also validated where they are written.
+
+`reasoning-effort.ts` is the only place they combine. Call sites pass them to
+`applyReasoningEffort(sdkOptions, thinkingEnabled, capabilities, requestedEffort)`
+and never set a thinking option themselves; it writes the names the downstream
+consumers read:
 
 | Option | Read by | Ladder |
 |---|---|---|
@@ -236,7 +245,11 @@ read:
 
 Depth is frozen when the engine spawns: `--effort` is a launch argument and
 Codex reads `model_reasoning_effort` at thread start, while the SDK's only
-runtime setter is `setMaxThinkingTokens`. `ensureSessionWarm` therefore applies
+runtime setter is `setMaxThinkingTokens`. A per-send level therefore changes
+the thinking budget of a live session (which the OpenAI-compat router reads
+back as a level), but not a Claude `--effort` or a Codex thread's level fixed
+at spawn: a session warmed ahead of the first send spawns with the model
+config's level, one started cold by a send spawns with that send's level. `ensureSessionWarm` therefore applies
 the level through `applySessionReasoningEffort` — a session warmed without one
 can never acquire it, and warm-up runs on every conversation switch, so leaving
 it out disables the feature for most of main chat.

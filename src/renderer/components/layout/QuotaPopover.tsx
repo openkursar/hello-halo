@@ -1,5 +1,6 @@
 /**
- * QuotaPopover — expanded metered-quota detail for the header QuotaPill.
+ * QuotaPopover — expanded metered-quota detail for QuotaPill, shown while the
+ * pointer or focus is on the ring or on this panel.
  *
  * Pure presentation over an AuthQuotaSnapshot: total / used / remaining, an
  * optional per-segment breakdown, a reset countdown, and an external "manage
@@ -9,7 +10,7 @@
 
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { api } from '../../api'
-import { ExternalLink, Clock, AlertTriangle } from 'lucide-react'
+import { ExternalLink, Clock, AlertTriangle, Cloud } from 'lucide-react'
 import { resolveLocalizedText, type AuthQuotaSnapshot, type LocalizedText } from '../../../shared/types'
 import { formatQuotaValue } from './quotaFormat'
 
@@ -17,7 +18,8 @@ interface QuotaPopoverProps {
   snapshot: AuthQuotaSnapshot
   /** Whether the last refresh failed (shows a "may be outdated" note). */
   stale: boolean
-  onClose: () => void
+  /** Name of the source this quota belongs to, shown as the panel title. */
+  sourceName?: string
 }
 
 function localized(value: LocalizedText | undefined, fallback = ''): string {
@@ -27,7 +29,7 @@ function localized(value: LocalizedText | undefined, fallback = ''): string {
 /** Segment swatch colors (theme-token based, cycled for extra segments). */
 const SEGMENT_SWATCHES = ['bg-primary', 'bg-primary/60', 'bg-primary/40', 'bg-primary/25']
 
-export function QuotaPopover({ snapshot, stale, onClose }: QuotaPopoverProps) {
+export function QuotaPopover({ snapshot, stale, sourceName }: QuotaPopoverProps) {
   const { t } = useTranslation()
 
   const { remaining, total, used, nextResetTime, segments, detailsUrl, detailsLabel } = snapshot
@@ -50,14 +52,20 @@ export function QuotaPopover({ snapshot, stale, onClose }: QuotaPopoverProps) {
   }
 
   return (
-    <>
-      {/* Click-outside backdrop */}
-      <div className="fixed inset-0 z-40" onClick={onClose} />
+    // pb-2 instead of a margin: the gap stays part of the hover area, so the
+    // pointer can travel from the ring up to the panel without closing it.
+    <div className="absolute right-0 bottom-full pb-2 z-50">
+      <div className="w-[min(20rem,calc(100vw-2rem))] bg-card border border-border rounded-lg shadow-pop p-4">
+        {sourceName && (
+          <>
+            <div className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
+              <Cloud className="w-4 h-4 shrink-0 text-muted-foreground" />
+              <span className="truncate">{sourceName}</span>
+            </div>
+            <div className="h-px bg-border my-3" />
+          </>
+        )}
 
-      <div
-        className="absolute right-0 mt-2 z-50 w-[min(20rem,calc(100vw-2rem))] bg-card border border-border rounded-lg shadow-pop p-4"
-        onClick={(e) => e.stopPropagation()}
-      >
         {stale && (
           <div className="flex items-center gap-1.5 mb-2 text-xs text-amber-600 dark:text-amber-500">
             <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
@@ -118,6 +126,6 @@ export function QuotaPopover({ snapshot, stale, onClose }: QuotaPopoverProps) {
           </button>
         )}
       </div>
-    </>
+    </div>
   )
 }

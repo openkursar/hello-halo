@@ -15,6 +15,7 @@ import {
   resolveAnthropicEffort,
   resolveCodexReasoningEffort,
   resolveRequestEffort,
+  pickReasoningEffort,
   resolveThinkingBudget,
 } from '../../../../src/main/services/agent/reasoning-effort'
 import {
@@ -42,6 +43,25 @@ describe('resolveRequestEffort', () => {
 
   it('defaults to the budget Halo used before the ladder existed', () => {
     expect(resolveThinkingBudget(resolveRequestEffort(true, undefined), undefined)).toBe(10_240)
+  })
+
+  it('lets a level picked for this send override both the toggle and the config', () => {
+    expect(resolveRequestEffort(false, 'low', 'max')).toBe('max')
+    expect(resolveRequestEffort(true, 'high', 'off')).toBe('off')
+  })
+
+  it('ignores a requested value that is not a ladder level', () => {
+    expect(resolveRequestEffort(true, 'low', 'ultra')).toBe('low')
+    expect(resolveRequestEffort(false, 'low', 3)).toBe('off')
+  })
+})
+
+describe('pickReasoningEffort', () => {
+  it('lets a bad stored value fall through to the next source', () => {
+    expect(pickReasoningEffort('ultra', 'low')).toBe('low')
+    expect(pickReasoningEffort(undefined, 'off')).toBe('off')
+    expect(pickReasoningEffort('high', 'low')).toBe('high')
+    expect(pickReasoningEffort(3, null)).toBeUndefined()
   })
 })
 
@@ -113,6 +133,12 @@ describe('applyReasoningEffort', () => {
     expect(sdkOptions.reasoningEffort).toBe('xhigh')
     expect(sdkOptions.effort).toBe('high')
     expect(sdkOptions.maxThinkingTokens).toBe(budget)
+  })
+
+  it('sizes the budget from a level picked for this send', () => {
+    const sdkOptions: Record<string, any> = {}
+    expect(applyReasoningEffort(sdkOptions, true, caps(64_000, 'high'), 'low')).toBe(2_048)
+    expect(sdkOptions.reasoningEffort).toBe('low')
   })
 
   it('leaves the thinking options unset when the toggle is off', () => {

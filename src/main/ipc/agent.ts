@@ -6,6 +6,7 @@
  * this module subscribes and forwards them to the BrowserWindow.
  */
 
+import type { ReasoningEffortLevel } from '../../shared/constants/reasoning-effort'
 import {
   sendMessage,
   injectMessage,
@@ -101,6 +102,7 @@ export function registerAgentHandlers(): void {
           size?: number
         }>
         thinkingEnabled?: boolean  // Enable extended thinking mode
+        reasoningEffort?: ReasoningEffortLevel  // Depth picked for this send
         goal?: GoalInput  // Set as the conversation goal before this message runs
       }
     ) => {
