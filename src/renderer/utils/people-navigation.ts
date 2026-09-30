@@ -48,6 +48,14 @@ export async function openWorkNotification(target: WorkNavigationTarget) {
   useAppStore.getState().navigate('apps')
 }
 
+/** Open a digital human's page on its activity thread. */
+export function openPersonActivity(appId: string) {
+  useAppsPageStore.getState().setInitialAppId(null)
+  useAppsPageStore.getState().setCurrentTab('my-digital-humans')
+  useAppsPageStore.getState().openActivityThread(appId)
+  useAppStore.getState().navigate('apps')
+}
+
 /** Open a digital human's settings at its model choice. */
 export function openPersonModelSettings(appId: string) {
   useAppsPageStore.getState().setInitialAppId(null)

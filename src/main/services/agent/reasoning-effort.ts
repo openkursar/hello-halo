@@ -44,15 +44,28 @@ function toLevel(effort: ReasoningEffortSetting): ReasoningEffortLevel {
 }
 
 /**
- * Effective effort for one request: the toggle decides whether the model
- * thinks at all, the model config decides how hard.
+ * Effective effort for one request. A level the user picked for this send
+ * wins outright ('off' included); otherwise the toggle decides whether the
+ * model thinks at all and the model config decides how hard. Anything that is
+ * not a ladder level is ignored, since it arrives from the transport.
  */
 export function resolveRequestEffort(
   thinkingEnabled: boolean | undefined,
-  configured: ReasoningEffortSetting | undefined
+  configured: ReasoningEffortSetting | undefined,
+  requested?: unknown
 ): ReasoningEffortSetting {
+  if (isReasoningEffortLevel(requested)) return requested
   if (!thinkingEnabled) return 'off'
   return configured || DEFAULT_REASONING_EFFORT
+}
+
+/**
+ * First candidate that is a ladder level. Stored levels arrive through
+ * unvalidated update paths, so a bad one must fall through to the next source
+ * instead of shadowing it.
+ */
+export function pickReasoningEffort(...candidates: unknown[]): ReasoningEffortLevel | undefined {
+  return candidates.find(isReasoningEffortLevel)
 }
 
 /**
@@ -127,9 +140,10 @@ export function applySessionReasoningEffort(
 export function applyReasoningEffort(
   sdkOptions: Record<string, any>,
   thinkingEnabled: boolean | undefined,
-  capabilities: ResolvedModelCapabilities | undefined
+  capabilities: ResolvedModelCapabilities | undefined,
+  requestedEffort?: unknown
 ): number | null {
-  const effort = resolveRequestEffort(thinkingEnabled, capabilities?.reasoningEffort)
+  const effort = resolveRequestEffort(thinkingEnabled, capabilities?.reasoningEffort, requestedEffort)
   const budget = resolveThinkingBudget(effort, capabilities?.maxOutputTokens)
 
   sdkOptions.reasoningEffort = effort

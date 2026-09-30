@@ -96,9 +96,6 @@ export function SpaceCard({ space, summary, onOpen, onOpenTab }: SpaceCardProps)
     summary && summary.conversationCount > 0 ? t('{{count}} conversations', { count: summary.conversationCount }) : null,
     lastActiveMs ? formatTimeAgo(lastActiveMs, t) : null,
   ].filter(Boolean).join(' · ')
-  // isTemp never manages (no rename/delete/folder — it isn't a real project
-  // directory); isMissing manages only "remove from list" — no reindex.
-  const canManage = !space.isTemp
 
   return (
     <div
@@ -118,50 +115,52 @@ export function SpaceCard({ space, summary, onOpen, onOpenTab }: SpaceCardProps)
           <div className="flex items-center gap-1.5 min-w-0">
             <h3 className="text-sm font-semibold text-foreground truncate leading-tight">{name}</h3>
           </div>
-          {!space.isTemp && (
-            <p className="text-xs font-mono text-muted-foreground truncate mt-0.5" title={space.workingDir || space.path}>
-              {space.workingDir || space.path}
-            </p>
-          )}
+          <p className="text-xs font-mono text-muted-foreground truncate mt-0.5" title={space.workingDir || space.path}>
+            {space.workingDir || space.path}
+          </p>
         </div>
 
         {space.isMissing && (
           <Unplug className="w-4 h-4 flex-shrink-0 text-muted-foreground" aria-label={t('Unavailable')} />
         )}
 
-        {canManage && (
-          <div ref={menuRef} className="relative flex-shrink-0 opacity-0 group-hover:opacity-100 max-sm:opacity-100 transition-opacity">
-            <button
-              onClick={(e) => { e.stopPropagation(); setMenuOpen(v => !v) }}
-              title={t('More')}
-              className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-md transition-colors"
-            >
-              <MoreHorizontal className="w-3.5 h-3.5" />
-            </button>
-            {menuOpen && (
-              <div onClick={e => e.stopPropagation()} className="absolute right-0 top-full mt-1 z-20 min-w-[180px] bg-popover border border-border rounded-lg shadow-lg py-1 text-sm">
-                {space.isMissing ? (
-                  <button onClick={handleForget} className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-halo-error hover:bg-halo-error/10 transition-colors">
-                    <Unplug className="w-3.5 h-3.5" /> {t('Remove from list')}
+        {/* isTemp can only be shown in its folder: Halo owns it, so there is
+            nothing to rename or delete. isMissing can only be removed. */}
+        <div ref={menuRef} className="relative flex-shrink-0 opacity-0 group-hover:opacity-100 max-sm:opacity-100 transition-opacity">
+          <button
+            onClick={(e) => { e.stopPropagation(); setMenuOpen(v => !v) }}
+            title={t('More')}
+            className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-md transition-colors"
+          >
+            <MoreHorizontal className="w-3.5 h-3.5" />
+          </button>
+          {menuOpen && (
+            <div onClick={e => e.stopPropagation()} className="absolute right-0 top-full mt-1 z-20 min-w-[180px] bg-popover border border-border rounded-lg shadow-lg py-1 text-sm">
+              {space.isTemp ? (
+                <button onClick={handleOpenFolder} className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-muted/60 transition-colors">
+                  <FolderOpen className="w-3.5 h-3.5 text-muted-foreground" /> {t('Show in Folder')}
+                </button>
+              ) : space.isMissing ? (
+                <button onClick={handleForget} className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-halo-error hover:bg-halo-error/10 transition-colors">
+                  <Unplug className="w-3.5 h-3.5" /> {t('Remove from list')}
+                </button>
+              ) : (
+                <>
+                  <button onClick={() => { setMenuOpen(false); setEditing(true) }} className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-muted/60 transition-colors">
+                    <Pencil className="w-3.5 h-3.5 text-muted-foreground" /> {t('Edit')}
                   </button>
-                ) : (
-                  <>
-                    <button onClick={() => { setMenuOpen(false); setEditing(true) }} className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-muted/60 transition-colors">
-                      <Pencil className="w-3.5 h-3.5 text-muted-foreground" /> {t('Edit')}
-                    </button>
-                    <button onClick={handleOpenFolder} className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-muted/60 transition-colors">
-                      <FolderOpen className="w-3.5 h-3.5 text-muted-foreground" /> {t('Show in Folder')}
-                    </button>
-                    <div className="my-1 border-t border-border/60" />
-                    <button onClick={handleDelete} className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-halo-error hover:bg-halo-error/10 transition-colors">
-                      <Trash2 className="w-3.5 h-3.5" /> {t('Delete')}
-                    </button>
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-        )}
+                  <button onClick={handleOpenFolder} className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-muted/60 transition-colors">
+                    <FolderOpen className="w-3.5 h-3.5 text-muted-foreground" /> {t('Show in Folder')}
+                  </button>
+                  <div className="my-1 border-t border-border/60" />
+                  <button onClick={handleDelete} className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-halo-error hover:bg-halo-error/10 transition-colors">
+                    <Trash2 className="w-3.5 h-3.5" /> {t('Delete')}
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="mt-3">

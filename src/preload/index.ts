@@ -5,6 +5,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { RpcContract, RpcClient } from '../shared/rpc/define'
 import type { CatalogModelCapability, ModelCapabilityOverride } from '../shared/types/model-capabilities'
+import type { ReasoningEffortLevel } from '../shared/constants/reasoning-effort'
 import type { EscalationResponse } from '../shared/apps/app-types'
 import type { UpdaterChannel, UpdaterStatusPayload } from '../shared/types/updater'
 import type { GoalInput } from '../shared/types/goal'
@@ -192,6 +193,7 @@ export interface HaloAPI {
       size?: number
     }>
     thinkingEnabled?: boolean  // Enable extended thinking mode
+    reasoningEffort?: ReasoningEffortLevel  // Depth picked for this send; overrides thinkingEnabled
     knowledgeBaseId?: string  // Chat-with-knowledge-base turn
     goal?: GoalInput  // Set as the conversation goal before this message runs
     canvasContext?: {  // Canvas context for AI awareness
@@ -609,7 +611,7 @@ export interface HaloAPI {
   // App Chat
   // conversationId addresses a specific native/local session; omit for the app's
   // native default session.
-  appChatSend: (request: { appId: string; spaceId: string; message: string; images?: ImageAttachment[]; thinkingEnabled?: boolean; canvasContext?: CanvasContext; conversationId?: string; teamContext?: unknown }) => Promise<IpcResponse<{ conversationId: string }>>
+  appChatSend: (request: { appId: string; spaceId: string; message: string; images?: ImageAttachment[]; thinkingEnabled?: boolean; reasoningEffort?: ReasoningEffortLevel; canvasContext?: CanvasContext; conversationId?: string; teamContext?: unknown }) => Promise<IpcResponse<{ conversationId: string }>>
   appChatStop: (appId: string, conversationId?: string) => Promise<IpcResponse>
   // Add a message to the running turn; delivered:false when no turn was in flight
   appChatInject: (input: { appId: string; conversationId: string; message: string }) => Promise<IpcResponse<{ delivered: boolean }>>

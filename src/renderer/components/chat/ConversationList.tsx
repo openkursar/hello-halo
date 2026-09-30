@@ -24,7 +24,9 @@ import { appChatSessionLabel, formatRowTime } from './conversation-row-format'
 import { parseAppChatKey } from '../../../shared/apps/im-keys'
 import { NATIVE_SESSION_CHANNEL, NATIVE_DEFAULT_CHAT_ID } from '../../../shared/types/im-channel'
 import type { ConversationMeta } from '../../types'
-import { markEntry, trackHome } from '../../services/home-telemetry'
+import { markEntry, trackHome, trackNavigate } from '../../services/home-telemetry'
+import { openDigitalHumanChat } from '../../utils/conversation-navigation'
+import { openPersonActivity } from '../../utils/people-navigation'
 
 // Width constraints (in pixels)
 const MIN_WIDTH = 140
@@ -82,13 +84,20 @@ type ConversationRow =
   /** `hint` is hover-only: the distinction between sections is one-time
    *  knowledge, not worth permanent vertical space in a 140px-wide sidebar.
    *  Omitted where the label already says everything. */
-  | { type: 'header'; key: string; label: string; hint?: string }
+  | { type: 'header'; key: string; section: ConversationSection; label: string; hint?: string; collapsed: boolean }
   | { type: 'item'; key: string; conversation: ConversationMeta }
-  | { type: 'dh-header'; key: string; appId: string; name: string; uninstalled: boolean; collapsed: boolean; count: number }
+  | { type: 'dh-header'; key: string; appId: string; name: string; uninstalled: boolean; collapsed: boolean }
   /** `standalone` rows sit outside their digital human's section (i.e. in
    *  Pinned), so they carry the avatar/name context the section header would
    *  otherwise provide. */
   | { type: 'dh-item'; key: string; row: AppChatConversationRow; standalone: boolean }
+  /** Reveals the next page of a long Pinned section. */
+  | { type: 'more'; key: string; remaining: number }
+
+type ConversationSection = 'pinned' | 'digital-humans' | 'conversations'
+
+/** Pinned rows shown per page, so a long pin list doesn't push the rest out of view. */
+const PINNED_PAGE_SIZE = 5
 
 /**
  * The scroller takes no padding: Virtuoso's viewport is absolutely positioned
@@ -107,6 +116,50 @@ const listComponents: Components<ConversationRow> = {
   Footer: () => <div className="h-3" />,
 }
 
+// Titles run to the row's edge and fade out instead of ending in an ellipsis;
+// the hover actions float over that edge rather than reserving room for it.
+const ROW_TITLE = 'flex-1 min-w-0 overflow-hidden whitespace-nowrap [mask-image:linear-gradient(to_right,black_calc(100%_-_20px),transparent)]'
+// Shown only while the row itself is highlighted (hover, open menu, keyboard
+// focus), since their fade-in backdrop is the row's highlight colour.
+const ROW_ACTIONS = 'absolute inset-y-0 right-1.5 flex items-center gap-0.5 pl-5 bg-[linear-gradient(to_right,transparent,hsl(var(--secondary))_20px)] opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto group-data-[menu-open]:opacity-100 group-data-[menu-open]:pointer-events-auto has-[:focus-visible]:opacity-100 has-[:focus-visible]:pointer-events-auto'
+const ROW_HIGHLIGHT = 'data-[menu-open]:bg-secondary data-[menu-open]:text-foreground has-[:focus-visible]:bg-secondary'
+
+/** A digital human's face, clickable through to its page (activity thread). */
+function PersonAvatarLink({ appId, name, size, dimmed, disabled, className }: {
+  appId: string
+  name: string
+  size: number
+  /** Half strength unless this digital human's conversation is open. */
+  dimmed: boolean
+  disabled?: boolean
+  className?: string
+}) {
+  const { t } = useTranslation()
+  const face = <AutomationAvatar name={name} size={size} />
+  if (disabled) {
+    return <span className={cn('flex shrink-0', dimmed && 'opacity-50', className)}>{face}</span>
+  }
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation()
+        trackNavigate('apps', 'conversation_list', 'home_conv_dh')
+        openPersonActivity(appId)
+      }}
+      title={t('View {{name}}', { name })}
+      aria-label={t('View {{name}}', { name })}
+      className={cn(
+        'flex shrink-0 rounded-full transition-[opacity,transform] ease-halo hover:opacity-100 hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
+        dimmed && 'opacity-50',
+        className
+      )}
+    >
+      {face}
+    </button>
+  )
+}
+
 /**
  * Build the full flat row list:
  *   Pinned (flat, mixes regular + digital-human items)
@@ -119,6 +172,10 @@ function buildConversationRows(
   conversations: ConversationMeta[],
   appChatRows: AppChatConversationRow[],
   collapsedApps: Set<string>,
+  collapsedSections: Set<ConversationSection>,
+  pinnedShown: number,
+  /** The open conversation's id; always listed even past the Pinned page. */
+  activeId: string | undefined,
   t: (key: string) => string
 ): ConversationRow[] {
   const pinnedConvs: ConversationMeta[] = []
@@ -143,14 +200,27 @@ function buildConversationRows(
 
   const out: ConversationRow[] = []
 
-  if (pinnedConvs.length || pinnedDh.length) {
-    out.push({ type: 'header', key: 'header:pinned', label: t('Pinned') })
-    for (const conv of pinnedConvs) out.push({ type: 'item', key: conv.id, conversation: conv })
-    for (const row of pinnedDh) out.push({ type: 'dh-item', key: row.id, row, standalone: true })
+  const header = (section: ConversationSection, label: string, hint?: string): boolean => {
+    const collapsed = collapsedSections.has(section)
+    out.push({ type: 'header', key: `header:${section}`, section, label, hint, collapsed })
+    return !collapsed
   }
 
-  if (byApp.size > 0) {
-    out.push({ type: 'header', key: 'header:digital-humans', label: t('Digital Humans'), hint: t('Conversations with digital humans available in this workspace') })
+  if ((pinnedConvs.length || pinnedDh.length) && header('pinned', t('Pinned'))) {
+    // One recency order across both kinds, so neither can push the other
+    // entirely past the first page.
+    const pinned = [
+      ...pinnedConvs.map(conv => ({ at: Date.parse(conv.updatedAt) || 0, row: { type: 'item' as const, key: conv.id, conversation: conv } })),
+      ...pinnedDh.map(row => ({ at: row.updatedAt, row: { type: 'dh-item' as const, key: row.id, row, standalone: true } })),
+    ].sort((a, b) => b.at - a.at).map(entry => entry.row as ConversationRow)
+    const shown = pinned.slice(0, pinnedShown)
+    const active = pinned.slice(pinnedShown).find(row => row.key === activeId)
+    if (active) shown.push(active)
+    out.push(...shown)
+    if (pinned.length > shown.length) out.push({ type: 'more', key: 'more:pinned', remaining: pinned.length - shown.length })
+  }
+
+  if (byApp.size > 0 && header('digital-humans', t('Digital Humans'), t('Conversations with digital humans available in this workspace'))) {
     for (const [appId, rows] of byApp) {
       if (rows.length === 0) continue
       const collapsed = collapsedApps.has(appId)
@@ -161,7 +231,6 @@ function buildConversationRows(
         name: rows[0].digitalHumanName,
         uninstalled: rows[0].uninstalled,
         collapsed,
-        count: rows.length,
       })
       if (!collapsed) {
         for (const row of rows) out.push({ type: 'dh-item', key: row.id, row, standalone: false })
@@ -169,8 +238,7 @@ function buildConversationRows(
     }
   }
 
-  if (rest.length) {
-    out.push({ type: 'header', key: 'header:conversations', label: t('Conversations'), hint: t('Your direct conversations with Halo') })
+  if (rest.length && header('conversations', t('Conversations'), t('Your direct conversations with Halo'))) {
     for (const conv of rest) out.push({ type: 'item', key: conv.id, conversation: conv })
   }
 
@@ -209,6 +277,19 @@ export const ConversationList = memo(function ConversationList({
       const next = new Set(prev)
       if (next.has(appId)) next.delete(appId)
       else next.add(appId)
+      return next
+    })
+  }, [])
+  // Transient like the collapse state; switching spaces starts from one page.
+  const [pinnedShown, setPinnedShown] = useState(PINNED_PAGE_SIZE)
+  useEffect(() => { setPinnedShown(PINNED_PAGE_SIZE) }, [currentSpaceId])
+  // Collapsed top-level sections; transient like the sub-groups above.
+  const [collapsedSections, setCollapsedSections] = useState<Set<ConversationSection>>(new Set())
+  const toggleSection = useCallback((section: ConversationSection) => {
+    setCollapsedSections(prev => {
+      const next = new Set(prev)
+      if (next.has(section)) next.delete(section)
+      else next.add(section)
       return next
     })
   }, [])
@@ -279,8 +360,11 @@ export const ConversationList = memo(function ConversationList({
   }, [hoverCard])
 
   const rows = useMemo<ConversationRow[]>(
-    () => buildConversationRows(conversations, allAppChatRows, collapsedApps, t),
-    [conversations, allAppChatRows, collapsedApps, t]
+    () => buildConversationRows(
+      conversations, allAppChatRows, collapsedApps, collapsedSections, pinnedShown,
+      selectedAppChat?.conversationId ?? currentConversationId, t
+    ),
+    [conversations, allAppChatRows, collapsedApps, collapsedSections, pinnedShown, selectedAppChat?.conversationId, currentConversationId, t]
   )
 
   // Handle drag resize
@@ -467,6 +551,20 @@ export const ConversationList = memo(function ConversationList({
     useChatStore.getState().selectAppChatConversation(spaceId, row.appId, row.id)
   }
 
+  const handleNewAppChat = (appId: string) => {
+    const spaceId = useSpaceStore.getState().currentSpace?.id
+    if (!spaceId) return
+    trackHome('home.conversation.create', { surface: 'dh_group' })
+    // Starting one under a collapsed group should still show it.
+    setCollapsedApps(prev => {
+      if (!prev.has(appId)) return prev
+      const next = new Set(prev)
+      next.delete(appId)
+      return next
+    })
+    void openDigitalHumanChat(appId, spaceId)
+  }
+
   const handleToggleAppChatPin = (e: React.MouseEvent, row: AppChatConversationRow) => {
     e.stopPropagation()
     trackHome('home.conversation.action', { action: row.starred ? 'unpin' : 'pin', kind: 'digital_human' })
@@ -514,11 +612,13 @@ export const ConversationList = memo(function ConversationList({
         onClick={() => !isEditing && handleSelectConversation(conversation)}
         onMouseEnter={(e) => showHoverCard(e.currentTarget, hoverCardFor({ type: 'item', key: conversation.id, conversation }, t))}
         onMouseLeave={hideHoverCard}
+        data-menu-open={menuOpenId === conversation.id || undefined}
         className={cn(
           'group relative flex w-full items-center gap-1.5 rounded-sm pl-2.5 pr-1.5 py-1.5 text-[13px] transition-colors ease-halo cursor-pointer',
+          ROW_HIGHLIGHT,
           isActive
             ? 'bg-secondary text-foreground font-medium'
-            : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
+            : 'text-subtle-foreground hover:bg-secondary hover:text-foreground'
         )}
       >
 
@@ -554,36 +654,38 @@ export const ConversationList = memo(function ConversationList({
                 by design, not a prototype-vs-implementation mismatch to fix. */}
             {status !== 'idle' && <TaskStatusDot status={status} size="sm" />}
 
-            <span className="flex-1 min-w-0 truncate">{conversation.title}</span>
+            <span className={ROW_TITLE}>{conversation.title}</span>
 
             <EngineBadge engineId={conversation.engineId} size="xs" />
 
-            <button
-              onClick={(e) => handleTogglePin(e, conversation)}
-              className={cn(
-                'ml-auto w-[22px] h-[22px] flex-shrink-0 rounded-[6px] hidden group-hover:flex items-center justify-center transition-colors',
-                conversation.starred
-                  ? 'text-accent-on-dark'
-                  : 'text-faint-foreground hover:bg-surface-hover hover:text-foreground'
-              )}
-              title={conversation.starred ? t('Unpin') : t('Pin')}
-              aria-pressed={conversation.starred}
-            >
-              <Pin className="w-[13px] h-[13px]" strokeWidth={1.8} />
-            </button>
+            <div className={ROW_ACTIONS}>
+              <button
+                onClick={(e) => handleTogglePin(e, conversation)}
+                className={cn(
+                  'w-[22px] h-[22px] flex-shrink-0 rounded-[6px] flex items-center justify-center transition-colors',
+                  conversation.starred
+                    ? 'text-accent-on-dark'
+                    : 'text-faint-foreground hover:bg-surface-hover hover:text-foreground'
+                )}
+                title={conversation.starred ? t('Unpin') : t('Pin')}
+                aria-pressed={conversation.starred}
+              >
+                <Pin className="w-[13px] h-[13px]" strokeWidth={1.8} />
+              </button>
 
-            <button
-              onClick={(e) => openMoreMenu(e, conversation.id)}
-              className="w-[22px] h-[22px] flex-shrink-0 rounded-[6px] flex items-center justify-center text-faint-foreground opacity-0 group-hover:opacity-100 transition-colors hover:bg-surface-hover hover:text-foreground focus-visible:opacity-100"
-              title={t('More')}
-            >
-              <EllipsisVertical className="w-[13px] h-[13px]" strokeWidth={1.8} />
-            </button>
+              <button
+                onClick={(e) => openMoreMenu(e, conversation.id)}
+                className="w-[22px] h-[22px] flex-shrink-0 rounded-[6px] flex items-center justify-center text-faint-foreground transition-colors hover:bg-surface-hover hover:text-foreground"
+                title={t('More')}
+              >
+                <EllipsisVertical className="w-[13px] h-[13px]" strokeWidth={1.8} />
+              </button>
+            </div>
           </>
         )}
       </div>
     )
-  }, [editingId, editingTitle, currentConversationId, selectedAppChat, conversationStatuses, t])
+  }, [editingId, editingTitle, currentConversationId, selectedAppChat, conversationStatuses, menuOpenId, t])
 
   // Render a single digital-human conversation row. Uninstalled digital
   // humans fade out and become non-interactive rather than disappearing —
@@ -600,19 +702,29 @@ export const ConversationList = memo(function ConversationList({
         onClick={() => !isEditing && !row.uninstalled && handleSelectAppChat(row)}
         onMouseEnter={(e) => showHoverCard(e.currentTarget, hoverCardFor({ type: 'dh-item', key: row.id, row, standalone }, t))}
         onMouseLeave={hideHoverCard}
+        data-menu-open={menuOpenId === row.id || undefined}
         className={cn(
           'group relative flex w-full items-center gap-1.5 rounded-sm pr-1.5 py-1.5 text-[13px] transition-colors ease-halo',
-          standalone ? 'pl-2.5' : 'pl-5',
+          ROW_HIGHLIGHT,
+          standalone ? 'pl-2.5' : 'pl-[30px]',
           row.uninstalled
             ? 'opacity-40 cursor-not-allowed'
             : 'cursor-pointer',
           isActive && !row.uninstalled
             ? 'bg-secondary text-foreground font-medium'
-            : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
+            : 'text-subtle-foreground hover:bg-secondary hover:text-foreground'
         )}
       >
 
-        {standalone && <AutomationAvatar name={row.digitalHumanName} size={16} />}
+        {standalone && (
+          <PersonAvatarLink
+            appId={row.appId}
+            name={row.digitalHumanName}
+            size={16}
+            dimmed={!isActive}
+            disabled={row.uninstalled}
+          />
+        )}
 
         {status !== 'idle' && <TaskStatusDot status={status} size="sm" />}
 
@@ -630,7 +742,7 @@ export const ConversationList = memo(function ConversationList({
             />
           </div>
         ) : (
-          <span className="flex-1 min-w-0 truncate">
+          <span className={ROW_TITLE}>
             {standalone && row.isDefault ? row.digitalHumanName : sessionLabel}
           </span>
         )}
@@ -639,11 +751,11 @@ export const ConversationList = memo(function ConversationList({
         )}
 
         {!row.uninstalled && (
-          <>
+          <div className={ROW_ACTIONS}>
             <button
               onClick={(e) => handleToggleAppChatPin(e, row)}
               className={cn(
-                'ml-auto w-[22px] h-[22px] flex-shrink-0 rounded-[6px] hidden group-hover:flex items-center justify-center transition-colors',
+                'w-[22px] h-[22px] flex-shrink-0 rounded-[6px] flex items-center justify-center transition-colors',
                 row.starred
                   ? 'text-accent-on-dark'
                   : 'text-faint-foreground hover:bg-surface-hover hover:text-foreground'
@@ -656,20 +768,20 @@ export const ConversationList = memo(function ConversationList({
 
             <button
               onClick={(e) => openMoreMenu(e, row.id)}
-              className="w-[22px] h-[22px] flex-shrink-0 rounded-[6px] flex items-center justify-center text-faint-foreground opacity-0 group-hover:opacity-100 transition-colors hover:bg-surface-hover hover:text-foreground focus-visible:opacity-100"
+              className="w-[22px] h-[22px] flex-shrink-0 rounded-[6px] flex items-center justify-center text-faint-foreground transition-colors hover:bg-surface-hover hover:text-foreground"
               title={t('More')}
             >
               <EllipsisVertical className="w-[13px] h-[13px]" strokeWidth={1.8} />
             </button>
-          </>
+          </div>
         )}
       </div>
     )
-  }, [selectedAppChat?.conversationId, editingId, editingTitle, conversationStatuses, t])
+  }, [selectedAppChat?.conversationId, editingId, editingTitle, conversationStatuses, menuOpenId, t])
 
   // Fixed-positioned and portaled: the row lists scroll, and a scroll
   // container clips anything reaching past its edge.
-  const hoverCardPortal = hoverCard && !editingId && createPortal(
+  const hoverCardPortal = hoverCard && !editingId && !menuOpenId && createPortal(
     <div
       ref={hoverCardRef}
       role="tooltip"
@@ -713,7 +825,7 @@ export const ConversationList = memo(function ConversationList({
             reaching past its edge. */}
         <div className="flex-1 w-full overflow-y-auto px-2 py-1 flex flex-col items-center gap-0.5">
           {rows.map(row => {
-            if (row.type === 'header' || row.type === 'dh-header') return null
+            if (row.type === 'header' || row.type === 'dh-header' || row.type === 'more') return null
             const isAppChat = row.type === 'dh-item'
             const id = isAppChat ? row.row.id : row.conversation.id
             const active = isAppChat
@@ -797,47 +909,87 @@ export const ConversationList = memo(function ConversationList({
                 // No uppercase/letter-spacing: both are no-ops on CJK labels
                 // and only loosen them oddly.
                 return (
-                  <div className={cn(
-                    'bg-background px-1.5 pb-1 text-xs font-medium text-subtle-foreground/70',
-                    index === 0 ? 'pt-1' : 'mt-4 pt-2.5 border-t border-border/50'
-                  )}>
-                    <span title={row.hint} className="cursor-default">{row.label}</span>
+                  <div className={cn('bg-background', index === 0 ? 'pt-1' : 'mt-4 pt-2.5 border-t border-border/50')}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        trackHome('home.conversation.section', { section: row.section, action: row.collapsed ? 'expand' : 'collapse' })
+                        toggleSection(row.section)
+                      }}
+                      aria-expanded={!row.collapsed}
+                      title={row.hint}
+                      className="group flex w-full items-center gap-1 rounded-sm px-1.5 pb-1 text-xs font-medium text-subtle-foreground/70 hover:text-subtle-foreground transition-colors ease-halo"
+                    >
+                      <span>{row.label}</span>
+                      <ChevronRight className={cn(
+                        'ml-auto w-3 h-3 shrink-0 transition-[transform,opacity]',
+                        row.collapsed ? 'opacity-100' : 'rotate-90 opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100'
+                      )} />
+                    </button>
                   </div>
                 )
               }
               if (row.type === 'dh-header') {
+                const toggle = () => {
+                  trackHome('home.dh_group.toggle', { collapsed: !row.collapsed })
+                  toggleAppCollapsed(row.appId)
+                }
+                return (
+                  <div className={cn(
+                    'group flex w-full items-center gap-0.5 rounded-sm pr-1 mt-0.5 transition-colors ease-halo',
+                    row.uninstalled ? 'opacity-40' : 'hover:bg-secondary'
+                  )}>
+                    <PersonAvatarLink
+                      appId={row.appId}
+                      name={row.name}
+                      size={18}
+                      dimmed={selectedAppChat?.appId !== row.appId}
+                      disabled={row.uninstalled}
+                      className="ml-1.5"
+                    />
+                    <button
+                      type="button"
+                      onClick={toggle}
+                      aria-expanded={!row.collapsed}
+                      className={cn(
+                        'flex flex-1 min-w-0 items-center pl-1.5 py-1.5 text-[13px] font-medium',
+                        row.uninstalled ? 'cursor-not-allowed' : 'text-foreground'
+                      )}
+                    >
+                      <span className="flex-1 min-w-0 truncate text-left">{row.name}</span>
+                    </button>
+                    {!row.uninstalled && (
+                      <button
+                        type="button"
+                        onClick={() => handleNewAppChat(row.appId)}
+                        title={t('New conversation with {{name}}', { name: row.name })}
+                        aria-label={t('New conversation with {{name}}', { name: row.name })}
+                        className="flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-subtle-foreground pointer-events-none opacity-0 transition-opacity hover:bg-background hover:text-foreground group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                    {/* A second hit area for the same toggle; the name button carries it for keyboard users. */}
+                    <button type="button" tabIndex={-1} aria-hidden="true" onClick={toggle} className="flex h-5 w-5 shrink-0 items-center justify-center">
+                      <ChevronRight className={cn(
+                        'w-3 h-3 text-subtle-foreground transition-[transform,opacity]',
+                        row.collapsed ? 'opacity-100' : 'rotate-90 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
+                      )} />
+                    </button>
+                  </div>
+                )
+              }
+              if (row.type === 'more') {
                 return (
                   <button
                     type="button"
                     onClick={() => {
-                      trackHome('home.dh_group.toggle', { collapsed: !row.collapsed })
-                      toggleAppCollapsed(row.appId)
+                      trackHome('home.conversation.section', { section: 'pinned', action: 'more' })
+                      setPinnedShown(n => n + PINNED_PAGE_SIZE)
                     }}
-                    className={cn(
-                      // pr = the rows' own 10px padding plus the 22px their
-                      // always-rendered (opacity-0) "more" button occupies, so
-                      // this count lands on the same right edge as their
-                      // timestamps instead of hugging the container.
-                      'group w-full flex items-center gap-1.5 rounded-sm pl-0.5 pr-8 py-1.5 mt-0.5 text-[13px] font-medium transition-colors ease-halo',
-                      row.uninstalled
-                        ? 'opacity-40 cursor-not-allowed'
-                        : 'text-foreground hover:bg-secondary'
-                    )}
+                    className="w-full rounded-sm pl-2.5 py-1 text-left text-xs text-subtle-foreground hover:text-foreground transition-colors ease-halo"
                   >
-                    <ChevronRight className={cn(
-                      'w-3 h-3 shrink-0 text-subtle-foreground transition-transform',
-                      !row.collapsed && 'rotate-90'
-                    )} />
-                    <AutomationAvatar name={row.name} size={18} />
-                    <span className="flex-1 min-w-0 truncate text-left">{row.name}</span>
-                    {/* Only while collapsed: expanded, the sessions are right
-                        there to count. Sits on the same right edge as their
-                        timestamps (see the pr above). */}
-                    {row.collapsed && (
-                      <span className="shrink-0 ml-1 text-[11px] tabular-nums text-subtle-foreground">
-                        {row.count}
-                      </span>
-                    )}
+                    {t('Show more ({{count}})', { count: row.remaining })}
                   </button>
                 )
               }

@@ -49,7 +49,7 @@ import {
 import { prepareNonVisionImageFallback, OCR_TOOLSET_ID } from './image-attachments'
 import { resolveCredentialsForSdk, buildUserSessionSdkOptions } from './sdk-config'
 import { resolveSpaceMemorySession, buildSpaceMemoryPreamble } from './space-memory'
-import { applyReasoningEffort } from './reasoning-effort'
+import { applyReasoningEffort, pickReasoningEffort } from './reasoning-effort'
 import { createConversationSink } from './conversation-sink'
 import { prepareGoalInput, setGoalForTurn } from './goal'
 import { flushToolStats } from './stream-processor'
@@ -210,8 +210,10 @@ export async function sendMessage(
     })
 
     // Apply dynamic configurations (Thinking mode)
+    // The conversation's own level wins; the send carries the last-used one.
     const thinkingBudget = applyReasoningEffort(
-      sdkOptions, thinkingEnabled, resolvedCredentials.capabilities
+      sdkOptions, thinkingEnabled, resolvedCredentials.capabilities,
+      pickReasoningEffort(conversation?.reasoningEffort, request.reasoningEffort)
     )
 
     const t0 = Date.now()

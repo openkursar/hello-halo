@@ -17,9 +17,11 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import type { ReactNode } from 'react'
 import { SquareCheckBig, Code, Bot, FileText, BookOpen, AlertCircle } from 'lucide-react'
-import logoOnDark from '../../assets/brand/halo-logo-icon-on-dark.svg'
-import logoOnLight from '../../assets/brand/halo-logo-icon-on-light.svg'
+import brandMarkAnimated from '../../assets/brand/halo-mark-animated.svg'
 import { useSpaceStore } from '../../stores/space.store'
+import { useAppStore } from '../../stores/app.store'
+import { ModelSelector } from '../layout/ModelSelector'
+import { QuotaPill } from '../layout/QuotaPill'
 import { useChatStore, selectActiveConversationId, conversationKind, digitalHumanAppId } from '../../stores/chat.store'
 import { useAppsStore } from '../../stores/apps.store'
 import { useOnboardingStore } from '../../stores/onboarding.store'
@@ -30,7 +32,7 @@ import { InputArea } from './InputArea'
 import { useConversationMentionCandidates } from './cross-conversation'
 import { TeamCollabPanel } from './team-collab'
 import { ScrollToBottomButton } from './ScrollToBottomButton'
-import { Sparkles } from '../icons/ToolIcons'
+import { AutomationAvatar } from '../apps/AutomationAvatar'
 import {
   ONBOARDING_ARTIFACT_NAME,
   getOnboardingAiResponse,
@@ -96,6 +98,13 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
   )
   const activeConversationId = useChatStore(selectActiveConversationId)
   const isDigitalHuman = !!activeConversationId && conversationKind(activeConversationId) === 'digital-human'
+  // String identity, so this only re-renders when the selection changes.
+  const currentSourceId = useAppStore(state => {
+    const src = state.config?.aiSources
+    return src?.version === 2 && src.currentId && src.sources.some(s => s.id === src.currentId)
+      ? src.currentId
+      : undefined
+  })
   const activeAppId = activeConversationId ? digitalHumanAppId(activeConversationId) : null
   const activeApp = useAppsStore(s => activeAppId ? s.apps.find(app => app.id === activeAppId) : undefined)
   const activeAppName = activeApp ? resolveSpecI18n(activeApp.spec, getCurrentLanguage()).name || activeApp.id : undefined
@@ -545,6 +554,17 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
   // just two possible slots for the same props. The key follows the
   // conversation, never its loading state, so opening one does not rebuild the
   // composer (and lose focus).
+  // Next to send, where the choice applies (the model of this conversation, or
+  // the digital human's own, read-only).
+  const sendControls = (
+    <>
+      <QuotaPill sourceId={currentSourceId} />
+      <div className="hidden sm:flex items-center">
+        <ModelSelector />
+      </div>
+    </>
+  )
+
   const inputArea = (
     <InputArea
       key={activeConversationId ?? 'none'}
@@ -567,6 +587,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
       digitalHumanSelector={digitalHumanSelector}
       draftKey={activeConversationId ?? undefined}
       goal={goalComposer}
+      sendSlot={sendControls}
     />
   )
 
@@ -622,6 +643,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
                   ? t('Send a message to start chatting with {{name}}', { name: activeAppName })
                   : t('Send a message to start chatting with this App'))
                 : undefined}
+              avatarName={isDigitalHuman ? activeAppName : undefined}
             />
           ) : (
             <MessageList
@@ -699,8 +721,8 @@ function LoadFailedState({ message, onRetry }: { message: string; onRetry?: () =
 }
 
 // Fixed hover/press treatment shared by every suggestion chip below.
-const CHIP_CLASS = 'group flex items-center gap-[7px] h-[34px] px-3.5 rounded-full border border-border bg-card text-[13px] text-muted-foreground transition-colors ease-halo hover:text-foreground hover:border-primary hover:bg-secondary'
-const CHIP_ICON_CLASS = 'w-[15px] h-[15px] text-subtle-foreground transition-colors ease-halo group-hover:text-primary'
+const CHIP_CLASS = 'group flex items-center gap-[7px] h-[34px] px-3.5 rounded-full border border-border/50 bg-card text-[13px] text-muted-foreground transition-colors ease-halo hover:text-foreground hover:border-border hover:bg-secondary'
+const CHIP_ICON_CLASS = 'w-[15px] h-[15px] text-subtle-foreground transition-colors ease-halo group-hover:text-foreground'
 
 // Empty state component - adapts to compact mode
 type EmptyStateChip = 'continue_task' | 'generate_code' | 'create_dh' | 'analyze_doc' | 'mount_kb'
@@ -708,6 +730,7 @@ type EmptyStateChip = 'continue_task' | 'generate_code' | 'create_dh' | 'analyze
 function EmptyState({
   isCompact = false,
   message,
+  avatarName,
   conversationId,
   onSuggestion,
   composer,
@@ -715,6 +738,8 @@ function EmptyState({
   isCompact?: boolean
   /** Replaces the compact hint (a digital human's empty conversation says who to talk to). */
   message?: string
+  /** A digital human's display name; the compact view shows its avatar instead of the brand mark. */
+  avatarName?: string
   conversationId?: string | null
   onSuggestion?: (prompt: string) => void
   /** Centered composer, only rendered in the full (non-compact) takeover. */
@@ -752,7 +777,11 @@ function EmptyState({
   if (isCompact) {
     return (
       <div className="h-full flex flex-col items-center justify-center text-center px-4">
-        <Sparkles className="w-8 h-8 text-primary/70" />
+        {/* A digital human shows its own face (same seed as the conversation
+            list); a plain conversation shows the brand mark. */}
+        {avatarName
+          ? <span className="avatar-alive flex"><AutomationAvatar name={avatarName} size={44} /></span>
+          : <img src={brandMarkAnimated} alt="" aria-hidden="true" className="w-10 h-10" />}
         <p className="mt-4 text-sm text-muted-foreground">
           {message ?? t('Continue the conversation here')}
         </p>
@@ -764,12 +793,9 @@ function EmptyState({
     // Outer scroll container keeps content reachable on short viewports
     <div className="h-full overflow-y-auto px-6 sm:px-8">
       <div className="min-h-full flex flex-col items-center justify-center text-center py-8 animate-fade-up">
-        {/* Brand mark — same asset as the NavRail logo, not a generic icon.
-            No border-radius: these are transparent ring icons, not the
-            prototype's solid rounded-square badge, so the prototype's
-            `.empty-logo{radius:12px}` has nothing to apply to here. */}
-        <img src={logoOnDark} alt="" aria-hidden="true" className="brand-mark-dark w-11 h-11 mb-4" />
-        <img src={logoOnLight} alt="" aria-hidden="true" className="brand-mark-light w-11 h-11 mb-4" />
+        {/* Brand mark, animated (glances and blinks). One asset for both
+            themes: it carries its own tile, so the background doesn't matter. */}
+        <img src={brandMarkAnimated} alt="" aria-hidden="true" className="w-11 h-11 mb-4" />
 
         {/* Title */}
         <h2 className="text-2xl font-semibold tracking-[-0.01em]">

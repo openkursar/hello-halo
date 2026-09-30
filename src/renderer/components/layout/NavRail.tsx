@@ -11,14 +11,12 @@
  * The rail spans the window's full height, alongside both the Header row and
  * the content below it — matching the prototype's grid (sidebar as one full-
  * height column, header+body as the other). On macOS the traffic lights live
- * in this column too, in the spacer above the brand mark.
+ * in this column too, in the spacer above the destinations.
  */
 
 import { useId, type ReactNode } from 'react'
 import { Settings } from 'lucide-react'
 import { ChatNavIcon, DigitalHumanNavIcon, KnowledgeNavIcon, StoreNavIcon, TasksNavIcon } from '../icons/NavIcons'
-import logoIconOnDark from '../../assets/brand/halo-logo-icon-on-dark.svg'
-import logoIconOnLight from '../../assets/brand/halo-logo-icon-on-light.svg'
 import { useAppStore } from '../../stores/app.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useTaskPanelStore } from '../../stores/taskPanel.store'
@@ -34,13 +32,13 @@ import { MAC_TRAFFIC_LIGHT_BOTTOM } from '../../../shared/constants/mac-traffic-
 
 type Destination = 'chat' | 'digital-humans' | 'knowledge' | 'store'
 
-/** Gap between the macOS traffic lights and the brand mark below them. */
-const MAC_LIGHTS_TO_MARK_GAP_PX = 18
+/** Gap between the macOS traffic lights and the first destination below them. */
+const MAC_LIGHTS_TO_NAV_GAP_PX = 18
 /** The rail's own pt-3, which sits above the spacer. */
 const RAIL_TOP_PADDING_PX = 12
-// Spacer that holds the traffic lights above the brand mark, divided by
+// Spacer that holds the traffic lights above the destinations, divided by
 // --display-scale so it stays in the real pixels the lights are placed in.
-const MAC_TRAFFIC_LIGHT_CLEARANCE_PX = MAC_TRAFFIC_LIGHT_BOTTOM + MAC_LIGHTS_TO_MARK_GAP_PX - RAIL_TOP_PADDING_PX
+const MAC_TRAFFIC_LIGHT_CLEARANCE_PX = MAC_TRAFFIC_LIGHT_BOTTOM + MAC_LIGHTS_TO_NAV_GAP_PX - RAIL_TOP_PADDING_PX
 
 function useActiveDestination(): Destination | null {
   const view = useAppStore(s => s.view)
@@ -170,7 +168,7 @@ export function NavRail() {
 
   return (
     // pt-3/pb-3.5 (12px/14px) matches the prototype's `.sidebar{padding:12px
-    // 0 14px}` — the brand mark sits right under that top padding, not below
+    // 0 14px}` — the destinations sit right under that top padding, not below
     // a Header-height spacer.
     <div
       className={cn(
@@ -188,22 +186,6 @@ export function NavRail() {
           style={{ height: `calc(${MAC_TRAFFIC_LIGHT_CLEARANCE_PX}px / var(--display-scale, 1))` }}
         />
       )}
-      {/* Clicking a top-left logo is widely expected to go home; here that is
-          the conversation view. No hover fill or pointer, so it stays a brand
-          mark rather than reading as another nav item. */}
-      <button
-        type="button"
-        onClick={goChat}
-        aria-label={t('Return to conversation')}
-        className={cn(
-          'flex-shrink-0 flex items-center justify-center px-1 rounded-sm cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-card',
-          isMacElectron ? 'mb-[18px]' : 'mb-7'
-        )}
-      >
-        <img src={logoIconOnDark} alt="" className="brand-mark-dark w-8 h-8" />
-        <img src={logoIconOnLight} alt="" className="brand-mark-light w-8 h-8" />
-      </button>
-
       <nav className="flex-1 w-full flex flex-col items-center gap-1.5">
         <NavItem
           icon={<ChatNavIcon className="w-[22px] h-[22px]" active={active === 'chat'} />}

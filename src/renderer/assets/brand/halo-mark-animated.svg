@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96" role="img" aria-labelledby="t d">
+  <title id="t">Halo</title>
+  <desc id="d">The peeking head glances left and right and blinks</desc>
+  <!-- Animated: the head stays still while the face glances left and right and blinks once, on a 2.4s cycle.
+       With prefers-reduced-motion it rests looking straight ahead. -->
+  <style>
+    @keyframes look { 0%,100% { transform: translateX(-.7px) } 50% { transform: translateX(.7px) } }
+    @keyframes blink { 0%,44%,52%,100% { transform: scaleY(1) } 48% { transform: scaleY(.15) } }
+    .look { animation: look 2.4s ease-in-out infinite; }
+    .eyes { transform-box: fill-box; transform-origin: center; animation: blink 2.4s ease-in-out infinite; }
+    @media (prefers-reduced-motion: reduce) { .look, .eyes { animation: none; } }
+  </style>
+    <defs><clipPath id="mc"><rect width="96" height="96" rx="21.47"/></clipPath></defs>
+    <rect width="96" height="96" rx="21.47" fill="#F3F5F9"/>
+    <g clip-path="url(#mc)"><g transform="scale(2.666667)"><rect width="36" height="36" rx="36" fill="#84B9EF" transform="translate(-12 0) scale(1.22)"/><g transform="translate(-3 1) rotate(-10 18 17) translate(18 17) scale(1.9) translate(-18 -17)"><g class="look"><g class="eyes"><rect x="13" y="14" width="1.5" height="2" rx="1" fill="#000000"/><rect x="21" y="14" width="1.5" height="2" rx="1" fill="#000000"/></g><path d="M15 19 c2 1 4 1 6 0" stroke="#000000" stroke-width="0.95" fill="none" stroke-linecap="round"/></g></g></g></g>
+</svg>

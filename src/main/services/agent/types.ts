@@ -5,7 +5,7 @@
  * This file has no dependencies and is imported by all other agent modules.
  */
 
-import type { ReasoningEffortSetting } from '../../../shared/constants/reasoning-effort'
+import type { ReasoningEffortLevel, ReasoningEffortSetting } from '../../../shared/constants/reasoning-effort'
 import type { Goal, GoalInput } from '../../../shared/types/goal'
 import type { ApiRetryState } from '../../../shared/types/api-retry'
 
@@ -126,6 +126,7 @@ export interface AgentRequest {
   resumeSessionId?: string
   images?: ImageAttachment[]  // Optional images for multi-modal messages
   thinkingEnabled?: boolean   // Enable extended thinking; depth comes from the model's reasoning effort
+  reasoningEffort?: ReasoningEffortLevel  // Depth picked for this send; overrides the toggle and the model config
   model?: string              // Model to use (for future model switching)
   canvasContext?: CanvasContext  // Current canvas state for AI awareness
   knowledgeBaseId?: string         // When set, run as a "chat with this knowledge base" turn:

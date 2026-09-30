@@ -1,27 +1,14 @@
-<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-labelledby="t d">
+  <title id="t">Halo App Icon</title>
+  <desc id="d">A big round digital-human head peeking in from the left of a rounded tile, cropped by the tile, with capsule eyes and a smile</desc>
+  <!-- The head is cropped by the tile, leaving a sliver of the tile color at the top right (same in light and dark).
+       Generic version: full-bleed rounded square (corner ≈ 22.4%); each platform adds its own mask or shadow. -->
   <defs>
-    <!-- Stronger blue gradient: from-primary/45 to transparent -->
-    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.5"/>
-      <stop offset="70%" stop-color="#3b82f6" stop-opacity="0.15"/>
-      <stop offset="100%" stop-color="#3b82f6" stop-opacity="0"/>
-    </linearGradient>
+    <clipPath id="tile"><rect x="0" y="0" width="1024" height="1024" rx="229"/></clipPath>
   </defs>
-
-  <!-- Dark background inside the ring -->
-  <circle cx="512" cy="512" r="408" fill="#0a0a0a"/>
-
-  <!-- Inner gradient circle - stronger blue -->
-  <circle cx="512" cy="512" r="326" fill="url(#grad)"/>
-
-  <!-- Thin outer ring -->
-  <circle
-    cx="512"
-    cy="512"
-    r="420"
-    fill="none"
-    stroke="#3b82f6"
-    stroke-width="24"
-    stroke-opacity="0.6"
-  />
+  <rect x="0" y="0" width="1024" height="1024" rx="229" fill="#F3F5F9"/>
+  <g clip-path="url(#tile)">
+    <g transform="translate(0 0)"><g transform="scale(28.444444)"><rect width="36" height="36" rx="36" fill="#84B9EF" transform="translate(-12 0) scale(1.22)"/><g transform="translate(-3 1) rotate(-10 18 17) translate(18 17) scale(1.9) translate(-18 -17)"><rect x="13" y="14" width="1.5" height="2" rx="1" fill="#000000"/><rect x="21" y="14" width="1.5" height="2" rx="1" fill="#000000"/><path d="M15 19 c2 1 4 1 6 0" stroke="#000000" stroke-width="0.95" fill="none" stroke-linecap="round"/></g></g></g>
+  </g>
+  <rect x="1.5" y="1.5" width="1021" height="1021" rx="227.5" fill="none" stroke="rgba(255,255,255,.55)" stroke-width="3"/>
 </svg>

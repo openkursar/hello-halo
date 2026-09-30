@@ -27,8 +27,6 @@ import { ConversationList } from '../components/chat/ConversationList'
 import { ChatHistoryPanel } from '../components/chat/ChatHistoryPanel'
 import { Header } from '../components/layout/Header'
 import { SpaceSelector } from '../components/layout/SpaceSelector'
-import { ModelSelector } from '../components/layout/ModelSelector'
-import { QuotaPill } from '../components/layout/QuotaPill'
 import { MobileOverflowMenu } from '../components/layout/MobileOverflowMenu'
 import { HeaderMoreMenu } from '../components/layout/HeaderMoreMenu'
 import { CanvasTableOpener, ContentCanvas, TerminalCloseGuard } from '../components/canvas'
@@ -78,15 +76,6 @@ export function SpacePage() {
   const gitBashInstallProgress = useAppStore(state => state.gitBashInstallProgress)
   const startGitBashInstall = useAppStore(state => state.startGitBashInstall)
   const artifactRailWidthConfig = useAppStore(state => state.config?.layout?.artifactRailWidth)
-
-  // Active source id for the header quota pill (string identity → re-renders
-  // only when the selection actually changes).
-  const currentSourceId = useAppStore(state => {
-    const src = state.config?.aiSources
-    return src?.version === 2 && src.currentId && src.sources.some(s => s.id === src.currentId)
-      ? src.currentId
-      : undefined
-  })
 
   const currentSpace = useSpaceStore(state => state.currentSpace)
 
@@ -402,20 +391,6 @@ export function SpacePage() {
               {/* Space Selector - dropdown for switching spaces (includes icon + name + "Manage Spaces") */}
               <SpaceSelector />
 
-              {/* Global search — prototype `.hsearch` sits directly after the
-                  space selector, on the left, not grouped with the right-side
-                  quota/model/rail icons. Hidden on mobile (reachable via the
-                  overflow menu instead). */}
-              <div className="hidden sm:block">
-                <SearchIcon
-                  onClick={(scope) => {
-                    trackHome('home.header.action', { action: 'search', surface: 'desktop' })
-                    openSearch(scope, 'icon')
-                  }}
-                  isInSpace={true}
-                />
-              </div>
-
               {/* Mobile: Chat History Panel as bottom sheet */}
               {isMobile && hasConversations && (
                 <div className="ml-1">
@@ -426,12 +401,15 @@ export function SpacePage() {
           }
           right={
             <>
-              {/* Metered quota — renders only when the active source reports it */}
-              <QuotaPill sourceId={currentSourceId} />
-
-              {/* Model Selector - hidden on mobile (in overflow menu) */}
+              {/* Mobile reaches search via the overflow menu instead. */}
               <div className="hidden sm:block">
-                <ModelSelector />
+                <SearchIcon
+                  onClick={(scope) => {
+                    trackHome('home.header.action', { action: 'search', surface: 'desktop' })
+                    openSearch(scope, 'icon')
+                  }}
+                  isInSpace={true}
+                />
               </div>
 
               {/* Space resources rail toggle - desktop only; mobile reaches the

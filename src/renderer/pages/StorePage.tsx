@@ -31,9 +31,9 @@ export function StorePage() {
         left={
           <>
             <span className="text-sm font-semibold text-foreground whitespace-nowrap">{t('Explore · Store')}</span>
-            <SearchIcon onClick={() => openSearch('global')} />
           </>
         }
+        right={<SearchIcon onClick={() => openSearch('global')} />}
       />
       {/* Page title/lead — outer container only; StoreView keeps owning its
           own tab bar / grid / detail layout. No segmented "Store / Activity"

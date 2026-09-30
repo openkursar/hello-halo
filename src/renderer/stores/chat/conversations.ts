@@ -1,6 +1,7 @@
 /**
  * createConversationsSlice — conversations slice of the chat store.
  */
+import { useThinkingLevelStore } from '../thinking-level.store'
 import type { ChatSlice, ChatState } from './internal'
 import { api, createEmptySpaceState } from './internal'
 import type { Conversation, ConversationMeta } from './internal'
@@ -66,7 +67,7 @@ function warnNoSpace(action: string, conversationId: string): void {
   console.warn(`[ChatStore] ${action}: space of ${conversationId} unknown, skipped`)
 }
 
-export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'openConversation' | 'loadEarlierMessages' | 'ensureMessageLoaded' | 'refreshConversation' | 'clearConversation' | 'deleteAppChatSession' | 'loadConversations' | 'preloadAllSpaceConversations' | 'createConversation' | 'selectConversation' | 'deleteConversation' | 'renameConversation' | 'toggleStarConversation' | 'setConversationModel' | 'attachKnowledgeBase' | 'detachKnowledgeBase'> = (set, get) => ({
+export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'openConversation' | 'loadEarlierMessages' | 'ensureMessageLoaded' | 'refreshConversation' | 'clearConversation' | 'deleteAppChatSession' | 'loadConversations' | 'preloadAllSpaceConversations' | 'createConversation' | 'selectConversation' | 'deleteConversation' | 'renameConversation' | 'toggleStarConversation' | 'setConversationModel' | 'setConversationReasoningEffort' | 'attachKnowledgeBase' | 'detachKnowledgeBase'> = (set, get) => ({
   setCurrentSpace: (spaceId: string) => {
     set({ currentSpaceId: spaceId })
   },
@@ -175,6 +176,10 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'openConver
         } catch (error) {
           console.error('[ChatStore] Failed to trigger session warm up:', error)
         }
+
+        // A new conversation starts at the last level picked anywhere, like its model.
+        const lastLevel = useThinkingLevelStore.getState().level
+        if (lastLevel) void get().setConversationReasoningEffort(spaceId, newConversation.id, lastLevel)
 
         // Knowledge bases (space bindings + default KB) are snapshotted onto the
         // conversation by the main process at creation, so newConversation already
@@ -489,6 +494,27 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'openConver
       console.error('Failed to set conversation model:', error)
       return false
     }
+  },
+  // How hard this conversation thinks. Cached optimistically so the slider
+  // follows the drag; reverted if the write fails.
+  setConversationReasoningEffort: async (spaceId, conversationId, level) => {
+    const previous = get().conversationCache.get(conversationId)?.reasoningEffort
+    const apply = (value: typeof level | undefined) => set((state) => {
+      const cached = state.conversationCache.get(conversationId)
+      if (!cached) return state
+      const newCache = new Map(state.conversationCache)
+      newCache.set(conversationId, { ...cached, reasoningEffort: value })
+      return { conversationCache: newCache }
+    })
+    apply(level)
+    try {
+      const response = await api.updateConversation(spaceId, conversationId, { reasoningEffort: level })
+      if (response.success) return true
+    } catch (error) {
+      console.error('Failed to set conversation reasoning effort:', error)
+    }
+    apply(previous)
+    return false
   },
   // Knowledge bases (Tlon) loaded into a conversation. Persisted via
   // updateConversation; the cache is updated optimistically so chips re-render.

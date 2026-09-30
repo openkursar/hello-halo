@@ -7,6 +7,7 @@
  * cached conversation instead of replacing it, so opening a seen conversation
  * is instant and a finished turn settles where it streamed.
  */
+import { lastUsedThinkingLevel } from '../../thinking-level.store'
 import { api, createEmptySessionState } from '../internal'
 import type { Conversation, Thought } from '../internal'
 import type { TranscriptPage } from '../../../../shared/types/transcript'
@@ -209,6 +210,7 @@ async function send(ctx: BackendContext, conversationId: string, request: SendRe
       message: content,
       images,
       thinkingEnabled,
+      reasoningEffort: lastUsedThinkingLevel(),
       conversationId,
       canvasContext: buildCanvasContext(),
     })

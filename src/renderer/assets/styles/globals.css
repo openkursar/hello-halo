@@ -976,21 +976,6 @@ html.platform-desktop body::after {
   color: hsl(var(--muted-foreground));
 }
 
-/* Brand mark — dark/light SVG pair swapped by the .light class, same
-   convention as .login-hero above. Renders the dark-theme asset by default
-   (root has no class in dark mode); .light flips which one is visible. */
-.brand-mark-light {
-  display: none;
-}
-
-.light .brand-mark-dark {
-  display: none;
-}
-
-.light .brand-mark-light {
-  display: inline-block;
-}
-
 /* ============================================
    Message Styles
    ============================================ */
@@ -1001,7 +986,7 @@ html.platform-desktop body::after {
 
 .message-assistant {
   background: hsl(var(--card));
-  border: 1px solid hsl(var(--border));
+  border: 1px solid hsl(var(--border) / 0.5);
 }
 
 /* Streaming message style */
@@ -1454,4 +1439,54 @@ html.platform-desktop body::after {
   .ws-steam-2 {
     animation: none;
   }
+}
+
+/* Digital-human avatar that glances and blinks, same rhythm as the animated
+   brand mark (halo-mark-animated.svg). Targets the face group of the
+   boring-avatars "beam" SVG (svg > g[mask] > g > mouth + two eyes); only its
+   children move, since the group's own transform places the face. */
+@keyframes avatar-look { 0%, 100% { translate: -0.8px 0 } 50% { translate: 0.8px 0 } }
+@keyframes avatar-blink { 0%, 44%, 52%, 100% { scale: 1 1 } 48% { scale: 1 .15 } }
+.avatar-alive > svg > g > g > * {
+  animation: avatar-look 2.4s ease-in-out infinite;
+}
+.avatar-alive > svg > g > g > rect {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: avatar-look 2.4s ease-in-out infinite, avatar-blink 2.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .avatar-alive > svg > g > g > * { animation: none; }
+}
+
+/* Thinking level slider (ThinkingLevelControl): a thick rounded track filled up
+   to the thumb. `--fill` is the filled share, set inline from the value. */
+.thinking-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 16px;
+  border-radius: 9999px;
+  background: linear-gradient(
+    to right,
+    hsl(var(--primary)) 0 var(--fill, 0%),
+    hsl(var(--secondary)) var(--fill, 0%) 100%
+  );
+  outline: none;
+}
+.thinking-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 9999px;
+  background: hsl(var(--background));
+  border: 1px solid hsl(var(--border));
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .18);
+  transition: transform var(--dur-fast) var(--ease);
+}
+.thinking-slider:active::-webkit-slider-thumb {
+  transform: scale(1.1);
+}
+.thinking-slider:focus-visible {
+  box-shadow: 0 0 0 3px hsl(var(--primary) / .25);
 }

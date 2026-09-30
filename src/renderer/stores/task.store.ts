@@ -13,7 +13,7 @@ import i18n, { getCurrentLanguage } from '../i18n'
 import { usePulseItems } from './chat.store'
 import { useAppsStore, useAutomationTaskItems } from './apps.store'
 import { resolveSpecI18n } from '../utils/spec-i18n'
-import { useSpaceStore } from './space.store'
+import { useSpaceNameResolver } from './space.store'
 import { useTeamStore } from './team.store'
 import type { PulseItem, TaskItem, TaskItemStatus } from '../types'
 import type { InstalledApp } from '../../shared/apps/app-types'
@@ -30,7 +30,7 @@ function conversationToTaskItem(item: PulseItem, apps: InstalledApp[]): TaskItem
     // conversation's closest equivalent is what was last said in it.
     detail: item.preview ?? '',
     spaceId: item.spaceId,
-    spaceName: item.spaceName,
+    spaceName: '',
     updatedAt: new Date(item.updatedAt).getTime(),
     conversationId: item.conversationId,
     starred: item.starred,
@@ -103,16 +103,11 @@ export function useTaskItems(): TaskItem[] {
   const apps = useAppsStore(state => state.apps)
   const hasFullAppList = useAppsStore(state => state.hasFullList)
   const teams = useTeamStore(state => state.teams)
-  const haloSpace = useSpaceStore(state => state.haloSpace)
-  const spaces = useSpaceStore(state => state.spaces)
+  const spaceName = useSpaceNameResolver()
 
   return useMemo(() => {
-    const resolveSpaceName = (spaceId: string | null): string => {
-      if (spaceId === null) return i18n.t('Global')
-      if (haloSpace?.id === spaceId) return haloSpace.isTemp ? 'Halo' : haloSpace.name
-      const space = spaces.find(s => s.id === spaceId)
-      return space ? (space.isTemp ? 'Halo' : space.name) : spaceId
-    }
+    const resolveSpaceName = (spaceId: string | null): string =>
+      spaceId === null ? i18n.t('Global') : spaceName(spaceId)
 
     // A deleted or uninstalled digital human has no chat left to open. Absence
     // only proves deletion once the full (not space-filtered) list is loaded.
@@ -126,7 +121,7 @@ export function useTaskItems(): TaskItem[] {
         .filter(item => !item.appId || !isGoneApp(item.appId))
         .map(item => {
           const task = conversationToTaskItem(item, apps)
-          return task.appId ? { ...task, spaceName: resolveSpaceName(task.spaceId) } : task
+          return { ...task, spaceName: resolveSpaceName(task.spaceId) }
         }),
       ...automationItems.map(item => ({ ...item, spaceName: resolveSpaceName(item.spaceId) })),
       ...teams.filter(team => !team.ephemeral && team.hasWaitingUser).map(teamToTaskItem),
@@ -136,7 +131,7 @@ export function useTaskItems(): TaskItem[] {
       const priorityDiff = STATUS_PRIORITY[a.status] - STATUS_PRIORITY[b.status]
       return priorityDiff !== 0 ? priorityDiff : b.updatedAt - a.updatedAt
     })
-  }, [pulseItems, automationItems, apps, hasFullAppList, teams, haloSpace, spaces])
+  }, [pulseItems, automationItems, apps, hasFullAppList, teams, spaceName])
 }
 
 export interface TaskItemCounts {
