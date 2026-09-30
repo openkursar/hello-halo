@@ -13,6 +13,8 @@ Before making any changes, you must read the halo-dev skill. Its `LAWS.md` (load
 
 Always design with high maintainability and modularity, aligned with long-term architectural planning and the evolution of code quality. Where to place code files/modules is a crucial issue — they cannot be placed randomly based on proximity to other files, nor can dependencies be introduced arbitrarily just because they happen to be needed. It is necessary to truly consider the responsibility category and abstract boundary of each file, whether to re-abstract, whether to refactor, whether to adjust the folder and module code relationships, etc. These are the points that should always be considered at the architectural level for any new feature or module.
 
+**Performance first, features second.** Before adding, keeping or reshaping any user-visible feature or background work, read the `product-principles` skill.
+
 **rules.**
 - Any code changes（edit/delete/move） require human confirmation and consent.
 - Changing modules like 'services/agent' must be done very carefully, it is the underlying dependency of the whole system.
@@ -22,6 +24,7 @@ Always design with high maintainability and modularity, aligned with long-term a
 - **IMPORTANT** — Comments convey context that readers cannot obtain from the code itself. Default is not needed; only add when the code itself cannot convey information. Each comment should be as brief as possible, avoid being too long, and must not carry sensitive information such as internal documents, corporate information, personal information, etc.
 - Variable naming follows existing-code observation. Underscore prefix (`_name`) is reserved for intentionally-unused identifiers (e.g. `_event` in IPC handlers). Scan 2–3 sibling files for established style before naming a new local.
 - do not use ask tool
+- Discuss and reply in the user's language (code, comments and commit messages stay in English).
 - Never run raw `git commit`. All commits go through the `code-commit` skill, and only when the human explicitly triggers or authorizes it — never on your own initiative.
 **tips.**
 This project is 100% AI-generated, so humans may not necessarily know more than you do. You need to proactively review documentation, manage documents, and examine code to confirm details and direction (for matters involving architecture and direction, actively discuss with users).
