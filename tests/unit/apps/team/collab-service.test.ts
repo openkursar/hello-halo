@@ -98,6 +98,12 @@ function makeRuntime(store: TeamStore) {
     getObservableStatus: vi.fn(() => 'idle'),
     getMemberStatus: vi.fn(() => 'working' as const),
     getMemberBusy: vi.fn(() => []),
+  teamFolders: {
+    forMember: () => null,
+    sharedDir: (teamId: string, epochId: string) => `/halo/team-work/${teamId}/${epochId}`,
+    remove: vi.fn(async () => {}),
+    prune: vi.fn(async () => {}),
+  },
   }
 }
 
@@ -358,5 +364,31 @@ describe('temporary space collaborations', () => {
       expect(ctx.appManager.apps.has(appId)).toBe(false)
     }
     expect(ctx.store.getTeamById(team.id)).toBeNull()
+  })
+
+  it('lists the coordinator\u2019s and members\u2019 published files where they really are', async () => {
+    ctx.dbManager.closeAll()
+    ctx = buildService({
+      spaces: {
+        spaceExists: () => true,
+        createMemberSpace: ({ owningSpaceId }) => owningSpaceId,
+        deleteMemberSpace: vi.fn(),
+        resolveWorkDir: (spaceId) => (spaceId === SPACE ? '/work/project' : null),
+      },
+    })
+    const { team, epochId } = await ctx.service.createCollab(collabInput())
+    const researcher = ctx.store.listMembersByTeam(team.id).find(m => m.memberName === 'researcher')!
+    const finding = (authorAppId: string, ref: string) =>
+      ctx.store.insertFinding({ id: randomUUID(), teamId: team.id, epochId, authorAppId, body: null, ref, createdAt: Date.now() })
+    finding(spaceCoordinatorAppId(CONVERSATION), 'plan.md')
+    finding(researcher.appId, 'team:researcher/sources.md')
+
+    const groups = await ctx.service.listArtifacts(team.id, epochId)
+    const byMember = new Map(groups.map(g => [g.memberName, g.artifacts[0]]))
+
+    // The coordinator has no app record; its file sits in the owning space's work dir.
+    expect(byMember.get('coordinator')?.path).toBe('/work/project/plan.md')
+    expect(byMember.get('researcher')?.path).toBe(`/halo/team-work/${team.id}/${epochId}/researcher/sources.md`)
+    expect(byMember.get('researcher')?.relativePath).toBe('team:researcher/sources.md')
   })
 })

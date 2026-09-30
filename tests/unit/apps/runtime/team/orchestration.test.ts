@@ -48,6 +48,7 @@ const LEAD_APP = 'app-lead'
 const RESEARCHER_APP = 'app-researcher'
 const TESTER_APP = 'app-tester'
 const SPACE = 'space-a'
+const EPOCH_ID = 'epoch-prompt'
 
 function seedTeam(
   store: TeamStore,
@@ -374,7 +375,7 @@ describe('TeamOrchestration', () => {
         hostNodeId: 'host-1',
         selfNodeId: 'viewer-1',
         snapshot: {
-          team: { id: TEAM_ID, name: 'Team', goal: 'g', leadAppId: LEAD_APP, collabMode: 'free', epochId: 'host-run', status: 'running' },
+          team: { id: TEAM_ID, name: 'Team', goal: 'g', leadAppId: LEAD_APP, collabMode: 'free', hostNodeId: 'host-1', epochId: 'host-run', status: 'running' },
           members: [
             { appId: LEAD_APP, memberName: 'Lead', role: 'Lead', isLead: true, ownerNodeId: 'host-1', memberIdentity: null },
           ],
@@ -1525,16 +1526,40 @@ describe('TeamOrchestration', () => {
       const { deps } = makeSession()
       const orch = build(deps)
 
-      const ctx = orch.buildPromptContext(TEAM_ID, RESEARCHER_APP)!
+      const ctx = orch.buildPromptContext(TEAM_ID, RESEARCHER_APP, EPOCH_ID)!
       expect(ctx.selfMemberName).toBe('researcher')
       expect(ctx.collabMode).toBe('structured')
       // researcher has no outgoing edges → nobody contactable in structured mode.
       expect(ctx.roster.every((m) => m.contactable === false)).toBe(true)
 
       // The lead, by contrast, may contact researcher + tester.
-      const leadCtx = orch.buildPromptContext(TEAM_ID, LEAD_APP)!
+      const leadCtx = orch.buildPromptContext(TEAM_ID, LEAD_APP, EPOCH_ID)!
       const contactable = leadCtx.roster.filter((m) => m.contactable).map((m) => m.memberName).sort()
       expect(contactable).toEqual(['researcher', 'tester'])
+    })
+
+    it('gives the member its team folder for the epoch its session serves', () => {
+      seedTeam(store)
+      const { deps } = makeSession()
+      const asked: Array<[string, string, string]> = []
+      const folders = {
+        forMember: (teamId: string, epochId: string, appId: string) => {
+          asked.push([teamId, epochId, appId])
+          return { shared: `/tf/${epochId}`, self: `/tf/${epochId}/${appId}` }
+        },
+        ofTaskAssignee: () => null,
+        sharedDir: () => '',
+        remove: async () => {},
+        prune: async () => {},
+      }
+      const orch = createOrchestration({ store, bus: createMessageBus({ store, hooks: {} as never }), session: deps, teamFolders: folders })
+
+      expect(orch.buildPromptContext(TEAM_ID, RESEARCHER_APP, 'epoch-9')!.teamFolder).toEqual({
+        shared: '/tf/epoch-9',
+        self: `/tf/epoch-9/${RESEARCHER_APP}`,
+      })
+      expect(asked).toEqual([[TEAM_ID, 'epoch-9', RESEARCHER_APP]])
+      expect(build(deps).buildPromptContext(TEAM_ID, RESEARCHER_APP, 'epoch-9')!.teamFolder).toBeNull()
     })
 
     // What app-chat withholds memory and the digital-human tools on. True only
@@ -1545,17 +1570,17 @@ describe('TeamOrchestration', () => {
 
       it('is true for a member the temporary collaboration built', () => {
         seedTeam(store, { ephemeral: true, aiProvisioned: true, collabMode: 'free' })
-        expect(make().buildPromptContext(TEAM_ID, RESEARCHER_APP)!.selfIsDisposable).toBe(true)
+        expect(make().buildPromptContext(TEAM_ID, RESEARCHER_APP, EPOCH_ID)!.selfIsDisposable).toBe(true)
       })
 
       it('is false for a digital human the person installed, even in a temporary collaboration', () => {
         seedTeam(store, { ephemeral: true, aiProvisioned: false, collabMode: 'free' })
-        expect(make().buildPromptContext(TEAM_ID, RESEARCHER_APP)!.selfIsDisposable).toBe(false)
+        expect(make().buildPromptContext(TEAM_ID, RESEARCHER_APP, EPOCH_ID)!.selfIsDisposable).toBe(false)
       })
 
       it('is false for an AI-built member of a persistent team — the team outlives the work', () => {
         seedTeam(store, { aiProvisioned: true })
-        expect(make().buildPromptContext(TEAM_ID, RESEARCHER_APP)!.selfIsDisposable).toBe(false)
+        expect(make().buildPromptContext(TEAM_ID, RESEARCHER_APP, EPOCH_ID)!.selfIsDisposable).toBe(false)
       })
     })
   })
@@ -1610,7 +1635,7 @@ describe('TeamOrchestration', () => {
       const epoch = makeEpoch(store)
       const { deps, pendings } = makeSession()
       const orch = build(deps)
-      const researcherEntry = () => buildTeamEntry(orch.buildPromptContext(TEAM_ID, RESEARCHER_APP)!)
+      const researcherEntry = () => buildTeamEntry(orch.buildPromptContext(TEAM_ID, RESEARCHER_APP, EPOCH_ID)!)
 
       // Turn 1: the lead sends.
       await bus.send({

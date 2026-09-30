@@ -32,9 +32,9 @@ import { tmpdir } from 'os'
 import { basename, extname, join } from 'path'
 import type { TeamStore } from '../../team'
 import { resolvePublishedArtifact } from '../../team/artifact-refs'
-import { isRemoteMember } from '../../../../shared/apps/team-types'
+import { isRemoteMember, isTeamFolderRef, parseSpaceCoordinatorAppId } from '../../../../shared/apps/team-types'
 import type { TeamArtifactOpenResult } from '../../../../shared/apps/team-types'
-import { resolveArtifactRef } from './artifact-path'
+import { resolvePublishedRef } from './artifact-path'
 
 const LOG_TAG = '[TeamArtifactRead]'
 
@@ -105,12 +105,17 @@ export class RemoteArtifactError extends Error {
 export interface LocalArtifactResolverDeps {
   store: TeamStore
   /**
-   * The directory an app's agent actually works in — NOT the space's internal
+   * The directory a member's agent actually works in — NOT the space's internal
    * bookkeeping path. The two differ for a space pointed at a project folder,
    * and resolving a ref against the wrong one makes every artifact unreadable.
-   * Null when unknown.
+   * Null when unknown. See {@link createMemberWorkDirResolver}.
    */
-  getWorkDirForApp: (appId: string) => string | null
+  getWorkDirForApp: (appId: string, teamId: string) => string | null
+  /**
+   * The folder of a piece of work on this machine (`TeamFolders.sharedDir`),
+   * where `team:` refs live. Absent → `team:` refs do not resolve here.
+   */
+  getTeamFolderDir?: (teamId: string, epochId: string) => string
   /** Injectable file read (tests); defaults to fs/promises readFile. */
   readFile?: (absPath: string) => Promise<Uint8Array>
 }
@@ -128,15 +133,37 @@ export type ResolveLocalArtifactPath = (params: {
 }) => string | null
 
 /**
+ * The working directory of a team member on this machine.
+ *
+ * A space conversation coordinating a collaboration sits on the roster under a
+ * placeholder appId that no app record carries; it works in the directory of
+ * the space that owns the team. Looking it up as an app answered "unknown",
+ * which left every file the coordinator published unreadable to its members.
+ */
+export function createMemberWorkDirResolver(deps: {
+  store: Pick<TeamStore, 'getTeamById'>
+  getAppSpaceId: (appId: string) => string | null
+  getSpaceWorkDir: (spaceId: string) => string | null
+}): (appId: string, teamId: string) => string | null {
+  return (appId, teamId) => {
+    const spaceId = parseSpaceCoordinatorAppId(appId)
+      ? deps.store.getTeamById(teamId)?.owningSpaceId ?? null
+      : deps.getAppSpaceId(appId)
+    return spaceId ? deps.getSpaceWorkDir(spaceId) || null : null
+  }
+}
+
+/**
  * Resolve a published team artifact to its absolute path on THIS node: the
- * ref's publishing finding/task names the producing app → its working directory
- * → the file (`resolveArtifactRef`, the same rule publishing enforces). Only a
- * published ref resolves, never an arbitrary path. Returns null when the
- * producer is not a local app (a remote member's file lives on its owner), the
- * ref is claimed by two members, or the ref escapes the work dir.
+ * ref's publishing finding/task names the producing app, and the ref resolves
+ * in the folder of this piece of work (a `team:` ref) or in that app's working
+ * directory (any other) — `resolvePublishedRef`, the same rule publishing
+ * enforces. Only a published ref resolves, never an arbitrary path. Returns
+ * null when the producer is not a local app (a remote member's file lives on
+ * its owner), the ref is claimed by two members, or the ref escapes its root.
  */
 export function createLocalArtifactPathResolver(
-  deps: Pick<LocalArtifactResolverDeps, 'store' | 'getWorkDirForApp'>
+  deps: Pick<LocalArtifactResolverDeps, 'store' | 'getWorkDirForApp' | 'getTeamFolderDir'>
 ): ResolveLocalArtifactPath {
   return ({ teamId, epochId, ref }) => {
     const resolution = resolvePublishedArtifact(deps.store, teamId, epochId, ref)
@@ -146,11 +173,24 @@ export function createLocalArtifactPathResolver(
       }
       return null
     }
-    const workDir = deps.getWorkDirForApp(resolution.authorAppId)
-    if (!workDir) return null
-    const resolved = resolveArtifactRef(workDir, ref)
+    const teamRef = isTeamFolderRef(ref)
+    // Only a producer on this machine has its files here. A `team:` ref needs no
+    // working directory, so without this a ref published in another machine's
+    // name could reach a local member's unpublished file.
+    if (teamRef) {
+      const producer = deps.store.getMember(teamId, resolution.authorAppId)
+      if (!producer || isRemoteMember(producer)) return null
+    }
+    const roots = {
+      workDir: teamRef ? null : deps.getWorkDirForApp(resolution.authorAppId, teamId),
+      teamFolder: teamRef ? deps.getTeamFolderDir?.(teamId, epochId) ?? null : null,
+    }
+    const resolved = resolvePublishedRef(roots, ref)
     if (!resolved.ok) {
-      console.warn(`${LOG_TAG} ref="${ref}" unresolvable in "${workDir}": ${resolved.reason}`)
+      console.warn(
+        `${LOG_TAG} ref="${ref}" unresolvable in "${roots.teamFolder ?? roots.workDir ?? ''}" ` +
+          `(producer=${resolution.authorAppId}): ${resolved.reason}`
+      )
       return null
     }
     return resolved.absPath

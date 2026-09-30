@@ -41,6 +41,12 @@ const fakeRuntime = () => ({
   blackboard: {},
   digest: undefined,
   archive: undefined,
+  teamFolders: {
+    forMember: vi.fn((teamId: string, epochId: string) => ({
+      shared: `/halo/team-work/${teamId}-${epochId}`,
+      self: `/halo/team-work/${teamId}-${epochId}/coordinator`,
+    })),
+  },
 })
 
 describe('Space Team MCP', () => {
@@ -89,6 +95,23 @@ describe('Space Team MCP', () => {
     expect(result.isError).toBeUndefined()
   })
 
+  it('collab_start tells the coordinator where its team folder is', async () => {
+    const runtime = fakeRuntime()
+    const createCollab = vi.fn(async () => ({ team: { id: 'team-1', name: 'Crew' }, epochId: 'epoch-1' }))
+    const tools = toolsFor({ createCollab }, runtime)
+
+    const result = await tools.get('collab_start')!({
+      name: 'Crew',
+      goal: 'Review the change',
+      members: [{ memberName: 'reviewer', role: 'Reviewer', responsibility: 'Review' }],
+    })
+
+    expect(runtime.teamFolders.forMember).toHaveBeenCalledWith('team-1', 'epoch-1', 'space-conv-conversation-1')
+    expect(result.content[0].text).toContain(
+      'Scratch folder for temporary collaboration files (reviews, notes, drafts): /halo/team-work/team-1-epoch-1/coordinator'
+    )
+  })
+
   it('coordination tools refuse before a collaboration exists', async () => {
     const tools = toolsFor({ getCollabForConversation: () => null }, fakeRuntime())
     const result = await tools.get(TEAM_TOOL_NAMES.send)!({ to: 'researcher', message: 'go' })
@@ -120,6 +143,10 @@ describe('Space Team MCP', () => {
       expect.objectContaining({ teamId: 'team-1', epochId: 'epoch-1', to: 'researcher' })
     )
     expect(result.isError).toBeUndefined()
+
+    // The coordinator's scratch folder is resolved once per piece of work, not per call.
+    await tools.get(TEAM_TOOL_NAMES.send)!({ to: 'researcher', message: 'again' })
+    expect(runtime.teamFolders.forMember).toHaveBeenCalledTimes(1)
   })
 
   it('collab_save keeps the current collaboration', async () => {

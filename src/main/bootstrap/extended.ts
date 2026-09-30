@@ -28,7 +28,7 @@ import { registerRemoteHandlers } from '../ipc/remote'
 import { powerMonitor } from 'electron'
 import { registerSecurityHandlers } from '../ipc/security'
 import { enableRemoteAccess, enableTunnel } from '../services/remote'
-import { getConfig, getFederationGatewayUrl, migrateCredentialEncryption, setCredentialFailureNotifier } from '../foundation/config.service'
+import { getConfig, getFederationGatewayUrl, migrateCredentialEncryption, setCredentialFailureNotifier, getTeamFolderRoot } from '../foundation/config.service'
 import { isServerMode } from '../foundation/runtime-mode'
 import { registerBrowserHandlers } from '../ipc/browser'
 import { registerBrowserPolicyHandlers } from '../ipc/browser-policy'
@@ -84,7 +84,7 @@ import type { OwnerStatus, MemberWriteRecord, ArtifactRef } from '../apps/runtim
 import { SELF_NODE_ID, TEAM_EVENTS, buildTeamSessionKey } from '../../shared/apps/team-types'
 import type { BlackboardTask, BlackboardFinding, TaskStatus, TeamActivity, TeamUpdatedEvent, TeamEpoch, TeamCheck } from '../../shared/apps/team-types'
 import { parseTeamSessionKey, parseTeamChatKey } from '../../shared/apps/im-keys'
-import { createTeamRuntime, setActiveTeamRuntime, getActiveTeamRuntime, createTeamTriggerScheduler, createDefaultSessionDeps, createTeamArtifactReader, createTeamMemberRecordReader, createTeamArtifactOpener, createLocalArtifactResolver, createLocalArtifactPathResolver, RemoteArtifactError, pruneSharedFileCopies, defaultSharedCopyRoot } from '../apps/runtime/team'
+import { createTeamRuntime, setActiveTeamRuntime, getActiveTeamRuntime, createTeamTriggerScheduler, createDefaultSessionDeps, createTeamArtifactReader, createTeamMemberRecordReader, createTeamArtifactOpener, createLocalArtifactResolver, createLocalArtifactPathResolver, createMemberWorkDirResolver, RemoteArtifactError, pruneSharedFileCopies, defaultSharedCopyRoot, teamFolderDir } from '../apps/runtime/team'
 import { readTeamMemberMessages, isAppChatConversationGenerating } from '../apps/runtime/app-chat'
 import type { TeamTriggerScheduler } from '../apps/runtime/team'
 import { createSpace, deleteSpace, getSpace, getSpaceDir } from '../services/space.service'
@@ -272,20 +272,23 @@ async function initPlatformAndApps(): Promise<void> {
     const localSessionDeps = createDefaultSessionDeps(teamStore)
 
     // Local artifact byte resolution (apps/runtime/team/artifact-read): bootstrap
-    // only supplies the app→work-dir lookup. Shared by the federation
-    // owner-serve path and the team_read_artifact reader below.
+    // only supplies the member→work-dir lookup and the team-folder root. Shared
+    // by the federation owner-serve path and the team_read_artifact reader below.
     //
     // getSpaceDir, never space.path: for a space pointed at a project folder the
     // agent works in that folder, so a ref resolved against space.path (internal
     // bookkeeping) can never be found.
-    const resolveAppWorkDir = (appId: string): string | null => {
-      const app = appManager.getApp(appId)
-      if (!app?.spaceId) return null
-      return getSpaceDir(app.spaceId) || null
-    }
+    const teamFolderRoot = getTeamFolderRoot()
+    const resolveMemberWorkDir = createMemberWorkDirResolver({
+      store: teamStore,
+      getAppSpaceId: (appId) => appManager.getApp(appId)?.spaceId ?? null,
+      getSpaceWorkDir: (spaceId) => getSpaceDir(spaceId) || null,
+    })
+    const getTeamFolderDir = (teamId: string, epochId: string) => teamFolderDir(teamFolderRoot, teamId, epochId)
     const readLocalArtifactBytes = createLocalArtifactResolver({
       store: teamStore,
-      getWorkDirForApp: resolveAppWorkDir,
+      getWorkDirForApp: resolveMemberWorkDir,
+      getTeamFolderDir,
     })
 
     /**
@@ -943,7 +946,8 @@ async function initPlatformAndApps(): Promise<void> {
       store: teamStore,
       resolveLocalPath: createLocalArtifactPathResolver({
         store: teamStore,
-        getWorkDirForApp: resolveAppWorkDir,
+        getWorkDirForApp: resolveMemberWorkDir,
+        getTeamFolderDir,
       }),
       ...fetchRemoteArtifact,
     })
@@ -1051,6 +1055,7 @@ async function initPlatformAndApps(): Promise<void> {
         },
         // See `TurnReportDeps.isLeadGenerating` for the contract this fills.
         isLeadGenerating: isAppChatConversationGenerating,
+        teamFolderRoot,
         // A space coordinator's "inbox" is its space conversation: member
         // replies and turn-end notices land there through the conversation
         // delivery layer (wake when idle, queue behind a busy turn). A full
@@ -1342,6 +1347,9 @@ async function initPlatformAndApps(): Promise<void> {
   // Copies of teammates' files are only a way to open them; the original is
   // fetched again on the next click, so a week-old copy is dead weight.
   registerIdleTask('prune-shared-file-copies', () => pruneSharedFileCopies(defaultSharedCopyRoot(), SHARED_COPY_MAX_AGE_MS))
+  // Dissolving a team removes its folders here; this catches the rest — a team
+  // removed from this machine some other way, or a dissolve cut short by a crash.
+  registerIdleTask('prune-team-folders', () => getActiveTeamRuntime()?.teamFolders.prune())
   registerIdleTask('seed-builtin-skills', () => seedBuiltinSkills(appManager))
   registerIdleTask('verify-office-runtime', () => verifyOfficeRuntime())
   startIdleDrain()

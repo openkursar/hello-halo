@@ -945,6 +945,15 @@ export function getSpacesDir(): string {
 }
 
 /**
+ * Where collaborations keep their in-between files (see apps/runtime/team
+ * `team-folder.ts`). Per Halo instance, and outside every space: a team can span
+ * spaces, and a remote member's machine has no copy of the owning one.
+ */
+export function getTeamFolderRoot(): string {
+  return join(getHaloDir(), 'team-work')
+}
+
+/**
  * Resolve the effective CLAUDE_CONFIG_DIR based on the user's configDirMode setting.
  *
  * Centralised so that both IPC handlers (cli-config) and SDK env (sdk-config)

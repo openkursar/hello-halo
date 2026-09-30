@@ -20,6 +20,8 @@ import {
   spaceCoordinatorAppId,
   parseSpaceCoordinatorAppId,
   SPACE_COORDINATOR_MEMBER_NAME,
+  TEAM_FOLDER_REF_PREFIX,
+  isTeamFolderRef,
 } from '../../../shared/apps/team-types'
 import { provisionLeadSpec } from './lead'
 import { conversationKindOf, deriveConversationLabel } from './epoch-label'
@@ -1233,6 +1235,8 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     }
 
     const members = store.listMembersByTeam(teamId)
+    // Read before the team row goes: the folders are named after its epochs.
+    const epochIds = store.listEpochsByTeam(teamId).map((e) => e.id)
 
     // Remove rows before orphan checks so reference counts reflect post-removal state.
     for (const m of members) {
@@ -1245,6 +1249,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     const rt = getRuntime()
     for (const check of store.listChecksByTeam(teamId)) rt?.checks.cancelById(check.id)
     store.deleteTeam(teamId)
+    await rt?.teamFolders.remove(teamId, epochIds)
 
     for (const m of members) {
       if (m.aiProvisioned) {
@@ -1273,7 +1278,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
    * truth; we only resolve relative refs to absolute paths.
    */
   async function listArtifacts(teamId: string, epochId?: string): Promise<TeamArtifactGroup[]> {
-    requireTeam(teamId)
+    const team = requireTeam(teamId)
     const epoch = epochId
       ? store.getEpochById(epochId)
       : store.getCurrentEpochForTeam(teamId) ?? store.getLatestEpochForTeam(teamId)
@@ -1294,12 +1299,24 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     const groups = new Map<string, { spaceId: string | null; seen: Set<string>; artifacts: TeamArtifact[] }>()
     const createdAt = new Date(epoch.startedAt).toISOString()
 
+    const teamFolderDir = getRuntime()?.teamFolders.sharedDir(teamId, epoch.id) ?? null
     for (const { appId, ref } of refs) {
       const member = memberById.get(appId)
       if (!member) continue
-      const spaceId = appManager.getApp(appId)?.spaceId ?? null
+      // A coordinating space conversation has no app record; it works in the team's own space.
+      const spaceId = parseSpaceCoordinatorAppId(appId)
+        ? team.owningSpaceId
+        : appManager.getApp(appId)?.spaceId ?? null
       const workDir = spaceId ? deps.spaces.resolveWorkDir?.(spaceId) ?? null : null
-      const path = isAbsolute(ref) ? ref : workDir ? join(workDir, ref) : ref
+      const path = isTeamFolderRef(ref)
+        ? teamFolderDir
+          ? join(teamFolderDir, ref.slice(TEAM_FOLDER_REF_PREFIX.length))
+          : ref
+        : isAbsolute(ref)
+          ? ref
+          : workDir
+            ? join(workDir, ref)
+            : ref
 
       let g = groups.get(appId)
       if (!g) {

@@ -39,6 +39,7 @@ import type {
   WakeDisposition,
 } from './message-bus'
 import type { TeamPromptContext } from './team-prompt'
+import type { TeamFolders } from './team-folder'
 import type { NoteTurnEndedInput } from './turn-report'
 
 const LOG_TAG = '[TeamOrch]'
@@ -195,10 +196,11 @@ export interface Orchestration {
 
   captureReport(correlationId: string, outcome: TurnCompletion): void
   /**
-   * The team layers of a member's system prompt. Keyed by (team, member) only:
-   * nothing about the current turn may enter it (see TeamPromptContext).
+   * The team layers of a member's system prompt. Keyed by (team, member) plus
+   * the epoch its session serves: nothing about the current turn may enter it
+   * (see TeamPromptContext).
    */
-  buildPromptContext(teamId: string, selfAppId: string): TeamPromptContext | null
+  buildPromptContext(teamId: string, selfAppId: string, epochId: string): TeamPromptContext | null
   getMemberStatus(appId: string): TeamMemberRuntimeStatus
   /** The office's status as a viewer observes it (see {@link observableStatus}). */
   getObservableStatus(teamId: string): TeamStatus
@@ -320,6 +322,8 @@ export interface OrchestrationDeps {
    * member, never that it carries an empty line.
    */
   getMemberDescription?: (appId: string) => string | null
+  /** Team folders on this machine. Absent → members are pointed at their working directory only. */
+  teamFolders?: TeamFolders
   /**
    * What the member being woken has missed since it last looked at the board,
    * or null when there is nothing to say. Rendered into the turn's INPUT (see
@@ -1652,7 +1656,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
 
   // ── Prompt context ──────────────────────────────────────────────────────────
 
-  function buildPromptContext(teamId: string, selfAppId: string): TeamPromptContext | null {
+  function buildPromptContext(teamId: string, selfAppId: string, epochId: string): TeamPromptContext | null {
     const team = store.getTeamById(teamId)
     if (!team) return null
     const members = store.listMembersByTeam(teamId)
@@ -1693,6 +1697,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       // end (only AI-provisioned apps are cleaned up on dissolve).
       selfIsDisposable: team.ephemeral === true && self.aiProvisioned,
       roster,
+      teamFolder: deps.teamFolders?.forMember(teamId, epochId, selfAppId) ?? null,
     }
   }
 

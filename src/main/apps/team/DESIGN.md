@@ -104,6 +104,9 @@ taken before the owner's latest edit reached the authority must not undo it.
   §8.2. It marks members whose app was auto-created for this team (AI sourcing)
   so the service can clean up orphans on dissolve. Manual members are never
   auto-deleted.
+  Dissolve also removes the team folders of every epoch the team had
+  (`runtime.teamFolders.remove`, see `apps/runtime/team` DESIGN), reading the
+  epoch ids before the team row goes.
 
 - `teams.ephemeral` + `teams.coordinator_conversation_id` (v18) mark a
   TEMPORARY SPACE COLLABORATION: a team the space agent assembled for one
@@ -113,6 +116,9 @@ taken before the owner's latest edit reached the authority must not undo it.
   also occupies a member row (`member_name = 'coordinator'`, `is_lead`,
   `is_system_coordinator`, `ai_provisioned = 0` so dissolve never tries to
   uninstall an app that does not exist). Consequences the code keeps:
+  - the sentinel has no app record, so anything keyed on "the app's space"
+    reads the team's `owning_space_id` for it instead (`listArtifacts`, and the
+    runtime's `createMemberWorkDirResolver`).
   - hidden everywhere person-facing: `listDirectoryMemberships` carries the
     flag (directory exclusion), `listTeamItems` carries it (Teams page and
     picker filtering), and one collaboration exists per conversation

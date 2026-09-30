@@ -1215,6 +1215,18 @@ export function parseSpaceCoordinatorAppId(appId: string): string | null {
 }
 
 /**
+ * Prefix of a published artifact ref naming a file in the team folder of its
+ * piece of work (`team:<member folder>/<path>`) rather than in the producer's
+ * working directory. A colon cannot appear in a Windows file name, so no real
+ * project path is mistaken for one.
+ */
+export const TEAM_FOLDER_REF_PREFIX = 'team:'
+
+export function isTeamFolderRef(ref: string): boolean {
+  return ref.startsWith(TEAM_FOLDER_REF_PREFIX)
+}
+
+/**
  * Whether a member runs on someone else's machine (federated), as opposed to
  * being locally owned. A remote member's run transcript is not locally reloadable
  * — it exists only as relayed live frames until owner-served history arrives.

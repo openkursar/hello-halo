@@ -34,7 +34,7 @@ import {
   renameArtifact,
   moveArtifact
 } from '../../services/artifact.service'
-import { getTempSpacePath, getSpacesDir, getConfig as getServiceConfig, saveConfig } from '../../foundation/config.service'
+import { getTempSpacePath, getSpacesDir, getTeamFolderRoot, getConfig as getServiceConfig, saveConfig } from '../../foundation/config.service'
 import { getSpace, getAllSpacePaths } from '../../services/space.service'
 import { getTlonRoot } from '../../services/tlon'
 import { getAppManager } from '../../apps/manager'
@@ -194,10 +194,12 @@ export function isPathAllowed(target: string): boolean {
 
 /**
  * Read access additionally covers the knowledge-base tree so remote citation
- * clicks can open source documents. Writes stay space-only (isPathAllowed).
+ * clicks can open source documents, and the team folders so a remote Team view
+ * can download what a collaboration published there. Writes stay space-only
+ * (isPathAllowed).
  */
 export function isReadPathAllowed(target: string): boolean {
-  return isWithinAnyBase(target, [...getAllSpacePaths(), getTlonRoot()])
+  return isWithinAnyBase(target, [...getAllSpacePaths(), getTlonRoot(), getTeamFolderRoot()])
 }
 
 export function validateFilePath(

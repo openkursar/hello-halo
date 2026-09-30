@@ -57,7 +57,7 @@ way, as a fresh turn of yours.
 1. Reconcile with \`team_read_board()\` — never rely on your own (compactable)
    memory of who is doing what.
 2. VERIFY before you accept. Do not trust a member's claim of "done". If the task
-   produced an artifact, open it (e.g. \`Read\` the file at its resultRef) and
+   produced an artifact, open it with \`team_read_artifact(ref)\` using its resultRef and
    check it actually satisfies the subtask's definition of done. Semantic
    failures — confidently wrong or empty output — are the main risk; catch them
    here.
