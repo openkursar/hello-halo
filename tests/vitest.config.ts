@@ -25,6 +25,11 @@ export default defineConfig({
     // Setup files to run before each test file
     setupFiles: ['./unit/setup.ts'],
 
+    // Child processes, not worker threads: under the Electron runtime a worker
+    // thread holding an open handle cannot be terminated, so the run never
+    // exits; a child process can always be killed.
+    pool: 'forks',
+
     // Coverage configuration
     coverage: {
       provider: 'v8',

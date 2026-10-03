@@ -89,11 +89,8 @@ const UNGATEABLE_TESTS = {
  * a real binary mismatch that reads exactly like a broken test.
  */
 const UNIT_RUNNER = [
-  'npx',
-  'cross-env',
-  'ELECTRON_RUN_AS_NODE=1',
-  'electron',
-  'node_modules/vitest/vitest.mjs',
+  'node',
+  'scripts/run-vitest.mjs',
   'run',
   '--config',
   'tests/vitest.config.ts'
