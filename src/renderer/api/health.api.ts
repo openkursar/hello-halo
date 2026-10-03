@@ -5,6 +5,8 @@
 import {
   isElectron,
 } from './_shared'
+import { onEvent } from './_shared'
+import type { MemoryPressureEvent, MemoryPressureLevel } from '../../shared/types/memory-pressure'
 import type {
   ApiResponse,
   HealthCheckResponse,
@@ -66,4 +68,19 @@ export const healthApi = {
     return window.halo.runHealthCheck()
   },
 
+  // ===== Memory pressure (host machine) =====
+  /**
+   * Current level. Remote clients have no query and start from 'normal'; they
+   * receive every change on `onMemoryPressure`.
+   */
+  getMemoryPressure: async (): Promise<MemoryPressureLevel> => {
+    if (!isElectron()) return 'normal'
+    const response = await window.halo.getMemoryPressure()
+    return response.success && response.data ? response.data.level : 'normal'
+  },
+
+  onMemoryPressure: (callback: (data: MemoryPressureEvent) => void): (() => void) => {
+    if (isElectron()) return window.halo.onMemoryPressure(callback)
+    return onEvent<MemoryPressureEvent>('app:memory-pressure', callback)
+  },
 }

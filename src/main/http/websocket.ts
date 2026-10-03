@@ -12,6 +12,8 @@ import { resolveIdentity, type AuthProof } from './identity/index'
 import { getFederationStore, DEFAULT_OFFICE_SCOPE, type OfficeScope } from '../apps/federation/index'
 import { getTeamStore } from '../apps/team'
 import { parseTeamSessionKey } from '../../shared/apps/im-keys'
+import { shouldDeliverAgentEvent } from '../../shared/agent-event-visibility'
+import { clearDetailConversations, setDetailConversations } from '../services/conversation-detail'
 
 // The credential a client authenticated with. Drives per-credential event
 // visibility: remote-control sees everything (unchanged); office-member is
@@ -112,6 +114,44 @@ export function sendFederationFrameToClient(clientId: string, frame: unknown): b
 }
 
 /**
+ * Unsent bytes past which a client is skipped for a frame the sender marked
+ * droppable (live stream batches, re-sendable feed traffic). Control frames are
+ * never skipped. Without this a slow joiner grows the host's memory unbounded.
+ */
+const FEDERATION_DROPPABLE_BACKLOG_BYTES = 2 * 1024 * 1024
+
+/**
+ * Send one federation frame to many clients, serialized once. A backed-up client
+ * gets `degrade()`'s reduced frame instead (serialized once, on first need), or
+ * nothing when it returns null. Returns the clients that got less than the full
+ * frame.
+ */
+export function sendFederationFrameToClients(
+  clientIds: readonly string[],
+  frame: unknown,
+  opts: { droppable: boolean; degrade?: () => unknown | null }
+): string[] {
+  const json = JSON.stringify({ type: 'federation', payload: frame })
+  let reduced: string | null | undefined
+  const shed: string[] = []
+  for (const clientId of clientIds) {
+    const client = clients.get(clientId)
+    if (!client || client.ws.readyState !== WebSocket.OPEN) continue
+    if (opts.droppable && client.ws.bufferedAmount > FEDERATION_DROPPABLE_BACKLOG_BYTES) {
+      shed.push(clientId)
+      if (reduced === undefined) {
+        const smaller = opts.degrade?.() ?? null
+        reduced = smaller === null ? null : JSON.stringify({ type: 'federation', payload: smaller })
+      }
+      if (reduced !== null) client.ws.send(reduced)
+      continue
+    }
+    client.ws.send(json)
+  }
+  return shed
+}
+
+/**
  * The node identity bound to a connected client's office-member session (proved
  * by the device-key challenge–response at auth; a joined node's nodeId equals
  * its Identity.id). Returns null for unknown/unauthenticated clients, bearer-only
@@ -182,6 +222,7 @@ export function initWebSocket(server: any): WebSocketServer {
     // diagnosable (1006 = abnormal/no close frame → transport-level drop).
     ws.on('close', (code: number, reason: Buffer) => {
       clients.delete(clientId)
+      clearDetailConversations(`ws:${clientId}`)
       releaseTerminalAttachments(clientId)
       const why = reason?.length ? reason.toString() : ''
       console.log(`[WS] Client disconnected: ${clientId} code=${code}${why ? ` reason=${why}` : ''}`)
@@ -191,6 +232,7 @@ export function initWebSocket(server: any): WebSocketServer {
     ws.on('error', (error) => {
       console.error(`[WS] Client error ${clientId}:`, error)
       clients.delete(clientId)
+      clearDetailConversations(`ws:${clientId}`)
       releaseTerminalAttachments(clientId)
     })
   })
@@ -204,6 +246,7 @@ export function initWebSocket(server: any): WebSocketServer {
         console.warn(`[WS] Keepalive timeout; terminating client: ${client.id}`)
         try { client.ws.terminate() } catch { /* already gone */ }
         clients.delete(client.id)
+        clearDetailConversations(`ws:${client.id}`)
         continue
       }
       client.isAlive = false
@@ -419,6 +462,7 @@ function handleClientMessage(
           break
         }
         client.subscriptions.add(conversationId)
+        recordClientDetail(client)
         console.log(`[WS] Client ${client.id} subscribed to ${conversationId}`)
       }
       break
@@ -427,6 +471,7 @@ function handleClientMessage(
       // Unsubscribe from conversation events
       if (message.payload?.conversationId) {
         client.subscriptions.delete(message.payload.conversationId)
+        recordClientDetail(client)
       }
       break
 
@@ -528,6 +573,15 @@ function handleClientMessage(
 }
 
 /**
+ * Record what a remote viewer renders in detail. Office-member clients are
+ * peer nodes, whose watching federation tracks itself.
+ */
+function recordClientDetail(client: WebSocketClient): void {
+  if (client.credential?.type === 'office-member') return
+  setDetailConversations(`ws:${client.id}`, client.subscriptions)
+}
+
+/**
  * Send message to a specific client
  */
 function sendToClient(client: WebSocketClient, message: object): void {
@@ -553,8 +607,14 @@ export function broadcastToWebSocket(
   }
 
   for (const client of Array.from(clients.values())) {
-    // Only send to authenticated clients subscribed to this conversation
-    if (!client.authenticated || !client.subscriptions.has(conversationId)) continue
+    if (!client.authenticated) continue
+    // Office peers (joiner nodes) receive only what they subscribed to: their
+    // federation leg consumes no status events. Viewers get the rule shared with
+    // IPC — detail for subscribed conversations, status for all.
+    const delivered = client.credential?.type === 'office-member'
+      ? client.subscriptions.has(conversationId)
+      : shouldDeliverAgentEvent(channel, conversationId, client.subscriptions, data)
+    if (!delivered) continue
     // Defense-in-depth on top of the subscription gate: an office-member client
     // can NEVER receive an arbitrary session's stream, only its own office's
     // team sessions.

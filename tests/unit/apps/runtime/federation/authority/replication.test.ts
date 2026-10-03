@@ -22,6 +22,7 @@ import {
 } from '../../../../../../src/main/apps/team/migrations'
 import {
   createReplication,
+  REPLICATION_CATCHUP_BATCH,
   type Replication,
   type ReplicationDeps,
 } from '../../../../../../src/main/apps/runtime/federation/authority/replication'
@@ -74,6 +75,18 @@ function makeStores() {
   }
 }
 
+
+/**
+ * Make `standby` ask `from` for a catch-up and return the request id an answer
+ * must carry (a response that answers no request of ours is dropped).
+ */
+function askCatchup(standby: Replication, sent: M2Frame[], from = AUTHORITY): string {
+  standby.requestCatchupFrom(from)
+  const request = [...sent].reverse().find((f): f is CatchupRequestFrame => f.kind === 'catchup-request')
+  if (!request) throw new Error('no catch-up request was sent')
+  return request.fid
+}
+
 describe('replication — authority commit + heir inclusion (O-R5-1/2)', () => {
   let dbManager: DatabaseManager
   let authorityStore: AuthorityStore
@@ -107,7 +120,7 @@ describe('replication — authority commit + heir inclusion (O-R5-1/2)', () => {
       setCommittedSeq: (s2) => (committedSeq = s2),
       getOnlineStandbys: () => online,
       getHeir: () => heir,
-      getKnownStandbyCount: () => online.length,
+      getKnownStandbyCount: () => online.length, getAuthorityNodeId: () => AUTHORITY,
     })
   })
 
@@ -175,7 +188,7 @@ describe('replication — authority commit + heir inclusion (O-R5-1/2)', () => {
         setCommittedSeq: () => {},
         getOnlineStandbys: () => [],
         getHeir: () => null,
-        getKnownStandbyCount: () => 0,
+        getKnownStandbyCount: () => 0, getAuthorityNodeId: () => AUTHORITY,
       })
       heirRepl.handleReplicate(AUTHORITY, replicate)
       expect(heirStores.teamStore.getTaskById('t1')).not.toBeNull()
@@ -234,7 +247,7 @@ describe('replication — idempotent apply (O-R5-3)', () => {
       setCommittedSeq: () => {},
       getOnlineStandbys: () => [],
       getHeir: () => null,
-      getKnownStandbyCount: () => 0,
+      getKnownStandbyCount: () => 0, getAuthorityNodeId: () => AUTHORITY,
     })
   })
 
@@ -341,7 +354,7 @@ describe('replication — idempotent apply (O-R5-3)', () => {
       setCommittedSeq: () => {},
       getOnlineStandbys: () => [],
       getHeir: () => null,
-      getKnownStandbyCount: () => 0,
+      getKnownStandbyCount: () => 0, getAuthorityNodeId: () => AUTHORITY,
     })
     repl2.handleReplicate(AUTHORITY, frame) // same fid; seq 1 also already in log
     expect(teamStore.listTasksByTeam(OFFICE)).toHaveLength(1)
@@ -371,7 +384,7 @@ describe('replication — idempotent apply (O-R5-3)', () => {
       setCommittedSeq: () => {},
       getOnlineStandbys: () => [],
       getHeir: () => null,
-      getKnownStandbyCount: () => 0,
+      getKnownStandbyCount: () => 0, getAuthorityNodeId: () => AUTHORITY,
     })
     // The rebuilt instance already knows it is at seq 3 (seeded from the log).
     expect(repl2.getAppliedSeq()).toBe(3)
@@ -413,7 +426,7 @@ describe('replication — roster quorum gating (O-R5-4/5)', () => {
       setCommittedSeq: (n) => (committedSeq = n),
       getOnlineStandbys: () => online,
       getHeir: () => heir,
-      getKnownStandbyCount: () => online.length,
+      getKnownStandbyCount: () => online.length, getAuthorityNodeId: () => AUTHORITY,
       onRosterCommitted: (epoch) => (rosterEpoch = epoch ?? rosterEpoch + 1),
     }
     repl = createReplication(deps)
@@ -476,7 +489,7 @@ describe('replication — catch-up (O-R5-6)', () => {
       setCommittedSeq: () => {},
       getOnlineStandbys: () => [],
       getHeir: () => null,
-      getKnownStandbyCount: () => 0,
+      getKnownStandbyCount: () => 0, getAuthorityNodeId: () => AUTHORITY,
     })
   })
 
@@ -580,7 +593,7 @@ describe('replication — member write admission (O-R5-7)', () => {
       setCommittedSeq: () => {},
       getOnlineStandbys: () => [],
       getHeir: () => null,
-      getKnownStandbyCount: () => 0,
+      getKnownStandbyCount: () => 0, getAuthorityNodeId: () => AUTHORITY,
       applyMemberWrite: (rec) => applied.push({ op: rec.op, taskId: rec.taskId }),
     })
   })
@@ -628,7 +641,7 @@ describe('replication — member write admission (O-R5-7)', () => {
       setCommittedSeq: () => {},
       getOnlineStandbys: () => [],
       getHeir: () => null,
-      getKnownStandbyCount: () => 0,
+      getKnownStandbyCount: () => 0, getAuthorityNodeId: () => AUTHORITY,
       applyMemberWrite: (rec) => applied.push({ op: rec.op, taskId: rec.taskId }),
       admitMemberWrite: () => false,
     })
@@ -665,7 +678,7 @@ describe('replication — catch-up backfills a missed seq (C9)', () => {
       setCommittedSeq: (s) => (committed = s),
       getOnlineStandbys: () => [],
       getHeir: () => null,
-      getKnownStandbyCount: () => 0,
+      getKnownStandbyCount: () => 0, getAuthorityNodeId: () => AUTHORITY,
     })
     for (let i = 1; i <= 3; i++) {
       authority.captureLocalWrite({
@@ -693,7 +706,7 @@ describe('replication — catch-up backfills a missed seq (C9)', () => {
       setCommittedSeq: () => {},
       getOnlineStandbys: () => [],
       getHeir: () => null,
-      getKnownStandbyCount: () => 0,
+      getKnownStandbyCount: () => 0, getAuthorityNodeId: () => AUTHORITY,
     })
 
     // Deliver seq 1, DROP seq 2, deliver seq 3 → the standby sees a gap.
@@ -722,14 +735,148 @@ describe('replication — catch-up backfills a missed seq (C9)', () => {
   })
 })
 
-describe('replication — snapshot reconcile (replace-apply, #4)', () => {
-  it('a snapshot prunes a stale/extra standby row and overwrites a diverged field', () => {
+describe('replication — paged catch-up applies in batches', () => {
+  it('a joiner far behind pages itself to the head with one notification and one ack per page', () => {
+    const TOTAL = REPLICATION_CATCHUP_BATCH * 2 + 17
+    const authStores = makeStores()
+    let committed = 0
+    const route: { toStandby: (frame: M2Frame) => void } = { toStandby: () => {} }
+    const authority = createReplication({
+      officeId: OFFICE,
+      selfNodeId: AUTHORITY,
+      authorityStore: authStores.authorityStore,
+      replicaStore: authStores.teamStore,
+      send: (_to, frame) => route.toStandby(frame),
+      broadcast: () => {},
+      getTerm: () => 1,
+      getCommittedSeq: () => committed,
+      setCommittedSeq: (s) => (committed = s),
+      getOnlineStandbys: () => [],
+      getHeir: () => null,
+      getKnownStandbyCount: () => 0, getAuthorityNodeId: () => AUTHORITY,
+    })
+    for (let i = 1; i <= TOTAL; i++) {
+      authority.captureLocalWrite({
+        teamId: OFFICE,
+        epochId: 'epoch-1',
+        op: i % 2 === 0 ? 'post_task' : 'post_activity',
+        payload:
+          i % 2 === 0
+            ? makeTaskPayload(`t${i}`)
+            : {
+                id: `a${i}`, teamId: OFFICE, epochId: 'epoch-1', kind: 'message', actorAppId: 'x',
+                targetAppId: null, subject: 's', body: null, refId: null, correlationId: null, status: null, createdAt: i,
+              },
+        ...(i % 2 === 0 ? { taskId: `t${i}` } : {}),
+      })
+    }
+
     const sbStores = makeStores()
+    const notifications: Array<{ entries: number; snapshot: boolean }> = []
+    const acks: AckFrame[] = []
+    let requests = 0
     const standby = createReplication({
       officeId: OFFICE,
       selfNodeId: HEIR,
       authorityStore: sbStores.authorityStore,
       replicaStore: sbStores.teamStore,
+      send: (_to, frame) => {
+        if (frame.kind === 'ack') acks.push(frame)
+        if (frame.kind === 'catchup-request') {
+          requests++
+          authority.handleM2Frame(HEIR, frame)
+        }
+      },
+      broadcast: () => {},
+      getTerm: () => 1,
+      getCommittedSeq: () => 0,
+      setCommittedSeq: () => {},
+      getOnlineStandbys: () => [],
+      getHeir: () => null,
+      getKnownStandbyCount: () => 0, getAuthorityNodeId: () => AUTHORITY,
+      onReplicaApplied: (applied) =>
+        notifications.push({ entries: applied.entries.length, snapshot: applied.snapshot }),
+    })
+    route.toStandby = (frame) => standby.handleM2Frame(AUTHORITY, frame)
+
+    standby.requestCatchupFrom(AUTHORITY)
+
+    expect(standby.getAppliedSeq()).toBe(TOTAL)
+    expect(requests).toBe(3)
+    expect(notifications).toEqual([
+      { entries: REPLICATION_CATCHUP_BATCH, snapshot: false },
+      { entries: REPLICATION_CATCHUP_BATCH, snapshot: false },
+      { entries: 17, snapshot: false },
+    ])
+    expect(acks.map((a) => a.ackedSeq)).toEqual([
+      REPLICATION_CATCHUP_BATCH,
+      REPLICATION_CATCHUP_BATCH * 2,
+      TOTAL,
+    ])
+    expect(sbStores.teamStore.listTasksByTeam(OFFICE)).toHaveLength(Math.floor(TOTAL / 2))
+    sbStores.dbManager.closeAll()
+    authStores.dbManager.closeAll()
+  })
+
+  it('a full page that advances nothing does not re-ask the same range', () => {
+    const sbStores = makeStores()
+    const sent: M2Frame[] = []
+    const requests = () => sent.filter((f) => f.kind === 'catchup-request').length
+    const standby = createReplication({
+      officeId: OFFICE,
+      selfNodeId: HEIR,
+      authorityStore: sbStores.authorityStore,
+      replicaStore: sbStores.teamStore,
+      send: (_to, frame) => sent.push(frame),
+      broadcast: () => {},
+      getTerm: () => 5,
+      getCommittedSeq: () => 0,
+      setCommittedSeq: () => {},
+      getOnlineStandbys: () => [],
+      getHeir: () => null,
+      getKnownStandbyCount: () => 0, getAuthorityNodeId: () => AUTHORITY,
+    })
+    const entries = Array.from({ length: REPLICATION_CATCHUP_BATCH }, (_, i) => ({
+      seq: i + 1,
+      term: 1,
+      op: 'post_task' as const,
+      payload: makeTaskPayload(`t${i}`),
+      taskId: `t${i}`,
+      fid: `fid-${i}`,
+    }))
+    const page = (reFid: string, fid: string) =>
+      standby.handleM2Frame(AUTHORITY, {
+        kind: 'catchup-response',
+        officeId: OFFICE,
+        fromNode: AUTHORITY,
+        term: 5,
+        reFid,
+        mode: 'incremental',
+        entries,
+        committedSeq: REPLICATION_CATCHUP_BATCH,
+        fid,
+      })
+    const first = askCatchup(standby, sent)
+    page(first, 'resp-1')
+    expect(standby.getAppliedSeq()).toBe(REPLICATION_CATCHUP_BATCH)
+    // A full page that advanced asks for the next one at once.
+    const next = askCatchup(standby, sent)
+    expect(next).not.toBe(first)
+    const afterFirst = requests()
+    // Answered with the same entries again: nothing advances, nothing is re-asked.
+    page(next, 'resp-2')
+    expect(standby.getAppliedSeq()).toBe(REPLICATION_CATCHUP_BATCH)
+    expect(requests()).toBe(afterFirst)
+    sbStores.dbManager.closeAll()
+  })
+
+  it('a catch-up page commits in one transaction per page', () => {
+    const authStores = makeStores()
+    const authority = createReplication({
+      officeId: OFFICE,
+      selfNodeId: AUTHORITY,
+      authorityStore: authStores.authorityStore,
+      replicaStore: authStores.teamStore,
       send: () => {},
       broadcast: () => {},
       getTerm: () => 1,
@@ -737,7 +884,67 @@ describe('replication — snapshot reconcile (replace-apply, #4)', () => {
       setCommittedSeq: () => {},
       getOnlineStandbys: () => [],
       getHeir: () => null,
-      getKnownStandbyCount: () => 0,
+      getKnownStandbyCount: () => 0, getAuthorityNodeId: () => AUTHORITY,
+    })
+    for (let i = 1; i <= 40; i++) {
+      authority.captureLocalWrite({ teamId: OFFICE, epochId: 'epoch-1', op: 'post_task', payload: makeTaskPayload(`t${i}`), taskId: `t${i}` })
+    }
+    const result = authority.buildCatchup(0)
+    if (result.mode !== 'incremental') throw new Error('expected incremental')
+
+    const sbStores = makeStores()
+    const txSpy = vi.spyOn(sbStores.authorityStore, 'transaction')
+    const sent: M2Frame[] = []
+    const standby = createReplication({
+      officeId: OFFICE,
+      selfNodeId: HEIR,
+      authorityStore: sbStores.authorityStore,
+      replicaStore: sbStores.teamStore,
+      send: (_to, frame) => sent.push(frame),
+      broadcast: () => {},
+      getTerm: () => 1,
+      getCommittedSeq: () => 0,
+      setCommittedSeq: () => {},
+      getOnlineStandbys: () => [],
+      getHeir: () => null,
+      getKnownStandbyCount: () => 0, getAuthorityNodeId: () => AUTHORITY,
+    })
+    const reFid = askCatchup(standby, sent)
+    standby.handleM2Frame(AUTHORITY, {
+      kind: 'catchup-response',
+      officeId: OFFICE,
+      fromNode: AUTHORITY,
+      term: 1,
+      reFid,
+      mode: 'incremental',
+      entries: result.entries.map((e) => ({ seq: e.seq, term: e.term, op: e.op, payload: e.payload, ...(e.taskId ? { taskId: e.taskId } : {}), fid: e.fid })),
+      committedSeq: 40,
+      fid: 'resp',
+    })
+    expect(standby.getAppliedSeq()).toBe(40)
+    expect(txSpy).toHaveBeenCalledTimes(1)
+    sbStores.dbManager.closeAll()
+    authStores.dbManager.closeAll()
+  })
+})
+
+describe('replication — snapshot reconcile (replace-apply, #4)', () => {
+  it('a snapshot prunes a stale/extra standby row and overwrites a diverged field', () => {
+    const sbStores = makeStores()
+    const sent: M2Frame[] = []
+    const standby = createReplication({
+      officeId: OFFICE,
+      selfNodeId: HEIR,
+      authorityStore: sbStores.authorityStore,
+      replicaStore: sbStores.teamStore,
+      send: (_to, frame) => sent.push(frame),
+      broadcast: () => {},
+      getTerm: () => 1,
+      getCommittedSeq: () => 0,
+      setCommittedSeq: () => {},
+      getOnlineStandbys: () => [],
+      getHeir: () => null,
+      getKnownStandbyCount: () => 0, getAuthorityNodeId: () => AUTHORITY,
     })
 
     // Standby holds a stale board: t1 with a diverged status (e.g. a rejected
@@ -753,11 +960,15 @@ describe('replication — snapshot reconcile (replace-apply, #4)', () => {
       officeId: OFFICE,
       fromNode: AUTHORITY,
       term: 1,
-      reFid: 'req-1',
+      reFid: askCatchup(standby, sent),
       mode: 'snapshot',
+      committedSeq: 12,
       snapshot: {
         tasks: [makeTaskPayload('t1'), makeTaskPayload('t2')], // authoritative: status 'pending'
         findings: [],
+        activities: [],
+        epochs: [],
+        checks: [],
         roster: [],
         appliedSeq: 12,
         term: 1,
@@ -773,5 +984,151 @@ describe('replication — snapshot reconcile (replace-apply, #4)', () => {
     expect(sbStores.teamStore.getTaskById('t1')!.status).toBe('pending')
     expect(standby.getAppliedSeq()).toBe(12)
     sbStores.dbManager.closeAll()
+  })
+})
+
+describe('replication — snapshot completeness', () => {
+  it('a snapshot carries and applies the office epochs and checks', () => {
+    const auth = makeStores()
+    const epoch = { id: 'epoch-9', teamId: OFFICE, startedAt: 1, endedAt: null, endReason: null, summary: null, lifecycle: 'conversation' as const }
+    auth.teamStore.upsertEpoch(epoch as never)
+    const authority = createReplication({
+      officeId: OFFICE, selfNodeId: AUTHORITY, authorityStore: auth.authorityStore, replicaStore: auth.teamStore,
+      send: () => {}, broadcast: () => {}, getTerm: () => 1, getCommittedSeq: () => 0, setCommittedSeq: () => {},
+      getOnlineStandbys: () => [], getHeir: () => null, getKnownStandbyCount: () => 0, getAuthorityNodeId: () => AUTHORITY,
+    })
+    for (let i = 1; i <= 3; i++) {
+      authority.captureLocalWrite({ teamId: OFFICE, epochId: 'epoch-9', op: 'post_task', payload: makeTaskPayload(`t${i}`), taskId: `t${i}` })
+    }
+    auth.authorityStore.pruneLogBefore(OFFICE, 2)
+    const served = authority.buildCatchup(0)
+    if (served.mode !== 'snapshot') throw new Error('expected a snapshot below the pruned floor')
+    expect(served.snapshot.epochs.map((e) => e.id)).toEqual(['epoch-9'])
+    expect(served.snapshot.checks).toEqual([])
+    const sb = makeStores()
+    const applied: string[] = []
+    const sent: M2Frame[] = []
+    const standby = createReplication({
+      officeId: OFFICE, selfNodeId: HEIR, authorityStore: sb.authorityStore, replicaStore: sb.teamStore,
+      send: (_to, frame) => sent.push(frame), broadcast: () => {}, getTerm: () => 1, getCommittedSeq: () => 0, setCommittedSeq: () => {},
+      getOnlineStandbys: () => [], getHeir: () => null, getKnownStandbyCount: () => 0, getAuthorityNodeId: () => AUTHORITY,
+      applyOfficeState: (op, payload) => applied.push(`${op}:${String(payload.id)}`),
+    })
+    standby.handleM2Frame(AUTHORITY, {
+      kind: 'catchup-response', officeId: OFFICE, fromNode: AUTHORITY, term: 1, reFid: askCatchup(standby, sent), mode: 'snapshot', committedSeq: 5,
+      snapshot: { tasks: [], findings: [], activities: [], roster: [], epochs: [epoch], checks: [{ id: 'chk-1' }], appliedSeq: 5, term: 1 },
+      fid: 's',
+    })
+    expect(sb.teamStore.getEpochById('epoch-9')?.lifecycle).toBe('conversation')
+    expect(applied).toEqual(['check_upsert:chk-1'])
+    auth.dbManager.closeAll()
+    sb.dbManager.closeAll()
+  })
+})
+
+describe('replication — snapshot scoped to open epochs', () => {
+  const act = (id: string, epochId: string, createdAt: number) => ({
+    id, teamId: OFFICE, epochId, kind: 'message', actorAppId: 'x', targetAppId: null, subject: 's',
+    body: null, refId: null, correlationId: null, status: null, createdAt,
+  })
+
+  it('carries only the open epochs’ record', () => {
+    const auth = makeStores()
+    auth.teamStore.upsertEpoch({ id: 'open', teamId: OFFICE, startedAt: 1, endedAt: null, endReason: null, summary: null, lifecycle: 'conversation' } as never)
+    auth.teamStore.upsertEpoch({ id: 'closed', teamId: OFFICE, startedAt: 1, endedAt: 2, endReason: 'completed', summary: null, lifecycle: 'conversation' } as never)
+    auth.teamStore.insertActivity(act('a-open', 'open', 10) as never)
+    auth.teamStore.insertActivity(act('a-closed', 'closed', 5) as never)
+    const authority = createReplication({
+      officeId: OFFICE, selfNodeId: AUTHORITY, authorityStore: auth.authorityStore, replicaStore: auth.teamStore,
+      send: () => {}, broadcast: () => {}, getTerm: () => 1, getCommittedSeq: () => 0, setCommittedSeq: () => {},
+      getOnlineStandbys: () => [], getHeir: () => null, getKnownStandbyCount: () => 0, getAuthorityNodeId: () => AUTHORITY,
+    })
+    for (let i = 1; i <= 3; i++) {
+      authority.captureLocalWrite({ teamId: OFFICE, epochId: 'open', op: 'post_task', payload: makeTaskPayload(`t${i}`), taskId: `t${i}` })
+    }
+    auth.authorityStore.pruneLogBefore(OFFICE, 2)
+    const scoped = authority.buildCatchup(0)
+    if (scoped.mode !== 'snapshot') throw new Error('expected a snapshot')
+    expect(scoped.snapshot.activities.map((a) => a.id)).toEqual(['a-open'])
+    auth.dbManager.closeAll()
+  })
+
+  it('applying a snapshot keeps the older record the standby already holds', () => {
+    const sb = makeStores()
+    sb.teamStore.insertActivity(act('old-record', 'closed', 1) as never)
+    const sent: M2Frame[] = []
+    const standby = createReplication({
+      officeId: OFFICE, selfNodeId: HEIR, authorityStore: sb.authorityStore, replicaStore: sb.teamStore,
+      send: (_to, frame) => sent.push(frame), broadcast: () => {}, getTerm: () => 1, getCommittedSeq: () => 0, setCommittedSeq: () => {},
+      getOnlineStandbys: () => [], getHeir: () => null, getKnownStandbyCount: () => 0, getAuthorityNodeId: () => AUTHORITY,
+    })
+    standby.handleM2Frame(AUTHORITY, {
+      kind: 'catchup-response', officeId: OFFICE, fromNode: AUTHORITY, term: 1, reFid: askCatchup(standby, sent), mode: 'snapshot', committedSeq: 3,
+      snapshot: { tasks: [], findings: [], roster: [], epochs: [], checks: [], activities: [act('a-open', 'open', 10)], appliedSeq: 3, term: 1 },
+      fid: 's',
+    })
+    expect(sb.teamStore.listActivityByTeam(OFFICE).map((a) => a.id).sort()).toEqual(['a-open', 'old-record'])
+    sb.dbManager.closeAll()
+  })
+})
+
+describe('replication — catch-up across a term boundary', () => {
+  function standbyInTerm(term: number, authorityNode: string) {
+    const sb = makeStores()
+    const sent: M2Frame[] = []
+    const standby = createReplication({
+      officeId: OFFICE, selfNodeId: HEIR, authorityStore: sb.authorityStore, replicaStore: sb.teamStore,
+      send: (_to, frame) => sent.push(frame), broadcast: () => {},
+      getTerm: () => term, getCommittedSeq: () => 0, setCommittedSeq: () => {},
+      getOnlineStandbys: () => [], getHeir: () => null, getKnownStandbyCount: () => 0,
+      getAuthorityNodeId: () => authorityNode,
+    })
+    return { sb, sent, standby }
+  }
+  const entries = [
+    { seq: 1, term: 0, op: 'post_task' as const, payload: makeTaskPayload('t1'), taskId: 't1', fid: 'f1' },
+    { seq: 2, term: 0, op: 'post_task' as const, payload: makeTaskPayload('t2'), taskId: 't2', fid: 'f2' },
+    { seq: 3, term: 1, op: 'post_task' as const, payload: makeTaskPayload('t3'), taskId: 't3', fid: 'f3' },
+  ]
+
+  it('a standby already in a later term applies earlier-term entries replayed by its authority, without re-asking', () => {
+    const { sb, sent, standby } = standbyInTerm(1, AUTHORITY)
+    const reFid = askCatchup(standby, sent)
+    const asked = sent.length
+    standby.handleM2Frame(AUTHORITY, {
+      kind: 'catchup-response', officeId: OFFICE, fromNode: AUTHORITY, term: 1, reFid, mode: 'incremental',
+      entries, committedSeq: 3, fid: 'resp',
+    })
+    expect(standby.getAppliedSeq()).toBe(3)
+    expect(sb.teamStore.listTasksByTeam(OFFICE).map((t) => t.id).sort()).toEqual(['t1', 't2', 't3'])
+    const after = sent.slice(asked)
+    expect(after.filter((f) => f.kind === 'catchup-request')).toEqual([])
+    expect(after.filter((f) => f.kind === 'reject')).toEqual([])
+    sb.dbManager.closeAll()
+  })
+
+  it('from a voter that is not the authority, a deposed authority’s older-term tail past its committed seq is not applied', () => {
+    // A vetoed candidate pulls from a voter whose log ends in a deposed authority's
+    // uncommitted older-term tail (seq 3 here, above the voter's committed seq 2).
+    const { sb, sent, standby } = standbyInTerm(2, 'node-someone-else')
+    const reFid = askCatchup(standby, sent, STANDBY_2)
+    standby.handleM2Frame(STANDBY_2, {
+      kind: 'catchup-response', officeId: OFFICE, fromNode: STANDBY_2, term: 2, reFid, mode: 'incremental',
+      entries: entries.map((e) => ({ ...e, term: 1 })), committedSeq: 2, fid: 'resp',
+    })
+    expect(standby.getAppliedSeq()).toBe(2)
+    expect(sb.teamStore.listTasksByTeam(OFFICE).map((t) => t.id).sort()).toEqual(['t1', 't2'])
+    sb.dbManager.closeAll()
+  })
+
+  it('a response that answers no request of ours is dropped', () => {
+    const { sb, sent, standby } = standbyInTerm(1, AUTHORITY)
+    askCatchup(standby, sent)
+    standby.handleM2Frame(AUTHORITY, {
+      kind: 'catchup-response', officeId: OFFICE, fromNode: AUTHORITY, term: 1, reFid: 'someone-elses-request', mode: 'incremental',
+      entries, committedSeq: 3, fid: 'resp',
+    })
+    expect(standby.getAppliedSeq()).toBe(0)
+    sb.dbManager.closeAll()
   })
 })

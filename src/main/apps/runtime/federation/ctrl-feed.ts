@@ -10,12 +10,12 @@
  * the completion backstop (MB-2) and the reliable completion closes the reassign
  * double-execution window (H9) at its source.
  *
- * Model: every node authors ONE `ctrl` feed carrying its outbound control
- * entries. The AUTHORITY appends `wake` entries; the OWNER appends
- * `turn-complete` entries. Each entry is directed (its payload names the target
- * node), so a consumer of a peer's ctrl feed applies every entry in order but
- * only ACTS on the ones addressed to it — the feed's ordered-once apply is what
- * makes the acting idempotent.
+ * Model: a node authors one feed per peer it addresses, `ctrl:<target>`, which
+ * only that target reads. The AUTHORITY appends `wake` entries; the OWNER
+ * appends `turn-complete` entries. Each target therefore receives only what is
+ * addressed to it (with one shared feed every node received every wake of the
+ * office), and a feed's retention floor is its one reader's ack. The feed's
+ * ordered-once apply is what makes the acting idempotent.
  *
  * Transport- and domain-agnostic seam: `sendToPeer` (link routing) and the two
  * domain handlers (`onWake` / `onTurnComplete`) are injected, so the manager
@@ -28,9 +28,12 @@ import type { FeedStore } from '../../federation'
 import type { NodeId, SerializedWakeRequest } from './types'
 import type { TurnCompletion } from '../team/message-bus'
 import { createFeedService, type FeedService } from './log/feed-service'
-import { feedIdKey, type FeedEntry, type FeedSyncFrame } from './log/types'
+import { feedIdKey, parseFeedIdKey, type FeedEntry, type FeedKind, type FeedSyncFrame } from './log/types'
 
-const CTRL_KIND = 'ctrl' as const
+/** The feed of control entries a node addresses to one target only. */
+export function ctrlTargetKind(target: NodeId): FeedKind {
+  return `ctrl:${target}` as FeedKind
+}
 const ENTRY_WAKE = 'wake'
 const ENTRY_TURN_COMPLETE = 'turn-complete'
 
@@ -62,14 +65,6 @@ export interface CtrlFeedDeps {
   /** A turn-complete addressed to THIS node arrived (resolve the authority waiter). */
   onTurnComplete: (msg: { correlationId: string; outcome: TurnCompletion }) => void
   /**
-   * Every other member of this office, independent of connection state —
-   * forwarded to the feed service's retention pruning so an offline or
-   * not-yet-subscribed member is never treated as caught up (see
-   * `FeedProducer.prune`). Omitting it reproduces the pre-fix behavior (floor
-   * computed from live subscribers only); production wiring always supplies it.
-   */
-  knownPeers?: () => NodeId[]
-  /**
    * A published wake could not be delivered: the target never acked before the
    * give-up deadline. The authority resolves the sender's completion waiter as
    * `undelivered` from this, so "the message never arrived" is known in bounded
@@ -99,8 +94,17 @@ export interface CtrlFeed {
   publishWake(target: NodeId, correlationId: string, request: SerializedWakeRequest): { seq: number }
   /** Author a turn-complete back to the authority; returns the assigned feed seq. */
   publishTurnComplete(target: NodeId, correlationId: string, outcome: TurnCompletion): { seq: number }
-  /** Start consuming a peer's ctrl feed (subscribe from our persisted watermark). */
+  /**
+   * Start (or restart) consuming a peer's ctrl feed, subscribing from our
+   * persisted watermark. For a (re)join; routine inbound traffic uses
+   * `ensureSubscribedToPeer`.
+   */
   subscribePeer(author: NodeId): void
+  /**
+   * Consume a peer's ctrl feed if this node has not subscribed to it yet. Cheap
+   * enough for every inbound frame: an established subscription sends nothing.
+   */
+  ensureSubscribedToPeer(author: NodeId): void
   /**
    * Register `peer` as a subscriber of THIS node's ctrl feed without an explicit
    * subscribe from it — the producer-side self-heal for a lost subscription,
@@ -135,7 +139,6 @@ export interface CtrlFeed {
 
 export function createCtrlFeed(deps: CtrlFeedDeps): CtrlFeed {
   const { officeId, selfNodeId, feedStore, onWake, onTurnComplete } = deps
-  const ownFeedKey = feedIdKey({ officeId, author: selfNodeId, kind: CTRL_KIND })
   const now = deps.now ?? Date.now
   const giveUpMs = deps.giveUpMs ?? DEFAULT_GIVE_UP_MS
 
@@ -145,35 +148,48 @@ export function createCtrlFeed(deps: CtrlFeedDeps): CtrlFeed {
   // NOT tracked: their author does not wait on delivery — the substrate prunes
   // them once acked, and a lost one is the authority's backstop concern.
   const outstandingWakes = new Map<
-    number,
-    { target: NodeId; correlationId: string; deadlineAt: number }
+    string,
+    { feedKey: string; seq: number; target: NodeId; correlationId: string; deadlineAt: number }
   >()
 
-  // Highest seq authored on this node's own ctrl feed, so the health line can
-  // compute "how far behind" without a store query per peer.
-  let lastAuthoredSeq = 0
+  const wakeId = (feedKey: string, seq: number): string => `${feedKey}\u0000${seq}`
 
-  /** A wake at `seq` to `target` has reached the target once the target's ack
-   *  cursor over our feed covers it. */
-  function isDelivered(target: NodeId, seq: number): boolean {
-    return feedStore.getPeerCursor(officeId, ownFeedKey, target) >= seq
+  function kindFor(target: NodeId): FeedKind {
+    return ctrlTargetKind(target)
   }
 
-  function markUndeliverable(seq: number, target: NodeId, correlationId: string, reason: string): void {
-    outstandingWakes.delete(seq)
+  function feedKeyFor(kind: FeedKind): string {
+    return feedIdKey({ officeId, author: selfNodeId, kind })
+  }
+
+  // Highest seq authored on each of this node's own ctrl feeds, so the health
+  // line can compute "how far behind" without a store query per peer.
+  const lastAuthoredSeq = new Map<string, number>()
+
+  /** A wake at `seq` of `feedKey` has reached `target` once its ack cursor over that feed covers it. */
+  function isDelivered(feedKey: string, target: NodeId, seq: number): boolean {
+    return feedStore.getPeerCursor(officeId, feedKey, target) >= seq
+  }
+
+  function markUndeliverable(id: string, target: NodeId, correlationId: string, reason: string): void {
+    outstandingWakes.delete(id)
     deps.onUndeliverable?.({ correlationId, target, reason })
   }
 
   /** Run on every feed tick: retire delivered wakes, fail ones past their deadline. */
   function sweepOutstanding(): void {
     const t = now()
-    for (const [seq, o] of outstandingWakes) {
-      if (isDelivered(o.target, seq)) {
-        outstandingWakes.delete(seq)
+    for (const [id, o] of outstandingWakes) {
+      if (isDelivered(o.feedKey, o.target, o.seq)) {
+        outstandingWakes.delete(id)
         continue
       }
-      if (t >= o.deadlineAt) markUndeliverable(seq, o.target, o.correlationId, 'timeout')
+      if (t >= o.deadlineAt) markUndeliverable(id, o.target, o.correlationId, 'timeout')
     }
+  }
+
+  function noteAuthored(feedKey: string, seq: number): void {
+    lastAuthoredSeq.set(feedKey, Math.max(lastAuthoredSeq.get(feedKey) ?? 0, seq))
   }
 
   /** Domain apply: an inbound ctrl entry from a remote author, in seq order. */
@@ -201,7 +217,9 @@ export function createCtrlFeed(deps: CtrlFeedDeps): CtrlFeed {
     selfNodeId,
     sendToPeer: deps.sendToPeer,
     apply: applyCtrl,
-    knownPeers: deps.knownPeers,
+    // A feed is read by its target alone, so only that peer holds its floor —
+    // connected or not, it is never treated as caught up before it acks.
+    knownPeers: (feedKey) => [parseFeedIdKey(officeId, feedKey).kind.slice('ctrl:'.length)],
     onTick: sweepOutstanding,
     ...(deps.retransmitIntervalMs !== undefined ? { retransmitIntervalMs: deps.retransmitIntervalMs } : {}),
     ...(deps.now ? { now: deps.now } : {}),
@@ -217,9 +235,9 @@ export function createCtrlFeed(deps: CtrlFeedDeps): CtrlFeed {
    * traffic from that peer, which never comes because the peer is idle waiting
    * for the very message sitting in this outbox.
    */
-  function ensureTargetSubscribed(target: NodeId): void {
+  function ensureTargetSubscribed(target: NodeId, kind: FeedKind): void {
     if (target === selfNodeId) return
-    if (feed.ensurePeerSubscribed(CTRL_KIND, target)) {
+    if (feed.ensurePeerSubscribed(kind, target)) {
       console.warn(
         `[CtrlFeed] addressee was not subscribed to our outbox; registered it office=${officeId} ` +
           `target=${target} deliveredUpTo=${deliveredUpTo(target)}`
@@ -229,10 +247,18 @@ export function createCtrlFeed(deps: CtrlFeedDeps): CtrlFeed {
 
   function publishWake(target: NodeId, correlationId: string, request: SerializedWakeRequest): { seq: number } {
     const payload: CtrlWakePayload = { target, from: selfNodeId, correlationId, request }
-    const entry = feed.appendLocal(CTRL_KIND, ENTRY_WAKE, payload)
-    outstandingWakes.set(entry.seq, { target, correlationId, deadlineAt: now() + giveUpMs })
-    lastAuthoredSeq = Math.max(lastAuthoredSeq, entry.seq)
-    ensureTargetSubscribed(target)
+    const kind = kindFor(target)
+    const feedKey = feedKeyFor(kind)
+    const entry = feed.appendLocal(kind, ENTRY_WAKE, payload)
+    outstandingWakes.set(wakeId(feedKey, entry.seq), {
+      feedKey,
+      seq: entry.seq,
+      target,
+      correlationId,
+      deadlineAt: now() + giveUpMs,
+    })
+    noteAuthored(feedKey, entry.seq)
+    ensureTargetSubscribed(target, kind)
     console.log(
       `[CtrlFeed] publish wake office=${officeId} seq=${entry.seq} target=${target} corr=${correlationId} deliveredUpTo=${deliveredUpTo(target)}`
     )
@@ -245,9 +271,10 @@ export function createCtrlFeed(deps: CtrlFeedDeps): CtrlFeed {
     outcome: TurnCompletion
   ): { seq: number } {
     const payload: CtrlTurnCompletePayload = { target, correlationId, outcome }
-    const entry = feed.appendLocal(CTRL_KIND, ENTRY_TURN_COMPLETE, payload)
-    lastAuthoredSeq = Math.max(lastAuthoredSeq, entry.seq)
-    ensureTargetSubscribed(target)
+    const kind = kindFor(target)
+    const entry = feed.appendLocal(kind, ENTRY_TURN_COMPLETE, payload)
+    noteAuthored(feedKeyFor(kind), entry.seq)
+    ensureTargetSubscribed(target, kind)
     console.log(
       `[CtrlFeed] publish turn-complete office=${officeId} seq=${entry.seq} target=${target} corr=${correlationId} deliveredUpTo=${deliveredUpTo(target)}`
     )
@@ -262,33 +289,52 @@ export function createCtrlFeed(deps: CtrlFeedDeps): CtrlFeed {
     if (!loggedSubscribes.has(author)) {
       loggedSubscribes.add(author)
       console.log(
-        `[CtrlFeed] subscribe peer office=${officeId} author=${author} fromCursor=${feedStore.getLocalCursor(officeId, feedIdKey({ officeId, author, kind: CTRL_KIND }))}`
+        `[CtrlFeed] subscribe peer office=${officeId} author=${author} fromCursor=${feedStore.getLocalCursor(officeId, inboundKey(author))}`
       )
     }
-    feed.subscribeRemote(author, CTRL_KIND)
+    feed.subscribeRemote(author, kindFor(selfNodeId))
+  }
+
+  function ensureSubscribedToPeer(author: NodeId): void {
+    if (feed.ensureSubscribedRemote(author, kindFor(selfNodeId))) {
+      console.log(
+        `[CtrlFeed] subscribe peer office=${officeId} author=${author} fromCursor=${feedStore.getLocalCursor(officeId, inboundKey(author))}`
+      )
+    }
+  }
+
+  /** The feed `author` addresses to this node. */
+  function inboundKey(author: NodeId): string {
+    return feedIdKey({ officeId, author, kind: kindFor(selfNodeId) })
+  }
+
+  /** The feed this node addresses `peer` on. */
+  function peerFeedKey(peer: NodeId): string {
+    return feedKeyFor(kindFor(peer))
   }
 
   function deliveredUpTo(peer: NodeId): number {
-    return feedStore.getPeerCursor(officeId, ownFeedKey, peer)
+    return feedStore.getPeerCursor(officeId, peerFeedKey(peer), peer)
   }
 
   function peerDelivery(peer: NodeId): { deliveredUpTo: number; behind: number; pendingWakes: number } {
-    const acked = deliveredUpTo(peer)
+    const feedKey = peerFeedKey(peer)
+    const acked = feedStore.getPeerCursor(officeId, feedKey, peer)
     // Counted against the peer's ack cursor, not against the sweep: a wake stays
     // in `outstandingWakes` until the next tick retires it, and a health line that
     // called a delivered wake "pending" for up to one tick would read as a fault.
     let pendingWakes = 0
-    for (const [seq, o] of outstandingWakes) {
-      if (o.target === peer && !isDelivered(peer, seq)) pendingWakes += 1
+    for (const o of outstandingWakes.values()) {
+      if (o.target === peer && !isDelivered(o.feedKey, peer, o.seq)) pendingWakes += 1
     }
-    return { deliveredUpTo: acked, behind: Math.max(0, lastAuthoredSeq - acked), pendingWakes }
+    return { deliveredUpTo: acked, behind: Math.max(0, (lastAuthoredSeq.get(feedKey) ?? 0) - acked), pendingWakes }
   }
 
   // Peers whose producer-side self-heal has already been logged (once per peer).
   const loggedEnsured = new Set<NodeId>()
 
   function ensurePeerSubscribed(peer: NodeId): void {
-    const added = feed.ensurePeerSubscribed(CTRL_KIND, peer)
+    const added = feed.ensurePeerSubscribed(kindFor(peer), peer)
     if (added && !loggedEnsured.has(peer)) {
       loggedEnsured.add(peer)
       console.log(
@@ -301,6 +347,7 @@ export function createCtrlFeed(deps: CtrlFeedDeps): CtrlFeed {
     publishWake,
     publishTurnComplete,
     subscribePeer,
+    ensureSubscribedToPeer,
     ensurePeerSubscribed,
     handleFrame: (from, frame) => feed.handleInbound(from, frame),
     dropPeer: (peer) => feed.dropPeer(peer),

@@ -115,29 +115,31 @@ export function useGoalComposer({
     />
   ) : null, [hasShelf, spaceId, conversationId, isGenerating, setMode])
 
-  if (!hasShelf || !spaceId || !conversationId) return undefined
-
   const hasActiveGoal = goal?.status === 'active'
   const finishedGoal = !!goal && !hasActiveGoal
 
-  return {
-    active,
-    menuItem: {
-      label: hasActiveGoal ? t('Edit goal') : finishedGoal ? t('Set a new goal') : t('Set a goal'),
-      description: t('Halo keeps working toward it; context compaction never loses it'),
-      onSelect: () => {
-        if (hasActiveGoal) void canvasLifecycle.openGoal(spaceId, conversationId)
-        else setMode(true)
+  // Stable while nothing it shows changes, so the memoized composer can skip renders.
+  return useMemo<GoalComposerConfig | undefined>(() => {
+    if (!hasShelf || !spaceId || !conversationId) return undefined
+    return {
+      active,
+      menuItem: {
+        label: hasActiveGoal ? t('Edit goal') : finishedGoal ? t('Set a new goal') : t('Set a goal'),
+        description: t('Halo keeps working toward it; context compaction never loses it'),
+        onSelect: () => {
+          if (hasActiveGoal) void canvasLifecycle.openGoal(spaceId, conversationId)
+          else setMode(true)
+        },
       },
-    },
-    exit: () => setMode(false),
-    chip: <GoalModeChip onExit={() => setMode(false)} />,
-    placeholder: t('Describe the outcome you want Halo to reach…'),
-    sendTitle: isGenerating
-      ? t('Set goal — Halo picks it up at its next step')
-      : sendKeyMode === 'ctrl-enter' ? t('Set goal and start — Ctrl+Enter') : t('Set goal and start — Enter'),
-    canSubmit: (text) => parseGoalDraft(text) !== null,
-    submit,
-    shelf,
-  }
+      exit: () => setMode(false),
+      chip: <GoalModeChip onExit={() => setMode(false)} />,
+      placeholder: t('Describe the outcome you want Halo to reach…'),
+      sendTitle: isGenerating
+        ? t('Set goal — Halo picks it up at its next step')
+        : sendKeyMode === 'ctrl-enter' ? t('Set goal and start — Ctrl+Enter') : t('Set goal and start — Enter'),
+      canSubmit: (text) => parseGoalDraft(text) !== null,
+      submit,
+      shelf,
+    }
+  }, [hasShelf, spaceId, conversationId, active, hasActiveGoal, finishedGoal, t, setMode, isGenerating, sendKeyMode, submit, shelf])
 }

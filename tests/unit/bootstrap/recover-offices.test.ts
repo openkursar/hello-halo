@@ -171,6 +171,24 @@ describe('startup office recovery (H-1)', () => {
     await vi.waitFor(() => expect(fedManager.joinOffice).toHaveBeenCalledTimes(1))
   })
 
+  it('a re-join refused for the Halo version asks the user to update; other refusals do not', async () => {
+    appMap.set('app-1', { id: 'app-1', spaceId: null, spec: { name: 'Writer' } })
+    joinedConnections.value = [
+      { officeId: 'office-old', serverUrl: 'http://host:3017', inviteToken: 't1', bringAppIds: ['app-1'], createdAt: 1, updatedAt: 1 },
+      { officeId: 'office-down', serverUrl: 'http://host:3018', inviteToken: 't2', bringAppIds: ['app-1'], createdAt: 2, updatedAt: 2 },
+    ]
+    fedManager.joinOffice.mockImplementation(async (req: { officeId: string }) =>
+      req.officeId === 'office-old' ? { ok: false, reason: 'VERSION_INCOMPATIBLE' } : { ok: false, reason: 'AUTH_REJECTED' }
+    )
+    const updateRequired: string[] = []
+
+    recoverPersistedOffices(fakeTeamStore([]), { onUpdateRequired: (officeId) => updateRequired.push(officeId) })
+
+    await vi.waitFor(() => expect(updateRequired).toEqual(['office-old']))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(updateRequired).toEqual(['office-old'])
+  })
+
   it('a connection whose appIds no longer resolve does not abort the others', async () => {
     appMap.set('app-live', { id: 'app-live', spaceId: null, spec: { name: 'Live' } })
     joinedConnections.value = [

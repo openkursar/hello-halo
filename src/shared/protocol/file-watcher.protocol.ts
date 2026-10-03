@@ -29,7 +29,14 @@ export type MainToWorkerMessage =
       dirPath: string
       rootPath: string
       depth: number
-      mode: 'tree' | 'flat'
+    }
+  | {
+      type: 'query-files'
+      requestId: string
+      spaceId: string
+      query: string
+      limit: number
+      /** Only paths at most this many segments deep. */
       maxDepth?: number
     }
   | {
@@ -55,8 +62,14 @@ export type WorkerToMainMessage =
       requestId: string
       spaceId: string
       dirPath: string
-      nodes?: CachedTreeNode[]
-      artifacts?: CachedArtifact[]
+      nodes: CachedTreeNode[]
+    }
+  | {
+      type: 'query-result'
+      requestId: string
+      spaceId: string
+      /** Null when the space is not watched (so it has no index). */
+      result: { items: Array<{ relativePath: string; isFolder: boolean }>; truncated: boolean; indexing: boolean; hasPaths: boolean; rootPath: string } | null
     }
   | {
       type: 'scan-error'
@@ -68,11 +81,28 @@ export type WorkerToMainMessage =
       type: 'fs-events'
       spaceId: string
       events: ProcessedFsEvent[]
+      /**
+       * False for events from an overflow window: not stat'ed, type taken from
+       * the OS event (a new directory reads as 'add'), no artifact / tree node.
+       */
+      resolved?: boolean
     }
   | {
       type: 'watcher-error'
       spaceId: string
       error: string
+    }
+  | {
+      /**
+       * Too many events arrived in one window to resolve individually. They
+       * follow as unresolved `fs-events`; derived state (tree, caches) must be
+       * resynced by rescanning. `droppedEvents` past the memory ceiling were
+       * only counted.
+       */
+      type: 'fs-overflow'
+      spaceId: string
+      overflowedEvents: number
+      droppedEvents: number
     }
   | {
       type: 'log'

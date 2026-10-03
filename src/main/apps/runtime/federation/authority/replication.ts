@@ -58,6 +58,7 @@ import type {
   BlackboardFinding,
   TaskStatus,
   TeamActivity,
+  TeamCheck,
   TeamEpoch,
 } from '../../../../../shared/apps/team-types'
 import { SELF_NODE_ID } from '../../../../../shared/apps/team-types'
@@ -81,6 +82,8 @@ function isDuplicateRowError(err: unknown): boolean {
 export const REPLICATION_ACK_TIMEOUT_MS = 2000
 /** Soft cap on log entries kept per office for incremental catch-up. */
 export const REPLICATION_LOG_RETAIN = 10000
+/** Recent record carried per open epoch in a snapshot (the live board's window). */
+export const SNAPSHOT_EPOCH_ACTIVITY_LIMIT = 500
 /** Max entries per catch-up batch, inside MAX_FRAME_BYTES. */
 export const REPLICATION_CATCHUP_BATCH = 256
 
@@ -90,11 +93,14 @@ export const REPLICATION_CATCHUP_BATCH = 256
 export interface ReplicationSnapshot {
   tasks: BlackboardTask[]
   findings: BlackboardFinding[]
+  /** Every epoch (runs and conversations) of the office. */
+  epochs: TeamEpoch[]
+  /** Periodic checks still running in the office. */
+  checks: TeamCheck[]
   /**
-   * The office record of what happened. Carried team-wide rather than per
-   * task-epoch (the way findings are gathered), because an epoch can consist
-   * entirely of messages — a conversation with no tasks would otherwise be
-   * invisible to a standby whose gap outran the retained log.
+   * The recent office record of every OPEN epoch (runs and conversations alike —
+   * an epoch can consist entirely of messages). Older and closed-epoch record is
+   * read on demand; the receiver adds these rows and removes none it holds.
    */
   activities: TeamActivity[]
   roster: RosterEntry[]
@@ -114,6 +120,26 @@ export interface RosterEntry {
 export type CatchupResult =
   | { mode: 'incremental'; entries: ReplicationLogEntry[] }
   | { mode: 'snapshot'; snapshot: ReplicationSnapshot }
+
+/** One board-visible row a hot-standby applied, carried so listeners can merge it without a re-read. */
+export interface ReplicaAppliedEntry {
+  op: ReplicationOp
+  taskId?: string
+  payload: Record<string, unknown>
+}
+
+/**
+ * What one apply pass changed on the replica: a single live frame, a whole
+ * catch-up page (applied in one transaction), or a snapshot replace.
+ */
+export interface ReplicaAppliedBatch {
+  entries: ReplicaAppliedEntry[]
+  /** The replica was reconciled to a full snapshot; `entries` is empty. */
+  snapshot: boolean
+}
+
+/** How often the replication layer self-reports its counters (per office). */
+const REPLICATION_REPORT_INTERVAL_MS = 5 * 60_000
 
 // ── Member-write record passed to the authority's kernel apply ──
 
@@ -156,6 +182,13 @@ export interface ReplicationDeps {
    * caller must supply the real last-known-roster count.
    */
   getKnownStandbyCount: () => number
+  /**
+   * The node this one believes holds the current tenure. Its catch-up pages are
+   * applied whole. Any other responder (a voter a vetoed candidate pulls from)
+   * may hold a deposed authority's uncommitted tail, so past its committed seq
+   * only entries of the current term or later are taken.
+   */
+  getAuthorityNodeId: () => NodeId | null
   /** Apply a member's admitted write through the authority's kernel blackboard. */
   applyMemberWrite?: (record: MemberWriteRecord) => void
   /** Scope admission gate for a member write. Default: allow. */
@@ -185,11 +218,13 @@ export interface ReplicationDeps {
    */
   applyOfficeState?: (op: OfficeStateOp, payload: Record<string, unknown>) => void
   /**
-   * Fired after a hot-standby applies a replicated task/finding to its replica
-   * store, so the renderer refreshes live. NOT fired for roster ops (they
-   * mutate no blackboard row). Default: no-op.
+   * Fired once per apply pass on a hot-standby — one live frame, one catch-up
+   * page, or one snapshot — with the board rows it changed, so listeners merge
+   * rows instead of re-reading the board. Roster and office-state ops are not
+   * listed (they change no board row); a pass that changed none does not fire.
+   * Default: no-op.
    */
-  onReplicaApplied?: (info: { op: ReplicationOp; taskId?: string }) => void
+  onReplicaApplied?: (applied: ReplicaAppliedBatch) => void
   /**
    * Fired for every committed replicate frame this standby receives (a post-commit
    * fan-out proves the authority accepted that fid). Used as the POSITIVE ack for a
@@ -291,7 +326,11 @@ export function createReplication(deps: ReplicationDeps): Replication {
   // the missing run, at most one in-flight request per node (cleared on response
   // or after a short window so a persistent gap re-asks).
   let catchupInFlight = false
+  // The request a catch-up response must answer; any other response is dropped.
+  let outstandingCatchupFid: Fid | null = null
   let catchupTimer: ReturnType<typeof setTimeout> | null = null
+  // Pages applied in the current self-driven catch-up run (logged once at the end).
+  let catchupPagesInRun = 0
 
   // Per-node highest acked seq (not per-seq ack sets), recomputed into commit —
   // keeps tracking O(standbys) and monotone.
@@ -304,6 +343,24 @@ export function createReplication(deps: ReplicationDeps): Replication {
     number,
     { resolve: (ok: boolean) => void; timer: ReturnType<typeof setTimeout>; epoch: number | undefined }
   >()
+
+  // Writes and applies are a hot path: counted here and reported as one
+  // periodic state line rather than a log line each.
+  const counters = { captured: 0, applied: 0, catchupPages: 0 }
+  let lastReportAt = now()
+
+  function maybeReportState(): void {
+    const t = now()
+    if (t - lastReportAt < REPLICATION_REPORT_INTERVAL_MS) return
+    lastReportAt = t
+    console.log(
+      `${LOG_TAG} state office=${officeId} appliedSeq=${getAppliedSeq()} committedSeq=${getCommittedSeq()} ` +
+        `captured=${counters.captured} replicaApplied=${counters.applied} catchupPages=${counters.catchupPages}`
+    )
+    counters.captured = 0
+    counters.applied = 0
+    counters.catchupPages = 0
+  }
 
   function getAppliedSeq(): number {
     return Math.max(replicaAppliedSeq, authorityStore.getMaxSeq(officeId))
@@ -414,11 +471,12 @@ export function createReplication(deps: ReplicationDeps): Replication {
     // a genuine authority-originated local write mints a fresh one.
     const fid = pendingMemberFid ?? randomUUID()
     pendingMemberFid = null
-    const seq = appendAndBroadcast(record.op, record.payload, record.taskId, fid)
+    appendAndBroadcast(record.op, record.payload, record.taskId, fid)
     // The authority is its own first durable copy → its applied water mark is the
     // log max. Optimistic: local apply already happened in the kernel; commit
     // advances in the background as acks arrive.
-    console.log(`${LOG_TAG} captureLocalWrite office=${officeId} seq=${seq} op=${record.op}`)
+    counters.captured++
+    maybeReportState()
     tryAdvanceCommit()
   }
 
@@ -532,12 +590,27 @@ export function createReplication(deps: ReplicationDeps): Replication {
     }
   }
 
-  function handleReplicate(from: NodeId, frame: BlackboardReplicateFrame): void {
-    if (frame.officeId !== officeId) return
-    // EPOCH_STALE: a write from a sealed (older) tenure is rejected with no effect.
-    if (frame.term < getTerm()) {
-      reject(from, frame.fid, 'EPOCH_STALE')
-      return
+  /** What applying one replicated entry asks the caller to do once its transaction commits. */
+  interface ApplyOutcome {
+    ack: boolean
+    catchup: boolean
+    rejectStale: boolean
+    row: ReplicaAppliedEntry | null
+  }
+
+  /**
+   * The idempotent apply of one replicated entry. Store writes only — every frame
+   * it implies (ack / catch-up request / reject) is returned for the caller to
+   * send after the surrounding transaction, so a page of entries commits once.
+   */
+  function applyReplicated(frame: BlackboardReplicateFrame, replayed = false): ApplyOutcome {
+    const outcome: ApplyOutcome = { ack: false, catchup: false, rejectStale: false, row: null }
+    // EPOCH_STALE: a live write from a sealed (older) tenure is rejected with no
+    // effect. An entry the current authority replays from its log keeps the term
+    // it was committed in and is not stale: the response itself was term-checked.
+    if (!replayed && frame.term < getTerm()) {
+      outcome.rejectStale = true
+      return outcome
     }
     // A replicate frame is a post-commit fan-out: reaching here proves the authority
     // accepted this fid. Positive-ack the member's own shadow write (no-op otherwise)
@@ -550,25 +623,25 @@ export function createReplication(deps: ReplicationDeps): Replication {
     // record its fid and the catch-up re-delivery of that same seq would be
     // falsely deduped and never applied (the hole would persist).
     if (frame.seq <= replicaAppliedSeq) {
-      sendAck(from, frame) // already applied (monotonic) → re-ack, don't re-apply
-      return
+      outcome.ack = true // already applied (monotonic) → re-ack, don't re-apply
+      return outcome
     }
     if (authorityStore.hasFid(officeId, frame.fid)) {
-      sendAck(from, frame) // cross-restart/handover replay of a persisted write
-      return
+      outcome.ack = true // cross-restart/handover replay of a persisted write
+      return outcome
     }
     // Gap: this seq is beyond the next contiguous one → frames were missed while
     // briefly disconnected. Applying out of order would skip the hole forever, so
     // instead ask the authority to replay the missing run (which re-delivers this
     // seq too, contiguously). Drop this frame; do NOT advance past or record it.
     if (frame.seq > replicaAppliedSeq + 1) {
-      requestCatchup(from)
-      return
+      outcome.catchup = true
+      return outcome
     }
     // Contiguous first delivery: record in the live-window dedup, then apply.
     if (fidDedup.seen(frame.fromNode, frame.fid)) {
-      sendAck(from, frame)
-      return
+      outcome.ack = true
+      return outcome
     }
     // Apply to the read-only replica FIRST (idempotently), THEN persist the durable
     // log entry and advance the applied water mark. Ordering is load-bearing: if the
@@ -592,10 +665,13 @@ export function createReplication(deps: ReplicationDeps): Replication {
       createdAt: now(),
     })
     replicaAppliedSeq = Math.max(replicaAppliedSeq, frame.seq)
-    // A fresh task/finding landed on this standby's replica → signal the
-    // renderer to refresh live (roster ops change no row, so they do not emit).
+    counters.applied++
     if (rowChanged) {
-      onReplicaApplied({ op: frame.op, ...(frame.taskId !== undefined ? { taskId: frame.taskId } : {}) })
+      outcome.row = {
+        op: frame.op,
+        payload: frame.payload,
+        ...(frame.taskId !== undefined ? { taskId: frame.taskId } : {}),
+      }
     }
     // Learn the authority's committed water mark (Raft leaderCommit), capped at
     // what we have actually applied — a standby can never claim committed beyond
@@ -604,8 +680,19 @@ export function createReplication(deps: ReplicationDeps): Replication {
     if (frame.committedSeq !== undefined) {
       setCommittedSeq(Math.min(frame.committedSeq, replicaAppliedSeq))
     }
-    console.log(`${LOG_TAG} applied replicate office=${officeId} seq=${frame.seq} op=${frame.op}`)
-    sendAck(from, frame)
+    outcome.ack = true
+    return outcome
+  }
+
+  function handleReplicate(from: NodeId, frame: BlackboardReplicateFrame): void {
+    if (frame.officeId !== officeId) return
+    const outcome = authorityStore.transaction(() => applyReplicated(frame))
+    if (outcome.rejectStale) reject(from, frame.fid, 'EPOCH_STALE')
+    if (outcome.catchup) requestCatchup(from)
+    if (outcome.ack) sendAck(from, frame)
+    // A fresh board row landed on this standby's replica → let the renderer merge it.
+    if (outcome.row) onReplicaApplied({ entries: [outcome.row], snapshot: false })
+    maybeReportState()
   }
 
   function sendAck(to: NodeId, frame: BlackboardReplicateFrame): void {
@@ -718,7 +805,11 @@ export function createReplication(deps: ReplicationDeps): Replication {
     return {
       tasks,
       findings,
-      activities: replicaStore.listActivityByTeam(officeId),
+      epochs: replicaStore.listEpochsByTeam(officeId),
+      checks: replicaStore.listChecksByTeam(officeId),
+      activities: replicaStore
+        .listOpenEpochs(officeId)
+        .flatMap((epoch) => replicaStore.listRecentActivityByEpoch(officeId, epoch.id, SNAPSHOT_EPOCH_ACTIVITY_LIMIT)),
       roster,
       appliedSeq: getAppliedSeq(),
       term: getTerm(),
@@ -738,7 +829,10 @@ export function createReplication(deps: ReplicationDeps): Replication {
       lastAckedSeq: replicaAppliedSeq,
       fid: randomUUID(),
     }
-    console.log(`${LOG_TAG} requesting catch-up office=${officeId} from=${replicaAppliedSeq}`)
+    outstandingCatchupFid = frame.fid
+    if (catchupPagesInRun === 0) {
+      console.log(`${LOG_TAG} requesting catch-up office=${officeId} from=${replicaAppliedSeq}`)
+    }
     send(authority, frame)
     // Clear the in-flight latch after a bounded window so a lost response re-asks.
     if (catchupTimer) clearTimeout(catchupTimer)
@@ -794,19 +888,62 @@ export function createReplication(deps: ReplicationDeps): Replication {
   function handleCatchupResponse(from: NodeId, frame: CatchupResponseFrame): void {
     if (frame.officeId !== officeId) return
     if (frame.term < getTerm()) return // from a sealed tenure
+    if (frame.reFid !== outstandingCatchupFid) return // not an answer to our request
+    outstandingCatchupFid = null
     catchupInFlight = false
     if (catchupTimer) {
       clearTimeout(catchupTimer)
       catchupTimer = null
     }
 
+    const entries = frame.mode === 'snapshot' ? [] : frame.entries ?? []
+    const appliedBefore = replicaAppliedSeq
     if (frame.mode === 'snapshot' && frame.snapshot) {
-      applySnapshot(frame.snapshot)
+      authorityStore.transaction(() => applySnapshot(frame.snapshot!))
+      onReplicaApplied({ entries: [], snapshot: true })
     } else {
-      // Incremental: feed each entry through the normal apply path (dedup + ack +
-      // gap guard). Entries are contiguous above lastAckedSeq, so they fill the hole.
-      for (const e of frame.entries ?? []) {
-        handleReplicate(from, {
+      applyCatchupPage(from, entries, frame.committedSeq)
+    }
+    // Adopt the responder's committed water mark, capped at what we actually
+    // applied. This is what lets a freshness-vetoed candidate re-claim with a
+    // baseSeq that passes the voter's STALE_LOG check.
+    setCommittedSeq(Math.min(frame.committedSeq, getAppliedSeq()))
+    // A full page that moved us forward means the responder may hold more: ask
+    // for the next page now instead of waiting for a live frame to expose the
+    // remaining gap. A page that advanced nothing must not re-ask the same range.
+    if (entries.length >= REPLICATION_CATCHUP_BATCH && replicaAppliedSeq > appliedBefore) {
+      requestCatchup(from)
+    } else if (catchupPagesInRun > 0) {
+      console.log(`${LOG_TAG} catch-up done office=${officeId} appliedSeq=${replicaAppliedSeq} pages=${catchupPagesInRun}`)
+      catchupPagesInRun = 0
+    }
+  }
+
+  /**
+   * Apply one incremental catch-up page through the normal per-entry path (dedup +
+   * gap guard) in ONE transaction, then answer with a single cumulative ack and
+   * one applied notification. Entries are contiguous above lastAckedSeq, so they
+   * fill the hole. From a responder that is not the believed authority, entries
+   * past its committed seq are taken only from the current term onward.
+   */
+  function applyCatchupPage(
+    from: NodeId,
+    entries: NonNullable<CatchupResponseFrame['entries']>,
+    committedSeq: number
+  ): void {
+    if (entries.length === 0) return
+    counters.catchupPages++
+    catchupPagesInRun++
+    const trustsTail = from === deps.getAuthorityNodeId()
+    const rows: ReplicaAppliedEntry[] = []
+    let ackFrame: BlackboardReplicateFrame | null = null
+    let needCatchup = false
+    authorityStore.transaction(() => {
+      for (const e of entries) {
+        // Past a non-authority responder's committed seq, an entry from a term older
+        // than ours is a deposed authority's tail that may never have committed.
+        if (!trustsTail && e.seq > committedSeq && e.term < getTerm()) break
+        const replicate: BlackboardReplicateFrame = {
           kind: 'blackboard-replicate',
           officeId,
           fromNode: from,
@@ -816,15 +953,25 @@ export function createReplication(deps: ReplicationDeps): Replication {
           payload: e.payload,
           ...(e.taskId !== undefined ? { taskId: e.taskId } : {}),
           fid: e.fid,
-        })
+        }
+        let outcome: ApplyOutcome
+        try {
+          outcome = applyReplicated(replicate, true)
+        } catch (err) {
+          // The rest of the page is dropped; the entries before it commit, and the
+          // unadvanced seq is asked for again on the next gap.
+          console.warn(`${LOG_TAG} catch-up apply failed office=${officeId} seq=${e.seq} op=${e.op}:`, err)
+          break
+        }
+        if (outcome.ack) ackFrame = replicate
+        if (outcome.catchup) needCatchup = true
+        if (outcome.row) rows.push(outcome.row)
       }
-    }
-    // Adopt the responder's committed water mark, capped at what we actually
-    // applied. This is what lets a freshness-vetoed candidate re-claim with a
-    // baseSeq that passes the voter's STALE_LOG check.
-    if (frame.committedSeq !== undefined) {
-      setCommittedSeq(Math.min(frame.committedSeq, getAppliedSeq()))
-    }
+    })
+    if (ackFrame) sendAck(from, ackFrame)
+    if (needCatchup) requestCatchup(from)
+    if (rows.length > 0) onReplicaApplied({ entries: rows, snapshot: false })
+    maybeReportState()
   }
 
   /** Insert a finding, treating a duplicate id as a no-op (findings are immutable). */
@@ -887,17 +1034,19 @@ export function createReplication(deps: ReplicationDeps): Replication {
     }
     for (const finding of snapFindings) insertFindingIdempotent(finding)
 
-    // Acts are the COMPLETE team set (unlike findings), so a local row the
-    // snapshot omits is a stale optimistic write and is pruned outright.
-    const snapActivities = (snapshot.activities ?? []) as TeamActivity[]
-    const wantActivityIds = new Set(snapActivities.map((a) => a.id))
-    for (const local of replicaStore.listActivityByTeam(officeId)) {
-      if (!wantActivityIds.has(local.id)) replicaStore.deleteActivity(local.id)
+    // Acts are immutable and the snapshot carries only the open epochs' recent
+    // record, so they are added, never pruned (a rejected optimistic act is
+    // rolled back by its author's own shadow-write backstop).
+    for (const activity of snapshot.activities as TeamActivity[]) replicaStore.insertActivity(activity)
+
+    // Epochs and checks converge by idempotent upsert, the way their log entries
+    // would have applied them.
+    for (const epoch of snapshot.epochs as TeamEpoch[]) replicaStore.upsertEpoch(epoch)
+    for (const check of snapshot.checks as TeamCheck[]) {
+      deps.applyOfficeState?.('check_upsert', check as unknown as Record<string, unknown>)
     }
-    for (const activity of snapActivities) replicaStore.insertActivity(activity)
 
     replicaAppliedSeq = Math.max(replicaAppliedSeq, snapshot.appliedSeq)
-    onReplicaApplied({ op: 'post_task' })
     console.log(`${LOG_TAG} applied snapshot office=${officeId} appliedSeq=${replicaAppliedSeq}`)
   }
 

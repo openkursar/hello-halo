@@ -45,6 +45,7 @@ import { resolveCredentialsForSdk, buildUserSessionSdkOptions } from '../../serv
 import { toEngineSystemPrompt } from '../../services/agent/system-prompt'
 import { applyReasoningEffort } from '../../services/agent/reasoning-effort'
 import { getOrCreateV2Session } from '../../services/agent/session-manager'
+import { admitTransientSession } from './session-budget'
 import { createAIBrowserMcpServer, createScopedBrowserContext } from '../../services/ai-browser'
 import { createTerminalMcpServer, getGlobalTerminalContext, isTerminalAvailable } from '../../services/ai-terminal'
 import { createOcrMcpServer } from '../../services/ocr'
@@ -579,6 +580,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
         workDir
       )
     } else {
+      admitTransientSession(runTag)
       session = await createSession(sdkOptions)
     }
     console.log(`[Runtime][${runTag}] V2 session created, sending initial message`)

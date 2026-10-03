@@ -26,7 +26,7 @@ const canvas = vi.hoisted(() => {
     state,
     lifecycle: {
       getTab: (id: string) => state.tabs.get(id),
-      onTabsChange: (cb: (tabs: Tab[]) => void) => {
+      onTabListChange: (cb: (tabs: Tab[]) => void) => {
         state.tabsListeners.add(cb)
         cb([...state.tabs.values()])
         return () => state.tabsListeners.delete(cb)

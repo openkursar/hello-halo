@@ -270,7 +270,8 @@ export async function launchElectronApp(appEntryPath: string, testConfigDir: str
   const userData = path.join(appData, 'user')
   fs.mkdirSync(userData, { recursive: true })
   // macOS resolves appData independently of HOME. Isolate browser storage before main imports.
-  fs.writeFileSync(bootstrap, `const { app } = require('electron');\napp.setPath('appData', ${JSON.stringify(appData)});\napp.setPath('userData', ${JSON.stringify(userData)});\nimport(${JSON.stringify(pathToFileURL(appEntryPath).href)});\n`)
+  // Selectors are English UI labels, so the renderer must not follow the OS language.
+  fs.writeFileSync(bootstrap, `const { app } = require('electron');\napp.commandLine.appendSwitch('lang', 'en-US');\napp.setPath('appData',${JSON.stringify(appData)});\napp.setPath('userData', ${JSON.stringify(userData)});\nimport(${JSON.stringify(pathToFileURL(appEntryPath).href)});\n`)
   const instance = await electron.launch({
     args: [bootstrap],
     env: {

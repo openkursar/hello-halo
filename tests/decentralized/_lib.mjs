@@ -57,12 +57,30 @@ function seedNodeIdentity(clusterDir, index) {
   )
 }
 
+/**
+ * Keep the previous run's cluster dir as `<dir>.prev` (one generation) so a red
+ * run can still be diffed after the next one starts. Nodes left over from that
+ * run are stopped first: a straggler still writing into its data dir is what
+ * made an in-place wipe fail with ENOTEMPTY. The rename moves the tree in one
+ * step; only the older generation is deleted, with retries.
+ */
+function retirePreviousRun(clusterDir, dirAbs) {
+  if (fs.existsSync(path.join(dirAbs, 'nodes.json'))) clusterStop(clusterDir)
+  const prev = `${dirAbs}.prev`
+  fs.rmSync(prev, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })
+  try {
+    fs.renameSync(dirAbs, prev)
+  } catch {
+    fs.rmSync(dirAbs, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })
+  }
+}
+
 export function clusterStart({ nodes = 5, basePort = 3460, fresh = true, clusterDir = '.cluster' } = {}) {
   // Manual fresh: wipe ourselves so we can pre-seed identities into node dirs
   // BEFORE the launcher spawns the processes (the launcher's own --fresh would
   // delete our seeded files). We then call the launcher WITHOUT --fresh.
   const dirAbs = path.resolve(PROJECT_ROOT, clusterDir)
-  if (fresh && fs.existsSync(dirAbs)) fs.rmSync(dirAbs, { recursive: true, force: true })
+  if (fresh && fs.existsSync(dirAbs)) retirePreviousRun(clusterDir, dirAbs)
   for (let i = 1; i <= nodes; i++) seedNodeIdentity(clusterDir, i)
 
   const args = [LAUNCHER, 'start', '--nodes', String(nodes), '--base-port', String(basePort), '--cluster', clusterDir]

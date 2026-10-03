@@ -118,16 +118,13 @@ export function CsvViewer({ tab, onScrollChange }: CsvViewerProps) {
     }
   }, [content])
 
-  // Restore scroll position (table view — source view's restore is handled
-  // internally by CodeMirrorEditor via its `scrollPosition` prop).
-  // No `key={tab.id}` on this component means React reuses it across tab
-  // switches instead of remounting, so a tab with no saved position must
-  // explicitly zero the scroller — otherwise it inherits the previous tab's
-  // native scrollTop, and TableVirtuoso can mount the wrong window off it.
+  // Restore scroll position on mount and when returning to the table view
+  // (source view's restore is handled by CodeMirrorEditor's `scrollPosition` prop).
   useEffect(() => {
     if (viewMode !== 'table' || !tableScrollerRef.current) return
-    tableScrollerRef.current.scrollTop = tab.scrollPosition ?? 0
-  }, [tab.id, viewMode])
+    tableScrollerRef.current.scrollTop = tab.view.scrollPosition ?? 0
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode])
 
   // Save scroll position (table view) — TableVirtuoso owns its scroller, so this
   // listens on the native element captured via `scrollerRef` instead of a prop.
@@ -243,7 +240,7 @@ export function CsvViewer({ tab, onScrollChange }: CsvViewerProps) {
             content={content}
             readOnly
             onScroll={onScrollChange}
-            scrollPosition={tab.scrollPosition}
+            scrollPosition={tab.view.scrollPosition}
           />
         </div>
       )}

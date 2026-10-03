@@ -16,6 +16,7 @@ Read this file after `../ARCHITECTURE.md`, then open only what your task needs.
 | `runtime-flows.md` | end-to-end execution | install/activate/run/escalate/recover flows |
 | `testing-and-observability.md` | quality and diagnostics | test scope, logging, validation checklist |
 | `module-catalog.md` | module quick index | jump directly to module and its design/source files |
+| `performance-and-scale.md` | hot paths, bounds, budgets, crash recovery, guard tests | touching streaming, events, watchers, canvas viewers, engine sessions, federation sync, caches |
 
 ## 2) Quick Task Entry Points
 

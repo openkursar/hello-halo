@@ -36,7 +36,7 @@ vi.mock('../../../../src/main/apps/team', () => ({
 }))
 
 vi.mock('../../../../src/main/apps/runtime/app-chat', () => ({
-  readTeamMemberMessages: () => [],
+  readTeamMemberHistory: () => [],
 }))
 
 const joinTeamOffice =

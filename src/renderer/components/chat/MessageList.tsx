@@ -25,7 +25,7 @@ import { useBrowserToolCalls, type BrowserToolCall } from './useBrowserToolCalls
 import { useTerminalToolCalls, type TerminalToolCall } from './useTerminalToolCalls'
 import { CompactNotice } from './CompactNotice'
 import { InterruptedBubble } from './InterruptedBubble'
-import { useStickToBottom, useHistoryWindow, transcriptRowClass, revealRowInView, type ScrollMotion } from './transcript'
+import { useStickToBottom, useHistoryWindow, transcriptRowClass, estimatedRowHeight, revealRowInView, type ScrollMotion } from './transcript'
 import type { Message, Thought, CompactInfo, AgentErrorType, PendingQuestion } from '../../types'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { useChatStore } from '../../stores/chat.store'
@@ -238,8 +238,12 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   const follower = useStickToBottom({ onAtBottomChange: onAtBottomStateChange, live: isGenerating })
   const rowKeys = useMemo(() => messageRowKeys(displayMessages), [displayMessages])
   const history = useHistoryWindow(rowKeys, follower.scroller, { onReachStart: onLoadEarlier })
-  const { scroller, scrollToBottom, detach } = follower
-  const { reveal } = history
+  const { scroller, detach } = follower
+  const { reveal, toEnd } = history
+  const scrollToBottom = useCallback((behavior?: ScrollMotion) => {
+    toEnd()
+    follower.scrollToBottom(behavior)
+  }, [toEnd, follower.scrollToBottom])
 
   const displayMessagesRef = useRef(displayMessages)
   displayMessagesRef.current = displayMessages
@@ -311,26 +315,47 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
 
   // Built only when the transcript itself changes: tokens streaming into the
   // footer re-render this component but reuse these elements untouched.
-  const { start } = history
-  const rows = useMemo(() => displayMessages.slice(start).map((message, offset) => {
-    const index = start + offset
-    return (
-      <div key={rowKeys[index]} data-transcript-index={index} className={transcriptRowClass(message)}>
-        <MessageRow
-          message={message}
-          previousCost={previousCostMap.get(index) ?? 0}
-          defaultThoughtsExpanded={defaultThoughtsExpanded || expandedThoughtIds.current.has(message.id)}
-          defaultThoughtsMaximized={defaultThoughtsMaximized}
-          onLoadThoughts={hasThoughtsLoader ? handleLoadThoughts : undefined}
-          hideBrowserLiveView={hideBrowserLiveView}
-          hideTerminalOpen={hideTerminalOpen}
-          injectionMessages={injectionMap.get(message.id)}
-          className={contentWidthClass}
-          senderName={message.role === 'assistant' ? senderName : undefined}
-        />
-      </div>
-    )
-  }), [displayMessages, start, previousCostMap, defaultThoughtsExpanded, defaultThoughtsMaximized, hasThoughtsLoader, handleLoadThoughts, hideBrowserLiveView, hideTerminalOpen, rowKeys, injectionMap, contentWidthClass, senderName])
+  // Rows outside the live range are placeholders of their measured height
+  // (see transcript/DESIGN.md); the sentinels sit at the live range's edges.
+  const { start, liveStart, liveEnd, placeholderHeight, sentinelRef, endSentinelRef } = history
+  const rows = useMemo(() => {
+    const out: ReactNode[] = []
+    for (let index = start; index < displayMessages.length; index++) {
+      const message = displayMessages[index]
+      const key = rowKeys[index]
+      if (index === liveStart) out.push(<div key="history-start" ref={sentinelRef} aria-hidden="true" />)
+      if (index === liveEnd) out.push(<div key="history-end" ref={endSentinelRef} aria-hidden="true" />)
+      if (index < liveStart || index >= liveEnd) {
+        out.push(
+          <div
+            key={key}
+            data-transcript-index={index}
+            aria-hidden="true"
+            style={{ height: placeholderHeight(key) ?? estimatedRowHeight(message) }}
+          />
+        )
+        continue
+      }
+      out.push(
+        <div key={key} data-transcript-index={index} className={transcriptRowClass(message)}>
+          <MessageRow
+            message={message}
+            previousCost={previousCostMap.get(index) ?? 0}
+            defaultThoughtsExpanded={defaultThoughtsExpanded || expandedThoughtIds.current.has(message.id)}
+            defaultThoughtsMaximized={defaultThoughtsMaximized}
+            onLoadThoughts={hasThoughtsLoader ? handleLoadThoughts : undefined}
+            hideBrowserLiveView={hideBrowserLiveView}
+            hideTerminalOpen={hideTerminalOpen}
+            injectionMessages={injectionMap.get(message.id)}
+            className={contentWidthClass}
+            senderName={message.role === 'assistant' ? senderName : undefined}
+          />
+        </div>
+      )
+    }
+    if (liveStart >= displayMessages.length) out.push(<div key="history-start" ref={sentinelRef} aria-hidden="true" />)
+    return out
+  }, [displayMessages, start, liveStart, liveEnd, placeholderHeight, sentinelRef, endSentinelRef, previousCostMap, defaultThoughtsExpanded, defaultThoughtsMaximized, hasThoughtsLoader, handleLoadThoughts, hideBrowserLiveView, hideTerminalOpen, rowKeys, injectionMap, contentWidthClass, senderName])
 
   // Keep the footer mounted for an active question independently of isGenerating:
   // a recovered question can be paused on the answer with isGenerating false, and
@@ -345,8 +370,6 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
       className="h-full overflow-y-auto overflow-x-hidden focus:outline-none"
     >
       <div ref={follower.contentRef} className={`pt-6 pb-6 ${sidePadClass}`}>
-        <div ref={history.sentinelRef} aria-hidden="true" />
-
         {rows}
 
         <div className={contentWidthClass}>

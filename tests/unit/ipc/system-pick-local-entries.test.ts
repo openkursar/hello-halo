@@ -25,6 +25,7 @@ vi.mock('../../../src/main/foundation/config.service', () => ({ setAutoLaunch: v
 vi.mock('../../../src/main/foundation/window.service', () => ({ getMainWindow: () => null, onMainWindowChange: vi.fn() }))
 vi.mock('../../../src/main/foundation/logging', () => ({ logFatal: vi.fn() }))
 vi.mock('../../../src/main/services/lifecycle', () => ({ relaunchApp: vi.fn() }))
+vi.mock('../../../src/main/services/perf', () => ({ countPendingCrashDumps: () => 0 }))
 vi.mock('../../../src/main/ipc/rpc', () => ({ registerRawRpcHandlers: (_c: unknown, impl: any) => { env.handlers = impl } }))
 
 import { registerSystemHandlers } from '../../../src/main/ipc/system'

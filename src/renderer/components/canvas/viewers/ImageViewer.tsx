@@ -13,6 +13,7 @@ import { useState, useRef, useCallback, useEffect, useSyncExternalStore } from '
 import { ZoomIn, ZoomOut, Maximize, ExternalLink, Download, RotateCw } from 'lucide-react'
 import { api } from '../../../api'
 import type { CanvasTab } from '../../../stores/canvas.store'
+import { useViewerResources } from '../viewer-resources'
 import { useTranslation } from '../../../i18n'
 import { subscribeArtifactVersions, getArtifactVersion } from '../../../services/artifact-version'
 
@@ -23,6 +24,7 @@ interface ImageViewerProps {
 export function ImageViewer({ tab }: ImageViewerProps) {
   const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
+  const resources = useViewerResources()
   const [scale, setScale] = useState(1)
   const [position, setPosition] = useState({ x: 0, y: 0 })
   const [isDragging, setIsDragging] = useState(false)
@@ -65,15 +67,6 @@ export function ImageViewer({ tab }: ImageViewerProps) {
       ? `data:${tab.mimeType || 'image/png'};base64,${tab.content}`
       : ''
 
-  // Reset the view when the viewer switches to another file.
-  useEffect(() => {
-    setScale(1)
-    setPosition({ x: 0, y: 0 })
-    setImageLoaded(false)
-    setImageError(false)
-    setIsFitted(true)
-  }, [tab.id])
-
   // A rewrite swaps the image under a viewer that stays mounted. Clearing the
   // error matters on its own: a rewrite that repairs a broken file would
   // otherwise never be retried. Zoom and pan are deliberately left alone —
@@ -111,14 +104,15 @@ export function ImageViewer({ tab }: ImageViewerProps) {
   useEffect(() => {
     const c = containerRef.current
     if (!c) return
-    const ro = new ResizeObserver(() => {
+    const scope = resources.scope()
+    const ro = scope.add(new ResizeObserver(() => {
       if (!isFitted || !naturalSize.width) return
       setScale(fitScaleFor(naturalSize.width, naturalSize.height))
       setPosition({ x: 0, y: 0 })
-    })
+    }))
     ro.observe(c)
-    return () => ro.disconnect()
-  }, [isFitted, naturalSize, fitScaleFor])
+    return () => scope.dispose()
+  }, [resources, isFitted, naturalSize, fitScaleFor])
 
   // Handle drag
   const handleMouseDown = (e: React.MouseEvent) => {

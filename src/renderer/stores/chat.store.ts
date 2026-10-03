@@ -12,6 +12,8 @@
  * - sessions: Map<conversationId, SessionState> — runtime state per conversation
  */
 import { create } from 'zustand'
+import { api } from '../api'
+import type { MemoryPressureLevel } from '../../shared/types/memory-pressure'
 import { PULSE_READ_GRACE_PERIOD_MS } from './chat/internal'
 import type { ChatState, SpaceState, SessionState } from './chat/internal'
 import type { Conversation, ConversationMeta, SessionInitInfo, PulseItem, TaskStatus } from './chat/internal'
@@ -27,6 +29,7 @@ import { selectActiveConversationId, selectActiveSession } from './chat/active'
 export { selectActiveConversationId, selectActiveConversation, selectActiveSession } from './chat/active'
 export { conversationKind, digitalHumanAppId } from './chat/backend'
 export type { ChatState } from './chat/internal'
+export { holdOpenThoughts } from './chat/open-thoughts'
 
 export const useChatStore = create<ChatState>((set, get) => ({
   spaceStates: new Map<string, SpaceState>(),
@@ -468,4 +471,17 @@ export function usePulseBeaconStatus(): 'waiting' | 'completed' | 'generating' |
 
     return null
   })
+}
+
+/**
+ * Under critical memory pressure the store keeps only what is on screen or
+ * running (see `backend/cache.ts`). Returns the unsubscribe.
+ */
+export function initChatMemoryPressureListener(): () => void {
+  const onLevel = (level: MemoryPressureLevel) => {
+    if (level === 'critical') useChatStore.getState().shedBackgroundDetail()
+  }
+  void api.getMemoryPressure().then(onLevel).catch((error) =>
+    console.warn('[ChatStore] Could not read memory pressure:', error))
+  return api.onMemoryPressure(({ level }) => onLevel(level))
 }

@@ -1,8 +1,8 @@
 /**
  * apps/runtime/federation -- M2 protocol contract (authority / replication / artifact)
  *
- * The SINGLE source of truth for every M2 control frame shape, capability bit,
- * reject reason and the cross-cutting envelope fields (term / fid / seq). M1
+ * The SINGLE source of truth for every M2 control frame shape, the protocol
+ * version gate, reject reason and the cross-cutting envelope fields (term / fid / seq). M1
  * frames (join / presence / wake / turn-complete / stream-frames / roster) stay
  * exactly as defined in `./types.ts`; this file ADDS the M2 family without
  * touching their wire shape.
@@ -26,21 +26,22 @@ import type { NodeId } from './types'
 
 // ── Protocol version ──
 //
-// `pv` is the monotonic major version. A bump = a non-backward-compatible
-// envelope/handshake change. Backward-compatible additions ride capability bits,
-// never a `pv` bump. Nodes that omit `pv` are treated as version 1.
-//
-// History:
-//   1 — M1 join/presence/wake/relay (no negotiation on the wire).
-//   2 — M2 authority/replication/artifact family.
-//   3 — device-key node-identity handshake (WS auth challenge–response) +
-//       negotiation enforced at join. Pre-3 nodes cannot prove a node identity,
-//       so the minimum supported version is 3: an unprovable node is rejected at
-//       join (VERSION_INCOMPATIBLE) instead of being half-admitted and then
-//       having every federation frame dropped at the transport gate.
+// One protocol, one version (`FEDERATION_PROTOCOL_VERSION`, shared). There is no
+// negotiation: `isSameProtocol` is the single point where two nodes decide
+// whether they can federate. A future compatibility layer belongs here.
 
-export const PROTOCOL_VERSION_CURRENT = 3
-export const PROTOCOL_VERSION_MIN_SUPPORTED = 3
+export { FEDERATION_PROTOCOL_VERSION } from '../../../../shared/federation/protocol-version'
+import { FEDERATION_PROTOCOL_VERSION } from '../../../../shared/federation/protocol-version'
+
+/**
+ * Whether a peer announcing `peerVersion` speaks this node's protocol. An absent
+ * version comes only from in-process links (tests): over a real socket a node
+ * cannot reach this point without the device-key handshake of the current
+ * protocol line.
+ */
+export function isSameProtocol(peerVersion: number | undefined): boolean {
+  return peerVersion === undefined || peerVersion === FEDERATION_PROTOCOL_VERSION
+}
 
 /**
  * Gateway WIRE protocol version (v2-gw), a separate namespace from `pv` above:
@@ -50,83 +51,6 @@ export const PROTOCOL_VERSION_MIN_SUPPORTED = 3
  * explicitly instead of running a silent mixed-version session.
  */
 export const GATEWAY_WIRE_PV = 2
-
-// ── Capability bits ──
-//
-// 64-bit space conceptually; we only allocate the low bits M1/M2 use, which stay
-// inside the JS safe-integer range, so a plain number bitmask is correct here.
-// Meaning is append-only: an allocated bit's meaning is NEVER reused/rewritten.
-
-export const CAP = {
-  /** Baseline control family (join/presence/wake/turn-complete). Always set. */
-  CORE_CONTROL: 1 << 0,
-  /** Activity-stream relay (`stream-frames`). */
-  ACTIVITY_STREAM: 1 << 1,
-  /** Artifact lazy fetch (`artifact-fetch`/`artifact-bytes`). */
-  ARTIFACT_FETCH: 1 << 2,
-  /** Blackboard replication (`blackboard-replicate`/`ack`) — hot-standbys set it. */
-  REPLICATION: 1 << 3,
-  /** Authority election (`authority-claim`/`confirm`) — P2P sets it; central does not. */
-  AUTHORITY_ELECTION: 1 << 4,
-  /** Governance egress (`member-removed`/`office-dissolved` + roster re-broadcast on every mutation). */
-  GOVERNANCE_EGRESS: 1 << 5,
-  /** Owner-served run history pull (`history-request`/`history-response`). */
-  HISTORY_PULL: 1 << 6,
-  /**
-   * Unified feed-log sync for the control plane (`feed-subscribe`/`feed-entries`/
-   * `feed-ack`/`feed-nack`): effectively-once wake / turn-complete delivery over a
-   * persistent per-author outbox. Advertised in DEFAULT_P2P_CAPS; see the mask
-   * comment below for how routing actually behaves.
-   */
-  FEED_SYNC: 1 << 7,
-  /**
-   * Session-transcript feed replication (`feed-advertise` + `session:<key>`
-   * feeds): every member's run transcript is proactively replicated to every
-   * office node (multi-replica, IM-style), so history opens from the local copy
-   * and survives an offline owner. Advertised in DEFAULT_P2P_CAPS; like
-   * FEED_SYNC the bit is informational — an older node simply ignores the
-   * frames (forward-compatible) and stays on the pull path.
-   */
-  SESSION_FEED: 1 << 8,
-} as const
-
-export type CapMask = number
-
-/** All baseline caps a P2P node advertises by default. */
-export const DEFAULT_P2P_CAPS: CapMask =
-  CAP.CORE_CONTROL |
-  CAP.ACTIVITY_STREAM |
-  CAP.ARTIFACT_FETCH |
-  CAP.REPLICATION |
-  CAP.AUTHORITY_ELECTION |
-  CAP.GOVERNANCE_EGRESS |
-  CAP.HISTORY_PULL |
-  // Control-plane feed sync ON by default: a directed wake/turn-complete always
-  // rides the durable, effectively-once feed outbox (the manager's ctrl shim).
-  // The cap bit is advertised but NOT consulted for routing — the only fallback
-  // to the raw send path is a node whose feed store is unavailable.
-  CAP.FEED_SYNC |
-  CAP.SESSION_FEED
-
-export function negotiateCaps(a: CapMask, b: CapMask): CapMask {
-  return (a & b) >>> 0
-}
-
-/** Negotiated protocol version = min(requested current, our current), floored. */
-export function negotiateVersion(
-  requestCurrent: number,
-  requestMin: number,
-  selfCurrent: number = PROTOCOL_VERSION_CURRENT,
-  selfMin: number = PROTOCOL_VERSION_MIN_SUPPORTED
-): number | null {
-  const negotiated = Math.min(requestCurrent, selfCurrent)
-  if (negotiated >= Math.max(requestMin, selfMin)) return negotiated
-  return null
-}
-
-export function hasCap(mask: CapMask, bit: number): boolean {
-  return (mask & bit) === bit
-}
 
 // ── Tenure (authority term) & frame id ──
 
@@ -363,13 +287,19 @@ export interface CatchupResponseFrame {
    * own applied seq) after replay, so a freshness-vetoed election candidate can
    * re-claim with a baseSeq that passes the voters' STALE_LOG check.
    */
-  committedSeq?: number
+  committedSeq: number
   /** Present when mode='snapshot' (opaque board state the standby replace-applies). */
   snapshot?: {
     tasks: unknown[]
     findings: unknown[]
-    /** Optional so a snapshot from a node predating the office record still applies. */
-    activities?: unknown[]
+    /** The recent office record of every open epoch. */
+    activities: unknown[]
+    /**
+     * The office's epochs and periodic checks: a snapshot replaces a log prefix
+     * the standby cannot get, so it carries every office row that prefix created.
+     */
+    epochs: unknown[]
+    checks: unknown[]
     roster: unknown[]
     appliedSeq: number
     term: number
@@ -583,6 +513,18 @@ export interface StopTurnResponseFrame {
   fid: Fid
 }
 
+/**
+ * Viewer → authority: start (or stop) receiving the live stream of one team
+ * session. Soft state, re-sent after every (re)join.
+ */
+export interface StreamSubscribeFrame {
+  kind: 'stream-subscribe' | 'stream-unsubscribe'
+  officeId: string
+  fromNode: NodeId
+  sessionKey: string
+  fid: Fid
+}
+
 /** The union of all M2-added frames (folded into FederationMessage in ./types). */
 export type M2Frame =
   | AuthorityClaimFrame
@@ -602,6 +544,7 @@ export type M2Frame =
   | HistoryResponseFrame
   | StopTurnRequestFrame
   | StopTurnResponseFrame
+  | StreamSubscribeFrame
 
 /** Frame kinds the M2 dispatch layer owns (everything outside the M1 set). */
 export const M2_FRAME_KINDS: ReadonlySet<string> = new Set<M2Frame['kind']>([
@@ -622,6 +565,8 @@ export const M2_FRAME_KINDS: ReadonlySet<string> = new Set<M2Frame['kind']>([
   'history-response',
   'stop-turn-request',
   'stop-turn-response',
+  'stream-subscribe',
+  'stream-unsubscribe',
 ])
 
 export function isM2Frame(frame: { kind: string }): frame is M2Frame {

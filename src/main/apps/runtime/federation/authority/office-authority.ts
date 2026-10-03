@@ -19,7 +19,6 @@
 
 import type { NodeId, FederationMessage } from '../types'
 import type { M2Frame, OfficeStateOp, ReplicationOp } from '../protocol-m2'
-import { DEFAULT_P2P_CAPS } from '../protocol-m2'
 import type { AuthorityStore, FederationStore } from '../../../federation'
 import type { TeamStore, BlackboardTask } from '../../../team'
 import type { BlackboardWriteRecord } from '../../team/blackboard'
@@ -27,7 +26,7 @@ import { SELF_NODE_ID } from '../../../../../shared/apps/team-types'
 import { createTermState, type TermState } from './term-state'
 import { createReconciler, type OwnerStatus } from './reconcile'
 import { createHandover, type Handover } from './handover'
-import { createReplication, type Replication, type MemberWriteRecord } from './replication'
+import { createReplication, type Replication, type MemberWriteRecord, type ReplicaAppliedBatch } from './replication'
 import { createScopeGate, type ScopeGate } from './scope-gate'
 import { createArtifactService, type ArtifactService } from './artifact-fetch'
 import { createHistoryService, type HistoryService, type ReadMemberHistory } from './history-fetch'
@@ -130,11 +129,10 @@ export interface OfficeAuthorityDeps {
 
   // ── replication observability ──
   /**
-   * Fired after a hot-standby applies a replicated task/finding to its replica
-   * store, so the renderer refreshes tasks/findings live. Not fired for
-   * roster-only ops (no blackboard row changes). Passed through to replication.
+   * Fired once per replica apply pass (live frame, catch-up page, or snapshot)
+   * with the board rows it changed. Passed through to replication.
    */
-  onReplicaApplied?: (info: { officeId: string; op: string; taskId?: string }) => void
+  onReplicaApplied?: (officeId: string, applied: ReplicaAppliedBatch) => void
 
   // ── test seams ──
   schedule?: (ms: number, fn: () => void) => () => void
@@ -148,8 +146,8 @@ export interface OfficeAuthority {
   onNodePresence: (nodeId: NodeId, status: 'online' | 'suspect' | 'offline') => void
   /** Authority capture: the global onBlackboardWrite routes a hosted office's write here. */
   captureLocalWrite: (record: BlackboardWriteRecord) => void
-  /** join-grant enrichment (current tenure + effective caps). */
-  getJoinGrantExtras: () => { term: number; caps: number }
+  /** join-grant enrichment (current tenure). */
+  getJoinGrantExtras: () => { term: number }
   /**
    * AUTHORITY: replicate a node admission through the committed blackboard log
    * (single-writer), so every replica's office_nodes ledger — the election
@@ -243,6 +241,7 @@ export function createOfficeAuthority(deps: OfficeAuthorityDeps): OfficeAuthorit
     // Known standbys in the last-known roster (excl. self), reachability-blind,
     // so a partitioned authority does NOT optimistically commit unreplicated writes.
     getKnownStandbyCount: () => Math.max(0, getLastKnownRoster().filter((n) => n !== selfNodeId).length),
+    getAuthorityNodeId: () => termState.getAuthorityNodeId(),
     applyMemberWrite: deps.applyMemberWrite,
     applyOfficeState: deps.applyOfficeState,
     admitMemberWrite: (frame) => {
@@ -288,7 +287,7 @@ export function createOfficeAuthority(deps: OfficeAuthorityDeps): OfficeAuthorit
     // office_nodes ledger (membership + contact card) and align rosterEpoch.
     applyRosterChange: (op, payload) => applyRosterChange(op, payload),
     onReplicaApplied: deps.onReplicaApplied
-      ? (info) => deps.onReplicaApplied!({ officeId, op: info.op, taskId: info.taskId })
+      ? (applied) => deps.onReplicaApplied!(officeId, applied)
       : undefined,
     // Positive-ack a member's own shadow write once the authority replicates it
     // back, so the unconfirmed-rollback backstop only fires for genuinely lost writes.
@@ -497,9 +496,13 @@ export function createOfficeAuthority(deps: OfficeAuthorityDeps): OfficeAuthorit
         break
       case 'catchup-request':
       case 'catchup-response':
-        // Gap-fill replay between a standby and the authority (both directions
-        // owned by replication). A response may carry a newer tenure → re-align.
-        if (frame.kind === 'catchup-response') handover.observeFrameTerm(from, frame.term)
+        // Gap-fill replay (both directions owned by replication). A response
+        // carries its sender's tenure, but only the believed authority's response
+        // says who holds it: a voter a vetoed candidate pulls from may already know
+        // a newer term won by someone else, and must not be taken for its winner.
+        if (frame.kind === 'catchup-response' && from === termState.getAuthorityNodeId()) {
+          handover.observeFrameTerm(from, frame.term)
+        }
         replication.handleM2Frame(from, frame)
         break
       case 'artifact-fetch':
@@ -532,7 +535,7 @@ export function createOfficeAuthority(deps: OfficeAuthorityDeps): OfficeAuthorit
     handle,
     onNodePresence: (nodeId, status) => handover.onNodePresence(nodeId, status),
     captureLocalWrite: (record) => replication.captureLocalWrite(record),
-    getJoinGrantExtras: () => ({ term: termState.getTerm(), caps: DEFAULT_P2P_CAPS }),
+    getJoinGrantExtras: () => ({ term: termState.getTerm() }),
     replicateNodeAdmitted,
     replicateNodeLeft,
     scopeGate,

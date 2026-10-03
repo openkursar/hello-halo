@@ -61,15 +61,63 @@ Implementation in `index.ts`:
   Squirrel only swaps the bundle after the window closes — so that event sets
   the flag too. Any future quit-like path must do the same or it hangs here.
 
-**`shouldKeepAlive()` role**: No longer gates process survival. Used solely to
-show a confirmation dialog when the user clicks "Quit Halo" from the tray menu
-while background tasks are active.
+**`shouldKeepAlive()` role**: on Windows it gates process survival when the last
+window goes away *without* a quit (renderer recovery destroyed it): with any
+reason registered, and a tray icon actually created (`hasTray()`), the process
+stays up — digital humans and background tasks keep running, and the window
+comes back from the tray or a second launch. A real quit (`isAppQuitting`)
+always proceeds; the tray "Quit Halo" item still asks for confirmation while
+reasons are active. On **Linux** closing the last window quits, as before: there
+is no close-to-tray, and a created tray icon may still be invisible (GNOME
+without a status-icon extension), so staying alive would leave an unreachable
+process. The decision is `decideAllWindowsClosed` in `services/lifecycle.ts`.
 
 Window restoration paths (macOS/Windows):
 - Tray "Show Halo" → `showMainWindow()`
 - macOS dock click → `app.on('activate')`
 - Windows tray click → `showMainWindow()`
 - Second instance launch → `app.on('second-instance')`
+
+### 2.2.1 Tray notice
+
+`setTrayNotice(notice | null)` pins a condition the user must act on at the top of
+the tray menu (label + one action) and into the tooltip, e.g. "Halo window
+stopped" → "Restart Halo" after renderer recovery halts. It may be set before the
+tray exists; the tray applies it on creation. The module stays business-free: the
+caller owns the text and the action.
+
+### 2.2.2 Memory pressure (`memory-pressure.ts`)
+
+A process-wide level `normal | low | critical` consumed by every tier that holds
+rebuildable memory (session budget, renderer caches, hidden canvas tabs). The
+module only classifies; it never measures. Readings are pushed by the health
+resource sampler (`services/health/resource-sampler.ts`), the single producer of
+resource numbers — the sampler imports this module (downward), so no seam exists.
+
+Triggers are memory only — never platform or VDI detection:
+
+| level | available system memory | or main-window renderer memory |
+|---|---|---|
+| low | < 15 % of total | > 1 GB |
+| critical | < 7 % of total | > 1.5 GB |
+
+"Available" = memory the OS can hand out without swapping:
+
+| platform | source | why |
+|---|---|---|
+| macOS | `sysctl -n kern.memorystatus_level` (async `execFile`, 5 s timeout, at sampling cadence only) | the kernel's free %, as `memory_pressure` reports; `os.freemem()` counts only free pages and reads single digits on a healthy Mac |
+| Linux | `os.freemem()` | libuv reads `MemAvailable` |
+| Windows | `os.freemem()` | `ullAvailPhys` |
+
+If the macOS read fails the sample falls back to `os.freemem()` (source
+`fallback`, logged once per process); a fallback reading raises the level only
+after three consecutive fallback samples. Escalation is immediate; recovery
+needs three consecutive calmer samples and settles on the highest level among
+them. Sampling runs every 120 s, every 30 s while the level is above normal.
+
+Every level change is logged once with its numbers and forwarded to the window
+and remote clients as `app:memory-pressure` `{ level }` (health orchestrator);
+the current level is queried with `health:get-memory-pressure`.
 
 ### 2.3 V1 Single Shared BrowserWindow + Task Queue
 
@@ -164,10 +212,12 @@ type Unsubscribe = () => void
 interface BackgroundService {
   // Tray
   initTray(): void
+  setTrayNotice(notice: TrayNotice | null): void
+  hasTray(): boolean
 
   // Keep-alive
   shouldKeepAlive(): boolean
-  registerKeepAliveReason(reason: string): Unsubscribe
+  registerKeepAliveReason(reason: string, options?: { ttlMs?: number }): Unsubscribe
 
   // Daemon browser
   getDaemonBrowserWindow(url: string): Promise<BrowserWindow>
@@ -194,6 +244,7 @@ src/main/platform/background/
   keep-alive.ts         -- KeepAliveManager (reason registration/pruning)
   tray.ts               -- TrayManager (icon, context menu, status display)
   daemon-browser.ts     -- DaemonBrowserManager (shared window, queue, partition)
+  memory-pressure.ts    -- memory pressure level (classification + hysteresis)
   partition.ts          -- extractPartition(url) utility
 
 tests/unit/platform/background/

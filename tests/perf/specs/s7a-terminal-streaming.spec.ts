@@ -15,6 +15,7 @@ import {
   launchElectronApp
 } from '../../e2e/fixtures/electron'
 import { navigateToChat } from '../../e2e/fixtures/helpers'
+import { openFromHeaderMenu } from '../lib/open-artifact'
 import { installRenderObserversNow, resetRenderObservers, readRenderMetrics } from '../lib/render-metrics'
 import { CdpMetricsCollector, type CdpSnapshot } from '../lib/cdp-metrics'
 import { ProcessMetricsSampler } from '../lib/process-metrics'
@@ -45,12 +46,7 @@ test('S7a terminal high-volume output', async () => {
     const throttle = currentThrottle()
     await cdp.setCpuThrottlingRate(throttle)
 
-    // UI locale isn't fixed by test config (observed both English and
-    // Chinese renders across runs) — match both, same convention as the
-    // existing e2e helpers (tests/e2e/fixtures/helpers.ts).
-    const openButton = window.getByTitle(/Open terminal|打开终端/).first()
-    await openButton.waitFor({ state: 'visible', timeout: 15000 })
-    await openButton.click()
+    await openFromHeaderMenu(window, 'Open terminal')
 
     // xterm mounts into a plain container (TerminalViewer.tsx, no
     // data-testid) — wait for the canvas it draws into as the "ready" signal.

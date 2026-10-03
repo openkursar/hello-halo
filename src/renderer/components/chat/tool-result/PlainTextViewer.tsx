@@ -12,7 +12,7 @@ import { useState, useCallback, useMemo } from 'react'
 import { Copy, Check, ChevronDown, ChevronUp, FileText } from 'lucide-react'
 import { useTranslation } from '../../../i18n'
 import type { ViewerBaseProps } from './types'
-import { truncateToLines } from './detection'
+import { truncateToLines, PREVIEW_MAX_CHARS } from './detection'
 
 const PREVIEW_LINES = 6
 
@@ -27,7 +27,7 @@ export function PlainTextViewer({
 
   // Parse content for preview
   const { content: previewContent, totalLines, truncated } = useMemo(() => {
-    return truncateToLines(output, PREVIEW_LINES)
+    return truncateToLines(output, PREVIEW_LINES, PREVIEW_MAX_CHARS)
   }, [output])
 
   const displayContent = isExpanded ? output : previewContent

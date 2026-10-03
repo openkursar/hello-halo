@@ -15,7 +15,7 @@ import { api } from '../../api'
 import { useTlonStore } from '../../stores/tlon.store'
 import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 import { IngestProgress } from './IngestProgress'
-import { useCanvasStore } from '../../stores/canvas.store'
+import { useCanvasActions } from '../../hooks/useCanvasLifecycle'
 import {
   FileText,
   CheckCircle2,
@@ -258,7 +258,7 @@ function FileRow({
 }) {
   const { t } = useTranslation()
   const reason = stateReason(file, t)
-  const { openFile } = useCanvasStore()
+  const { openFile } = useCanvasActions()
   const isLearned = file.state === 'learned'
 
   const handleClick = () => {

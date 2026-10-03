@@ -69,6 +69,8 @@ import { registerToolset } from '../../services/agent/toolsets/registry'
 import { handleMcpAppsChange } from '../../services/agent/session-manager'
 import { handleMcpAppsChangeForStatus } from '../../services/agent/mcp-probe'
 import type { AppRuntimeService } from './types'
+import { initSessionBudget, disposeSessionBudget } from './session-budget'
+import { releaseSpaceWatcher, retainSpaceWatcher } from '../../services/watcher-host.service'
 
 // Re-export types for consumers
 export type {
@@ -143,6 +145,9 @@ export { dispatchInboundMessage } from './dispatch-inbound'
 
 // Re-export intentional-stop marker (called by IPC/HTTP stop handlers, read by app-chat.ts)
 export { markIntentionalStop } from './intentional-stop'
+
+// Resident engine-session budget (team epoch seal releases member sessions)
+export { releaseTeamEpochSessions } from './session-budget'
 
 // Re-export IM permission registry
 export {
@@ -247,6 +252,9 @@ export async function initAppRuntime(
   // the MCP-apps-change event from this side.
   registerAppBridge({ getAppManager, createHaloAppsMcpServer, onMcpAppsChange })
   onMcpAppsChange(handleMcpAppsChange)
+
+  // Resident engine sessions are budgeted from here for every chat entry.
+  initSessionBudget()
   // Team collaboration is an opt-in toolset, not an always-on server: its tool
   // surface (and usage guide) enters a space conversation only when the user
   // flips the switch, the same shape as ai-browser / ai-terminal. Registered
@@ -378,6 +386,17 @@ export async function initAppRuntime(
       const space = getSpace(spaceId)
       return space?.path ?? null
     },
+    fileWatch: {
+      retain: (spaceId: string, holder: string) => {
+        const space = getSpace(spaceId)
+        if (!space) {
+          console.warn(`[Runtime] File subscription on missing space ${spaceId} (${holder}); not watching`)
+          return
+        }
+        retainSpaceWatcher(spaceId, space.workingDir || space.path, holder)
+      },
+      release: releaseSpaceWatcher,
+    },
     imSessionRegistry: registry,
     getChannelAdapter: (channel: string) => {
       // For backward compatibility, look up by instance ID first (new path)
@@ -507,6 +526,8 @@ export function getEventRouter(): EventRouter | null {
  */
 export async function shutdownAppRuntime(): Promise<void> {
   console.log('[Runtime] Shutting down App Runtime...')
+
+  disposeSessionBudget()
 
   if (runtimeService) {
     await runtimeService.deactivateAll()

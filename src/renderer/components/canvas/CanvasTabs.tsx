@@ -26,7 +26,7 @@
 import { useState, useRef, useCallback, useEffect, forwardRef } from 'react'
 import { X, Loader2, AlertCircle, Plus, XCircle, Maximize2, Minimize2, RefreshCw, Target } from 'lucide-react'
 import { type TabState } from '../../services/canvas-lifecycle'
-import { useCanvasLifecycle } from '../../hooks/useCanvasLifecycle'
+import { useActiveTabId, useCanvasActions, useTabList } from '../../hooks/useCanvasLifecycle'
 import { useCanvasStore } from '../../stores/canvas.store'
 import { useWindowMaximize } from './viewers/useWindowMaximize'
 import { FileIcon } from '../icons/ToolIcons'
@@ -36,7 +36,7 @@ import { getBrowserHomepage } from '../../utils/browser-homepage'
 import { trackToolOpen } from '../../services/tool-session-telemetry'
 
 interface CanvasTabsProps {
-  tabs: TabState[]
+  tabs: readonly TabState[]
   activeTabId: string | null
   onTabClick: (tabId: string) => void
   onTabClose: (tabId: string) => void
@@ -59,7 +59,7 @@ export function CanvasTabs({
   onToggleMaximize,
 }: CanvasTabsProps) {
   const { t } = useTranslation()
-  const { reorderTabs } = useCanvasLifecycle()
+  const { reorderTabs } = useCanvasActions()
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null)
   const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null)
   const [closingTabIds, setClosingTabIds] = useState<Set<string>>(new Set())
@@ -68,7 +68,7 @@ export function CanvasTabs({
   const tabListRef = useRef<HTMLDivElement>(null)
   const tabRefs = useRef<Map<string, HTMLDivElement>>(new Map())
   // Ref to store latest tabs for stable callbacks (avoids event listener recreation)
-  const tabsRef = useRef<TabState[]>(tabs)
+  const tabsRef = useRef<readonly TabState[]>(tabs)
   tabsRef.current = tabs
 
   // Track new tabs for appear animation and auto-scroll
@@ -475,7 +475,9 @@ const TabItem = forwardRef<HTMLDivElement, TabItemProps>(function TabItem({
  */
 export function CanvasTabBar() {
   const { t } = useTranslation()
-  const { tabs, activeTabId, switchTab, closeTab, closeAllTabs, refreshTab, openUrl } = useCanvasLifecycle()
+  const tabs = useTabList()
+  const activeTabId = useActiveTabId()
+  const { switchTab, closeTab, closeAllTabs, refreshTab, openUrl } = useCanvasActions()
   const isCanvasMaximized = useCanvasStore(state => state.isMaximized)
   const toggleCanvasMaximized = useCanvasStore(state => state.toggleMaximized)
   const { isMaximized: isWindowMaximized, toggleMaximize: toggleWindowMaximize } = useWindowMaximize()

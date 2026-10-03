@@ -397,7 +397,7 @@ export const appsApi = {
   // native default session.
   appChatSend: async (request: { appId: string; spaceId: string; message: string; images?: ImageAttachment[]; thinkingEnabled?: boolean; canvasContext?: CanvasContext; conversationId?: string; teamContext?: unknown }): Promise<ApiResponse<{ conversationId: string }>> => {
     // Subscribe to agent events so remote/Capacitor clients receive streaming updates.
-    // The view also subscribes on mount (via useRemoteSubscription), but the API-level
+    // The view also subscribes on mount (via useConversationDetail), but the API-level
     // subscription mirrors sendMessage's pattern and ensures coverage if the API is
     // called before the view mounts (e.g. programmatic triggers).
     if (!isElectron()) {

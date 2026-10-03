@@ -7,21 +7,18 @@ import (
 	"github.com/openkursar/hello-halo/gateway/internal/wire"
 )
 
-// Per-plane outbound queue capacities (§5.3).
-var planeCapacity = [wire.PlaneCount]int{
-	wire.PlaneControl:  1024,
-	wire.PlaneStream:   256,
-	wire.PlaneArtifact: 32,
-}
+// Per-plane outbound queue capacities, generated from the shared plane list.
+var planeCapacity = wire.PlaneCapacityFrames
 
-// PlaneQueue is the per-downstream-session outbound queue: three planes
-// drained in strict control -> stream -> artifact priority, dropping the
-// oldest frame within a plane on overflow. Overflow in one plane can never
+// PlaneQueue is the per-downstream-session outbound queue: one queue per plane,
+// drained in strict plane order, dropping the oldest frame within a plane when
+// it exceeds its frame count or byte budget. Overflow in one plane can never
 // crowd out another.
 type PlaneQueue struct {
 	mu      sync.Mutex
 	cond    *sync.Cond
 	queues  [wire.PlaneCount][][]byte
+	bytes   [wire.PlaneCount]int
 	closed  bool
 	metrics *metrics.Metrics
 }
@@ -45,11 +42,14 @@ func (q *PlaneQueue) Push(plane wire.Plane, data []byte) bool {
 		return false
 	}
 	buf := q.queues[plane]
-	if len(buf) >= planeCapacity[plane] {
+	budget := wire.PlaneCapacityBytes[plane]
+	for len(buf) > 0 && (len(buf) >= planeCapacity[plane] || (budget > 0 && q.bytes[plane]+len(data) > budget)) {
+		q.bytes[plane] -= len(buf[0])
 		copy(buf, buf[1:])
 		buf = buf[:len(buf)-1]
 		q.metrics.FramesDroppedTotal[plane].Add(1)
 	}
+	q.bytes[plane] += len(data)
 	q.queues[plane] = append(buf, data)
 	q.cond.Signal()
 	return true
@@ -66,6 +66,7 @@ func (q *PlaneQueue) Pop() ([]byte, bool) {
 			if buf := q.queues[p]; len(buf) > 0 {
 				data := buf[0]
 				q.queues[p] = buf[1:]
+				q.bytes[p] -= len(data)
 				return data, true
 			}
 		}
@@ -83,6 +84,7 @@ func (q *PlaneQueue) Close() {
 	q.closed = true
 	for p := range q.queues {
 		q.queues[p] = nil
+		q.bytes[p] = 0
 	}
 	q.mu.Unlock()
 	q.cond.Broadcast()

@@ -19,6 +19,7 @@ import {
   unsubscribeFromConversation,
 } from './_shared'
 import { enqueueReport } from './analytics-batch'
+import { isConversationDetailRetained, retainConversationDetail } from './conversation-visibility'
 import type { GoalUpdatedEvent } from '../../shared/types/goal'
 import type { ApiRetryEvent } from '../../shared/types/api-retry'
 
@@ -79,6 +80,10 @@ export const eventsApi = {
   subscribeToConversation,
   unsubscribeFromConversation,
   onWsStateChange,
+
+  // ===== Conversation detail visibility (desktop + remote) =====
+  retainConversationDetail,
+  isConversationDetailRetained,
   onEvent,
   sendWsMessage,
 

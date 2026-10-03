@@ -158,6 +158,7 @@ export interface AgentConfig {
     maxForwardDepth?: number;
   };
   teamMaxConcurrentTurns?: number; // Cap on team member turns running at once on this machine
+  maxResidentSessions?: number; // Most engine sessions kept resident at once (halved under memory pressure)
 }
 
 // Schedule value type (re-exported by components/apps/schedule-utils)
@@ -682,7 +683,6 @@ export interface ArtifactChangeEvent {
 export interface ArtifactTreeUpdateEvent {
   spaceId: string;
   updatedDirs: Array<{ dirPath: string; children: ArtifactTreeNode[] }>;
-  changes: ArtifactChangeEvent[];
 }
 
 // ============================================

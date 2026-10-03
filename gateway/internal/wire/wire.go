@@ -24,8 +24,11 @@ type Envelope struct {
 	// (presence-update uses nodeId; stream-frames/turn-complete carry none)
 	// would otherwise lose their origin across the relay. The host treats it
 	// as authoritative — the gateway already asserted it (§9.1/§9.2).
-	From    string          `json:"from,omitempty"`
-	Error   string          `json:"error,omitempty"`
+	From  string `json:"from,omitempty"`
+	Error string `json:"error,omitempty"`
+	// Plane is the sender's outbound plane for a federation frame (optional;
+	// absent from older senders, which the gateway classifies by kind).
+	Plane   string          `json:"plane,omitempty"`
 	Payload json.RawMessage `json:"payload,omitempty"`
 }
 
@@ -165,26 +168,16 @@ func IsElectionKind(kind string) bool {
 	return ok
 }
 
-// Plane is one of the three outbound priority planes (§5.3).
-type Plane int
-
-const (
-	PlaneControl Plane = iota
-	PlaneStream
-	PlaneArtifact
-	PlaneCount
-)
-
-func (p Plane) String() string {
-	switch p {
-	case PlaneControl:
-		return "control"
-	case PlaneStream:
-		return "stream"
-	case PlaneArtifact:
-		return "artifact"
+// ResolvePlane picks a frame's outbound plane: the sender's `plane` hint when it
+// names a known plane (a session-feed frame is told apart from a ctrl-feed one
+// only by its payload, which the gateway does not read), else by kind.
+func ResolvePlane(hint, kind string) Plane {
+	if hint != "" {
+		if p, ok := PlaneByName(hint); ok {
+			return p
+		}
 	}
-	return "unknown"
+	return ClassifyPlane(kind)
 }
 
 // ClassifyPlane maps a federation frame kind to its outbound plane.

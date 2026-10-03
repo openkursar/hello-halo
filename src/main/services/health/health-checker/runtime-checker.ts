@@ -14,6 +14,7 @@ import { getPlatformOps } from '../process-guardian/platform'
 import { getRouterInfo } from '../../../openai-compat-router'
 import { getServerInfo } from '../../../http'
 import { getRecentEvents, getTotalErrorCount } from './event-listener'
+import { formatResourceSample, getLatestResourceSample } from '../resource-sampler'
 
 // Memory threshold for warning (500MB)
 const MEMORY_WARNING_THRESHOLD_MB = 500
@@ -134,10 +135,11 @@ async function performFallbackCheck(): Promise<void> {
     // ========================================
     // Step 4: Read Memory Usage (passive, no I/O)
     // ========================================
-    const memUsage = process.memoryUsage()
-    const heapUsedMB = memUsage.heapUsed / (1024 * 1024)
-    const heapTotalMB = memUsage.heapTotal / (1024 * 1024)
-    const rssMB = memUsage.rss / (1024 * 1024)
+    const sample = getLatestResourceSample()
+    const memUsage = sample ? null : process.memoryUsage()
+    const heapUsedMB = sample ? sample.main.heapUsedMb : memUsage!.heapUsed / (1024 * 1024)
+    const heapTotalMB = sample ? sample.main.heapTotalMb : memUsage!.heapTotal / (1024 * 1024)
+    const rssMB = sample ? sample.main.rssMb : memUsage!.rss / (1024 * 1024)
     if (heapUsedMB > MEMORY_CRITICAL_THRESHOLD_MB) {
       issues.push(`Critical memory usage: ${heapUsedMB.toFixed(0)}MB`)
     } else if (heapUsedMB > MEMORY_WARNING_THRESHOLD_MB) {
@@ -170,7 +172,8 @@ async function performFallbackCheck(): Promise<void> {
     // Always log memory numbers (heap used/total, rss) so the trajectory toward an
     // OOM is visible across cycles, and the reasons behind a non-healthy status —
     // otherwise a status that stays 'degraded' for hours is logged without any cause.
-    const memInfo = `heap=${heapUsedMB.toFixed(0)}/${heapTotalMB.toFixed(0)}MB rss=${rssMB.toFixed(0)}MB procs=${registryStats.currentProcesses}`
+    const memInfo = `heap=${heapUsedMB.toFixed(0)}/${heapTotalMB.toFixed(0)}MB rss=${rssMB.toFixed(0)}MB procs=${registryStats.currentProcesses}` +
+      (sample ? ` ${formatResourceSample(sample)}` : '')
     const reasonInfo = issues.length > 0 ? `; reasons: ${issues.join('; ')}` : ''
     console.log(`[Health][Runtime] Passive check complete: ${newStatus} (${memInfo}${reasonInfo})`)
   } catch (error) {
@@ -368,8 +371,7 @@ async function doImmediateCheck(): Promise<ImmediateCheckResult> {
     // ========================================
     // Step 6: Memory Check
     // ========================================
-    const memUsage = process.memoryUsage()
-    const heapUsedMB = memUsage.heapUsed / (1024 * 1024)
+    const heapUsedMB = getLatestResourceSample()?.main.heapUsedMb ?? process.memoryUsage().heapUsed / (1024 * 1024)
     if (heapUsedMB > MEMORY_WARNING_THRESHOLD_MB) {
       issues.push(`High memory usage: ${heapUsedMB.toFixed(0)}MB`)
     }

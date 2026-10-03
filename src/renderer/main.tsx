@@ -9,9 +9,11 @@
 // In remote browser and Capacitor modes, native console is used since there's no IPC transport.
 // Uses the same detection pattern as src/renderer/api/transport.ts:isElectron()
 // Non-blocking: don't use top-level await to avoid blocking module graph in Vite dev mode
+// Only warn/error reach main.log: every forwarded line is an IPC message plus a
+// main-process write, so info/debug stay in DevTools.
 if (typeof window !== 'undefined' && 'halo' in window) {
   import('electron-log/renderer.js').then(({ default: log }) => {
-    Object.assign(console, log.functions)
+    Object.assign(console, { warn: log.functions.warn, error: log.functions.error })
   })
 }
 

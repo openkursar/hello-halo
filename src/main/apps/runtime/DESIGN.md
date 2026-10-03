@@ -168,6 +168,35 @@ lane; accepted answer continuations take the next free opportunity before new tr
 - No priority system in V1 (FIFO queue).
 - The AI Browser lane (maxConcurrentAIBrowserRuns) is deferred to V2.
 
+### 2.6a Session Budget: Resident Engine Sessions Are Budgeted Here
+
+**Decision**: every resident chat session (space chat, digital-human chat, IM,
+team member) keeps one engine process alive between turns, so their number is
+the first resource to run out as digital humans multiply. `session-budget.ts`
+owns the policy: limit = `agent.maxResidentSessions` (Settings → Advanced,
+clamped 2–50, default 10 — `shared/constants/session-budget.ts`), halved while
+memory pressure (`platform/background/memory-pressure`) is above normal. The
+limit is pushed down to the engine (`setResidentSessionLimit`), which enforces it
+before creating any NEW session by closing least-recently-used idle ones; the
+policy re-pushes on config and pressure changes and trims immediately when the
+limit drops. Automation runs create transient sessions outside that path, so
+`execute.ts` calls `admitTransientSession()` first. An epoch seal releases that
+epoch's idle member sessions (`releaseTeamEpochSessions`).
+
+**Never refuses**: a busy session is never evicted; if all are busy the new one
+goes over budget (warned once per crossing). An evicted conversation resumes from
+its stored session id on its next turn — the same path as the idle sweep.
+
+**Runs in flight** are indexed by app (`running-runs.ts`) — status queries are
+O(1), not a prefix scan — and each app with a run in flight holds a keep-alive
+reason (`automation-run:<appId>`), so a manual run of an inactive app survives
+the window closing.
+
+**File subscriptions hold their space's watcher**: watchers are reference-counted
+(`services/watcher-host`), so activation retains the App's space
+(`AppRuntimeDeps.fileWatch`, holder `automation:<appId>`) while it has a `file`
+subscription and releases it on deactivate or when the subscription goes away.
+
 ### 2.7 Activation Lifecycle
 
 **Decision**: `activate(appId)` is idempotent. It reads the App's subscriptions,
@@ -568,8 +597,11 @@ inbound message; rides into whatever history the engine keeps).
 - **Quote**: captured by the runtime from the **raw inbound body** (assembled
   text carries runtime tags and, after a relay was consumed, the previous
   hop's block), never copied by the AI.
-- **No TTL**: staleness is conveyed by the `at` timestamp and judged by the
-  model. Bounded instead: per-target cap (10) with oldest-event collapse.
+- **No per-event TTL**: staleness is conveyed by the `at` timestamp and judged
+  by the model. Bounded instead: per-target cap (10) with oldest-event
+  collapse, and a target whose newest event is older than 90 days is dropped
+  (logged) — the number of targets is otherwise unbounded (chats that never
+  speak again).
 - **Durability**: `~/.halo/im-pending-relays.json`, versioned (unknown
   versions rejected, never guessed), write-behind (im-session-registry
   pattern) plus a synchronous flush at shutdown. Survives restarts —
@@ -683,15 +715,26 @@ JSONL storage is unchanged (append-only, written by `session-store`).
   (`readSessionMessages`, used by IM, team-member and run-detail views) is
   unchanged. On a 13–16 MB team-member transcript the first 50-message page is
   ~0.13 MB over IPC versus 2–5 MB for the full read.
-- **Parse cache** (`platform/file-cache`, `createStampedLru`): the converted
-  messages of a file are kept while its stamp (size + mtime + inode) is
-  unchanged, LRU bounded to 8 files / 32 MB of file bytes (the parsed form costs
-  2–3x that on the heap). Appends change the stamp, so a growing file re-parses
-  on its next read (cold parse of a 16 MB file ≈ 100–160 ms; a warm page is
-  sub-millisecond). Callers get a copy of the array; the message objects in it
-  are shared with the cache and must be treated as read-only. Global search
-  over many sessions cycles this cache, so the open chat may re-parse once
-  afterwards.
+- **Parse cache** (`platform/file-cache`, `createStampedLru`): the parsed
+  events and converted messages of a file are kept while its stamp (size +
+  mtime + inode) is unchanged, LRU bounded to 8 files / 32 MB of file bytes (the
+  parsed form costs 2–3x that on the heap). An append changes the stamp, and the
+  next read parses only the bytes appended since (the cache hands the previous
+  parse to the reader) before re-converting. Files are read in 1 MB chunks —
+  never as one string. Callers get a copy of the array; the message objects in
+  it are shared with the cache and must be treated as read-only.
+- **Large files** (> 32 MB, `FULL_PARSE_MAX_BYTES`) are never parsed whole for
+  paged reads and never cached whole (the cache refuses an entry heavier than its
+  budget). A sparse line index (`session-file-reader.ts`: a checkpoint per MB,
+  persisted as `<run>.lineidx.json` and extended only by appended bytes) maps a
+  message id (`session-msg-<line>`) to its byte offset, so a page reads one
+  8 MB window: the newest window for the first page, the window ending at
+  `before` for older ones (its first message may be a partial turn and is
+  dropped; the next older window reads it whole), and a thought load reads from
+  the message's own line. Message ids equal a whole parse; `total` then counts
+  the window, and thought ids are per read. A whole-transcript caller should pass
+  `limit` (newest N from the last window); an unlimited whole read of a large file
+  still works but is uncached and logged once.
 - **Codec** (`session-transcript.ts`): the event → message conversion is pure
   and lives apart from the file I/O and the cache in `session-store.ts`.
 - **Provenance.** A user-side record may carry `_source`

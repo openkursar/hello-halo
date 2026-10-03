@@ -41,6 +41,7 @@ import {
   resetDialogSuppression
 } from './recovery-manager'
 import { sendToRenderer } from '../../foundation/window.service'
+import { startResourceSampling, stopResourceSampling } from './resource-sampler'
 
 // ============================================
 // State
@@ -125,6 +126,10 @@ export async function initializeHealthSystem(): Promise<void> {
 
     // Start fallback polling (runtime checks only)
     startFallbackPolling(handleStatusChange)
+
+    // Resource sampling: the single source of memory numbers and memory pressure
+    // (level changes reach clients through ipc/health.ts)
+    startResourceSampling()
 
     systemState.isPollingActive = true
 
@@ -346,7 +351,7 @@ export function onProcessExit(processId: string, code: number | null): void {
 /**
  * Handle renderer crash (called from main process)
  */
-export function onRendererCrash(details: { reason: string }): void {
+export function onRendererCrash(details: { reason: string; exitCode?: number }): void {
   emitRendererCrash(details.reason)
 }
 
@@ -370,6 +375,7 @@ export function shutdownHealthSystem(): void {
   try {
     // Stop polling
     stopFallbackPolling()
+    stopResourceSampling()
 
     // Mark clean exit
     markCleanExit()

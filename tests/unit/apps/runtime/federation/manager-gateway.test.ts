@@ -32,6 +32,8 @@ import type {
   SerializedWakeRequest,
 } from '../../../../../src/main/apps/runtime/federation/types'
 import { startFakeGateway, waitFor, type FakeGateway } from './_fake-gateway'
+import { DEFAULT_OFFICE_SCOPE } from '../../../../../src/main/apps/federation/types'
+import { buildTeamSessionKey } from '../../../../../src/shared/apps/im-keys'
 
 const OFFICE = 'office-gwm-1'
 const NODE_A = 'node-a-host'
@@ -71,7 +73,7 @@ describe('FederationManager gateway routing (fake gateway over real ws)', () => 
       hostListOfficeClients: () => [C_CLIENT_ID],
       federationStore,
       teamStore,
-      verifyCredential: (token) => (token === VALID_TOKEN ? { officeId: OFFICE } : null),
+      verifyCredential: (token) => (token === VALID_TOKEN ? { officeId: OFFICE, scope: DEFAULT_OFFICE_SCOPE } : null),
       getLocalNodeId: () => NODE_A,
       getGatewayUrl: () => gateway.url,
       makeAuthProof: (nonce) => ({ method: 'device-key', identityId: NODE_A, challenge: nonce }),
@@ -247,7 +249,7 @@ describe('FederationManager gateway routing (fake gateway over real ws)', () => 
       hostListOfficeClients: () => [],
       federationStore,
       teamStore,
-      verifyCredential: (token) => (token === VALID_TOKEN ? { officeId: 'office-late-gw' } : null),
+      verifyCredential: (token) => (token === VALID_TOKEN ? { officeId: 'office-late-gw', scope: DEFAULT_OFFICE_SCOPE } : null),
       getLocalNodeId: () => NODE_A,
       getGatewayUrl: () => configuredUrl,
       makeAuthProof: (nonce) => ({ method: 'device-key', identityId: NODE_A, challenge: nonce }),
@@ -291,5 +293,65 @@ describe('FederationManager gateway routing (fake gateway over real ws)', () => 
     expect(payload.officeId).toBe(joinerOffice)
 
     manager.leaveOffice(joinerOffice)
+  })
+
+  describe('live batches relayed through the gateway', () => {
+    const sessionOf = (appId: string) => buildTeamSessionKey(appId, OFFICE, 'epoch-1')
+    const batch = (appId: string) => ({
+      kind: 'stream-frames', officeId: OFFICE, sessionKey: sessionOf(appId), baseSeq: 1, originRun: 'r',
+      frames: [
+        { seq: 1, kind: 'milestone', channel: 'agent:turn-start', spaceId: 's', payload: {} },
+        { seq: 2, kind: 'milestone', channel: 'agent:complete', spaceId: 's', payload: {} },
+      ],
+    })
+    const streamsToGateway = (to: string) =>
+      gateway.hostFrames.filter((f) => f.to === to && (f.payload as { kind?: string }).kind === 'stream-frames')
+    const streamsToLan = () => localSent.filter((s) => s.clientId === C_CLIENT_ID && s.frame.kind === 'stream-frames')
+
+    async function admitBandC(): Promise<void> {
+      relayJoinFromB()
+      await waitFor(() => federationStore.getNode(OFFICE, NODE_B) != null)
+      manager.handleHostInbound({
+        clientId: C_CLIENT_ID,
+        officeId: OFFICE,
+        frame: {
+          kind: 'join-request', officeId: OFFICE, fromNode: NODE_C, identityId: NODE_C, displayName: 'C',
+          credentialToken: VALID_TOKEN, bringMembers: [{ appId: 'app-c-1', memberName: 'c', role: 'r' }],
+        } as FederationMessage,
+      })
+    }
+
+    it('a relayed producer never gets its own batch back; others get it', async () => {
+      await admitBandC()
+      gateway.relayToHost(batch('app-b-1'), NODE_B)
+      await waitFor(() => streamsToLan().length > 0)
+      expect(streamsToGateway(NODE_B)).toEqual([])
+    })
+
+    it('a relayed batch for a member its sender does not own is dropped', async () => {
+      await admitBandC()
+      gateway.relayToHost(batch('app-c-1'), NODE_B)
+      gateway.relayToHost(heartbeat(NODE_B) as unknown as Record<string, unknown>, NODE_B)
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      expect(streamsToLan()).toEqual([])
+    })
+
+    it('a relayed member confirmed offline is not sent live batches', async () => {
+      await admitBandC()
+      const node = federationStore.getNode(OFFICE, NODE_B)!
+      federationStore.upsertNode({ ...node, status: 'offline' })
+      const before = gateway.hostFrames.length
+      manager.handleHostInbound({ clientId: C_CLIENT_ID, officeId: OFFICE, frame: batch('app-c-1') as FederationMessage })
+      manager.getOffice(OFFICE)!.link.send(NODE_B, heartbeat(NODE_A))
+      await waitFor(() => gateway.hostFrames.length > before)
+      expect(streamsToGateway(NODE_B)).toEqual([])
+    })
+
+    it('a relayed batch with no stamped sender is dropped', async () => {
+      await admitBandC()
+      gateway.relayToHost(batch('app-b-1'))
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      expect(streamsToLan()).toEqual([])
+    })
   })
 })

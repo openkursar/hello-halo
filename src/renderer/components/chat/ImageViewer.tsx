@@ -15,6 +15,7 @@ import { createPortal } from 'react-dom'
 import { X, ChevronLeft, ChevronRight, ZoomIn, ZoomOut } from 'lucide-react'
 import type { ImageAttachment } from '../../types'
 import { useTranslation } from '../../i18n'
+import { imageAttachmentSrc } from '../../../shared/types/image-attachment'
 
 interface ImageViewerProps {
   images: ImageAttachment[]
@@ -184,7 +185,7 @@ export function ImageViewer({ images, initialIndex = 0, onClose }: ImageViewerPr
         onWheel={handleWheel}
       >
         <img
-          src={`data:${currentImage.mediaType};base64,${currentImage.data}`}
+          src={imageAttachmentSrc(currentImage)}
           alt={currentImage.name || t('Image')}
           className="max-w-full max-h-[85vh] object-contain select-none
             transition-transform duration-150 ease-out"

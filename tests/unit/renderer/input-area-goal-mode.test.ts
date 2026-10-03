@@ -58,7 +58,7 @@ beforeEach(() => {
 
 function mount() {
   const runner = new ComponentRunner()
-  const render = () => runner.render(() => InputArea(props))
+  const render = () => runner.render(() => (InputArea as unknown as { type: (p: typeof props) => unknown }).type(props))  // memo wrapper: call the component itself
   const type = (value: string) => {
     textarea(render()).props.onChange({ target: { value, selectionStart: value.length } })
     return render()

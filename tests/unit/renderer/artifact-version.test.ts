@@ -11,21 +11,24 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
-const { onArtifactChanged } = vi.hoisted(() => ({ onArtifactChanged: vi.fn() }))
-vi.mock('../../../src/renderer/api', () => ({ api: { onArtifactChanged } }))
+const { onArtifactChangedBatch } = vi.hoisted(() => ({ onArtifactChangedBatch: vi.fn() }))
+vi.mock('../../../src/renderer/api', () => ({ api: { onArtifactChangedBatch } }))
+
+type Batch = { spaceId: string; changes: Array<{ type: string; path: string; relativePath: string }>; resync?: boolean }
 
 type Mod = typeof import('../../../src/renderer/services/artifact-version')
 
 let subscribeArtifactVersions: Mod['subscribeArtifactVersions']
 let getArtifactVersion: Mod['getArtifactVersion']
 let emit: (path: string, type?: 'add' | 'change' | 'unlink') => void
+let emitBatch: (batch: Batch) => void
 
 beforeEach(async () => {
   vi.resetModules()
-  onArtifactChanged.mockReset()
+  onArtifactChangedBatch.mockReset()
 
-  let handler: ((data: { type: string; path: string }) => void) | null = null
-  onArtifactChanged.mockImplementation((cb: (data: { type: string; path: string }) => void) => {
+  let handler: ((data: Batch) => void) | null = null
+  onArtifactChangedBatch.mockImplementation((cb: (data: Batch) => void) => {
     handler = cb
     return () => {}
   })
@@ -33,7 +36,8 @@ beforeEach(async () => {
   const mod: Mod = await import('../../../src/renderer/services/artifact-version')
   subscribeArtifactVersions = mod.subscribeArtifactVersions
   getArtifactVersion = mod.getArtifactVersion
-  emit = (path, type = 'change') => handler?.({ type, path })
+  emitBatch = (batch) => handler?.(batch)
+  emit = (path, type = 'change') => emitBatch({ spaceId: 's', changes: [{ type, path, relativePath: path }] })
 })
 
 describe('artifact versions / what gets tracked', () => {
@@ -106,6 +110,40 @@ describe('artifact versions / subscribers', () => {
     subscribeArtifactVersions(() => {})
     subscribeArtifactVersions(() => {})
 
-    expect(onArtifactChanged).toHaveBeenCalledTimes(1)
+    expect(onArtifactChangedBatch).toHaveBeenCalledTimes(1)
+  })
+
+  it('wakes subscribers once for a batch however many tracked files it touches', () => {
+    const listener = vi.fn()
+    subscribeArtifactVersions(listener)
+    getArtifactVersion('/space/a.png')
+    getArtifactVersion('/space/b.png')
+
+    emitBatch({
+      spaceId: 's',
+      changes: [
+        { type: 'change', path: '/space/a.png', relativePath: 'a.png' },
+        { type: 'change', path: '/space/b.png', relativePath: 'b.png' },
+      ],
+    })
+
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(getArtifactVersion('/space/a.png')).toBe(1)
+    expect(getArtifactVersion('/space/b.png')).toBe(1)
+  })
+})
+
+describe('artifact versions / lost changes', () => {
+  it('treats every tracked path as rewritten when a batch reports lost changes', () => {
+    const listener = vi.fn()
+    subscribeArtifactVersions(listener)
+    getArtifactVersion('/space/a.png')
+    getArtifactVersion('/space/b.png')
+
+    emitBatch({ spaceId: 's', changes: [], resync: true })
+
+    expect(getArtifactVersion('/space/a.png')).toBe(1)
+    expect(getArtifactVersion('/space/b.png')).toBe(1)
+    expect(listener).toHaveBeenCalledTimes(1)
   })
 })

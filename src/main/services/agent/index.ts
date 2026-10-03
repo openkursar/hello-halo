@@ -128,5 +128,7 @@ export { parseSDKMessage, buildMessageContent, formatCanvasContext } from './mes
 export { getOrCreateV2Session, activeSessions, v2Sessions, getConsumerHandle, SessionOptionsStaleError } from './session-manager'
 // Whether a conversation's session must not be disturbed: a turn in flight, or team agents still working between turns.
 export { isSessionBusy } from './session-manager'
+export { listResidentSessions, evictIdleSession, setResidentSessionLimit, getSessionEvictionCount, getResidentSessionLimit } from './session-manager'
+export type { ResidentSessionInfo } from './session-manager'
 export type { SessionGates } from './session-manager'
 export { broadcastMcpStatus } from './mcp-manager'

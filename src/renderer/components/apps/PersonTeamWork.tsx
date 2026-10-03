@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ArrowUpRight } from 'lucide-react'
-import type { TeamDetail } from '../../../shared/apps/team-types'
+import type { TeamDetail, TeamUpdatedChange } from '../../../shared/apps/team-types'
 import { api } from '../../api'
 import { useTeamStore } from '../../stores/team.store'
 import { useTranslation } from '../../i18n'
@@ -36,10 +36,18 @@ export function PersonTeamWork({ appId }: { appId: string }) {
   }, [ids, appId, revision])
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined
-    const refresh = () => { if (!timer) timer = setTimeout(() => { timer = undefined; setRevision(value => value + 1) }, 500) }
-    const off = [api.onTeamBlackboard(refresh), api.onTeamPresence(refresh), api.onTeamUpdated(refresh)]
+    const shown = new Set(ids ? ids.split('\n') : [])
+    // Only a roster or presence change of a team shown here moves what this card
+    // says; board rows never do, and other teams' events are not ours.
+    const refresh = (data: unknown) => {
+      const event = data as { teamId?: string; changed?: TeamUpdatedChange[] } | null
+      if (!event?.teamId || !shown.has(event.teamId)) return
+      if (event.changed && !event.changed.includes('members')) return
+      if (!timer) timer = setTimeout(() => { timer = undefined; setRevision(value => value + 1) }, 500)
+    }
+    const off = [api.onTeamPresence(refresh), api.onTeamUpdated(refresh)]
     return () => { off.forEach(unsubscribe => unsubscribe()); if (timer) clearTimeout(timer) }
-  }, [])
+  }, [ids])
   if (!memberships.length) return null
   return <section className="mb-7 rounded-xl border border-border p-4"><div className="flex items-center justify-between gap-3"><h2 className="text-sm font-medium">{t('Current team work')}</h2><button disabled={loading} onClick={() => setRevision(value => value + 1)} className="min-h-8 text-xs text-primary disabled:opacity-50">{loading ? t('Updating…') : t('Refresh')}</button></div>
     {memberships.slice(0, limit).map(team => {

@@ -58,6 +58,17 @@ function loadProviderConfig() {
 /**
  * Analytics Service class (singleton)
  */
+/**
+ * Performance events (`perf.*`) go to the internal Telemetry provider only —
+ * they are operational diagnostics, not product analytics for GA / Baidu.
+ */
+export const PERF_EVENT_PREFIX = 'perf.'
+const PERF_PROVIDER_NAME = 'Telemetry'
+
+export function providersForEvent<P extends { readonly name: string }>(eventName: string, providers: readonly P[]): readonly P[] {
+  return eventName.startsWith(PERF_EVENT_PREFIX) ? providers.filter(p => p.name === PERF_PROVIDER_NAME) : providers
+}
+
 class AnalyticsService {
   private static instance: AnalyticsService | null = null
 
@@ -230,7 +241,7 @@ class AnalyticsService {
 
     // Track to all providers in parallel (isolated from each other)
     await Promise.allSettled(
-      this.providers.map(provider =>
+      providersForEvent(eventName, this.providers).map(provider =>
         provider.track(event, this.userContext!)
       )
     )

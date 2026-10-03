@@ -100,6 +100,8 @@ vi.mock('../../../../src/main/services/space.service', () => ({
   getSpaceDir: vi.fn().mockReturnValue('/tmp/space-1'),
 }))
 
+// The budget is tested on its own (session-budget.test.ts); here only its call matters.
+vi.mock('../../../../src/main/apps/runtime/session-budget', () => ({ admitTransientSession: vi.fn() }))
 vi.mock('../../../../src/main/services/ai-browser', () => ({
   createAIBrowserMcpServer: vi.fn().mockReturnValue({ name: 'ai-browser', _isMcpServer: true }),
   createScopedBrowserContext: vi.fn(() => ({ destroy: vi.fn() })),

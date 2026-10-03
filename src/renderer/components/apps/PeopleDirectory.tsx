@@ -14,6 +14,7 @@ import { AutomationAvatar } from './AutomationAvatar'
 import { WorkspaceMigrationDialog } from './WorkspaceMigrationDialog'
 import { needsAttention } from '../../../shared/apps/app-types'
 import type { PeopleDirectoryQuery, PeopleDirectorySummary } from '../../../shared/apps/people-directory'
+import type { TeamUpdatedChange } from '../../../shared/apps/team-types'
 
 interface DirectoryGroup {
   key: string
@@ -65,7 +66,13 @@ export function PeopleDirectory({ spaceMap, onCreate }: { spaceMap: Record<strin
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined
     const update = () => { if (!timer) timer = setTimeout(() => { timer = undefined; void refresh() }, 250) }
-    const off = [api.onAppStatusChanged(update), api.onAppListChanged(update), api.onTeamUpdated(update)]
+    // A team event matters here only when it can change who belongs to which
+    // team or what the team is called; board and task-list churn cannot.
+    const onTeam = (data: unknown) => {
+      const changed = (data as { changed?: TeamUpdatedChange[] } | null)?.changed
+      if (!changed || changed.includes('members')) update()
+    }
+    const off = [api.onAppStatusChanged(update), api.onAppListChanged(update), api.onTeamUpdated(onTeam)]
     return () => { off.forEach(unsubscribe => unsubscribe()); if (timer) clearTimeout(timer) }
   }, [refresh])
   const rows = data?.items ?? []

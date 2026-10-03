@@ -22,7 +22,7 @@ import { StreamingSection } from '../chat/StreamingSection'
 import { useBrowserToolCalls } from '../chat/useBrowserToolCalls'
 import { InterruptedBubble } from '../chat/InterruptedBubble'
 import { InputArea } from '../chat/InputArea'
-import { useRemoteSubscription } from '../../hooks/useRemoteSubscription'
+import { useConversationDetail } from '../../hooks/useConversationDetail'
 import { useTranslation } from '../../i18n'
 import type { Message, Thought, ImageAttachment } from '../../types'
 import { shouldShowRelayedTranscript } from '../../../shared/apps/team-types'
@@ -80,7 +80,7 @@ export function TeamSessionChat({
   const { t } = useTranslation()
   const conversationId = buildTeamSessionKey(appId, teamId, epochId ?? 'none')
 
-  useRemoteSubscription(conversationId)
+  useConversationDetail(conversationId)
 
   // Seeded from the transcript this session last showed (the member panel is
   // remounted per member, so a switch would otherwise always start from blank).

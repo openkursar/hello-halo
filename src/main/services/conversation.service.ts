@@ -720,6 +720,76 @@ export function getConversation(spaceId: string, conversationId: string): Conver
   return result ? result.conversation : null
 }
 
+/**
+ * A conversation whose messages start at `fromMessageId` (inclusive), for a
+ * reader that already holds the earlier ones — a finished turn then transfers
+ * its own messages, not the whole history. `messagesFrom` marks a cut list;
+ * when the id is unknown the whole conversation is returned without it.
+ */
+export function getConversationFrom(
+  spaceId: string,
+  conversationId: string,
+  fromMessageId: string
+): (Conversation & { messagesFrom?: string }) | null {
+  const conversation = getConversation(spaceId, conversationId)
+  if (!conversation) return null
+  const index = conversation.messages.findIndex(m => m.id === fromMessageId)
+  if (index < 0) return conversation
+  return { ...conversation, messages: conversation.messages.slice(index), messagesFrom: fromMessageId }
+}
+
+const IMAGE_EXTENSIONS: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+}
+
+function imageFilesDir(conversationsDir: string, conversationId: string): string {
+  return join(conversationsDir, `${conversationId}.images`)
+}
+
+/** A `halo-file://` URL for a local path (the protocol decodes it back). */
+function toHaloFileUrl(filePath: string): string {
+  return `halo-file://${filePath.replace(/%/g, '%25').replace(/#/g, '%23').replace(/\?/g, '%3F')}`
+}
+
+/**
+ * The conversation as the desktop renderer receives it: each inline base64
+ * image is written once beside the conversation (`<id>.images/`) and sent as a
+ * `halo-file://` URL with empty `data`, so the renderer holds a URL instead of
+ * megabytes of base64. The stored JSON keeps the data — remote clients (no
+ * `halo-file:`) and older builds read it. An image that cannot be written is
+ * sent inline as before.
+ */
+export function withImageFiles<T extends Conversation>(spaceId: string, conversation: T): T {
+  if (!conversation.messages.some(m => m.images?.some(image => image.data))) return conversation
+  const dir = imageFilesDir(getConversationsDir(spaceId), conversation.id)
+  let failed = false
+  const messages = conversation.messages.map((message, messageIndex) => {
+    if (!message.images?.some(image => image.data)) return message
+    const images = message.images.map((image, imageIndex) => {
+      if (!image.data || failed) return image
+      const stem = `${message.id || messageIndex}-${image.id || imageIndex}`.replace(/[^\w-]/g, '_')
+      const name = `${stem}.${IMAGE_EXTENSIONS[image.mediaType] ?? 'bin'}`
+      const filePath = join(dir, name)
+      try {
+        if (!existsSync(filePath)) {
+          mkdirSync(dir, { recursive: true })
+          writeFileSync(filePath, Buffer.from(image.data, 'base64'))
+        }
+        return { ...image, data: '', url: toHaloFileUrl(filePath) }
+      } catch (error) {
+        failed = true
+        console.error(`[Conversation] Could not write image file for ${conversation.id}; sending images inline:`, error)
+        return image
+      }
+    })
+    return { ...message, images }
+  })
+  return { ...conversation, messages }
+}
+
 // Update a conversation
 export function updateConversation(
   spaceId: string,
@@ -991,6 +1061,15 @@ export function deleteConversation(spaceId: string, conversationId: string): boo
     const tmpThoughts = thoughtsPath + '.tmp'
     if (existsSync(tmpMain)) try { rmSync(tmpMain) } catch { /* ignore */ }
     if (existsSync(tmpThoughts)) try { rmSync(tmpThoughts) } catch { /* ignore */ }
+
+    const imagesDir = imageFilesDir(conversationsDir, conversationId)
+    if (existsSync(imagesDir)) {
+      try {
+        rmSync(imagesDir, { recursive: true, force: true })
+      } catch (error) {
+        console.error(`[Conversation] Failed to delete image files for ${conversationId}:`, error)
+      }
+    }
 
     // Use immediate index update for deletes (user expects instant feedback).
     // Clear any pending debounced entry to prevent the deleted conversation

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AlertCircle, ArrowUpRight, ChevronLeft } from 'lucide-react'
-import type { ActivityEntry, BlockedPerson, PendingDecisionQuery } from '../../../shared/apps/app-types'
+import type { ActivityEntry, AutomationAppState, BlockedPerson, BlockedReason, PendingDecisionQuery } from '../../../shared/apps/app-types'
 import { api } from '../../api'
 import { useAppsStore } from '../../stores/apps.store'
 import { usePeopleViewStore } from '../../stores/people-view.store'
@@ -25,6 +25,9 @@ export function PeopleInbox() {
   const [expanded, setExpanded] = useState<string | null>(null)
   const [received, setReceived] = useState(false)
   const generation = useRef(0)
+  // Who this list shows as stopped, and why — a status push that does not change
+  // it cannot change the list.
+  const shownBlocked = useRef(new Map<string, BlockedReason>())
   const load = useCallback(async (after?: PendingDecisionQuery) => {
     const current = ++generation.current
     setLoading(true); setFailed(false)
@@ -37,6 +40,7 @@ export function PeopleInbox() {
       setNames(previous => after ? { ...previous, ...result.data!.names } : result.data!.names)
       // Stopped people are not paginated, so every page carries the same set.
       setBlocked(result.data.blocked)
+      shownBlocked.current = new Map(result.data.blocked.map(person => [person.appId, person.reason]))
       setTotal(result.data.total)
       const last = page[page.length - 1]
       setCursor(page.length === 30 && last ? { afterTs: last.ts, afterId: last.id } : null)
@@ -62,7 +66,11 @@ export function PeopleInbox() {
       }),
       // A person stopping or being resumed changes this list without writing
       // any activity entry, so the decision feed alone would not notice it.
-      api.onAppStatusChanged(reload),
+      api.onAppStatusChanged(data => {
+        const event = data as { appId?: string; state?: AutomationAppState } | null
+        if (!event?.appId || event.state?.blocked === shownBlocked.current.get(event.appId)) return
+        reload()
+      }),
     ]
     return () => { ++generation.current; off.forEach(unsubscribe => unsubscribe()); if (timer) clearTimeout(timer) }
   }, [load])

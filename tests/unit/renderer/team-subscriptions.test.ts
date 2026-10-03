@@ -7,13 +7,13 @@ vi.mock('react', () => ({
 }))
 vi.mock('../../../src/renderer/api/transport', () => ({ isElectron: () => false, subscribeToConversation: fixtures.subscribe, unsubscribeFromConversation: fixtures.unsubscribe }))
 vi.mock('../../../src/renderer/api', () => ({ api: { teamChatMessages: fixtures.history, onTeamMemberHistory: (listener: (event: unknown) => void) => { fixtures.listener = listener; return () => { fixtures.listener = undefined } } } }))
-import { useRemoteSubscription } from '../../../src/renderer/hooks/useRemoteSubscription'
+import { useConversationDetail } from '../../../src/renderer/hooks/useConversationDetail'
 import { useTaskReports } from '../../../src/renderer/components/team/workbench/useTaskReports'
 import type { RosterMember } from '../../../src/shared/apps/team-types'
 afterEach(() => { fixtures.effects.length = 0; vi.clearAllMocks() })
 it('keeps one remote subscription until both surfaces unmount', () => {
-  useRemoteSubscription('session')
-  useRemoteSubscription('session')
+  useConversationDetail('session')
+  useConversationDetail('session')
   const first = fixtures.effects[0]() as () => void
   const second = fixtures.effects[1]() as () => void
   expect(fixtures.subscribe).toHaveBeenCalledTimes(1)

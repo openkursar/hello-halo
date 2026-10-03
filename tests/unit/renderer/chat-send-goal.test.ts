@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { create } from 'zustand'
 import type { Conversation, ConversationMeta } from '../../../src/renderer/types'
 
-const apiMock = vi.hoisted(() => ({ sendMessage: vi.fn() }))
+const apiMock = vi.hoisted(() => ({ sendMessage: vi.fn(), retainConversationDetail: vi.fn(() => () => {}), isConversationDetailRetained: vi.fn(() => true) }))
 vi.mock('../../../src/renderer/api', () => ({ api: apiMock }))
 vi.mock('../../../src/renderer/services/canvas-lifecycle', () => ({
   canvasLifecycle: { getIsOpen: () => false, getTabCount: () => 0 },

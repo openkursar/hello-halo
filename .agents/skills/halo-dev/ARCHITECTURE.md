@@ -455,30 +455,29 @@ Services use a **callback registration pattern** to avoid circular dependencies:
 ### Components
 
 ```
-ContentCanvas.tsx          # Main container + tab switching
+ContentCanvas.tsx          # Main container; renders <TabContent key={tab.id}>
 ├── CanvasTabs.tsx         # Tab bar (VS Code style)
 └── viewers/
-    ├── CodeViewer.tsx     # CodeMirror 6 with syntax highlighting
-    ├── MarkdownViewer.tsx # react-markdown
-    ├── HtmlViewer.tsx     # iframe srcdoc (avoids CSP issues)
+    ├── CodeViewer.tsx     # CodeMirror 6; also json/text and unknown types
+    ├── MarkdownViewer.tsx # Streamdown (static mode)
+    ├── HtmlViewer.tsx     # halo-preview:// origin for files; opaque srcdoc otherwise
     ├── ImageViewer.tsx    # Zoom/pan
-    ├── JsonViewer.tsx     # Format/minify
     ├── CsvViewer.tsx      # Table view
-    ├── TextViewer.tsx
     ├── BrowserViewer.tsx  # Live web pages
     ├── XlsxViewer.tsx     # SheetJS parse in a Web Worker + virtualized table
-    ├── DocxViewer.tsx     # docx-preview
+    ├── DocxViewer.tsx     # docx-preview (patched: blob URLs revoked on dispose)
     ├── PdfViewer.tsx      # pdfjs-dist; remote/web only (desktop uses BrowserView)
     ├── PptxViewer.tsx     # Placeholder — no renderer; open externally / download
+    ├── TerminalViewer.tsx / TeamViewer.tsx
     └── OfficeFallback.tsx # Shared unreadable/unsupported state with escape hatches
 ```
 
-The four document viewers are `React.lazy` chunks (SheetJS / docx-preview / pdfjs
-are large) behind `ViewerSuspense`, which pairs Suspense with a scoped
-ErrorBoundary — a chunk that fails to load must cost one pane, not the window.
-They are also the only viewers keyed on `tab.id`, because this switch reuses one
-component instance per type and their per-document state (page, zoom, active
-sheet) would otherwise bleed across tabs.
+Viewers are looked up in a registry that is exhaustive over `ContentType` (unknown or
+legacy persisted types render as text) and every viewer is mounted by a host that owns the
+Suspense + ErrorBoundary and one instance per tab (`key={tab.id}`). The viewer contract —
+per-tab disposable resources, no canvas store access, immutable `TabState`, budgets, hidden
+= unmounted — is in `src/renderer/components/canvas/DESIGN.md`; the rules that are enforced
+by guards are summarized in `references/performance-and-scale.md` §4.
 
 ### Two content channels per tab
 
@@ -967,7 +966,7 @@ model and where things are:
 | Coordination kernel | `apps/runtime/team/` | message-bus (send/wait/turn-complete), blackboard (tasks/findings/activity), board-digest (what a member missed, rendered into its turn input), orchestration, artifact-read (location-transparent `team_read_artifact` for agents, and the opener behind a person clicking a shared file — one resolution for both). **Never imports the federation transport** — cross-node behavior arrives only through bootstrap-injected seams. |
 | Team persistence | `apps/team/` | teams/members (incl. per-team duty + delegated capability policy)/edges/epochs/triggers/checks/activity (SQLite, `app_team`) + published-ref semantics SSOT (`artifact-refs.ts`, shared with the federation owner-serve gate) |
 | Federation runtime | `apps/runtime/federation/` | join/presence coordinator, per-node manager (host+joiner roles), M2 authority (election/replication/handover), activity relay |
-| Feed substrate | `apps/runtime/federation/log/` + `ctrl-feed.ts` + `session-feed.ts` | per-author append-only feeds: durable ctrl outbox (effectively-once wake/turn-complete) + multi-replica session transcripts (local-first history) |
+| Feed substrate | `apps/runtime/federation/log/` + `ctrl-feed.ts` + `session-feed.ts` | per-author append-only feeds: durable ctrl outbox (effectively-once wake/turn-complete; per-target to capable peers) + session transcripts held by the authority and by every node that wants them (lazy replication) |
 | Federation persistence | `apps/federation/` | office nodes/credentials/authority + FeedStore (`app_federation`) |
 | Relay gateway | `gateway/` (repo-root Go module) | dumb frame router for off-LAN offices; never interprets payloads |
 | Transport seams | injected by `bootstrap/extended.ts` | federation imports no `http/*`; WS server routes inbound frames via `setFederationInbound` |
@@ -991,6 +990,7 @@ Key invariants (violating these is an architecture bug):
   Never reintroduce a "first/newest publisher wins" pick — a model handed the
   wrong file has no way to notice it got one.
 - Star topology: joiners talk only to the office authority; joiner↔joiner traffic is relayed/mirror-served by it.
-- Directed control messages ride the durable feed outbox (no fire-and-forget); transcripts are multi-replica (every node keeps a local copy).
+- Directed control messages ride the durable feed outbox (no fire-and-forget). Transcripts are multi-replica as "the office authority + every node that showed them in a panel", not every node. History is guaranteed readable while the authority is online. A copy that is not local is fetched on demand and reads as "unavailable right now", never as "this member said nothing".
+- A node receives what it owns, what it shows, and a digest of the rest: streams by subscription, run state as versioned deltas, wakes on its own ctrl feed, transcripts lazily. There is one protocol, gated by `FEDERATION_PROTOCOL_VERSION` (a peer on another version is refused at join; see federation DESIGN "Compatibility policy"). Subscriptions are soft state, re-declared after every (re)join or election.
 - Office-shared rows outside the board (member profile, periodic checks) ride the same single-writer log; a member's delegated capability policy never leaves the machine it guards.
 - Team/federation changes additionally require the cluster tier: `npm run build` then `npm run test:team -- federation` (never in parallel with other suites).

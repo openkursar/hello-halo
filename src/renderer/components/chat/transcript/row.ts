@@ -17,10 +17,37 @@
 
 import type { Message } from '../../../types'
 
+// Class strings are literal so Tailwind sees them; heights mirror ROW_ESTIMATES.
 const USER_ROW = '[content-visibility:auto] [contain-intrinsic-size:auto_96px]'
-const REPLY_ROW = '[content-visibility:auto] [contain-intrinsic-size:auto_240px]'
+const SHORT_REPLY_ROW = '[content-visibility:auto] [contain-intrinsic-size:auto_240px]'
+const MEDIUM_REPLY_ROW = '[content-visibility:auto] [contain-intrinsic-size:auto_600px]'
+const LONG_REPLY_ROW = '[content-visibility:auto] [contain-intrinsic-size:auto_1000px]'
 
-/** Containment classes for a transcript row, with a height estimate by role. */
-export function transcriptRowClass(message: Pick<Message, 'role'>): string {
-  return message.role === 'user' ? USER_ROW : REPLY_ROW
+/**
+ * Height estimates in px for a row that has never rendered, by role and reply
+ * length (a 1.4K-character reply with code measured 600–1200 px, so a single
+ * 240 px guess was 3–5× short).
+ */
+const ROW_ESTIMATES = { user: 96, short: 240, medium: 600, long: 1000 } as const
+const SHORT_REPLY_CHARS = 500
+const MEDIUM_REPLY_CHARS = 3000
+
+type RowMessage = Pick<Message, 'role'> & { content?: string }
+
+function tier(message: RowMessage): keyof typeof ROW_ESTIMATES {
+  if (message.role === 'user') return 'user'
+  const length = message.content?.length ?? 0
+  return length < SHORT_REPLY_CHARS ? 'short' : length < MEDIUM_REPLY_CHARS ? 'medium' : 'long'
+}
+
+const ROW_CLASSES = { user: USER_ROW, short: SHORT_REPLY_ROW, medium: MEDIUM_REPLY_ROW, long: LONG_REPLY_ROW } as const
+
+/** Containment classes for a transcript row, with a height estimate by role and length. */
+export function transcriptRowClass(message: RowMessage): string {
+  return ROW_CLASSES[tier(message)]
+}
+
+/** The same estimate in px, for a placeholder of a row that never rendered. */
+export function estimatedRowHeight(message: RowMessage): number {
+  return ROW_ESTIMATES[tier(message)]
 }

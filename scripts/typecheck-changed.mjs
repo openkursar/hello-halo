@@ -35,6 +35,7 @@
 import { execFileSync, spawnSync } from 'node:child_process'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { parsePorcelain } from './typecheck-changed-lib.mjs'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 const PROJECT_ROOT = resolve(__dirname, '..')
@@ -63,14 +64,13 @@ function changedFiles() {
   const explicit = process.argv.slice(2)
   if (explicit.length > 0) return explicit
 
-  const out = execFileSync('git', ['status', '--porcelain'], { cwd: PROJECT_ROOT, encoding: 'utf-8' })
-  return out
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => line.slice(3).trim())
-    // Renames read as "old -> new"; only the new path can have errors.
-    .map((path) => (path.includes(' -> ') ? path.split(' -> ')[1] : path))
-    .map((path) => path.replace(/^"|"$/g, ''))
+  // `-uall`: without it git reports a new untracked directory as one entry, and
+  // every file inside it would go unchecked.
+  const out = execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], {
+    cwd: PROJECT_ROOT,
+    encoding: 'utf-8'
+  })
+  return parsePorcelain(out)
 }
 
 const changed = changedFiles().filter((f) => /\.(tsx?|mts)$/.test(f) && /^(src|tests)\//.test(f))

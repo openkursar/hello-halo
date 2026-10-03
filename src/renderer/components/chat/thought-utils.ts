@@ -26,6 +26,39 @@ void function _i18nThoughtKeys(t: (k: string) => string) {
 }
 
 // ============================================
+// Sub-agent grouping
+// ============================================
+
+export const NO_CHILD_THOUGHTS: Thought[] = []
+
+/**
+ * Sub-agent steps grouped under their parent Task/Agent step id. A parent whose
+ * steps did not change keeps its array from `previous`, so its memoized row is
+ * not re-rendered when an unrelated step streams in.
+ */
+export function groupChildThoughts(
+  thoughts: readonly Thought[],
+  previous?: ReadonlyMap<string, Thought[]>,
+): Map<string, Thought[]> {
+  const groups = new Map<string, Thought[]>()
+  for (const thought of thoughts) {
+    if (!thought.parentToolUseId) continue
+    const group = groups.get(thought.parentToolUseId)
+    if (group) group.push(thought)
+    else groups.set(thought.parentToolUseId, [thought])
+  }
+  if (previous) {
+    for (const [parentId, group] of groups) {
+      const before = previous.get(parentId)
+      if (before && before.length === group.length && before.every((thought, i) => thought === group[i])) {
+        groups.set(parentId, before)
+      }
+    }
+  }
+  return groups
+}
+
+// ============================================
 // Text Utilities
 // ============================================
 

@@ -11,7 +11,7 @@ import { api, createEmptySessionState } from '../internal'
 import type { Conversation, Thought } from '../internal'
 import type { TranscriptPage } from '../../../../shared/types/transcript'
 import i18n from '../../../i18n'
-import { cacheConversation } from './cache'
+import { cacheConversation, cacheLoadedThoughts } from './cache'
 import { digitalHumanAppId } from './kind'
 import { createPendingUserMessage, prependOlder, reconcileTranscript } from './reconcile'
 import { recoverSessionState } from './recover'
@@ -160,9 +160,6 @@ async function open(ctx: BackendContext, ref: ConversationRef): Promise<void> {
   const appId = digitalHumanAppId(ref.conversationId)
   if (!appId) return
 
-  // Remote clients only receive events for conversations they subscribed to.
-  api.subscribeToConversation(ref.conversationId)
-
   // Started first so the read below commits knowing whether a turn is running.
   const recovered = recoverSessionState(ctx, ref.conversationId)
   if (ctx.get().conversationCache.has(ref.conversationId)) {
@@ -303,16 +300,7 @@ async function loadThoughts(ctx: BackendContext, ref: ConversationRef, messageId
     const response = await api.appChatMessageThoughts({ appId, spaceId: ref.spaceId, conversationId: ref.conversationId, messageId })
     if (!response.success || !response.data) return []
     const thoughts = response.data as Thought[]
-    ctx.set((state) => {
-      const conversation = state.conversationCache.get(ref.conversationId)
-      if (!conversation) return state
-      const conversationCache = new Map(state.conversationCache)
-      conversationCache.set(ref.conversationId, {
-        ...conversation,
-        messages: conversation.messages.map(m => m.id === messageId ? { ...m, thoughts } : m),
-      })
-      return { conversationCache }
-    })
+    ctx.set((state) => ({ conversationCache: cacheLoadedThoughts(state, ref.conversationId, messageId, thoughts) }))
     return thoughts
   } catch (error) {
     console.error(`${LOG_TAG} Failed to load thoughts for ${ref.conversationId}/${messageId}:`, error)

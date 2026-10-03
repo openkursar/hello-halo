@@ -13,7 +13,7 @@ import type { CapabilityPresetId } from '../../../shared/apps/capability-policy'
 import { isRemoteMember } from '../../../shared/apps/team-types'
 import { DelegationPresetPicker } from '../capability/DelegationPresetPicker'
 import { api } from '../../api'
-import { useTeamStore } from '../../stores/team.store'
+import { useTeamStore, detailOf } from '../../stores/team.store'
 import { useTranslation } from '../../i18n'
 
 interface TeamInviteDialogProps {
@@ -40,7 +40,7 @@ export function TeamInviteDialog({ teamId, onClose }: TeamInviteDialogProps) {
   // already in this office — the ones running on THIS computer. The question
   // belongs here, at the moment that reach is created, and it is applied to all
   // of them at once: nobody sets it per member before knowing who is joining.
-  const detail = useTeamStore(s => s.detail)
+  const detail = useTeamStore(s => detailOf(s, teamId))
   const updateMember = useTeamStore(s => s.updateMember)
   const localMembers = (detail?.team.id === teamId ? detail.members : []).filter(m => !isRemoteMember(m))
   const [preset, setPreset] = useState<CapabilityPresetId>('read_only')

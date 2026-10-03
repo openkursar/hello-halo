@@ -16,12 +16,14 @@ import { getTempSpacePath } from '../foundation/config.service'
 import { CPP_LEVEL_IGNORE_DIRS } from '../../shared/constants/ignore-patterns'
 import { MAX_PREVIEW_DOCUMENT_SIZE, formatPreviewSize } from '../../shared/constants/artifact-preview'
 import { getSpace } from './space.service'
+import { queryFilesViaWorker } from './watcher-host.service'
+import type { FileQueryItem, FileQueryResult } from '../../shared/types/artifact'
 import {
-  listArtifacts as listArtifactsCached,
   listArtifactsTree as listArtifactsTreeCached,
   loadDirectoryChildren,
-  initSpaceCache,
   ensureSpaceCache,
+  retainSpaceCache,
+  releaseSpaceCache,
   onArtifactChange,
   reconcileLoadedDirs,
   type CachedArtifact,
@@ -59,38 +61,73 @@ function getWorkingDir(spaceId: string): string {
   return getTempSpacePath()
 }
 
+/** Largest result a file query may ask for. */
+export const MAX_FILE_QUERY_LIMIT = 200
+/** Largest flat listing `listArtifacts` returns. */
+const MAX_LISTED_ARTIFACTS = 20_000
+const LIST_INDEX_WAIT_MS = 3000
+
 /**
- * List all artifacts in a space
- * Uses caching and file watching for optimal performance
+ * Best matches for a typed file query (the @ menu), answered from the
+ * watcher's background path index; only `limit` items cross processes.
+ * Watches the space if nothing did yet — the first query of a large space
+ * may report `indexing` with partial results.
+ */
+export async function queryFiles(spaceId: string, query: string, limit: number): Promise<FileQueryResult> {
+  const boundedLimit = Math.max(0, Math.min(Math.floor(limit) || 0, MAX_FILE_QUERY_LIMIT))
+  return queryPathIndex(spaceId, typeof query === 'string' ? query : '', boundedLimit)
+}
+
+async function queryPathIndex(
+  spaceId: string,
+  query: string,
+  limit: number,
+  maxDepth?: number
+): Promise<FileQueryResult> {
+  const workDir = getWorkingDir(spaceId)
+  if (!existsSync(workDir)) return { items: [], truncated: false, indexing: false, hasPaths: false }
+
+  await ensureSpaceCache(spaceId, workDir)
+  const result = await queryFilesViaWorker(spaceId, query, limit, maxDepth)
+  if (!result) return { items: [], truncated: false, indexing: false, hasPaths: false }
+
+  const items: FileQueryItem[] = result.items.map(({ relativePath, isFolder }) => ({
+    path: join(result.rootPath, relativePath),
+    relativePath,
+    name: basename(relativePath),
+    type: isFolder ? 'folder' : 'file',
+  }))
+  return { items, truncated: result.truncated, indexing: result.indexing, hasPaths: result.hasPaths }
+}
+
+/**
+ * Flat listing of a space down to `maxDepth` path segments, folders first,
+ * capped at MAX_LISTED_ARTIFACTS. Served from the path index; waits briefly
+ * for a space whose index is still being built.
  */
 export async function listArtifacts(spaceId: string, maxDepth: number = 2): Promise<Artifact[]> {
-  const workDir = getWorkingDir(spaceId)
-
-  if (!existsSync(workDir)) {
-    console.log(`[Artifact] Directory does not exist: ${workDir}`)
-    return []
+  const deadline = Date.now() + LIST_INDEX_WAIT_MS
+  let result = await queryPathIndex(spaceId, '', MAX_LISTED_ARTIFACTS, maxDepth)
+  while (result.indexing && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 100))
+    result = await queryPathIndex(spaceId, '', MAX_LISTED_ARTIFACTS, maxDepth)
   }
 
-  const cachedArtifacts = await listArtifactsCached(spaceId, workDir, maxDepth)
-
-  // Convert to Artifact format
-  const artifacts: Artifact[] = cachedArtifacts.map(ca => ({
-    id: ca.id,
-    spaceId: ca.spaceId,
-    conversationId: 'all',
-    name: ca.name,
-    type: ca.type,
-    path: ca.path,
-    relativePath: ca.relativePath,
-    extension: ca.extension,
-    icon: ca.icon,
-    createdAt: ca.createdAt,
-    size: ca.size,
-    preview: undefined  // Don't load preview by default for performance
-  }))
-
-  console.log(`[Artifact] listArtifacts: spaceId=${spaceId} count=${artifacts.length}`)
-  return artifacts
+  return result.items.map(item => {
+    const extension = item.type === 'file' ? extname(item.name).replace('.', '') : ''
+    return {
+      id: item.path,
+      spaceId,
+      conversationId: 'all',
+      name: item.name,
+      type: item.type,
+      path: item.path,
+      relativePath: item.relativePath,
+      extension,
+      icon: item.type === 'folder' ? 'folder' : extension,
+      createdAt: '',
+    }
+  })
 }
 
 /** Dependency/VCS/build directories are noise in a file count, and recursing
@@ -146,7 +183,7 @@ export function watchArtifacts(
   callback: (artifacts: Artifact[]) => void
 ): () => void {
   // File watching is handled by artifact-cache.service.ts via IPC events
-  // Callers should use api.onArtifactChanged() instead
+  // Callers should use api.onArtifactChangedBatch() instead
   return () => {}
 }
 
@@ -175,10 +212,7 @@ export async function loadTreeChildren(
   spaceId: string,
   dirPath: string
 ): Promise<CachedTreeNode[]> {
-  console.log(`[Artifact] loadTreeChildren for: ${dirPath}`)
-
   const workDir = getWorkingDir(spaceId)
-  console.log(`[Artifact] loadTreeChildren workDir resolved: ${workDir}`)
 
   if (!existsSync(dirPath)) {
     console.log(`[Artifact] Directory does not exist: ${dirPath}`)
@@ -211,17 +245,22 @@ export async function loadTreeChildren(
 }
 
 /**
- * Initialize artifact watcher for a space
+ * A client (renderer instance or remote tab, identified by `clientId`) starts
+ * or keeps showing a space. `recreated`: the client held nothing here, so on a
+ * renewal its view may have missed changes and should be reloaded.
  */
-export async function initArtifactWatcher(spaceId: string): Promise<void> {
+export async function retainArtifactSpace(spaceId: string, clientId: string): Promise<{ recreated: boolean }> {
   const workDir = getWorkingDir(spaceId)
-
   if (!existsSync(workDir)) {
-    console.log(`[Artifact] Cannot init watcher, directory does not exist: ${workDir}`)
-    return
+    console.log(`[Artifact] Cannot retain space, directory does not exist: ${workDir}`)
+    return { recreated: false }
   }
+  return { recreated: await retainSpaceCache(spaceId, workDir, clientId) }
+}
 
-  await ensureSpaceCache(spaceId, workDir)
+/** The client stopped showing the space; its cache and watcher may be released. */
+export async function releaseArtifactSpace(spaceId: string, clientId: string): Promise<void> {
+  await releaseSpaceCache(spaceId, clientId)
 }
 
 /**

@@ -144,6 +144,16 @@ describe('KeepAliveManager', () => {
     vi.restoreAllMocks()
   })
 
+  it('never prunes a reason registered without expiry', () => {
+    manager.register('app:activated', { ttlMs: Infinity })
+    manager.register('app:crashy')
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 3 * 24 * 3600_000)
+
+    expect(manager.getActiveReasons()).toEqual(['app:activated'])
+
+    vi.restoreAllMocks()
+  })
+
   it('should clearAll reasons', () => {
     manager.register('app:a')
     manager.register('app:b')

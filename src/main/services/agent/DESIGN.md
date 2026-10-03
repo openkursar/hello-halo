@@ -55,6 +55,8 @@
   Adding a new engine = implement an adapter under `services/agent/<engine>/` that produces this exact frame sequence. Do NOT add engine-specific branches in consumers; if a consumer needs engine awareness, the adapter contract is wrong.
 - **BrowserWindow safety.** Always check `!mainWindow.isDestroyed()` before sending events in async callbacks. Stream processing is full of async callbacks; violations will crash on window close.
 
+- **Resident session limit.** Every resident session is one engine process, so their count is bounded by a number the budget policy owner pushes down: `setResidentSessionLimit(limit | null)` (set by `apps/runtime/session-budget.ts`; null = unlimited). Before a NEW session is created — never on reuse — the manager evicts least-recently-used idle sessions through `cleanupSession` until one more fits; busy, awaiting-init and in-creation sessions are never evicted, and if all are busy the new session is created over the limit (one warn per crossing, never refused). An evicted conversation resumes from its stored session id on its next turn, the same path as the 30-minute idle sweep. `listResidentSessions()` / `evictIdleSession(id, reason)` expose the same stats and safety check to callers that manage transient sessions (automation runs). The engine holds no memory logic; the limit is policy from above.
+
 ## 3) Stream Processing Model
 
 ```

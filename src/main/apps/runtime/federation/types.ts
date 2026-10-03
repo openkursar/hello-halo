@@ -4,8 +4,8 @@
  * Control-plane message shapes and presence types for the office federation
  * runtime. Covers the JOIN handshake (join-request/grant/reject) and PRESENCE
  * (online/suspect/offline via heartbeat + the two-threshold debounce machine),
- * trimmed to what join + presence need — version negotiation and capability
- * bits live in ./protocol-m2.
+ * trimmed to what join + presence need — the protocol version gate lives in
+ * ./protocol-m2.
  *
  * Renderer-unaware: pure data shapes, no Node/Electron imports.
  */
@@ -20,6 +20,7 @@ import type {
 import type { TurnCompletion } from '../team/message-bus'
 import type { M2Frame } from './protocol-m2'
 import type { FeedSyncFrame } from './log/types'
+import type { FederationPlane } from '../../../../shared/federation/planes'
 
 /** Stable per-node identifier (office_nodes.node_id). */
 export type NodeId = string
@@ -57,10 +58,8 @@ export interface JoinRequest {
   displayName?: string
   credentialToken: string
   bringMembers: JoinMember[]
-  /** M2 version/capability negotiation. Absent → treated as v1 / core caps. */
+  /** The sender's FEDERATION_PROTOCOL_VERSION; the authority admits only its own. */
   pv?: number
-  minSupported?: number
-  caps?: number
   /**
    * Base URL of this node's own HTTP/WS server, advertised so peers can dial it
    * after a transport loss (address book for re-form). Absent when the node
@@ -74,9 +73,8 @@ export interface JoinGrant {
   kind: 'join-grant'
   officeId: string
   assignedNodeId: NodeId
-  /** M2: negotiated version + effective caps + current authority tenure baseline. */
+  /** The authority's FEDERATION_PROTOCOL_VERSION; a joiner refuses any other. */
   pv?: number
-  caps?: number
   /** Current authority tenure at admission, so a joiner aligns its term baseline. */
   term?: number
 }
@@ -304,6 +302,41 @@ export interface RosterFrame {
   kind: 'roster'
   officeId: string
   snapshot: RosterSnapshot
+  /**
+   * The authority's roster version this snapshot is. A `member-status` names the
+   * version it applies on top of. Absent from an authority that sends none.
+   */
+  version?: number
+}
+
+/** One member's live run state, as a `member-status` carries it. */
+export interface MemberRuntimeSnap {
+  appId: string
+  status: TeamMemberRuntimeStatus
+  currentTaskTitle?: string
+  busy?: RosterBusyEntry[]
+}
+
+/**
+ * Authority → joiner: only what changed in the
+ * run state since `baseVersion` (members whose status/task/busy moved, and the
+ * office's observable status). A joiner whose version is not `baseVersion`
+ * answers with `roster-request` instead of applying it.
+ */
+export interface MemberStatusFrame {
+  kind: 'member-status'
+  officeId: string
+  baseVersion: number
+  version: number
+  status?: TeamStatus
+  members: MemberRuntimeSnap[]
+}
+
+/** Joiner → authority: send me the full roster (a `member-status` did not line up). */
+export interface RosterRequestFrame {
+  kind: 'roster-request'
+  officeId: string
+  fromNode: NodeId
 }
 
 /**
@@ -320,6 +353,8 @@ export interface MemberLeaveFrame {
 }
 
 export type FederationMessage =
+  | MemberStatusFrame
+  | RosterRequestFrame
   | JoinRequest
   | JoinGrant
   | JoinReject
@@ -340,15 +375,21 @@ export type FederationMessage =
 // ── Transport planes (outbound prioritization) ──
 
 /**
- * The three transport planes a frame belongs to, in strict priority order. A
- * congested link drains 'control' first and sheds 'artifact' first, so a large
- * artifact transfer can never head-of-line-block or starve coordination, and a
- * control frame (join / presence / election / replication / ack) is never the
- * one dropped on overflow.
+ * The transport plane a frame belongs to (`shared/federation/planes`, strict
+ * priority order). A congested link drains 'control' first, so a stream, a
+ * transcript backfill or a large artifact transfer can never head-of-line-block
+ * or starve coordination, and a control frame (join / presence / election /
+ * replication / ack / wake) is never the one dropped on overflow.
  */
-export type FramePlane = 'control' | 'stream' | 'artifact'
+export type FramePlane = FederationPlane
 
-/** Classify a frame into its transport plane. Everything not stream/artifact is control. */
+/**
+ * Classify a frame into its transport plane. Transcript replication (the
+ * session feeds, whose loss the feed resend heals) and board catch-up pages
+ * ride `feed`, so a slow consumer backfilling history never crowds out a wake;
+ * ctrl-feed frames stay on `control`. Everything else not stream/artifact is
+ * control.
+ */
 export function framePlane(frame: FederationMessage): FramePlane {
   switch (frame.kind) {
     case 'stream-frames':
@@ -356,6 +397,16 @@ export function framePlane(frame: FederationMessage): FramePlane {
     case 'artifact-fetch':
     case 'artifact-bytes':
       return 'artifact'
+    case 'feed-digest':
+    case 'catchup-response':
+      return 'feed'
+    case 'feed-subscribe':
+    case 'feed-unsubscribe':
+    case 'feed-entries':
+    case 'feed-ack':
+    case 'feed-nack':
+    case 'feed-advertise':
+      return frame.feedKey.includes('\u0000session:') ? 'feed' : 'control'
     default:
       return 'control'
   }

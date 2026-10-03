@@ -13,6 +13,14 @@
  */
 
 export { perfService } from './perf.service'
+export {
+  startPerfTelemetry,
+  stopPerfTelemetry,
+  recordProcessGone,
+  recordRendererHang,
+  writePreCrashSnapshot,
+  countPendingCrashDumps,
+} from './perf-reporting'
 export * from './types'
 
 // ============================================

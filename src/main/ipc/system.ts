@@ -12,6 +12,7 @@ import { setAutoLaunch, getAutoLaunch } from '../foundation/config.service'
 import { getMainWindow, onMainWindowChange } from '../foundation/window.service'
 import { logFatal } from '../foundation/logging'
 import { relaunchApp } from '../services/lifecycle'
+import { countPendingCrashDumps } from '../services/perf'
 import { systemRpc } from '../../shared/rpc/contracts/system.contract'
 import { registerRawRpcHandlers } from './rpc'
 
@@ -149,6 +150,23 @@ export function registerSystemHandlers(): void {
         return { success: true, data: mainWindow?.isMaximized() ?? false }
       } catch (error) {
         const err = error as Error
+        return { success: false, error: err.message }
+      }
+    },
+
+    // Open the crash reports folder (Crashpad minidumps are kept locally, never
+    // uploaded) so a user can hand them over for diagnosis.
+    openCrashReportsFolder: async () => {
+      try {
+        const dir = app.getPath('crashDumps')
+        const pending = countPendingCrashDumps()
+        const error = await shell.openPath(dir)
+        if (error) throw new Error(error)
+        console.log(`[Settings] system:open-crash-reports-folder - Opened (pending dumps: ${pending})`)
+        return { success: true, data: { path: dir, pending } }
+      } catch (error) {
+        const err = error as Error
+        console.error('[Settings] system:open-crash-reports-folder - Failed:', err.message)
         return { success: false, error: err.message }
       }
     },

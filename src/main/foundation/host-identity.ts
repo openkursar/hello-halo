@@ -185,3 +185,14 @@ export function getLocalIp(): string | null {
 
   return fallback
 }
+
+/**
+ * Whether this process looks like it runs in a virtual desktop session (RDP,
+ * Citrix ICA, VMware Horizon). Reported in performance telemetry only — never
+ * a reason to change behavior; degradation follows measured memory alone.
+ */
+export function isVirtualDesktopSession(env: NodeJS.ProcessEnv = process.env): boolean {
+  const session = (env.SESSIONNAME ?? '').toUpperCase()
+  if (session.startsWith('RDP-') || session.startsWith('ICA-')) return true
+  return Boolean(env.ViewClient_Machine_Name || env.CITRIX_SESSION_ID || env.ClientName_Citrix)
+}

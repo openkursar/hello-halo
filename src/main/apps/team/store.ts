@@ -280,6 +280,8 @@ export class TeamStore implements ITeamStore {
   private readonly stmtInsertActivity: Database.Statement
   private readonly stmtDeleteActivity: Database.Statement
   private readonly stmtListActivityByEpoch: Database.Statement
+  private readonly stmtListActivityByEpochSince: Database.Statement
+  private readonly stmtListRecentActivityByEpoch: Database.Statement
   private readonly stmtListActivityByTeam: Database.Statement
   private readonly stmtCountActivityByEpoch: Database.Statement
   // team_tool_audit
@@ -477,6 +479,15 @@ export class TeamStore implements ITeamStore {
       SELECT * FROM team_activity
       WHERE team_id = ? AND epoch_id = ?
       ORDER BY created_at ASC, rowid ASC
+    `)
+    this.stmtListActivityByEpochSince = db.prepare(`
+      SELECT * FROM team_activity
+      WHERE team_id = ? AND epoch_id = ? AND created_at > ?
+      ORDER BY created_at ASC, rowid ASC
+    `)
+    this.stmtListRecentActivityByEpoch = db.prepare(`
+      SELECT * FROM team_activity WHERE team_id = ? AND epoch_id = ?
+      ORDER BY created_at DESC, id DESC LIMIT ?
     `)
     this.stmtListActivityByTeam = db.prepare(`
       SELECT * FROM team_activity WHERE team_id = ? ORDER BY created_at ASC, rowid ASC
@@ -999,6 +1010,35 @@ export class TeamStore implements ITeamStore {
     return this.joinedMemberRuntime.get(teamId)?.get(appId)?.busy ?? []
   }
 
+  applyJoinedMemberStatus(
+    teamId: string,
+    change: {
+      status?: TeamStatus
+      members: Array<{ appId: string; status: TeamMemberRuntimeStatus; currentTaskTitle?: string; busy?: RosterBusyEntry[] }>
+    }
+  ): void {
+    let runtime = this.joinedMemberRuntime.get(teamId)
+    if (!runtime) {
+      runtime = new Map()
+      this.joinedMemberRuntime.set(teamId, runtime)
+    }
+    for (const m of change.members) {
+      const busy = m.busy && m.busy.length > 0 ? m.busy : undefined
+      if (m.status === 'idle' && !busy) {
+        runtime.delete(m.appId)
+        continue
+      }
+      runtime.set(m.appId, {
+        status: m.status,
+        ...(m.currentTaskTitle ? { taskTitle: m.currentTaskTitle } : {}),
+        ...(busy ? { busy } : {}),
+      })
+    }
+    if (change.status !== undefined) {
+      this.updateTeamStatus(teamId, change.status)
+    }
+  }
+
   // ── team_edges ──────────────────────────────────
 
   /**
@@ -1171,9 +1211,12 @@ export class TeamStore implements ITeamStore {
     return (this.stmtListActivityByEpoch.all(teamId, epochId) as TeamActivityRow[]).map(rowToActivity)
   }
 
+  listActivityByEpochSince(teamId: string, epochId: string, sinceCreatedAt: number): TeamActivity[] {
+    return (this.stmtListActivityByEpochSince.all(teamId, epochId, sinceCreatedAt) as TeamActivityRow[]).map(rowToActivity)
+  }
+
   listRecentActivityByEpoch(teamId: string, epochId: string, limit: number): TeamActivity[] {
-    const rows = this.db.prepare(`SELECT * FROM team_activity WHERE team_id = ? AND epoch_id = ?
-      ORDER BY created_at DESC, id DESC LIMIT ?`).all(teamId, epochId, limit) as TeamActivityRow[]
+    const rows = this.stmtListRecentActivityByEpoch.all(teamId, epochId, limit) as TeamActivityRow[]
     return rows.reverse().map(rowToActivity)
   }
 

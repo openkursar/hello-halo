@@ -1,16 +1,15 @@
 /**
- * apps/runtime/federation -- Multi-replica session-transcript feeds
+ * apps/runtime/federation -- Session-transcript feeds
  *
- * Proactively replicates every member's run transcript to every office node,
- * IM-style, over the unified feed substrate (runtime/federation/log): the OWNER
- * appends each transcript message to its own `session:<sessionKey>` feed (single
- * writer, append-only, never pruned); every peer consumes the feed and persists
- * two things per entry — a verbatim MIRROR row (so this node can in turn serve
- * the feed to peers that cannot reach the author) and a HISTORY-CACHE row (the
- * exact rows the manager's cache-first fetchMemberHistory already reads). The
- * result: history opens from the local copy, only the un-replicated tail ever
- * crosses the wire, and a transcript survives its owner going permanently
- * offline on every node that replicated it.
+ * Replicates members' run transcripts over the unified feed substrate
+ * (runtime/federation/log). The OWNER appends each transcript message to its own
+ * `session:<sessionKey>` feed (single writer, append-only). The office authority
+ * keeps a copy of every feed: a verbatim MIRROR row it serves onward, plus a
+ * HISTORY-CACHE row. Any other node copies only the feeds a local viewer shows
+ * (`wantsReplica`), keeps just the history-cache rows, and releases a copy's
+ * subscription a grace period after nobody here shows it. History is readable
+ * while the authority is online; a copy that is not local is fetched when shown
+ * and never reads as "this member said nothing".
  *
  * Mutable-tail contract: the transcript reader merges an in-flight turn's events
  * into a provisional trailing assistant message that keeps changing until the
@@ -19,13 +18,14 @@
  * last published message changed on disk — consumers upsert by message seq, so
  * every replica converges on the finished form even across races.
  *
- * Topology: joiners exchange frames only with the office authority (star), so
- * the authority doubles as the serving replica for joiner↔joiner replication —
- * a subscribe for a feed authored elsewhere is served from the mirror. Discovery
- * is the `feed-advertise` frame: the serving side announces `(feedKey, upToSeq)`
- * on append / peer-online / a slow re-announce tick, and a consumer whose
- * applied cursor is behind answers with a subscribe from its watermark. Both
- * halves are idempotent, so advertise doubles as the self-healing re-announce.
+ * Topology: joiners exchange frames only with the office authority (star), so a
+ * subscribe for a feed authored elsewhere is served from the authority's mirror.
+ * Discovery: an owner announces its own feeds to the authority with
+ * `feed-advertise`; the authority announces to peers with `feed-digest` (the full
+ * list when a peer joins or comes online, then only what grew). A consumer that
+ * wants a feed and is behind answers with a subscribe from its watermark.
+ * Retention: a node that does not serve prunes its own feeds below the
+ * authority's ack.
  *
  * Transport- and domain-agnostic seam like ctrl-feed: `sendToPeer`/`broadcast`
  * (link routing) and `readOwnedTranscript` (chat storage) are injected; nothing
@@ -33,7 +33,7 @@
  */
 
 import type { FeedStore } from '../../federation'
-import { parseTeamSessionKey } from '../../../../shared/apps/im-keys'
+import { buildTeamSessionKey, parseTeamSessionKey } from '../../../../shared/apps/im-keys'
 import type { SerializedHistoryMessage } from './protocol-m2'
 import type { NodeId } from './types'
 import { createDurableFeedLog, type DurableFeedLog } from './log/durable-log'
@@ -62,6 +62,21 @@ const DEFAULT_PUBLISH_DEBOUNCE_MS = 400
 const FINALIZE_PUBLISH_MS = 3000
 /** Re-announce every known feed every N retransmit ticks (self-healing discovery). */
 const REANNOUNCE_EVERY_TICKS = 6
+/**
+ * Full `feed-digest` resend to every peer every N ticks (10 min at 5 s). In
+ * between each gets only the feeds that grew since it was last told, so an idle
+ * office announces nothing; the full resend heals a dropped digest.
+ */
+const FULL_DIGEST_EVERY_TICKS = 120
+/**
+ * How long a copied feed stays subscribed after no local viewer shows it any
+ * more, so a panel closed and reopened does not churn subscriptions.
+ */
+export const REPLICA_RELEASE_GRACE_MS = 60_000
+/** How long an epoch has been over before a node that does not serve drops its unwanted copy. */
+export const SETTLED_EPOCH_ARCHIVE_MS = 7 * 24 * 60 * 60 * 1000
+/** Settled-copy archiving pass cadence in retransmit ticks (6 h at the default 5 s). */
+const ARCHIVE_EVERY_TICKS = 4320
 /** Transcript messages carried per feed entry batch (entries can be large: thoughts). */
 const SESSION_BATCH_MAX = 16
 /**
@@ -87,6 +102,7 @@ export function historyCacheKey(ownerNodeId: NodeId, appId: string, epochId: str
 
 /** Whether a feed-sync frame belongs to the session plane (vs the ctrl plane). */
 export function isSessionFeedFrame(officeId: string, frame: FeedSyncFrame): boolean {
+  if (frame.kind === 'feed-digest') return true
   return parseFeedIdKey(officeId, frame.feedKey).kind.startsWith(SESSION_KIND_PREFIX)
 }
 
@@ -100,8 +116,20 @@ export interface SessionFeedDeps {
   sendToPeer: (peer: NodeId, frame: FeedSyncFrame) => void
   /** Fan a sync frame to every connected peer (host: all clients; joiner: upstream). */
   broadcast: (frame: FeedSyncFrame) => void
-  /** Owner-side: serialized transcript of a member THIS node owns (sync read). */
-  readOwnedTranscript: (teamId: string, appId: string, epochId: string) => SerializedHistoryMessage[] | null
+  /**
+   * Owner-side: serialized transcript of a member THIS node owns (sync read).
+   * `sinceSeq` (a publish watermark) narrows the read to that message and
+   * everything after it — the idle sweep republishes every few seconds while a
+   * turn runs, so a whole-transcript read there would cost O(transcript size)
+   * per tick. Inclusive of `sinceSeq` itself: the revision self-heal compares
+   * the last published message against its current on-disk form.
+   */
+  readOwnedTranscript: (
+    teamId: string,
+    appId: string,
+    epochId: string,
+    sinceSeq?: number
+  ) => SerializedHistoryMessage[] | null
   /**
    * Whether a turn is currently running for this session on THIS node. The
    * transcript reader merges an in-flight turn's events into a PROVISIONAL last
@@ -131,6 +159,32 @@ export interface SessionFeedDeps {
    * self-label on a joined office's single upstream leg).
    */
   acceptEntriesFrom: (from: NodeId, author: NodeId) => boolean
+  /**
+   * The office authority this node publishes to. A node that does not serve
+   * drops the prefix of its own feeds the authority has acked — the authority's
+   * mirror is the office's copy from then on. Absent → own feeds are kept whole.
+   */
+  authorityNodeId?: () => NodeId | null
+  /**
+   * Whether this node keeps a local copy of `feedKey`: true while a local viewer
+   * shows the session. A feed it does not want is only remembered (`upToSeq`),
+   * and subscribed when a panel opens on it. Absent → every announced feed is
+   * replicated.
+   */
+  wantsReplica?: (feedKey: string) => boolean
+  /**
+   * Serving side: the peers to announce feeds to, as `feed-digest` frames (one
+   * full digest when a peer comes online, then only what grew since it was last
+   * told, plus a slow full resend). Null or absent → this node does not serve:
+   * its own feeds are announced to its upstream with one `feed-advertise` each.
+   */
+  announceTargets?: () => NodeId[] | null
+  /**
+   * When an epoch ended (null while open or unknown). A node that does not serve
+   * drops its copy of feeds it no longer wants once their epoch has been over
+   * for `SETTLED_EPOCH_ARCHIVE_MS`; opening such a history fetches it again.
+   */
+  epochEndedAt?: (epochId: string) => number | null
   /** Retransmit backstop interval (ms); 0 disables the timer (tests tick manually). */
   retransmitIntervalMs?: number
   publishDebounceMs?: number
@@ -145,6 +199,13 @@ export interface SessionFeed {
   publishOwnedTail(sessionKey: string): number
   /** Advertise every feed this node can serve (own + mirrored) to one peer. */
   advertiseAllTo(peer: NodeId): void
+  /** Re-check which remembered feeds are wanted now, and subscribe the ones behind. */
+  refreshWanted(): void
+  /**
+   * Restart every copy this node is taking. After a (re)join the serving node may
+   * have restarted and forgotten its subscribers, like live-stream subscriptions.
+   */
+  resubscribeCopies(): void
   /** Route one inbound feed-sync frame from a peer. */
   handleFrame(from: NodeId, frame: FeedSyncFrame): void
   /** Forget a disconnected peer's producer subscriptions. */
@@ -181,6 +242,7 @@ export function createSessionFeed(deps: SessionFeedDeps): SessionFeed {
     send: (peer, frame) => deps.sendToPeer(peer, frame),
     getPeerCursor: (feedKey, peer) => feedStore.getPeerCursor(officeId, feedKey, peer),
     setPeerCursor: (feedKey, peer, seq) => feedStore.setPeerCursor(officeId, feedKey, peer, seq, now()),
+    truncatedBeforeSeq: (feedKey) => feedStore.getMeta(officeId, feedKey)?.truncatedBeforeSeq ?? 0,
   })
 
   /** Contiguous mirror rows above afterSeq (corrupt rows end the run — contiguity first). */
@@ -202,13 +264,53 @@ export function createSessionFeed(deps: SessionFeedDeps): SessionFeed {
     officeId,
     batchMax: SESSION_BATCH_MAX,
     read: (feedKey, after, limit) => readMirror(feedKey, after, Math.min(limit, MIRROR_READ_LIMIT)),
-    latestSeq: (feedKey) => feedStore.getCacheMaxSeq(officeId, feedKey),
+    latestSeq: (feedKey) => servableUpTo(feedKey),
     send: (peer, frame) => deps.sendToPeer(peer, frame),
     getPeerCursor: (feedKey, peer) => feedStore.getPeerCursor(officeId, feedKey, peer),
     setPeerCursor: (feedKey, peer, seq) => feedStore.setPeerCursor(officeId, feedKey, peer, seq, now()),
+    truncatedBeforeSeq: (feedKey) => mirrorFloor(feedKey),
   })
 
-  /** Persist one replicated entry: the mirror row + the history-cache row. */
+  /**
+   * Below this seq the mirror holds nothing. A node mirrors only while it serves
+   * (a plain joiner never serves anyone), so a node elected later starts its
+   * mirror mid-feed; announcing that floor lets a consumer behind it skip ahead
+   * instead of nacking a range this replica can never produce. A consumer that
+   * skips keeps a hole in its history copy, which the cache-first history read
+   * detects and fills from the owner.
+   */
+  function mirrorFloor(feedKey: string): number {
+    const min = feedStore.getCacheMinSeq(officeId, feedKey)
+    return min > 1 ? min - 1 : 0
+  }
+
+  /** Keep the mirror a contiguous suffix: a row that would leave a hole replaces what came before it. */
+  function writeMirrorRow(feedKey: string, entry: FeedEntry): void {
+    const max = servableUpTo(feedKey)
+    if (max > 0 && max < entry.seq - 1) {
+      const dropped = feedStore.deleteCacheFeed(officeId, feedKey)
+      console.warn(
+        `${LOG_TAG} mirror restarted office=${officeId} feed=${feedKey} at seq=${entry.seq}; dropped ${dropped} rows before a gap`
+      )
+    }
+    feedStore.putCache(officeId, feedKey, entry.seq, JSON.stringify(entry))
+    servable.set(feedKey, entry.seq)
+  }
+
+  // Feeds whose mirror grew during the batch being applied; served onward once
+  // the batch is done rather than once per entry.
+  const mirrorGrew = new Set<string>()
+
+  /** Push each grown mirror to peers subscribed through this node and announce it to the rest. */
+  function flushMirrorGrowth(): void {
+    for (const feedKey of mirrorGrew) {
+      mirrorProducer.notifyAppended(feedKey)
+      advertise(feedKey)
+    }
+    mirrorGrew.clear()
+  }
+
+  /** Persist one replicated entry: the history-cache row, plus the mirror row while serving. */
   function applyEntry(feedKey: string, entry: FeedEntry): void {
     const id = parseFeedIdKey(officeId, feedKey)
     if (!id.kind.startsWith(SESSION_KIND_PREFIX)) return
@@ -224,8 +326,6 @@ export function createSessionFeed(deps: SessionFeedDeps): SessionFeed {
       console.warn(`${LOG_TAG} malformed msg payload office=${officeId} feed=${feedKey} seq=${entry.seq}; ignoring`)
       return
     }
-    // Mirror row: the verbatim entry, so this node can serve the feed onward.
-    feedStore.putCache(officeId, feedKey, entry.seq, JSON.stringify(entry))
     // History-cache row: exactly what the cache-first fetchMemberHistory reads —
     // this line is what turns a viewer's history open into a local read.
     feedStore.putCache(
@@ -234,10 +334,13 @@ export function createSessionFeed(deps: SessionFeedDeps): SessionFeed {
       msg.seq,
       JSON.stringify(msg)
     )
-    // Push the grown mirror to any peer subscribed through this node, and let
-    // peers that have not discovered the feed yet learn it exists.
-    mirrorProducer.notifyAppended(feedKey)
-    if (deps.servesMirror()) advertise(feedKey)
+    // Mirror row: the verbatim entry, so this node can serve the feed onward. Only
+    // the serving node needs it — a joiner that mirrored every feed paid a second
+    // copy of every transcript for a replica nobody reads.
+    if (deps.servesMirror()) {
+      writeMirrorRow(feedKey, entry)
+      mirrorGrew.add(feedKey)
+    }
     deps.onApplied?.({ ownerNodeId: id.author, appId: parsed.appId, epochId: parsed.epochId })
   }
 
@@ -250,6 +353,8 @@ export function createSessionFeed(deps: SessionFeedDeps): SessionFeed {
     getLocalCursor: (feedKey) => feedStore.getLocalCursor(officeId, feedKey),
     setLocalCursor: (feedKey, seq) => feedStore.setLocalCursor(officeId, feedKey, seq, now()),
     observeHlc: (hlc) => durableLog.observeHlc(hlc),
+    // A batch of transcript entries commits once instead of several writes per entry.
+    transaction: (fn) => feedStore.transaction(fn),
   })
 
   // ── Publishing (owner side) ──
@@ -321,23 +426,32 @@ export function createSessionFeed(deps: SessionFeedDeps): SessionFeed {
     const parsed = parseTeamSessionKey(sessionKey)
     if (!parsed || parsed.teamId !== officeId) return 0
     const feedKey = ownFeedKey(sessionKey)
-    const messages = deps.readOwnedTranscript(parsed.teamId, parsed.appId, parsed.epochId)
-    if (!messages || messages.length === 0) return 0
-
-    // An in-flight turn's trailing assistant message is a PROVISIONAL flush that
-    // keeps changing until the turn ends — withhold it and stay dirty so the
-    // idle sweep publishes the finished version.
-    const active = deps.isSessionActive(sessionKey)
-    const publishable =
-      active && messages[messages.length - 1]?.role === 'assistant' ? messages.slice(0, -1) : messages
 
     // The published message watermark is the LAST entry's payload seq (not the
     // feed seq): a revision entry re-carries an earlier message seq, so the two
-    // sequences diverge once a revision was ever appended.
+    // sequences diverge once a revision was ever appended. Read BEFORE the
+    // transcript: it bounds the read to what is left to publish.
     const feedTail = durableLog.latestSeq(feedKey)
     const lastEntry = feedTail > 0 ? durableLog.read(feedKey, feedTail - 1, 1)[0] : undefined
     const lastMsg = lastEntry?.payload as SerializedHistoryMessage | undefined
     const publishedSeq = typeof lastMsg?.seq === 'number' ? lastMsg.seq : 0
+
+    const active = deps.isSessionActive(sessionKey)
+    const messages = deps.readOwnedTranscript(parsed.teamId, parsed.appId, parsed.epochId, publishedSeq)
+    if (!messages) return 0
+    // An empty tail after a watermark means nothing new since the last publish:
+    // an idle session has therefore completed publishing (clear the marker the
+    // idle publish used to clear); an active one still withholds its final form.
+    if (messages.length === 0) {
+      if (!active) dirtySessions.delete(sessionKey)
+      return 0
+    }
+
+    // An in-flight turn's trailing assistant message is a PROVISIONAL flush that
+    // keeps changing until the turn ends — withhold it and stay dirty so the
+    // idle sweep publishes the finished version.
+    const publishable =
+      active && messages[messages.length - 1]?.role === 'assistant' ? messages.slice(0, -1) : messages
 
     let appended = 0
     // Self-heal: if the last published message has since changed on disk (an
@@ -361,6 +475,7 @@ export function createSessionFeed(deps: SessionFeedDeps): SessionFeed {
       appended++
     }
     if (appended > 0) {
+      servable.set(feedKey, durableLog.latestSeq(feedKey))
       ownProducer.notifyAppended(feedKey)
       advertise(feedKey)
     }
@@ -417,11 +532,30 @@ export function createSessionFeed(deps: SessionFeedDeps): SessionFeed {
   // only when the feed actually grew (the slow re-announce tick bypasses this).
   const advertisedUpTo = new Map<string, number>()
 
+  // Every session feed this node can serve (own, or mirrored while serving) ->
+  // its highest seq. Kept in memory from appends and applies; the tables are
+  // scanned once, so a re-announce never re-reads the whole cache.
+  const servable = new Map<string, number>()
+  let servableSeeded = false
+
+  function seedServable(): void {
+    if (servableSeeded) return
+    servableSeeded = true
+    for (const key of feedStore.listLogFeedIds(officeId)) {
+      const id = parseFeedIdKey(officeId, key)
+      if (id.author !== selfNodeId || !id.kind.startsWith(SESSION_KIND_PREFIX)) continue
+      if (!servable.has(key)) servable.set(key, durableLog.latestSeq(key))
+    }
+    for (const key of feedStore.listCacheFeedIds(officeId)) {
+      const id = parseFeedIdKey(officeId, key)
+      if (id.author === selfNodeId || !id.kind.startsWith(SESSION_KIND_PREFIX)) continue
+      if (!servable.has(key)) servable.set(key, feedStore.getCacheMaxSeq(officeId, key))
+    }
+  }
+
   function servableUpTo(feedKey: string): number {
-    const author = parseFeedIdKey(officeId, feedKey).author
-    return author === selfNodeId
-      ? durableLog.latestSeq(feedKey)
-      : feedStore.getCacheMaxSeq(officeId, feedKey)
+    seedServable()
+    return servable.get(feedKey) ?? 0
   }
 
   function advertiseFrame(feedKey: string, upToSeq: number): FeedSyncFrame {
@@ -432,51 +566,184 @@ export function createSessionFeed(deps: SessionFeedDeps): SessionFeed {
     const upToSeq = servableUpTo(feedKey)
     if (upToSeq <= (advertisedUpTo.get(feedKey) ?? 0)) return
     advertisedUpTo.set(feedKey, upToSeq)
-    deps.broadcast(advertiseFrame(feedKey, upToSeq))
+    // A serving node's peers learn it from the next tick's delta digest.
+    if (!deps.announceTargets?.()) deps.broadcast(advertiseFrame(feedKey, upToSeq))
+  }
+
+  // Digest peer -> (feedKey -> upToSeq it was last told).
+  const toldDigest = new Map<NodeId, Map<string, number>>()
+
+  function sendDigest(peer: NodeId, feeds: Array<[string, number]>): void {
+    if (feeds.length === 0) return
+    let told = toldDigest.get(peer)
+    if (!told) toldDigest.set(peer, (told = new Map()))
+    for (const [feedKey, upToSeq] of feeds) told.set(feedKey, upToSeq)
+    deps.sendToPeer(peer, { kind: 'feed-digest', officeId, feeds })
+  }
+
+  /** Each peer gets only the feeds that grew since it was last told. */
+  function sendDigestDeltas(targets: NodeId[]): void {
+    let list: Array<[string, number]> | null = null
+    for (const peer of targets) {
+      list ??= servableList()
+      const told = toldDigest.get(peer)
+      sendDigest(peer, told ? list.filter(([key, upToSeq]) => (told.get(key) ?? 0) < upToSeq) : list)
+    }
   }
 
   /** Every session feed this node can serve: authored + (when serving) mirrored. */
   function servableFeedKeys(): string[] {
-    const keys = new Set<string>()
-    for (const key of feedStore.listLogFeedIds(officeId)) {
-      const id = parseFeedIdKey(officeId, key)
-      if (id.author === selfNodeId && id.kind.startsWith(SESSION_KIND_PREFIX)) keys.add(key)
+    seedServable()
+    const serving = deps.servesMirror()
+    const keys: string[] = []
+    for (const key of servable.keys()) {
+      if (serving || parseFeedIdKey(officeId, key).author === selfNodeId) keys.push(key)
     }
-    if (deps.servesMirror()) {
-      for (const key of feedStore.listCacheFeedIds(officeId)) {
-        if (parseFeedIdKey(officeId, key).kind.startsWith(SESSION_KIND_PREFIX)) keys.add(key)
-      }
+    return keys
+  }
+
+  function servableList(): Array<[string, number]> {
+    const feeds: Array<[string, number]> = []
+    for (const feedKey of servableFeedKeys()) {
+      const upToSeq = servableUpTo(feedKey)
+      if (upToSeq > 0) feeds.push([feedKey, upToSeq])
     }
-    return [...keys]
+    return feeds
   }
 
   function advertiseAllTo(peer: NodeId): void {
-    for (const feedKey of servableFeedKeys()) {
-      const upToSeq = servableUpTo(feedKey)
-      if (upToSeq > 0) deps.sendToPeer(peer, advertiseFrame(feedKey, upToSeq))
+    sendDigest(peer, servableList())
+  }
+
+  /**
+   * Self-healing re-announce: a node that does not serve re-advertises its own
+   * feeds to its upstream; a serving node resends every peer the full digest,
+   * but only rarely (deltas go every tick).
+   */
+  function reannounceAll(fullDigest: boolean): void {
+    const targets = deps.announceTargets?.()
+    if (!targets) {
+      for (const [feedKey, upToSeq] of servableList()) deps.broadcast(advertiseFrame(feedKey, upToSeq))
+      return
+    }
+    if (fullDigest) for (const peer of targets) advertiseAllTo(peer)
+  }
+
+  // Feeds announced to this node that it has not replicated (not wanted yet).
+  const knownFeeds = new Map<string, number>()
+  // Remote feeds this node subscribed to, and when each one no longer wanted is released.
+  const replicating = new Set<string>()
+  const releaseAt = new Map<string, number>()
+
+  function replicate(feedKey: string, restart: boolean): void {
+    replicating.add(feedKey)
+    releaseAt.delete(feedKey)
+    if (restart) consumer.subscribe(feedKey)
+    else consumer.ensureSubscribed(feedKey)
+  }
+
+  /**
+   * A copied feed nobody here shows any more stops arriving after a grace period:
+   * the authority stops pushing it, and the cursor stays for when it is shown
+   * again. Traffic follows the sessions shown now, not every session ever shown.
+   */
+  function releaseUnwanted(): void {
+    const t = now()
+    for (const feedKey of replicating) {
+      if (wanted(feedKey)) {
+        releaseAt.delete(feedKey)
+        continue
+      }
+      const due = releaseAt.get(feedKey)
+      if (due === undefined) {
+        releaseAt.set(feedKey, t + REPLICA_RELEASE_GRACE_MS)
+        continue
+      }
+      if (t < due) continue
+      releaseAt.delete(feedKey)
+      replicating.delete(feedKey)
+      consumer.unsubscribe(feedKey)
     }
   }
 
-  function reannounceAll(): void {
-    for (const feedKey of servableFeedKeys()) {
-      const upToSeq = servableUpTo(feedKey)
-      if (upToSeq > 0) deps.broadcast(advertiseFrame(feedKey, upToSeq))
-    }
+  function wanted(feedKey: string): boolean {
+    return deps.wantsReplica?.(feedKey) ?? true
   }
 
-  function handleAdvertise(frame: { feedKey: string; upToSeq: number }): void {
+  /**
+   * `fromAuthor`: the feed's own author announced it (after an append, or after
+   * it restarted and forgot who subscribed), so a copy already running restarts.
+   * A serving node's digest does not restart one: that copy is being pushed.
+   */
+  function handleAdvertise(frame: { feedKey: string; upToSeq: number }, fromAuthor: boolean): void {
     const author = parseFeedIdKey(officeId, frame.feedKey).author
     if (author === selfNodeId) return // own feed announced back (broadcast echo)
+    if (!parseFeedIdKey(officeId, frame.feedKey).kind.startsWith(SESSION_KIND_PREFIX)) return
+    knownFeeds.set(frame.feedKey, Math.max(knownFeeds.get(frame.feedKey) ?? 0, frame.upToSeq))
+    if (!wanted(frame.feedKey)) return
     if (feedStore.getLocalCursor(officeId, frame.feedKey) >= frame.upToSeq) return
-    consumer.subscribe(frame.feedKey)
+    replicate(frame.feedKey, fromAuthor || !replicating.has(frame.feedKey))
+  }
+
+  function resubscribeCopies(): void {
+    for (const feedKey of replicating) consumer.subscribe(feedKey)
+  }
+
+  function refreshWanted(): void {
+    for (const [feedKey, upToSeq] of knownFeeds) {
+      if (!wanted(feedKey)) continue
+      if (replicating.has(feedKey)) {
+        releaseAt.delete(feedKey)
+        continue
+      }
+      if (feedStore.getLocalCursor(officeId, feedKey) >= upToSeq) continue
+      replicate(feedKey, false)
+    }
+    releaseUnwanted()
+  }
+
+  // ── Archiving copies nobody here wants ──
+
+  /**
+   * On a node that does not serve, the copy of a feed it does not want is
+   * dropped once the feed's epoch has been over long enough: its history rows
+   * go and its cursor returns to 0, so opening that history later subscribes
+   * afresh through the authority's mirror (or reports it unreachable while the
+   * authority is offline) instead of reading a partial copy.
+   */
+  function archiveSettledCopies(): void {
+    if (deps.servesMirror() || !deps.wantsReplica || !deps.epochEndedAt) return
+    const cutoff = now() - SETTLED_EPOCH_ARCHIVE_MS
+    let archived = 0
+    for (const key of feedStore.listCacheFeedIds(officeId)) {
+      if (!key.startsWith('history\u0000')) continue
+      const [, owner, appId, epochId] = key.split('\u0000')
+      if (!owner || !appId || !epochId || owner === selfNodeId) continue
+      const ended = deps.epochEndedAt(epochId)
+      if (ended === null || ended > cutoff) continue
+      const feedKey = feedIdKey({
+        officeId,
+        author: owner,
+        kind: `${SESSION_KIND_PREFIX}${buildTeamSessionKey(appId, officeId, epochId)}` as FeedKind,
+      })
+      // Still subscribed (not yet past its release grace): entries keep arriving.
+      if (wanted(feedKey) || replicating.has(feedKey)) continue
+      feedStore.deleteCacheFeed(officeId, key)
+      feedStore.setLocalCursor(officeId, feedKey, 0, now())
+      archived += 1
+    }
+    if (archived > 0) console.log(`${LOG_TAG} archived ${archived} settled transcript copies office=${officeId}`)
   }
 
   // ── Inbound routing ──
 
   function handleFrame(from: NodeId, frame: FeedSyncFrame): void {
     switch (frame.kind) {
+      case 'feed-digest':
+        for (const [feedKey, upToSeq] of frame.feeds) handleAdvertise({ feedKey, upToSeq }, false)
+        break
       case 'feed-advertise':
-        handleAdvertise(frame)
+        handleAdvertise(frame, parseFeedIdKey(officeId, frame.feedKey).author === from)
         break
       case 'feed-entries': {
         const author = parseFeedIdKey(officeId, frame.feedKey).author
@@ -487,6 +754,13 @@ export function createSessionFeed(deps: SessionFeedDeps): SessionFeed {
           return
         }
         consumer.onEntries(frame)
+        flushMirrorGrowth()
+        break
+      }
+      case 'feed-unsubscribe': {
+        const producer =
+          parseFeedIdKey(officeId, frame.feedKey).author === selfNodeId ? ownProducer : mirrorProducer
+        producer.unsubscribe(from, frame.feedKey)
         break
       }
       case 'feed-subscribe':
@@ -507,6 +781,49 @@ export function createSessionFeed(deps: SessionFeedDeps): SessionFeed {
   function dropPeer(peer: NodeId): void {
     ownProducer.dropPeer(peer)
     mirrorProducer.dropPeer(peer)
+    toldDigest.delete(peer)
+  }
+
+  // ── Retention ──
+
+  // Own feed -> the floor already pruned to, so each pass only moves forward.
+  const ownPrunedThrough = new Map<string, number>()
+
+  /**
+   * While another node is the authority, keep only the part of each own feed it
+   * has not acked yet, plus the last entry (the publisher reads it back to know
+   * what it already published). The authority keeps its own feeds whole: its
+   * copy is the one the office reads.
+   */
+  function pruneOwnFeeds(): void {
+    if (deps.servesMirror()) return
+    const authority = deps.authorityNodeId?.()
+    if (!authority || authority === selfNodeId) return
+    seedServable()
+    for (const [feedKey, latest] of servable) {
+      if (parseFeedIdKey(officeId, feedKey).author !== selfNodeId) continue
+      const floor = Math.min(feedStore.getPeerCursor(officeId, feedKey, authority), latest - 1)
+      if (floor <= (ownPrunedThrough.get(feedKey) ?? 0)) continue
+      durableLog.truncate(feedKey, floor)
+      ownPrunedThrough.set(feedKey, floor)
+    }
+  }
+
+  /**
+   * A node that does not serve has no use for mirror rows of feeds authored
+   * elsewhere (older versions wrote them on every node). Its history-cache rows
+   * are kept — they are what opens history locally.
+   */
+  function dropUnservedMirrors(): void {
+    if (deps.servesMirror()) return
+    seedServable()
+    let dropped = 0
+    for (const feedKey of [...servable.keys()]) {
+      if (parseFeedIdKey(officeId, feedKey).author === selfNodeId) continue
+      dropped += feedStore.deleteCacheFeed(officeId, feedKey)
+      servable.delete(feedKey)
+    }
+    if (dropped > 0) console.log(`${LOG_TAG} dropped ${dropped} unserved mirror rows office=${officeId}`)
   }
 
   // ── Lifecycle ──
@@ -521,8 +838,17 @@ export function createSessionFeed(deps: SessionFeedDeps): SessionFeed {
     // Dirty sweep: a session that still withholds an in-flight tail (or whose
     // publish raced the turn end) republishes until an idle publish completes it.
     for (const sessionKey of [...dirtySessions]) safePublish(sessionKey)
+    releaseUnwanted()
     tickCount += 1
-    if (tickCount % REANNOUNCE_EVERY_TICKS === 0) reannounceAll()
+    const targets = deps.announceTargets?.()
+    if (targets) sendDigestDeltas(targets)
+    if (tickCount % REANNOUNCE_EVERY_TICKS === 0) {
+      reannounceAll(tickCount % FULL_DIGEST_EVERY_TICKS === 0)
+      pruneOwnFeeds()
+    }
+    // Once, after the authority role has had time to settle following a start.
+    if (tickCount === REANNOUNCE_EVERY_TICKS * 2) dropUnservedMirrors()
+    if (tickCount === REANNOUNCE_EVERY_TICKS * 4 || tickCount % ARCHIVE_EVERY_TICKS === 0) archiveSettledCopies()
   }
 
   /** Publish any owned tail persisted before the last shutdown (missed triggers). */
@@ -560,6 +886,8 @@ export function createSessionFeed(deps: SessionFeedDeps): SessionFeed {
     schedulePublish,
     publishOwnedTail,
     advertiseAllTo,
+    refreshWanted,
+    resubscribeCopies,
     handleFrame,
     dropPeer,
     retransmitTick,

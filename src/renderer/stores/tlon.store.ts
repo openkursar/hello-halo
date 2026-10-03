@@ -81,6 +81,25 @@ function clearChatWatchdog(kbId: string): void {
   }
 }
 
+/**
+ * The KB chat reads thoughts and tool calls (status line, citations), which main
+ * forwards only for conversations a view declared; held from the first send
+ * until the chat is cleared.
+ */
+const kbChatDetail = new Map<string, { conversationId: string; release: () => void }>()
+
+function retainKbChatDetail(kbId: string, conversationId: string): void {
+  const held = kbChatDetail.get(kbId)
+  if (held?.conversationId === conversationId) return
+  held?.release()
+  kbChatDetail.set(kbId, { conversationId, release: api.retainConversationDetail(conversationId) })
+}
+
+function releaseKbChatDetail(kbId: string): void {
+  kbChatDetail.get(kbId)?.release()
+  kbChatDetail.delete(kbId)
+}
+
 function armChatWatchdog(kbId: string, onStall: () => void): void {
   clearChatWatchdog(kbId)
   const timer = setTimeout(() => {
@@ -577,6 +596,7 @@ export const useTlonStore = create<TlonState>((set, get) => ({
     }
 
     const userMsg: TlonChatMessage = { id: crypto.randomUUID(), role: 'user', content }
+    retainKbChatDetail(kbId, conversationId)
     set(state => ({
       chatSessions: {
         ...state.chatSessions,
@@ -610,6 +630,7 @@ export const useTlonStore = create<TlonState>((set, get) => ({
 
   clearChat: async (kbId) => {
     clearChatWatchdog(kbId)
+    releaseKbChatDetail(kbId)
     const conversationId = get().chatSessions[kbId]?.conversationId
     set(state => ({
       chatSessions: { ...state.chatSessions, [kbId]: { messages: [], generating: false } },

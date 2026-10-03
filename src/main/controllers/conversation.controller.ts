@@ -7,6 +7,7 @@ import {
   listConversations as serviceListConversations,
   createConversation as serviceCreateConversation,
   getConversation as serviceGetConversation,
+  getConversationFrom as serviceGetConversationFrom,
   updateConversation as serviceUpdateConversation,
   deleteConversation as serviceDeleteConversation,
   addMessage as serviceAddMessage,
@@ -52,9 +53,11 @@ export function createConversation(spaceId: string, title?: string): ControllerR
 /**
  * Get a specific conversation
  */
-export function getConversation(spaceId: string, conversationId: string): ControllerResponse {
+export function getConversation(spaceId: string, conversationId: string, fromMessageId?: string): ControllerResponse {
   try {
-    const conversation = serviceGetConversation(spaceId, conversationId)
+    const conversation = fromMessageId
+      ? serviceGetConversationFrom(spaceId, conversationId, fromMessageId)
+      : serviceGetConversation(spaceId, conversationId)
     if (conversation) {
       return { success: true, data: conversation }
     }

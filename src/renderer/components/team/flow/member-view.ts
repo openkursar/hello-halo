@@ -8,7 +8,7 @@
 
 import { awaitsOurDecision, checksForMember } from '../../../../shared/apps/team-types'
 import type { RosterMember } from '../../../../shared/apps/team-types'
-import { useMemberPresence, useTeamStore, type MemberPresence } from '../../../stores/team.store'
+import { detailOf, useMemberPresence, useTeamStore, type MemberPresence, type TeamState } from '../../../stores/team.store'
 import { useAppsStore } from '../../../stores/apps.store'
 import { useTranslation } from '../../../i18n'
 
@@ -42,6 +42,16 @@ export interface MemberView {
   checkCount: number
 }
 
+/** Checks standing over a member, read from the team the card belongs to (not the Teams page selection). */
+export function memberCheckCount(
+  s: TeamState,
+  teamId: string,
+  appId: string,
+  focusedEpochId?: string | null,
+): number {
+  return checksForMember(detailOf(s, teamId)?.checks ?? [], appId, focusedEpochId).length
+}
+
 export function useMemberView(
   member: RosterMember,
   teamId: string,
@@ -49,9 +59,7 @@ export function useMemberView(
 ): MemberView {
   const { t } = useTranslation()
   const presence = useMemberPresence(teamId, member.appId)
-  const checkCount = useTeamStore(
-    s => checksForMember(s.detail?.checks ?? [], member.appId, focusedEpochId).length
-  )
+  const checkCount = useTeamStore(s => memberCheckCount(s, teamId, member.appId, focusedEpochId))
   const description = useAppsStore(
     s => s.apps.find(a => a.id === member.appId)?.spec.description ?? ''
   )

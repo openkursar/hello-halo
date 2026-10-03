@@ -12,6 +12,7 @@ import { ExternalLink } from 'lucide-react'
 import { TableVirtuoso, type TableComponents } from 'react-virtuoso'
 import { api } from '../../../api'
 import type { CanvasTab } from '../../../stores/canvas.store'
+import { useViewerResources } from '../viewer-resources'
 import { useTranslation } from '../../../i18n'
 import { OfficeFallback } from './OfficeFallback'
 import type { XlsxSheet, XlsxWorkerResult } from './xlsx.worker'
@@ -49,6 +50,7 @@ const tableComponents: TableComponents<string[]> = {
 export default function XlsxViewer({ tab, onScrollChange }: XlsxViewerProps) {
   const { t } = useTranslation()
   const bytes = tab.bytes
+  const resources = useViewerResources()
   const workerRef = useRef<Worker | null>(null)
   const [sheets, setSheets] = useState<XlsxSheet[] | null>(null)
   const [parseError, setParseError] = useState<string | null>(null)
@@ -62,9 +64,10 @@ export default function XlsxViewer({ tab, onScrollChange }: XlsxViewerProps) {
     setSheets(null)
     setParseError(null)
 
-    const worker = new Worker(new URL('./xlsx.worker.ts', import.meta.url), {
+    const scope = resources.scope()
+    const worker = scope.add(new Worker(new URL('./xlsx.worker.ts', import.meta.url), {
       type: 'module'
-    })
+    }))
     workerRef.current = worker
     worker.onmessage = (event: MessageEvent<XlsxWorkerResult>) => {
       if (event.data.ok) {
@@ -85,10 +88,10 @@ export default function XlsxViewer({ tab, onScrollChange }: XlsxViewerProps) {
     worker.postMessage(buffer, [buffer])
 
     return () => {
-      worker.terminate()
+      scope.dispose()
       workerRef.current = null
     }
-  }, [bytes])
+  }, [resources, bytes])
 
   const sheet = sheets?.[activeIdx] ?? null
 
@@ -128,8 +131,9 @@ export default function XlsxViewer({ tab, onScrollChange }: XlsxViewerProps) {
   // Restore / save scroll position (mirrors CsvViewer's TableVirtuoso wiring)
   useEffect(() => {
     if (!scrollerRef.current) return
-    scrollerRef.current.scrollTop = tab.scrollPosition ?? 0
-  }, [tab.id, activeIdx, sheet])
+    scrollerRef.current.scrollTop = tab.view.scrollPosition ?? 0
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeIdx, sheet])
 
   useEffect(() => {
     if (!onScrollChange) return

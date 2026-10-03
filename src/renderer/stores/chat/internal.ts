@@ -16,8 +16,12 @@ import type { StoreApi } from 'zustand'
 import type { GoalInput } from '../../../shared/types/goal'
 import type { ApiRetryEvent } from '../../../shared/types/api-retry'
 
-// LRU cache size limit
+// Conversation cache bounds (backend/cache.ts): entries, and estimated heap
+// (one conversation can hold megabytes of inline images or v1 thoughts).
 export const CONVERSATION_CACHE_SIZE = 10
+export const CONVERSATION_CACHE_BYTES = 32 * 1024 * 1024
+// Thoughts read on demand, across all cached conversations.
+export const LOADED_THOUGHTS_BYTES = 16 * 1024 * 1024
 
 // Store-level timer for pulseReadAt cleanup (independent of UI components)
 
@@ -308,6 +312,8 @@ export interface ChatState {
   resetSpace: (spaceId: string) => void
   /** Drop every trace of one conversation (cache, live state, draft, selection). */
   forgetConversation: (conversationId: string) => void
+  /** Critical memory pressure: keep only what is on screen or running (backend/cache.ts). */
+  shedBackgroundDetail: () => void
 }
 
 // Default empty states

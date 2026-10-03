@@ -735,6 +735,8 @@ interface HaloConfig {
     }
     /** Cap on team member turns running at once on this machine. Overrides the built-in default when set. */
     teamMaxConcurrentTurns?: number
+    /** Most engine sessions kept resident at once (halved under memory pressure). Default in shared/constants/session-budget. */
+    maxResidentSessions?: number
   }
   remoteAccess: {
     enabled: boolean

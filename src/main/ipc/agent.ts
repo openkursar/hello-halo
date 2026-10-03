@@ -34,6 +34,61 @@ import { analytics } from '../services/analytics/analytics.service'
 import { agentRpc } from '../../shared/rpc/contracts/agent.contract'
 import { registerRawRpcHandlers } from './rpc'
 import { markIntentionalStop } from '../apps/runtime'
+import { ipcMain } from 'electron'
+import { shouldDeliverAgentEvent } from '../../shared/agent-event-visibility'
+import { clearDetailConversations, setDetailConversations } from '../services/conversation-detail'
+
+/**
+ * Conversations whose streaming detail each renderer declared it shows, keyed
+ * by webContents id. A renderer that has not declared (yet, or since a reload)
+ * receives status events only.
+ */
+const detailByRenderer = new Map<number, ReadonlySet<string>>()
+const NO_DETAIL: ReadonlySet<string> = new Set()
+const MAX_DECLARED_CONVERSATIONS = 200
+
+/** Renderers whose reload/destroy is already followed (one listener pair each). */
+const hookedRenderers = new Set<number>()
+
+interface DeclaringRenderer {
+  readonly id: number
+  on(event: 'did-navigate', listener: () => void): unknown
+  once(event: 'destroyed', listener: () => void): unknown
+}
+
+/** Record what `sender` renders in detail. Exported for tests. */
+export function applyVisibilityDeclaration(sender: DeclaringRenderer, payload: unknown): void {
+  const ids = Array.isArray(payload)
+    ? payload.filter((id): id is string => typeof id === 'string' && id.length > 0)
+    : []
+  if (ids.length > MAX_DECLARED_CONVERSATIONS) {
+    console.warn(`[Agent] Visible-conversation declaration truncated: ${ids.length} > ${MAX_DECLARED_CONVERSATIONS}`)
+  }
+  const id = sender.id
+  if (!hookedRenderers.has(id)) {
+    hookedRenderers.add(id)
+    const forget = () => {
+      detailByRenderer.delete(id)
+      clearDetailConversations(`renderer:${id}`)
+    }
+    // A reload starts a fresh renderer that must declare again; the listeners
+    // stay, so a reloading window never accumulates them.
+    sender.on('did-navigate', forget)
+    sender.once('destroyed', () => {
+      hookedRenderers.delete(id)
+      forget()
+    })
+  }
+  const declared = new Set(ids.slice(0, MAX_DECLARED_CONVERSATIONS))
+  detailByRenderer.set(id, declared)
+  setDetailConversations(`renderer:${id}`, declared)
+}
+
+function registerVisibilityDeclaration(): void {
+  ipcMain.on('agent:set-visible-conversations', (event, payload: unknown) => {
+    applyVisibilityDeclaration(event.sender, payload)
+  })
+}
 
 // Module-level subscription disposables (lifetime = process lifetime)
 // Stored to establish correct Disposable pattern; these are never disposed
@@ -41,6 +96,7 @@ import { markIntentionalStop } from '../apps/runtime'
 const eventSubscriptions: import('../platform/event').IDisposable[] = []
 
 export function registerAgentHandlers(): void {
+  registerVisibilityDeclaration()
 
   // ============================================
   // Event Forwarding (Emitter → IPC + WebSocket)
@@ -50,13 +106,17 @@ export function registerAgentHandlers(): void {
   eventSubscriptions.push(onAgentEvent((e) => {
     const eventData = { ...e.data, spaceId: e.spaceId, conversationId: e.conversationId }
 
-    // 1. Send to Electron renderer via IPC
+    // 1. Send to Electron renderer via IPC — streaming detail only for
+    //    conversations it declared visible, status events for all.
     const mainWindow = getMainWindow()
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send(e.channel, eventData)
+      const detail = detailByRenderer.get(mainWindow.webContents.id) ?? NO_DETAIL
+      if (shouldDeliverAgentEvent(e.channel, e.conversationId, detail, e.data)) {
+        mainWindow.webContents.send(e.channel, eventData)
+      }
     }
 
-    // 2. Broadcast to remote WebSocket clients
+    // 2. Broadcast to remote WebSocket clients (same rule, per client)
     try {
       broadcastToWebSocket(e.channel, eventData)
     } catch {

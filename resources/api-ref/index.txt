@@ -45,6 +45,7 @@ POST   /api/terminal/resize                                        [wrapped]  te
 POST   /api/terminal/kill                                          [wrapped]  terminal                Close a terminal session
 POST   /api/terminal/replay                                        [wrapped]  terminal                Read back a terminal session buffer
 GET    /api/spaces/$HALO_SPACE_ID/artifacts                        [ai]       workspace               List files and folders in a space
+GET    /api/spaces/$HALO_SPACE_ID/artifacts/query                  [ai]       workspace               Search file and folder paths in a space by name
 GET    /api/spaces/$HALO_SPACE_ID/artifacts/tree                   [ai]       workspace               Get the full lazy-loadable file tree for a space
 POST   /api/spaces/$HALO_SPACE_ID/artifacts/children               [ai]       workspace               Load one folder's children in the file tree
 GET    /api/artifacts/content                                      [ai]       workspace               Read one file from a space

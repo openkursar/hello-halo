@@ -28,6 +28,7 @@ import { randomUUID } from 'crypto'
 import { onAgentEvent, emitAgentEvent } from '../../../services/agent/events'
 import type { IDisposable } from '../../../platform/event'
 import { classifyChannel, type StreamFrame, type StreamFramesFrame } from './types'
+import { shouldDeliverAgentEvent } from '../../../../shared/agent-event-visibility'
 
 const LOG_TAG = '[Relay]'
 
@@ -236,6 +237,36 @@ export function createStreamReplay(_deps: StreamReplayDeps = {}): StreamReplay {
   }
 
   return { apply }
+}
+
+/**
+ * The batch a backed-up viewer still receives: only its milestone frames (reply
+ * text, tool calls and results, completion). Dropped `-delta` frames are
+ * intermediate states the milestones re-establish, so the viewer still ends
+ * with the whole reply. Null when nothing is left to send.
+ */
+export function milestoneOnly(batch: StreamFramesFrame): StreamFramesFrame | null {
+  const frames = batch.frames.filter((frame) => frame.kind === 'milestone')
+  if (frames.length === 0) return null
+  if (frames.length === batch.frames.length) return batch
+  return { ...batch, baseSeq: frames[0].seq, frames }
+}
+
+const NO_DETAIL: ReadonlySet<string> = new Set()
+
+/**
+ * A batch cut to what a node that does not show the session still needs: its
+ * status events (turn start, completion, error, a question or approval waiting),
+ * the same rule every local client gets for a conversation it does not render.
+ * Null when the batch carries none.
+ */
+export function statusOnly(batch: StreamFramesFrame): StreamFramesFrame | null {
+  const frames = batch.frames.filter((frame) =>
+    shouldDeliverAgentEvent(frame.channel, batch.sessionKey, NO_DETAIL, frame.payload)
+  )
+  if (frames.length === 0) return null
+  if (frames.length === batch.frames.length) return batch
+  return { ...batch, baseSeq: frames[0].seq, frames }
 }
 
 /** Cheap per-frame size estimate for the batch byte trigger (no full JSON). */

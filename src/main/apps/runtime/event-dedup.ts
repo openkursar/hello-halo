@@ -71,13 +71,13 @@ export function createDedupCache(config?: Partial<DedupConfig>): DedupCache {
   function prune(now: number): void {
     // Evict expired entries
     if (ttlMs > 0) {
+      // touch() re-inserts at the end with the newest time, so the Map is
+      // ordered oldest-first: stop at the first entry still inside the TTL.
+      // Amortized O(1) per insert instead of a full scan.
       const cutoff = now - ttlMs
-      for (const [entryKey, entryTs] of Array.from(cache)) {
-        if (entryTs < cutoff) {
-          cache.delete(entryKey)
-        }
-        // Note: we cannot break early because touch() reorders entries.
-        // Full iteration is O(n) but n is bounded by maxSize.
+      for (const [entryKey, entryTs] of cache) {
+        if (entryTs >= cutoff) break
+        cache.delete(entryKey)
       }
     }
 

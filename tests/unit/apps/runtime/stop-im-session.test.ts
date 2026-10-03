@@ -115,6 +115,7 @@ vi.mock('../../../../src/main/services/agent/message-utils', () => ({
 }))
 
 vi.mock('../../../../src/main/services/ai-browser', () => ({
+  AI_BROWSER_SYSTEM_PROMPT: '',
   createAIBrowserMcpServer: vi.fn(),
   createScopedBrowserContext: vi.fn(),
 }))

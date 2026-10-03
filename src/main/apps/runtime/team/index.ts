@@ -337,6 +337,11 @@ export interface CreateTeamRuntimeDeps {
   /** Resolve pending decisions after the task's local sessions have stopped. */
   onTaskClosed?: (teamId: string, epochId: string) => void
   /**
+   * An epoch was sealed and persisted. Bootstrap closes its members' idle engine
+   * sessions (a reopened epoch resumes them from the stored session id).
+   */
+  onEpochSealed?: (teamId: string, epochId: string) => void
+  /**
    * Persisted unanswered-escalation check (activity store), so waiting_user
    * survives a run seal and a restart (P0-5). Absent → in-memory only.
    */
@@ -453,6 +458,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
       digest.clearEpoch(epochId)
       archive.clearEpoch(epochId)
       turnReport.clearEpoch(epochId)
+      deps.onEpochSealed?.(teamId, epochId)
     },
   })
 
@@ -545,6 +551,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
       digest.clearEpoch(epochId)
       archive.clearEpoch(epochId)
       turnReport.clearEpoch(epochId)
+      deps.onEpochSealed?.(teamId, epochId)
     },
     sealEpoch: (teamId, reason, summary) => orchestration!.sealEpoch(teamId, reason, summary),
     sealConversationEpoch: async (teamId, epochId, reason, summary) => {

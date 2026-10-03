@@ -202,6 +202,27 @@ const EVENT_WHITELIST: Record<string, readonly string[]> = {
                            'totalCalls', 'totalErrors', 'durationMs'],
   'mcp.connect':          ['mcpId', 'status', 'toolCount'],
   'error.surface':        ['area', 'errorCode'],
+
+  // Performance (numbers, booleans and fixed enums only; routed to this provider alone)
+  'perf.heartbeat': [
+    'windowSec', 'samples', 'uptimeMin', 'vdi', 'totalMemMb', 'availPctP50', 'availPctMin', 'availSource',
+    'mainRssMbP50', 'mainRssMbMax', 'mainHeapMbMax', 'rendererMbP50', 'rendererMbMax', 'electronMbMax', 'gpuMbMax',
+    'rendererCountMax', 'agentCountMax', 'agentMbMax', 'elP99MsP50', 'elP99MsMax', 'pressureLowPct',
+    'pressureCriticalPct', 'pressureChanges', 'sessionLimit', 'residentSessionsMax', 'sessionEvictions',
+    'rendererCrashes', 'rendererHangs',
+  ],
+  'perf.process_crash': [
+    'processType', 'mainWindow', 'reason', 'exitCode', 'recovery', 'crashesInWindow', 'pressure', 'availPct',
+    'rendererMb', 'vdi',
+  ],
+  'perf.crash_snapshot': [
+    'previousExit', 'relaunchReason', 'sameVersion', 'snapshotReason', 'snapshotAgeSec', 'lastAvailPct',
+    'lastRendererMb', 'lastMainRssMb', 'lastElectronMb', 'lastAgentMb', 'lastAgentCount', 'lastElP99Ms',
+    'lastPressure', 'crashpadPending', 'latestDumpProcessType', 'latestDumpAgeHours', 'vdi',
+  ],
+  'perf.memory_pressure': [
+    'from', 'to', 'availPct', 'availSource', 'rendererMb', 'agentCount', 'residentSessions', 'sessionLimit', 'vdi',
+  ],
 }
 
 export interface TelemetryProviderConfig extends BaseProviderOptions {

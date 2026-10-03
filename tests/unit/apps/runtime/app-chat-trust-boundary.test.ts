@@ -110,6 +110,7 @@ vi.mock('../../../../src/main/services/agent/stream-processor', () => ({ process
 vi.mock('../../../../src/main/services/agent/message-utils', () => ({ buildMessageContent: vi.fn(), formatCanvasContext: () => '' }))
 
 vi.mock('../../../../src/main/services/ai-browser', () => ({
+  AI_BROWSER_SYSTEM_PROMPT: '',
   createAIBrowserMcpServer: vi.fn(),
   createScopedBrowserContext: vi.fn(),
 }))

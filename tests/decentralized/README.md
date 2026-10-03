@@ -34,6 +34,9 @@ tests/decentralized/
 ├── checklist-upgrade-migration.mjs  ← §4 upgrade/migration compatibility
 ├── checklist-perf.mjs               ← §5 performance (accepts --long-run-minutes / --soak-minutes)
 ├── checklist-data-lifecycle.mjs     ← §7 data lifecycle & security
+├── checklist-federation-scale.mjs   ← host+30: per-joiner inbound ∝ own + open + digest, read from each node's rx health line
+│                                       (release-time confirmation; the same bounds are asserted in seconds during
+│                                       development by tests/unit/apps/runtime/federation/_sim/traffic-bounds.sim.test.ts)
 │
 │  PERMANENT — specs & coverage docs (source of truth for AI regression)
 ├── SCENARIOS.md                     ← federation scenario spec (what run-scenarios.mjs implements)
@@ -64,11 +67,18 @@ npm run test:team -- federation      # §3 federation, all 62 scenarios (writes 
 npm run test:team -- upgrade         # §4 upgrade/migration
 npm run test:team -- perf            # §5 performance (add --long-run-minutes / --soak-minutes for full length)
 npm run test:team -- lifecycle       # §7 data lifecycle & security
+npm run test:team -- scale           # host + 30 joiners (31 nodes; heavy — run alone)
+                                     # (traffic bounds are first asserted in-process, in seconds, by
+                                     #  tests/unit/apps/runtime/federation/_sim/traffic-bounds.sim.test.ts)
 ```
 
 A single `npm run test:team` entry dispatches to all suites (see `run.mjs`), rather
 than five top-level scripts — the launcher self-documents the catalog and forwards
 any extra args (e.g. `-- federation --only G1,K1`) to the driver.
+
+A suite keeps its previous run's cluster dir as `<dir>.prev` (one generation), so a
+red run can still be diffed after the next one starts; stale nodes from that run are
+stopped before the dir is moved.
 
 Rules that keep results trustworthy:
 

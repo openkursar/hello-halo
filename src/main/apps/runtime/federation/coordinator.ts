@@ -20,17 +20,17 @@ import {
   type OfficeContext,
   type PresenceSnapshot,
   type RosterSnapshot,
+  type MemberRuntimeSnap,
+  type MemberStatusFrame,
+  type RosterFrame,
   type SerializedWakeRequest,
   type StreamFramesFrame,
   type WakeFrame,
 } from './types'
 import {
-  DEFAULT_P2P_CAPS,
-  PROTOCOL_VERSION_CURRENT,
+  FEDERATION_PROTOCOL_VERSION,
   isM2Frame,
-  negotiateCaps,
-  negotiateVersion,
-  CAP,
+  isSameProtocol,
   type M2Frame,
 } from './protocol-m2'
 import { isFeedSyncFrame, type FeedSyncFrame } from './log/types'
@@ -94,7 +94,11 @@ export interface FederationCoordinatorDeps {
    * teamStore-backed resolver.
    */
   listMembersForNode?: (nodeId: NodeId) => NodeBoundMember[]
-  /** Surfaced join-grant/reject for the client side (no crash on reject). */
+  /**
+   * Surfaced join-grant/reject for the client side (no crash on reject). A grant
+   * from an authority on another protocol version is refused here and surfaced
+   * as a VERSION_INCOMPATIBLE reject instead.
+   */
   onJoinGrant?: (assignedNodeId: NodeId) => void
   onJoinReject?: (reason: JoinReject['reason']) => void
   /**
@@ -145,7 +149,11 @@ export interface FederationCoordinatorDeps {
    * office). Set only on the joiner coordinator; absent on the host (a host
    * never receives roster frames).
    */
-  onRoster?: (snapshot: RosterSnapshot) => void
+  onRoster?: (snapshot: RosterSnapshot, version: number | undefined) => void
+  /**
+   * Joiner role: a run-state change arrived (`member-status`). The manager checks its version against `baseVersion`.
+   */
+  onMemberStatus?: (frame: MemberStatusFrame) => void
   /**
    * M2 dispatch seam: every authority/replication/artifact frame (the M2 family,
    * outside the M1 join+presence+relay set) is delegated here verbatim. The
@@ -156,20 +164,21 @@ export interface FederationCoordinatorDeps {
    */
   onM2Frame?: (from: NodeId, frame: M2Frame) => void
   /**
-   * Unified feed-log sync frames (`feed-subscribe`/`feed-entries`/`feed-ack`/
-   * `feed-nack`): routed verbatim to the manager's per-office ctrl-feed transport.
+   * Unified feed-log sync frames (`feed-subscribe`/`feed-unsubscribe`/
+   * `feed-entries`/`feed-ack`/`feed-nack`, and the discovery frames): routed
+   * verbatim to the manager's feed transports.
    * The coordinator carries the correct `from` (the delivering peer), which the
    * feed producer/consumer need to track cursors — so routing here, not at the
    * manager's many inbound entrypoints, keeps the source attribution in one place.
-   * Absent → a feed-sync frame is dropped (an office with FEED_SYNC off).
+   * Absent → a feed-sync frame is dropped.
    */
   onFeedFrame?: (from: NodeId, frame: FeedSyncFrame) => void
   /**
-   * M2 join enrichment: the authority's current tenure (term) + effective caps at
-   * admission, folded into the join-grant so a joiner aligns its term baseline.
+   * M2 join enrichment: the authority's current tenure (term) at admission,
+   * folded into the join-grant so a joiner aligns its term baseline.
    * Absent → grant carries no term (M1 behaviour).
    */
-  getJoinGrantExtras?: () => { term?: number; caps?: number }
+  getJoinGrantExtras?: () => { term?: number }
   /**
    * Run-context seam: the office's currently-open run epoch id (or null when no
    * run is open). Stamped into the roster snapshot so a joiner can derive the live
@@ -266,6 +275,12 @@ export interface FederationCoordinator {
    * joiner coordinator (it has no joiners to project to).
    */
   broadcastRoster(): void
+  /**
+   * Host role: project only what changed since the last projection — nothing
+   * when nothing did; run-state alone as `member-status`.
+   * The throttled refresh during a run uses this.
+   */
+  refreshRoster(): void
 }
 
 export function createFederationCoordinator(
@@ -288,6 +303,7 @@ export function createFederationCoordinator(
     onStreamFrames,
     onRosterChanged,
     onRoster,
+    onMemberStatus,
     onM2Frame,
     onFeedFrame,
     getJoinGrantExtras,
@@ -404,7 +420,11 @@ export function createFederationCoordinator(
   function rejectJoin(to: NodeId, reason: JoinReject['reason']): void {
     console.warn(`${LOG_TAG} join rejected node=${to} reason=${reason} ts=${now()}`)
     rejectedJoinNodes.add(to)
-    link.send(to, { kind: 'join-reject', officeId, reason })
+    link.send(to, {
+      kind: 'join-reject',
+      officeId,
+      reason,
+    })
   }
 
   /**
@@ -453,6 +473,9 @@ export function createFederationCoordinator(
         }
       }
     }
+    // One ledger read per snapshot, not one per member.
+    const nodes = federationStore.listNodesByOffice(officeId)
+    const nodesById = new Map(nodes.map((n) => [n.nodeId, n]))
     const members = teamStore.listMembersByTeam(officeId).map((m) => {
       const absoluteOwner = m.ownerNodeId === SELF_NODE_ID ? context.selfNodeId : m.ownerNodeId ?? context.selfNodeId
       const status = getMemberRuntimeStatus?.(m.appId) ?? 'idle'
@@ -469,7 +492,7 @@ export function createFederationCoordinator(
         memberIdentity: m.memberIdentity ?? null,
         // Prefer the live node ledger, fall back to the name persisted on the
         // member row at join (covers rows written before the ledger had a name).
-        ownerDisplayName: federationStore.getNode(officeId, absoluteOwner)?.displayName ?? m.ownerDisplayName ?? null,
+        ownerDisplayName: nodesById.get(absoluteOwner)?.displayName ?? m.ownerDisplayName ?? null,
         status,
         ...(currentTaskTitle ? { currentTaskTitle } : {}),
         ...(busy.length > 0 ? { busy } : {}),
@@ -496,7 +519,7 @@ export function createFederationCoordinator(
       // Address book: every admitted node's contact card, so joiners can dial a
       // peer (e.g. a newly-elected authority) after the host is gone. Consumed
       // in memory on the joiner — never materialized into its office_nodes.
-      nodes: federationStore.listNodesByOffice(officeId).map((n) => ({
+      nodes: nodes.map((n) => ({
         nodeId: n.nodeId,
         displayName: n.displayName,
         advertisedUrl: n.advertisedUrl,
@@ -505,10 +528,89 @@ export function createFederationCoordinator(
     }
   }
 
-  /** Host: refresh local UI + project the full roster to every joiner. */
-  function broadcastRoster(): void {
-    link.broadcast({ kind: 'roster', officeId, snapshot: buildRosterSnapshot() })
+  // ── Roster egress by version ──
+  //
+  // The roster is re-projected on every board write while members work, but
+  // between membership changes only run state moves. Peers then receive just
+  // that (`member-status`, versioned); a membership change, or a peer asking
+  // with `roster-request`, gets the full roster.
+  let rosterVersion = 0
+  let lastStructural: string | null = null
+  let lastRuntime = new Map<string, string>()
+  let lastStatus: string | undefined
+
+  /**
+   * Host: refresh local UI + project the roster change to every joiner. `forceFull`
+   * re-sends the full roster to everyone even when nothing changed. Returns
+   * whether the full roster went out.
+   */
+  function projectRoster(forceFull = false): boolean {
+    const snapshot = buildRosterSnapshot()
+    const runtime = new Map<string, MemberRuntimeSnap>()
+    const structural = JSON.stringify({
+      ...snapshot,
+      team: { ...snapshot.team, status: undefined },
+      members: snapshot.members.map((m) => {
+        runtime.set(m.appId, {
+          appId: m.appId,
+          status: m.status ?? 'idle',
+          ...(m.currentTaskTitle ? { currentTaskTitle: m.currentTaskTitle } : {}),
+          ...(m.busy && m.busy.length > 0 ? { busy: m.busy } : {}),
+        })
+        return { ...m, status: undefined, currentTaskTitle: undefined, busy: undefined }
+      }),
+    })
+    const changed: MemberRuntimeSnap[] = []
+    const runtimeKeys = new Map<string, string>()
+    for (const [appId, snap] of runtime) {
+      const key = JSON.stringify(snap)
+      runtimeKeys.set(appId, key)
+      if (lastRuntime.get(appId) !== key) changed.push(snap)
+    }
+    const statusChanged = snapshot.team.status !== lastStatus
+    // No periodic full resend: a peer that missed a change sees the version
+    // mismatch on the next status (the run-state liveness re-projection keeps
+    // sending them) and asks for the roster itself.
+    const full = forceFull || structural !== lastStructural
+    // Nothing changed: the re-projection is a liveness re-baseline, an empty
+    // status naming the current version (a peer that missed a change sees the
+    // mismatch and asks for the roster).
+    const unchanged = !full && changed.length === 0 && !statusChanged
+    const baseVersion = rosterVersion
+    if (!unchanged) rosterVersion += 1
+    const fullFrame: RosterFrame = { kind: 'roster', officeId, snapshot, version: rosterVersion }
+    if (full) {
+      link.broadcast(fullFrame)
+    } else {
+      const statusFrame: MemberStatusFrame = {
+        kind: 'member-status',
+        officeId,
+        baseVersion: unchanged ? rosterVersion : baseVersion,
+        version: rosterVersion,
+        ...(statusChanged && snapshot.team.status ? { status: snapshot.team.status } : {}),
+        members: changed,
+      }
+      link.broadcast(statusFrame)
+    }
+    if (unchanged) return false
+    lastStructural = structural
+    lastRuntime = runtimeKeys
+    lastStatus = snapshot.team.status
     onRosterChanged?.(officeId)
+    return full
+  }
+
+  function broadcastRoster(): void {
+    projectRoster(true)
+  }
+
+  function refreshRoster(): void {
+    projectRoster()
+  }
+
+  /** Host: a joiner could not line up a `member-status`; answer with the full roster. */
+  function sendFullRoster(to: NodeId): void {
+    link.send(to, { kind: 'roster', officeId, snapshot: buildRosterSnapshot(), version: rosterVersion })
   }
 
   /**
@@ -561,21 +663,12 @@ export function createFederationCoordinator(
         `${LOG_TAG} credential unverifiable for admitted node=${req.fromNode}; admitting via roster re-entry`
       )
     }
-    // Version negotiation: only a PRESENT-and-incompatible protocol version is
-    // rejected. An absent pv is a pre-negotiation peer — it is not trusted on
-    // that basis (genuine security is the WS-layer device-key handshake, which a
-    // pre-v3 node cannot answer, so it never reaches here over a real socket);
-    // the coordinator stays lenient so in-process/test links without pv still
-    // admit. A present pv below the floor (or above our ceiling with no overlap)
-    // is refused.
-    let grantPv = PROTOCOL_VERSION_CURRENT
-    if (req.pv !== undefined) {
-      const negotiatedPv = negotiateVersion(req.pv, req.minSupported ?? req.pv)
-      if (negotiatedPv === null) {
-        rejectJoin(req.fromNode, 'VERSION_INCOMPATIBLE')
-        return
-      }
-      grantPv = negotiatedPv
+    // One protocol: a node on another version is refused (it, or this node,
+    // must update — the joiner's UI says so).
+    if (!isSameProtocol(req.pv)) {
+      console.warn(`${LOG_TAG} join refused: protocol ${req.pv} ≠ ${FEDERATION_PROTOCOL_VERSION} node=${req.fromNode}`)
+      rejectJoin(req.fromNode, 'VERSION_INCOMPATIBLE')
+      return
     }
     // Persisted identity for this node's bindings. In production a node's wire id
     // IS its portable Identity.id (identityId === fromNode), and the host edge has
@@ -688,22 +781,14 @@ export function createFederationCoordinator(
     ensureLeadEdges(joinedAppIds)
 
     console.log(
-      `${LOG_TAG} node joined node=${req.fromNode} identity=${nodeIdentity} pv=${grantPv} ts=${ts}`
+      `${LOG_TAG} node joined node=${req.fromNode} identity=${nodeIdentity} pv=${FEDERATION_PROTOCOL_VERSION} ts=${ts}`
     )
     const grantExtras = getJoinGrantExtras?.() ?? {}
-    // Effective caps = the intersection of what the joiner advertised and what
-    // this authority runs (grant extras when the M2 module is on, defaults
-    // otherwise). CORE_CONTROL is the floor for an admitted node.
-    const effectiveCaps = negotiateCaps(
-      req.caps ?? CAP.CORE_CONTROL,
-      grantExtras.caps ?? DEFAULT_P2P_CAPS
-    )
     link.send(req.fromNode, {
       kind: 'join-grant',
       officeId,
       assignedNodeId: req.fromNode,
-      pv: grantPv,
-      caps: effectiveCaps,
+      pv: FEDERATION_PROTOCOL_VERSION,
       ...(grantExtras.term !== undefined ? { term: grantExtras.term } : {}),
     })
 
@@ -716,7 +801,8 @@ export function createFederationCoordinator(
       since: ts,
     })
     notifyPresence()
-    broadcastRoster()
+    // A node re-joining with nothing changed still needs the roster it anchors on.
+    if (!projectRoster()) sendFullRoster(req.fromNode)
   }
 
   // ── Presence: inbound heartbeat ──
@@ -899,6 +985,14 @@ export function createFederationCoordinator(
         handleJoinRequest(msg)
         break
       case 'join-grant': {
+        // One protocol: an authority on another version cannot be joined (it,
+        // or this node, must update).
+        if (!isSameProtocol(msg.pv)) {
+          console.warn(`${LOG_TAG} join grant refused: authority protocol ${msg.pv} ≠ ${FEDERATION_PROTOCOL_VERSION} office=${officeId}`)
+          joinRejectedTerminally = true
+          onJoinReject?.('VERSION_INCOMPATIBLE')
+          break
+        }
         console.log(`${LOG_TAG} join granted assignedNodeId=${msg.assignedNodeId}`)
         // A grant is a fresh handshake: clear this node's confirmed-offline
         // latches on its peers. Without it a host confirmed-offline during a
@@ -994,8 +1088,15 @@ export function createFederationCoordinator(
         // Joiner role: materialize the shadow office from the host's projection.
         // A host never receives roster frames (it is the sole authority), so a
         // roster with no handler is dropped with a warning.
-        if (onRoster) onRoster(msg.snapshot)
+        if (onRoster) onRoster(msg.snapshot, msg.version)
         else console.warn(`${LOG_TAG} roster with no handler office=${officeId}; dropping`)
+        break
+      case 'member-status':
+        if (onMemberStatus) onMemberStatus(msg)
+        else console.warn(`${LOG_TAG} member-status with no handler office=${officeId}; dropping`)
+        break
+      case 'roster-request':
+        sendFullRoster(from)
         break
       case 'member-leave':
         // Host role: a joiner left → drop the members it brought and re-converge.
@@ -1245,5 +1346,6 @@ export function createFederationCoordinator(
     tick: sweepPresence,
     getPresence: snapshot,
     broadcastRoster,
+    refreshRoster,
   }
 }

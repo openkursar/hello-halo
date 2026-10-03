@@ -13,4 +13,6 @@ export const healthRpc = {
   generateHealthReportText: rawRpcMethod('health:generate-report-text'),
   exportHealthReport: rawRpcMethod('health:export-report'),
   runHealthCheck: rawRpcMethod('health:run-check'),
+  /** Current memory pressure; changes arrive on the `app:memory-pressure` event. */
+  getMemoryPressure: rawRpcMethod('health:get-memory-pressure'),
 }

@@ -8,9 +8,10 @@ import type { Conversation, ConversationMeta, Message, Thought } from '../intern
 import i18n from '../../../i18n'
 import { titleFromFirstMessage } from '../../../../shared/conversation-title'
 import { buildCanvasContext } from './canvas-context'
-import { cacheConversation } from './cache'
+import { cacheConversation, cacheLoadedThoughts } from './cache'
 import { recoverSessionState } from './recover'
 import { beginTurn, endTurnWithError, finishedTurnState } from './turn'
+import { createPendingUserMessage, joinFromAnchor, reconcileTranscript, rereadAnchor } from './reconcile'
 import type { ChatBackend, SendRequest, BackendContext } from './types'
 import { noteTurnEnded } from '../../../services/home-telemetry'
 
@@ -80,13 +81,42 @@ async function open(ctx: BackendContext, { spaceId, conversationId }: { spaceId:
   }
 }
 
+/**
+ * A fresh read merged into the cached conversation: unchanged messages keep
+ * their objects (memoized rows skip rendering) and loaded thoughts, and the
+ * optimistic bubble hands its row identity to its persisted twin.
+ */
+function merged(state: { conversationCache: Map<string, Conversation> }, read: Conversation, dropUnconfirmed: boolean): Conversation {
+  const cached = state.conversationCache.get(read.id)
+  if (!cached) return read
+  return { ...read, messages: reconcileTranscript(cached.messages, read.messages, { dropUnconfirmed }).messages }
+}
+
+/**
+ * Re-read after a finished turn: only messages from the turn's own user
+ * message on cross the process boundary; the rest is what the cache holds.
+ */
+async function readFinishedTurn(ctx: BackendContext, spaceId: string, conversationId: string): Promise<Conversation | null> {
+  const held = ctx.get().conversationCache.get(conversationId)
+  const fromMessageId = held ? rereadAnchor(held.messages) : undefined
+  const response = await api.getConversation(spaceId, conversationId, fromMessageId ? { fromMessageId } : undefined)
+  if (!response.success || !response.data) return null
+  const { messagesFrom, ...read } = response.data as Conversation & { messagesFrom?: string }
+  if (!messagesFrom) return read
+  const messages = joinFromAnchor(ctx.get().conversationCache.get(conversationId)?.messages ?? [], read.messages, messagesFrom)
+  if (messages) return { ...read, messages }
+  // The cache changed underneath (cleared, evicted): read it whole.
+  const whole = await api.getConversation(spaceId, conversationId)
+  return whole.success && whole.data ? whole.data as Conversation : null
+}
+
 async function refresh(ctx: BackendContext, { spaceId, conversationId }: { spaceId: string; conversationId: string }): Promise<void> {
   try {
     const response = await api.getConversation(spaceId, conversationId)
     if (!response.success || !response.data) return
     const updated = response.data as Conversation
     ctx.set((state) => ({
-      conversationCache: cacheConversation(state, updated),
+      conversationCache: cacheConversation(state, merged(state, updated, !state.sessions.get(conversationId)?.isGenerating)),
       conversationLoadErrors: withLoadError(state, conversationId, null),
     }))
   } catch (error) {
@@ -154,11 +184,7 @@ async function send(ctx: BackendContext, conversationId: string, request: SendRe
     beginTurn(set, conversationId)
 
     userMessage = {
-      id: `msg-${Date.now()}`,
-      role: 'user',
-      content,
-      timestamp: new Date().toISOString(),
-      images,
+      ...createPendingUserMessage(content, images),
       ...(goal ? { metadata: { goal } } : {})
     }
 
@@ -240,14 +266,15 @@ async function inject(_ctx: BackendContext, conversationId: string, message: str
 async function settleTurn(ctx: BackendContext, { spaceId, conversationId }: { spaceId: string; conversationId: string }, turnId: number): Promise<void> {
   const { set } = ctx
   try {
-    const response = await api.getConversation(spaceId, conversationId)
-    if (response.success && response.data) {
-      const updatedConversation = response.data as Conversation
-      const updatedMeta = metaFromConversation(updatedConversation)
-
+    const read = await readFinishedTurn(ctx, spaceId, conversationId)
+    if (read) {
       // One commit for cache, metadata and session, so the streamed turn is
       // replaced by its persisted form without a frame in between.
       set((state) => {
+        // A turn sent while this read was in flight keeps its optimistic bubble.
+        const newTurnStarted = (state.sessions.get(conversationId)?.turnId ?? turnId) !== turnId
+        const updatedConversation = merged(state, read, !newTurnStarted)
+        const updatedMeta = metaFromConversation(updatedConversation)
         const conversationCache = cacheConversation(state, updatedConversation)
 
         const spaceStates = new Map(state.spaceStates)
@@ -299,17 +326,7 @@ async function loadThoughts(ctx: BackendContext, { spaceId, conversationId }: { 
     const response = await api.getMessageThoughts(spaceId, conversationId, messageId)
     if (response.success && response.data) {
       const thoughts = response.data as Thought[]
-      ctx.set((state) => {
-        const conversationCache = new Map(state.conversationCache)
-        const conversation = conversationCache.get(conversationId)
-        if (conversation) {
-          conversationCache.set(conversationId, {
-            ...conversation,
-            messages: conversation.messages.map(m => m.id === messageId ? { ...m, thoughts } : m)
-          })
-        }
-        return { conversationCache }
-      })
+      ctx.set((state) => ({ conversationCache: cacheLoadedThoughts(state, conversationId, messageId, thoughts) }))
       return thoughts
     }
   } catch (error) {

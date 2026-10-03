@@ -23,33 +23,21 @@
  * BrowserView lifecycle is managed centrally by CanvasLifecycle.
  */
 
-import { useCallback, useEffect, useState, lazy, Suspense } from 'react'
+import { useCallback, useEffect, useState, Suspense } from 'react'
 import { X, ChevronLeft, Maximize2, Minimize2 } from 'lucide-react'
-import { useCanvasLifecycle, type TabState, type ContentType } from '../../hooks/useCanvasLifecycle'
+import {
+  useActiveTab,
+  useCanvasActions,
+  useCanvasIsOpen,
+  useTabCount,
+} from '../../hooks/useCanvasLifecycle'
+import { canvasLifecycle } from '../../services/canvas-lifecycle'
 import { CanvasTabBar } from './CanvasTabs'
-import { CodeViewer } from './viewers/CodeViewer'
-import { MarkdownViewer } from './viewers/MarkdownViewer'
-import { ImageViewer } from './viewers/ImageViewer'
-import { HtmlViewer } from './viewers/HtmlViewer'
-import { JsonViewer } from './viewers/JsonViewer'
-import { CsvViewer } from './viewers/CsvViewer'
-import { TextViewer } from './viewers/TextViewer'
-import { BrowserViewer, BrowserViewerFallback } from './viewers/BrowserViewer'
-import { TerminalViewer } from './viewers/TerminalViewer'
-import { TeamViewer } from './viewers/TeamViewer'
-import { GoalEditor } from '../goal'
-import { api } from '../../api'
+import { viewerFor, type ViewerProps } from './viewer-registry'
 import { useTranslation } from '../../i18n'
 import { getBrowserHomepage } from '../../utils/browser-homepage'
 import { trackToolOpen } from '../../services/tool-session-telemetry'
 import { ErrorBoundary } from '../ErrorBoundary'
-
-// Office viewers ship heavy parsers (SheetJS, docx-preview, pdfjs) — lazy
-// chunks keep them out of the startup bundle.
-const XlsxViewer = lazy(() => import('./viewers/XlsxViewer'))
-const DocxViewer = lazy(() => import('./viewers/DocxViewer'))
-const PdfViewer = lazy(() => import('./viewers/PdfViewer'))
-const PptxViewer = lazy(() => import('./viewers/PptxViewer'))
 
 interface ContentCanvasProps {
   className?: string
@@ -57,22 +45,24 @@ interface ContentCanvasProps {
 
 export function ContentCanvas({ className = '' }: ContentCanvasProps) {
   const { t } = useTranslation()
+  const activeTab = useActiveTab()
+  const activeTabId = activeTab?.id ?? null
+  const isOpen = useCanvasIsOpen()
   const {
-    activeTabId,
-    activeTab,
-    isOpen,
     closeTab,
     closeAllTabs,
     setOpen,
     saveScrollPosition,
     updateTabContent,
     markTabSaved,
+    revertTabContent,
+    resolveDiskConflict,
     switchToNextTab,
     switchToPrevTab,
     switchToTabIndex,
     openUrl,
     setEditMode,
-  } = useCanvasLifecycle()
+  } = useCanvasActions()
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -151,6 +141,14 @@ export function ContentCanvas({ className = '' }: ContentCanvasProps) {
     }
   }, [activeTabId, markTabSaved])
 
+  const handleRevert = useCallback(() => {
+    if (activeTabId) revertTabContent(activeTabId)
+  }, [activeTabId, revertTabContent])
+
+  const handleResolveDiskConflict = useCallback((keep: 'disk' | 'mine') => {
+    if (activeTabId) resolveDiskConflict(activeTabId, keep)
+  }, [activeTabId, resolveDiskConflict])
+
   // Handle edit mode request (from MarkdownViewer)
   const handleEditRequest = useCallback(() => {
     if (activeTabId) {
@@ -171,11 +169,16 @@ export function ContentCanvas({ className = '' }: ContentCanvasProps) {
           `.canvas{background:var(--bg)}`. */}
       <div className="flex-1 min-h-0 overflow-hidden bg-background">
         {activeTab ? (
+          // One viewer instance per tab: switching tabs remounts, so no
+          // editor history, edit mode or per-document UI state carries over.
           <TabContent
+            key={activeTab.id}
             tab={activeTab}
             onScrollChange={handleScrollChange}
             onContentChange={handleContentChange}
             onSaveComplete={handleSaveComplete}
+            onRevert={handleRevert}
+            onResolveDiskConflict={handleResolveDiskConflict}
             onEditRequest={handleEditRequest}
           />
         ) : (
@@ -189,41 +192,17 @@ export function ContentCanvas({ className = '' }: ContentCanvasProps) {
 /**
  * Tab Content - Renders appropriate viewer for content type
  */
-interface TabContentProps {
-  tab: TabState
-  onScrollChange?: (position: number) => void
-  onContentChange?: (content: string) => void
-  onSaveComplete?: (content: string) => void
-  onEditRequest?: () => void
-}
+type TabContentProps = ViewerProps
 
-function TabContent({ tab, onScrollChange, onContentChange, onSaveComplete, onEditRequest }: TabContentProps) {
+function TabContent({ tab, ...handlers }: TabContentProps) {
   const { t } = useTranslation()
-  // Browser tabs (and desktop PDF tabs) use BrowserView (handle their own
-  // loading state). In remote mode PDFs open as content tabs rendered by the
-  // pdfjs viewer below instead.
-  if (tab.type === 'browser') {
-    if (api.isRemoteMode()) {
-      return <BrowserViewerFallback tab={tab} />
-    }
-    return <BrowserViewer tab={tab} />
-  }
-  if (tab.type === 'pdf' && !api.isRemoteMode()) {
-    return <BrowserViewer tab={tab} />
-  }
+  const { Component, ownsLoading, ownsError } = viewerFor(tab.type)
 
-  // Handle loading state for non-browser tabs
-  if (tab.isLoading) {
+  if (!ownsLoading && tab.isLoading) {
     return <LoadingState tabId={tab.id} />
   }
 
-  // Office viewers render their own error fallback (with open-externally and
-  // download escape hatches), so they bypass the generic error state below.
-  const isOfficeType =
-    tab.type === 'xlsx' || tab.type === 'docx' || tab.type === 'pptx' || tab.type === 'pdf'
-
-  // Handle error state
-  if (tab.error && !isOfficeType) {
+  if (!ownsLoading && !ownsError && tab.error) {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="flex flex-col items-center gap-3 text-center max-w-md px-4">
@@ -237,118 +216,11 @@ function TabContent({ tab, onScrollChange, onContentChange, onSaveComplete, onEd
     )
   }
 
-  // Render appropriate viewer based on content type
-  switch (tab.type) {
-    case 'code':
-      return (
-        <CodeViewer
-          tab={tab}
-          onScrollChange={onScrollChange}
-          onContentChange={onContentChange}
-          onSaveComplete={onSaveComplete}
-        />
-      )
-
-    case 'markdown':
-      // Default to MarkdownViewer for preview, switch to CodeViewer when editing
-      if (tab.isEditMode) {
-        return (
-          <CodeViewer
-            tab={tab}
-            onScrollChange={onScrollChange}
-            onContentChange={onContentChange}
-            onSaveComplete={onSaveComplete}
-          />
-        )
-      }
-      return (
-        <MarkdownViewer
-          tab={tab}
-          onScrollChange={onScrollChange}
-          onEditRequest={onEditRequest}
-        />
-      )
-
-    case 'image':
-      return <ImageViewer tab={tab} />
-
-    case 'html':
-      return <HtmlViewer tab={tab} />
-
-    case 'json':
-      // Use CodeViewer for JSON too - enables editing with syntax highlighting
-      return (
-        <CodeViewer
-          tab={tab}
-          onScrollChange={onScrollChange}
-          onContentChange={onContentChange}
-          onSaveComplete={onSaveComplete}
-        />
-      )
-
-    case 'csv':
-      return <CsvViewer tab={tab} onScrollChange={onScrollChange} />
-
-    // Document viewers are keyed on the tab, and the key goes on the boundary so
-    // it covers the whole subtree. This switch reuses one instance per type
-    // across tabs, which otherwise leaks two ways: per-document state (page,
-    // zoom, active sheet) bleeds into the next document — the trap CsvViewer
-    // already documents — and a tripped ErrorBoundary would keep showing its
-    // failure placeholder for every later tab of that type. Only these are
-    // keyed; browser / terminal / team tabs intentionally survive a switch.
-    case 'xlsx':
-      return (
-        <ViewerSuspense key={tab.id}>
-          <XlsxViewer tab={tab} onScrollChange={onScrollChange} />
-        </ViewerSuspense>
-      )
-
-    case 'docx':
-      return (
-        <ViewerSuspense key={tab.id}>
-          <DocxViewer tab={tab} onScrollChange={onScrollChange} />
-        </ViewerSuspense>
-      )
-
-    case 'pdf':
-      // Remote mode only — desktop PDFs returned a BrowserView above
-      return (
-        <ViewerSuspense key={tab.id}>
-          <PdfViewer tab={tab} />
-        </ViewerSuspense>
-      )
-
-    case 'pptx':
-      return (
-        <ViewerSuspense key={tab.id}>
-          <PptxViewer tab={tab} />
-        </ViewerSuspense>
-      )
-
-    case 'text':
-      // Use CodeViewer for text files too - enables editing even without syntax highlighting
-      return (
-        <CodeViewer
-          tab={tab}
-          onScrollChange={onScrollChange}
-          onContentChange={onContentChange}
-          onSaveComplete={onSaveComplete}
-        />
-      )
-
-    case 'terminal':
-      return <TerminalViewer tab={tab} />
-
-    case 'team':
-      return <TeamViewer tab={tab} />
-
-    // Keyed: each goal tab holds its own form.
-    case 'goal':
-      return <GoalEditor key={tab.id} tab={tab} />
-
-    default:
-      return <TextViewer tab={tab} onScrollChange={onScrollChange} />
-  }
+  return (
+    <ViewerHost>
+      <Component tab={tab} {...handlers} />
+    </ViewerHost>
+  )
 }
 
 /**
@@ -384,15 +256,14 @@ function LoadingState({ tabId }: { tabId: string }) {
 }
 
 /**
- * Boundary for lazy-loaded office viewer chunks.
+ * Boundary around every viewer, remounted per tab with it.
  *
- * Suspense alone is not enough: it handles the pending import but not a
- * rejected one, so a chunk that fails to load throws past it to the root
- * boundary and blanks the whole window. That is a real scenario after an
- * incremental update leaves stale chunk hashes in a running window — losing one
- * pane is acceptable there, losing the app is not.
+ * A viewer that throws — or a lazy chunk that fails to load, e.g. after an
+ * incremental update leaves stale chunk hashes in a running window — loses
+ * its own pane instead of throwing past to the root boundary and blanking the
+ * whole window. Suspense covers lazy viewers' pending import.
  */
-function ViewerSuspense({ children }: { children: React.ReactNode }) {
+function ViewerHost({ children }: { children: React.ReactNode }) {
   const { t } = useTranslation()
   return (
     <ErrorBoundary
@@ -445,7 +316,8 @@ interface CollapsibleCanvasProps {
 }
 
 export function CollapsibleCanvas({ children }: CollapsibleCanvasProps) {
-  const { isOpen, isTransitioning, tabs } = useCanvasLifecycle()
+  const isOpen = useCanvasIsOpen()
+  const isTransitioning = canvasLifecycle.getIsTransitioning()
 
   // Compute width based on state
   const canvasWidth = isOpen ? 'flex-1' : 'w-0'
@@ -473,10 +345,12 @@ export function CollapsibleCanvas({ children }: CollapsibleCanvasProps) {
  */
 export function CanvasToggleButton() {
   const { t } = useTranslation()
-  const { isOpen, tabs, toggleOpen } = useCanvasLifecycle()
+  const isOpen = useCanvasIsOpen()
+  const tabCount = useTabCount()
+  const { toggleOpen } = useCanvasActions()
 
   // Don't show if no tabs
-  if (tabs.length === 0) return null
+  if (tabCount === 0) return null
 
   return (
     <button

@@ -43,6 +43,7 @@ import type {
   PresenceSnapshot,
 } from '../../../../../src/main/apps/runtime/federation'
 import { DEFAULT_OFFICE_SCOPE } from '../../../../../src/main/apps/federation/types'
+import { FEDERATION_PROTOCOL_VERSION } from '../../../../../src/main/apps/runtime/federation/protocol-m2'
 
 // ── Fixtures ──
 
@@ -227,39 +228,39 @@ describe('FederationCoordinator', () => {
       expect(federationStore.getNode(OFFICE, BOB)).toBeNull()
     })
 
-    it('negotiates a compatible protocol version: the grant echoes the negotiated pv + caps', () => {
+    it('admits a joiner on the same protocol version; the grant carries the authority’s version', () => {
       makeHost()
       const bob = recordingPeer(hub, BOB)
 
-      // A current-version joiner (pv=3, min=3) is admitted and the grant carries
-      // the negotiated version and an effective cap mask.
-      bob.link.send(HOST, makeJoinRequest({ pv: 3, minSupported: 3, caps: 0xff }))
+      bob.link.send(HOST, makeJoinRequest({ pv: FEDERATION_PROTOCOL_VERSION }))
 
       const grant = bob.received.find((r) => r.msg.kind === 'join-grant')
-      expect(grant?.msg).toMatchObject({ kind: 'join-grant', assignedNodeId: BOB, pv: 3 })
-      expect(typeof (grant?.msg as { caps?: number }).caps).toBe('number')
+      expect(grant?.msg).toMatchObject({ kind: 'join-grant', assignedNodeId: BOB, pv: FEDERATION_PROTOCOL_VERSION })
       expect(federationStore.getNode(OFFICE, BOB)).toBeTruthy()
     })
 
-    it('rejects a join whose PRESENT protocol version is below the floor (VERSION_INCOMPATIBLE)', () => {
+    it.each([
+      ['older', FEDERATION_PROTOCOL_VERSION - 1],
+      ['newer', FEDERATION_PROTOCOL_VERSION + 1],
+    ])('refuses a joiner on an %s protocol version with VERSION_INCOMPATIBLE', (_label, pv) => {
       makeHost()
       const bob = recordingPeer(hub, BOB)
 
-      // A legacy node that advertises pv=1/min=1 cannot satisfy the current floor.
-      bob.link.send(HOST, makeJoinRequest({ pv: 1, minSupported: 1 }))
+      bob.link.send(HOST, makeJoinRequest({ pv }))
 
       const reject = bob.received.find((r) => r.msg.kind === 'join-reject')
-      expect(reject?.msg).toMatchObject({ kind: 'join-reject', reason: 'VERSION_INCOMPATIBLE' })
+      expect(reject?.msg).toMatchObject({
+        kind: 'join-reject',
+        reason: 'VERSION_INCOMPATIBLE',
+      })
       expect(federationStore.getNode(OFFICE, BOB)).toBeNull()
       expect(teamStore.listMembersByTeam(OFFICE)).toHaveLength(0)
     })
 
-    it('admits a join that omits pv (pre-negotiation peer / in-process link): gate is lenient on absent version', () => {
+    it('admits a join that omits pv (in-process link)', () => {
       makeHost()
       const bob = recordingPeer(hub, BOB)
 
-      // No pv field at all — admitted (security is the WS-layer device-key proof,
-      // not the version gate).
       bob.link.send(HOST, makeJoinRequest())
 
       expect(federationStore.getNode(OFFICE, BOB)).toBeTruthy()
@@ -429,7 +430,7 @@ describe('FederationCoordinator', () => {
       expect(bob.received.filter((r) => r.msg.kind === 'rejoin-request')).toHaveLength(1)
 
       // The answered join is terminally rejected (incompatible version).
-      bob.link.send(HOST, makeJoinRequest({ pv: 1, minSupported: 1 }))
+      bob.link.send(HOST, makeJoinRequest({ pv: FEDERATION_PROTOCOL_VERSION - 1 }))
       expect(bob.received.some((r) => r.msg.kind === 'join-reject')).toBe(true)
 
       // Later heartbeats (past the nudge window) must NOT re-nudge — the node
@@ -491,6 +492,43 @@ describe('FederationCoordinator', () => {
       clock += 10_000
       inbound(HOST, { kind: 'heartbeat', officeId: OFFICE, fromNode: HOST, ts: clock })
       expect(joinsSent()).toBe(before + 3) // the explicit send + the re-armed re-drive
+    })
+
+    it.each([
+      ['older', FEDERATION_PROTOCOL_VERSION - 1],
+      ['newer', FEDERATION_PROTOCOL_VERSION + 1],
+    ])('a joiner refuses a grant from an authority on an %s protocol version', (_label, pv) => {
+      const sent: FederationMessage[] = []
+      let inbound: (from: string, msg: FederationMessage) => void = () => {}
+      const rejects: string[] = []
+      let granted = 0
+      const joiner = createFederationCoordinator({
+        context: { officeId: OFFICE, selfNodeId: BOB },
+        link: {
+          send: (_to, msg) => sent.push(msg),
+          broadcast: (msg) => sent.push(msg),
+          onMessage: (h) => { inbound = h },
+          close: () => {},
+        },
+        federationStore,
+        teamStore,
+        verifyCredential: () => null,
+        now,
+        onJoinGrant: () => { granted += 1 },
+        onJoinReject: (reason) => rejects.push(reason),
+      })
+      joiner.start()
+      coordinators.push(joiner)
+      joiner.requestJoin(makeJoinRequest({ pv: FEDERATION_PROTOCOL_VERSION }))
+
+      inbound(HOST, { kind: 'join-grant', officeId: OFFICE, assignedNodeId: BOB, pv })
+
+      expect(rejects).toEqual(['VERSION_INCOMPATIBLE'])
+      expect(granted).toBe(0)
+      // Terminal: a heartbeat from the host does not re-drive the join.
+      const joins = sent.filter((m) => m.kind === 'join-request').length
+      inbound(HOST, { kind: 'rejoin-request', officeId: OFFICE })
+      expect(sent.filter((m) => m.kind === 'join-request').length).toBe(joins)
     })
 
     it('does not crash the handshake on duplicate bringMembers; a name clash is admitted renamed', () => {

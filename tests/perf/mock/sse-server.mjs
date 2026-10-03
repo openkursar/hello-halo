@@ -7,12 +7,9 @@
  * meaningless; this mock emits a FIXED token count at a FIXED interval every
  * run — same script, same machine, same result shape.
  *
- * LIMITATION — text deltas only, no tool calls. Any scenario that needs the
- * agent to actually run a tool (S8's digital-human run) can therefore only
- * reach `status: 'precondition-failed'` against this mock, and the tool-call
- * leg of streaming performance stays unmeasured. Supporting it means emitting
- * `choices[0].delta.tool_calls` plus a `finish_reason: 'tool_calls'` terminal
- * chunk, and handling the follow-up request that carries the tool result.
+ * Automation runs need one report_to_user tool call to finish. When the
+ * caller supplies that tool, the mock emits a short reply and a deterministic
+ * tool call, then answers the tool-result turn with a final text response.
  *
  * Does not touch any product code. Halo's own (untouched)
  * src/main/openai-compat-router already knows how to translate a standard
@@ -37,6 +34,13 @@
  * Env vars (all optional):
  *   MOCK_PORT          default 8791
  *   MOCK_TOKEN_COUNT    default 2000   (word-ish tokens per response)
+ *   MOCK_CONTENT        default "default"; "links" = ~20K chars of link- and
+ *                       bold-dense paragraphs, "code150" = one 150-line fenced
+ *                       TypeScript block. Presets stream in fixed 40-char deltas
+ *                       (MOCK_TOKEN_COUNT does not apply).
+ *
+ * A prompt containing `mock-content:<preset>` gets that preset regardless of
+ * MOCK_CONTENT, so one mock (the one run-perf starts) serves every scenario.
  *   MOCK_INTERVAL_MS    default 20     (ms between each token)
  *   MOCK_MODEL          default "mock-sse-v1" (echoed back if request omits model)
  *
@@ -155,8 +159,50 @@ function buildTokenStream(count) {
   return out.slice(0, count)
 }
 
+const LINK_PARAGRAPH = (n) =>
+  `Section ${n}: see [the guide ${n}](https://example.com/docs/guide-${n}) and **the reference ${n}**, ` +
+  `then compare with [release notes ${n}](https://example.com/releases/${n}) and [issue ${n}](https://example.com/issues/${n}).\n\n`
+
+const CODE_LINE = (n) =>
+  `export function step${n}(input: number): number { return input * ${n} + ${n % 7} } // line ${n}\n`
+
+function presetText(name) {
+  if (name === 'links') {
+    let text = '# Link-dense report\n\n'
+    for (let n = 1; text.length < 20000; n++) text += LINK_PARAGRAPH(n)
+    return text
+  }
+  if (name === 'code150') {
+    let code = ''
+    for (let n = 1; n <= 150; n++) code += CODE_LINE(n)
+    return `Here is the whole module:\n\n\`\`\`ts\n${code}\`\`\`\n\nThat is all 150 lines.\n`
+  }
+  throw new Error(`Unknown MOCK_CONTENT preset: ${name}`)
+}
+
+/** Fixed-size deltas, like a provider streaming a long reply. */
+function chunked(text, size) {
+  const out = []
+  for (let i = 0; i < text.length; i += size) out.push(text.slice(i, i + size))
+  return out
+}
+
+const CONTENT = process.env.MOCK_CONTENT || 'default'
+const PRESETS = ['links', 'code150']
+
 // Built once at startup so every request in this process serves byte-identical content.
-const TOKENS = buildTokenStream(TOKEN_COUNT)
+const TOKENS_BY_CONTENT = {
+  default: buildTokenStream(TOKEN_COUNT),
+  ...Object.fromEntries(PRESETS.map(name => [name, chunked(presetText(name), 40)])),
+}
+if (!TOKENS_BY_CONTENT[CONTENT]) throw new Error(`Unknown MOCK_CONTENT preset: ${CONTENT}`)
+
+/** The preset a prompt asks for with `mock-content:<preset>`, else MOCK_CONTENT. */
+function contentFor(body) {
+  const text = JSON.stringify(body.messages ?? [])
+  const asked = PRESETS.find(name => text.includes(`mock-content:${name}`))
+  return asked ?? CONTENT
+}
 
 function readBody(req) {
   return new Promise((resolve) => {
@@ -180,8 +226,12 @@ async function handleChatCompletions(req, res) {
   const body = await readBody(req)
   const model = body.model || DEFAULT_MODEL
   const stream = body.stream !== false // default true, matches how the SDK calls it
+  const content = contentFor(body)
+  const reportTool = body.tools?.find(tool => tool.function?.name === 'mcp__halo-report__report_to_user')
+  const reportResult = body.messages?.some(message => message.role === 'tool' && message.tool_call_id === 'mock-report-1')
+  const TOKENS = reportTool ? (reportResult ? ['Run finished.'] : ['Preparing the run report.']) : TOKENS_BY_CONTENT[content]
 
-  console.log(`[mock-sse] POST ${req.url} model=${model} stream=${stream} tokens=${TOKEN_COUNT} interval=${INTERVAL_MS}ms`)
+  console.log(`[mock-sse] POST ${req.url} model=${model} stream=${stream} tokens=${TOKENS.length} content=${content} interval=${INTERVAL_MS}ms report=${!!reportTool} followup=${!!reportResult}`)
 
   if (!stream) {
     // Non-streaming fallback: full OpenAI chat completion object, for completeness.
@@ -196,7 +246,7 @@ async function handleChatCompletions(req, res) {
         message: { role: 'assistant', content: TOKENS.join('') },
         finish_reason: 'stop'
       }],
-      usage: { prompt_tokens: 20, completion_tokens: TOKEN_COUNT, total_tokens: TOKEN_COUNT + 20 }
+      usage: { prompt_tokens: 20, completion_tokens: TOKENS.length, total_tokens: TOKENS.length + 20 }
     }))
     return
   }
@@ -241,14 +291,25 @@ async function handleChatCompletions(req, res) {
       return
     }
 
-    // Terminal chunk: empty delta + finish_reason + usage, then [DONE].
+    if (reportTool && !reportResult) {
+      sseChunk(res, {
+        id: 'mock-cmpl-1',
+        object: 'chat.completion.chunk',
+        created: Math.floor(Date.now() / 1000),
+        model,
+        choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'mock-report-1', type: 'function', function: {
+          name: reportTool.function.name,
+          arguments: JSON.stringify({ type: 'run_complete', message: 'The seeded run completed.' })
+        } }] }, finish_reason: null }]
+      })
+    }
     sseChunk(res, {
       id: 'mock-cmpl-1',
       object: 'chat.completion.chunk',
       created: Math.floor(Date.now() / 1000),
       model,
-      choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
-      usage: { prompt_tokens: 20, completion_tokens: TOKEN_COUNT, total_tokens: TOKEN_COUNT + 20 }
+      choices: [{ index: 0, delta: {}, finish_reason: reportTool && !reportResult ? 'tool_calls' : 'stop' }],
+      usage: { prompt_tokens: 20, completion_tokens: TOKENS.length, total_tokens: TOKENS.length + 20 }
     })
     res.write('data: [DONE]\n\n')
     res.end()
@@ -268,5 +329,5 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`[mock-sse] listening on http://127.0.0.1:${PORT}`)
-  console.log(`[mock-sse] ${TOKEN_COUNT} tokens/response, ${INTERVAL_MS}ms/token, model="${DEFAULT_MODEL}"`)
+  console.log(`[mock-sse] ${TOKENS_BY_CONTENT[CONTENT].length} tokens/response (${CONTENT}), ${INTERVAL_MS}ms/token, model="${DEFAULT_MODEL}"`)
 })

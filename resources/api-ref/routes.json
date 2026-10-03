@@ -300,6 +300,11 @@
   },
   {
     "method": "GET",
+    "path": "/api/spaces/:spaceId/artifacts/query",
+    "group": "workspace"
+  },
+  {
+    "method": "GET",
     "path": "/api/spaces/:spaceId/artifacts/tree",
     "group": "workspace"
   },
@@ -340,6 +345,14 @@
     "method": "POST",
     "path": "/api/spaces/:spaceId/artifacts/folder",
     "group": "workspace"
+  },
+  {
+    "method": "POST",
+    "path": "/api/spaces/:spaceId/artifacts/retain"
+  },
+  {
+    "method": "POST",
+    "path": "/api/spaces/:spaceId/artifacts/release"
   },
   {
     "method": "POST",

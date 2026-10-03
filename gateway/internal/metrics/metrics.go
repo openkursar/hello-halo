@@ -1,11 +1,13 @@
-// Package metrics is a dependency-free Prometheus text exporter backed by
-// atomic counters and gauges.
+// Package metrics is a Prometheus text exporter backed by atomic counters and
+// gauges (no dependency beyond the wire plane list).
 package metrics
 
 import (
 	"fmt"
 	"io"
 	"sync/atomic"
+
+	"github.com/openkursar/hello-halo/gateway/internal/wire"
 )
 
 // Metrics holds every counter the gateway exposes at /metrics.
@@ -16,8 +18,8 @@ type Metrics struct {
 	AuthFailuresTotal    atomic.Int64
 	RateLimitedTotal     atomic.Int64
 	FramesRejectedTotal  atomic.Int64
-	FramesForwardedTotal [3]atomic.Int64 // indexed by wire.Plane
-	FramesDroppedTotal   [3]atomic.Int64
+	FramesForwardedTotal [wire.PlaneCount]atomic.Int64 // indexed by wire.Plane
+	FramesDroppedTotal   [wire.PlaneCount]atomic.Int64
 	// Host frames addressed to a node the room holds no session for.
 	FramesDroppedNoMemberTotal atomic.Int64
 	AnnouncesTotal             atomic.Int64
@@ -28,7 +30,7 @@ type Metrics struct {
 
 func New() *Metrics { return &Metrics{} }
 
-var planeNames = [3]string{"control", "stream", "artifact"}
+var planeNames = wire.PlaneNames
 
 // WritePrometheus renders all metrics in the Prometheus text exposition format.
 func (m *Metrics) WritePrometheus(w io.Writer) {

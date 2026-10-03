@@ -23,7 +23,7 @@ import { CapabilityPolicyFields } from '../capability/CapabilityPolicyFields'
 import { api } from '../../api'
 import { SystemPromptEditor } from '../apps/SystemPromptEditor'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
-import { useTeamStore } from '../../stores/team.store'
+import { useTeamStore, useTeamView, detailOf } from '../../stores/team.store'
 import { useAppsStore } from '../../stores/apps.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useTranslation } from '../../i18n'
@@ -208,8 +208,8 @@ function OwnInstructions({ prompt }: { prompt: string }) {
 function MemberChecks({ teamId, checks }: { teamId: string; checks: TeamCheckView[] }) {
   const { t, i18n } = useTranslation()
   const cancelCheck = useTeamStore(s => s.cancelCheck)
-  const conversations = useTeamStore(s => s.conversations)
-  const epochs = useTeamStore(s => s.epochs)
+  const conversations = useTeamView(v => v.conversations)
+  const epochs = useTeamView(v => v.epochs)
   const [stopping, setStopping] = useState<TeamCheckView | null>(null)
 
   if (checks.length === 0) {
@@ -302,7 +302,7 @@ function BorrowedWorkRecord({ teamId, member }: { teamId: string; member: TeamMe
   }, [open, teamId, appId])
 
   const nameByApp = new Map(
-    (useTeamStore.getState().detail?.members ?? []).map(m => [m.appId, m.memberName]),
+    (detailOf(useTeamStore.getState(), teamId)?.members ?? []).map(m => [m.appId, m.memberName]),
   )
   const refused = entries?.filter(e => e.decision === 'denied').length ?? 0
 

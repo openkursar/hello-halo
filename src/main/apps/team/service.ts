@@ -912,6 +912,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         activities: store.listRecentActivityByEpoch(teamId, epochId, 500),
         pendingEscalations,
         checks,
+        boardEpochId: epochId,
       }
     }
 
@@ -932,6 +933,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         activities: store.listRecentActivityByEpoch(teamId, epoch.id, 500),
         pendingEscalations,
         checks,
+        boardEpochId: epoch.id,
       }
     }
 
@@ -959,6 +961,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       activities: [],
       pendingEscalations,
       checks,
+      boardEpochId: null,
     }
   }
 

@@ -26,14 +26,17 @@ export const conversationApi = {
     return httpRequest('POST', `/api/spaces/${spaceId}/conversations`, { title })
   },
 
+  /** `fromMessageId`: return messages from that one on, marked with `messagesFrom` (whole list if unknown). */
   getConversation: async (
     spaceId: string,
-    conversationId: string
+    conversationId: string,
+    options?: { fromMessageId?: string }
   ): Promise<ApiResponse> => {
     if (isElectron()) {
-      return window.halo.getConversation(spaceId, conversationId)
+      return window.halo.getConversation(spaceId, conversationId, options)
     }
-    return httpRequest('GET', `/api/spaces/${spaceId}/conversations/${conversationId}`)
+    const from = options?.fromMessageId ? `?from=${encodeURIComponent(options.fromMessageId)}` : ''
+    return httpRequest('GET', `/api/spaces/${spaceId}/conversations/${conversationId}${from}`)
   },
 
   updateConversation: async (

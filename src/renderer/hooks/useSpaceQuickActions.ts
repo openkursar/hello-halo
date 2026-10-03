@@ -7,7 +7,7 @@
  */
 
 import { useCallback } from 'react'
-import { useCanvasLifecycle } from './useCanvasLifecycle'
+import { useCanvasActions } from './useCanvasLifecycle'
 import { useUserTerminal } from './useUserTerminal'
 import { getBrowserHomepage } from '../utils/browser-homepage'
 import { api } from '../api'
@@ -29,7 +29,7 @@ interface SpaceQuickActions {
 
 export function useSpaceQuickActions(): SpaceQuickActions {
   const { t } = useTranslation()
-  const { openUrl } = useCanvasLifecycle()
+  const { openUrl } = useCanvasActions()
   const { available: terminalAvailable, creating: terminalCreating, createAndOpen: openTerminal } = useUserTerminal()
 
   const openBrowser = useCallback(

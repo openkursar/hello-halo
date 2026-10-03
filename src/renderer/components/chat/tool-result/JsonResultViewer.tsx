@@ -10,10 +10,10 @@
 
 import { useState, useCallback, useMemo } from 'react'
 import { Copy, Check, ChevronDown, ChevronUp, Braces } from 'lucide-react'
-import { useAsyncHighlight } from '../../../hooks/useAsyncHighlight'
 import { useTranslation } from '../../../i18n'
 import type { ViewerBaseProps } from './types'
-import { truncateToLines } from './detection'
+import { useBoundedHighlight } from './bounded-highlight'
+import { truncateToLines, PREVIEW_MAX_CHARS } from './detection'
 
 const PREVIEW_LINES = 6
 
@@ -39,13 +39,13 @@ export function JsonResultViewer({
 
   // Parse content for preview
   const { content: previewContent, totalLines, truncated } = useMemo(() => {
-    return truncateToLines(formattedJson, PREVIEW_LINES)
+    return truncateToLines(formattedJson, PREVIEW_LINES, PREVIEW_MAX_CHARS)
   }, [formattedJson])
 
   const displayContent = isExpanded ? formattedJson : previewContent
 
-  // Async highlight: shows plain text instantly, then swaps in highlighted HTML
-  const highlightedJson = useAsyncHighlight(displayContent, 'json')
+  // Async highlight: plain text first, then highlighted HTML (head only when huge)
+  const highlightedJson = useBoundedHighlight(displayContent, 'json')
 
   // Copy handler
   const handleCopy = useCallback(async () => {

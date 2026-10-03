@@ -51,6 +51,18 @@ export class CdpMetricsCollector {
   }
 
   /**
+   * Raise Chromium's own critical memory-pressure signal once, so the renderer
+   * empties its resource caches exactly as it would when the OS asks. Tells
+   * retained-for-reuse memory (drops on this signal) from a leak (does not).
+   * `Memory.forciblyPurgeJavaScriptMemory` is deliberately not part of this:
+   * in one run it left the Electron process unable to exit after measurement.
+   */
+  async simulateMemoryPressure(): Promise<void> {
+    if (!this.session) throw new Error('CdpMetricsCollector.connect() must run first')
+    await this.session.send('Memory.simulatePressureNotification', { level: 'critical' })
+  }
+
+  /**
    * Make the renderer drop everything it is holding only for reuse, by raising
    * the critical memory-pressure signal it already listens for — the same
    * signal the operating system raised on its own during one soak, which

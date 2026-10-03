@@ -1,12 +1,14 @@
-let conversationGeneration = 0
+// Per team: a task-list response older than the latest request for that team is dropped.
+const conversationGenerations = new Map<string, number>()
 
 /** Renderer state for the Digital Team feature. */
 
-import { useMemo } from 'react'
+import { createContext, useContext, useMemo } from 'react'
 import { create } from 'zustand'
 import { api } from '../api'
 import { useTeamViewPrefsStore } from './team-view-prefs.store'
 import { useNotificationStore } from './notification.store'
+import { requestUpdateCheck } from '../services/request-update-check'
 import i18n from '../i18n'
 import type {
   TeamListItem,
@@ -35,6 +37,7 @@ import { isRemoteMember } from '../../shared/apps/team-types'
 /** Animates the status-board connector line; auto-expires after FLOW_TTL_MS. */
 export interface ActiveFlow {
   id: string
+  teamId: string
   fromAppId: string
   toAppId: string
   ts: number
@@ -75,14 +78,37 @@ function toReachability(status: 'online' | 'suspect' | 'offline'): MemberReachab
  */
 export type OfficeLiveness = 'live' | 'paused'
 
+/** One team as a surface shows it: board, run history, task list, selection. */
+export interface TeamViewData {
+  detail: TeamDetail | null
+  epochs: TeamEpochSummary[]
+  conversations: TeamConversation[]
+  conversationsError: string | null
+  isLoadingDetail: boolean
+  isLoadingConversations: boolean
+  selectedConversationId: string | null
+  error: string | null
+}
+
+const EMPTY_VIEW: TeamViewData = {
+  detail: null,
+  epochs: [],
+  conversations: [],
+  conversationsError: null,
+  isLoadingDetail: false,
+  isLoadingConversations: false,
+  selectedConversationId: null,
+  error: null,
+}
+
 // ── State ────────────────────────────────────────────────────────────────────
 
-interface TeamState {
+export interface TeamState {
   // ── Data ─────────────────────────────────
   teams: TeamListItem[]
   currentTeamId: string | null
   detail: TeamDetail | null
-  /** Transient send signals for the flow-line animation (auto-expire). */
+  /** Transient send signals for the flow-line animation (auto-expire), of every shown team. */
   activeFlows: ActiveFlow[]
   /** Live presence per office: teamId → (nodeId → {displayName, reachability}). */
   presence: Map<string, Map<string, NodePresence>>
@@ -94,6 +120,15 @@ interface TeamState {
    * clears it. Distinct from any dialog state so the link survives navigation.
    */
   pendingInviteLink: string | null
+
+  /**
+   * Teams shown by a surface other than the Teams page's selection (a canvas team
+   * tab), keyed by team id and kept while one is mounted (`retainTeamView`).
+   * The flat fields above belong to `currentTeamId`; a surface inside a
+   * `TeamViewContext` reads its own entry instead, so two surfaces on two teams
+   * never fight over one selection.
+   */
+  views: Record<string, TeamViewData>
 
   // ── Loading flags ────────────────────────
   isLoadingList: boolean
@@ -164,6 +199,11 @@ interface TeamState {
   /** Remove flows older than FLOW_TTL_MS (called on a timer after each message). */
   expireFlows: () => void
 
+  /** Keep `teamId`'s view loaded and live until the returned release is called (ref-counted). */
+  retainTeamView: (teamId: string) => () => void
+  /** Select a task inside a team view (the Teams page selection is `selectConversation`). */
+  selectViewConversation: (teamId: string, epochId: string | null) => void
+
   /**
    * Project a member's owner identity + reachability for the office UI. Local
    * members are always reachable (this node); a remote member maps to its owner
@@ -230,7 +270,69 @@ async function refreshTeamsCoalesced(load: () => Promise<void>): Promise<void> {
   }
 }
 
+/** A board with one replicated/local row merged in; the same object when it changes nothing. */
+function mergeBoardRow(detail: TeamDetail, event: TeamBlackboardEvent): TeamDetail {
+  const { task, finding, activity } = event
+  if (activity) {
+    // Append-only, so a repeat (a replica echo of a row this node authored)
+    // is dropped rather than duplicating the feed.
+    const activities = detail.activities ?? []
+    if (activities.some(a => a.id === activity.id)) return detail
+    return { ...detail, activities: [activity, ...activities].slice(0, 500) }
+  }
+  if (task) {
+    const exists = detail.tasks.some(tk => tk.id === task.id)
+    const tasks = exists ? detail.tasks.map(tk => tk.id === task.id ? task : tk) : [task, ...detail.tasks]
+    return { ...detail, tasks }
+  }
+  if (finding) {
+    if (detail.findings.some(f => f.id === finding.id)) return detail
+    return { ...detail, findings: [finding, ...detail.findings] }
+  }
+  return detail
+}
+
+/**
+ * Board reloads are requested by events that arrive in bursts (a replicated
+ * catch-up page, several writes in one turn). One request runs per key; callers
+ * that arrive meanwhile share one trailing rerun, and every caller resolves only
+ * after a fetch that started after its call — so an await after a mutation still
+ * sees the mutation.
+ */
+const boardLoads = new Map<string, { again: boolean; done: Promise<void> }>()
+function coalesceLoad(key: string, run: () => Promise<void>): Promise<void> {
+  const running = boardLoads.get(key)
+  if (running) {
+    running.again = true
+    return running.done
+  }
+  const slot = { again: false, done: Promise.resolve() }
+  boardLoads.set(key, slot)
+  slot.done = (async () => {
+    try {
+      do {
+        slot.again = false
+        await run()
+      } while (slot.again)
+    } finally {
+      boardLoads.delete(key)
+    }
+  })()
+  return slot.done
+}
+
 // ── Store ────────────────────────────────────────────────────────────────────
+
+/** Merge into a retained team view; a team with no view is left alone. */
+function patchView(teamId: string, patch: Partial<TeamViewData>): void {
+  useTeamStore.setState(s => {
+    const view = s.views[teamId]
+    if (!view) return {}
+    return { views: { ...s.views, [teamId]: { ...view, ...patch } } }
+  })
+}
+
+const viewHolders = new Map<string, number>()
 
 /** In-flight list requests, by space ('' = every space). */
 const teamListRequests = new Map<string, Promise<void>>()
@@ -249,6 +351,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
   conversationsError: null,
   isLoadingConversations: false,
   selectedConversationId: null,
+  views: {},
 
   isLoadingList: false,
   isLoadingDetail: false,
@@ -289,7 +392,6 @@ export const useTeamStore = create<TeamState>((set, get) => ({
     set({
       currentTeamId: teamId,
       detail: null,
-      activeFlows: [],
       epochs: [],
       conversations: [],
       selectedConversationId: teamId ? useTeamViewPrefsStore.getState().taskByTeam[teamId] ?? null : null,
@@ -301,49 +403,60 @@ export const useTeamStore = create<TeamState>((set, get) => ({
     }
   },
 
-  loadDetail: async (teamId) => {
+  loadDetail: (teamId) => coalesceLoad(`detail:${teamId}`, async () => {
+    const shown = () => get().currentTeamId === teamId
+    if (!shown() && !get().views[teamId]) return
     // Snapshot the current roster so we can tell if someone new joined once the
     // refetch lands (null when this is the first load of this team = no toast).
-    const prev = get().detail
+    const prev = shown() ? get().detail : get().views[teamId]?.detail ?? null
     const prevMembers = prev && prev.team.id === teamId ? prev.members : null
-    set({ isLoadingDetail: true, error: null })
+    if (shown()) set({ isLoadingDetail: true, error: null })
+    patchView(teamId, { isLoadingDetail: true, error: null })
+    const failed = i18n.t('Couldn\u2019t open this team. Please try again.')
     try {
       const res = await api.teamGetDetail(teamId)
-      // Guard against races: ignore stale responses for a no-longer-selected team.
-      if (get().currentTeamId !== teamId) return
       if (res.success && res.data) {
-        const detail = res.data as TeamDetail
+        const raw = res.data as TeamDetail
         // A remote member present now but not before = someone else's machine joined.
         if (prevMembers) {
           const known = new Set(prevMembers.map(m => m.appId))
-          notifyMembersJoined(detail.team.name, detail.members.filter(m => isRemoteMember(m) && !known.has(m.appId)))
+          notifyMembersJoined(raw.team.name, raw.members.filter(m => isRemoteMember(m) && !known.has(m.appId)))
         }
-        set({ detail: { ...detail, activities: [...(detail.activities ?? [])].sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id)).slice(0, 500) } })
+        const detail = { ...raw, activities: [...(raw.activities ?? [])].sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id)).slice(0, 500) }
+        // Guard against races: a response for a no-longer-selected team only feeds its view.
+        if (shown()) set({ detail })
+        patchView(teamId, { detail })
       } else if (!res.success) {
-        set({ error: (res.error as string) || i18n.t('Couldn\u2019t open this team. Please try again.') })
+        const error = (res.error as string) || failed
+        if (shown()) set({ error })
+        patchView(teamId, { error })
       }
     } catch (err) {
       console.error('[TeamStore] loadDetail error:', err)
-      set({ error: i18n.t('Couldn\u2019t open this team. Please try again.') })
+      if (shown()) set({ error: failed })
+      patchView(teamId, { error: failed })
     } finally {
-      if (get().currentTeamId === teamId) set({ isLoadingDetail: false })
+      if (shown()) set({ isLoadingDetail: false })
+      patchView(teamId, { isLoadingDetail: false })
     }
-  },
+  }),
 
-  loadEpochs: async (teamId) => {
-    set({ isLoadingEpochs: true })
+  loadEpochs: (teamId) => coalesceLoad(`epochs:${teamId}`, async () => {
+    if (get().currentTeamId !== teamId && !get().views[teamId]) return
+    if (get().currentTeamId === teamId) set({ isLoadingEpochs: true })
     try {
       const res = await api.teamListEpochs(teamId)
-      if (get().currentTeamId !== teamId) return
       if (res.success && Array.isArray(res.data)) {
-        set({ epochs: res.data as TeamEpochSummary[] })
+        const epochs = res.data as TeamEpochSummary[]
+        if (get().currentTeamId === teamId) set({ epochs })
+        patchView(teamId, { epochs })
       }
     } catch (err) {
       console.error('[TeamStore] loadEpochs error:', err)
     } finally {
       if (get().currentTeamId === teamId) set({ isLoadingEpochs: false })
     }
-  },
+  }),
 
   loadEpochBoard: async (teamId, epochId) => {
     try {
@@ -359,27 +472,45 @@ export const useTeamStore = create<TeamState>((set, get) => ({
 
   // ── Conversations ────────────────────────
 
-  loadConversations: async (teamId) => {
-    const generation = ++conversationGeneration
-    set({ isLoadingConversations: true, conversationsError: null })
+  loadConversations: (teamId) => coalesceLoad(`conversations:${teamId}`, async () => {
+    const shown = () => get().currentTeamId === teamId
+    if (!shown() && !get().views[teamId]) return
+    const generation = (conversationGenerations.get(teamId) ?? 0) + 1
+    conversationGenerations.set(teamId, generation)
+    const current = () => generation === conversationGenerations.get(teamId)
+    const failed = i18n.t('Could not load tasks. Please try again.')
+    if (shown()) set({ isLoadingConversations: true, conversationsError: null })
+    patchView(teamId, { isLoadingConversations: true, conversationsError: null })
     try {
       const res = await api.teamListConversations(teamId)
-      if (get().currentTeamId !== teamId || generation !== conversationGeneration) return
+      if (!current()) return
       if (res.success && Array.isArray(res.data)) {
         const conversations = res.data as TeamConversation[]
-        const selected = get().selectedConversationId
-        set({ conversations, ...(selected && !conversations.some(item => item.epochId === selected) ? { selectedConversationId: null } : {}) })
+        const keep = (selected: string | null) => !selected || conversations.some(item => item.epochId === selected)
+        if (shown()) {
+          const selected = get().selectedConversationId
+          set({ conversations, ...(keep(selected) ? {} : { selectedConversationId: null }) })
+        }
+        const view = get().views[teamId]
+        if (view) patchView(teamId, { conversations, ...(keep(view.selectedConversationId) ? {} : { selectedConversationId: null }) })
       } else {
         console.warn('[TeamStore] Task list rejected', { teamId, error: res.error })
-        set({ conversationsError: i18n.t('Could not load tasks. Please try again.') })
+        if (shown()) set({ conversationsError: failed })
+        patchView(teamId, { conversationsError: failed })
       }
     } catch (err) {
       console.error('[TeamStore] loadConversations error:', err)
-      if (get().currentTeamId === teamId && generation === conversationGeneration) set({ conversationsError: i18n.t('Could not load tasks. Please try again.') })
+      if (current()) {
+        if (shown()) set({ conversationsError: failed })
+        patchView(teamId, { conversationsError: failed })
+      }
     } finally {
-      if (get().currentTeamId === teamId && generation === conversationGeneration) set({ isLoadingConversations: false })
+      if (current()) {
+        if (shown()) set({ isLoadingConversations: false })
+        patchView(teamId, { isLoadingConversations: false })
+      }
     }
-  },
+  }),
 
   openConversation: async (teamId, title) => {
     try {
@@ -778,66 +909,99 @@ export const useTeamStore = create<TeamState>((set, get) => ({
         // Every field of a first-sighting row is a guess (the event carries a
         // Team, not a list item), so pull the real one.
         if (!existing) void refreshTeamsCoalesced(() => get().loadTeams())
+        const view = s.views[teamId]
         return {
           teams,
           detail: s.detail && s.detail.team.id === teamId
             ? { ...s.detail, team }
             : s.detail,
+          ...(view?.detail ? { views: { ...s.views, [teamId]: { ...view, detail: { ...view.detail, team } } } } : {}),
         }
       })
     }
 
     // Detail-affecting changes (members, roster, edges) may not be expressible
-    // in the lightweight team payload — refetch when this is the open team. Also
-    // refresh run history so a newly started/sealed epoch appears immediately.
-    if (get().currentTeamId === teamId) {
-      void get().loadDetail(teamId)
-      void get().loadEpochs(teamId)
-      // The session list is office-shared: an epoch opened/renamed/sealed on any
-      // node arrives as team:updated, so keep the Conversation tab in sync.
-      void get().loadConversations(teamId)
+    // in the lightweight team payload — refetch what the event says changed when
+    // this team is shown (everything when it does not say). The session list
+    // is office-shared: an epoch opened/renamed/sealed on any node arrives here.
+    if (get().currentTeamId === teamId || get().views[teamId]) {
+      const changed = event.changed
+      if (!changed || changed.includes('members') || changed.includes('board')) void get().loadDetail(teamId)
+      if (!changed || changed.includes('epochs')) void get().loadEpochs(teamId)
+      if (!changed || changed.includes('conversations')) void get().loadConversations(teamId)
     }
   },
 
   applyTeamBlackboard: (event) => {
-    const { teamId, task, finding, activity } = event
-    if (get().currentTeamId !== teamId) return
+    const { teamId, task, finding } = event
+    const flat = get().currentTeamId === teamId && get().detail?.team.id === teamId ? get().detail : null
+    const viewed = get().views[teamId]?.detail ?? null
+    if (!flat && !viewed) return
+
+    // The detail's rows are a buffer across epochs (task rooms read their own
+    // epoch's rows from it), so every row is merged. A board that shows no epoch
+    // yet may now have one to show — the main process decides which.
+    if (flat?.boardEpochId === null || viewed?.boardEpochId === null) void get().loadDetail(teamId)
+    // Task and finding rows feed the task list's counts and completion.
+    if (task || finding) void get().loadConversations(teamId)
 
     set(s => {
-      if (!s.detail || s.detail.team.id !== teamId) return {}
-      const detail = s.detail
-
-      if (activity) {
-        // Append-only, so a repeat (a replica echo of a row this node authored)
-        // is dropped rather than duplicating the feed.
-        const activities = detail.activities ?? []
-        if (activities.some(a => a.id === activity.id)) return {}
-        return { detail: { ...detail, activities: [activity, ...activities].slice(0, 500) } }
+      const next: Partial<TeamState> = {}
+      if (s.currentTeamId === teamId && s.detail?.team.id === teamId) {
+        const merged = mergeBoardRow(s.detail, event)
+        if (merged !== s.detail) next.detail = merged
       }
-      if (task) {
-        const exists = detail.tasks.some(tk => tk.id === task.id)
-        const tasks = exists
-          ? detail.tasks.map(tk => tk.id === task.id ? task : tk)
-          : [task, ...detail.tasks]
-        return { detail: { ...detail, tasks } }
+      const view = s.views[teamId]
+      if (view?.detail) {
+        const merged = mergeBoardRow(view.detail, event)
+        if (merged !== view.detail) next.views = { ...s.views, [teamId]: { ...view, detail: merged } }
       }
-      if (finding) {
-        const exists = detail.findings.some(f => f.id === finding.id)
-        if (exists) return {}
-        return { detail: { ...detail, findings: [finding, ...detail.findings] } }
-      }
-      return {}
+      return next
     })
+  },
+
+  retainTeamView: (teamId) => {
+    const holders = viewHolders.get(teamId) ?? 0
+    viewHolders.set(teamId, holders + 1)
+    if (holders === 0) {
+      const selectedConversationId = useTeamViewPrefsStore.getState().taskByTeam[teamId] ?? null
+      set(s => ({ views: { ...s.views, [teamId]: s.views[teamId] ?? { ...EMPTY_VIEW, isLoadingDetail: true, selectedConversationId } } }))
+      void get().loadDetail(teamId)
+      void get().loadEpochs(teamId)
+      void get().loadConversations(teamId)
+    }
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      const remaining = (viewHolders.get(teamId) ?? 1) - 1
+      if (remaining > 0) {
+        viewHolders.set(teamId, remaining)
+        return
+      }
+      viewHolders.delete(teamId)
+      set(s => {
+        if (!s.views[teamId]) return {}
+        const views = { ...s.views }
+        delete views[teamId]
+        return { views }
+      })
+    }
+  },
+
+  selectViewConversation: (teamId, epochId) => {
+    useTeamViewPrefsStore.getState().setLastTask(teamId, epochId)
+    patchView(teamId, { selectedConversationId: epochId })
   },
 
   applyTeamMessage: (event) => {
     const { teamId, fromAppId, toAppId, messageId, ts } = event
-    if (get().currentTeamId !== teamId) return
+    if (get().currentTeamId !== teamId && !get().views[teamId]) return
 
     set(s => ({
       activeFlows: [
         ...s.activeFlows.filter(f => f.id !== messageId),
-        { id: messageId, fromAppId, toAppId, ts },
+        { id: messageId, teamId, fromAppId, toAppId, ts },
       ],
     }))
 
@@ -889,6 +1053,21 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       return
     }
 
+    if (kind === 'update-required') {
+      const name = get().teams.find(tm => tm.id === teamId)?.name
+      useNotificationStore.getState().show({
+        id: `team-update-required-${teamId}`,
+        title: name
+          ? i18n.t('{{office}} needs an update', { office: name })
+          : i18n.t('The team needs an update'),
+        body: i18n.t('This team requires everyone to update Halo to the latest version'),
+        variant: 'warning',
+        duration: 0,
+        action: { label: i18n.t('Check for updates'), onClick: () => void requestUpdateCheck() },
+      })
+      return
+    }
+
     const wasPaused = get().officeLiveness.get(teamId) === 'paused'
 
     set(s => {
@@ -933,6 +1112,19 @@ export const useTeamStore = create<TeamState>((set, get) => ({
   },
 }))
 
+// Every member card runs several selectors per store update; indexing the
+// member list once per detail keeps that O(members) instead of O(members²).
+const membersIndex = new WeakMap<TeamMember[], Map<string, TeamMember>>()
+export function memberById(detail: TeamDetail | null, appId: string): TeamMember | undefined {
+  if (!detail) return undefined
+  let index = membersIndex.get(detail.members)
+  if (!index) {
+    index = new Map(detail.members.map(m => [m.appId, m]))
+    membersIndex.set(detail.members, index)
+  }
+  return index.get(appId)
+}
+
 /**
  * Whether a member (by appId) runs on someone else's machine. Used outside React
  * (e.g. the chat store) to decide whether a team-overlay session's transcript is
@@ -940,7 +1132,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
  * detail snapshot; returns false when the member isn't resolved yet.
  */
 export function isRemoteMemberAppId(appId: string): boolean {
-  const member = useTeamStore.getState().detail?.members.find(m => m.appId === appId)
+  const member = memberById(useTeamStore.getState().detail, appId)
   if (!member) return false
   return isRemoteMember(member)
 }
@@ -954,9 +1146,9 @@ export function isRemoteMemberAppId(appId: string): boolean {
  * comparator does not loop; the projection is assembled in a memo.
  */
 export function useMemberPresence(teamId: string, appId: string): MemberPresence {
-  const ownerNodeId = useTeamStore(s => s.detail?.members.find(m => m.appId === appId)?.ownerNodeId)
-  const origin = useTeamStore(s => s.detail?.members.find(m => m.appId === appId)?.origin)
-  const ownerDisplayName = useTeamStore(s => s.detail?.members.find(m => m.appId === appId)?.ownerDisplayName)
+  const ownerNodeId = useTeamStore(s => memberById(detailOf(s, teamId), appId)?.ownerNodeId)
+  const origin = useTeamStore(s => memberById(detailOf(s, teamId), appId)?.origin)
+  const ownerDisplayName = useTeamStore(s => memberById(detailOf(s, teamId), appId)?.ownerDisplayName)
   const node = useTeamStore(s =>
     ownerNodeId ? s.presence.get(teamId)?.get(ownerNodeId) : undefined,
   )
@@ -972,4 +1164,52 @@ export function useMemberPresence(teamId: string, appId: string): MemberPresence
       isRemote: true,
     }
   }, [origin, ownerNodeId, ownerDisplayName, node])
+}
+
+/**
+ * The team a surface shows when it is not the Teams page's selection (a canvas
+ * team tab provides it around its TeamView). Components under it read that
+ * team's view; outside it they read the Teams page's selection.
+ */
+export const TeamViewContext = createContext<string | null>(null)
+
+function selectedView(s: TeamState): TeamViewData {
+  return {
+    detail: s.detail,
+    epochs: s.epochs,
+    conversations: s.conversations,
+    conversationsError: s.conversationsError,
+    isLoadingDetail: s.isLoadingDetail,
+    isLoadingConversations: s.isLoadingConversations,
+    selectedConversationId: s.selectedConversationId,
+    error: s.error,
+  }
+}
+
+/** The board of `teamId` as whichever surface holds it has it loaded. */
+export function detailOf(s: TeamState, teamId: string): TeamDetail | null {
+  if (s.currentTeamId === teamId && s.detail?.team.id === teamId) return s.detail
+  return s.views[teamId]?.detail ?? null
+}
+
+/** The team a surface shows: its own view inside a TeamViewContext, else the Teams page selection. */
+export function teamViewOf(s: TeamState, viewTeamId: string | null): TeamViewData {
+  return viewTeamId ? s.views[viewTeamId] ?? EMPTY_VIEW : selectedView(s)
+}
+
+/** Select from the team this component's surface shows (see TeamViewContext). */
+export function useTeamView<T>(select: (view: TeamViewData) => T): T {
+  const teamId = useContext(TeamViewContext)
+  return useTeamStore(s => select(teamViewOf(s, teamId)))
+}
+
+/** Select a task in the team this component's surface shows. */
+export function useSelectTeamTask(): (epochId: string | null) => void {
+  const teamId = useContext(TeamViewContext)
+  const selectConversation = useTeamStore(s => s.selectConversation)
+  const selectViewConversation = useTeamStore(s => s.selectViewConversation)
+  return useMemo(
+    () => (teamId ? (epochId: string | null) => selectViewConversation(teamId, epochId) : selectConversation),
+    [teamId, selectConversation, selectViewConversation]
+  )
 }

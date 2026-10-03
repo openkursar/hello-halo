@@ -25,7 +25,7 @@ import { api } from '../../api'
 import { useTranslation } from '../../i18n'
 import { useNotificationStore } from '../../stores/notification.store'
 import type { UpdaterReleaseNotes } from '../../../shared/types/updater'
-import { isUpdateSnoozed, snoozeUpdate } from './update-snooze'
+import { isUpdateSnoozed, snoozeUpdate } from '../../services/update-snooze'
 
 // Stable toast ID so lifecycle events replace rather than duplicate
 const UPDATE_TOAST_ID = 'updater-lifecycle'

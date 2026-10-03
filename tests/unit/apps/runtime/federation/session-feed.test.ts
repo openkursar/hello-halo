@@ -415,10 +415,121 @@ describe('session-feed — multi-replica transcript replication', () => {
     const ctrlFrame: FeedSyncFrame = {
       kind: 'feed-subscribe',
       officeId: OFFICE,
-      feedKey: feedIdKey({ officeId: OFFICE, author: A, kind: 'ctrl' }),
+      feedKey: feedIdKey({ officeId: OFFICE, author: A, kind: 'ctrl:node-b' }),
       afterSeq: 0,
     }
     expect(isSessionFeedFrame(OFFICE, sessionFrame)).toBe(true)
     expect(isSessionFeedFrame(OFFICE, ctrlFrame)).toBe(false)
+  })
+})
+
+describe('session-feed — only the serving node keeps a mirror', () => {
+  let h: Harness
+
+  afterEach(() => h?.closeAll())
+
+  it('a joiner keeps the history copy but writes no mirror rows', () => {
+    h = makeHarness()
+    h.a.transcripts.set(SESSION_KEY, [msg(1), msg(2), msg(3)])
+    h.a.feed.publishOwnedTail(SESSION_KEY)
+
+    expect(cachedTranscript(h.b).map((m) => m.seq)).toEqual([1, 2, 3])
+    expect(h.b.store.getCacheMaxSeq(OFFICE, A_FEED_KEY)).toBe(0)
+    expect(h.host.store.getCacheMaxSeq(OFFICE, A_FEED_KEY)).toBe(3)
+  })
+
+  it('a transcript batch commits in one transaction', () => {
+    h = makeHarness()
+    const tx = vi.spyOn(h.b.store, 'transaction')
+    h.a.transcripts.set(SESSION_KEY, [msg(1), msg(2), msg(3), msg(4)])
+    h.a.feed.publishOwnedTail(SESSION_KEY)
+    expect(cachedTranscript(h.b)).toHaveLength(4)
+    expect(tx).toHaveBeenCalledTimes(1)
+  })
+
+  it('re-announcing reads no feed tables after the first pass', () => {
+    h = makeHarness()
+    h.a.transcripts.set(SESSION_KEY, [msg(1)])
+    h.a.feed.publishOwnedTail(SESSION_KEY)
+    h.host.feed.retransmitTick()
+    const scan = vi.spyOn(h.host.store, 'listCacheFeedIds')
+    const maxSeq = vi.spyOn(h.host.store, 'getCacheMaxSeq')
+    for (let i = 0; i < 12; i++) h.host.feed.retransmitTick()
+    expect(scan).not.toHaveBeenCalled()
+    expect(maxSeq).not.toHaveBeenCalled()
+  })
+
+  it('a node that starts serving mid-feed announces its mirror floor instead of stalling a consumer', () => {
+    const dbm = createDatabaseManager(':memory:')
+    dbm.runMigrations(dbm.getAppDatabase(), MIGRATION_NAMESPACE, migrations)
+    const store = new FeedStore(dbm.getAppDatabase())
+    let serving = false
+    const toC: FeedSyncFrame[] = []
+    const node = createSessionFeed({
+      officeId: OFFICE,
+      selfNodeId: HOST,
+      feedStore: store,
+      sendToPeer: (peer, frame) => {
+        if (peer === 'node-c') toC.push(frame)
+      },
+      broadcast: () => {},
+      readOwnedTranscript: () => null,
+      isSessionActive: () => false,
+      servesMirror: () => serving,
+      acceptEntriesFrom: () => true,
+      retransmitIntervalMs: 0,
+    })
+    const entry = (seq: number) => ({ seq, hlc: `0000000000000${seq}`.slice(-16), fid: `f${seq}`, type: 'msg', payload: msg(seq), ts: seq })
+    const batch = (seqs: number[]): FeedSyncFrame => ({
+      kind: 'feed-entries', officeId: OFFICE, feedKey: A_FEED_KEY, entries: seqs.map(entry), upToSeq: seqs.at(-1)!, more: false, truncatedBeforeSeq: 0,
+    })
+    node.handleFrame(A, batch([1, 2, 3]))
+    serving = true
+    node.handleFrame(A, batch([4, 5]))
+
+    node.handleFrame('node-c', { kind: 'feed-subscribe', officeId: OFFICE, feedKey: A_FEED_KEY, afterSeq: 0 })
+    const served = toC.find((f) => f.kind === 'feed-entries') as Extract<FeedSyncFrame, { kind: 'feed-entries' }>
+    expect(served.truncatedBeforeSeq).toBe(3)
+    expect(served.entries.map((e) => e.seq)).toEqual([4, 5])
+    expect(served.upToSeq).toBe(5)
+    node.stop()
+    dbm.closeAll()
+  })
+})
+
+describe('session-feed — own feed retention on a node that does not serve', () => {
+  it('keeps only what the authority has not acked, plus the last entry, and republishes nothing', () => {
+    const dbm = createDatabaseManager(':memory:')
+    dbm.runMigrations(dbm.getAppDatabase(), MIGRATION_NAMESPACE, migrations)
+    const store = new FeedStore(dbm.getAppDatabase())
+    const transcripts = new Map<string, SerializedHistoryMessage[]>()
+    const feed = createSessionFeed({
+      officeId: OFFICE,
+      selfNodeId: A,
+      feedStore: store,
+      sendToPeer: () => {},
+      broadcast: () => {},
+      readOwnedTranscript: (teamId, appId, epochId) => transcripts.get(buildTeamSessionKey(appId, teamId, epochId)) ?? null,
+      isSessionActive: () => false,
+      servesMirror: () => false,
+      acceptEntriesFrom: () => true,
+      authorityNodeId: () => HOST,
+      retransmitIntervalMs: 0,
+    })
+    transcripts.set(SESSION_KEY, [msg(1), msg(2), msg(3), msg(4), msg(5)])
+    expect(feed.publishOwnedTail(SESSION_KEY)).toBe(5)
+    // The authority acked everything it mirrored.
+    feed.handleFrame(HOST, { kind: 'feed-subscribe', officeId: OFFICE, feedKey: A_FEED_KEY, afterSeq: 0 })
+    feed.handleFrame(HOST, { kind: 'feed-ack', officeId: OFFICE, feedKey: A_FEED_KEY, ackedSeq: 5 })
+    for (let i = 0; i < 6; i++) feed.retransmitTick()
+
+    expect(store.getMinSeq(OFFICE, A_FEED_KEY)).toBe(5)
+    expect(store.getMaxSeq(OFFICE, A_FEED_KEY)).toBe(5)
+    expect(feed.publishOwnedTail(SESSION_KEY)).toBe(0)
+    transcripts.set(SESSION_KEY, [msg(1), msg(2), msg(3), msg(4), msg(5), msg(6)])
+    expect(feed.publishOwnedTail(SESSION_KEY)).toBe(1)
+    expect(store.getMaxSeq(OFFICE, A_FEED_KEY)).toBe(6)
+    feed.stop()
+    dbm.closeAll()
   })
 })

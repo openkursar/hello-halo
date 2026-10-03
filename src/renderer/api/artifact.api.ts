@@ -13,6 +13,11 @@ import type {
   ApiResponse,
 } from './_shared'
 import { MAX_PREVIEW_DOCUMENT_SIZE, formatPreviewSize } from '../../shared/constants/artifact-preview'
+import type { ArtifactChangeBatchEvent, FileQueryResult } from '../../shared/types/artifact'
+
+// Batches raised inside this renderer (a lapsed space hold: changes were lost),
+// delivered to the same subscribers as those from main.
+const localChangedBatchListeners = new Set<(data: ArtifactChangeBatchEvent) => void>()
 
 export const artifactApi = {
   // ===== Artifact =====
@@ -21,6 +26,14 @@ export const artifactApi = {
       return window.halo.listArtifacts(spaceId, maxDepth)
     }
     return httpRequest('GET', `/api/spaces/${spaceId}/artifacts?maxDepth=${maxDepth}`)
+  },
+
+  // Best path matches for a typed query; only `limit` items cross processes
+  queryArtifactFiles: async (spaceId: string, query: string, limit: number): Promise<ApiResponse<FileQueryResult>> => {
+    if (isElectron()) {
+      return window.halo.queryArtifactFiles(spaceId, query, limit)
+    }
+    return httpRequest('GET', `/api/spaces/${spaceId}/artifacts/query?q=${encodeURIComponent(query)}&limit=${limit}`)
   },
 
   listArtifactsTree: async (spaceId: string): Promise<ApiResponse> => {
@@ -38,41 +51,42 @@ export const artifactApi = {
     return httpRequest('POST', `/api/spaces/${spaceId}/artifacts/children`, { dirPath })
   },
 
-  // Initialize file watcher for a space
-  initArtifactWatcher: async (spaceId: string): Promise<ApiResponse> => {
+  // Declare that this client shows / stopped showing a space (see services/artifact-space-holds)
+  retainArtifactSpace: async (spaceId: string, clientId: string): Promise<ApiResponse> => {
     if (isElectron()) {
-      return window.halo.initArtifactWatcher(spaceId)
+      return window.halo.retainArtifactSpace(spaceId, clientId)
     }
-    // In remote mode, watcher is managed by server
-    return { success: true }
+    return httpRequest('POST', `/api/spaces/${spaceId}/artifacts/retain`, { clientId })
   },
 
-  // Subscribe to artifact change events
-  onArtifactChanged: (callback: (data: {
-    type: 'add' | 'change' | 'unlink' | 'addDir' | 'unlinkDir'
-    path: string
-    relativePath: string
-    spaceId: string
-    item?: unknown
-  }) => void) => {
+  releaseArtifactSpace: async (spaceId: string, clientId: string): Promise<ApiResponse> => {
     if (isElectron()) {
-      return window.halo.onArtifactChanged(callback)
+      return window.halo.releaseArtifactSpace(spaceId, clientId)
     }
-    // In remote mode, use WebSocket events
-    return onEvent('artifact:changed', callback)
+    return httpRequest('POST', `/api/spaces/${spaceId}/artifacts/release`, { clientId })
+  },
+
+  // Subscribe to file changes: one event per flush per space, not one per file
+  onArtifactChangedBatch: (callback: (data: ArtifactChangeBatchEvent) => void) => {
+    localChangedBatchListeners.add(callback)
+    const offRemote = isElectron()
+      ? window.halo.onArtifactChangedBatch(callback)
+      : onEvent<ArtifactChangeBatchEvent>('artifact:changed-batch', callback)
+    return () => {
+      localChangedBatchListeners.delete(callback)
+      offRemote()
+    }
+  },
+
+  // Deliver a batch to this renderer's subscribers only (never sent to main)
+  emitLocalArtifactChangedBatch: (batch: ArtifactChangeBatchEvent): void => {
+    for (const listener of Array.from(localChangedBatchListeners)) listener(batch)
   },
 
   // Subscribe to tree update events (pre-computed data, zero IPC round-trips)
   onArtifactTreeUpdate: (callback: (data: {
     spaceId: string
     updatedDirs: Array<{ dirPath: string; children: unknown[] }>
-    changes: Array<{
-      type: 'add' | 'change' | 'unlink' | 'addDir' | 'unlinkDir'
-      path: string
-      relativePath: string
-      spaceId: string
-      item?: unknown
-    }>
   }) => void) => {
     if (isElectron()) {
       return window.halo.onArtifactTreeUpdate(callback)

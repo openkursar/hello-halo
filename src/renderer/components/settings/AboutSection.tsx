@@ -7,7 +7,7 @@ import { useState, useEffect } from 'react'
 import { Loader2 } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
-import { clearUpdateSnooze } from '../updater/update-snooze'
+import { clearUpdateSnooze } from '../../services/update-snooze'
 import type { UpdateStatus } from './types'
 
 declare const __BUILD_TIME__: string

@@ -10,11 +10,11 @@
 import type { NodeId } from '../types'
 
 /**
- * A feed's kind. `ctrl` and `act` are one-per-author-per-office; `session:<key>`
- * is one per team session (its transcript). The producer treats them uniformly;
- * only reliability policy differs (see the engine).
+ * A feed's kind: `ctrl:<target>` carries one author's wakes and turn completions
+ * for one peer; `session:<key>` is one team session's transcript. The producer
+ * treats them uniformly; only reliability policy differs (see the engine).
  */
-export type FeedKind = 'ctrl' | 'act' | `session:${string}`
+export type FeedKind = `ctrl:${string}` | `session:${string}`
 
 /** Fully-qualified feed identity within an office. `feedId` is the string form. */
 export interface FeedId {
@@ -35,7 +35,8 @@ export function feedIdKey(id: FeedId): string {
 
 export function parseFeedIdKey(officeId: string, key: string): FeedId {
   const sep = key.indexOf('\u0000')
-  if (sep < 0) return { officeId, author: key, kind: 'ctrl' }
+  // Not a key feedIdKey made: an empty kind matches no feed this node reads or writes.
+  if (sep < 0) return { officeId, author: key, kind: '' as FeedKind }
   return { officeId, author: key.slice(0, sep), kind: key.slice(sep + 1) as FeedKind }
 }
 
@@ -57,6 +58,13 @@ export interface FeedSubscribeFrame {
   officeId: string
   feedKey: string
   afterSeq: number
+}
+
+/** Consumer → author: stop pushing this feed; the consumer keeps its cursor for a later subscribe. */
+export interface FeedUnsubscribeFrame {
+  kind: 'feed-unsubscribe'
+  officeId: string
+  feedKey: string
 }
 
 /** Author → consumer: a batch of entries (Live push or Catch-up replay share this). */
@@ -111,20 +119,35 @@ export interface FeedAdvertiseFrame {
   upToSeq: number
 }
 
+/**
+ * Serving side → peer: the feeds it can serve, in one frame instead of one
+ * `feed-advertise` per feed. The peer records them and subscribes only to the
+ * ones it wants.
+ */
+export interface FeedDigestFrame {
+  kind: 'feed-digest'
+  officeId: string
+  feeds: Array<[feedKey: string, upToSeq: number]>
+}
+
 export type FeedSyncFrame =
   | FeedSubscribeFrame
+  | FeedUnsubscribeFrame
   | FeedEntriesFrame
   | FeedAckFrame
   | FeedNackFrame
   | FeedAdvertiseFrame
+  | FeedDigestFrame
 
 /** The feed-sync frame kinds the feed transports own on the wire. */
 export const FEED_SYNC_FRAME_KINDS: ReadonlySet<string> = new Set<FeedSyncFrame['kind']>([
   'feed-subscribe',
+  'feed-unsubscribe',
   'feed-entries',
   'feed-ack',
   'feed-nack',
   'feed-advertise',
+  'feed-digest',
 ])
 
 export function isFeedSyncFrame(frame: { kind: string }): frame is FeedSyncFrame {

@@ -21,7 +21,7 @@ feed), so there is never a conflict — reliability is *delivery + cursor sync*,
 not consensus, and ordering is *causal*, not total.
 
 ```
-FeedId = { officeId, author, kind }        kind ∈ 'ctrl' | 'act' | 'session:<key>'
+FeedId = { officeId, author, kind }        kind ∈ 'ctrl:<target>' | 'session:<key>'
 entry  = { seq, hlc, fid, type, payload, ts }
          seq  — per-(office,feed) monotonic, persisted (survives restart)
          hlc  — hybrid logical clock, lexicographically sortable
@@ -36,7 +36,7 @@ entry  = { seq, hlc, fid, type, payload, ts }
 | `durable-log.ts` | `DurableFeedLog` — the write end of a node's own feeds: allocate the next seq (anchored to the retention floor so a fully-pruned feed never reuses seq 1), stamp HLC + fid, persist. Seeds/merges the office clock so a restart never regresses it. |
 | `sync-engine.ts` | `FeedProducer` (author side: windowed, ack-driven delivery + nack/retransmit resend) and `FeedConsumer` (reader side: strictly seq-ordered apply — the monotonic cursor is the dedup — gap buffering, cumulative ack). Transport-agnostic — both take a `send` closure. |
 | `feed-service.ts` | `FeedService` — per-office assembly facade composing the log + producer + consumer + `FeedStore` cursors, owning the retransmit-backstop timer and resolving that a consumer's control frames route to the feed's **author**. The seam domain handlers (message/activity/history) plug into. |
-| `types.ts` | `FeedId`/`FeedEntry` and the four sync frames (`feed-subscribe` / `feed-entries` / `feed-ack` / `feed-nack`) — one mechanism serving Live push, reconnect gap-fill, history load, and late-join backfill alike. |
+| `types.ts` | `FeedId`/`FeedEntry` and the sync frames (`feed-subscribe` / `feed-unsubscribe` / `feed-entries` / `feed-ack` / `feed-nack`, plus the discovery frames `feed-advertise` / `feed-digest`) — one mechanism serving Live push, reconnect gap-fill, history load, and late-join backfill alike. Feed kinds in use: `ctrl:<target>` (wakes and turn completions for one peer), `session:<key>`. |
 
 Persistence lives one tier down in `apps/federation` (`FeedStore` +
 `app_federation` migration v6: `feed_log` / `feed_peer_cursor` /
@@ -114,9 +114,25 @@ The substrate is the **single** transport for the control plane: `ctrl-feed`
 carries every wake / turn-complete over this log (no raw fire-and-forget path,
 no capability gate). Retention pruning and ctrl-plane give-up are wired (above).
 The session plane (`../session-feed.ts`) is the second consumer: per-session
-transcript feeds proactively replicated to every office node (multi-replica,
-never pruned), with the `feed-advertise` frame as its discovery half and a
-mirror-backed producer so the office authority serves feeds authored elsewhere.
+transcript feeds. The office authority keeps a copy of every one and serves it
+from its mirror. A joiner copies only the feeds a local viewer shows.
+Discovery is `feed-advertise` from an owner to the authority, and `feed-digest`
+frames from the authority to its peers. Transcripts are therefore
+multi-replica as "the authority + every node that wanted them", not every node.
+A copy that is not local is fetched on demand, and it never reads as "this
+member said nothing". Its retention is owner-side: a node that does not
+serve prunes its own feeds below the authority's ack (see the session-feed entry
+in `../DESIGN.md`).
+
+A consumer given a `transaction` applies each received batch — hlc, entries and
+one cursor write — as one unit and acks after it commits; without one, every
+applied entry persists its cursor immediately (the ctrl plane keeps this, so a
+crash mid-batch never re-runs a wake that already took effect). A producer
+notifying several caught-up subscribers reads and sizes the window once per
+distinct cursor, and a subscribe is always answered (an empty batch for an
+idle feed), so a consumer never re-drives a subscribe that was in fact heard. `FeedConsumer.ensureSubscribed` subscribes once per process
+and feed; routine inbound traffic uses it, and only a (re)join restarts a
+stream with `subscribe`.
 Activity relay still uses its own path — migrating it onto this substrate is
 later work, gated by the `tests/decentralized/` cluster regression. The
 consensus paths (`authority/*`) remain a separate consumer of the bare core.

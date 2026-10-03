@@ -2,7 +2,12 @@
  * HTML Viewer - HTML preview with source toggle
  *
  * Features:
- * - Live HTML preview using srcdoc (CSP-compliant)
+ * - Live preview isolated from the app: on the desktop the file is served
+ *   from its own origin (halo-preview://, an out-of-process frame whose
+ *   relative URLs resolve in the file's directory and which may use https:
+ *   CDNs); without a local file it is a srcdoc in an opaque-origin sandbox.
+ *   Either way page script cannot reach the app window, its preload API or
+ *   its storage.
  * - Toggle between preview and source view
  * - Syntax highlighted source code
  * - Copy to clipboard
@@ -10,24 +15,51 @@
  * - "Open in Browser" mode for full rendering capabilities
  */
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useMemo, useEffect } from 'react'
 import { Copy, Check, Code, Eye, ExternalLink, Globe } from 'lucide-react'
 import { useTranslation } from '../../../i18n'
 import { api } from '../../../api'
-import { useCanvasStore, type CanvasTab } from '../../../stores/canvas.store'
+import type { CanvasTab } from '../../../stores/canvas.store'
+import { useCanvasActions } from '../../../hooks/useCanvasLifecycle'
 import { CodeMirrorEditor } from './CodeMirrorEditor'
+import { buildHtmlPreviewDocument, openIsolatedPreview } from './html-preview'
+import { countLines } from './count-lines'
+import { useViewerResources } from '../viewer-resources'
 
 interface HtmlViewerProps {
   tab: CanvasTab
 }
 
+/** Bumped per content change so the isolated frame reloads the rewritten file. */
+let previewRevision = 0
+
 export function HtmlViewer({ tab }: HtmlViewerProps) {
   const { t } = useTranslation()
   const iframeRef = useRef<HTMLIFrameElement>(null)
+  const resources = useViewerResources()
   const [viewMode, setViewMode] = useState<'preview' | 'source'>('preview')
   const [copied, setCopied] = useState(false)
 
   const content = tab.content || ''
+
+  // null while the origin is being set up; 'srcdoc' when it is unavailable.
+  const [isolatedUrl, setIsolatedUrl] = useState<string | 'srcdoc' | null>(() =>
+    api.isRemoteMode() || !tab.path ? 'srcdoc' : null
+  )
+  useEffect(() => {
+    if (api.isRemoteMode() || !tab.path) return
+    const scope = resources.scope()
+    let active = true
+    void openIsolatedPreview(api.openHtmlPreview, tab.path).then((preview) => {
+      if (preview) scope.add(() => void api.closeHtmlPreview(preview.host))
+      if (active) setIsolatedUrl(preview ? preview.url : 'srcdoc')
+    })
+    return () => {
+      active = false
+      scope.dispose()
+    }
+  }, [resources, tab.path])
+  const revision = useMemo(() => ++previewRevision, [content])
 
   // Copy content
   const handleCopy = async () => {
@@ -61,12 +93,20 @@ export function HtmlViewer({ tab }: HtmlViewerProps) {
     window.open(dataUri, '_blank')
   }
 
-  // Count lines for source view
-  const lines = content.split('\n')
+  const lineCount = useMemo(
+    () => (viewMode === 'source' ? countLines(content) : 0),
+    [viewMode, content]
+  )
+
+  // halo-file:// only exists on the desktop; a remote client has no local file to resolve against.
+  const previewPath = api.isRemoteMode() ? undefined : tab.path
+  const previewDocument = useMemo(
+    () => (isolatedUrl === 'srcdoc' ? buildHtmlPreviewDocument(content, previewPath) : ''),
+    [isolatedUrl, content, previewPath]
+  )
 
   // Open in embedded browser (BrowserViewer)
-  const openUrl = useCanvasStore(state => state.openUrl)
-  const closeTab = useCanvasStore(state => state.closeTab)
+  const { openUrl, closeTab } = useCanvasActions()
 
   const handleOpenInBrowser = async () => {
     if (!tab.path) return
@@ -119,7 +159,7 @@ export function HtmlViewer({ tab }: HtmlViewerProps) {
 
           {viewMode === 'source' && (
             <span className="text-xs text-muted-foreground">
-              {t('{{count}} lines', { count: lines.length })}
+              {t('{{count}} lines', { count: lineCount })}
             </span>
           )}
         </div>
@@ -164,13 +204,28 @@ export function HtmlViewer({ tab }: HtmlViewerProps) {
       {/* Content */}
       <div className="flex-1 min-h-0 overflow-hidden">
         {viewMode === 'preview' ? (
-          <iframe
-            ref={iframeRef}
-            srcDoc={content}
-            className="w-full h-full border-0 bg-white"
-            sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-            title={tab.title}
-          />
+          isolatedUrl === 'srcdoc' ? (
+            <iframe
+              ref={iframeRef}
+              srcDoc={previewDocument}
+              className="w-full h-full border-0 bg-white"
+              sandbox="allow-scripts allow-forms allow-popups"
+              title={tab.title}
+            />
+          ) : isolatedUrl ? (
+            // Its own site, so allow-same-origin gives it that origin (storage,
+            // same-origin fetches), never the app's.
+            <iframe
+              key={revision}
+              ref={iframeRef}
+              src={isolatedUrl}
+              className="w-full h-full border-0 bg-white"
+              sandbox="allow-scripts allow-forms allow-popups allow-same-origin"
+              title={tab.title}
+            />
+          ) : (
+            <div className="w-full h-full bg-white" />
+          )
         ) : (
           <CodeMirrorEditor content={content} language="html" readOnly />
         )}

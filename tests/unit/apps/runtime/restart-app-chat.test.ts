@@ -112,6 +112,7 @@ vi.mock('../../../../src/main/services/agent/message-utils', () => ({
 
 // AI Browser and other MCP servers — referenced at module load.
 vi.mock('../../../../src/main/services/ai-browser', () => ({
+  AI_BROWSER_SYSTEM_PROMPT: '',
   createAIBrowserMcpServer: vi.fn(),
   createScopedBrowserContext: vi.fn(),
 }))

@@ -45,6 +45,15 @@ export interface TeamTriggerSchedulerDeps {
    * "already running" forever stops being triggered at all.
    */
   activeRunEpochId: (teamId: string) => string | null
+  /**
+   * Hold the team's space file watcher while a 'file' trigger is subscribed.
+   * Watchers are reference-counted; without a hold, file events only flow while
+   * the user happens to have that space open.
+   */
+  fileWatch?: {
+    retain(spaceId: string, holder: string): void
+    release(spaceId: string, holder: string): void
+  }
 }
 
 export interface TeamTriggerScheduler {
@@ -132,6 +141,12 @@ export function createTeamTriggerScheduler(deps: TeamTriggerSchedulerDeps): Team
     })
     const arr = eventUnsubs.get(trigger.teamId) ?? []
     arr.push(unsub)
+    const watchedSpaceId = trigger.sourceType === 'file' ? store.getTeamById(trigger.teamId)?.owningSpaceId : undefined
+    if (watchedSpaceId && deps.fileWatch) {
+      const holder = `team-trigger:${trigger.teamId}:${trigger.id}`
+      deps.fileWatch.retain(watchedSpaceId, holder)
+      arr.push(() => deps.fileWatch?.release(watchedSpaceId, holder))
+    }
     eventUnsubs.set(trigger.teamId, arr)
   }
 

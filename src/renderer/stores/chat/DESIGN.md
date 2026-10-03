@@ -76,10 +76,38 @@ reader paged in. Row keys, not ids or indexes, key `MessageList` rows — a prep
 page must not rebuild the rows below it (`transcript/useHistoryWindow` follows the
 rows it was showing when the list grows at the front).
 
+## Which conversations stream in full
+
+Main sends every agent event only for conversations a client retains
+(`api.retainConversationDetail`, rule in `shared/agent-event-visibility`); all
+others arrive as status events (turn start, complete, error, question, goal).
+`detail-retention.ts` owns the store's side:
+
+- Every view rendering a session's live detail retains its conversation with
+  `hooks/useConversationDetail` (`ChatView`, `ImChatView`, team chat).
+- A turn sent from this window (`sendMessage`, `continueAfterInterrupt`) is held
+  until `agent:complete` has settled it (unless a newer turn started meanwhile),
+  `agent:error`, or a refused send — the reply keeps streaming while the user
+  looks elsewhere.
+- Detail handlers ignore a conversation that is neither retained nor already in
+  `sessions`, so background digital humans and team members never grow state
+  here.
+
+Opening a conversation whose turn another client or an autonomous trigger
+started shows its text from the moment it was retained; the settled transcript
+replaces it when the turn completes.
+
 ## Cache, recovery, reset
 
-- `conversationCache` is bounded (`CONVERSATION_CACHE_SIZE`), oldest-cached-first
-  via `backend/cache.ts`, which never evicts the conversation on screen, either
+- `conversationCache` is bounded by count (`CONVERSATION_CACHE_SIZE`) and by
+  estimated heap (`CONVERSATION_CACHE_BYTES`: text, inline images, inline
+  thoughts), oldest-cached-first via `backend/cache.ts`. Thoughts read on demand
+  stay in their message but share one budget (`LOADED_THOUGHTS_BYTES`,
+  `cacheLoadedThoughts`); past it the oldest are set back to not-loaded, never
+  the one just opened. Under critical memory pressure (`api.onMemoryPressure`,
+  wired in `App.tsx`) `shedBackgroundDetail` keeps only the pinned conversations
+  below, with on-demand thoughts and finished-turn steps only for the one on
+  screen. The cache never evicts the conversation on screen, either
   pointer of the current space, any space's selected digital human, or one with a
   generating session. Whatever conversation is on screen but uncached anyway —
   evicted, or landed on by a path that only moved a pointer (the next
@@ -99,13 +127,17 @@ rows it was showing when the list grows at the front).
   `forgetConversation` drops one conversation's every trace (cache, session, init
   info, draft, selection).
 
-## Known asymmetry
+## Turn lifecycle (space)
 
-Optimistic-message reconciliation (`backend/reconcile.ts`) is used only by the
-digital-human backend; the space backend keeps its own send-to-settle handling.
-Users see the same behavior, but the two paths are separate implementations.
-The next time the space send flow is changed, move it onto `reconcileTranscript`
-rather than opening a change for that alone.
+Both backends merge reads through `reconcileTranscript`. A space send shows a
+`pending-*` bubble (`createPendingUserMessage`); `settleTurn` re-reads from the
+last message the user sent (`rereadAnchor`: everything earlier belongs to
+finished turns and no longer changes) with `getConversation(…, { fromMessageId })`,
+joins the cut read onto the held messages (`joinFromAnchor`; a cut point no
+longer held means the conversation changed, and it is read whole), and
+reconciles — unchanged rows keep their objects and loaded thoughts, the bubble's
+row passes to its persisted twin, and a bubble of a turn sent meanwhile stays.
+`refresh` reconciles too, keeping unconfirmed bubbles while a turn runs.
 
 ## Naming
 

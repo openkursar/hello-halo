@@ -18,10 +18,17 @@ import { KeepAliveManager } from './keep-alive'
 import { TrayManager } from './tray'
 import { DaemonBrowserManager } from './daemon-browser'
 export { setDaemonStealthInjector } from './daemon-browser'
+export {
+  evaluateMemoryPressure,
+  getMemoryPressure,
+  onMemoryPressure,
+} from './memory-pressure'
+export type { MemoryPressureLevel, MemoryReading } from './memory-pressure'
 import type {
   BackgroundService,
   BackgroundStatus,
   StatusChangeHandler,
+  TrayNotice,
   Unsubscribe
 } from './types'
 
@@ -94,14 +101,22 @@ export function initBackground(): BackgroundService {
       })
     },
 
+    setTrayNotice(notice: TrayNotice | null): void {
+      tray!.setNotice(notice)
+    },
+
+    hasTray(): boolean {
+      return tray?.hasTray() ?? false
+    },
+
     // ── Keep-Alive ───────────────────────────
 
     shouldKeepAlive(): boolean {
       return keepAlive!.shouldKeepAlive()
     },
 
-    registerKeepAliveReason(reason: string): Unsubscribe {
-      const unregister = keepAlive!.register(reason)
+    registerKeepAliveReason(reason: string, options?: { ttlMs?: number }): Unsubscribe {
+      const unregister = keepAlive!.register(reason, options)
 
       // Update tray menu to reflect new reason count
       tray?.updateMenu()
@@ -241,4 +256,4 @@ function showMainWindow(): void {
 }
 
 // Re-export types for convenience
-export type { BackgroundService, BackgroundStatus, StatusChangeHandler, Unsubscribe } from './types'
+export type { BackgroundService, BackgroundStatus, StatusChangeHandler, TrayNotice, Unsubscribe } from './types'

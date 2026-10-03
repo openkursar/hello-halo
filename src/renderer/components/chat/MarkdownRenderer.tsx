@@ -9,13 +9,14 @@
  * - ~8x faster first-paint on large documents
  */
 
-import { memo, useContext, useRef } from 'react'
+import { memo, useContext, useMemo, useRef, useState } from 'react'
 import { Maximize2 } from 'lucide-react'
 import { Streamdown } from 'streamdown'
 import type { PluginConfig } from 'streamdown'
 import 'streamdown/styles.css'
 import 'katex/dist/katex.min.css'
 import { useCodePlugin, useMathPlugin } from '../../lib/streamdown-plugins'
+import { createStreamingMarkdown } from '../../lib/streaming-markdown'
 import { useTranslation } from '../../i18n'
 import { OpenTableContext } from './open-table-context'
 
@@ -151,6 +152,11 @@ const components = {
   ),
 }
 
+// Streamdown memoizes its context on these identities; inline literals would
+// re-render every code block, link and table on each parent render.
+const CONTROLS = { code: true } as const
+const LINK_SAFETY = { enabled: true } as const
+
 export const MarkdownRenderer = memo(function MarkdownRenderer({
   content,
   className = '',
@@ -158,22 +164,38 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
 }: MarkdownRendererProps) {
   const codePlugin = useCodePlugin()
   const mathPlugin = useMathPlugin()
+  const streaming = mode === 'streaming'
+
+  // Streaming code stays monochrome: highlighting re-tokenizes the whole block
+  // on every delta. The finished message renders static and highlights once.
+  const plugins = useMemo<PluginConfig>(() => {
+    const config: PluginConfig = {}
+    if (codePlugin && !streaming) config.code = codePlugin
+    if (mathPlugin) config.math = mathPlugin
+    return config
+  }, [codePlugin, mathPlugin, streaming])
+
+  // Mending and block lexing follow the open tail of the reply, not all of it.
+  const [streamingParser] = useState(createStreamingMarkdown)
+  const markdown = useMemo(
+    () => (streaming ? streamingParser.update(content).markdown : content),
+    [content, streaming, streamingParser],
+  )
 
   if (!content) return null
-
-  const plugins: PluginConfig = {}
-  if (codePlugin) plugins.code = codePlugin
-  if (mathPlugin) plugins.math = mathPlugin
 
   return (
     <div className={`markdown-content overflow-x-auto ${className}`}>
       <Streamdown
         mode={mode}
+        parseIncompleteMarkdown={false}
+        parseMarkdownIntoBlocksFn={streaming ? streamingParser.parseBlocks : undefined}
         components={components as any}
-        controls={{ code: true }}
+        controls={CONTROLS}
+        linkSafety={LINK_SAFETY}
         plugins={plugins}
       >
-        {content}
+        {markdown}
       </Streamdown>
     </div>
   )

@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { useChatStore } from '../../../stores/chat.store'
-import { useRemoteSubscription } from '../../../hooks/useRemoteSubscription'
+import { useConversationDetail } from '../../../hooks/useConversationDetail'
 import { buildTeamSessionKey } from '../../../../shared/apps/im-keys'
 import { observeExecution, type ExecutionState } from './execution-state'
 
 export function useExecutionState(teamId: string, epochId: string, appId: string, remote: boolean) {
   const conversationId = buildTeamSessionKey(appId, teamId, epochId)
-  useRemoteSubscription(conversationId)
+  useConversationDetail(conversationId)
   const live = useChatStore(state => state.getSession(conversationId))
   const [state, setState] = useState<ExecutionState>({ snapshot: null, failed: false, now: Date.now(), requestedAt: -Infinity })
   useEffect(() => {

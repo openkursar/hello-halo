@@ -363,7 +363,7 @@ export function parseGlobOutput(output: string): {
  */
 export function countLines(content: string): number {
   if (!content) return 0
-  return content.split('\n').length
+  return countNewlines(content) + 1
 }
 
 /**
@@ -412,23 +412,40 @@ export function removeLineNumberPrefix(content: string): string {
   return content
 }
 
+/** Collapsed previews stop here even on one huge line (minified code, base64). */
+export const PREVIEW_MAX_CHARS = 8_000
+
+function countNewlines(content: string): number {
+  let count = 0
+  for (let at = content.indexOf('\n'); at !== -1; at = content.indexOf('\n', at + 1)) count++
+  return count
+}
+
 /**
- * Truncate to first N lines
+ * Truncate to the first `maxLines` lines and at most `maxChars` characters.
+ * Tool output can be hundreds of KB (or one enormous line); the preview is cut
+ * without splitting the whole string.
  */
-export function truncateToLines(content: string, maxLines: number): {
+export function truncateToLines(content: string, maxLines: number, maxChars = Infinity): {
   content: string
   totalLines: number
   truncated: boolean
 } {
-  const lines = content.split('\n')
-  const totalLines = lines.length
+  const totalLines = countNewlines(content) + 1
 
-  if (totalLines <= maxLines) {
+  let end = content.length
+  if (totalLines > maxLines) {
+    end = -1
+    for (let i = 0; i < maxLines; i++) end = content.indexOf('\n', end + 1)
+  }
+  end = Math.min(end, maxChars)
+
+  if (end >= content.length) {
     return { content, totalLines, truncated: false }
   }
 
   return {
-    content: lines.slice(0, maxLines).join('\n'),
+    content: content.slice(0, end),
     totalLines,
     truncated: true
   }

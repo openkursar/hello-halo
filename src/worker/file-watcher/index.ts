@@ -20,13 +20,13 @@ import {
   stopWatcher,
   stopAll,
   refreshIgnoreRules,
+  queryPaths,
   setOnEventsCallback,
+  setOnOverflowCallback,
   setOnErrorCallback
 } from './watcher'
 import {
   scanDirectoryTreeShallow,
-  scanDirectoryRecursive,
-  loadIgnoreRules,
   loadTreeIgnoreRules
 } from './scanner'
 
@@ -44,13 +44,19 @@ function log(level: 'info' | 'warn' | 'error', message: string): void {
 
 // --- Event callback ---
 
-setOnEventsCallback((spaceId, events) => {
-  send({ type: 'fs-events', spaceId, events })
+setOnEventsCallback((spaceId, events, resolved) => {
+  send(resolved ? { type: 'fs-events', spaceId, events } : { type: 'fs-events', spaceId, events, resolved })
+})
+
+setOnOverflowCallback((spaceId, overflowedEvents, droppedEvents) => {
+  send({ type: 'fs-overflow', spaceId, overflowedEvents, droppedEvents })
 })
 
 setOnErrorCallback((spaceId, error) => {
   send({ type: 'watcher-error', spaceId, error })
 })
+
+const treeIgnoreRules = loadTreeIgnoreRules()
 
 // --- Message handler ---
 
@@ -69,32 +75,26 @@ async function handleMessage(msg: MainToWorkerMessage): Promise<void> {
       }
 
       case 'scan-dir': {
-        if (msg.mode === 'tree') {
-          const ig = loadTreeIgnoreRules()
-          const nodes = await scanDirectoryTreeShallow(
-            msg.dirPath, msg.rootPath, msg.depth, ig
-          )
-          send({
-            type: 'scan-result',
-            requestId: msg.requestId,
-            spaceId: msg.spaceId,
-            dirPath: msg.dirPath,
-            nodes
-          })
-        } else {
-          const ig = loadIgnoreRules(msg.rootPath)
-          const artifacts = await scanDirectoryRecursive(
-            msg.dirPath, msg.rootPath, msg.spaceId,
-            msg.maxDepth ?? 1, 0, ig
-          )
-          send({
-            type: 'scan-result',
-            requestId: msg.requestId,
-            spaceId: msg.spaceId,
-            dirPath: msg.dirPath,
-            artifacts
-          })
-        }
+        const nodes = await scanDirectoryTreeShallow(
+          msg.dirPath, msg.rootPath, msg.depth, treeIgnoreRules
+        )
+        send({
+          type: 'scan-result',
+          requestId: msg.requestId,
+          spaceId: msg.spaceId,
+          dirPath: msg.dirPath,
+          nodes
+        })
+        break
+      }
+
+      case 'query-files': {
+        send({
+          type: 'query-result',
+          requestId: msg.requestId,
+          spaceId: msg.spaceId,
+          result: queryPaths(msg.spaceId, msg.query, msg.limit, msg.maxDepth)
+        })
         break
       }
 
@@ -125,6 +125,13 @@ async function handleMessage(msg: MainToWorkerMessage): Promise<void> {
 }
 
 // --- Bootstrap ---
+
+// A rejection escaping an async path must not take the watcher down: the host
+// would restart it and replay the same input into the same failure.
+process.on('unhandledRejection', (reason) => {
+  const detail = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)
+  log('error', `Unhandled rejection: ${detail}`)
+})
 
 // Listen for messages from main process via child_process.fork IPC
 process.on('message', (msg: MainToWorkerMessage) => {

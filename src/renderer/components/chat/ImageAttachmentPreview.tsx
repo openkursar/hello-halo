@@ -12,6 +12,7 @@ import { X, Image as ImageIcon } from 'lucide-react'
 import { ImageViewer } from './ImageViewer'
 import type { ImageAttachment } from '../../types'
 import { useTranslation } from '../../i18n'
+import { imageAttachmentSrc } from '../../../shared/types/image-attachment'
 
 interface ImageAttachmentPreviewProps {
   images: ImageAttachment[]
@@ -58,7 +59,7 @@ export function ImageAttachmentPreview({
               onClick={() => openViewer(index)}
             >
               <img
-                src={`data:${image.mediaType};base64,${image.data}`}
+                src={imageAttachmentSrc(image)}
                 alt={image.name || t('Attached image')}
                 className="w-full h-full object-cover"
               />
@@ -144,7 +145,7 @@ export function MessageImages({ images }: MessageImageProps) {
       <>
         <div className="mb-2">
           <img
-            src={`data:${images[0].mediaType};base64,${images[0].data}`}
+            src={imageAttachmentSrc(images[0])}
             alt={images[0].name || 'Image'}
             className="max-w-full max-h-64 rounded-lg object-contain cursor-pointer
               hover:opacity-95 transition-opacity"
@@ -178,7 +179,7 @@ export function MessageImages({ images }: MessageImageProps) {
             onClick={() => openViewer(index)}
           >
             <img
-              src={`data:${image.mediaType};base64,${image.data}`}
+              src={imageAttachmentSrc(image)}
               alt={image.name || `Image ${index + 1}`}
               className="w-full h-full object-cover"
             />

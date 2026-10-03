@@ -436,7 +436,7 @@ export function forceReconnectWebSocket(): void {
  * Register event listener (works for IPC, WebSocket, or Capacitor WS)
  */
 // Generic in the payload so a slice can declare the shape its consumers get
-// (see artifactApi.onArtifactChanged) instead of casting at the call site; the
+// (see artifactApi.onArtifactChangedBatch) instead of casting at the call site; the
 // channel is stringly-typed either way, so `T` is the declaration, not a proof.
 export function onEvent<T = unknown>(channel: string, callback: (data: T) => void): () => void {
   const listener = callback as (data: unknown) => void
@@ -470,6 +470,7 @@ export function onEvent<T = unknown>(channel: string, callback: (data: T) => voi
       'ai-browser:view-gone': 'onAIBrowserViewGone',
       'ai-browser:conversation-released': 'onAIBrowserConversationReleased',
       'artifact:tree-update': 'onArtifactTreeUpdate',
+      'artifact:changed-batch': 'onArtifactChangedBatch',
       'perf:snapshot': 'onPerfSnapshot',
       'perf:warning': 'onPerfWarning',
       'app:status_changed': 'onAppStatusChanged',
@@ -488,6 +489,7 @@ export function onEvent<T = unknown>(channel: string, callback: (data: T) => voi
       'team:invite-link': 'onTeamInviteLink',
       'team:member-history': 'onTeamMemberHistory',
       'notification:toast': 'onNotificationToast',
+      'app:memory-pressure': 'onMemoryPressure',
       'tlon:stats-updated': 'onTlonStatsUpdated',
       'tlon:ingest-progress': 'onTlonIngestProgress',
       'store:sync-status-changed': 'onStoreSyncStatusChanged',

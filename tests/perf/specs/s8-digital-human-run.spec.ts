@@ -10,9 +10,7 @@
  * a fixed token count/rate makes before/after comparable, and doesn't
  * depend on the currently-unreliable real provider.
  *
- * The mock emits text deltas only, no tool calls, so a run whose whole point
- * is executing a tool can only reach `status: 'precondition-failed'` against
- * it — see tests/perf/mock/sse-server.mjs.
+ * The mock must call report_to_user for the headless run to finish normally.
  */
 
 import { test, expect } from '../../e2e/fixtures/electron-with-app'
@@ -25,12 +23,12 @@ import { installReloadGuard } from '../lib/reload-guard'
 import { writeResult, beginScenario, currentLabel, currentThrottle } from '../lib/result-writer'
 import { writeSkipResult } from '../lib/skip-record'
 import { getBuildIdentity } from '../lib/build-identity'
+import type { HaloAPI } from '../../../src/preload/index'
+import type { AutomationRunWithSummary } from '../../../src/shared/apps/app-types'
 import type { PerfResult } from '../types'
 
-const RUN_NOW_SELECTOR = [
-  'button[title="Run now"]', 'button[title="立即执行"]',
-  'button[title="Resume and run now"]', 'button[title="立即恢复并运行"]',
-].join(', ')
+// The header shows "Run now" as the button's text; paused apps offer "Resume and run now".
+const RUN_NOW_NAME = /^(Resume and run now|Run now)$/
 
 test('S8 digital human run', async ({ electronApp, window, seededApp }, testInfo) => {
   beginScenario('s8-digital-human-run')
@@ -65,30 +63,38 @@ test('S8 digital human run', async ({ electronApp, window, seededApp }, testInfo
   sampler.start()
   const t0 = Date.now()
 
-  const runNowButton = await window.waitForSelector(RUN_NOW_SELECTOR, { timeout: 10000 })
+  const existingRuns = await window.evaluate(async (appId) => {
+    const response = await (window as unknown as { halo: HaloAPI }).halo.appGetRuns({ appId, options: { limit: 10 } })
+    if (!response.success || !Array.isArray(response.data)) throw new Error('Could not read runs before triggering')
+    return (response.data as AutomationRunWithSummary[]).map(run => run.runId)
+  }, seededApp.appId)
+  const runNowButton = window.getByRole('button', { name: RUN_NOW_NAME }).first()
+  await runNowButton.waitFor({ state: 'visible', timeout: 10000 })
   await runNowButton.click()
 
-  // Follow into the live process view the same way digital-human-lifecycle.spec.ts does.
-  await window.waitForTimeout(800)
-  const activityTab = await window.$('text=/^Activity$|^活动$/i')
-  if (activityTab) {
-    await activityTab.click()
-    await window.waitForTimeout(400)
+  let observedRun: AutomationRunWithSummary | null = null
+  let finishedRun: AutomationRunWithSummary | null = null
+  const deadline = Date.now() + 90000
+  while (Date.now() < deadline && !finishedRun) {
+    const response = await window.evaluate(async (appId) => {
+      return (window as unknown as { halo: HaloAPI }).halo.appGetRuns({ appId, options: { limit: 10 } })
+    }, seededApp.appId)
+    if (response.success && Array.isArray(response.data)) {
+      const run = (response.data as AutomationRunWithSummary[]).find(item => !existingRuns.includes(item.runId))
+      if (run) {
+        observedRun = run
+        if (run.status !== 'running') finishedRun = run
+      }
+    }
+    if (!finishedRun) await window.waitForTimeout(500)
   }
-  await window.waitForSelector('text=/View process|查看进程/i', { timeout: 45000 }).catch(() => {
-    warnings.push('Never reached "View process" — run may not have started visibly within 45s.')
-  })
-
-  // Completion signal: the run's own working/streaming indicator clearing,
-  // same shape as S2's chat — not the "Halo 工作中" text (see
-  // wait-for-stream-complete.ts's rationale), the `.streaming-cursor`
-  // element used across the whole chat surface.
-  const streamingObserved = await window.waitForSelector('.streaming-cursor', { timeout: 15000 })
-    .then(() => true)
-    .catch(() => false)
-  await window.waitForSelector('.streaming-cursor', { state: 'detached', timeout: 90000 }).catch((err) => {
-    warnings.push(`Run did not visibly complete within 90s: ${err instanceof Error ? err.message : String(err)}`)
-  })
+  if (!observedRun) warnings.push('No new run record appeared after triggering the seeded app.')
+  else if (!finishedRun) warnings.push(`Run ${observedRun.runId} did not finish within 90s.`)
+  const session = finishedRun ? await window.evaluate(async ({ appId, runId }) => {
+    return (window as unknown as { halo: HaloAPI }).halo.appGetSession({ appId, runId })
+  }, { appId: seededApp.appId, runId: finishedRun.runId }) : null
+  const messages = session?.success && Array.isArray(session.data) ? session.data as Array<{ role: string; content?: string }> : []
+  const assistantOutput = messages.some(message => message.role === 'assistant' && !!message.content?.trim())
 
   const durationMs = Date.now() - t0
   sampler.stop()
@@ -132,19 +138,15 @@ test('S8 digital human run', async ({ electronApp, window, seededApp }, testInfo
     warnings.push('eventLatency: PerformanceObserver never attached — null, not "0 observed".')
   }
 
-  // A scenario that spins through its own timeouts without the seeded app
-  // ever actually doing anything must fail loudly, not blend in as another
-  // valid:true row. `streamingObserved` is the minimal proof any real
-  // activity happened; without it, `durationMs` is just the sum of this
-  // file's own wait timeouts (observed once as 60886ms ≈ 45s+15s+800ms+400ms).
-  const status: PerfResult['status'] = streamingObserved ? 'ok' : 'precondition-failed'
-  const note = streamingObserved
-    ? undefined
-    : 'No ".streaming-cursor" was ever observed — the run does not look like it produced any real output ' +
-      '(durationMs is likely just the sum of this test\'s own wait timeouts, not actual work).'
+  // Headless runs write JSONL; SessionDetailView polls it instead of rendering
+  // a streaming cursor. A matching persisted reply and completed run are the
+  // proof this scenario exercised the execution path.
+  const status: PerfResult['status'] = finishedRun?.status === 'ok' && assistantOutput ? 'ok' : 'precondition-failed'
+  const note = `runId=${observedRun?.runId ?? 'none'}, runStatus=${finishedRun?.status ?? 'none'}, ` +
+    `runError=${finishedRun?.errorMessage ?? 'none'}, sessionRead=${session?.success ?? false}, ` +
+    `messageCount=${messages.length}, assistantOutput=${assistantOutput}`
 
-  // `valid` = contamination-free AND the run actually did something
-  // (status === 'ok'), same narrowed definition used elsewhere.
+  // `valid` = contamination-free AND a completed run with output.
   const valid = noReloadOrCrash && status === 'ok'
   const unresponsiveCount = await readUnresponsiveCount(electronApp)
 
@@ -188,4 +190,5 @@ test('S8 digital human run', async ({ electronApp, window, seededApp }, testInfo
   console.log(`[perf] S8 result written to ${filePath}${warnings.length ? ` (${warnings.length} warning(s))` : ''}`)
 
   expect(result.durationMs).toBeGreaterThan(0)
+  expect(result.valid, note).toBe(true)
 })

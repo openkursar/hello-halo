@@ -27,6 +27,7 @@ import type { FederationLink } from './link'
 import { LanMeshLink, type WsSender } from './lan-mesh-provider'
 import { WsFederationClient, type FederationAuthProof } from './ws-federation-client'
 import { createStreamReplay, type StreamReplay } from './relay'
+import { createStreamRecipients, createStreamWatch, fanOutStream, type StreamRecipients, type StreamRoute, type StreamWatch } from './stream-subscriptions'
 import type { NodeBoundMember } from './coordinator'
 import { GatewayAttachClient } from './gateway-attach'
 import { createRemoteBusyOverlay } from './remote-busy-overlay'
@@ -36,23 +37,21 @@ import { createOfficeAuthority, type OfficeAuthority } from './authority/office-
 import type { ReadMemberHistory } from './authority/history-fetch'
 import { STOP_ERR_OWNER_UNREACHABLE, type StopMemberTurn } from './authority/stop-turn'
 import type { OwnerStatus } from './authority/reconcile'
-import type { MemberWriteRecord } from './authority/replication'
+import type { MemberWriteRecord, ReplicaAppliedBatch } from './authority/replication'
 import type { OutboundBlackboardWrite } from './authority/location-aware-blackboard'
 import type { BlackboardWriteRecord } from '../team/blackboard'
 import {
-  DEFAULT_P2P_CAPS,
-  PROTOCOL_VERSION_CURRENT,
-  PROTOCOL_VERSION_MIN_SUPPORTED,
-  CAP,
+  FEDERATION_PROTOCOL_VERSION,
   type ArtifactRef,
   type BlackboardWriteFrame,
   type M2Frame,
+  type StreamSubscribeFrame,
   type OfficeStateOp,
   type SerializedHistoryMessage,
 } from './protocol-m2'
 import { createCtrlFeed, type CtrlFeed } from './ctrl-feed'
 import { createSessionFeed, historyCacheKey, isSessionFeedFrame, type SessionFeed } from './session-feed'
-import { isFeedSyncFrame, type FeedSyncFrame } from './log/types'
+import { isFeedSyncFrame, parseFeedIdKey, type FeedSyncFrame } from './log/types'
 import { getFeedStore, type AuthorityStore, type FeedStore } from '../../federation'
 import { SELF_NODE_ID, type TeamMemberRuntimeStatus, type TeamStatus } from '../../../../shared/apps/team-types'
 import { parseTeamSessionKey } from '../../../../shared/apps/im-keys'
@@ -66,6 +65,7 @@ import type {
   PresenceSnapshot,
   SerializedWakeRequest,
   StreamFramesFrame,
+  MemberStatusFrame,
 } from './types'
 import type { TurnCompletion } from '../team/message-bus'
 
@@ -149,6 +149,17 @@ export interface FederationManagerDeps {
   hostSend: (clientId: string, frame: FederationMessage) => boolean
   /** Authenticated office-member client ids for an office (host broadcast set). */
   hostListOfficeClients: (officeId: string) => string[]
+  /**
+   * Host → many joiners, serialized once (bootstrap passes websocket.ts
+   * sendFederationFrameToClients). A `droppable` frame is skipped for a client
+   * whose socket is backed up; returns the clients that skipped it. Absent →
+   * one `hostSend` per client.
+   */
+  hostSendMany?: (
+    clientIds: readonly string[],
+    frame: FederationMessage,
+    opts: { droppable: boolean; degrade?: () => FederationMessage | null }
+  ) => string[]
   federationStore: FederationStore
   teamStore: TeamStore
   /** Office-credential verifier (injected so the manager never imports http/auth). */
@@ -293,7 +304,12 @@ export interface FederationManagerDeps {
    * transcript to every office node. Absent → no proactive replication (the
    * office stays on the pull-only history path).
    */
-  readOwnedTranscript?: (teamId: string, appId: string, epochId: string) => SerializedHistoryMessage[] | null
+  readOwnedTranscript?: (
+    teamId: string,
+    appId: string,
+    epochId: string,
+    sinceSeq?: number
+  ) => SerializedHistoryMessage[] | null
   /**
    * Whether a chat turn is currently running for a session key on THIS node.
    * The session-feed publisher withholds an in-flight turn's provisional trailing
@@ -302,11 +318,11 @@ export interface FederationManagerDeps {
    */
   isSessionActive?: (sessionKey: string) => boolean
   /**
-   * A hot-standby applied a replicated task/finding to its replica store.
-   * Bootstrap maps this to a UI refresh event so the renderer shows the live
-   * task/finding without a reload. Absent → no signal.
+   * A hot-standby applied replicated board rows (one live frame, one catch-up
+   * page, or a snapshot). Bootstrap maps the rows to incremental renderer
+   * events. Absent → no signal.
    */
-  onReplicaApplied?: (info: { officeId: string; op: string; taskId?: string }) => void
+  onReplicaApplied?: (officeId: string, applied: ReplicaAppliedBatch) => void
   /**
    * A member's local transcript replica grew (session-feed apply or a
    * background tail refresh). Bootstrap maps this to a renderer event so an
@@ -559,6 +575,13 @@ export interface FederationManager {
    */
   reenrollWithAuthority(officeId: string): boolean
   /**
+   * The conversations local viewers render in detail (renderer declarations and
+   * remote clients). Team sessions of joined offices whose member another node
+   * owns are subscribed at the authority, so this node receives only the live
+   * streams it shows. Bootstrap feeds it from the visibility registry.
+   */
+  setWatchedSessions(conversationIds: ReadonlySet<string>): void
+  /**
    * A peer node's dialable base URL from the office's address book (joined:
    * in-memory host-projected; hosted: persisted office_nodes). Null when unknown.
    */
@@ -592,6 +615,8 @@ interface HostedOffice {
    * amplification loop. Null when no stream batch is in flight.
    */
   streamOriginClientId: string | null
+  /** The node a batch being re-sent arrived from over the relay (never echoed back to it). */
+  streamOriginNode: NodeId | null
   /** M2 per-office authority module (election/replication/reconcile/scope/artifact). */
   authority?: OfficeAuthority
   /** Outbound gateway attachment when the office is relayed, else undefined. */
@@ -606,6 +631,12 @@ interface HostedOffice {
   ctrlFeed?: CtrlFeed
   /** Multi-replica session-transcript plane; undefined when the feed store or transcript reader is unavailable. */
   sessionFeed?: SessionFeed
+  /** Which viewers asked for which live streams. */
+  streamRecipients: StreamRecipients
+  /** Droppable frames skipped for a backed-up LAN client since start (health line). */
+  lanShed: number
+  /** Clients whose first skip has been logged. */
+  lanShedLogged: Set<string>
 }
 
 interface JoinedOffice {
@@ -649,6 +680,22 @@ interface JoinedOffice {
   /** The join-request sent at join, kept so a redial/reconnect can re-drive it to a
    *  newly-elected authority (roster re-entry after a host loss). */
   joinRequest?: JoinRequest
+  /**
+   * The authority this office last subscribed to and advertised its own feeds to
+   * on a roster. Rosters arrive on every board write, so both happen once per
+   * authority and again after a reconnect or re-enroll clears this.
+   */
+  rosterWiredHost?: NodeId | null
+  /** Live streams this node's viewers show, subscribed at the authority. */
+  streamWatch: StreamWatch
+  /** While this node is the elected authority: which peers asked for which live streams. */
+  streamRecipients: StreamRecipients
+  /** The peer a live batch being re-sent arrived from (never echoed back to it). */
+  streamOriginNode: NodeId | null
+  /** Version of the last roster applied (null: from an authority that sends none). */
+  rosterVersion: number | null
+  /** A full roster has been asked for and not yet received. */
+  rosterRequested: boolean
   /**
    * Set when the upstream session proved to be a RELAY (the gateway sent
    * gw:host-lost): the gateway base URL this office rides. An election win
@@ -903,15 +950,123 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
   }
 
   /**
-   * One line per office, per minute: the transport, whether it is up, and how far
-   * each peer is behind on what this node addressed to it.
-   *
-   * A pair of members that cannot hear each other is otherwise indistinguishable
-   * from a quiet office — the roster is green, the board still updates (it is
-   * broadcast), and the sender's own record says "sent". This line separates the
-   * states that matter: channel never established, dead direct leg, transport
-   * down, peer not acknowledging.
+   * WS-server clients of this node (the host's joiners, or peers that dialed an
+   * elected authority): one frame to many, where a `droppable` one may be reduced
+   * with `degrade` for a backed-up client. Returns the clients it was reduced for.
    */
+  function sendToClients(
+    clientIds: readonly string[],
+    frame: FederationMessage,
+    opts: { droppable: boolean; degrade?: () => FederationMessage | null }
+  ): string[] {
+    if (clientIds.length === 0) return []
+    if (deps.hostSendMany) return deps.hostSendMany(clientIds, frame, opts)
+    for (const clientId of clientIds) deps.hostSend(clientId, frame)
+    return []
+  }
+
+  /** Relayed nodes confirmed offline are skipped: the relay would only drop the frame. */
+  function isOnline(officeId: string, node: NodeId): boolean {
+    return deps.federationStore.getNode(officeId, node)?.status !== 'offline'
+  }
+
+  /**
+   * A live batch arriving at the node that serves the office, from any source (a
+   * LAN or dialed-in session, the relay, an election leg): accepted only from the
+   * node that owns the streamed member, and re-sent to everyone but that node.
+   * `producer` must be the proven sender, never a label the frame carries.
+   */
+  function acceptServedStream(
+    officeId: string,
+    link: LanMeshLink,
+    producer: NodeId | null,
+    frame: StreamFramesFrame,
+    setOrigin: (node: NodeId | null) => void
+  ): void {
+    if (!producer || !ownsStreamSession(officeId, producer, frame.sessionKey)) {
+      console.warn(`${LOG_TAG} stream-frames origin mismatch office=${officeId} from=${producer} key=${frame.sessionKey}; dropping`)
+      return
+    }
+    setOrigin(producer)
+    try {
+      link.deliver(producer, frame)
+    } finally {
+      setOrigin(null)
+    }
+  }
+
+  /** The host's route for a live batch: its LAN clients, then its relayed members. */
+  function hostedStreamRoute(entry: HostedOffice, officeId: string): StreamRoute {
+    const listed = new Set(deps.hostListOfficeClients(officeId))
+    const clientOf = new Map<NodeId, string>()
+    for (const [node, clientId] of entry.nodeToClient) {
+      if (listed.has(clientId) && clientId !== entry.streamOriginClientId) clientOf.set(node, clientId)
+    }
+    const relayed = entry.gateway
+      ? [...entry.nodeToGateway].filter((node) => node !== entry.streamOriginNode && isOnline(officeId, node))
+      : []
+    return {
+      nodes: [...clientOf.keys(), ...relayed],
+      send: (nodes, frame, opts) => {
+        const lan = nodes.flatMap((node) => clientOf.get(node) ?? [])
+        const shed = sendToClients(lan, frame, opts)
+        if (shed.length > 0) noteLanShed(officeId, entry, shed, frame.kind)
+        for (const node of nodes) if (!clientOf.has(node)) entry.gateway?.send(node, frame)
+      },
+    }
+  }
+
+  /** An elected authority's route for a live batch: peers that dialed it, election legs, a claimed relay room. */
+  function joinedStreamRoute(officeId: string, entry: JoinedOffice): StreamRoute {
+    const self = deps.getLocalNodeId()
+    const nodes = new Set<NodeId>([...entry.peerClients.keys(), ...entry.electionLegs.keys()])
+    const room = entry.gateway?.isAttached() ? entry.gateway : null
+    if (room) {
+      for (const n of deps.federationStore.listNodesByOffice(officeId)) {
+        if (n.status !== 'offline') nodes.add(n.nodeId)
+      }
+    }
+    nodes.delete(self)
+    if (entry.streamOriginNode) nodes.delete(entry.streamOriginNode)
+    return {
+      nodes: [...nodes],
+      send: (targets, frame, opts) => {
+        const direct = targets.flatMap((node) => entry.peerClients.get(node) ?? [])
+        sendToClients(direct, frame, opts)
+        for (const node of targets) {
+          if (entry.peerClients.has(node)) continue
+          const leg = entry.electionLegs.get(node)
+          if (leg) leg.sender(node, frame)
+          else room?.send(node, frame)
+        }
+      },
+    }
+  }
+
+  /** Authority: a viewer's stream subscription change (sessions of this office only). */
+  function handleStreamSubscription(
+    recipients: StreamRecipients,
+    officeId: string,
+    from: NodeId,
+    frame: StreamSubscribeFrame
+  ): void {
+    if (parseTeamSessionKey(frame.sessionKey)?.teamId !== officeId) {
+      console.warn(`${LOG_TAG} stream subscription for a foreign session office=${officeId} from=${from}; ignoring`)
+      return
+    }
+    if (frame.kind === 'stream-subscribe') recipients.subscribe(from, frame.sessionKey)
+    else recipients.unsubscribe(from, frame.sessionKey)
+  }
+
+  function noteLanShed(officeId: string, entry: HostedOffice, shed: string[], kind: string): void {
+    entry.lanShed += shed.length
+    for (const clientId of shed) {
+      if (entry.lanShedLogged.has(clientId)) continue
+      entry.lanShedLogged.add(clientId)
+      console.warn(`${LOG_TAG} client backed up; reducing droppable frames office=${officeId} client=${clientId} first=${kind}`)
+    }
+  }
+
   /**
    * Per peer: how far it has acknowledged this node's outbox, how far behind that
    * leaves it, and how many wakes are unanswered. A peer stuck at 0 while the
@@ -932,15 +1087,47 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     return parts.length > 0 ? parts.join(' ') : 'no peers'
   }
 
+  // The replication log is retained whole (see DESIGN), so its size rides the
+  // health line every LOG_STATS_EVERY_TICKS ticks to keep growth observable.
+  const LOG_STATS_EVERY_TICKS = 10
+  let healthTicks = 0
+
+  function describeReplicationLog(officeId: string): string {
+    if (healthTicks % LOG_STATS_EVERY_TICKS !== 0 || !deps.authorityStore) return ''
+    const stats = deps.authorityStore.getLogStats(officeId)
+    return ` replicationLog=${stats.rows}rows/${Math.round(stats.bytes / 1024)}KB`
+  }
+
+  /** Inbound volume by plane (or kind), as `name:frames/KB` — the per-joiner cost the cluster tier bounds. */
+  function describeReceived(received: Record<string, { frames: number; bytes: number }>): string {
+    return Object.entries(received)
+      .map(([plane, r]) => `${plane}:${r.frames}/${Math.round(r.bytes / 1024)}`)
+      .join(',')
+  }
+
+  /**
+   * One line per office, per minute: the transport, whether it is up, and how far
+   * each peer is behind on what this node addressed to it.
+   *
+   * A pair of members that cannot hear each other is otherwise indistinguishable
+   * from a quiet office — the roster is green, the board still updates (it is
+   * broadcast), and the sender's own record says "sent". This line separates the
+   * states that matter: channel never established, dead direct leg, transport
+   * down, peer not acknowledging.
+   */
   function linkHealthTick(): void {
+    healthTicks += 1
     for (const [officeId, entry] of joined) {
       try {
         const link = entry.client.getHealth()
         console.log(
           `${LOG_TAG} health office=${officeId} role=joined via=${dialedPeers.has(officeId) ? 'direct-leg' : 'join-link'}` +
             ` link=${link.url} ${link.connected ? 'up' : `down(${link.failedAttempts})`}` +
-            ` shed=${link.dropped.control}/${link.dropped.stream}/${link.dropped.artifact}` +
-            ` acked[${describeDelivery(officeId, entry.ctrlFeed)}]`
+            ` shed=${link.dropped.control}/${link.dropped.stream}/${link.dropped.feed}/${link.dropped.artifact}` +
+            ` acked[${describeDelivery(officeId, entry.ctrlFeed)}]` +
+            ` rx=${describeReceived(link.received)}` +
+            ` rxKinds=${describeReceived(link.receivedByKind)}` +
+            describeReplicationLog(officeId)
         )
       } catch (err) {
         console.warn(
@@ -953,8 +1140,9 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
         const relay = entry.gateway ? (entry.gateway.isAttached() ? 'attached' : 'detached') : 'off'
         console.log(
           `${LOG_TAG} health office=${officeId} role=host relay=${relay}` +
-            ` lanClients=${entry.nodeToClient.size} relayed=${entry.nodeToGateway.size}` +
-            ` acked[${describeDelivery(officeId, entry.ctrlFeed)}]`
+            ` lanClients=${entry.nodeToClient.size} relayed=${entry.nodeToGateway.size} lanShed=${entry.lanShed}` +
+            ` acked[${describeDelivery(officeId, entry.ctrlFeed)}]` +
+            describeReplicationLog(officeId)
         )
       } catch (err) {
         console.warn(
@@ -1019,6 +1207,13 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
         const live = joined.get(officeId)
         if (!live) return
         if ((frame as { officeId?: unknown }).officeId !== officeId) return
+        if (frame.kind === 'stream-frames') {
+          // The relay-stamped sender is the only proof of origin a batch has.
+          acceptServedStream(officeId, live.federation.link as LanMeshLink, from ?? null, frame, (node) => {
+            live.streamOriginNode = node
+          })
+          return
+        }
         const src = resolveFromNode(frame) ?? from ?? deps.getLocalNodeId()
         ;(live.federation.link as LanMeshLink).deliver(src, frame)
       },
@@ -1099,16 +1294,6 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       officeId,
       selfNodeId: deps.getLocalNodeId(),
       feedStore,
-      // The full office roster minus self — an offline or not-yet-connected
-      // member must still block retention pruning of what it has not acked yet
-      // (see FeedProducer.prune); computing the floor from only who is currently
-      // connected is what let a member joining mid-run land on an already-pruned
-      // gap it could never fill.
-      knownPeers: () =>
-        deps.federationStore
-          .listNodesByOffice(officeId)
-          .map((n) => n.nodeId)
-          .filter((id) => id !== deps.getLocalNodeId()),
       sendToPeer: (peer, frame) => link.send(peer, frame),
       onWake: ({ correlationId, request, from }) =>
         link.deliver(from, { kind: 'wake', officeId, correlationId, request, fromNode: from }),
@@ -1160,6 +1345,18 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       // which the transport labels with THIS node's id after authenticating it.
       acceptEntriesFrom: (from, author) =>
         from === author || from === deps.getLocalNodeId() || from === believedAuthorityNode(officeId),
+      authorityNodeId: () => believedAuthorityNode(officeId),
+      wantsReplica: (feedKey) => wantsReplica(officeId, feedKey, servesMirror),
+      // Only the serving node announces peer by peer; a joiner's own feeds go
+      // to its single upstream as a broadcast.
+      announceTargets: () =>
+        servesMirror()
+          ? deps.federationStore
+              .listNodesByOffice(officeId)
+              .filter((n) => n.nodeId !== deps.getLocalNodeId() && n.status !== 'offline')
+              .map((n) => n.nodeId)
+          : null,
+      epochEndedAt: (epochId) => deps.teamStore.getEpochById(epochId)?.endedAt ?? null,
     })
     sf.start()
     return sf
@@ -1180,6 +1377,11 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     }, HISTORY_UPDATE_COALESCE_MS)
     if (typeof timer.unref === 'function') timer.unref()
     historyUpdateTimers.set(key, timer)
+  }
+
+  /** The coordinator of an office this node hosts or has joined. */
+  function officeCoordinator(officeId: string): Federation['coordinator'] | undefined {
+    return (hosted.get(officeId) ?? joined.get(officeId))?.federation.coordinator
   }
 
   /** The node this office's writes are believed to be served by (authority/host). */
@@ -1252,7 +1454,11 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       link: undefined as unknown as LanMeshLink,
       nodeToClient: new Map(),
       streamOriginClientId: null,
+      streamOriginNode: null,
       nodeToGateway: new Set(),
+      streamRecipients: createStreamRecipients(),
+      lanShed: 0,
+      lanShedLogged: new Set(),
     }
 
     // Host link: send(nodeId) resolves a clientId then hostSend; broadcast fans
@@ -1262,14 +1468,13 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     // own frames back to it (loop prevention, layer 1).
     const link: LanMeshLink = new LanMeshLink((to: NodeId | null, frame: FederationMessage) => {
       if (to === null) {
-        const exclude = frame.kind === 'stream-frames' ? entry.streamOriginClientId : null
-        for (const clientId of deps.hostListOfficeClients(officeId)) {
-          if (exclude !== null && clientId === exclude) continue
-          deps.hostSend(clientId, frame)
+        if (frame.kind === 'stream-frames') {
+          fanOutStream(frame, entry.streamRecipients, hostedStreamRoute(entry, officeId))
+          return
         }
+        sendToClients(deps.hostListOfficeClients(officeId), frame, { droppable: false })
         // Relayed members: the gateway fans a null-addressed frame out to every
-        // admitted room member. A relayed producer cannot be excluded there;
-        // the viewer's seq dedup guards that overlap.
+        // admitted room member.
         entry.gateway?.send(null, frame)
         return
       }
@@ -1341,7 +1546,13 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
         link.broadcast(batch)
       },
       // M2: route authority/replication/artifact frames to the per-office module.
-      onM2Frame: authority ? (from, frame) => authority!.handle(from, frame) : undefined,
+      onM2Frame: (from, frame) => {
+        if (frame.kind === 'stream-subscribe' || frame.kind === 'stream-unsubscribe') {
+          handleStreamSubscription(entry.streamRecipients, officeId, from, frame)
+          return
+        }
+        authority?.handle(from, frame)
+      },
       // Feed planes: route inbound feed-sync frames to this office's session or
       // ctrl feed (the coordinator supplies the delivering peer as the source).
       onFeedFrame: (from, frame) => routeFeedFrame(officeId, entry.ctrlFeed, entry.sessionFeed, from, frame),
@@ -1353,11 +1564,14 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       // serves, so a late joiner backfills all transcripts without waiting for
       // the re-announce tick.
       onNodePresence: (nodeId, status) => {
-        if (status === 'offline') entry.sessionFeed?.dropPeer(nodeId)
+        if (status === 'offline') {
+          entry.sessionFeed?.dropPeer(nodeId)
+          entry.streamRecipients.dropNode(nodeId)
+        }
         if (status === 'online') entry.sessionFeed?.advertiseAllTo(nodeId)
         authority?.onNodePresence(nodeId, status)
       },
-      // M2: stamp the join-grant with the current tenure + effective caps.
+      // M2: stamp the join-grant with the current tenure.
       getJoinGrantExtras: authority ? () => authority!.getJoinGrantExtras() : undefined,
       // Committed roster: a node admission rides the replicated blackboard log,
       // so every replica's quorum denominator converges to the committed set.
@@ -1505,9 +1719,12 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     entry.nodeToClient.set(fromNode, ctx.clientId)
     // A direct client session supersedes any earlier gateway path for this node.
     entry.nodeToGateway.delete(fromNode)
-    // Reliable ctrl-plane: subscribe to this peer's ctrl feed so its turn-completes
-    // are consumed reliably (idempotent — a re-subscribe just replays from cursor).
-    entry.ctrlFeed?.subscribePeer(fromNode)
+    // Reliable ctrl-plane: consume this peer's ctrl feed so its turn-completes
+    // arrive reliably. A (re)join restarts the stream from our cursor; any other
+    // frame only makes sure a subscription exists — re-subscribing on every frame
+    // echoed one feed-subscribe (and a cursor write on the peer) per heartbeat.
+    if (frame.kind === 'join-request') entry.ctrlFeed?.subscribePeer(fromNode)
+    else entry.ctrlFeed?.ensureSubscribedToPeer(fromNode)
     // …and the reverse direction: ensure this peer subscribes to OUR ctrl feed so
     // our wakes reach it even if its one-shot subscribe was lost in transit. Any
     // inbound frame (a heartbeat suffices) heals it — the always-on primary self-heal.
@@ -1515,6 +1732,17 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
 
     // The host link's inbound entrypoint forwards to the coordinator's handler.
     ;(entry.federation.link as LanMeshLink).deliver(fromNode, frame)
+    if (frame.kind === 'join-request') announceFeedsAfterJoin(ctx.officeId, entry.sessionFeed, fromNode)
+  }
+
+  /**
+   * An admitted (re)join gets the full feed digest. A node that restarted before
+   * it was ever marked offline comes back knowing no feeds, and deltas alone
+   * would leave it unable to open a quiet session until the slow full resend.
+   */
+  function announceFeedsAfterJoin(officeId: string, sessionFeed: SessionFeed | undefined, node: NodeId): void {
+    if (!sessionFeed || deps.federationStore.getNode(officeId, node)?.status !== 'online') return
+    sessionFeed.advertiseAllTo(node)
   }
 
   /**
@@ -1537,12 +1765,11 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     // fromNode — correctly attributed across the relay instead of being dropped.
     const fromNode = resolveFromNode(frame) ?? from ?? null
     if (!fromNode) {
-      // Cross-version compatibility: an OLDER gateway that does not stamp `from`
-      // leaves these two kinds without any source node. They carry none in their
-      // payload by design and the coordinator does not route on the source label
-      // for them, so deliver under a synthetic label (the pre-`from` behavior)
-      // rather than silently dropping the relayed activity stream / turn-complete.
-      if (frame.kind === 'stream-frames' || frame.kind === 'turn-complete') {
+      // An OLDER gateway that does not stamp `from` leaves turn-complete without a
+      // source; the coordinator routes it by correlation id, so it is delivered
+      // under a synthetic label. A live batch without a proven sender cannot pass
+      // the origin rule and is dropped.
+      if (frame.kind === 'turn-complete') {
         ;(entry.federation.link as LanMeshLink).deliver('gateway', frame)
         return
       }
@@ -1555,11 +1782,19 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     // the sender's ctrl feed so its wakes/turn-completes are consumed reliably.
     // Without this, a gateway member's outbox is never served — its replies sit
     // undelivered forever while everything else looks connected.
-    entry.ctrlFeed?.subscribePeer(fromNode)
+    if (frame.kind === 'join-request') entry.ctrlFeed?.subscribePeer(fromNode)
+    else entry.ctrlFeed?.ensureSubscribedToPeer(fromNode)
     // Reverse direction: ensure this relayed peer subscribes to OUR ctrl feed so our
     // wakes reach it even if its subscribe was lost — heartbeat-driven primary heal.
     entry.ctrlFeed?.ensurePeerSubscribed(fromNode)
+    if (frame.kind === 'stream-frames') {
+      acceptServedStream(officeId, entry.federation.link as LanMeshLink, fromNode, frame, (node) => {
+        entry.streamOriginNode = node
+      })
+      return
+    }
     ;(entry.federation.link as LanMeshLink).deliver(fromNode, frame)
+    if (frame.kind === 'join-request') announceFeedsAfterJoin(officeId, entry.sessionFeed, fromNode)
   }
 
   /**
@@ -1597,15 +1832,23 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
         entry.electionLegs.delete(peer)
       }
       // Reliable ctrl-plane from this peer (mirrors the hosted inbound path).
-      entry.ctrlFeed?.subscribePeer(peer)
+      if (frame.kind === 'join-request') entry.ctrlFeed?.subscribePeer(peer)
+      else entry.ctrlFeed?.ensureSubscribedToPeer(peer)
       // Reverse direction: ensure this peer subscribes to OUR ctrl feed too, so a
       // wake we author (as elected authority) reaches it even if its subscribe was
       // lost — mirrors the hosted/gateway inbound heal.
       entry.ctrlFeed?.ensurePeerSubscribed(peer)
     }
+    if (frame.kind === 'stream-frames' && entry.authority?.isAuthoritySelf()) {
+      acceptServedStream(ctx.officeId, entry.federation.link as LanMeshLink, peer ?? null, frame, (node) => {
+        entry.streamOriginNode = node
+      })
+      return
+    }
     // Frames without a payload source (feed-sync et al) are attributed to the
     // proven session identity, so feed cursors key on the real peer node.
     ;(entry.federation.link as LanMeshLink).deliver(fromNode ?? peer ?? deps.getLocalNodeId(), frame)
+    if (frame.kind === 'join-request' && peer) announceFeedsAfterJoin(ctx.officeId, entry.sessionFeed, peer)
   }
 
   /**
@@ -1956,6 +2199,12 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
           sendDirected(to, frame)
           return
         }
+        // Elected authority: live batches go out by the same rule as the first host's.
+        const live = joined.get(officeId)
+        if (frame.kind === 'stream-frames' && live?.authority?.isAuthoritySelf()) {
+          fanOutStream(frame, live.streamRecipients, joinedStreamRoute(officeId, live))
+          return
+        }
         // Broadcast: upstream + every direct peer path, one copy per node
         // (an inbound session wins over a dial leg to the same peer). In the
         // steady state both maps are empty and this is exactly the old
@@ -1978,6 +2227,10 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
           roomClaim.send(null, frame)
           return
         }
+        // After a re-form the upstream points at the authority; one that already
+        // got the frame over a direct path must not get it a second time.
+        const authorityNode = believedAuthorityNode(officeId)
+        if (authorityNode && sent.has(authorityNode)) return
         upstreamRef.send(null, frame)
       })
       // M2 authority module for this JOINED office: as a hot-standby it applies
@@ -2020,6 +2273,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
           const live = joined.get(officeId)
           if (!live) return
           console.log(`${LOG_TAG} re-driving join after reconnect office=${officeId}`)
+          live.rosterWiredHost = null
           // The outage silence must not be counted as peer death the moment
           // frames resume: re-baseline presence with a grace window (same
           // mechanism as OS resume) before re-entering the roster.
@@ -2062,6 +2316,10 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
           : undefined,
         onJoinGrant: (assignedNodeId) => {
           console.log(`${LOG_TAG} joined office=${officeId}`)
+          // Subscriptions are soft state at the authority: every grant (first
+          // join, reconnect, a new authority after an election) re-declares them.
+          joined.get(officeId)?.streamWatch.resend()
+          joined.get(officeId)?.sessionFeed?.resubscribeCopies()
           accessLostNotified = false
           // M2: record self in the node ledger so election views include it.
           if (authority) {
@@ -2107,24 +2365,39 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
         onTurnComplete: (correlationId, outcome) => dispatchTurnComplete(correlationId, outcome),
         // JOINED office: stream-frames from the host (another node's member,
         // relayed via the host) → replay so this joiner's renderer sees it.
-        onStreamFrames: (batch) => streamReplay.apply(batch),
+        // As elected authority it also passes a peer's batch on, as the first host did.
+        onStreamFrames: (batch) => {
+          streamReplay.apply(batch)
+          if (joined.get(officeId)?.authority?.isAuthoritySelf()) link.broadcast(batch)
+        },
         // JOINED office: materialize the host's roster projection into the local
         // store as a shadow office. This gives the joiner's renderer a full
         // office to show AND lets its RelayCapture recognize its own brought
         // member as owned-by-SELF (so it relays). The host's node id rides in
         // snapshot.team.hostNodeId; owner ids are remapped SELF-relative inside.
-        onRoster: (snapshot) => {
+        onRoster: (snapshot, version) => {
+          const rosterEntry = joined.get(officeId)
+          if (rosterEntry) {
+            rosterEntry.rosterVersion = version ?? null
+            rosterEntry.rosterRequested = false
+          }
           deps.teamStore.materializeJoinedOffice({
             hostNodeId: snapshot.team.hostNodeId,
             selfNodeId: selfContext.selfNodeId,
             snapshot,
           })
+          // Members' owners are known from here on; a shown session skipped before can subscribe now.
+          setWatchedSessions(watchedSessions)
           // Reliable ctrl-plane: subscribe to the host's ctrl feed here (not at
           // join-grant) — this is the first point the host's node id is reliably
-          // known. Idempotent: a re-subscribe just replays from our cursor, so
-          // firing on every roster is safe and also re-establishes after a reconnect.
-          if (snapshot.team.hostNodeId) {
+          // known. Once per authority; a reconnect or re-enroll re-arms it.
+          const live = joined.get(officeId)
+          if (snapshot.team.hostNodeId && live?.rosterWiredHost !== snapshot.team.hostNodeId) {
+            if (live) live.rosterWiredHost = snapshot.team.hostNodeId
             ctrlFeed?.subscribePeer(snapshot.team.hostNodeId)
+            // Board: page to the authority's head now rather than waiting for a
+            // live write to expose the gap (a quiet office would stay empty).
+            if (!authority?.isAuthoritySelf()) authority?.replication.requestCatchupFrom(snapshot.team.hostNodeId)
             // Session plane: announce this node's own transcript feeds so the
             // authority mirrors them (and serves them onward to other joiners).
             sessionFeed?.advertiseAllTo(snapshot.team.hostNodeId)
@@ -2186,6 +2459,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
           }
           deps.onRosterChanged?.(officeId)
         },
+        onMemberStatus: (frame) => applyMemberStatus(officeId, frame),
         onRosterChanged: deps.onRosterChanged
           ? () => deps.onRosterChanged!(officeId)
           : undefined,
@@ -2193,7 +2467,14 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
         // grant extras. Governance egress (member-removed / office-dissolved) is a
         // JOINER-side consumer concern (not authority logic), so intercept those
         // and surface them to bootstrap before delegating the rest.
-        onM2Frame: (from, frame) => handleJoinerM2Frame(officeId, authority, from, frame),
+        onM2Frame: (from, frame) => {
+          const live = joined.get(officeId)
+          if (frame.kind === 'stream-subscribe' || frame.kind === 'stream-unsubscribe') {
+            if (live?.authority?.isAuthoritySelf()) handleStreamSubscription(live.streamRecipients, officeId, from, frame)
+            return
+          }
+          handleJoinerM2Frame(officeId, authority, from, frame)
+        },
         // Feed planes: route inbound feed-sync frames to this office's session
         // or ctrl feed.
         onFeedFrame: (from, frame) => routeFeedFrame(officeId, ctrlFeed, sessionFeed, from, frame),
@@ -2212,7 +2493,10 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
           }
         },
         onNodePresence: (nodeId, status) => {
-          if (status === 'offline') sessionFeed?.dropPeer(nodeId)
+          if (status === 'offline') {
+            sessionFeed?.dropPeer(nodeId)
+            joined.get(officeId)?.streamRecipients.dropNode(nodeId)
+          }
           if (status === 'online') sessionFeed?.advertiseAllTo(nodeId)
           // Losing the AUTHORITY means losing the office's whole transport
           // (star center). Open direct dial legs to the survivors BEFORE the
@@ -2241,6 +2525,20 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
         authority,
         ctrlFeed,
         sessionFeed,
+        rosterVersion: null,
+        rosterRequested: false,
+        streamRecipients: createStreamRecipients(),
+        streamOriginNode: null,
+        streamWatch: createStreamWatch({
+          officeId,
+          selfNodeId: selfContext.selfNodeId,
+          send: (frame) => {
+            const live = joined.get(officeId)
+            const target = believedAuthorityNode(officeId)
+            if (!live || !target) return
+            live.link.send(target, frame)
+          },
+        }),
       })
       federation.coordinator.start()
 
@@ -2252,12 +2550,9 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
         displayName: deps.getLocalDisplayName?.() ?? undefined,
         credentialToken,
         bringMembers,
-        // Version/capability negotiation: the host computes the common version
-        // (rejecting an incompatible node) and answers with the negotiated pv +
-        // effective caps on the join-grant.
-        pv: PROTOCOL_VERSION_CURRENT,
-        minSupported: PROTOCOL_VERSION_MIN_SUPPORTED,
-        caps: DEFAULT_P2P_CAPS,
+        // One protocol: the authority admits only its own version (and this node
+        // refuses a grant from any other).
+        pv: FEDERATION_PROTOCOL_VERSION,
         advertisedUrl: deps.getLocalAdvertisedUrl?.() ?? undefined,
       }
       // Keep the request so a redial/reconnect to a newly-elected authority can
@@ -2297,6 +2592,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     if (join) {
       join.ctrlFeed?.stop()
       join.sessionFeed?.stop()
+      join.streamWatch.stop()
       join.authority?.stop()
       join.federation.coordinator.stop()
       join.client.close()
@@ -2511,6 +2807,68 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
   }
 
   /**
+   * Joiner: a run-state change on top of the roster version it names. One that
+   * does not line up (a frame lost, a new authority) asks for the full roster
+   * once and is not applied.
+   */
+  function applyMemberStatus(officeId: string, frame: MemberStatusFrame): void {
+    const entry = joined.get(officeId)
+    if (!entry) return
+    if (entry.rosterVersion !== frame.baseVersion) {
+      if (entry.rosterRequested) return
+      entry.rosterRequested = true
+      const authorityNode = believedAuthorityNode(officeId)
+      console.warn(
+        `${LOG_TAG} member-status does not line up office=${officeId} have=${entry.rosterVersion} base=${frame.baseVersion}; requesting the roster`
+      )
+      if (authorityNode) entry.link.send(authorityNode, { kind: 'roster-request', officeId, fromNode: deps.getLocalNodeId() })
+      return
+    }
+    if (frame.members.length === 0 && !frame.status) return
+    deps.teamStore.applyJoinedMemberStatus(officeId, {
+      ...(frame.status ? { status: frame.status } : {}),
+      members: frame.members,
+    })
+    entry.rosterVersion = frame.version
+    deps.onRosterChanged?.(officeId)
+  }
+
+  /**
+   * Whether this node keeps a copy of a session feed: every one while it serves
+   * (the authority's copy is the office's), otherwise only the sessions a local
+   * viewer shows. Not "sessions that messaged our members": a
+   * member's session in a piece of work holds its exchanges with everyone, so
+   * copying it on that basis put the office's busiest transcript on every node,
+   * while what was said to our member is already in our member's own transcript.
+   */
+  function wantsReplica(officeId: string, feedKey: string, servesMirror: () => boolean): boolean {
+    const entry = joined.get(officeId)
+    if (!entry || servesMirror()) return true
+    const kind = parseFeedIdKey(officeId, feedKey).kind
+    if (!kind.startsWith('session:')) return true
+    const sessionKey = kind.slice('session:'.length)
+    return watchedSessions.has(sessionKey)
+  }
+
+  // Last viewer set, kept so the lazy transcript replication can ask it too.
+  let watchedSessions: ReadonlySet<string> = new Set()
+
+  function setWatchedSessions(conversationIds: ReadonlySet<string>): void {
+    watchedSessions = conversationIds
+    for (const [officeId, entry] of joined) {
+      const keys = new Set<string>()
+      for (const id of conversationIds) {
+        const parsed = parseTeamSessionKey(id)
+        if (!parsed || parsed.teamId !== officeId) continue
+        const owner = deps.teamStore.listMembersByTeam(officeId).find((m) => m.appId === parsed.appId)?.ownerNodeId
+        if (owner && owner !== SELF_NODE_ID) keys.add(id)
+      }
+      entry.streamWatch.setWatched(keys)
+      entry.sessionFeed?.refreshWanted()
+    }
+  }
+
+  /**
    * Re-drive this joined office's original join-request to the CURRENT authority
    * over the (possibly repointed) link, so a newly-elected authority enrolls this
    * survivor: adds its node row, counts it in quorum, materializes its members.
@@ -2521,6 +2879,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     const join = joined.get(officeId)
     if (!join?.joinRequest) return false
     console.log(`${LOG_TAG} re-enrolling with authority office=${officeId}`)
+    join.rosterWiredHost = null
     join.federation.coordinator.requestJoin(join.joinRequest)
     return true
   }
@@ -2553,6 +2912,15 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     const office = hosted.get(officeId) ?? joined.get(officeId)
     if (!office) {
       console.warn(`${LOG_TAG} deliverInbound: office not present office=${officeId}; dropping ${frame.kind}`)
+      return
+    }
+    // A leg this node dialed: `fromNode` is the peer it dialed. Serving the office,
+    // a batch from it follows the same origin rule as every other source.
+    const join = joined.get(officeId)
+    if (frame.kind === 'stream-frames' && join?.authority?.isAuthoritySelf()) {
+      acceptServedStream(officeId, join.federation.link as LanMeshLink, fromNode ?? null, frame, (node) => {
+        join.streamOriginNode = node
+      })
       return
     }
     const label = resolveFromNode(frame) ?? fromNode ?? deps.getLocalNodeId()
@@ -2666,7 +3034,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     if (rosterRefreshTimers.has(officeId)) return
     const timer = setTimeout(() => {
       rosterRefreshTimers.delete(officeId)
-      broadcastRosterFor(officeId)
+      hosted.get(officeId)?.federation.coordinator.refreshRoster()
     }, ROSTER_REFRESH_COALESCE_MS)
     if (typeof timer.unref === 'function') timer.unref()
     rosterRefreshTimers.set(officeId, timer)
@@ -3032,6 +3400,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     redialToAuthority,
     abandonDirectLeg,
     reenrollWithAuthority,
+    setWatchedSessions,
     getNodeAddress,
     deliverInbound,
     handleSystemResume,
@@ -3075,6 +3444,9 @@ function resolveFromNode(frame: FederationMessage): NodeId | null {
     case 'history-response':
     case 'stop-turn-request':
     case 'stop-turn-response':
+    case 'stream-subscribe':
+    case 'stream-unsubscribe':
+    case 'roster-request':
     case 'member-leave':
       return frame.fromNode
     default:

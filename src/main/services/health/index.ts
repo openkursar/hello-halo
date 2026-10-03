@@ -38,6 +38,18 @@ export {
 } from './orchestrator'
 
 // ============================================
+// Resource Sampling (single source of resource numbers)
+// ============================================
+
+export {
+  getLatestResourceSample,
+  onResourceSample,
+  sampleResourcesNow,
+  formatResourceSample
+} from './resource-sampler'
+export type { ResourceSample } from './resource-sampler'
+
+// ============================================
 // Process Guardian
 // ============================================
 
@@ -139,6 +151,7 @@ export {
   isDialogSuppressed,
   suppressAllDialogs
 } from './recovery-manager'
+export type { RecoveryDialogResult, RecoveryDialogOptions } from './recovery-manager'
 
 // ============================================
 // Diagnostics
@@ -181,8 +194,6 @@ export type {
   RecoveryStrategyId,
   RecoveryStrategy,
   RecoveryResult,
-  RecoveryDialogResult,
-  RecoveryDialogOptions,
 
   // Event types
   HealthEventCategory,

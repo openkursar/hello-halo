@@ -19,4 +19,14 @@ export interface ImageAttachment {
   name?: string
   /** Byte size of the encoded image */
   size?: number
+  /**
+   * Where the desktop renderer loads a stored conversation image from
+   * (`halo-file://`); `data` is then empty. Never sent back as input.
+   */
+  url?: string
+}
+
+/** `src` for an image attachment: its file URL, or its inline data. */
+export function imageAttachmentSrc(image: Pick<ImageAttachment, 'url' | 'data' | 'mediaType'>): string {
+  return image.url || `data:${image.mediaType};base64,${image.data}`
 }

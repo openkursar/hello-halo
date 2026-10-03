@@ -70,24 +70,26 @@ import { initMemory } from '../platform/memory'
 import { setMemorySdk } from '../platform/memory/sdk'
 import { tool as sdkTool, createSdkMcpServer as sdkCreateMcpServer } from '../services/agent/resolved-sdk'
 import { initAppManager, shutdownAppManager } from '../apps/manager'
-import { initAppRuntime, shutdownAppRuntime, getEventRouter, getActivityStore, getImSessionRegistry, createDigitalHumanConversationSource, createRunConversationSource } from '../apps/runtime'
+import { initAppRuntime, shutdownAppRuntime, getEventRouter, getActivityStore, getImSessionRegistry, createDigitalHumanConversationSource, createRunConversationSource, releaseTeamEpochSessions } from '../apps/runtime'
 import { initTeamStore, shutdownTeamStore, getTeamStore, initTeamService, shutdownTeamService, getTeamService } from '../apps/team'
 import type { TeamStore } from '../apps/team'
 import { initFederationStore, shutdownFederationStore, getFederationStore, getAuthorityStore } from '../apps/federation'
 import { recoverPersistedOffices } from './office-recovery'
 import { initIdentity, getLocalIdentity, getLocalPublicKeyPem, signWithLocalKey } from '../http/identity'
 import { verifyOfficeCredential } from '../http/auth'
-import { setFederationInbound, sendFederationFrameToClient, listOfficeClientIds, broadcastToAll, getSessionIdentity } from '../http/websocket'
-import { createFederationManager, setFederationManager, getFederationManager, makeLocationAwareSessionDeps, withOwnerResolvedSpace, withExternalOrigin, createRelayCapture, createLocationAwareBlackboard, WsFederationClient, classifyArtifactFetchFailure } from '../apps/runtime/federation'
+import { setFederationInbound, sendFederationFrameToClient, sendFederationFrameToClients, listOfficeClientIds, broadcastToAll, getSessionIdentity } from '../http/websocket'
+import { createFederationManager, setFederationManager, getFederationManager, makeLocationAwareSessionDeps, withOwnerResolvedSpace, withExternalOrigin, createRelayCapture, createLocationAwareBlackboard, WsFederationClient, classifyArtifactFetchFailure, projectReplicaApplied } from '../apps/runtime/federation'
 import { getRemoteAccessStatus } from '../services/remote'
 import type { OwnerStatus, MemberWriteRecord, ArtifactRef } from '../apps/runtime/federation'
 import { SELF_NODE_ID, TEAM_EVENTS, buildTeamSessionKey } from '../../shared/apps/team-types'
-import type { BlackboardTask, BlackboardFinding, TaskStatus, TeamActivity, TeamUpdatedEvent, TeamEpoch, TeamCheck } from '../../shared/apps/team-types'
+import type { BlackboardTask, BlackboardFinding, TaskStatus, TeamActivity, TeamUpdatedEvent, TeamEpoch, TeamCheck, TeamOfficeStatusKind } from '../../shared/apps/team-types'
 import { parseTeamSessionKey, parseTeamChatKey } from '../../shared/apps/im-keys'
 import { createTeamRuntime, setActiveTeamRuntime, getActiveTeamRuntime, createTeamTriggerScheduler, createDefaultSessionDeps, createTeamArtifactReader, createTeamMemberRecordReader, createTeamArtifactOpener, createLocalArtifactResolver, createLocalArtifactPathResolver, RemoteArtifactError, pruneSharedFileCopies, defaultSharedCopyRoot } from '../apps/runtime/team'
 import { readTeamMemberMessages, isAppChatConversationGenerating } from '../apps/runtime/app-chat'
 import type { TeamTriggerScheduler } from '../apps/runtime/team'
 import { createSpace, deleteSpace, getSpace, getSpaceDir } from '../services/space.service'
+import { retainSpaceWatcher, releaseSpaceWatcher } from '../services/watcher-host.service'
+import { getDetailConversations, onDetailConversationsChanged } from '../services/conversation-detail'
 import { listArtifacts } from '../services/artifact.service'
 import { installAppsSubscribers } from '../services/analytics/subscribers/apps.subscriber'
 import { runStartupSnapshot } from '../services/analytics/snapshot'
@@ -137,6 +139,12 @@ let digitalHumanConversations: { dispose(): void } | null = null
 let flushRelayCapture: (() => void) | null = null
 let onSystemResume: (() => void) | null = null
 let taskStateService: Awaited<ReturnType<typeof initTaskState>> | null = null
+
+/** Tell every window and remote client how an office stands (see TeamOfficeStatusKind). */
+function emitOfficeStatus(teamId: string, kind: TeamOfficeStatusKind): void {
+  broadcastToAll('team:office-status', { teamId, kind })
+  sendToRenderer('team:office-status', { teamId, kind })
+}
 
 /**
  * Initialize platform (store, scheduler, memory) and apps
@@ -378,8 +386,8 @@ async function initPlatformAndApps(): Promise<void> {
               awaitingDecision: p.awaitingDecision === true,
             })
             const team = teamStore.getTeamById(p.teamId)
-            const event = team ? { teamId: p.teamId, team } : { teamId: p.teamId }
-            broadcastToAll(TEAM_EVENTS.updated, event)
+            const event: TeamUpdatedEvent = { teamId: p.teamId, ...(team ? { team } : {}), changed: ['members'] }
+            broadcastToAll(TEAM_EVENTS.updated, event as unknown as Record<string, unknown>)
             sendToRenderer(TEAM_EVENTS.updated, event)
             return
           }
@@ -428,8 +436,12 @@ async function initPlatformAndApps(): Promise<void> {
             teamStore.upsertEpoch(epoch)
             applyClosedTaskLocally(record.teamId, epoch.id)
             const team = teamStore.getTeamById(record.teamId)
-            const payload = team ? { teamId: record.teamId, team } : { teamId: record.teamId }
-            broadcastToAll(TEAM_EVENTS.updated, payload)
+            const payload: TeamUpdatedEvent = {
+              teamId: record.teamId,
+              ...(team ? { team } : {}),
+              changed: ['board', 'epochs', 'conversations'],
+            }
+            broadcastToAll(TEAM_EVENTS.updated, payload as unknown as Record<string, unknown>)
             sendToRenderer(TEAM_EVENTS.updated, payload)
           } else if (
             record.op === 'member_profile' ||
@@ -480,10 +492,11 @@ async function initPlatformAndApps(): Promise<void> {
       // ordinal in the append-only transcript — stable across reads, so viewers
       // pull/replicate only the tail. Carries the thoughts/tool trace so a remote
       // viewer's backfill shows the same thinking the live relay did.
-      const serializeTeamTranscript = (teamId: string, appId: string, epochId: string) => {
+      const serializeTeamTranscript = (teamId: string, appId: string, epochId: string, sinceSeq?: number) => {
         const messages = readTeamMemberMessages(appId, teamId, epochId)
-        return messages.map((m, i) => ({
-          seq: i + 1,
+        const start = typeof sinceSeq === 'number' && sinceSeq > 0 ? sinceSeq - 1 : 0
+        return messages.slice(start).map((m, i) => ({
+          seq: start + i + 1,
           role: m.role,
           content: m.content,
           ...(m.thoughts ? { thoughts: m.thoughts } : {}),
@@ -494,6 +507,7 @@ async function initPlatformAndApps(): Promise<void> {
 
       const federationManager = createFederationManager({
         hostSend: sendFederationFrameToClient,
+        hostSendMany: sendFederationFrameToClients,
         hostListOfficeClients: listOfficeClientIds,
         federationStore: fedStore,
         teamStore,
@@ -595,10 +609,16 @@ async function initPlatformAndApps(): Promise<void> {
             // Carry the observable status: the row alone says idle for the whole
             // turn (this is not a run of the office's own), so a push without it
             // would reset the very board it is announcing work to.
-            const payload = team
-              ? { teamId, team, liveStatus: getActiveTeamRuntime()?.getObservableStatus(teamId) ?? team.status }
+            const payload: TeamUpdatedEvent = team
+              ? {
+                  teamId,
+                  team,
+                  liveStatus: getActiveTeamRuntime()?.getObservableStatus(teamId) ?? team.status,
+                  // A member's working state shows on the roster and on the task it serves.
+                  changed: ['members', 'conversations'],
+                }
               : { teamId }
-            broadcastToAll(TEAM_EVENTS.updated, payload)
+            broadcastToAll(TEAM_EVENTS.updated, payload as unknown as Record<string, unknown>)
             sendToRenderer(TEAM_EVENTS.updated, payload)
           }
           // A paused digital human is one whose owner said "stop working". A
@@ -657,8 +677,8 @@ async function initPlatformAndApps(): Promise<void> {
         // emitting team:updated, the event the renderer re-fetches the team on.
         onRosterChanged: (officeId) => {
           const team = teamStore.getTeamById(officeId)
-          const payload = team ? { teamId: officeId, team } : { teamId: officeId }
-          broadcastToAll(TEAM_EVENTS.updated, payload)
+          const payload: TeamUpdatedEvent = { teamId: officeId, ...(team ? { team } : {}), changed: ['members'] }
+          broadcastToAll(TEAM_EVENTS.updated, payload as unknown as Record<string, unknown>)
           sendToRenderer(TEAM_EVENTS.updated, payload)
         },
         // ── Authority/replication/resilience (falls back to local-only behaviour when absent) ──
@@ -686,8 +706,7 @@ async function initPlatformAndApps(): Promise<void> {
         // maps the kind to neutral copy (t('Reconnected automatically') etc.). No
         // technical words ever travel in a user-facing string.
         onAuthorityChange: (officeId) => {
-          broadcastToAll('team:office-status', { teamId: officeId, kind: 'authority-changed' })
-          sendToRenderer('team:office-status', { teamId: officeId, kind: 'authority-changed' })
+          emitOfficeStatus(officeId, 'authority-changed')
           const team = teamStore.getTeamById(officeId)
           if (team) {
             broadcastToAll(TEAM_EVENTS.updated, { teamId: officeId, team })
@@ -695,8 +714,7 @@ async function initPlatformAndApps(): Promise<void> {
           }
         },
         onOfficePaused: (officeId, paused) => {
-          broadcastToAll('team:office-status', { teamId: officeId, kind: paused ? 'paused' : 'resumed' })
-          sendToRenderer('team:office-status', { teamId: officeId, kind: paused ? 'paused' : 'resumed' })
+          emitOfficeStatus(officeId, paused ? 'paused' : 'resumed')
         },
         // Membership refused on re-entry: reconnecting alone cannot fix it, so
         // the renderer tells the user to rejoin with a fresh invite. The wire
@@ -704,8 +722,7 @@ async function initPlatformAndApps(): Promise<void> {
         // no-technical-words contract.
         onOfficeAccessLost: (officeId, reason) => {
           console.warn(`[Bootstrap] office access lost office=${officeId} reason=${reason}`)
-          broadcastToAll('team:office-status', { teamId: officeId, kind: 'access-lost' })
-          sendToRenderer('team:office-status', { teamId: officeId, kind: 'access-lost' })
+          emitOfficeStatus(officeId, reason === 'VERSION_INCOMPATIBLE' ? 'update-required' : 'access-lost')
         },
         // Owner-side transcript reader: serve a member's team-channel history to a
         // viewer over the office link. Reuses the same read as the IPC/HTTP chat
@@ -725,8 +742,8 @@ async function initPlatformAndApps(): Promise<void> {
           localSessionDeps.stopTeamSession(appId, teamId, epochId),
         // The same read without the request-scoped seam, driving the session-feed
         // plane's proactive replication of owned transcripts to every office node.
-        readOwnedTranscript: (teamId, appId, epochId) =>
-          serializeTeamTranscript(teamId, appId, epochId),
+        readOwnedTranscript: (teamId, appId, epochId, sinceSeq) =>
+          serializeTeamTranscript(teamId, appId, epochId, sinceSeq),
         // A session with a live turn has a provisional trailing message the
         // publisher must withhold (session keys ARE conversation ids).
         //
@@ -746,20 +763,26 @@ async function initPlatformAndApps(): Promise<void> {
           broadcastToAll(TEAM_EVENTS.memberHistory, payload)
           sendToRenderer(TEAM_EVENTS.memberHistory, payload)
         },
-        // A hot-standby applied a replicated task/finding to its replica store.
-        // The signal carries no concrete task/finding object (only op + taskId),
-        // so it's a refresh trigger, not a blackboard merge: emit team:updated so
-        // the open detail re-fetches and the replicated row appears live, instead
-        // of staying silent until a manual refresh.
-        onReplicaApplied: (info) => {
-          if (info.op === 'epoch_upsert' && info.taskId) {
-            const epoch = teamStore.getEpochById(info.taskId)
-            if (epoch?.endReason === 'cleared' || epoch?.workItem?.status === 'completed') applyClosedTaskLocally(info.officeId, info.taskId)
+        // A hot-standby applied replicated board rows. Rows merge into an open
+        // board as deltas; only an epoch change, a snapshot or a large catch-up
+        // page refreshes the whole office view.
+        onReplicaApplied: (officeId, applied) => {
+          const projection = projectReplicaApplied(officeId, applied, (taskId) => teamStore.getTaskById(taskId))
+          for (const epochId of projection.epochIds) {
+            const epoch = teamStore.getEpochById(epochId)
+            if (epoch?.endReason === 'cleared' || epoch?.workItem?.status === 'completed') applyClosedTaskLocally(officeId, epochId)
           }
-          const team = teamStore.getTeamById(info.officeId)
-          const payload = team ? { teamId: info.officeId, team } : { teamId: info.officeId }
-          broadcastToAll(TEAM_EVENTS.updated, payload)
-          sendToRenderer(TEAM_EVENTS.updated, payload)
+          for (const event of projection.boardEvents) emitBlackboard(event as unknown as Record<string, unknown>)
+          if (projection.refresh) {
+            const team = teamStore.getTeamById(officeId)
+            const payload: TeamUpdatedEvent = {
+              teamId: officeId,
+              ...(team ? { team } : {}),
+              ...(projection.changed ? { changed: projection.changed } : {}),
+            }
+            broadcastToAll(TEAM_EVENTS.updated, payload as unknown as Record<string, unknown>)
+            sendToRenderer(TEAM_EVENTS.updated, payload)
+          }
         },
         // Joiner-side: the host kicked a member → drop the row by re-fetching the
         // office. The roster also re-converges via the accompanying re-broadcast.
@@ -775,6 +798,7 @@ async function initPlatformAndApps(): Promise<void> {
             teamId: officeId,
             ...(team ? { team } : {}),
             ...(ownMember ? { memberKicked: { appId, ...(kickedName ? { memberName: kickedName } : {}) } } : {}),
+            changed: ['members'],
           }
           broadcastToAll(TEAM_EVENTS.updated, payload as unknown as Record<string, unknown>)
           sendToRenderer(TEAM_EVENTS.updated, payload)
@@ -807,6 +831,9 @@ async function initPlatformAndApps(): Promise<void> {
         },
       })
       setFederationManager(federationManager)
+      // Joined offices receive only the live member streams a local viewer shows.
+      federationManager.setWatchedSessions(getDetailConversations())
+      onDetailConversationsChanged((conversationIds) => federationManager.setWatchedSessions(conversationIds))
       setFederationInbound((ctx) => federationManager.handleHostInbound(ctx))
 
       // Activity-stream relay: capture this node's own team-session events
@@ -1028,6 +1055,11 @@ async function initPlatformAndApps(): Promise<void> {
         // activity entry is the truth, not just the in-memory waiter set.
         hasPendingEscalation: hasPendingEscalationFor,
         onTaskClosed: closeTaskDecisions,
+        // A sealed epoch takes no member turns until reopened: free its idle
+        // engine sessions now rather than after the idle timeout.
+        onEpochSealed: (teamId, epochId) => {
+          releaseTeamEpochSessions(teamId, epochId)
+        },
         describeChatKey: describeTeamChatKey,
         // The roster tells a member what its teammates are, not just what they
         // were assigned — a duty is per-team and routinely blank, while the
@@ -1045,8 +1077,8 @@ async function initPlatformAndApps(): Promise<void> {
           ),
         onChecksChanged: (teamId) => {
           const team = teamStore.getTeamById(teamId)
-          const payload = team ? { teamId, team } : { teamId }
-          broadcastToAll(TEAM_EVENTS.updated, payload)
+          const payload: TeamUpdatedEvent = { teamId, ...(team ? { team } : {}), changed: ['board'] }
+          broadcastToAll(TEAM_EVENTS.updated, payload as unknown as Record<string, unknown>)
           sendToRenderer(TEAM_EVENTS.updated, payload)
         },
         // See `TurnReportDeps.isLeadGenerating` for the contract this fills.
@@ -1217,6 +1249,17 @@ async function initPlatformAndApps(): Promise<void> {
         // Live state, not the persisted pointer: a run that outlived its process
         // must not keep refusing this session's triggers.
         activeRunEpochId: (teamId) => getActiveTeamRuntime()?.activeRunEpochId(teamId) ?? null,
+        fileWatch: {
+          retain: (spaceId, holder) => {
+            const space = getSpace(spaceId)
+            if (!space) {
+              console.warn(`[Bootstrap] team file trigger on missing space ${spaceId} (${holder}); not watching`)
+              return
+            }
+            retainSpaceWatcher(spaceId, space.workingDir || space.path, holder)
+          },
+          release: releaseSpaceWatcher,
+        },
       })
       teamTriggerScheduler.registerHandler()
       teamTriggerScheduler.rehydrate()
@@ -1323,7 +1366,9 @@ async function initPlatformAndApps(): Promise<void> {
   // a joiner's own client reconnects on backoff, so readiness arriving shortly
   // after boot is in time.
   registerIdleTask('recover-offices', () => {
-    recoverPersistedOffices(teamStore)
+    recoverPersistedOffices(teamStore, {
+      onUpdateRequired: (officeId) => emitOfficeStatus(officeId, 'update-required'),
+    })
   })
 
   // ── Tier 3: Idle tasks ─────────────────────────────────────────────────

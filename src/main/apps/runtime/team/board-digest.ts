@@ -148,8 +148,10 @@ export function createBoardDigest(deps: BoardDigestDeps): BoardDigest {
     const { teamId, epochId, viewerAppId } = params
     try {
       const names = memberNames(teamId)
-      const acts = store.listActivityByEpoch(teamId, epochId)
       const since = watermarks.get(key(epochId, viewerAppId)) ?? 0
+      // Only what is newer than the watermark can change the digest; a long epoch
+      // must not be re-read in full on every turn.
+      const acts = store.listActivityByEpochSince(teamId, epochId, since)
       const changes = changesFor(acts, viewerAppId, since, names)
       // Advance to the newest act actually accounted for, NOT to wall-clock: two
       // acts can share a millisecond, and a clock-based mark would silently skip

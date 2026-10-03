@@ -11,6 +11,7 @@ import * as pdfjsLib from 'pdfjs-dist'
 import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist'
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import type { CanvasTab } from '../../../stores/canvas.store'
+import { useViewerResources } from '../viewer-resources'
 import { useTranslation } from '../../../i18n'
 import { OfficeFallback } from './OfficeFallback'
 
@@ -41,6 +42,7 @@ const PDFJS_ASSETS = {
 export default function PdfViewer({ tab }: PdfViewerProps) {
   const { t } = useTranslation()
   const bytes = tab.bytes
+  const resources = useViewerResources()
   const containerRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const renderTaskRef = useRef<RenderTask | null>(null)
@@ -58,7 +60,8 @@ export default function PdfViewer({ tab }: PdfViewerProps) {
 
     // pdfjs takes ownership of the buffer; hand it a copy so the tab keeps its
     // own bytes usable after a refresh or reopen
-    const loadingTask = pdfjsLib.getDocument({ data: bytes.slice(), ...PDFJS_ASSETS })
+    const scope = resources.scope()
+    const loadingTask = scope.add(pdfjsLib.getDocument({ data: bytes.slice(), ...PDFJS_ASSETS }))
     let cancelled = false
     loadingTask.promise
       .then((loaded) => {
@@ -73,19 +76,20 @@ export default function PdfViewer({ tab }: PdfViewerProps) {
 
     return () => {
       cancelled = true
-      loadingTask.destroy()
+      scope.dispose()
     }
-  }, [bytes])
+  }, [resources, bytes])
 
   // Track container width for fit-width scaling
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
-    const observer = new ResizeObserver(() => setContainerWidth(el.clientWidth))
+    const scope = resources.scope()
+    const observer = scope.add(new ResizeObserver(() => setContainerWidth(el.clientWidth)))
     observer.observe(el)
     setContainerWidth(el.clientWidth)
-    return () => observer.disconnect()
-  }, [])
+    return () => scope.dispose()
+  }, [resources])
 
   useEffect(() => {
     const canvas = canvasRef.current

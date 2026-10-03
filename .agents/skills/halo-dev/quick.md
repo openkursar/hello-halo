@@ -110,6 +110,13 @@
     - Brand-specific IPC files (`ipc/wecom-bot.ts`, etc.) only expose unique setup/auth flows (QR login, token refresh). Generic channel operations go in `ipc/im-channels.ts` / `ipc/im-sessions.ts`.
     - See `ARCHITECTURE.md §22` for the full contract and recipe.
 
+15. **Performance and scale rules are architecture, not polish.**
+    - Before touching a hot path (streaming render, IPC/WS events, file watching, Canvas
+      viewers, engine sessions, crash recovery, federation sync, any cache), read
+      `references/performance-and-scale.md`.
+    - Guard tests in `tests/unit/architecture/` enforce the automatable rules. A failing guard
+      means fix the code; never widen an allowlist to get green.
+
 ## 2) Fast Task Router
 
 ### Backend / Apps / Platform

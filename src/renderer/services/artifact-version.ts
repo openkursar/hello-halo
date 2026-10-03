@@ -32,11 +32,22 @@ let watching = false
 function ensureWatching(): void {
   if (watching) return
   watching = true
-  api.onArtifactChanged((data) => {
-    if (data.type !== 'change' && data.type !== 'add') return
-    const current = versions.get(data.path)
-    if (current === undefined) return
-    versions.set(data.path, current + 1)
+  api.onArtifactChangedBatch((batch) => {
+    let bumped = false
+    if (batch.resync) {
+      // Changes were lost, so any tracked file may have been rewritten.
+      for (const [path, version] of versions) versions.set(path, version + 1)
+      bumped = versions.size > 0
+    } else {
+      for (const change of batch.changes) {
+        if (change.type !== 'change' && change.type !== 'add') continue
+        const current = versions.get(change.path)
+        if (current === undefined) continue
+        versions.set(change.path, current + 1)
+        bumped = true
+      }
+    }
+    if (!bumped) return
     for (const listener of listeners) listener()
   })
 }

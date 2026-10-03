@@ -5,10 +5,11 @@
  */
 
 import { useState, useRef, useEffect } from 'react'
-import { renderAsync } from 'docx-preview'
+import { renderDocx } from './docx-render'
 import type { CanvasTab } from '../../../stores/canvas.store'
 import { useTranslation } from '../../../i18n'
 import { OfficeFallback } from './OfficeFallback'
+import { useViewerResources } from '../viewer-resources'
 
 interface DocxViewerProps {
   tab: CanvasTab
@@ -18,6 +19,7 @@ interface DocxViewerProps {
 export default function DocxViewer({ tab, onScrollChange }: DocxViewerProps) {
   const { t } = useTranslation()
   const bytes = tab.bytes
+  const resources = useViewerResources()
   const containerRef = useRef<HTMLDivElement | null>(null)
   const scrollerRef = useRef<HTMLDivElement | null>(null)
   const [rendering, setRendering] = useState(true)
@@ -30,10 +32,12 @@ export default function DocxViewer({ tab, onScrollChange }: DocxViewerProps) {
     setRendering(true)
     setRenderError(false)
 
-    renderAsync(bytes, container, undefined, {
+    const scope = resources.scope()
+    const render = scope.add(renderDocx(bytes, container, {
       inWrapper: true,
       ignoreLastRenderedPageBreak: false
-    })
+    }))
+    render.done
       .then(() => {
         if (!cancelled) setRendering(false)
       })
@@ -47,14 +51,15 @@ export default function DocxViewer({ tab, onScrollChange }: DocxViewerProps) {
 
     return () => {
       cancelled = true
-      container.innerHTML = ''
+      scope.dispose()
     }
-  }, [bytes])
+  }, [resources, bytes])
 
   useEffect(() => {
     if (rendering || !scrollerRef.current) return
-    scrollerRef.current.scrollTop = tab.scrollPosition ?? 0
-  }, [tab.id, rendering])
+    scrollerRef.current.scrollTop = tab.view.scrollPosition ?? 0
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rendering])
 
   useEffect(() => {
     if (!onScrollChange) return
