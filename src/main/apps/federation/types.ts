@@ -212,6 +212,14 @@ export interface AuthorityStore {
   pruneLogBefore(officeId: string, beforeSeq: number): number
   /** Count log entries carrying a given task id (duplicate-task-id probe). */
   countByTaskId(officeId: string, taskId: string): number
+  /** Size of an office's replication log (row count, payload bytes), for the health line. */
+  getLogStats(officeId: string): { rows: number; bytes: number }
+  /**
+   * Run `fn` in one transaction on the app database (nested calls become
+   * savepoints). The team tables live in the same database, so a replica apply
+   * and its log append commit together.
+   */
+  transaction<T>(fn: () => T): T
 
   // ── office_authority ──
   getAuthorityState(officeId: string): AuthorityState | null
@@ -230,7 +238,7 @@ export interface AuthorityStore {
  */
 export interface FeedEntryRecord {
   officeId: string
-  /** Feed identity within the office (e.g. 'ctrl', 'act', 'session:<key>'). */
+  /** Feed identity within the office (`<author>\0ctrl:<target>` or `<author>\0session:<key>`). */
   feedId: string
   /** Per-(office,feed) monotonic, assigned by the author; survives restart. */
   seq: number
@@ -314,6 +322,10 @@ export interface FeedStore {
   putCache(officeId: string, feedId: string, seq: number, entryJson: string): void
   listCache(officeId: string, feedId: string, afterSeq: number, limit: number): { seq: number; entryJson: string }[]
   getCacheMaxSeq(officeId: string, feedId: string): number
+  /** Lowest cached seq of a feed (0 if none). */
+  getCacheMinSeq(officeId: string, feedId: string): number
+  /** Drop every cached row of one feed. Returns rows removed. */
+  deleteCacheFeed(officeId: string, feedId: string): number
   /** Distinct feed ids with cached rows in an office (replica enumeration). */
   listCacheFeedIds(officeId: string): string[]
 
@@ -323,6 +335,9 @@ export interface FeedStore {
   setHlcHigh(officeId: string, feedId: string, hlc: string): void
   /** Highest persisted hlc_high across all feeds of an office (clock rehydrate). */
   getOfficeHlcHigh(officeId: string): string | null
+
+  /** Run `fn` in one transaction (nested calls become savepoints). Feed applies batch through this. */
+  transaction<T>(fn: () => T): T
 }
 
 // ── FederationStore Interface ──

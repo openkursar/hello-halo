@@ -61,6 +61,7 @@ import { broadcastToAll } from '../../http/websocket'
 import { destroyChatBrowserContextsForApp } from './app-chat-browser'
 import { sendToRenderer } from '../../foundation/window.service'
 import { notifyAppEvent } from '../../services/notification.service'
+import { RunningRuns } from './running-runs'
 
 // ============================================
 // Constants
@@ -74,6 +75,12 @@ const MAX_CONSECUTIVE_ERRORS = 5
 
 /** Keep-alive reason string for the background service */
 const KEEP_ALIVE_REASON = 'automation-apps-active'
+
+/** Keep-alive reason while an app has a run in flight (covers manual runs of inactive apps) */
+const RUN_KEEP_ALIVE_REASON = 'automation-run'
+
+/** Longest an app state served by getAllAppStates may lag inputs that changed without a publish */
+const STATE_CACHE_TTL_MS = 60_000
 
 /** How often to check for timed-out escalations (5 minutes) */
 const ESCALATION_CHECK_INTERVAL_MS = 5 * 60 * 1000
@@ -141,10 +148,18 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     if (outcome === 'skipped' || outcome === 'noop') return 'skipped'
     return 'ok'
   }
-  // Keyed by unique execution key ("{appId}:{counter}") -- NOT by appId alone.
-  // This avoids concurrent runs for the same App overwriting each other's
-  // abort controller, ensuring deactivate() can cancel ALL running instances.
-  const runningAbortControllers = new Map<string, AbortController>()
+  // Each run has its own execution key ("{appId}:{counter}") so concurrent runs
+  // of one App never overwrite each other's abort controller. While an app has
+  // a run in flight it holds the process alive (a closed window must not end it).
+  const runKeepAlive = new Map<string, () => void>()
+  const runningRuns = new RunningRuns((appId, busy) => {
+    if (busy) {
+      runKeepAlive.set(appId, background.registerKeepAliveReason(`${RUN_KEEP_ALIVE_REASON}:${appId}`))
+    } else {
+      runKeepAlive.get(appId)?.()
+      runKeepAlive.delete(appId)
+    }
+  })
   let executionCounter = 0
   /**
    * Reference-counted map of app IDs waiting for a global semaphore slot.
@@ -248,7 +263,8 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         console.warn('[Runtime] IM trigger history unavailable: missing session environment', { appId: app.id, sessionKey })
         continue
       }
-      const messages = readSessionMessages(spacePath, app.id, chatRunId)
+      // Only recent turns are used; several messages per turn (tool narration) leave headroom.
+      const messages = readSessionMessages(spacePath, app.id, chatRunId, { limit: IM_HISTORY_TURN_LIMIT * 8 })
       if (messages.length === 0) continue
 
       // ── Group into turns ──────────────────────────────────────────────────
@@ -361,11 +377,36 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
   }
 
   // ── Helper: Broadcast app state change ──────────────
+  // Last state published per app, and the state cache getAllAppStates reads.
+  // A state is recomputed on every publish; an app whose inputs change without
+  // a publish is at most STATE_CACHE_TTL_MS stale in getAllAppStates.
+  const lastPublishedState = new Map<string, string>()
+  const stateCache = new Map<string, { state: AutomationAppState; at: number }>()
+
+  function computeAppState(appId: string): AutomationAppState {
+    const state = service.getAppState(appId)
+    stateCache.set(appId, { state, at: Date.now() })
+    return state
+  }
+
+  function forgetAppState(appId: string): void {
+    lastPublishedState.delete(appId)
+    stateCache.delete(appId)
+  }
+
+  /** Publish an app's state to every client, unless it is what they already have. */
+  function publishAppState(appId: string): void {
+    const state = computeAppState(appId)
+    const serialized = JSON.stringify(state)
+    if (lastPublishedState.get(appId) === serialized) return
+    lastPublishedState.set(appId, serialized)
+    broadcastToAll('app:status_changed', { appId, state: state as unknown as Record<string, unknown> })
+    sendToRenderer('app:status_changed', { appId, state })
+  }
+
   function broadcastAppStatus(appId: string): void {
     try {
-      const state = service.getAppState(appId)
-      broadcastToAll('app:status_changed', { appId, state: state as unknown as Record<string, unknown> })
-      sendToRenderer('app:status_changed', { appId, state })
+      publishAppState(appId)
     } catch (error) {
       console.error('[Runtime] Failed to publish execution state', { appId, error })
     }
@@ -386,8 +427,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
    * state. Every trigger entry must consult this, not just the manual one.
    */
   function isAppBusy(appId: string): boolean {
-    const running = Array.from(runningAbortControllers.keys()).some(k => k.startsWith(`${appId}:`))
-    return running || (pendingTriggers.get(appId) ?? 0) > 0
+    return runningRuns.has(appId) || (pendingTriggers.get(appId) ?? 0) > 0
   }
 
   /**
@@ -543,7 +583,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     // Use a unique per-run key so concurrent runs of the same App
     // each get their own abort controller entry.
     const executionKey = `${app.id}:${++executionCounter}`
-    runningAbortControllers.set(executionKey, abortController)
+    runningRuns.add(app.id, executionKey, abortController)
 
     // Broadcast run-start status (app transitions from 'queued'/'idle' to 'running')
     broadcastAppStatus(app.id)
@@ -709,7 +749,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         activeRunControllers.delete(executingRunId)
         intentionallyStoppedRuns.delete(executingRunId)
       }
-      runningAbortControllers.delete(executionKey)
+      runningRuns.remove(app.id, executionKey)
       semaphore.release()
       drainContinuations()
 
@@ -949,6 +989,20 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     )
   }
 
+  /** Hold (or drop) the file watcher of the App's space to match its file subscriptions. */
+  function syncFileWatch(state: ActivationState, app: InstalledApp | null): void {
+    const wanted = app?.spaceId && app.spec.type === 'automation'
+      && (app.spec.subscriptions ?? []).some((sub) => sub.source.type === 'file')
+      ? app.spaceId
+      : null
+    const held = state.fileWatchSpaceId ?? null
+    if (wanted === held) return
+    const holder = `automation:${state.appId}`
+    if (held) deps.fileWatch?.release(held, holder)
+    if (wanted) deps.fileWatch?.retain(wanted, holder)
+    state.fileWatchSpaceId = wanted
+  }
+
   // ── Service Implementation ──────────────────────────
 
   const service: AppRuntimeService = {
@@ -1035,11 +1089,14 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
 
       // Register keep-alive reason if we have any active subscriptions
       if (state.schedulerJobIds.length > 0 || state.eventUnsubscribers.length > 0) {
+        // Held for as long as the App is activated; deactivate disposes it.
         state.keepAliveDisposer = background.registerKeepAliveReason(
-          `${KEEP_ALIVE_REASON}:${appId}`
+          `${KEEP_ALIVE_REASON}:${appId}`,
+          { ttlMs: Infinity }
         )
       }
 
+      syncFileWatch(state, app)
       activations.set(appId, state)
       console.log(
         `[Runtime] App activated: ${appId}, ` +
@@ -1078,6 +1135,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       if (state.keepAliveDisposer) {
         state.keepAliveDisposer()
       }
+      syncFileWatch(state, null)
 
       activations.delete(appId)
       console.log(`[Runtime] App deactivated: ${appId}`)
@@ -1092,6 +1150,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       if (app.spec.type !== 'automation') return // Only automation apps have subscriptions
 
       const subscriptions = app.spec.subscriptions ?? []
+      syncFileWatch(state, app)
 
       // ── 1. Hot-sync scheduler jobs ─────────────────────
       const desiredJobIds = new Set<string>()
@@ -1225,10 +1284,9 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
 
     getDirectoryRuntimeSnapshot() {
       const result: import('../../../shared/apps/people-directory').DirectoryRuntimeSnapshot = {}
-      for (const key of runningAbortControllers.keys()) {
-        const appId = key.slice(0, key.indexOf(':'))
+      for (const [appId, count] of runningRuns.counts()) {
         const row = result[appId] ??= { runningCount: 0, queued: false }
-        row.runningCount++
+        row.runningCount = count
       }
       for (const [appId, count] of pendingTriggers) {
         const row = result[appId] ??= { runningCount: 0, queued: false }
@@ -1245,7 +1303,11 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     },
 
     getAllAppStates(): Record<string, AutomationAppState> {
-      return Object.fromEntries(appManager.listApps({ type: 'automation' }).map(app => [app.id, service.getAppState(app.id)]))
+      const now = Date.now()
+      return Object.fromEntries(appManager.listApps({ type: 'automation' }).map(app => {
+        const cached = stateCache.get(app.id)
+        return [app.id, cached && now - cached.at < STATE_CACHE_TTL_MS ? cached.state : computeAppState(app.id)]
+      }))
     },
 
     getAppState(appId: string): AutomationAppState {
@@ -1256,8 +1318,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         }
       }
 
-      const appPrefix = `${appId}:`
-      const isRunning = Array.from(runningAbortControllers.keys()).some(k => k.startsWith(appPrefix))
+      const isRunning = runningRuns.has(appId)
       const isQueued = (pendingTriggers.get(appId) ?? 0) > 0
 
       const counts = store.getDecisionCounts(appId)
@@ -1270,7 +1331,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         }),
         automaticEnabled: automaticEnabled(app.status),
         blocked: blockedReason(app.status),
-        runningCount: Array.from(runningAbortControllers.keys()).filter(key => key.startsWith(appPrefix)).length,
+        runningCount: runningRuns.count(appId),
         pendingDecisionCount: counts.pending,
         pendingSoloDecisionCount: counts.solo,
         continuationCount: counts.continuations,
@@ -1573,7 +1634,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     async deactivateAll(): Promise<void> {
       shuttingDown = true
       if (continuationInterval) { clearInterval(continuationInterval); continuationInterval = null }
-      for (const controller of runningAbortControllers.values()) controller.abort()
+      runningRuns.abortAll()
       console.log('[Runtime] Deactivating all apps...')
       const appIds = Array.from(activations.keys())
 
@@ -1674,9 +1735,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
 
     // Broadcast status change to all connected remote clients for real-time UI
     try {
-      const state = service.getAppState(appId)
-      broadcastToAll('app:status_changed', { appId, state: state as unknown as Record<string, unknown> })
-      sendToRenderer('app:status_changed', { appId, state })
+      publishAppState(appId)
     } catch (err) {
       console.warn(`[Runtime] Failed to broadcast status change for app=${appId}:`, err)
     }
@@ -1698,7 +1757,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
 
   appManager.onAppInstalled((app: InstalledApp) => announceListChange(app.id, 'installed'))
   appManager.onAppUninstalled((app: InstalledApp) => {
-    for (const [key, controller] of runningAbortControllers) if (key.startsWith(`${app.id}:`)) controller.abort()
+    runningRuns.abortApp(app.id)
     for (const controller of queuedAutomatic.get(app.id) ?? []) controller.abort()
     destroyChatBrowserContextsForApp(app.id, 'app-uninstalled')
     // Idempotent: a user uninstall already deactivated it, but a space delete or
@@ -1706,6 +1765,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     void service.deactivate(app.id).catch(err => {
       console.warn(`[Runtime] Deactivate after uninstall failed for app=${app.id}:`, err)
     })
+    forgetAppState(app.id)
     announceListChange(app.id, 'uninstalled')
   })
 

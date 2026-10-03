@@ -226,9 +226,6 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'openConver
       }
     }
 
-    // Subscribe to conversation events (for remote mode)
-    api.subscribeToConversation(conversationId)
-
     // Update the pointer, and move a pending finish/error into the task
     // panel's read grace period (persisted once set() resolves).
     let persistRead: (() => void) | undefined

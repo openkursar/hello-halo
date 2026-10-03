@@ -1,7 +1,7 @@
 /** Digital Team REST API routes. Thin delegation to TeamService. */
 import type { Express, Request, Response } from 'express'
 import { getTeamService, getTeamStore } from '../../apps/team'
-import { readTeamMemberMessages } from '../../apps/runtime/app-chat'
+import { readTeamMemberHistory } from '../../apps/runtime/app-chat'
 import { getOfficeCredential } from '../auth/middleware'
 import { resolveOfficeMemberAppIds } from '../identity/office-membership'
 import { createScopeGate } from '../../apps/runtime/federation/authority/scope-gate'
@@ -346,7 +346,9 @@ export function registerTeamRoutes(app: Express): void {
         res.json({ success: true, data: [] })
         return
       }
-      res.json({ success: true, data: readTeamMemberMessages(appId, teamId, epochId) })
+      const sinceRaw = typeof req.query.sinceSeq === 'string' ? Number(req.query.sinceSeq) : NaN
+      const sinceSeq = Number.isInteger(sinceRaw) && sinceRaw > 0 ? sinceRaw : undefined
+      res.json({ success: true, data: readTeamMemberHistory(appId, teamId, epochId, sinceSeq) })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }

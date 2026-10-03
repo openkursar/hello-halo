@@ -40,8 +40,9 @@ import {
   ShieldCheck,
 } from 'lucide-react'
 import { api } from '../../../api'
-import { canvasLifecycle, type TabState, type BrowserState } from '../../../services/canvas-lifecycle'
-import { useBrowserState } from '../../../hooks/useCanvasLifecycle'
+import type { TabState, BrowserState } from '../../../services/canvas-lifecycle'
+import { useBrowserState, useCanvasActions } from '../../../hooks/useCanvasLifecycle'
+import { useViewerResources } from '../viewer-resources'
 import { useAIBrowserStore, selectViewOwner } from '../../../stores/ai-browser.store'
 import { useTranslation } from '../../../i18n'
 import { useSecurityPolicy } from '../../../hooks/useSecurityPolicy'
@@ -102,9 +103,12 @@ function inputToUrl(input: string): string {
 export function BrowserViewer({ tab }: BrowserViewerProps) {
   const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
+  const canvasActions = useCanvasActions()
+  const resources = useViewerResources()
   const [addressBarValue, setAddressBarValue] = useState(tab.url || '')
   const [isAddressBarFocused, setIsAddressBarFocused] = useState(false)
-  const [zoomLevel, setZoomLevel] = useState(100)
+  // Percent; the view's state carries it as a factor and outlives this mount.
+  const [zoomLevel, setZoomLevel] = useState(() => Math.round((tab.browserState?.zoomLevel ?? 1) * 100))
 
   // PDF mode: simplified UI without navigation controls
   const isPdf = tab.type === 'pdf'
@@ -158,7 +162,7 @@ export function BrowserViewer({ tab }: BrowserViewerProps) {
         await api.navigateBrowserView(tab.browserViewId, blockedUrl)
       } else {
         // Initial URL was blocked at creation — no view exists, re-create it
-        await canvasLifecycle.retryBlockedBrowserView(tab.id)
+        await canvasActions.retryBlockedBrowserView(tab.id)
       }
     } catch (error) {
       console.error('[BrowserViewer] Allow blocked host failed:', error)
@@ -187,7 +191,7 @@ export function BrowserViewer({ tab }: BrowserViewerProps) {
   // This allows CanvasLifecycle to position BrowserViews correctly
   useEffect(() => {
     const getBounds = () => containerRef.current?.getBoundingClientRect() || null
-    canvasLifecycle.setContainerBoundsGetter(getBounds)
+    canvasActions.setContainerBoundsGetter(getBounds)
 
     // When container becomes available, ensure BrowserView is shown
     // This handles the case where the BrowserView was created before this
@@ -195,7 +199,7 @@ export function BrowserViewer({ tab }: BrowserViewerProps) {
     if (containerRef.current && tab.browserViewId) {
       // Use ensureActiveBrowserViewShown instead of updateActiveBounds
       // because the view may not have been added to the window yet
-      canvasLifecycle.ensureActiveBrowserViewShown()
+      canvasActions.ensureActiveBrowserViewShown()
     }
   }, [tab.browserViewId])
 
@@ -207,15 +211,16 @@ export function BrowserViewer({ tab }: BrowserViewerProps) {
   useEffect(() => {
     if (!containerRef.current) return
 
-    const resizeObserver = new ResizeObserver(() => {
+    const scope = resources.scope()
+    const resizeObserver = scope.add(new ResizeObserver(() => {
       if (tab.browserViewId) {
-        canvasLifecycle.updateActiveBounds()
+        canvasActions.updateActiveBounds()
       }
-    })
+    }))
 
     resizeObserver.observe(containerRef.current)
-    return () => resizeObserver.disconnect()
-  }, [tab.browserViewId])
+    return () => scope.dispose()
+  }, [resources, canvasActions, tab.browserViewId])
 
   // ============================================
   // Address Bar Sync
@@ -327,13 +332,14 @@ export function BrowserViewer({ tab }: BrowserViewerProps) {
 
   // Listen for zoom changes from native menu
   useEffect(() => {
-    const unsubscribe = api.onBrowserZoomChanged((data) => {
+    const scope = resources.scope()
+    scope.add(api.onBrowserZoomChanged((data) => {
       if (data.viewId === tab.browserViewId) {
         setZoomLevel(data.zoomLevel)
       }
-    })
-    return unsubscribe
-  }, [tab.browserViewId])
+    }))
+    return () => scope.dispose()
+  }, [resources, tab.browserViewId])
 
   // Check if URL is HTTPS
   const isSecure = tab.url?.startsWith('https://')

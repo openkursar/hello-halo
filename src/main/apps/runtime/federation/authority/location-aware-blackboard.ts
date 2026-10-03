@@ -264,7 +264,6 @@ export function createLocationAwareBlackboard(deps: LocationAwareBlackboardDeps)
       },
       () => store.deleteTask(task.id) // rollback: undo the optimistic insert
     )
-    console.log(`${LOG_TAG} shadow postTask team=${input.teamId} task=${task.id} → host=${host}`)
     return { taskId: task.id }
   }
 
@@ -314,7 +313,6 @@ export function createLocationAwareBlackboard(deps: LocationAwareBlackboardDeps)
         )
       }
     )
-    console.log(`${LOG_TAG} shadow updateTask team=${input.teamId} task=${input.taskId} → host=${host}`)
   }
 
   function postFinding(input: PostFindingInput): { findingId: string } {
@@ -343,7 +341,6 @@ export function createLocationAwareBlackboard(deps: LocationAwareBlackboardDeps)
       },
       () => store.deleteFinding(finding.id) // rollback: undo the optimistic insert
     )
-    console.log(`${LOG_TAG} shadow postFinding team=${input.teamId} finding=${finding.id} → host=${host}`)
     return { findingId: finding.id }
   }
 
@@ -385,7 +382,6 @@ export function createLocationAwareBlackboard(deps: LocationAwareBlackboardDeps)
       },
       () => store.deleteActivity(activity.id)
     )
-    console.log(`${LOG_TAG} shadow postActivity team=${input.teamId} kind=${activity.kind} → host=${host}`)
     return { activityId: activity.id }
   }
 

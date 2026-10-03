@@ -19,7 +19,7 @@
  * - Bottom toolbar for future extensibility
  */
 
-import { useState, useRef, useEffect, useMemo, useCallback, KeyboardEvent, ClipboardEvent, DragEvent } from 'react'
+import { memo, useState, useRef, useEffect, useMemo, useCallback, KeyboardEvent, ClipboardEvent, DragEvent } from 'react'
 import { Plus, ImagePlus, Paperclip, Loader2, AlertCircle, MessagesSquare, Bot, Target } from 'lucide-react'
 import { useAppStore } from '../../stores/app.store'
 import { useChatStore } from '../../stores/chat.store'
@@ -38,7 +38,10 @@ import { ImageAttachmentPreview } from './ImageAttachmentPreview'
 import { KnowledgeBaseButton } from './KnowledgeBaseButton'
 import { processImage, isValidImageType, formatFileSize } from '../../utils/imageProcessor'
 import { startDigitalHumanConversation } from '../../utils/conversation-navigation'
-import type { ImageAttachment, Artifact } from '../../types'
+import type { ImageAttachment } from '../../types'
+import type { FileQueryItem } from '../../../shared/types/artifact'
+import { normalizePathLike } from '../../../shared/file-path-match'
+import { useFileMentionQuery } from '../../hooks/useFileMentionQuery'
 import { getCurrentSource, resolveModelVision } from '../../types'
 import { useTranslation } from '../../i18n'
 import { SlashCommandMenu, filterSlashCommands } from './SlashCommandMenu'
@@ -80,25 +83,6 @@ function getMentionMatch(value: string, cursorPosition: number): MentionMatch | 
   return { query: match[2] || '', start: match.index + match[1].length, end: cursorPosition }
 }
 
-function normalizePathLike(value: string): string {
-  return value.replace(/\\/g, '/').trim().toLowerCase()
-}
-
-function matchesFuzzyPathPrefix(relativePath: string, query: string): boolean {
-  const normalizedPath = normalizePathLike(relativePath)
-  const normalizedQuery = normalizePathLike(query)
-  if (!normalizedQuery) return true
-  if (normalizedPath.includes(normalizedQuery)) return true
-  const pathSegments = normalizedPath.split('/').filter(Boolean)
-  const querySegments = normalizedQuery.split('/').filter(Boolean)
-  if (querySegments.length === 0) return true
-  if (querySegments.length > pathSegments.length) return false
-  for (let i = 0; i < querySegments.length; i += 1) {
-    if (!pathSegments[i]?.startsWith(querySegments[i])) return false
-  }
-  return true
-}
-
 function formatArtifactReference(relativePath: string): string {
   return `\`${relativePath}\``
 }
@@ -117,7 +101,7 @@ function formatArtifactReference(relativePath: string): string {
 type MentionCandidate =
   | { kind: 'digitalHuman'; key: string; text: null; appId: string; name: string; paused: boolean }
   | { kind: 'conversation'; key: string; text: string; conversation: ConversationMentionCandidate }
-  | { kind: 'artifact'; key: string; text: string; artifact: Artifact }
+  | { kind: 'artifact'; key: string; text: string; artifact: FileQueryItem }
 
 /**
  * Section heading shown above each kind's rows.
@@ -151,6 +135,8 @@ const MENTION_TELEMETRY_TYPE: Record<MentionCandidate['kind'], MentionTelemetryT
  * and the cap would only hide matches, so it lifts.
  */
 const MENTION_GROUP_PREVIEW_LIMIT = 4
+/** Most file matches the @ menu asks the index for. */
+const MENTION_FILE_LIMIT = 50
 
 /** One kind's rows, plus where they start in the flat keyboard-navigation order. */
 interface MentionGroup {
@@ -181,8 +167,8 @@ interface InputAreaProps {
   sendSlot?: React.ReactNode
   /** Available slash commands for the "/" quick-input autocomplete */
   slashCommands?: SlashCommandItem[]
-  /** Files available in the @ menu. */
-  mentionArtifacts?: Artifact[]
+  /** Space whose files the @ menu offers (queried on demand); omitted = no Files group. */
+  mentionSpaceId?: string
   /**
    * Conversations available in the @ menu. Omitted by surfaces that cannot
    * deliver across conversations (digital-human / team chat), which then show
@@ -263,7 +249,8 @@ interface ImageError {
   message: string
 }
 
-export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder, isCompact = false, toolbarSlot, sendSlot, draftKey, slashCommands = [], mentionArtifacts = [], mentionConversations = [], hideToolsetControls = false, hideKnowledgeControls = false, standalone = false, digitalHumanSelector, goal }: InputAreaProps) {
+// Memoized: the composer is large and its parent re-renders on every turn-state change.
+export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isGenerating, placeholder, isCompact = false, toolbarSlot, sendSlot, draftKey, slashCommands = [], mentionSpaceId, mentionConversations = [], hideToolsetControls = false, hideKnowledgeControls = false, standalone = false, digitalHumanSelector, goal }: InputAreaProps) {
   const { t } = useTranslation()
   const sendKeyMode = useAppStore(state => state.config?.chat?.sendKeyMode ?? 'enter')
 
@@ -322,6 +309,9 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
   const [slashPreviewOverride, setSlashPreviewOverride] = useState<SlashCommandItem | null>(null)
   // @ mention autocomplete; cursorPos is tracked as state for correct useMemo deps
   const [mentionMenuOpen, setMentionMenuOpen] = useState(false)
+  // Opened by typing with only files as a possible kind: the menu stays hidden
+  // until the space turns out to have files, so "@" in an empty space is inert.
+  const [mentionFilesOnly, setMentionFilesOnly] = useState(false)
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0)
   const [cursorPos, setCursorPos] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -566,15 +556,8 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
   }
 
   // Handle artifact drag-drop reference insertion
-  const handleDropReference = (rawPath: string): boolean => {
-    const normalizedPath = normalizePathLike(rawPath)
-    // P1 fix: use string match instead of RegExp
-    const target = mentionArtifacts.find(a => {
-      const rp = normalizePathLike(a.relativePath)
-      return rp === normalizedPath || rp.endsWith('/' + normalizedPath)
-    })
-    if (!target) return false
-
+  const insertFileReference = (relativePath: string): void => {
+    const target = { relativePath }
     const prefix = content && !content.endsWith(' ') && !content.endsWith('\n') ? ' ' : ''
     const nextContent = `${content}${prefix}${formatArtifactReference(target.relativePath)} `
     setContent(nextContent)
@@ -588,6 +571,21 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
         setCursorPos(len)
       }
     })
+  }
+
+  // Dropped plain text counts as a file reference only when it names a file
+  // of this space (the tree's own drags carry a dedicated type and skip this).
+  const insertMatchingFileReference = async (rawPath: string): Promise<boolean> => {
+    if (!mentionSpaceId) return false
+    const normalizedPath = normalizePathLike(rawPath)
+    if (!normalizedPath) return false
+    const response = await api.queryArtifactFiles(mentionSpaceId, normalizedPath, 20)
+    const target = response.data?.items.find(item => {
+      const rp = normalizePathLike(item.relativePath)
+      return rp === normalizedPath || rp.endsWith('/' + normalizedPath)
+    })
+    if (!target) return false
+    insertFileReference(target.relativePath)
     return true
   }
 
@@ -595,20 +593,30 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
     e.preventDefault()
     setIsDragOver(false)
 
-    // Check for artifact drag-drop first
-    const referencePath = e.dataTransfer.getData('text/halo-artifact-relative-path') || e.dataTransfer.getData('text/plain')
-    if (referencePath && handleDropReference(referencePath)) {
-      return
-    }
-
+    // Everything is read before the first await: drop data is gone once the event returns.
+    const treePath = e.dataTransfer.getData('text/halo-artifact-relative-path')
+    const plainText = treePath ? '' : e.dataTransfer.getData('text/plain')
     const items = Array.from(e.dataTransfer.items ?? []).filter(item => item.kind === 'file')
     const files = Array.from(e.dataTransfer.files).map((file, index) => ({
       file,
       isDirectory: items[index]?.webkitGetAsEntry?.()?.isDirectory ?? false,
     }))
 
-    if (files.length > 0) {
-      await attachFiles(files)
+    // Check for artifact drag-drop first
+    if (treePath.trim()) {
+      insertFileReference(treePath.trim())
+      return
+    }
+    try {
+      if (plainText && files.length === 0 && await insertMatchingFileReference(plainText)) {
+        return
+      }
+      if (files.length > 0) {
+        await attachFiles(files)
+      }
+    } catch (error) {
+      console.error('[InputArea] Drop failed:', error)
+      showError(t('Could not add the dropped files'))
     }
   }
 
@@ -687,6 +695,7 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
 
     setContent(nextContent)
     setMentionMenuOpen(true)
+    setMentionFilesOnly(false)
     setMentionSelectedIndex(0)
 
     requestAnimationFrame(() => {
@@ -743,33 +752,23 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
     [content, cursorPos]
   )
 
-  // Filtered & scored mention artifacts — only computed when the menu is open
-  const filteredMentionArtifacts = useMemo(() => {
-    if (!mentionMenuOpen) return []
-    const query = mentionMatch?.query.trim() || ''
-    const normalizedQuery = normalizePathLike(query)
+  // Ranked file matches, queried from the space's path index while the menu is open
+  const {
+    items: filteredMentionArtifacts,
+    indexing: mentionFilesIndexing,
+    available: mentionFilesAvailable,
+  } = useFileMentionQuery(
+    mentionSpaceId,
+    mentionMatch?.query.trim() ?? '',
+    mentionMenuOpen,
+    MENTION_FILE_LIMIT
+  )
+  const mentionMenuVisible = mentionMenuOpen && (!mentionFilesOnly || mentionFilesAvailable)
 
-    const score = (artifact: Artifact) => {
-      const name = normalizePathLike(artifact.name)
-      const rp = normalizePathLike(artifact.relativePath)
-      if (!normalizedQuery) return artifact.type === 'folder' ? 0 : 1
-      if (rp === normalizedQuery || name === normalizedQuery) return 0
-      if (rp.startsWith(normalizedQuery)) return 1
-      if (name.startsWith(normalizedQuery)) return 2
-      if (rp.includes(normalizedQuery)) return 3
-      return 10
-    }
-
-    return [...mentionArtifacts]
-      .filter(a => matchesFuzzyPathPrefix(a.relativePath, query))
-      .sort((a, b) => {
-        const diff = score(a) - score(b)
-        if (diff !== 0) return diff
-        if (a.type !== b.type) return a.type === 'folder' ? -1 : 1
-        return a.relativePath.localeCompare(b.relativePath)
-      })
-      .slice(0, 50)
-  }, [mentionArtifacts, mentionMatch, mentionMenuOpen])
+  // A files-only menu counts as opened once it actually shows
+  useEffect(() => {
+    if (mentionMenuOpen && mentionFilesOnly && mentionFilesAvailable) trackMentionOpen()
+  }, [mentionFilesAvailable]) // rising edge only; the other flags are read, not watched
 
   // A bare "@" deliberately lists everything (see mentionMenuDecision.ts), a
   // typed query narrows it. Matching logic lives there, shared with the
@@ -1035,7 +1034,7 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
     if (e.nativeEvent.isComposing) return
 
     // ── @ mention menu navigation ───────────────────────────────────────────────
-    if (mentionMenuOpen && mentionCandidates.length > 0) {
+    if (mentionMenuVisible && mentionCandidates.length > 0) {
       const mLen = mentionCandidates.length
       if (e.key === 'ArrowDown') {
         e.preventDefault()
@@ -1289,7 +1288,7 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
           )}
           {/* @ mention autocomplete menu — one menu, one keyboard model, one
               row shell; only the row content differs per candidate kind. */}
-          {mentionMenuOpen && mentionCandidates.length > 0 && (
+          {mentionMenuVisible && mentionCandidates.length > 0 && (
             <div className={`absolute bottom-full -inset-x-px mb-2 bg-popover border border-border/70 ${cardRadius} shadow-soft z-30 overflow-hidden animate-composer-rise`}>
               <div className="max-h-[336px] overflow-y-auto py-1 scrollbar-thin">
                 {mentionGroups.map(group => (
@@ -1350,15 +1349,16 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
                 <span>↑↓ {t('navigate')}</span>
                 <span>↵ {t('select')}</span>
                 <span>Esc {t('close')}</span>
+                {mentionFilesIndexing && <span className="ml-auto">{t('Indexing files…')}</span>}
               </div>
             </div>
           )}
           {/* Stays open with zero matches: a silently empty "@" is
               indistinguishable from the keystroke not registering. */}
-          {mentionMenuOpen && mentionCandidates.length === 0 && (
+          {mentionMenuVisible && mentionCandidates.length === 0 && (
             <div className={`absolute bottom-full -inset-x-px mb-2 bg-popover border border-border/70 ${cardRadius} shadow-soft z-30 overflow-hidden animate-composer-rise`}>
               <div className="px-3 py-4 text-xs text-muted-foreground text-center">
-                {t('No matching results found')}
+                {mentionFilesIndexing ? t('Indexing files…') : t('No matching results found')}
               </div>
             </div>
           )}
@@ -1453,8 +1453,10 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
                 const hasPeople = !!digitalHumanSelector && !digitalHumanSelector.locked
                   && digitalHumanSelector.options.some(o => !query || o.name.toLowerCase().includes(query.trim().toLowerCase()))
                 const hasConversations = decideConversationMentionCandidates({ query, conversations: mentionConversations }).shouldOpenMenu
-                if (nextMentionMatch && (hasPeople || hasConversations || mentionArtifacts.length > 0)) {
-                  if (!mentionMenuOpen) trackMentionOpen()
+                if (nextMentionMatch && (hasPeople || hasConversations || !!mentionSpaceId)) {
+                  const filesOnly = !hasPeople && !hasConversations
+                  if (!mentionMenuOpen && !filesOnly) trackMentionOpen()
+                  setMentionFilesOnly(filesOnly)
                   setMentionMenuOpen(true)
                   setMentionSelectedIndex(0)
                 } else {
@@ -1505,7 +1507,7 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
       </div>
     </div>
   )
-}
+})
 
 /**
  * Input Toolbar - Bottom action bar

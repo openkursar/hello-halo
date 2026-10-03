@@ -573,3 +573,54 @@ describe('feed sync — self-heal past a permanently discarded prefix', () => {
     expect(sent).toEqual([]) // nothing pruned yet — the old silent-wait behavior stands
   })
 })
+
+describe('consumer subscribe-once', () => {
+  it('ensureSubscribed sends one subscribe per feed; subscribe always restarts', () => {
+    const sent: string[] = []
+    const consumer = createFeedConsumer({
+      officeId: OFFICE,
+      send: (frame) => sent.push(frame.kind),
+      apply: () => {},
+      getLocalCursor: () => 0,
+      setLocalCursor: () => {},
+    })
+    for (let i = 0; i < 50; i++) consumer.ensureSubscribed(FEED)
+    expect(sent).toEqual(['feed-subscribe'])
+    consumer.subscribe(FEED)
+    expect(sent).toEqual(['feed-subscribe', 'feed-subscribe'])
+    expect(consumer.ensureSubscribed(FEED)).toBe(false)
+    expect(consumer.ensureSubscribed('other\u0000ctrl')).toBe(true)
+  })
+})
+
+describe('subscribing to an idle feed', () => {
+  it('is answered with an empty batch, so the consumer stops re-asking', () => {
+    const toConsumer: FeedEntriesFrame[] = []
+    const producer = createFeedProducer({
+      officeId: OFFICE,
+      read: () => [],
+      latestSeq: () => 0,
+      send: (_peer, frame) => toConsumer.push(frame),
+      getPeerCursor: () => 0,
+      setPeerCursor: () => {},
+    })
+    const subscribes: string[] = []
+    const consumer = createFeedConsumer({
+      officeId: OFFICE,
+      send: (frame) => {
+        if (frame.kind === 'feed-subscribe') {
+          subscribes.push(frame.feedKey)
+          producer.onSubscribe(READER, frame.feedKey, frame.afterSeq)
+        }
+      },
+      apply: () => {},
+      getLocalCursor: () => 0,
+      setLocalCursor: () => {},
+    })
+    consumer.subscribe(FEED)
+    consumer.onEntries(toConsumer[0])
+    expect(toConsumer[0].entries).toEqual([])
+    for (let i = 0; i < 50; i++) consumer.resubscribeStale()
+    expect(subscribes).toHaveLength(1)
+  })
+})

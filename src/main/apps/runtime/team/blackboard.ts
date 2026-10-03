@@ -383,8 +383,7 @@ export function createBlackboard(deps: BlackboardDeps): Blackboard {
     // its own transcript, and pasting bodies here would turn every board read
     // into a re-read of the whole conversation.
     const activities = store
-      .listActivityByEpoch(teamId, epochId)
-      .slice(-SNAPSHOT_ACTIVITY_LIMIT)
+      .listRecentActivityByEpoch(teamId, epochId, SNAPSHOT_ACTIVITY_LIMIT)
       .map((a) => ({ ...a, body: null }))
 
     if (filter?.mine) tasks = tasks.filter((t) => t.assigneeAppId === callerAppId)

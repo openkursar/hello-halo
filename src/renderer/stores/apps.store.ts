@@ -188,6 +188,18 @@ interface AppsState {
 // Store Implementation
 // ============================================
 
+/** Field-by-field equality of two runtime states (the shape is flat, all primitives). */
+export function sameAppState(a: AutomationAppState | undefined, b: AutomationAppState): boolean {
+  if (!a) return false
+  if (a === b) return true
+  const keys = Object.keys(a) as (keyof AutomationAppState)[]
+  if (keys.length !== Object.keys(b).length) return false
+  for (const key of keys) {
+    if (a[key] !== b[key]) return false
+  }
+  return true
+}
+
 const PAGE_SIZE = 30
 let activityRevision = 0
 const activityEvents = new Map<string, { revision: number; entry: ActivityEntry }>()
@@ -774,14 +786,25 @@ export const useAppsStore = create<AppsState>((set, get) => ({
           appStatus = 'active'
       }
 
-      return {
-        appStates: { ...s.appStates, [appId]: state },
-        // Removal is not a runtime state and has no representation in the
-        // broadcast, so a broadcast must never be able to undo it.
-        apps: s.apps.map(a =>
-          a.id === appId ? { ...a, status: a.status === 'uninstalled' ? a.status : appStatus } : a
-        ),
+      // Status pushes repeat unchanged states often; an unchanged push must not
+      // hand every subscriber a new object.
+      const stateChanged = !sameAppState(s.appStates[appId], state)
+      const index = s.apps.findIndex(a => a.id === appId)
+      const current = index >= 0 ? s.apps[index] : undefined
+      // Removal is not a runtime state and has no representation in the
+      // broadcast, so a broadcast must never be able to undo it.
+      const nextStatus = current && current.status !== 'uninstalled' ? appStatus : current?.status
+      const appChanged = current !== undefined && current.status !== nextStatus
+      if (!stateChanged && !appChanged) return s
+
+      const next: Partial<AppsState> = {}
+      if (stateChanged) next.appStates = { ...s.appStates, [appId]: state }
+      if (appChanged) {
+        const apps = s.apps.slice()
+        apps[index] = { ...current, status: nextStatus! }
+        next.apps = apps
       }
+      return next
     })
   },
 

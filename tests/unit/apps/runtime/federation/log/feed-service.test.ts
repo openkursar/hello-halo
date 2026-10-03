@@ -16,11 +16,13 @@ import {
   migrations,
 } from '../../../../../../src/main/apps/federation/migrations'
 import { createFeedService, type FeedService } from '../../../../../../src/main/apps/runtime/federation/log/feed-service'
-import type { FeedEntry, FeedSyncFrame } from '../../../../../../src/main/apps/runtime/federation/log/types'
+import type { FeedEntry, FeedKind, FeedSyncFrame } from '../../../../../../src/main/apps/runtime/federation/log/types'
 
 const OFFICE = 'office-1'
 const AUTHOR = 'node-author'
 const READER = 'node-reader'
+const CTRL: FeedKind = `ctrl:${READER}`
+const SESSION: FeedKind = 'session:app-a|office-1|e1'
 
 interface Bus {
   authorSvc: FeedService
@@ -106,35 +108,35 @@ describe('FeedService end-to-end', () => {
   })
 
   it('delivers authored ctrl entries to a subscribed reader', () => {
-    bus.readerSvc.subscribeRemote(AUTHOR, 'ctrl')
-    bus.authorSvc.appendLocal('ctrl', 'msg', { n: 1 })
-    bus.authorSvc.appendLocal('ctrl', 'msg', { n: 2 })
+    bus.readerSvc.subscribeRemote(AUTHOR, CTRL)
+    bus.authorSvc.appendLocal(CTRL, 'msg', { n: 1 })
+    bus.authorSvc.appendLocal(CTRL, 'msg', { n: 2 })
     expect(bus.applied.map((e) => e.payload)).toEqual([{ n: 1 }, { n: 2 }])
   })
 
   it('recovers from a dropped delivery via the retransmit backstop', () => {
-    bus.readerSvc.subscribeRemote(AUTHOR, 'ctrl')
+    bus.readerSvc.subscribeRemote(AUTHOR, CTRL)
     // Drop the first entries frame headed to the reader entirely.
     bus.dropOnce(READER, (f) => f.kind === 'feed-entries')
-    bus.authorSvc.appendLocal('ctrl', 'msg', { n: 1 })
+    bus.authorSvc.appendLocal(CTRL, 'msg', { n: 1 })
     expect(bus.applied).toHaveLength(0)
     bus.authorSvc.retransmitTick()
     expect(bus.applied.map((e) => e.payload)).toEqual([{ n: 1 }])
   })
 
   it('persists the delivery watermark so an author restart does not reset seq', () => {
-    bus.readerSvc.subscribeRemote(AUTHOR, 'ctrl')
-    bus.authorSvc.appendLocal('ctrl', 'msg', { n: 1 })
-    bus.authorSvc.appendLocal('ctrl', 'msg', { n: 2 })
+    bus.readerSvc.subscribeRemote(AUTHOR, CTRL)
+    bus.authorSvc.appendLocal(CTRL, 'msg', { n: 1 })
+    bus.authorSvc.appendLocal(CTRL, 'msg', { n: 2 })
     expect(bus.applied).toHaveLength(2)
 
     // Author process restarts: a brand-new service over the SAME store.
     bus.rebuildAuthor()
-    const third = bus.authorSvc.appendLocal('ctrl', 'msg', { n: 3 })
+    const third = bus.authorSvc.appendLocal(CTRL, 'msg', { n: 3 })
     expect(third.seq).toBe(3) // continues, not reset to 1
 
     // Reader re-subscribes from its persisted watermark and gets only the tail.
-    bus.readerSvc.subscribeRemote(AUTHOR, 'ctrl')
+    bus.readerSvc.subscribeRemote(AUTHOR, CTRL)
     expect(bus.applied.map((e) => e.payload)).toEqual([{ n: 1 }, { n: 2 }, { n: 3 }])
   })
 
@@ -143,24 +145,24 @@ describe('FeedService end-to-end', () => {
     // registers it, so appends are neither pushed nor retransmitted (the exact
     // production stall: a member joined mid-run, its wakes sat undelivered).
     bus.dropOnce(AUTHOR, (f) => f.kind === 'feed-subscribe')
-    bus.readerSvc.subscribeRemote(AUTHOR, 'ctrl')
-    bus.authorSvc.appendLocal('ctrl', 'msg', { n: 1 })
-    bus.authorSvc.appendLocal('ctrl', 'msg', { n: 2 })
+    bus.readerSvc.subscribeRemote(AUTHOR, CTRL)
+    bus.authorSvc.appendLocal(CTRL, 'msg', { n: 1 })
+    bus.authorSvc.appendLocal(CTRL, 'msg', { n: 2 })
     expect(bus.applied).toHaveLength(0)
 
     // An inbound frame from the reader (a heartbeat, in production) drives the
     // author to register it and stream the backlog — no subscribe needed.
-    const added = bus.authorSvc.ensurePeerSubscribed('ctrl', READER)
+    const added = bus.authorSvc.ensurePeerSubscribed(CTRL, READER)
     expect(added).toBe(true)
     expect(bus.applied.map((e) => e.payload)).toEqual([{ n: 1 }, { n: 2 }])
     // Idempotent on later heartbeats.
-    expect(bus.authorSvc.ensurePeerSubscribed('ctrl', READER)).toBe(false)
+    expect(bus.authorSvc.ensurePeerSubscribed(CTRL, READER)).toBe(false)
   })
 
   it('consumer heals a lost subscribe via the retransmit tick (resubscribeStale)', () => {
     bus.dropOnce(AUTHOR, (f) => f.kind === 'feed-subscribe')
-    bus.readerSvc.subscribeRemote(AUTHOR, 'ctrl') // subscribe #1 lost
-    bus.authorSvc.appendLocal('ctrl', 'msg', { n: 1 })
+    bus.readerSvc.subscribeRemote(AUTHOR, CTRL) // subscribe #1 lost
+    bus.authorSvc.appendLocal(CTRL, 'msg', { n: 1 })
     expect(bus.applied).toHaveLength(0)
 
     // The reader's own tick re-drives the subscribe; it now reaches the author,
@@ -170,10 +172,10 @@ describe('FeedService end-to-end', () => {
   })
 
   it('keeps distinct feed kinds independent', () => {
-    bus.readerSvc.subscribeRemote(AUTHOR, 'ctrl')
-    bus.readerSvc.subscribeRemote(AUTHOR, 'act')
-    bus.authorSvc.appendLocal('ctrl', 'msg', { plane: 'ctrl' })
-    bus.authorSvc.appendLocal('act', 'frame', { plane: 'act' })
+    bus.readerSvc.subscribeRemote(AUTHOR, CTRL)
+    bus.readerSvc.subscribeRemote(AUTHOR, SESSION)
+    bus.authorSvc.appendLocal(CTRL, 'msg', { plane: 'ctrl' })
+    bus.authorSvc.appendLocal(SESSION, 'frame', { plane: 'act' })
     const planes = bus.applied.map((e) => (e.payload as { plane: string }).plane).sort()
     expect(planes).toEqual(['act', 'ctrl'])
   })

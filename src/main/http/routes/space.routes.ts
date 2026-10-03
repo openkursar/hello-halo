@@ -111,7 +111,8 @@ export function registerSpaceRoutes(app: Express): void {
   app.get('/api/spaces/:spaceId/conversations/:conversationId', async (req: Request, res: Response) => {
     const result = conversationController.getConversation(
       req.params.spaceId,
-      req.params.conversationId
+      req.params.conversationId,
+      typeof req.query.from === 'string' && req.query.from ? req.query.from : undefined
     )
     res.json(result)
   })

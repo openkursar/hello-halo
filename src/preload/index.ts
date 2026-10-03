@@ -11,6 +11,8 @@ import type { UpdaterChannel, UpdaterStatusPayload } from '../shared/types/updat
 import type { GoalInput } from '../shared/types/goal'
 import type { CanvasContext } from '../shared/types/canvas-context'
 import type { Thought, TranscriptPage } from '../shared/types/transcript'
+import type { ArtifactChangeBatchEvent, FileQueryResult } from '../shared/types/artifact'
+import type { MemoryPressureEvent } from '../shared/types/memory-pressure'
 import type { AIBrowserActiveView, AIBrowserConversationReleased, AIBrowserLivePage, AIBrowserStopResult, AIBrowserViewGone } from '../shared/types/ai-browser'
 import type { MemorySettings, MemoryStatus } from '../shared/types/memory'
 import type { PickedLocalEntry } from '../shared/attached-paths'
@@ -31,6 +33,7 @@ import { remoteRpc } from '../shared/rpc/contracts/remote.contract'
 import { authRpc } from '../shared/rpc/contracts/auth.contract'
 import { systemRpc } from '../shared/rpc/contracts/system.contract'
 import { healthRpc } from '../shared/rpc/contracts/health.contract'
+import { canvasPreviewRpc } from '../shared/rpc/contracts/canvas-preview.contract'
 import { configRpc } from '../shared/rpc/contracts/config.contract'
 import { agentRpc } from '../shared/rpc/contracts/agent.contract'
 import { terminalRpc } from '../shared/rpc/contracts/terminal.contract'
@@ -149,7 +152,7 @@ export interface HaloAPI {
   // Conversation
   listConversations: (spaceId: string) => Promise<IpcResponse>
   createConversation: (spaceId: string, title?: string, reasoningEffort?: ReasoningEffortLevel) => Promise<IpcResponse>
-  getConversation: (spaceId: string, conversationId: string) => Promise<IpcResponse>
+  getConversation: (spaceId: string, conversationId: string, options?: { fromMessageId?: string }) => Promise<IpcResponse>
   updateConversation: (
     spaceId: string,
     conversationId: string,
@@ -293,26 +296,15 @@ export interface HaloAPI {
 
   // Artifact
   listArtifacts: (spaceId: string, maxDepth?: number) => Promise<IpcResponse>
+  queryArtifactFiles: (spaceId: string, query: string, limit: number) => Promise<IpcResponse<FileQueryResult>>
   listArtifactsTree: (spaceId: string) => Promise<IpcResponse>
   loadArtifactChildren: (spaceId: string, dirPath: string) => Promise<IpcResponse>
-  initArtifactWatcher: (spaceId: string) => Promise<IpcResponse>
-  onArtifactChanged: (callback: (data: {
-    type: 'add' | 'change' | 'unlink' | 'addDir' | 'unlinkDir'
-    path: string
-    relativePath: string
-    spaceId: string
-    item?: unknown
-  }) => void) => () => void
+  retainArtifactSpace: (spaceId: string, clientId: string) => Promise<IpcResponse>
+  releaseArtifactSpace: (spaceId: string, clientId: string) => Promise<IpcResponse>
+  onArtifactChangedBatch: (callback: (data: ArtifactChangeBatchEvent) => void) => () => void
   onArtifactTreeUpdate: (callback: (data: {
     spaceId: string
     updatedDirs: Array<{ dirPath: string; children: unknown[] }>
-    changes: Array<{
-      type: 'add' | 'change' | 'unlink' | 'addDir' | 'unlinkDir'
-      path: string
-      relativePath: string
-      spaceId: string
-      item?: unknown
-    }>
   }) => void) => () => void
   reconcileArtifacts: (spaceId: string) => Promise<IpcResponse>
   openArtifact: (filePath: string) => Promise<IpcResponse>
@@ -364,6 +356,7 @@ export interface HaloAPI {
   getAutoLaunch: () => Promise<IpcResponse>
   setAutoLaunch: (enabled: boolean) => Promise<IpcResponse>
   openLogFolder: () => Promise<IpcResponse>
+  openCrashReportsFolder: () => Promise<IpcResponse<{ path: string; pending: number }>>
   relaunch: () => Promise<IpcResponse>
   /** Native picker for files/folders to attach to a chat message. */
   pickLocalEntries: () => Promise<IpcResponse<PickedLocalEntry[]>>
@@ -505,6 +498,9 @@ export interface HaloAPI {
   generateHealthReportText: () => Promise<IpcResponse<string>>
   exportHealthReport: (filePath?: string) => Promise<IpcResponse<HealthExportResponse>>
   runHealthCheck: () => Promise<IpcResponse<HealthCheckResponse>>
+  getMemoryPressure: () => Promise<IpcResponse<MemoryPressureEvent>>
+  onMemoryPressure: (callback: (data: MemoryPressureEvent) => void) => () => void
+  setVisibleConversations: (conversationIds: string[]) => void
 
   // Notification Channels
   testNotificationChannel: (channelType: string) => Promise<IpcResponse>
@@ -778,6 +774,10 @@ export interface HaloAPI {
   /** Get all preset model capabilities as a flat map */
   modelCapabilitiesAll: () => Promise<IpcResponse>
 
+  // Canvas HTML preview origin
+  openHtmlPreview: (filePath: string) => Promise<IpcResponse<{ url: string; host: string }>>
+  closeHtmlPreview: (host: string) => Promise<IpcResponse<void>>
+
   // Telemetry (fire-and-forget — no response)
   trackEvent: (event: string, properties?: Record<string, unknown>) => void
 }
@@ -906,7 +906,7 @@ const api: HaloAPI = {
 
   // Artifact (methods derived from artifactRpc contract; event listeners kept)
   ...bindRpc(artifactRpc),
-  onArtifactChanged: (callback) => createEventListener('artifact:changed', callback),
+  onArtifactChangedBatch: (callback) => createEventListener('artifact:changed-batch', callback),
   onArtifactTreeUpdate: (callback) => createEventListener('artifact:tree-update', callback),
 
   // Onboarding (derived from onboardingRpc contract)
@@ -1022,8 +1022,13 @@ const api: HaloAPI = {
   getBootstrapStatus: () => ipcRenderer.invoke('bootstrap:get-status'),
   onBootstrapExtendedReady: (callback) => createEventListener('bootstrap:extended-ready', callback),
 
+  // Canvas HTML preview origin
+  ...bindRpc(canvasPreviewRpc),
+
   // Health System
   ...bindRpc(healthRpc),
+  onMemoryPressure: (callback) => createEventListener('app:memory-pressure', callback),
+  setVisibleConversations: (conversationIds) => ipcRenderer.send('agent:set-visible-conversations', conversationIds),
 
   // Notification Channels
   ...bindRpc(notificationChannelsRpc),

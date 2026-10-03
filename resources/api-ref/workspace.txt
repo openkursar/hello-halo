@@ -23,6 +23,7 @@ operations on this page:
   POST   /api/spaces/$HALO_SPACE_ID/artifacts/file                   Create a new file in a space
   POST   /api/spaces/$HALO_SPACE_ID/artifacts/folder                 Create a new folder in a space
   POST   /api/spaces/$HALO_SPACE_ID/artifacts/move                   Move a file or folder to a different directory
+  GET    /api/spaces/$HALO_SPACE_ID/artifacts/query                  Search file and folder paths in a space by name
   POST   /api/spaces/$HALO_SPACE_ID/artifacts/reconcile              Resync the file list with what is actually on disk
   POST   /api/spaces/$HALO_SPACE_ID/artifacts/rename                 Rename a file or folder
   GET    /api/spaces/$HALO_SPACE_ID/artifacts/tree                   Get the full lazy-loadable file tree for a space
@@ -156,6 +157,11 @@ POST   /api/spaces/$HALO_SPACE_ID/artifacts/move                   Move a file o
      # body: {"oldPath":"/absolute/path/inside/the/space/file.md"}
      # out: {"success":true,"data":{"path":"/…/new-location/file.md"}}
      # err: 400 if oldPath is missing. newParentPath is optional — omit it to move to the space root.
+
+GET    /api/spaces/$HALO_SPACE_ID/artifacts/query                  Search file and folder paths in a space by name
+     curl -s "$HALO_API_URL/api/spaces/$HALO_SPACE_ID/artifacts/query?q=report&limit=50" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {"success":true,"data":{"items":[{"name":"report.md","type":"file","path":"/…","relativePath":"docs/report.md"}],"truncated":false,"indexing":false}}
+     # note: Returns only the best matches (limit defaults to 50). indexing:true means the space is still being indexed and a repeated query may find more; truncated:true means the space has more paths than the index holds.
 
 POST   /api/spaces/$HALO_SPACE_ID/artifacts/reconcile              Resync the file list with what is actually on disk
      curl -sX POST "$HALO_API_URL/api/spaces/$HALO_SPACE_ID/artifacts/reconcile" -H "Authorization: Bearer $HALO_API_TOKEN"

@@ -21,7 +21,7 @@ import { createDatabaseManager } from '../../../../../src/main/platform/store/da
 import type { DatabaseManager } from '../../../../../src/main/platform/store/types'
 import { TeamStore } from '../../../../../src/main/apps/team/store'
 import { MIGRATION_NAMESPACE, migrations } from '../../../../../src/main/apps/team/migrations'
-import { createBlackboard } from '../../../../../src/main/apps/runtime/team/blackboard'
+import { createBlackboard, SNAPSHOT_ACTIVITY_LIMIT } from '../../../../../src/main/apps/runtime/team/blackboard'
 import { createBoardDigest } from '../../../../../src/main/apps/runtime/team/board-digest'
 import { createMessageBus } from '../../../../../src/main/apps/runtime/team/message-bus'
 import type { Team, TeamMember, TeamEpoch } from '../../../../../src/main/apps/team/types'
@@ -154,12 +154,49 @@ describe('office record + board digest', () => {
       // The full text is still on the row for the UI to open on demand.
       expect(store.listActivityByEpoch(TEAM_ID, EPOCH_ID)[0].body).toContain('long details')
     })
+
+    it('the snapshot reads only the recent window from the store, newest last', () => {
+      const board = createBlackboard({ store })
+      for (let i = 0; i < SNAPSHOT_ACTIVITY_LIMIT + 30; i++) {
+        store.insertActivity({
+          id: `a-${String(i).padStart(4, '0')}`, teamId: TEAM_ID, epochId: EPOCH_ID, kind: 'finding',
+          actorAppId: LEAD_APP, targetAppId: null, subject: `s${i}`, body: null, refId: null,
+          correlationId: null, status: null, createdAt: 1000 + i,
+        })
+      }
+      const fullRead = vi.spyOn(store, 'listActivityByEpoch')
+      const snapshot = board.readBoard(TEAM_ID, EPOCH_ID, RESEARCHER_APP)
+      expect(fullRead).not.toHaveBeenCalled()
+      expect(snapshot.activities).toHaveLength(SNAPSHOT_ACTIVITY_LIMIT)
+      expect(snapshot.activities[0].subject).toBe('s30')
+      expect(snapshot.activities.at(-1)!.subject).toBe(`s${SNAPSHOT_ACTIVITY_LIMIT + 29}`)
+    })
   })
 
   describe('digest', () => {
     it('says nothing when nothing has happened', () => {
       const digest = createBoardDigest({ store })
       expect(digest.render({ teamId: TEAM_ID, epochId: EPOCH_ID, viewerAppId: RESEARCHER_APP })).toBeNull()
+    })
+
+    it('reads only acts newer than the member watermark, never the whole epoch again', () => {
+      const board = createBlackboard({ store })
+      const digest = createBoardDigest({ store })
+      board.postActivity({ teamId: TEAM_ID, epochId: EPOCH_ID, kind: 'finding', actorAppId: LEAD_APP, subject: 'one.md' })
+      digest.render({ teamId: TEAM_ID, epochId: EPOCH_ID, viewerAppId: RESEARCHER_APP })
+      const seen = store.listActivityByEpoch(TEAM_ID, EPOCH_ID)[0].createdAt
+
+      const fullRead = vi.spyOn(store, 'listActivityByEpoch')
+      const sinceRead = vi.spyOn(store, 'listActivityByEpochSince')
+      store.insertActivity({
+        id: 'a-later', teamId: TEAM_ID, epochId: EPOCH_ID, kind: 'finding', actorAppId: LEAD_APP,
+        targetAppId: null, subject: 'two.md', body: null, refId: null, correlationId: null, status: null, createdAt: seen + 5,
+      })
+      const second = digest.render({ teamId: TEAM_ID, epochId: EPOCH_ID, viewerAppId: RESEARCHER_APP })
+      expect(second).toContain('two.md')
+      expect(second).not.toContain('one.md')
+      expect(fullRead).not.toHaveBeenCalled()
+      expect(sinceRead).toHaveBeenCalledWith(TEAM_ID, EPOCH_ID, seen)
     })
 
     it("reports a teammate's act once, then stays quiet", () => {

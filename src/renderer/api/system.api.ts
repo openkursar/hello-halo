@@ -57,6 +57,13 @@ export const systemApi = {
     return window.halo.openLogFolder()
   },
 
+  openCrashReportsFolder: async (): Promise<ApiResponse<{ path: string; pending: number }>> => {
+    if (!isElectron()) {
+      return { success: false, error: 'Only available in desktop app' }
+    }
+    return window.halo.openCrashReportsFolder()
+  },
+
   relaunch: async (): Promise<ApiResponse> => {
     if (!isElectron()) {
       return { success: false, error: 'Only available in desktop app' }

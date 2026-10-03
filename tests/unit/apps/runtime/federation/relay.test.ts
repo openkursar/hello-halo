@@ -136,8 +136,12 @@ describe('RelayCapture (owner-only + team-only)', () => {
 })
 
 describe('RelayCapture batching', () => {
-  beforeEach(() => vi.useFakeTimers())
-  afterEach(() => vi.useRealTimers())
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
 
   it('coalesces N events in the window into one batch on timer flush', () => {
     const sinkCalls: StreamFramesFrame[] = []
@@ -456,6 +460,22 @@ describe('two-node relay (in-process)', () => {
       getLocalNodeId: () => NODE_A,
     })
     hostManager.hostOffice(OFFICE)
+    // B (the producer) and C both join and both show the session.
+    for (const [clientId, node] of [[B_CLIENT_ID, NODE_B], [C_CLIENT_ID, 'node-c']]) {
+      hostManager.handleHostInbound({
+        clientId,
+        officeId: OFFICE,
+        frame: {
+          kind: 'join-request', officeId: OFFICE, fromNode: node, identityId: node, displayName: node,
+          credentialToken: VALID_TOKEN, bringMembers: [],
+        } as FederationMessage,
+      })
+      hostManager.handleHostInbound({
+        clientId,
+        officeId: OFFICE,
+        frame: { kind: 'stream-subscribe', officeId: OFFICE, fromNode: node, sessionKey: OTHER_SESSION, fid: `sub-${node}` } as FederationMessage,
+      })
+    }
 
     // A stream batch arrives on B's client (B is the producer).
     const batch: StreamFramesFrame = {

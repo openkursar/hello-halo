@@ -10,7 +10,7 @@ import { Tray, Menu, nativeImage, nativeTheme } from 'electron'
 import { join } from 'path'
 import { getTrayIconDir } from '../../foundation/product-config'
 import { readWindowsTaskbarIsDark } from './taskbar-theme'
-import type { BackgroundStatus } from './types'
+import type { BackgroundStatus, TrayNotice } from './types'
 
 /**
  * Callback interface for tray menu actions.
@@ -39,6 +39,7 @@ export interface TrayCallbacks {
 export class TrayManager {
   private tray: Tray | null = null
   private callbacks: TrayCallbacks | null = null
+  private notice: TrayNotice | null = null
   private readonly onThemeUpdated = (): void => this.refreshWindowsIcon()
   private themeReadSeq = 0
 
@@ -55,8 +56,14 @@ export class TrayManager {
       return
     }
 
-    const icon = this.createIcon()
-    this.tray = new Tray(icon)
+    try {
+      this.tray = new Tray(this.createIcon())
+    } catch (error) {
+      // No status-icon host: the app runs without a tray, and closing the last
+      // window quits (see hasTray).
+      console.error('[Tray] Could not create the system tray icon:', error)
+      return
+    }
 
     this.tray.setToolTip('Halo')
 
@@ -77,6 +84,16 @@ export class TrayManager {
     console.log('[Tray] System tray initialized')
   }
 
+  /** Whether a tray icon exists, i.e. the user can reach the app with no window open. */
+  hasTray(): boolean {
+    return this.tray !== null
+  }
+
+  setNotice(notice: TrayNotice | null): void {
+    this.notice = notice
+    this.updateMenu()
+  }
+
   /**
    * Update the context menu to reflect current status.
    */
@@ -87,7 +104,15 @@ export class TrayManager {
     const reasons = this.callbacks.getActiveReasons()
     const isOnline = status === 'online'
 
+    const notice = this.notice
     const menuItems: Electron.MenuItemConstructorOptions[] = [
+      ...(notice
+        ? [
+            { label: notice.message, enabled: false },
+            { label: notice.actionLabel, click: () => notice.onAction() },
+            { type: 'separator' as const }
+          ]
+        : []),
       {
         label: 'Show Halo',
         click: () => this.callbacks?.onShowWindow()
@@ -144,7 +169,9 @@ export class TrayManager {
     this.tray.setContextMenu(contextMenu)
 
     // Update tooltip to show status
-    const tooltip = reasons.length > 0
+    const tooltip = notice
+      ? `Halo - ${notice.message}`
+      : reasons.length > 0
       ? `Halo (${isOnline ? 'Online' : 'Offline'}) - ${reasons.length} active task(s)`
       : `Halo (${isOnline ? 'Online' : 'Offline'})`
     this.tray.setToolTip(tooltip)

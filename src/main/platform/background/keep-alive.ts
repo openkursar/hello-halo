@@ -20,6 +20,7 @@ const MAX_KEEP_ALIVE_TTL_MS = 24 * 60 * 60 * 1000
  */
 interface KeepAliveEntry {
   registeredAt: number
+  ttlMs: number
 }
 
 /**
@@ -46,8 +47,8 @@ export class KeepAliveManager {
    * @param reason - Unique reason identifier (e.g. "app:jd-price-monitor")
    * @returns Unsubscribe function that removes this reason
    */
-  register(reason: string): Unsubscribe {
-    this.reasons.set(reason, { registeredAt: Date.now() })
+  register(reason: string, options: { ttlMs?: number } = {}): Unsubscribe {
+    this.reasons.set(reason, { registeredAt: Date.now(), ttlMs: options.ttlMs ?? this.ttlMs })
     console.log(`[KeepAlive] Registered reason: "${reason}" (total: ${this.reasons.size})`)
 
     let disposed = false
@@ -103,10 +104,9 @@ export class KeepAliveManager {
    */
   private pruneExpired(): void {
     const now = Date.now()
-    const cutoff = now - this.ttlMs
 
     for (const [reason, entry] of this.reasons) {
-      if (entry.registeredAt < cutoff) {
+      if (now - entry.registeredAt > entry.ttlMs) {
         this.reasons.delete(reason)
         console.warn(
           `[KeepAlive] Auto-pruned expired reason: "${reason}" ` +

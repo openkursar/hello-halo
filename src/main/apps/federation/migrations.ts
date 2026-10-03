@@ -260,5 +260,17 @@ export const migrations: Migration[] = [
         )
       `)
     }
+  },
+  {
+    version: 7,
+    description: 'Drop the retired office-wide ctrl feed (wakes now ride one ctrl:<target> feed per peer)',
+    up(db) {
+      // Its feed id is `<author>\0ctrl`; nothing reads or prunes it any more.
+      // Compared as bytes: LIKE and text functions stop at the embedded NUL.
+      const retired = `substr(CAST(feed_id AS BLOB), -5) = X'006374726C'`
+      for (const table of ['feed_log', 'feed_peer_cursor', 'feed_local_cursor', 'feed_cache', 'feed_meta']) {
+        db.exec(`DELETE FROM ${table} WHERE ${retired}`)
+      }
+    }
   }
 ]

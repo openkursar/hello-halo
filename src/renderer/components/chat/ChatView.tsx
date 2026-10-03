@@ -14,7 +14,8 @@
  * - Compact mode (isCompact=true): Sidebar-style when Canvas is open
  */
 
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import { forwardRef, useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import type { ReactNode } from 'react'
 import { SquareCheckBig, Code, Bot, FileText, BookOpen, AlertCircle } from 'lucide-react'
 import brandMarkAnimated from '../../assets/brand/halo-mark-animated.svg'
@@ -27,7 +28,7 @@ import { useAppsStore } from '../../stores/apps.store'
 import { useOnboardingStore } from '../../stores/onboarding.store'
 import { useTaskPanelStore } from '../../stores/taskPanel.store'
 import { MessageList } from './MessageList'
-import type { MessageListHandle } from './MessageList'
+import type { MessageListHandle, MessageListProps } from './MessageList'
 import { InputArea } from './InputArea'
 import { useConversationMentionCandidates } from './cross-conversation'
 import { TeamCollabPanel } from './team-collab'
@@ -40,7 +41,8 @@ import {
   getOnboardingPrompt,
 } from '../onboarding/onboardingData'
 import { api } from '../../api'
-import type { ImageAttachment, Artifact } from '../../types'
+import { useConversationDetail } from '../../hooks/useConversationDetail'
+import type { ImageAttachment, Thought } from '../../types'
 import type { SlashCommandItem } from '../../types/slash-command'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { ClearChatControl } from './ClearChatControl'
@@ -77,7 +79,6 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
   // whole page on every token of every background turn. Actions are stable
   // references; only the fields read below can trigger a render, and the live
   // turn arrives through `session` further down.
-  const getSession = useChatStore(s => s.getSession)
   const sessionInitInfo = useChatStore(s => s.sessionInitInfo)
   const sendMessage = useChatStore(s => s.sendMessage)
   const stopGeneration = useChatStore(s => s.stopGeneration)
@@ -135,73 +136,8 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
   const [mockUserMessage, setMockUserMessage] = useState<string | null>(null)
   const [mockAiResponse, setMockAiResponse] = useState<string | null>(null)
   const [mockStreamingContent, setMockStreamingContent] = useState<string>('')
-  // Artifact list for @ mention suggestions in InputArea
-  const [mentionArtifacts, setMentionArtifacts] = useState<Artifact[]>([])
   // Sibling candidate source for the same @ menu: conversations in this space
   const mentionConversations = useConversationMentionCandidates()
-  // Tracks the space a fetch was issued for, so stale responses (after a space
-  // switch) can be discarded instead of overwriting the current list.
-  const mentionSpaceIdRef = useRef<string | undefined>(undefined)
-
-  // Load artifacts for @ mention suggestions (depth=5 for deeper file references)
-  const loadMentionArtifacts = useCallback(async () => {
-    const spaceId = currentSpace?.id
-    mentionSpaceIdRef.current = spaceId
-    if (!spaceId) {
-      setMentionArtifacts([])
-      return
-    }
-    try {
-      const response = await api.listArtifacts(spaceId, 5)
-      if (mentionSpaceIdRef.current !== spaceId) return
-      if (response.success && response.data) {
-        setMentionArtifacts(response.data as Artifact[])
-      }
-    } catch (error) {
-      if (mentionSpaceIdRef.current === spaceId) {
-        console.error('[ChatView] Failed to load mention artifacts:', error)
-      }
-    }
-  }, [currentSpace?.id])
-
-  // Initial load and reload when the active space changes
-  useEffect(() => {
-    loadMentionArtifacts()
-  }, [loadMentionArtifacts])
-
-  // Keep the @ mention list in sync with filesystem changes. Files created by
-  // external tools (e.g. Claude Code) after the space opened must appear without
-  // requiring a space switch. The backend already debounces watcher events; a
-  // short debounce here coalesces bursts into a single refresh.
-  useEffect(() => {
-    const spaceId = currentSpace?.id
-    if (!spaceId) return
-
-    // Ensure the watcher is active even when the Artifact Rail is not mounted
-    // (chat runs full-width with no Canvas open). initArtifactWatcher is idempotent.
-    api.initArtifactWatcher(spaceId).catch(error => {
-      console.error('[ChatView] Failed to init artifact watcher:', error)
-    })
-
-    let debounceTimer: ReturnType<typeof setTimeout> | null = null
-    const scheduleReload = () => {
-      if (debounceTimer) clearTimeout(debounceTimer)
-      debounceTimer = setTimeout(loadMentionArtifacts, 300)
-    }
-
-    const cleanup = api.onArtifactChanged(event => {
-      if (event.spaceId !== spaceId) return
-      // Content-only edits don't alter the file list; only structural changes
-      // (create/delete/rename) affect @ mention candidates.
-      if (event.type === 'change') return
-      scheduleReload()
-    })
-
-    return () => {
-      if (debounceTimer) clearTimeout(debounceTimer)
-      cleanup()
-    }
-  }, [currentSpace?.id, loadMentionArtifacts])
 
   // Clear mock state when onboarding completes
   useEffect(() => {
@@ -308,16 +244,32 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
     }
   }, [])
 
-  // The conversation on screen and its live turn. `getSession('')` is the
-  // store's own empty-session constant — a stable identity for "no session
-  // yet", so the fallback does not look like a change to anything downstream.
+  // The conversation on screen and the low-frequency state of its live turn.
+  // Tokens and steps are read by `LiveTranscript`, so a streaming reply never
+  // re-renders this page or the composer.
   const currentConversation = useChatStore(s =>
     activeConversationId ? s.conversationCache.get(activeConversationId) ?? null : null
   )
   const isLoadingConversation = useChatStore(s => s.isLoadingConversation)
   const loadError = useChatStore(s => activeConversationId ? s.conversationLoadErrors.get(activeConversationId) ?? null : null)
-  const session = useChatStore(s => s.sessions.get(activeConversationId ?? '')) ?? getSession('')
-  const { isGenerating, streamingContent, isStreaming, thoughts, isThinking, compactInfo, error, errorType, textBlockVersion, pendingQuestion } = session
+  const { isGenerating, isThinking, compactInfo, error, errorType, pendingQuestion, hasStreamingContent } = useChatStore(
+    useShallow(s => {
+      const live = s.sessions.get(activeConversationId ?? '')
+      return {
+        isGenerating: live?.isGenerating ?? false,
+        isThinking: live?.isThinking ?? false,
+        compactInfo: live?.compactInfo ?? null,
+        error: live?.error ?? null,
+        errorType: live?.errorType ?? null,
+        pendingQuestion: live?.pendingQuestion ?? null,
+        hasStreamingContent: !!live?.streamingContent,
+      }
+    })
+  )
+
+  // Main streams a conversation's full detail only while a view retains it;
+  // every other conversation arrives as status events.
+  useConversationDetail(activeConversationId)
 
   // A conversation on screen that is not in the cache (evicted, never read, or
   // landed on without a read — the next one after a delete, the regular
@@ -361,12 +313,12 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
     const active = s.sessions.get(activeConversationId ?? '')
     return !!active && (active.isGenerating || active.queuedMessages.length > 0)
   })
-  const digitalHumanSelector: DigitalHumanSelectorConfig | undefined = currentSpaceId ? {
-    current: selectedAppChat?.appId ?? null,
+  const selectedAppId = selectedAppChat?.appId ?? null
+  const digitalHumanSelector = useMemo<DigitalHumanSelectorConfig | undefined>(() => currentSpaceId ? {
+    current: selectedAppId,
     options: digitalHumanOptions,
     locked: digitalHumanSelectorLocked,
     onChange: (appId, conversationId) => {
-      if (!currentSpaceId) return
       trackHome('home.composer.recipient.switch', {
         to: appId ? 'digital_human' : 'halo',
         appId: appId ?? undefined,
@@ -379,7 +331,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
         selectAppChatConversation(currentSpaceId, appId, conversationId ?? getAppChatConversationId(appId))
       }
     },
-  } : undefined
+  } : undefined, [currentSpaceId, selectedAppId, digitalHumanOptions, digitalHumanSelectorLocked, clearAppChatSelection, selectAppChatConversation])
 
   const sendWithGoal = useCallback(
     (content: string, images: ImageAttachment[] | undefined, thinkingEnabled: boolean, goal: GoalInput) =>
@@ -482,7 +434,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
   }, [currentSpace, onboardingHtml, onboardingPrompt, onboardingResponse, setMockAnimating, setMockThinking])
 
   // Handle send (with optional images for multi-modal messages, optional thinking mode)
-  const handleSend = async (content: string, images?: ImageAttachment[], thinkingEnabled?: boolean) => {
+  const handleSend = useCallback(async (content: string, images?: ImageAttachment[], thinkingEnabled?: boolean) => {
     // In onboarding mode, intercept and play mock response
     if (isOnboarding && currentStep === 'send-message') {
       handleOnboardingSend()
@@ -496,14 +448,18 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
     // Sending returns the reader to the end, wherever they were reading.
     messageListRef.current?.scrollToBottom('auto')
     return sendMessage(content, images, thinkingEnabled)
-  }
+  }, [isOnboarding, currentStep, handleOnboardingSend, isGenerating, activeConversationId, isDigitalHuman, sendMessage])
 
   // Handle stop - stops the current conversation's generation
-  const handleStop = async () => {
+  const handleStop = useCallback(async () => {
     if (activeConversationId) {
       await stopGeneration(activeConversationId)
     }
-  }
+  }, [activeConversationId, stopGeneration])
+
+  const handleInject = useCallback((content: string) => {
+    if (activeConversationId) injectMessage(activeConversationId, content)
+  }, [activeConversationId, injectMessage])
 
 
   // Combine real messages with mock onboarding messages
@@ -518,13 +474,11 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
       ]
     : realMessages
 
-  const displayStreamingContent = mockStreamingContent || streamingContent
   const displayIsGenerating = isMockAnimating || isGenerating
   const displayIsThinking = isMockThinking || isThinking
-  const displayIsStreaming = isStreaming  // Only real streaming (not mock)
   const hasMessages = showsMessageList({
     messageCount: displayMessages.length,
-    streamingContent: displayStreamingContent,
+    hasStreamingContent: !!mockStreamingContent || hasStreamingContent,
     isThinking: displayIsThinking,
     error,
   })
@@ -566,15 +520,13 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
     <InputArea
       key={activeConversationId ?? 'none'}
       onSend={handleSend}
-      onInject={(content) => {
-        if (activeConversationId) injectMessage(activeConversationId, content)
-      }}
+      onInject={handleInject}
       onStop={handleStop}
       isGenerating={isGenerating}
       placeholder={composerPlaceholder}
       isCompact={isCompact}
       slashCommands={slashCommands}
-      mentionArtifacts={mentionArtifacts}
+      mentionSpaceId={currentSpace?.id}
       // A digital human's tools and knowledge live in its own settings; it can
       // only act on a reference to another conversation once collaboration is on.
       mentionConversations={isDigitalHuman && !(activeApp && isConversationCollabEnabled(activeApp)) ? undefined : mentionConversations}
@@ -643,16 +595,14 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
               avatarName={isDigitalHuman ? activeAppName : undefined}
             />
           ) : (
-            <MessageList
+            <LiveTranscript
               key={activeConversationId ?? 'empty'}
               ref={messageListRef}
               conversationId={activeConversationId ?? undefined}
               thoughtsLoader={thoughtsLoader}
               messages={displayMessages}
-              streamingContent={displayStreamingContent}
+              mockStreamingContent={mockStreamingContent}
               isGenerating={displayIsGenerating}
-              isStreaming={displayIsStreaming}
-              thoughts={thoughts}
               isThinking={displayIsThinking}
               compactInfo={compactInfo}
               error={error}
@@ -660,7 +610,6 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
               onContinue={activeConversationId ? () => continueAfterInterrupt(activeConversationId) : undefined}
               onStop={handleStop}
               isCompact={isCompact}
-              textBlockVersion={textBlockVersion}
               pendingQuestion={pendingQuestion}
               onAnswerQuestion={activeConversationId ? (answers) => answerQuestion(activeConversationId, answers) : undefined}
               onAtBottomStateChange={handleAtBottomStateChange}
@@ -686,6 +635,42 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
     </div>
   )
 }
+
+const NO_THOUGHTS: Thought[] = []
+
+type LiveTranscriptProps = Omit<MessageListProps, 'streamingContent' | 'isStreaming' | 'thoughts' | 'textBlockVersion'> & {
+  /** Onboarding's simulated reply, shown in place of the live one. */
+  mockStreamingContent?: string
+}
+
+/**
+ * The transcript plus the live turn's per-token state (text, steps), which is
+ * subscribed here so that streaming re-renders this subtree only.
+ */
+const LiveTranscript = forwardRef<MessageListHandle, LiveTranscriptProps>(function LiveTranscript(
+  { mockStreamingContent, ...props },
+  ref,
+) {
+  const live = useChatStore(useShallow(s => {
+    const session = s.sessions.get(props.conversationId ?? '')
+    return {
+      streamingContent: session?.streamingContent ?? '',
+      isStreaming: session?.isStreaming ?? false,
+      thoughts: session?.thoughts ?? NO_THOUGHTS,
+      textBlockVersion: session?.textBlockVersion ?? 0,
+    }
+  }))
+  return (
+    <MessageList
+      ref={ref}
+      {...props}
+      streamingContent={mockStreamingContent || live.streamingContent}
+      isStreaming={live.isStreaming}
+      thoughts={live.thoughts}
+      textBlockVersion={live.textBlockVersion}
+    />
+  )
+})
 
 // Loading state component
 function LoadingState() {

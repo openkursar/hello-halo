@@ -1,17 +1,17 @@
 /**
- * React Hook for Canvas Lifecycle
+ * React bindings for the Canvas lifecycle manager.
  *
- * This hook bridges the imperative CanvasLifecycle manager with React's
- * declarative rendering model. It subscribes to state changes and triggers
- * re-renders when tabs, active tab, or browser state change.
- *
- * Usage:
- * ```tsx
- * const { tabs, activeTab, isOpen, openFile, closeTab } = useCanvasLifecycle()
- * ```
+ * Each hook subscribes to exactly one kind of change, so a component re-renders
+ * only for what it shows:
+ * - `useTabList()` — the tab strip: tabs added/removed/reordered, titles,
+ *   dirty/loading/error flags. Not content, not browser page churn.
+ * - `useActiveTab()` — the one tab being viewed, including its content.
+ * - `useActiveTabId()`, `useCanvasIsOpen()`, `useTabCount()` — single values.
+ * - `useBrowserState(tabId)` — one browser tab's navigation state.
+ * - `useCanvasActions()` — stable action functions; never re-renders.
  */
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useSyncExternalStore } from 'react'
 import {
   canvasLifecycle,
   type TabState,
@@ -19,192 +19,86 @@ import {
   type ContentType,
 } from '../services/canvas-lifecycle'
 
-/**
- * Main hook for Canvas lifecycle management
- * Provides reactive state and actions for tabs
- */
-export function useCanvasLifecycle() {
-  // Initialize with current state from canvasLifecycle (not empty)
-  // This ensures we have correct state even before useEffect runs
-  const [tabs, setTabs] = useState<TabState[]>(() => canvasLifecycle.getTabs())
-  const [activeTabId, setActiveTabId] = useState<string | null>(() => canvasLifecycle.getActiveTabId())
-  const [isOpen, setIsOpen] = useState(() => canvasLifecycle.getIsOpen())
-
-  // Subscribe to state changes
-  useEffect(() => {
-    // Subscribe to all changes - callbacks will be called immediately with current state
-    const unsubTabs = canvasLifecycle.onTabsChange(setTabs)
-    const unsubActive = canvasLifecycle.onActiveTabChange(setActiveTabId)
-    const unsubOpen = canvasLifecycle.onOpenStateChange(setIsOpen)
-
-    return () => {
-      unsubTabs()
-      unsubActive()
-      unsubOpen()
-    }
-  }, [])
-
-  // Compute active tab
-  const activeTab = activeTabId ? tabs.find(t => t.id === activeTabId) : undefined
-
-  // Expose actions (bound to singleton)
-  const openFile = useCallback(
-    (path: string, title?: string) => canvasLifecycle.openFile(path, title),
-    []
-  )
-
-  const openUrl = useCallback(
-    (url: string, title?: string) => canvasLifecycle.openUrl(url, title),
-    []
-  )
-
-  const attachAIBrowserView = useCallback(
-    (viewId: string, url: string, title?: string) =>
-      canvasLifecycle.attachAIBrowserView(viewId, url, title),
-    []
-  )
-
-  const openContent = useCallback(
-    (content: string, title: string, type: ContentType, language?: string) =>
-      canvasLifecycle.openContent(content, title, type, language),
-    []
-  )
-
-  const openTerminal = useCallback(
-    (sessionId: string, title?: string) => canvasLifecycle.openTerminal(sessionId, title),
-    []
-  )
-
-  const openTeam = useCallback(
-    (teamId: string, title?: string) => canvasLifecycle.openTeam(teamId, title),
-    []
-  )
-
-  const closeTab = useCallback(
-    (tabId: string) => canvasLifecycle.closeTab(tabId),
-    []
-  )
-
-  const closeAllTabs = useCallback(
-    () => canvasLifecycle.closeAll({ confirmDirty: true }),
-    []
-  )
-
-  const switchTab = useCallback(
-    (tabId: string) => canvasLifecycle.switchTab(tabId),
-    []
-  )
-
-  const switchToNextTab = useCallback(
-    () => canvasLifecycle.switchToNextTab(),
-    []
-  )
-
-  const switchToPrevTab = useCallback(
-    () => canvasLifecycle.switchToPrevTab(),
-    []
-  )
-
-  const switchToTabIndex = useCallback(
-    (index: number) => canvasLifecycle.switchToTabIndex(index),
-    []
-  )
-
-  const reorderTabs = useCallback(
-    (fromIndex: number, toIndex: number) => canvasLifecycle.reorderTabs(fromIndex, toIndex),
-    []
-  )
-
-  const refreshTab = useCallback(
-    (tabId: string) => canvasLifecycle.refreshTab(tabId),
-    []
-  )
-
-  const updateTabContent = useCallback(
-    (tabId: string, content: string) => canvasLifecycle.updateTabContent(tabId, content),
-    []
-  )
-
-  const markTabSaved = useCallback(
-    (tabId: string, content?: string) => canvasLifecycle.markTabSaved(tabId, content),
-    []
-  )
-
-  const saveScrollPosition = useCallback(
-    (tabId: string, position: number) => canvasLifecycle.saveScrollPosition(tabId, position),
-    []
-  )
-
-  const toggleEditMode = useCallback(
-    (tabId: string) => canvasLifecycle.toggleEditMode(tabId),
-    []
-  )
-
-  const setEditMode = useCallback(
-    (tabId: string, editMode: boolean) => canvasLifecycle.setEditMode(tabId, editMode),
-    []
-  )
-
-  const setOpen = useCallback(
-    (open: boolean) => canvasLifecycle.setOpen(open),
-    []
-  )
-
-  const toggleOpen = useCallback(
-    () => canvasLifecycle.toggleOpen(),
-    []
-  )
-
-  const updateBounds = useCallback(
-    () => canvasLifecycle.updateActiveBounds(),
-    []
-  )
-
-  const setContainerBoundsGetter = useCallback(
-    (getter: () => DOMRect | null) => canvasLifecycle.setContainerBoundsGetter(getter),
-    []
-  )
-
-  return {
-    // State
-    tabs,
-    activeTabId,
-    activeTab,
-    isOpen,
-    isTransitioning: canvasLifecycle.getIsTransitioning(),
-    tabCount: tabs.length,
-
-    // Tab Actions
-    openFile,
-    openUrl,
-    attachAIBrowserView,
-    openContent,
-    openTerminal,
-    openTeam,
-    closeTab,
-    closeAllTabs,
-    switchTab,
-    switchToNextTab,
-    switchToPrevTab,
-    switchToTabIndex,
-    reorderTabs,
-
-    // Content Actions
-    refreshTab,
-    updateTabContent,
-    markTabSaved,
-    saveScrollPosition,
-    toggleEditMode,
-    setEditMode,
-
-    // Layout Actions
-    setOpen,
-    toggleOpen,
-
-    // BrowserView Actions
-    updateBounds,
-    setContainerBoundsGetter,
+const subscribeTabList = (onChange: () => void) => canvasLifecycle.onTabListChange(onChange)
+const subscribeActiveTabId = (onChange: () => void) => canvasLifecycle.onActiveTabChange(onChange)
+const subscribeOpenState = (onChange: () => void) => canvasLifecycle.onOpenStateChange(onChange)
+const subscribeActiveTab = (onChange: () => void) => {
+  const offActive = canvasLifecycle.onActiveTabChange(onChange)
+  const offTab = canvasLifecycle.onTabChange(onChange)
+  const offList = canvasLifecycle.onTabListChange(onChange)
+  return () => {
+    offActive()
+    offTab()
+    offList()
   }
+}
+
+const getTabList = () => canvasLifecycle.getTabListSnapshot()
+const getActiveTabId = () => canvasLifecycle.getActiveTabId()
+const getActiveTab = () => canvasLifecycle.getActiveTab()
+const getIsOpen = () => canvasLifecycle.getIsOpen()
+const getTabCount = () => canvasLifecycle.getTabCount()
+
+/** Tabs in display order; a new array only when the list itself changes. */
+export function useTabList(): readonly TabState[] {
+  return useSyncExternalStore(subscribeTabList, getTabList)
+}
+
+/** The tab being viewed; a new object only when that tab changes. */
+export function useActiveTab(): TabState | undefined {
+  return useSyncExternalStore(subscribeActiveTab, getActiveTab)
+}
+
+export function useActiveTabId(): string | null {
+  return useSyncExternalStore(subscribeActiveTabId, getActiveTabId)
+}
+
+export function useCanvasIsOpen(): boolean {
+  return useSyncExternalStore(subscribeOpenState, getIsOpen)
+}
+
+export function useTabCount(): number {
+  return useSyncExternalStore(subscribeTabList, getTabCount)
+}
+
+const canvasActions = {
+  openFile: (path: string, title?: string) => canvasLifecycle.openFile(path, title),
+  openUrl: (url: string, title?: string) => canvasLifecycle.openUrl(url, title),
+  attachAIBrowserView: (viewId: string, url: string, title?: string) =>
+    canvasLifecycle.attachAIBrowserView(viewId, url, title),
+  openContent: (content: string, title: string, type: ContentType, language?: string) =>
+    canvasLifecycle.openContent(content, title, type, language),
+  openTerminal: (sessionId: string, title?: string) => canvasLifecycle.openTerminal(sessionId, title),
+  openTeam: (teamId: string, title?: string) => canvasLifecycle.openTeam(teamId, title),
+  closeTab: (tabId: string) => canvasLifecycle.closeTab(tabId),
+  closeAllTabs: () => canvasLifecycle.closeAll({ confirmDirty: true }),
+  switchTab: (tabId: string) => canvasLifecycle.switchTab(tabId),
+  switchToNextTab: () => canvasLifecycle.switchToNextTab(),
+  switchToPrevTab: () => canvasLifecycle.switchToPrevTab(),
+  switchToTabIndex: (index: number) => canvasLifecycle.switchToTabIndex(index),
+  reorderTabs: (fromIndex: number, toIndex: number) => canvasLifecycle.reorderTabs(fromIndex, toIndex),
+  refreshTab: (tabId: string) => canvasLifecycle.refreshTab(tabId),
+  updateTabContent: (tabId: string, content: string) => canvasLifecycle.updateTabContent(tabId, content),
+  markTabSaved: (tabId: string, content?: string) => canvasLifecycle.markTabSaved(tabId, content),
+  revertTabContent: (tabId: string) => canvasLifecycle.revertTabContent(tabId),
+  resolveDiskConflict: (tabId: string, keep: 'disk' | 'mine') => canvasLifecycle.resolveDiskConflict(tabId, keep),
+  saveScrollPosition: (tabId: string, position: number) => canvasLifecycle.saveScrollPosition(tabId, position),
+  toggleEditMode: (tabId: string) => canvasLifecycle.toggleEditMode(tabId),
+  setEditMode: (tabId: string, editMode: boolean) => canvasLifecycle.setEditMode(tabId, editMode),
+  setOpen: (open: boolean) => canvasLifecycle.setOpen(open),
+  toggleOpen: () => canvasLifecycle.toggleOpen(),
+  // Native browser view placement, driven by the viewer that owns the container.
+  setContainerBoundsGetter: (getter: () => DOMRect | null) => canvasLifecycle.setContainerBoundsGetter(getter),
+  ensureActiveBrowserViewShown: () => canvasLifecycle.ensureActiveBrowserViewShown(),
+  updateActiveBounds: () => canvasLifecycle.updateActiveBounds(),
+  retryBlockedBrowserView: (tabId: string) => canvasLifecycle.retryBlockedBrowserView(tabId),
+} as const
+
+export type CanvasActions = typeof canvasActions
+
+/** Canvas actions. The same object on every call — safe in deps, never re-renders. */
+export function useCanvasActions(): CanvasActions {
+  return canvasActions
 }
 
 /**
@@ -238,53 +132,6 @@ export function useBrowserState(tabId: string | undefined) {
   }, [tabId])
 
   return browserState
-}
-
-/**
- * Hook for just the open state (minimal re-renders)
- */
-export function useCanvasIsOpen(): boolean {
-  const [isOpen, setIsOpen] = useState(canvasLifecycle.getIsOpen())
-
-  useEffect(() => {
-    const unsub = canvasLifecycle.onOpenStateChange(setIsOpen)
-    return unsub
-  }, [])
-
-  return isOpen
-}
-
-/**
- * Hook for just the tab count (minimal re-renders)
- */
-export function useTabCount(): number {
-  const [tabs, setTabs] = useState<TabState[]>(canvasLifecycle.getTabs())
-
-  useEffect(() => {
-    const unsub = canvasLifecycle.onTabsChange(setTabs)
-    return unsub
-  }, [])
-
-  return tabs.length
-}
-
-/**
- * Hook for active tab only (minimal re-renders)
- */
-export function useActiveTab(): TabState | undefined {
-  const [tabs, setTabs] = useState<TabState[]>(canvasLifecycle.getTabs())
-  const [activeTabId, setActiveTabId] = useState<string | null>(canvasLifecycle.getActiveTabId())
-
-  useEffect(() => {
-    const unsubTabs = canvasLifecycle.onTabsChange(setTabs)
-    const unsubActive = canvasLifecycle.onActiveTabChange(setActiveTabId)
-    return () => {
-      unsubTabs()
-      unsubActive()
-    }
-  }, [])
-
-  return activeTabId ? tabs.find(t => t.id === activeTabId) : undefined
 }
 
 // Re-export types for convenience

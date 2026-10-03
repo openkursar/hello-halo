@@ -18,7 +18,7 @@ async function settleTurn(ctx: BackendContext, ref: ConversationRef, turnId: num
   // A remote team member has no local transcript, so its relayed stream is the
   // only record: keep it and stop the in-progress indicators.
   const team = parseTeamSessionKey(ref.conversationId)
-  const preserveRelayed = !!team && isRemoteMemberAppId(team.appId)
+  const preserveRelayed = !!team && isRemoteMemberAppId(team.teamId, team.appId)
 
   ctx.set((state) => {
     const sessions = new Map(state.sessions)

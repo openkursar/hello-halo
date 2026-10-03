@@ -636,6 +636,14 @@ function ensureSandboxSettings(configDir: string): void {
 const AI_SDK_ENV_PREFIXES = ['ANTHROPIC_', 'OPENAI_', 'CLAUDE_']
 
 /**
+ * Halo's own subprocess-facing vars. They describe the self-API capability, so
+ * they may only ever come from the explicit `selfApi` injection below — an
+ * ambient one (a shell that exports HALO_API_URL) would tell sessions without
+ * the toolset that they have it, breaking the all-three-or-none contract.
+ */
+const SELF_API_ENV_KEYS = ['HALO_API_URL', 'HALO_API_TOKEN', 'HALO_SPACE_ID']
+
+/**
  * Copy of process.env with all AI SDK variables removed.
  */
 export function getCleanUserEnv(): Record<string, string | undefined> {
@@ -645,6 +653,7 @@ export function getCleanUserEnv(): Record<string, string | undefined> {
       delete env[key]
     }
   }
+  for (const key of SELF_API_ENV_KEYS) delete env[key]
   return env
 }
 

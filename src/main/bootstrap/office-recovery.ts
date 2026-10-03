@@ -19,7 +19,13 @@ import { joinTeamOffice } from '../controllers/team-invite.controller'
  * Idempotent (hostOffice/joinOffice tolerate re-entry) and best-effort: a
  * single office's failure never aborts the rest.
  */
-export function recoverPersistedOffices(teamStore: TeamStore | null): void {
+export function recoverPersistedOffices(
+  teamStore: TeamStore | null,
+  opts: {
+    /** A re-join refused because this machine and the office run different Halo versions. */
+    onUpdateRequired?: (officeId: string) => void
+  } = {}
+): void {
   if (!teamStore) {
     console.warn('[Bootstrap] Office recovery skipped: team store unavailable')
     return
@@ -52,8 +58,11 @@ export function recoverPersistedOffices(teamStore: TeamStore | null): void {
       inviteToken: conn.inviteToken,
       bringAppIds: conn.bringAppIds,
     })
-      .then((res) =>
-        res.success
+      .then((res) => {
+        // Unlike other refusals, waiting cannot fix this one, and at boot there is
+        // no join dialog to say so: the user must hear it now.
+        if (!res.success && res.error === 'VERSION_INCOMPATIBLE') opts.onUpdateRequired?.(conn.officeId)
+        return res.success
           ? console.log(`[Bootstrap] Re-joined office=${conn.officeId}`)
           : // A re-join failure is NOT a safe purge trigger: AUTH_REJECTED here fires
             // both for a genuinely revoked/dissolved office AND for a host that is
@@ -64,7 +73,7 @@ export function recoverPersistedOffices(teamStore: TeamStore | null): void {
             // is instead cleaned on the live `office-dissolved` frame (see
             // onOfficeDissolvedRemote) and its credentials are revoked on dissolve.
             console.warn(`[Bootstrap] Re-join failed office=${conn.officeId}: ${res.error}`)
-      )
+      })
       .catch((err) => console.error(`[Bootstrap] Re-join threw office=${conn.officeId}:`, err))
   }
 

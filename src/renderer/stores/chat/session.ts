@@ -5,6 +5,7 @@ import type { ChatSlice } from './internal'
 import { PULSE_READ_GRACE_PERIOD_MS, api, createEmptySessionState } from './internal'
 import type { Thought, PulseReadInfo } from './internal'
 import { conversationKind, backendFor } from './backend'
+import { shedBackgroundDetail } from './backend/cache'
 
 // Store-level timer for pulseReadAt cleanup (independent of UI components)
 let _pulseCleanupTimer: ReturnType<typeof setTimeout> | null = null
@@ -42,7 +43,7 @@ function splitTaskStateRows(rows: TaskStateRow[]): {
   return { unseenCompletions, pulseReadAt }
 }
 
-export const createSessionSlice: ChatSlice<'answerQuestion' | 'loadMessageThoughts' | 'cleanupPulseReadAt' | 'keepPulseItem' | 'removePulseItem' | 'loadPersistedTaskState' | 'syncPersistedTaskState' | 'resetSession' | 'setSessionError' | 'markSessionStopped' | 'reset' | 'resetSpace' | 'forgetConversation'> = (set, get) => ({
+export const createSessionSlice: ChatSlice<'answerQuestion' | 'loadMessageThoughts' | 'cleanupPulseReadAt' | 'keepPulseItem' | 'removePulseItem' | 'loadPersistedTaskState' | 'syncPersistedTaskState' | 'resetSession' | 'setSessionError' | 'markSessionStopped' | 'reset' | 'resetSpace' | 'forgetConversation' | 'shedBackgroundDetail'> = (set, get) => ({
   answerQuestion: async (conversationId: string, answers: Record<string, string>) => {
     const session = get().sessions.get(conversationId)
     if (!session?.pendingQuestion) {
@@ -316,6 +317,10 @@ export const createSessionSlice: ChatSlice<'answerQuestion' | 'loadMessageThough
   // Drop every trace of one conversation, wherever it lives: cache, live turn,
   // slash-command info, unsent draft, pulse entries, and the board selection if
   // it points at it.
+  shedBackgroundDetail: () => {
+    set((state) => shedBackgroundDetail(state))
+  },
+
   forgetConversation: (conversationId: string) => {
     set((state) => {
       const drop = <V,>(map: Map<string, V>): Map<string, V> => {

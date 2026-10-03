@@ -107,3 +107,28 @@ export function prependOlder(cached: readonly Message[], older: readonly Message
   const loaded = new Set(cached.map(m => m.id))
   return [...older.filter(m => !loaded.has(m.id)), ...cached]
 }
+
+/**
+ * Where a re-read after a finished turn may start: the last message the user
+ * sent (an injection is not one). Everything before it belongs to finished
+ * turns and no longer changes; the turn's own messages — its user message,
+ * the reply placeholder filled in at the end, injections — come after it.
+ */
+export function rereadAnchor(messages: readonly Message[]): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]
+    if (message.role === 'user' && !message.source && !isPendingMessage(message)) return message.id
+  }
+  return undefined
+}
+
+/**
+ * The full transcript for a read that returned messages from `fromId` on:
+ * the held messages before `fromId`, then the read. Null when `fromId` is no
+ * longer among the held messages (the conversation changed underneath).
+ */
+export function joinFromAnchor(held: readonly Message[], fromRead: readonly Message[], fromId: string): Message[] | null {
+  const persisted = held.filter(m => !isPendingMessage(m))
+  const at = persisted.findIndex(m => m.id === fromId)
+  return at < 0 ? null : [...persisted.slice(0, at), ...fromRead]
+}

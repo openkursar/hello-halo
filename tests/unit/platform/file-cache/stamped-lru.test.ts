@@ -64,7 +64,7 @@ describe('createStampedLru', () => {
     expect(cache.get(b, () => 'B2')).toBe('B2')
   })
 
-  it('evicts by total weight but always keeps the newest entry', () => {
+  it('evicts by total weight, least recently used first', () => {
     const cache = createStampedLru<string>({ maxEntries: 10, maxWeight: 10 })
     const a = file('a', '123456')
     const b = file('b', '123456')
@@ -72,11 +72,30 @@ describe('createStampedLru', () => {
     cache.get(b, () => 'B')
     expect(cache.size).toBe(1)
     expect(cache.get(b, () => 'B2')).toBe('B')
+  })
 
+  it('never retains a single entry heavier than the whole budget', () => {
+    const cache = createStampedLru<string>({ maxEntries: 10, maxWeight: 10 })
+    const small = file('small', '12')
+    cache.get(small, () => 'S')
     const huge = file('huge', '1'.repeat(50))
-    cache.get(huge, () => 'H')
-    expect(cache.size).toBe(1)
-    expect(cache.get(huge, () => 'H2')).toBe('H')
+    expect(cache.get(huge, () => 'H')).toBe('H')
+    expect(cache.get(huge, () => 'H2')).toBe('H2')
+    // The oversize read did not evict what fits.
+    expect(cache.get(small, () => 'S2')).toBe('S')
+  })
+
+  it('hands the previous value to derive after the file changes', () => {
+    const cache = createStampedLru<string>({ maxEntries: 10, maxWeight: 1e6 })
+    const path = file('grow', 'a')
+    cache.get(path, () => 'v1')
+    writeFileSync(path, 'ab')
+    let seen: string | undefined
+    cache.get(path, (previous) => {
+      seen = previous
+      return 'v2'
+    })
+    expect(seen).toBe('v1')
   })
 
   it('clear empties the cache', () => {

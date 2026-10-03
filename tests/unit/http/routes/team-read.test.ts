@@ -70,8 +70,11 @@ vi.mock('../../../../src/main/apps/team', () => ({
 const readTeamMemberMessages = vi.fn<[string, string, string], unknown[]>()
 
 vi.mock('../../../../src/main/apps/runtime/app-chat', () => ({
-  readTeamMemberMessages: (appId: string, teamId: string, epochId: string) =>
-    readTeamMemberMessages(appId, teamId, epochId),
+  // Mirrors the real seq stamping so the route's sinceSeq handling is exercised.
+  readTeamMemberHistory: (appId: string, teamId: string, epochId: string, sinceSeq?: number) => {
+    const rows = readTeamMemberMessages(appId, teamId, epochId).map((m, i) => ({ ...(m as object), seq: i + 1 }))
+    return sinceSeq ? rows.slice(sinceSeq) : rows
+  },
 }))
 
 // Federation manager: a remote-owned member's transcript is pulled from its
@@ -210,6 +213,22 @@ describe('GET /api/teams/:teamId/chat-messages', () => {
       expect(body.data).toHaveLength(1)
     })
     expect(readTeamMemberMessages).toHaveBeenCalledWith('member-1', 'X', 'epoch-1')
+  })
+
+  it('returns only rows after ?sinceSeq, stamped with seq', async () => {
+    listMembersByTeam.mockReturnValue([{ appId: 'member-1' }])
+    getCurrentEpochForTeam.mockReturnValue({ id: 'epoch-1' })
+    readTeamMemberMessages.mockReturnValue([
+      { id: 'm1', role: 'user', content: 'a' },
+      { id: 'm2', role: 'assistant', content: 'b' },
+      { id: 'm3', role: 'user', content: 'c' },
+    ])
+
+    await withServer(buildApp(null), async (base) => {
+      const res = await fetch(`${base}/api/teams/X/chat-messages?appId=member-1&sinceSeq=2`)
+      const body = await res.json()
+      expect(body.data).toEqual([{ id: 'm3', role: 'user', content: 'c', seq: 3 }])
+    })
   })
 
   it('honors an explicit ?epochId over the current epoch', async () => {

@@ -1,0 +1,64 @@
+diff --git a/node_modules/docx-preview/dist/docx-preview.js b/node_modules/docx-preview/dist/docx-preview.js
+index af4b45a..216d40d 100644
+--- a/node_modules/docx-preview/dist/docx-preview.js
++++ b/node_modules/docx-preview/dist/docx-preview.js
+@@ -1119,6 +1119,14 @@
+             this.parts = [];
+             this.partsMap = {};
+             this.contentTypes = [];
++            this._objectUrls = [];
++            this._disposed = false;
++        }
++        disposeUrls() {
++            this._disposed = true;
++            for (const url of this._objectUrls)
++                URL.revokeObjectURL(url);
++            this._objectUrls = [];
+         }
+         static async load(blob, parser, options) {
+             var d = new WordDocument();
+@@ -1229,7 +1237,11 @@
+             if (this._options.useBase64URL) {
+                 return blobToBase64(blob);
+             }
+-            return URL.createObjectURL(blob);
++            if (this._disposed)
++                return null;
++            const url = URL.createObjectURL(blob);
++            this._objectUrls.push(url);
++            return url;
+         }
+         findPartByRelId(id, basePart = null) {
+             var rel = (basePart.rels ?? this.rels).find(r => r.id == id);
+diff --git a/node_modules/docx-preview/dist/docx-preview.mjs b/node_modules/docx-preview/dist/docx-preview.mjs
+index 35fb7e7..1da302a 100644
+--- a/node_modules/docx-preview/dist/docx-preview.mjs
++++ b/node_modules/docx-preview/dist/docx-preview.mjs
+@@ -1115,6 +1115,14 @@ class WordDocument {
+         this.parts = [];
+         this.partsMap = {};
+         this.contentTypes = [];
++        this._objectUrls = [];
++        this._disposed = false;
++    }
++    disposeUrls() {
++        this._disposed = true;
++        for (const url of this._objectUrls)
++            URL.revokeObjectURL(url);
++        this._objectUrls = [];
+     }
+     static async load(blob, parser, options) {
+         var d = new WordDocument();
+@@ -1225,7 +1233,11 @@ class WordDocument {
+         if (this._options.useBase64URL) {
+             return blobToBase64(blob);
+         }
+-        return URL.createObjectURL(blob);
++        if (this._disposed)
++            return null;
++        const url = URL.createObjectURL(blob);
++        this._objectUrls.push(url);
++        return url;
+     }
+     findPartByRelId(id, basePart = null) {
+         var rel = (basePart.rels ?? this.rels).find(r => r.id == id);

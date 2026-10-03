@@ -174,4 +174,21 @@ describe('resilience upgrades (rig)', () => {
     // The tenure never advanced — no split brain is possible on revival.
     expect(b.office.getTerm()).toBe(1)
   })
+
+  it('a catch-up answered by a voter already in a newer term does not make that voter the authority', () => {
+    cluster = buildCluster({ ids: ['a', 'b', 'c', 'd'] })
+    const { b, c } = cluster.nodes
+    cluster.beat()
+    cluster.flush()
+    expect(b.office.handover.getBelievedAuthority()).toBe('a')
+    // c learned that d won term 2; b, cut off from d, still believes a at term 1.
+    c.office.handover.observeFrameTerm('d', 2)
+    expect(c.office.getTerm()).toBe(2)
+    cluster.partition([['a', 'b', 'c'], ['d']])
+    // b pulls a missing tail from c, as a vetoed candidate pulls from its voter.
+    b.office.replication.requestCatchupFrom('c')
+    cluster.flush()
+    // c answers at its own term, but c is not the authority of that term.
+    expect(b.office.handover.getBelievedAuthority()).toBe('a')
+  })
 })

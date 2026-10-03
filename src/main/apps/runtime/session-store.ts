@@ -14,7 +14,7 @@
  * derived from file content (see convertEventsToMessages).
  */
 
-import { existsSync, mkdirSync, appendFileSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, appendFileSync, readFileSync, writeFileSync, fstatSync, statSync, copyFileSync, readSync } from 'fs'
 import { join } from 'path'
 import type { TeamTriggerContext } from '../../../shared/apps/team-types'
 import type { ImageAttachment } from '../../../shared/types/image-attachment'
@@ -28,6 +28,7 @@ import type {
 import { pageTranscript, withThoughtsUnloaded } from '../../../shared/transcript'
 import { createStampedLru } from '../../platform/file-cache'
 import { convertEventsToMessages, type StoredEvent } from './session-transcript'
+import { LineIndex, scanJsonlLines, withFileDescriptor } from './session-file-reader'
 
 // ============================================
 // Writer
@@ -118,75 +119,233 @@ export function openSessionWriter(spacePath: string, appId: string, runId: strin
 // ============================================
 
 /**
- * A session file parsed into messages, thoughts included. Cached per file
- * (see `parsedSessions`) so paging and on-demand thought loads do not re-parse a
- * long transcript on every call. Treat as immutable — it is shared.
+ * A session file parsed into messages, thoughts included, plus the parse
+ * position so an append is parsed from where the last read stopped. Cached per
+ * file (see `parsedSessions`) so paging and on-demand thought loads do not
+ * re-parse a long transcript on every call. Treat as immutable — it is shared.
  */
 interface ParsedSession {
   messages: TranscriptMessage[]
+  ino: number
+  /** Bytes consumed, through the last complete line. */
+  endByte: number
+  nextLine: number
+  /** The bytes just before `endByte`; a resume requires them unchanged (the file was appended to, not rewritten). */
+  probe: string
+  events: StoredEvent[]
+  lines: number[]
 }
 
+const PROBE_BYTES = 64
+
+function readProbe(fd: number, endByte: number): string {
+  const start = Math.max(0, endByte - PROBE_BYTES)
+  const buffer = Buffer.alloc(endByte - start)
+  readSync(fd, buffer, 0, buffer.length, start)
+  return buffer.toString('base64')
+}
+
+/**
+ * Files up to this size are parsed whole and cached; larger ones are read in
+ * windows through a line index (see `readSessionTranscript`). Also the cache's
+ * weight budget, so a larger file is never retained whole.
+ */
+export const FULL_PARSE_MAX_BYTES = 32 * 1024 * 1024
+/** Bytes read per window of a large file. */
+export const SESSION_WINDOW_BYTES = 8 * 1024 * 1024
+
 // Bounded by file bytes; parsed messages cost 2-3x that on the heap.
-const parsedSessions = createStampedLru<ParsedSession>({ maxEntries: 8, maxWeight: 32 * 1024 * 1024 })
+const parsedSessions = createStampedLru<ParsedSession>({ maxEntries: 8, maxWeight: FULL_PARSE_MAX_BYTES })
 
 /** Files already reported unreadable: every read retries, the log says it once. */
 const reportedUnreadable = new Set<string>()
+/** Large files already reported as read whole by a non-paged caller. */
+const reportedWholeReads = new Set<string>()
 
-function parseSessionFile(filePath: string): ParsedSession | null {
-  let raw: string
-  try {
-    raw = readFileSync(filePath, 'utf8')
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && !reportedUnreadable.has(filePath)) {
-      reportedUnreadable.add(filePath)
-      console.warn(`[SessionStore] Cannot read session file ${filePath}; showing it as empty:`, error)
-    }
-    return null
+function reportUnreadable(filePath: string, error: unknown): void {
+  if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && !reportedUnreadable.has(filePath)) {
+    reportedUnreadable.add(filePath)
+    console.warn(`[SessionStore] Cannot read session file ${filePath}; showing it as empty:`, error)
   }
+}
 
-  // Physical line numbers (blank and malformed lines included) are what message
-  // ids derive from, so they must not shift when a line is skipped.
+/**
+ * Parse [start, end) of `fd` into events. Physical line numbers (blank and
+ * malformed lines included) are what message ids derive from, so they never
+ * shift when a line is skipped. A torn final line is a write in progress;
+ * anywhere else an unparsable line is damage.
+ */
+function parseRange(fd: number, filePath: string, start: number, end: number, startLine: number) {
   const events: StoredEvent[] = []
   const lines: number[] = []
-  const rawLines = raw.split('\n')
-  let lastNonBlank = rawLines.length - 1
-  while (lastNonBlank > 0 && !rawLines[lastNonBlank].trim()) lastNonBlank--
   const corrupt: number[] = []
-  for (let i = 0; i < rawLines.length; i++) {
-    if (!rawLines[i].trim()) continue
+  const scan = scanJsonlLines(fd, start, end, startLine, (text, line) => {
+    if (!text.trim()) return
     try {
-      events.push(JSON.parse(rawLines[i]))
-      lines.push(i + 1)
+      events.push(JSON.parse(text))
+      lines.push(line)
     } catch {
-      // A torn final line is a write still in progress; anywhere else it is damage.
-      if (i !== lastNonBlank) corrupt.push(i + 1)
+      corrupt.push(line)
+    }
+  })
+  let trailingEvent: { event: StoredEvent; line: number } | null = null
+  if (scan.trailing && scan.trailing.text.trim()) {
+    try {
+      trailingEvent = { event: JSON.parse(scan.trailing.text), line: scan.trailing.line }
+    } catch {
+      // In progress; read again once its newline lands.
     }
   }
   if (corrupt.length > 0) {
     console.warn(`[SessionStore] Skipped ${corrupt.length} unreadable line(s) in ${filePath} (first: line ${corrupt[0]})`)
   }
-  return { messages: convertEventsToMessages(events, lines) }
+  return { events, lines, trailingEvent, endByte: scan.endByte, nextLine: scan.nextLine }
 }
 
-function loadParsedSession(spacePath: string, appId: string, runId: string): ParsedSession | null {
-  const filePath = getSessionFilePath(spacePath, appId, runId)
-  return parsedSessions.get(filePath, () => parseSessionFile(filePath))
+function toMessages(events: StoredEvent[], lines: number[], trailing: { event: StoredEvent; line: number } | null) {
+  return trailing
+    ? convertEventsToMessages([...events, trailing.event], [...lines, trailing.line])
+    : convertEventsToMessages(events, lines)
+}
+
+/** Parse a whole file, continuing from `previous` when the file only grew since. */
+function parseSessionFile(filePath: string, previous?: ParsedSession): ParsedSession | null {
+  try {
+    return withFileDescriptor(filePath, (fd) => {
+      const { size, ino } = fstatSync(fd)
+      const resume = previous && previous.ino === ino && previous.endByte <= size
+        && readProbe(fd, previous.endByte) === previous.probe
+        ? previous
+        : undefined
+      const parsed = parseRange(fd, filePath, resume?.endByte ?? 0, size, resume?.nextLine ?? 1)
+      const events = resume ? resume.events.concat(parsed.events) : parsed.events
+      const lines = resume ? resume.lines.concat(parsed.lines) : parsed.lines
+      return {
+        messages: toMessages(events, lines, parsed.trailingEvent),
+        ino,
+        endByte: parsed.endByte,
+        nextLine: parsed.nextLine,
+        probe: readProbe(fd, parsed.endByte),
+        events,
+        lines,
+      }
+    })
+  } catch (error) {
+    reportUnreadable(filePath, error)
+    return null
+  }
+}
+
+function sessionFileSize(filePath: string): number | null {
+  try {
+    return statSync(filePath).size
+  } catch (error) {
+    reportUnreadable(filePath, error)
+    return null
+  }
+}
+
+function loadParsedSession(filePath: string): ParsedSession | null {
+  return parsedSessions.get(filePath, (previous) => parseSessionFile(filePath, previous))
+}
+
+function lineIndexPath(filePath: string): string {
+  return filePath.replace(/\.jsonl$/, '.lineidx.json')
+}
+
+/**
+ * Messages of one window of a large file: [start, end) widened to line starts.
+ *
+ * A window that does not begin at the file start may open in the middle of a
+ * turn, so its first message is dropped — the next older window reads it whole.
+ * One turn can be larger than a window, so when dropping it would leave no
+ * complete message the window doubles backwards until one fits (or reaches the
+ * file start): a page is never empty while messages exist. A window placed on a
+ * message's first line (`startsAtMessage`) instead grows forwards until that
+ * message ends inside it.
+ */
+function readWindow(
+  filePath: string,
+  choose: (fd: number, index: LineIndex) => { start: number; end: number; startsAtMessage?: boolean },
+) {
+  return withFileDescriptor(filePath, (fd) => {
+    const index = LineIndex.open(lineIndexPath(filePath), fd)
+    const fileSize = fstatSync(fd).size
+    const chosen = choose(fd, index)
+    let rawStart = chosen.start
+    let end = chosen.end
+    let span = Math.max(1, end - rawStart)
+    for (;;) {
+      const { byte: start, line } = index.lineStartingAtOrAfter(fd, rawStart)
+      const parsed = parseRange(fd, filePath, start, end, line)
+      const trailing = end >= index.indexedBytes ? parsed.trailingEvent : null
+      const messages = toMessages(parsed.events, parsed.lines, trailing)
+      if (chosen.startsAtMessage) {
+        if (messages.length >= 2 || end >= fileSize) return { messages, truncated: start > 0, end }
+        span *= 2
+        end = Math.min(fileSize, start + span)
+        continue
+      }
+      if (start === 0) return { messages, truncated: false, end }
+      if (messages.length >= 2) return { messages: messages.slice(1), truncated: true, end }
+      span *= 2
+      rawStart = Math.max(0, end - span)
+    }
+  })
+}
+
+function lineOfMessageId(messageId: string | undefined): number | null {
+  const match = messageId ? /^session-msg-(\d+)$/.exec(messageId) : null
+  return match ? Number(match[1]) : null
 }
 
 /**
  * Read a run's session JSONL and convert to renderer-compatible messages, each
  * with its full thought process.
  *
- * Returns an empty array if the file doesn't exist or is unreadable.
+ * Whole-transcript readers belong to small files; a caller that only needs the
+ * recent part passes `limit` (newest `limit` messages) and never pays for the
+ * rest of a large file. Returns an empty array if the file doesn't exist or is
+ * unreadable.
  */
-export function readSessionMessages(spacePath: string, appId: string, runId: string): TranscriptMessage[] {
-  return [...(loadParsedSession(spacePath, appId, runId)?.messages ?? [])]
+export function readSessionMessages(
+  spacePath: string,
+  appId: string,
+  runId: string,
+  options: { limit?: number } = {}
+): TranscriptMessage[] {
+  const filePath = getSessionFilePath(spacePath, appId, runId)
+  const size = sessionFileSize(filePath)
+  if (size === null) return []
+  if (size > FULL_PARSE_MAX_BYTES) {
+    if (options.limit !== undefined) {
+      try {
+        return readWindow(filePath, (_fd, index) => ({
+          start: Math.max(0, index.indexedBytes - SESSION_WINDOW_BYTES),
+          end: size,
+        })).messages.slice(-options.limit)
+      } catch (error) {
+        reportUnreadable(filePath, error)
+        return []
+      }
+    }
+    if (!reportedWholeReads.has(filePath)) {
+      reportedWholeReads.add(filePath)
+      console.warn(`[SessionStore] Whole read of a large transcript (${Math.round(size / 1048576)} MB, not cached): ${filePath}`)
+    }
+  }
+  const messages = loadParsedSession(filePath)?.messages ?? []
+  return options.limit !== undefined ? messages.slice(-options.limit) : [...messages]
 }
 
 /**
  * One page of a session's transcript, newest first (see `pageTranscript`).
  * Messages carry `thoughts: null` plus `thoughtsSummary`; load a message's
  * thought process with `readSessionMessageThoughts`.
+ *
+ * A large file is read one window at a time: the newest window for the first
+ * page, the window ending at `before` for older pages. `total` then counts the
+ * messages read so far, not the whole file.
  */
 export function readSessionTranscript(
   spacePath: string,
@@ -194,7 +353,27 @@ export function readSessionTranscript(
   runId: string,
   request: TranscriptPageRequest = {}
 ): TranscriptPage {
-  const page = pageTranscript(loadParsedSession(spacePath, appId, runId)?.messages ?? [], request)
+  const filePath = getSessionFilePath(spacePath, appId, runId)
+  const size = sessionFileSize(filePath)
+  if (size !== null && size > FULL_PARSE_MAX_BYTES) {
+    try {
+      const beforeLine = lineOfMessageId(request.before)
+      const window = readWindow(filePath, (fd, index) => {
+        const end = beforeLine !== null ? index.offsetOfLine(fd, beforeLine) ?? size : size
+        return { start: Math.max(0, end - SESSION_WINDOW_BYTES), end }
+      })
+      const page = pageTranscript(window.messages, { limit: request.limit, through: request.through })
+      return {
+        ...page,
+        hasMoreBefore: page.hasMoreBefore || window.truncated,
+        messages: page.messages.map(withThoughtsUnloaded),
+      }
+    } catch (error) {
+      reportUnreadable(filePath, error)
+      return pageTranscript([], request)
+    }
+  }
+  const page = pageTranscript(size === null ? [] : loadParsedSession(filePath)?.messages ?? [], request)
   return { ...page, messages: page.messages.map(withThoughtsUnloaded) }
 }
 
@@ -205,7 +384,26 @@ export function readSessionMessageThoughts(
   runId: string,
   messageId: string
 ): Thought[] {
-  const message = loadParsedSession(spacePath, appId, runId)?.messages.find(m => m.id === messageId)
+  const filePath = getSessionFilePath(spacePath, appId, runId)
+  const size = sessionFileSize(filePath)
+  if (size === null) return []
+  let message: TranscriptMessage | undefined
+  if (size > FULL_PARSE_MAX_BYTES) {
+    const line = lineOfMessageId(messageId)
+    if (line === null) return []
+    try {
+      // The window starts exactly at the message, so it is read whole.
+      message = readWindow(filePath, (fd, index) => {
+        const start = index.offsetOfLine(fd, line) ?? size
+        return { start, end: Math.min(size, start + SESSION_WINDOW_BYTES), startsAtMessage: true }
+      }).messages.find(m => m.id === messageId)
+    } catch (error) {
+      reportUnreadable(filePath, error)
+      return []
+    }
+  } else {
+    message = loadParsedSession(filePath)?.messages.find(m => m.id === messageId)
+  }
   return message?.thoughts ? [...message.thoughts] : []
 }
 
@@ -262,7 +460,7 @@ export function copySessionJsonl(
   try {
     const dir = getRunsDir(spacePath, appId)
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-    writeFileSync(toPath, readFileSync(fromPath, 'utf8'), 'utf8')
+    copyFileSync(fromPath, toPath)
     return true
   } catch (err) {
     console.error(`[SessionStore] Failed to copy transcript ${fromRunId} → ${toRunId}:`, err)

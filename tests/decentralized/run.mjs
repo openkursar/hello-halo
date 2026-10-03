@@ -44,6 +44,10 @@ const SUITES = {
     file: 'checklist-perf.mjs',
     blurb: '§5 performance (--long-run-minutes / --soak-minutes for full duration)',
   },
+  scale: {
+    file: 'checklist-federation-scale.mjs',
+    blurb: 'Host + 30 joiners: per-joiner inbound bounded by own + open + digest, not office size (31 nodes; run alone)',
+  },
   lifecycle: {
     file: 'checklist-data-lifecycle.mjs',
     blurb: '§7 data lifecycle & security (deletion / credentials / log secret scan)',

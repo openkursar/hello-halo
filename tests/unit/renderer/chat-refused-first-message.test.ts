@@ -10,7 +10,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { Conversation, ConversationMeta } from '../../../src/renderer/types'
 
-const apiMock = vi.hoisted(() => ({ sendMessage: vi.fn() }))
+const apiMock = vi.hoisted(() => ({ sendMessage: vi.fn(), retainConversationDetail: vi.fn(() => () => {}), isConversationDetailRetained: vi.fn(() => true) }))
 vi.mock('../../../src/renderer/api', () => ({ api: apiMock }))
 // Module-load subscribers elsewhere in the import graph only need callable stubs.
 vi.mock('../../../src/renderer/services/canvas-lifecycle', () => ({
@@ -53,7 +53,7 @@ it('shows the error of a refused first message in an empty conversation', async 
   const messages = store.getState().conversationCache.get('c')!.messages
   const session = store.getState().sessions.get('c')!
   expect(messages).toHaveLength(0)
-  expect(showsMessageList({ messageCount: messages.length, streamingContent: '', isThinking: false, error: session.error })).toBe(true)
+  expect(showsMessageList({ messageCount: messages.length, hasStreamingContent: false, isThinking: false, error: session.error })).toBe(true)
 
   const html = renderToStaticMarkup(createElement(MessageList as any, {
     conversationId: 'c',
@@ -73,5 +73,5 @@ it('shows the error of a refused first message in an empty conversation', async 
 })
 
 it('keeps the empty state for a conversation with nothing to show', () => {
-  expect(showsMessageList({ messageCount: 0, streamingContent: '', isThinking: false, error: null })).toBe(false)
+  expect(showsMessageList({ messageCount: 0, hasStreamingContent: false, isThinking: false, error: null })).toBe(false)
 })

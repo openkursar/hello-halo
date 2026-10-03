@@ -15,7 +15,7 @@ import { useState, useEffect, useRef } from 'react'
 import { highlightCode } from '../lib/highlight-loader'
 
 // Simple HTML escape for plain text fallback
-function escapeHtml(text: string): string {
+export function escapeHtml(text: string): string {
   return text
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')

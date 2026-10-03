@@ -16,12 +16,12 @@ import { relative, sep } from 'path'
 import { getMainWindow } from '../foundation/window.service'
 import { broadcastToAll } from '../http/websocket'
 import {
-  initSpaceWatcher,
-  destroySpaceWatcher,
+  retainSpaceWatcher,
+  releaseSpaceWatcher,
   scanTreeViaWorker,
-  scanFlatViaWorker,
   refreshIgnoreRules as refreshWorkerIgnoreRules,
-  setFsEventsHandler,
+  addFsEventsHandler,
+  addFsEventsLostHandler,
   shutdown as shutdownWorker
 } from './watcher-host.service'
 import type { ProcessedFsEvent } from '../../shared/protocol/file-watcher.protocol'
@@ -32,14 +32,17 @@ export type {
   CachedArtifact,
   CachedTreeNode,
   ArtifactChangeEvent,
-  ArtifactTreeUpdateEvent
+  ArtifactTreeUpdateEvent,
+  ArtifactChange,
+  ArtifactChangeBatchEvent
 } from '../../shared/types/artifact'
 
 import type {
-  CachedArtifact,
   CachedTreeNode,
   ArtifactChangeEvent,
-  ArtifactTreeUpdateEvent
+  ArtifactTreeUpdateEvent,
+  ArtifactChange,
+  ArtifactChangeBatchEvent
 } from '../../shared/types/artifact'
 
 /**
@@ -72,61 +75,34 @@ function broadcastToAllClients(channel: string, data: Record<string, unknown>): 
 interface SpaceCache {
   spaceId: string
   rootPath: string
-  // Cache for flat list (only top-level items for card view)
-  flatItems: Map<string, CachedArtifact>
   // Cache for tree structure: key = directory absolute path, value = sorted children
   treeNodes: Map<string, CachedTreeNode[]>
   // Track loaded directories for lazy loading
   loadedDirs: Set<string>
-  // Last update timestamp
-  lastUpdate: number
-  // Maximum depth used for the last flat scan (for cache invalidation)
-  cachedMaxDepth: number
   // Whether watcher has been requested for this space
   watcherInitialized: boolean
+  /** Client id → when it last retained this space (holds are leases; see sweepExpiredSpaceHolds). */
+  clients: Map<string, number>
+  // Last time any request touched this space; orders eviction
+  lastUsed: number
 }
 
 // Global cache map (per-space)
 const cacheMap = new Map<string, SpaceCache>()
 
-// Maximum number of items in flatItems cache to prevent memory leaks
-const MAX_FLAT_ITEMS_CACHE_SIZE = 10000
+/** Holder key under which this cache retains a space's watcher. */
+const WATCHER_HOLDER = 'artifact-cache'
+
+/**
+ * Most spaces kept cached at once. Clients release the spaces they stop
+ * showing; this bounds what a client that never releases (crashed or reloaded
+ * renderer, closed remote tab) can leave behind. Spaces nobody holds go first.
+ */
+export const MAX_CACHED_SPACES = 3
 
 // Event listeners registry
 type ChangeListener = (event: ArtifactChangeEvent) => void
 const changeListeners: ChangeListener[] = []
-
-/**
- * Add item to flatItems cache with size limit enforcement.
- * Uses FIFO eviction when limit is reached.
- */
-function addToFlatItemsCache(cache: SpaceCache, path: string, artifact: CachedArtifact): void {
-  // Evict oldest entries if at capacity
-  if (cache.flatItems.size >= MAX_FLAT_ITEMS_CACHE_SIZE) {
-    const keysToDelete: string[] = []
-    const deleteCount = Math.ceil(MAX_FLAT_ITEMS_CACHE_SIZE * 0.1) // Evict 10%
-    let count = 0
-    for (const key of Array.from(cache.flatItems.keys())) {
-      if (count >= deleteCount) break
-      keysToDelete.push(key)
-      count++
-    }
-    for (const key of keysToDelete) {
-      cache.flatItems.delete(key)
-    }
-    console.log(`[ArtifactCache] Evicted ${keysToDelete.length} items from cache (limit: ${MAX_FLAT_ITEMS_CACHE_SIZE})`)
-  }
-  cache.flatItems.set(path, artifact)
-}
-
-/**
- * Sort artifacts: folders first, then alphabetically by name
- */
-function sortByName(a: CachedArtifact, b: CachedArtifact): number {
-  if (a.type === 'folder' && b.type !== 'folder') return -1
-  if (a.type !== 'folder' && b.type === 'folder') return 1
-  return a.name.localeCompare(b.name)
-}
 
 /**
  * Get parent directory path from a file path.
@@ -170,28 +146,45 @@ function removeTreeNodeDescendants(cache: SpaceCache, dirPath: string): void {
 // Worker Event Integration
 // ============================================
 
-// Register once: receive fs events from the worker process and apply to caches.
-// This replaces the old in-process processWatcherEvent() function.
-setFsEventsHandler((spaceId: string, events: ProcessedFsEvent[]) => {
+/**
+ * Apply one worker batch to a space's caches.
+ *
+ * Children of a directory are indexed by path once per batch and re-sorted once
+ * per directory, so a burst into one large directory stays linear.
+ */
+export function applyFsEvents(spaceId: string, events: ProcessedFsEvent[]): void {
   const cache = cacheMap.get(spaceId)
   if (!cache) return
 
+  const childIndexes = new Map<string, Map<string, number>>()
+  const needsSort = new Set<string>()
+  const removals = new Map<string, Set<string>>()
+  const indexOf = (dirPath: string, children: CachedTreeNode[]): Map<string, number> => {
+    let index = childIndexes.get(dirPath)
+    if (!index) {
+      index = new Map(children.map((node, i) => [node.path, i]))
+      childIndexes.set(dirPath, index)
+    }
+    return index
+  }
+
   for (const event of events) {
-    const parentIsTracked = cache.treeNodes.has(event.parentDir)
+    const parentChildren = cache.treeNodes.get(event.parentDir)
 
     if (event.changeType === 'unlink' || event.changeType === 'unlinkDir') {
-      // Delete from caches.
-      // For 'unlink' events from the worker, we check local cache to determine
-      // if the deleted path was a directory (worker can't stat deleted files).
-      const wasCachedDir = cache.loadedDirs.has(event.filePath) ||
-        cache.flatItems.get(event.filePath)?.type === 'folder'
+      // The worker cannot stat a deleted path, so whether it was a directory
+      // comes from what the cache knew about it.
+      const knownNode = parentChildren ? parentChildren[indexOf(event.parentDir, parentChildren).get(event.filePath) ?? -1] : undefined
+      const wasCachedDir = cache.loadedDirs.has(event.filePath) || knownNode?.type === 'folder'
       const resolvedChangeType = wasCachedDir ? 'unlinkDir' : event.changeType
 
-      cache.flatItems.delete(event.filePath)
-
-      if (parentIsTracked) {
-        const parentChildren = cache.treeNodes.get(event.parentDir)!
-        cache.treeNodes.set(event.parentDir, parentChildren.filter(n => n.path !== event.filePath))
+      if (parentChildren) {
+        let removed = removals.get(event.parentDir)
+        if (!removed) {
+          removed = new Set()
+          removals.set(event.parentDir, removed)
+        }
+        removed.add(event.filePath)
       }
 
       if (wasCachedDir || event.changeType === 'unlinkDir') {
@@ -204,97 +197,144 @@ setFsEventsHandler((spaceId: string, events: ProcessedFsEvent[]) => {
         relativePath: event.relativePath,
         spaceId,
       })
-    } else {
-      // Add/update caches
-      if (event.artifact) {
-        addToFlatItemsCache(cache, event.filePath, event.artifact)
-      }
-
-      if (parentIsTracked && event.treeNode) {
-        const parentChildren = cache.treeNodes.get(event.parentDir)!
-        const existingIdx = parentChildren.findIndex(n => n.path === event.filePath)
-
-        if (existingIdx !== -1) {
-          // Node exists: replace in-place, preserving children/childrenLoaded for expanded folders
-          const existing = parentChildren[existingIdx]
-          const updatedNode = { ...event.treeNode }
-          if (existing.type === 'folder' && updatedNode.type === 'folder') {
-            updatedNode.children = existing.children
-            updatedNode.childrenLoaded = existing.childrenLoaded
-          }
-          parentChildren[existingIdx] = updatedNode
-        } else {
-          // New node: insert and re-sort
-          parentChildren.push(event.treeNode)
-          sortTreeNodes(parentChildren)
-        }
-      }
-
-      emitChange({
-        type: event.changeType,
-        path: event.filePath,
-        relativePath: event.relativePath,
-        spaceId,
-        item: event.artifact,
-      })
+      continue
     }
+
+    if (parentChildren && event.treeNode) {
+      const index = indexOf(event.parentDir, parentChildren)
+      const existingIdx = index.get(event.filePath)
+
+      if (existingIdx !== undefined) {
+        // Node exists: replace in-place, preserving children/childrenLoaded for expanded folders
+        const existing = parentChildren[existingIdx]
+        const updatedNode = { ...event.treeNode }
+        if (existing.type === 'folder' && updatedNode.type === 'folder') {
+          updatedNode.children = existing.children
+          updatedNode.childrenLoaded = existing.childrenLoaded
+        }
+        parentChildren[existingIdx] = updatedNode
+      } else {
+        index.set(event.filePath, parentChildren.length)
+        parentChildren.push(event.treeNode)
+        needsSort.add(event.parentDir)
+      }
+    }
+
+    emitChange({
+      type: event.changeType,
+      path: event.filePath,
+      relativePath: event.relativePath,
+      spaceId,
+      item: event.artifact,
+    })
   }
+
+  for (const [dirPath, removed] of removals) {
+    const children = cache.treeNodes.get(dirPath)
+    if (children) cache.treeNodes.set(dirPath, children.filter(n => !removed.has(n.path)))
+  }
+  for (const dirPath of needsSort) {
+    const children = cache.treeNodes.get(dirPath)
+    if (children) sortTreeNodes(children)
+  }
+}
+
+addFsEventsHandler(applyFsEvents, { resolvedOnly: true })
+
+// Events were lost (burst over the limit, watcher failure, worker restart):
+// clients' per-file state is stale. Tree directories are reconciled by the host.
+addFsEventsLostHandler((spaceId) => {
+  if (cacheMap.has(spaceId)) markResync(spaceId)
 })
 
 // ============================================
 // Debounced IPC Broadcasting
 // ============================================
 
-// Pending events to be broadcast (grouped by spaceId, deduped by path)
-const pendingBroadcastEvents = new Map<string, Map<string, ArtifactChangeEvent>>()
+interface PendingBroadcast {
+  changes: Map<string, ArtifactChange>
+  resync: boolean
+}
+
+// Pending changes to be broadcast, per space, deduped by path (last wins).
+const pendingBroadcasts = new Map<string, PendingBroadcast>()
 let broadcastTimer: ReturnType<typeof setTimeout> | null = null
+let broadcastMaxWaitTimer: ReturnType<typeof setTimeout> | null = null
 const BROADCAST_DEBOUNCE_MS = 500
+// Sustained activity must not postpone delivery indefinitely.
+const BROADCAST_MAX_WAIT_MS = 2000
+/** Largest `artifact:changed-batch` payload; bigger flushes are split. */
+export const MAX_CHANGES_PER_BATCH = 1000
+/** Past this many pending changes a space is sent as a resync instead. */
+export const MAX_PENDING_CHANGES_PER_SPACE = 20_000
+
+function pendingFor(spaceId: string): PendingBroadcast {
+  let pending = pendingBroadcasts.get(spaceId)
+  if (!pending) {
+    pending = { changes: new Map(), resync: false }
+    pendingBroadcasts.set(spaceId, pending)
+  }
+  return pending
+}
+
+function scheduleBroadcast(): void {
+  if (broadcastTimer) clearTimeout(broadcastTimer)
+  broadcastTimer = setTimeout(flushPendingBroadcasts, BROADCAST_DEBOUNCE_MS)
+  if (!broadcastMaxWaitTimer) {
+    broadcastMaxWaitTimer = setTimeout(flushPendingBroadcasts, BROADCAST_MAX_WAIT_MS)
+  }
+}
+
+function markResync(spaceId: string): void {
+  const pending = pendingFor(spaceId)
+  pending.resync = true
+  pending.changes.clear()
+  scheduleBroadcast()
+}
 
 /**
- * Flush pending events to all clients.
- *
- * Smart batching: for each spaceId, collect unique parent directories that are tracked
- * in treeNodes and build an `updatedDirs` payload with pre-computed children.
- * Also sends individual `artifact:changed` events for backwards compatibility (card view).
+ * Flush pending changes to all clients: per space, one `artifact:tree-update`
+ * carrying the recomputed children of every affected loaded directory, and the
+ * changes themselves as `artifact:changed-batch` (split at MAX_CHANGES_PER_BATCH).
  */
-function flushPendingBroadcasts(): void {
-  if (pendingBroadcastEvents.size === 0) return
+export function flushPendingBroadcasts(): void {
+  if (broadcastTimer) { clearTimeout(broadcastTimer); broadcastTimer = null }
+  if (broadcastMaxWaitTimer) { clearTimeout(broadcastMaxWaitTimer); broadcastMaxWaitTimer = null }
+  if (pendingBroadcasts.size === 0) return
 
-  for (const [spaceId, eventsMap] of Array.from(pendingBroadcastEvents.entries())) {
-    const dedupedEvents = Array.from(eventsMap.values())
+  const flushing = Array.from(pendingBroadcasts.entries())
+  pendingBroadcasts.clear()
+
+  for (const [spaceId, pending] of flushing) {
+    const changes = Array.from(pending.changes.values())
     const cache = cacheMap.get(spaceId)
 
-    const updatedDirs: Array<{ dirPath: string; children: CachedTreeNode[] }> = []
-
-    if (cache) {
+    if (cache && changes.length > 0) {
+      const updatedDirs: Array<{ dirPath: string; children: CachedTreeNode[] }> = []
       const seenDirs = new Set<string>()
-      for (const event of dedupedEvents) {
-        const parentDir = getParentPath(event.path)
-        if (!seenDirs.has(parentDir) && cache.treeNodes.has(parentDir)) {
-          seenDirs.add(parentDir)
-          updatedDirs.push({
-            dirPath: parentDir,
-            children: cache.treeNodes.get(parentDir)!
-          })
-        }
+      for (const change of changes) {
+        const parentDir = getParentPath(change.path)
+        if (seenDirs.has(parentDir)) continue
+        seenDirs.add(parentDir)
+        const children = cache.treeNodes.get(parentDir)
+        if (children) updatedDirs.push({ dirPath: parentDir, children })
+      }
+      if (updatedDirs.length > 0) {
+        const treeUpdateEvent: ArtifactTreeUpdateEvent = { spaceId, updatedDirs }
+        broadcastToAllClients('artifact:tree-update', treeUpdateEvent as unknown as Record<string, unknown>)
       }
     }
 
-    if (updatedDirs.length > 0 || dedupedEvents.length > 0) {
-      const treeUpdateEvent: ArtifactTreeUpdateEvent = {
-        spaceId,
-        updatedDirs,
-        changes: dedupedEvents
-      }
-      broadcastToAllClients('artifact:tree-update', treeUpdateEvent as unknown as Record<string, unknown>)
+    if (pending.resync) {
+      const batch: ArtifactChangeBatchEvent = { spaceId, changes: [], resync: true }
+      broadcastToAllClients('artifact:changed-batch', batch as unknown as Record<string, unknown>)
+      continue
     }
-
-    for (const event of dedupedEvents) {
-      broadcastToAllClients('artifact:changed', event as unknown as Record<string, unknown>)
+    for (let i = 0; i < changes.length; i += MAX_CHANGES_PER_BATCH) {
+      const batch: ArtifactChangeBatchEvent = { spaceId, changes: changes.slice(i, i + MAX_CHANGES_PER_BATCH) }
+      broadcastToAllClients('artifact:changed-batch', batch as unknown as Record<string, unknown>)
     }
   }
-
-  pendingBroadcastEvents.clear()
 }
 
 /**
@@ -312,16 +352,16 @@ function emitChange(event: ArtifactChangeEvent): void {
     }
   }
 
-  // Queue event for debounced broadcast
-  if (!pendingBroadcastEvents.has(event.spaceId)) {
-    pendingBroadcastEvents.set(event.spaceId, new Map())
+  const pending = pendingFor(event.spaceId)
+  if (!pending.resync) {
+    pending.changes.set(event.path, { type: event.type, path: event.path, relativePath: event.relativePath })
+    if (pending.changes.size > MAX_PENDING_CHANGES_PER_SPACE) {
+      console.warn(`[ArtifactCache] Over ${MAX_PENDING_CHANGES_PER_SPACE} pending changes for ${event.spaceId}; sending resync`)
+      pending.resync = true
+      pending.changes.clear()
+    }
   }
-  pendingBroadcastEvents.get(event.spaceId)!.set(event.path, event)
-
-  if (broadcastTimer) {
-    clearTimeout(broadcastTimer)
-  }
-  broadcastTimer = setTimeout(flushPendingBroadcasts, BROADCAST_DEBOUNCE_MS)
+  scheduleBroadcast()
 }
 
 // ============================================
@@ -342,12 +382,11 @@ export async function initSpaceCache(spaceId: string, rootPath: string): Promise
   const cache: SpaceCache = {
     spaceId,
     rootPath,
-    flatItems: new Map(),
     treeNodes: new Map(),
     loadedDirs: new Set(),
-    lastUpdate: Date.now(),
-    cachedMaxDepth: 0,
-    watcherInitialized: false
+    watcherInitialized: false,
+    clients: new Map(),
+    lastUsed: Date.now(),
   }
 
   cacheMap.set(spaceId, cache)
@@ -355,24 +394,112 @@ export async function initSpaceCache(spaceId: string, rootPath: string): Promise
   // Initialize watcher in worker process (non-blocking)
   if (!isDiskRoot(rootPath)) {
     cache.watcherInitialized = true
-    initSpaceWatcher(spaceId, rootPath)
+    retainSpaceWatcher(spaceId, rootPath, WATCHER_HOLDER)
   }
+
+  evictSpaceCaches(spaceId)
+}
+
+/**
+ * Drop least-recently-used caches beyond MAX_CACHED_SPACES, never `keep` and
+ * never one a client still retains: that client shows the space's tree and would
+ * silently stop receiving its changes. Retained caches leave when their last
+ * client releases them, so the cap bounds only the caches nobody is showing.
+ */
+function evictSpaceCaches(keep: string): void {
+  if (cacheMap.size <= MAX_CACHED_SPACES) return
+  const candidates = Array.from(cacheMap.values())
+    .filter(c => c.spaceId !== keep && c.clients.size === 0)
+    .sort((a, b) => a.lastUsed - b.lastUsed)
+  for (const cache of candidates) {
+    if (cacheMap.size <= MAX_CACHED_SPACES) break
+    console.log(`[ArtifactCache] Evicting cache for ${cache.spaceId} (over ${MAX_CACHED_SPACES} spaces, no client)`)
+    void destroySpaceCache(cache.spaceId)
+  }
+}
+
+/** The space's cache, created on first use and marked as just used. */
+async function useSpaceCache(spaceId: string, rootPath: string): Promise<SpaceCache> {
+  let cache = cacheMap.get(spaceId)
+  if (!cache) {
+    await initSpaceCache(spaceId, rootPath)
+    cache = cacheMap.get(spaceId)!
+  }
+  cache.lastUsed = Date.now()
+  return cache
 }
 
 /**
  * Ensure cache exists without tearing down existing watcher
  */
 export async function ensureSpaceCache(spaceId: string, rootPath: string): Promise<void> {
-  const cache = cacheMap.get(spaceId)
-  if (!cache) {
-    await initSpaceCache(spaceId, rootPath)
-    return
-  }
-
+  const cache = await useSpaceCache(spaceId, rootPath)
   if (!cache.watcherInitialized && !isDiskRoot(rootPath)) {
     cache.watcherInitialized = true
-    initSpaceWatcher(spaceId, rootPath)
+    retainSpaceWatcher(spaceId, rootPath, WATCHER_HOLDER)
   }
+}
+
+/**
+ * A client hold is a lease: the client re-sends `retain` while it shows the
+ * space (every minute), and a hold not renewed for SPACE_HOLD_LEASE_MS is
+ * dropped. Explicit release stays the fast path; the lease cleans up after a
+ * renderer reload or crash and a remote tab that closed without releasing —
+ * none of which reaches main as a release.
+ */
+export const SPACE_HOLD_LEASE_MS = 3 * 60 * 1000
+const HOLD_SWEEP_INTERVAL_MS = 60 * 1000
+let holdSweepTimer: ReturnType<typeof setInterval> | null = null
+
+/** Drop holds not renewed within the lease; destroy caches left with no client. */
+export async function sweepExpiredSpaceHolds(now = Date.now()): Promise<number> {
+  let dropped = 0
+  for (const cache of Array.from(cacheMap.values())) {
+    if (cache.clients.size === 0) continue
+    for (const [clientId, seenAt] of cache.clients) {
+      if (now - seenAt < SPACE_HOLD_LEASE_MS) continue
+      cache.clients.delete(clientId)
+      dropped += 1
+    }
+    if (cache.clients.size === 0) {
+      console.log(`[ArtifactCache] Space ${cache.spaceId}: every client hold expired; releasing`)
+      await destroySpaceCache(cache.spaceId)
+    }
+  }
+  if (!Array.from(cacheMap.values()).some(c => c.clients.size > 0) && holdSweepTimer) {
+    clearInterval(holdSweepTimer)
+    holdSweepTimer = null
+  }
+  return dropped
+}
+
+function ensureHoldSweep(): void {
+  if (holdSweepTimer) return
+  holdSweepTimer = setInterval(() => { void sweepExpiredSpaceHolds() }, HOLD_SWEEP_INTERVAL_MS)
+  holdSweepTimer.unref?.()
+}
+
+/**
+ * A client declares (or renews) that it is showing `spaceId`. The hold is a
+ * lease: the cache and watcher stay alive while any client renews within
+ * SPACE_HOLD_LEASE_MS and has not released; a held cache is never evicted.
+ * Returns true when this client held nothing here — on a renewal that means
+ * its hold lapsed and the cache was rebuilt, so changes in between were lost.
+ */
+export async function retainSpaceCache(spaceId: string, rootPath: string, clientId: string): Promise<boolean> {
+  const recreated = !cacheMap.get(spaceId)?.clients.has(clientId)
+  await ensureSpaceCache(spaceId, rootPath)
+  cacheMap.get(spaceId)?.clients.set(clientId, Date.now())
+  ensureHoldSweep()
+  return recreated
+}
+
+/** A client stopped showing `spaceId`; the cache goes when no client is left. */
+export async function releaseSpaceCache(spaceId: string, clientId: string): Promise<void> {
+  const cache = cacheMap.get(spaceId)
+  if (!cache) return
+  cache.clients.delete(clientId)
+  if (cache.clients.size === 0) await destroySpaceCache(spaceId)
 }
 
 /**
@@ -384,61 +511,16 @@ export async function destroySpaceCache(spaceId: string): Promise<void> {
 
   console.log(`[ArtifactCache] Destroying cache for space: ${spaceId}`)
 
-  // Tell worker to stop watching this space
   if (cache.watcherInitialized) {
-    destroySpaceWatcher(spaceId)
+    releaseSpaceWatcher(spaceId, WATCHER_HOLDER)
   }
 
-  cache.flatItems.clear()
   cache.treeNodes.clear()
   cache.loadedDirs.clear()
 
   cacheMap.delete(spaceId)
-}
-
-/**
- * Get artifacts as flat list (for card view)
- */
-export async function listArtifacts(
-  spaceId: string,
-  rootPath: string,
-  maxDepth: number = 1
-): Promise<CachedArtifact[]> {
-  console.debug(`[ArtifactCache] listArtifacts for space: ${spaceId}`)
-
-  // Disk root detection - degrade to prevent system freeze
-  if (isDiskRoot(rootPath)) {
-    console.warn(`[ArtifactCache] Disk root detected (${rootPath}), degrading to depth 0`)
-    maxDepth = 0
-  }
-
-  // Ensure cache is initialized
-  if (!cacheMap.has(spaceId)) {
-    await initSpaceCache(spaceId, rootPath)
-  }
-
-  const cache = cacheMap.get(spaceId)!
-
-  // If cache is fresh (within 5 seconds) AND was scanned at sufficient depth, return cached
-  const now = Date.now()
-  if (cache.flatItems.size > 0 && now - cache.lastUpdate < 5000 && cache.cachedMaxDepth >= maxDepth) {
-    console.debug(`[ArtifactCache] Returning cached ${cache.flatItems.size} items (depth=${cache.cachedMaxDepth}, requested=${maxDepth})`)
-    return Array.from(cache.flatItems.values())
-      .sort((a, b) => sortByName(a, b))
-  }
-
-  // Scan via worker process
-  const artifacts = await scanFlatViaWorker(spaceId, rootPath, rootPath, maxDepth)
-
-  // Update cache (track maxDepth for invalidation)
-  cache.flatItems.clear()
-  for (const artifact of artifacts) {
-    cache.flatItems.set(artifact.path, artifact)
-  }
-  cache.lastUpdate = now
-  cache.cachedMaxDepth = maxDepth
-
-  return artifacts.sort((a, b) => sortByName(a, b))
+  pendingBroadcasts.delete(spaceId)
+  lastReconcileTime.delete(spaceId)
 }
 
 /**
@@ -450,12 +532,7 @@ export async function listArtifactsTree(
   spaceId: string,
   rootPath: string
 ): Promise<CachedTreeNode[]> {
-  // Ensure cache is initialized
-  if (!cacheMap.has(spaceId)) {
-    await initSpaceCache(spaceId, rootPath)
-  }
-
-  const cache = cacheMap.get(spaceId)!
+  const cache = await useSpaceCache(spaceId, rootPath)
 
   // Cache hit: return immediately (O(1) Map.get)
   const cached = cache.treeNodes.get(rootPath)
@@ -486,11 +563,7 @@ export async function loadDirectoryChildren(
   dirPath: string,
   rootPath: string
 ): Promise<CachedTreeNode[]> {
-  let cache = cacheMap.get(spaceId)
-  if (!cache) {
-    await initSpaceCache(spaceId, rootPath)
-    cache = cacheMap.get(spaceId)!
-  }
+  const cache = await useSpaceCache(spaceId, rootPath)
 
   // Cache hit: return immediately
   const cached = cache.treeNodes.get(dirPath)
@@ -542,7 +615,6 @@ export function onArtifactChange(listener: ChangeListener): () => void {
  * Get cache statistics (for debugging)
  */
 export function getCacheStats(spaceId: string): {
-  flatItems: number
   treeNodes: number
   loadedDirs: number
   watcherActive: boolean
@@ -551,7 +623,6 @@ export function getCacheStats(spaceId: string): {
   if (!cache) return null
 
   return {
-    flatItems: cache.flatItems.size,
     treeNodes: cache.treeNodes.size,
     loadedDirs: cache.loadedDirs.size,
     watcherActive: cache.watcherInitialized
@@ -617,7 +688,6 @@ export async function reconcileLoadedDirs(spaceId: string, reason = 'manual'): P
       const error = result.reason as Error
       console.warn(`[ArtifactCache] Reconcile scan failed for ${failedDir}: ${error.message}. Removing from cache.`)
       removeTreeNodeDescendants(cache, failedDir)
-      cache.flatItems.delete(failedDir)
       // Remove from parent's treeNodes children list
       const parentDir = failedDir.substring(0, Math.max(failedDir.lastIndexOf('/'), failedDir.lastIndexOf('\\')))
       if (parentDir && cache.treeNodes.has(parentDir)) {
@@ -646,37 +716,13 @@ export async function reconcileLoadedDirs(spaceId: string, reason = 'manual'): P
     changedDirCount++
     cache.treeNodes.set(dirPath, freshNodes)
 
-    // Update flatItems: remove stale entries, add new ones
     if (cachedNodes) {
       const freshPaths = new Set(freshNodes.map(n => n.path))
       for (const oldNode of cachedNodes) {
-        if (!freshPaths.has(oldNode.path)) {
-          cache.flatItems.delete(oldNode.path)
-          // If removed item was a tracked directory, clean up descendants
-          if (oldNode.type === 'folder') {
-            removeTreeNodeDescendants(cache, oldNode.path)
-          }
+        // A removed directory takes its loaded descendants with it
+        if (oldNode.type === 'folder' && !freshPaths.has(oldNode.path)) {
+          removeTreeNodeDescendants(cache, oldNode.path)
         }
-      }
-    }
-    // A scanned tree node carries no timestamps, so both stamps are the scan's
-    // own — taken once so the two cannot disagree for the same entry.
-    const scannedAt = new Date().toISOString()
-    for (const freshNode of freshNodes) {
-      if (freshNode.type === 'file') {
-        addToFlatItemsCache(cache, freshNode.path, {
-          id: freshNode.path,
-          spaceId,
-          name: freshNode.name,
-          type: 'file',
-          path: freshNode.path,
-          relativePath: relative(cache.rootPath, freshNode.path),
-          extension: freshNode.name.includes('.') ? freshNode.name.slice(freshNode.name.lastIndexOf('.')) : '',
-          icon: '',
-          createdAt: scannedAt,
-          modifiedAt: scannedAt,
-          size: freshNode.size,
-        })
       }
     }
 
@@ -685,31 +731,12 @@ export async function reconcileLoadedDirs(spaceId: string, reason = 'manual'): P
 
   // Broadcast changes through existing channel if anything changed
   if (updatedDirs.length > 0) {
-    cache.lastUpdate = Date.now()
-    const treeUpdateEvent: ArtifactTreeUpdateEvent = {
-      spaceId,
-      updatedDirs,
-      changes: [] // No individual change events — this is a bulk reconciliation
-    }
+    const treeUpdateEvent: ArtifactTreeUpdateEvent = { spaceId, updatedDirs }
     broadcastToAllClients('artifact:tree-update', treeUpdateEvent as unknown as Record<string, unknown>)
     console.log(`[ArtifactCache] Reconciled ${changedDirCount}/${dirsToCheck.length} dirs with changes for space: ${spaceId}`)
   } else {
     console.debug(`[ArtifactCache] Reconcile complete: no drift detected (${dirsToCheck.length} dirs checked)`)
   }
-}
-
-/**
- * Reconcile ALL cached spaces. Called on window focus.
- *
- * @param reason - Trigger source, forwarded to reconcileLoadedDirs for attribution.
- */
-export async function reconcileAllSpaces(reason = 'window-focus'): Promise<void> {
-  const spaceIds = Array.from(cacheMap.keys())
-  if (spaceIds.length === 0) return
-
-  await Promise.allSettled(
-    spaceIds.map(spaceId => reconcileLoadedDirs(spaceId, reason))
-  )
 }
 
 /**
@@ -751,11 +778,8 @@ export async function refreshCache(spaceId: string, rootPath: string): Promise<v
   if (cache) {
     // Tell worker to reload .gitignore rules
     refreshWorkerIgnoreRules(spaceId, rootPath)
-    cache.flatItems.clear()
     cache.treeNodes.clear()
     cache.loadedDirs.clear()
-    cache.lastUpdate = 0
-    cache.cachedMaxDepth = 0
   }
 }
 
@@ -769,11 +793,15 @@ export async function cleanupAllCaches(): Promise<void> {
   for (const spaceId of Array.from(cacheMap.keys())) {
     const cache = cacheMap.get(spaceId)
     if (cache) {
-      cache.flatItems.clear()
       cache.treeNodes.clear()
       cache.loadedDirs.clear()
     }
     cacheMap.delete(spaceId)
+  }
+
+  if (holdSweepTimer) {
+    clearInterval(holdSweepTimer)
+    holdSweepTimer = null
   }
 
   // Shutdown the worker process

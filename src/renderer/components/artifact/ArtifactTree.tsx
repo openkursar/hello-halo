@@ -15,7 +15,7 @@ import { Tree, NodeRendererProps, TreeApi, CreateHandler, RenameHandler, DeleteH
 import { api } from '../../api'
 import { useCanvasStore } from '../../stores/canvas.store'
 import { useConversationTouchedFiles, type TouchedFileStatus } from '../../hooks/useConversationTouchedFiles'
-import type { ArtifactTreeNode, ArtifactTreeUpdateEvent } from '../../types'
+import type { ArtifactTreeNode } from '../../types'
 import { FileIcon } from '../icons/ToolIcons'
 import { ChevronRight, ChevronDown, Download, Eye, Loader2, FilePlus, FolderPlus, Edit3, Trash2, FolderOpen, Copy, RefreshCw, Monitor } from 'lucide-react'
 import { useTranslation } from '../../i18n'
@@ -26,9 +26,11 @@ import { useNotificationStore } from '../../stores/notification.store'
 import { useFileOperations } from '../../hooks/useFileOperations'
 import { copyToClipboard } from '../../utils/clipboard'
 import { trackHome } from '../../services/home-telemetry'
+import { holdArtifactSpace } from '../../services/artifact-space-holds'
 import { useSpaceStore } from '../../stores/space.store'
 import { useOnboardingStore } from '../../stores/onboarding.store'
 import { ONBOARDING_ARTIFACT_NAME } from '../onboarding/onboardingData'
+import { fillFolder, indexNodes, loadedFolderPaths, mergeChildren, unloadSubtree } from './tree-index'
 
 // Context to pass openFile function to tree nodes without each node subscribing to store
 type OpenFileFn = (path: string, title?: string) => Promise<void>
@@ -104,67 +106,10 @@ function getParentPath(filePath: string): string {
 // Context for lazy loading children
 interface LazyLoadContextType {
   loadChildren: (path: string) => Promise<void>
+  unloadChildren: (path: string) => void
   loadingPaths: Set<string>
 }
 const LazyLoadContext = createContext<LazyLoadContextType | null>(null)
-
-// ============================================
-// Index helpers — maintain Map<path, node> for O(1) lookup
-// ============================================
-
-/** Add direct children to the index (non-recursive — deeper nodes indexed on expand) */
-function indexNodes(nodes: ArtifactTreeNode[], index: Map<string, ArtifactTreeNode>): void {
-  for (const node of nodes) {
-    index.set(node.path, node)
-  }
-}
-
-/** Remove a node and its entire expanded subtree from the index */
-function removeSubtreeFromIndex(node: ArtifactTreeNode, index: Map<string, ArtifactTreeNode>): void {
-  index.delete(node.path)
-  if (node.children) {
-    for (const child of node.children) {
-      removeSubtreeFromIndex(child, index)
-    }
-  }
-}
-
-/**
- * Merge incoming children (from watcher or IPC) with existing children.
- * Preserves react-arborist node id (key stability) and expanded folder state.
- * Maintains the path→node index as a side effect.
- */
-function mergeChildren(
-  incoming: ArtifactTreeNode[],
-  existing: ArtifactTreeNode[],
-  index: Map<string, ArtifactTreeNode>,
-  recentlyCreatedPaths?: Map<string, number>
-): ArtifactTreeNode[] {
-  const existingByPath = new Map(existing.map(n => [n.path, n]))
-
-  // Remove deleted nodes from index
-  const incomingPaths = new Set(incoming.map(n => n.path))
-  for (const node of existing) {
-    if (!incomingPaths.has(node.path)) {
-      removeSubtreeFromIndex(node, index)
-    }
-  }
-
-  return incoming.map(node => {
-    const prev = existingByPath.get(node.path)
-    if (prev) {
-      // Preserve react-arborist key
-      node.id = prev.id
-      // Preserve expanded state: keep children the user already loaded
-      if (prev.childrenLoaded && prev.children) {
-        node.children = prev.children
-        node.childrenLoaded = prev.childrenLoaded
-      }
-    }
-    index.set(node.path, node)
-    return node
-  })
-}
 
 // ============================================
 // ArtifactTree component
@@ -174,7 +119,6 @@ export function ArtifactTree({ spaceId, onRootCountChange }: ArtifactTreeProps) 
   const { t } = useTranslation()
   const [loadingPaths, setLoadingPaths] = useState<Set<string>>(new Set())
   const [treeBoxRef, treeHeight] = useElementHeight()
-  const watcherInitialized = useRef(false)
   const treeRef = useRef<TreeApi<ArtifactTreeNode>>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const { showConfirm, DialogComponent } = useConfirmDialog()
@@ -504,24 +448,24 @@ export function ArtifactTree({ spaceId, onRootCountChange }: ArtifactTreeProps) 
 
     try {
       setLoadingPaths(prev => new Set(prev).add(dirPath))
-      const response = await api.loadArtifactChildren(spaceId, dirPath)
-
-      if (response.success && response.data) {
-        const children = response.data as ArtifactTreeNode[]
-        const parent = nodeIndex.current.get(dirPath)
-        if (parent) {
-          parent.children = children
-          parent.childrenLoaded = true
-          indexNodes(children, nodeIndex.current)
-          setRevision(r => r + 1)
-        } else {
-          console.warn('[ArtifactTree] loadChildren: parent not in index — path=%s', dirPath)
-        }
-      } else {
-        console.warn('[ArtifactTree] loadChildren: empty response — path=%s', dirPath)
+      const parent = nodeIndex.current.get(dirPath)
+      if (!parent) {
+        console.warn('[ArtifactTree] loadChildren: parent not in index — path=%s', dirPath)
+        return
       }
+      const fetchChildren = async (path: string): Promise<ArtifactTreeNode[] | null> => {
+        const response = await api.loadArtifactChildren(spaceId, path)
+        if (response.success && response.data) return response.data as ArtifactTreeNode[]
+        console.warn('[ArtifactTree] loadChildren: empty response — path=%s', path)
+        return null
+      }
+      const isOpen = (id: string) => treeRef.current?.isOpen(id) ?? false
+      await fillFolder(parent, fetchChildren, isOpen, nodeIndex.current)
+      if (parent.childrenLoaded) setRevision(r => r + 1)
     } catch (error) {
       console.error('[ArtifactTree] Failed to load children:', error)
+      // A failing open subfolder may leave its parent already filled
+      setRevision(r => r + 1)
     } finally {
       setLoadingPaths(prev => {
         const next = new Set(prev)
@@ -531,18 +475,18 @@ export function ArtifactTree({ spaceId, onRootCountChange }: ArtifactTreeProps) 
     }
   }, [spaceId])
 
+  // Collapsing a folder drops its loaded subtree, so what the tree holds (and
+  // what each revision rebuilds) tracks what is open, not everything ever opened.
+  const unloadChildren = useCallback((dirPath: string) => {
+    const node = nodeIndex.current.get(dirPath)
+    if (node && unloadSubtree(node, nodeIndex.current)) setRevision(r => r + 1)
+  }, [])
+
   // Handle tree update events from watcher (pre-computed data, zero IPC round-trips)
   // O(1) node lookup via index, mutate in place, single revision bump
   const handleTreeUpdate = useCallback((data: {
     spaceId: string
     updatedDirs: Array<{ dirPath: string; children: unknown[] }>
-    changes: Array<{
-      type: 'add' | 'change' | 'unlink' | 'addDir' | 'unlinkDir'
-      path: string
-      relativePath: string
-      spaceId: string
-      item?: unknown
-    }>
   }) => {
     if (data.spaceId !== spaceId || data.updatedDirs.length === 0) return
 
@@ -551,9 +495,9 @@ export function ArtifactTree({ spaceId, onRootCountChange }: ArtifactTreeProps) 
       const parent = nodeIndex.current.get(dirPath)
 
       if (parent) {
-        // Known expanded directory — O(1) lookup, merge children
+        // Collapsed directories hold no children; they are fetched again on expand
+        if (!parent.childrenLoaded) continue
         parent.children = mergeChildren(incomingChildren, parent.children || [], nodeIndex.current, recentlyCreatedPaths.current)
-        parent.childrenLoaded = true
       } else {
         // Root-level update or initial load
         const isRoot = treeDataRef.current.length > 0 &&
@@ -568,22 +512,55 @@ export function ArtifactTree({ spaceId, onRootCountChange }: ArtifactTreeProps) 
     setRevision(r => r + 1)
   }, [spaceId])
 
-  // Initialize watcher and subscribe to changes
+  // Keep the space's cache and watcher alive while the tree shows it
   useEffect(() => {
-    if (!spaceId || watcherInitialized.current) return
+    if (!spaceId) return
+    return holdArtifactSpace(spaceId)
+  }, [spaceId])
 
-    api.initArtifactWatcher(spaceId).catch(err => {
-      console.error('[ArtifactTree] Failed to init watcher:', err)
-    })
-
-    const cleanup = api.onArtifactTreeUpdate(handleTreeUpdate)
-    watcherInitialized.current = true
-
-    return () => {
-      cleanup()
-      watcherInitialized.current = false
-    }
+  useEffect(() => {
+    if (!spaceId) return
+    return api.onArtifactTreeUpdate(handleTreeUpdate)
   }, [spaceId, handleTreeUpdate])
+
+  // Changes were lost (the watcher overflowed, or this client's hold lapsed and
+  // main rebuilt the space's cache without the folders open here): re-list the
+  // root and every loaded folder and merge, keeping ids and open state.
+  const reloadLoadedDirs = useCallback(async () => {
+    if (!spaceId) return
+    const dirs = [workspaceRootRef.current, ...loadedFolderPaths(nodeIndex.current)].filter(Boolean)
+    const listed = await Promise.all(dirs.map(async dirPath => {
+      try {
+        const response = await api.loadArtifactChildren(spaceId, dirPath)
+        return response.success && response.data ? { dirPath, children: response.data as unknown[] } : null
+      } catch (error) {
+        console.warn('[ArtifactTree] Reload of %s failed:', dirPath, error)
+        return null
+      }
+    }))
+    const updatedDirs = listed.filter((d): d is { dirPath: string; children: unknown[] } => d !== null)
+    handleTreeUpdate({ spaceId, updatedDirs })
+  }, [spaceId, handleTreeUpdate])
+
+  useEffect(() => {
+    if (!spaceId) return
+    return api.onArtifactChangedBatch(batch => {
+      if (batch.spaceId === spaceId && batch.resync) void reloadLoadedDirs()
+    })
+  }, [spaceId, reloadLoadedDirs])
+
+  // Returning to the window re-checks the shown space for changes the watcher
+  // missed (sleep, OS event drops, directories the watcher does not follow).
+  useEffect(() => {
+    if (!spaceId) return
+    const onFocus = () => {
+      api.reconcileArtifacts(spaceId).catch(err => {
+        console.error('[ArtifactTree] Reconcile on focus failed:', err)
+      })
+    }
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [spaceId])
 
   // Load on mount and when space changes
   useEffect(() => {
@@ -625,8 +602,9 @@ export function ArtifactTree({ spaceId, onRootCountChange }: ArtifactTreeProps) 
 
   const lazyLoadValue = useMemo(() => ({
     loadChildren,
+    unloadChildren,
     loadingPaths
-  }), [loadChildren, loadingPaths])
+  }), [loadChildren, unloadChildren, loadingPaths])
 
   // Recede at rest: thin strokes, and below full strength until the pointer
   // enters the toolbar, where they return to the 3:1 faint color.
@@ -971,10 +949,15 @@ function TreeNodeComponent({ node, style, dragHandle }: NodeRendererProps<Artifa
   // Handle folder toggle with lazy loading (must be before early return)
   const handleToggle = useCallback(async () => {
     if (!isFolder) return
-    if (!node.isOpen && !data.childrenLoaded && lazyLoad) {
+    if (node.isOpen) {
+      node.close()
+      lazyLoad?.unloadChildren(data.path)
+      return
+    }
+    if (!data.childrenLoaded && lazyLoad) {
       await lazyLoad.loadChildren(data.path)
     }
-    node.toggle()
+    node.open()
   }, [isFolder, node, data.childrenLoaded, data.path, lazyLoad])
 
   // Handle click — select node and open in canvas, system app, or download
@@ -1012,7 +995,7 @@ function TreeNodeComponent({ node, style, dragHandle }: NodeRendererProps<Artifa
   const handleDoubleClickFile = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation()
     if (isFolder) {
-      node.toggle()
+      handleToggle()
       return
     }
     if (isWebMode) {
@@ -1024,7 +1007,7 @@ function TreeNodeComponent({ node, style, dragHandle }: NodeRendererProps<Artifa
         console.error('Failed to open file:', error)
       }
     }
-  }, [isFolder, node, data.path])
+  }, [isFolder, handleToggle, data.path])
 
   // Check editing state (after all hooks)
   if (node.isEditing) {

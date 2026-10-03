@@ -120,6 +120,11 @@ export default defineConfig({
         }
       }
     },
+    // Workers are created with `type: 'module'`; ES output lets them code-split
+    // (the code-highlight worker loads grammars on demand).
+    worker: {
+      format: 'es'
+    },
     // App.tsx only reaches the page components through React.lazy()/dynamic
     // import(), so Vite's initial esbuild dep scan (which starts from
     // index.html and follows *static* imports) never sees the packages they

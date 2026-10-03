@@ -10,9 +10,11 @@
 import { shell } from 'electron'
 import {
   listArtifacts,
+  queryFiles,
   listArtifactsTree,
   loadTreeChildren,
-  initArtifactWatcher,
+  retainArtifactSpace,
+  releaseArtifactSpace,
   reconcileArtifacts,
   readArtifactContent,
   readArtifactBytes,
@@ -41,6 +43,16 @@ export function registerArtifactHandlers(): void {
       }
     },
 
+    // Best path matches for a typed query (the @ menu); only `limit` items cross
+    queryArtifactFiles: async (spaceId: string, query: string, limit: number) => {
+      try {
+        return { success: true, data: await queryFiles(spaceId, query, limit) }
+      } catch (error) {
+        console.error('[IPC] artifact:query-files error:', error)
+        return { success: false, error: (error as Error).message }
+      }
+    },
+
     // List artifacts as tree structure (for developer view)
     // Returns { workspaceRoot, nodes } so the frontend knows the authoritative root path
     listArtifactsTree: async (spaceId: string) => {
@@ -65,14 +77,22 @@ export function registerArtifactHandlers(): void {
       }
     },
 
-    // Initialize file watcher for a space
-    initArtifactWatcher: async (spaceId: string) => {
+    // A client starts / stops showing a space (keeps or frees its cache and watcher)
+    retainArtifactSpace: async (spaceId: string, clientId: string) => {
       try {
-        console.log(`[IPC] artifact:init-watcher - spaceId: ${spaceId}`)
-        await initArtifactWatcher(spaceId)
+        return { success: true, data: await retainArtifactSpace(spaceId, clientId) }
+      } catch (error) {
+        console.error('[IPC] artifact:retain-space error:', error)
+        return { success: false, error: (error as Error).message }
+      }
+    },
+
+    releaseArtifactSpace: async (spaceId: string, clientId: string) => {
+      try {
+        await releaseArtifactSpace(spaceId, clientId)
         return { success: true }
       } catch (error) {
-        console.error('[IPC] artifact:init-watcher error:', error)
+        console.error('[IPC] artifact:release-space error:', error)
         return { success: false, error: (error as Error).message }
       }
     },

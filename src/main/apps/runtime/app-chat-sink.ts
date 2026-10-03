@@ -41,6 +41,7 @@ import { ProgressEventParser } from './progress-formatter'
 import { TurnCutPoint } from './escalation-cut'
 import { openSessionWriter, saveChatSessionId, type SessionWriter } from './session-store'
 import { stopGeneration } from '../../services/agent/control'
+import { listResidentSessions } from '../../services/agent'
 
 // ============================================
 // Types
@@ -488,6 +489,40 @@ class AppChatSink implements TurnSink {
  * queued against that conversation.
  */
 const sinks = new Map<string, AppChatSink>()
+const lastUsedAt = new Map<string, number>()
+
+/** A sink idle this long, with no round and no resident session, is released. */
+export const SINK_IDLE_RELEASE_MS = 60 * 60 * 1000
+const SINK_SWEEP_INTERVAL_MS = 10 * 60 * 1000
+let lastSweepAt = 0
+
+/**
+ * Release sinks of conversations nobody has touched for an hour. A sink is only
+ * released when it has no round in flight and its conversation holds no
+ * resident session (whose consumer writes into it); the next message builds a
+ * fresh one, as after a history wipe.
+ */
+export function sweepIdleAppChatSinks(
+  hasResidentSession: (conversationId: string) => boolean,
+  now = Date.now(),
+): number {
+  let released = 0
+  for (const [conversationId, sink] of sinks) {
+    if (now - (lastUsedAt.get(conversationId) ?? 0) < SINK_IDLE_RELEASE_MS) continue
+    if (sink.hasActiveRound() || hasResidentSession(conversationId)) continue
+    disposeAppChatSink(conversationId)
+    released += 1
+  }
+  return released
+}
+
+function maybeSweep(now: number): void {
+  if (now - lastSweepAt < SINK_SWEEP_INTERVAL_MS) return
+  lastSweepAt = now
+  const resident = new Set(listResidentSessions().map(s => s.conversationId))
+  const released = sweepIdleAppChatSinks(id => resident.has(id), now)
+  if (released > 0) console.log(`[AppChat] Released ${released} idle chat sink(s); ${sinks.size} remain`)
+}
 
 export function getAppChatSink(params: {
   appId: string
@@ -495,6 +530,9 @@ export function getAppChatSink(params: {
   runId: string
   spacePath: string
 }): AppChatSink {
+  const now = Date.now()
+  maybeSweep(now)
+  lastUsedAt.set(params.conversationId, now)
   const existing = sinks.get(params.conversationId)
   if (existing) return existing
 
@@ -533,6 +571,7 @@ export function getConversationsWithActiveRound(): string[] {
 export function disposeAppChatSink(conversationId: string): void {
   sinks.get(conversationId)?.dispose()
   sinks.delete(conversationId)
+  lastUsedAt.delete(conversationId)
 }
 
 export type { AppChatSink }

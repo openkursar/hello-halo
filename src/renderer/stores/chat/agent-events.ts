@@ -9,6 +9,7 @@ import { selectActiveConversationId } from './active'
 import { conversationKind, backendFor } from './backend'
 import { startedTurnState } from './backend/turn'
 import { noteTurnEnded } from '../../services/home-telemetry'
+import { acceptsDetailEvent, releaseTurnDetail } from './detail-retention'
 
 export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAgentToolCall' | 'handleAgentToolResult' | 'handleAgentError' | 'handleAgentComplete' | 'handleAgentThought' | 'handleAgentThoughtDelta' | 'handleAgentCompact' | 'handleAgentApiRetry' | 'handleAgentSessionInfo' | 'handleAgentTurnStart' | 'handleAskQuestion'> = (set, get) => ({
   handleAgentMessage: (data) => {
@@ -21,6 +22,7 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
     }
 
     set((state) => {
+      if (!acceptsDetailEvent(state, conversationId)) return state
       const newSessions = new Map(state.sessions)
       const session = newSessions.get(conversationId) || createEmptySessionState()
 
@@ -52,6 +54,8 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
   handleAgentToolCall: (data) => {
     const { conversationId, ...toolCall } = data
 
+    // An approval request is a status event: it reaches this store for every
+    // conversation, since the turn stays blocked until someone answers.
     if (toolCall.requiresApproval) {
       set((state) => {
         const newSessions = new Map(state.sessions)
@@ -107,6 +111,7 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
       })
       return { sessions: newSessions }
     })
+    releaseTurnDetail(conversationId)
   },
 
   // A turn ended. The conversation is re-read from its store (the single source
@@ -183,6 +188,8 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
     })
 
     await backendFor(conversationId).settleTurn({ set, get }, { spaceId, conversationId }, completeTurnId)
+    // A turn sent after this one ended keeps the hold.
+    if ((get().sessions.get(conversationId)?.turnId ?? 0) === completeTurnId) releaseTurnDetail(conversationId)
   },
 
   // Handle thought for a specific conversation.
@@ -193,6 +200,7 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
     const { conversationId, thought } = data
 
     set((state) => {
+      if (!acceptsDetailEvent(state, conversationId)) return state
       const newSessions = new Map(state.sessions)
       const session = newSessions.get(conversationId) || createEmptySessionState()
 
@@ -276,6 +284,7 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
     console.log(`[ChatStore] handleAgentCompact [${conversationId}]: trigger=${trigger}, preTokens=${preTokens}`)
 
     set((state) => {
+      if (!acceptsDetailEvent(state, conversationId)) return state
       const newSessions = new Map(state.sessions)
       const session = newSessions.get(conversationId) || createEmptySessionState()
 
@@ -298,6 +307,7 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
     set((state) => {
       const session = state.sessions.get(conversationId)
       if (!retry && !session?.apiRetry) return state
+      if (!acceptsDetailEvent(state, conversationId)) return state
 
       const newSessions = new Map(state.sessions)
       newSessions.set(conversationId, {
@@ -312,6 +322,7 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
   handleAgentSessionInfo: (data) => {
     const { conversationId, slashCommands, skills, agents } = data
     set((state) => {
+      if (!acceptsDetailEvent(state, conversationId)) return state
       const newSessionInitInfo = new Map(state.sessionInitInfo)
       newSessionInitInfo.set(conversationId, { slashCommands, skills, agents })
       return { sessionInitInfo: newSessionInitInfo }

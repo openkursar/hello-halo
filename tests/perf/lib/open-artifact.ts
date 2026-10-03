@@ -23,9 +23,46 @@ export function seedArtifact(testConfigDir: string, fixtureAbsPath: string): { n
  * dispatched the click).
  */
 export async function clickArtifactByName(window: Page, name: string): Promise<void> {
+  await openWorkspaceRail(window)
   const card = window.getByText(name, { exact: true }).first()
   await card.waitFor({ state: 'visible', timeout: 15000 })
   await card.click({ noWaitAfter: true })
+}
+
+/**
+ * The workspace rail (files, terminal, browser entries) starts collapsed; its
+ * contents are in the DOM but hidden, so a scenario that waits for them times out.
+ * The toggle is only rendered while the rail is collapsed.
+ */
+export async function openWorkspaceRail(window: Page): Promise<void> {
+  const toggle = window.getByRole('button', { name: 'Open workspace resources' }).first()
+  if (await toggle.isVisible().catch(() => false)) await toggle.click()
+}
+
+/** Opens a space-level entry ("Open terminal", "Open browser") from the header's More menu. */
+export async function openFromHeaderMenu(window: Page, entry: string): Promise<void> {
+  await window.getByTitle('More', { exact: true }).first().click()
+  const item = window.getByText(entry, { exact: true }).first()
+  await item.waitFor({ state: 'visible', timeout: 15000 })
+  await item.click()
+}
+
+/** Whether an `<img>` in the window has finished decoding at least `minWidth` natural pixels wide. */
+export async function hasDecodedImage(window: Page, minWidth: number): Promise<boolean> {
+  return window.evaluate(
+    (min) => Array.from(document.images).some((img) => img.complete && img.naturalWidth >= min),
+    minWidth
+  ).catch(() => false)
+}
+
+/**
+ * Element count of the `halo-preview:` frame's document, or null when no such
+ * frame is open (the viewer rendered in the app's own DOM).
+ */
+export async function isolatedPreviewNodeCount(window: Page): Promise<number | null> {
+  const frame = window.frames().find((f) => f.url().startsWith('halo-preview:'))
+  if (!frame) return null
+  return frame.evaluate(() => document.querySelectorAll('*').length).catch(() => 0)
 }
 
 const OBSERVATION_KEY = '__perfOpenObservation'
@@ -45,12 +82,28 @@ export async function beginOpenObservation(window: Page): Promise<void> {
     previous?.stop?.()
 
     const observers: MutationObserver[] = []
+    // A preview frame from another origin (the HTML preview's own site, or an
+    // opaque sandbox) hides its document, so its 'load' is the only signal
+    // that it finished. Captured on the document because 'load' does not bubble.
+    const loadedFrames = new WeakSet<EventTarget>()
+    const onLoad = (event: Event) => {
+      if (event.target instanceof HTMLIFrameElement) {
+        loadedFrames.add(event.target)
+        state.bump()
+      }
+    }
+    document.addEventListener('load', onLoad, true)
     const state = {
       start: performance.now(),
       last: null as number | null,
       observers,
+      loadedFrames,
       bump: () => { state.last = performance.now() },
-      stop: () => { for (const o of observers) o.disconnect(); observers.length = 0 }
+      stop: () => {
+        for (const o of observers) o.disconnect()
+        observers.length = 0
+        document.removeEventListener('load', onLoad, true)
+      }
     }
     const root = new MutationObserver(state.bump)
     root.observe(document.body, { childList: true, subtree: true, characterData: true })
@@ -102,7 +155,7 @@ async function waitForActiveTabReady(window: Page, timeoutMs: number, browserVie
       new Promise<number>((resolve, reject) => {
         const holder = window as unknown as Record<string, unknown>
         const state = holder[args.key] as
-          | { start: number; last: number | null; observers: MutationObserver[]; bump: () => void; stop: () => void }
+          | { start: number; last: number | null; observers: MutationObserver[]; loadedFrames: WeakSet<EventTarget>; bump: () => void; stop: () => void }
           | undefined
         if (!state) {
           reject(new Error('No open observation in progress — beginOpenObservation() must run before the click that opens the file.'))
@@ -123,7 +176,10 @@ async function waitForActiveTabReady(window: Page, timeoutMs: number, browserVie
           for (const frame of Array.from(content?.querySelectorAll('iframe') ?? [])) {
             let doc: Document | null = null
             try { doc = (frame as HTMLIFrameElement).contentDocument } catch { doc = null }
-            if (!doc) { frameBusy = true; continue }
+            if (!doc) {
+              if (!state.loadedFrames.has(frame)) frameBusy = true
+              continue
+            }
             if (doc.readyState !== 'complete') frameBusy = true
             if (doc.body && !observedFrames.has(doc.body)) {
               observedFrames.add(doc.body)

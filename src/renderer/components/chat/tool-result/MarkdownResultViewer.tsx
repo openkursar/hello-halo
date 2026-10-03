@@ -2,21 +2,34 @@
  * MarkdownResultViewer - Display rendered Markdown content
  *
  * Features:
- * - Full markdown rendering via react-markdown
- * - Preview mode with gradient mask
+ * - Collapsed: renders only the first lines (tool output can be hundreds of KB)
+ * - Expanded: full content; very large output renders chunk by chunk as it
+ *   scrolls into view
  * - Copy raw source
- * - Expand to full content
  */
 
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useMemo, useRef, type RefObject } from 'react'
 import { Copy, Check, ChevronDown, ChevronUp, FileText } from 'lucide-react'
 import { MarkdownRenderer } from '../MarkdownRenderer'
 import { useTranslation } from '../../../i18n'
+import { useLazyVisible } from '../../../hooks/useLazyVisible'
+import { splitMarkdownIntoChunks } from '../../../lib/markdown-chunks'
 import type { ViewerBaseProps } from './types'
-import { countLines } from './detection'
+import { truncateToLines, PREVIEW_MAX_CHARS } from './detection'
 
 const PREVIEW_HEIGHT = 120
-const MAX_EXPANDED_HEIGHT = 400
+const PREVIEW_LINES = 40
+/** Above this, expanded output is parsed per chunk instead of in one long task. */
+const CHUNKED_EXPAND_THRESHOLD_CHARS = 32_000
+
+function LazyMarkdownChunk({ content, root }: { content: string; root: RefObject<HTMLDivElement | null> }) {
+  const [ref, isVisible] = useLazyVisible('400px', root)
+  return (
+    <div ref={ref} style={isVisible ? undefined : { minHeight: Math.ceil(content.length / 100) * 18 }}>
+      {isVisible && <MarkdownRenderer content={content} className="tool-result-markdown" />}
+    </div>
+  )
+}
 
 export function MarkdownResultViewer({
   output,
@@ -26,13 +39,23 @@ export function MarkdownResultViewer({
   const { t } = useTranslation()
   const [isExpanded, setIsExpanded] = useState(false)
   const [copied, setCopied] = useState(false)
-  const [needsExpand, setNeedsExpand] = useState(false)
-  const contentRef = useRef<HTMLDivElement>(null)
+  const [overflows, setOverflows] = useState(false)
+  const contentRef = useRef<HTMLDivElement | null>(null)
+
+  const preview = useMemo(
+    () => truncateToLines(output, PREVIEW_LINES, PREVIEW_MAX_CHARS),
+    [output],
+  )
+  const chunks = useMemo(
+    () => (isExpanded && output.length > CHUNKED_EXPAND_THRESHOLD_CHARS ? splitMarkdownIntoChunks(output) : null),
+    [isExpanded, output],
+  )
+  const needsExpand = preview.truncated || overflows
 
   // Check if content overflows preview height
   const checkOverflow = useCallback((node: HTMLDivElement | null) => {
     if (node) {
-      setNeedsExpand(node.scrollHeight > PREVIEW_HEIGHT)
+      setOverflows(node.scrollHeight > PREVIEW_HEIGHT)
     }
   }, [])
 
@@ -51,8 +74,6 @@ export function MarkdownResultViewer({
   const handleToggle = useCallback(() => {
     setIsExpanded(prev => !prev)
   }, [])
-
-  const lineCount = countLines(output)
 
   return (
     <div
@@ -76,7 +97,13 @@ export function MarkdownResultViewer({
         `}
       >
         <div className="px-3 py-2 text-[12px]">
-          <MarkdownRenderer content={output} className="tool-result-markdown" />
+          {!isExpanded ? (
+            <MarkdownRenderer content={preview.content} className="tool-result-markdown" />
+          ) : chunks ? (
+            chunks.map((chunk, index) => <LazyMarkdownChunk key={index} content={chunk} root={contentRef} />)
+          ) : (
+            <MarkdownRenderer content={output} className="tool-result-markdown" />
+          )}
         </div>
 
         {/* Gradient mask when collapsed and has overflow */}

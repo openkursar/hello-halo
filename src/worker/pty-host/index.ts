@@ -242,4 +242,9 @@ process.on('uncaughtException', (err) => {
   log('error', `Uncaught exception: ${err.stack || err.message}`)
 })
 
+process.on('unhandledRejection', (reason) => {
+  const detail = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)
+  log('error', `Unhandled rejection: ${detail}`)
+})
+
 log('info', 'Pty host worker started')

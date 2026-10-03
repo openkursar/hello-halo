@@ -12,24 +12,28 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
-const scanTreeViaWorker = vi.fn(async () => [] as unknown[])
-const scanFlatViaWorker = vi.fn(async () => [] as unknown[])
-const initSpaceWatcher = vi.fn()
-const destroySpaceWatcher = vi.fn()
+const scanTreeViaWorker = vi.fn(async (..._args: unknown[]) => [] as unknown[])
+const retainSpaceWatcher = vi.fn()
+const releaseSpaceWatcher = vi.fn()
 
 vi.mock('../../../src/main/index', () => ({ getMainWindow: () => null }))
 vi.mock('../../../src/main/http/websocket', () => ({ broadcastToAll: vi.fn() }))
 vi.mock('../../../src/main/services/watcher-host.service', () => ({
-  initSpaceWatcher: (...a: unknown[]) => initSpaceWatcher(...a),
-  destroySpaceWatcher: (...a: unknown[]) => destroySpaceWatcher(...a),
+  retainSpaceWatcher: (...a: unknown[]) => retainSpaceWatcher(...a),
+  releaseSpaceWatcher: (...a: unknown[]) => releaseSpaceWatcher(...a),
   scanTreeViaWorker: (...a: unknown[]) => scanTreeViaWorker(...a),
-  scanFlatViaWorker: (...a: unknown[]) => scanFlatViaWorker(...a),
   refreshIgnoreRules: vi.fn(),
-  setFsEventsHandler: vi.fn(),
+  addFsEventsHandler: vi.fn(),
+  addFsEventsLostHandler: vi.fn(),
   shutdown: vi.fn(async () => {}),
 }))
 
 import {
+  retainSpaceCache,
+  releaseSpaceCache,
+  MAX_CACHED_SPACES,
+  SPACE_HOLD_LEASE_MS,
+  sweepExpiredSpaceHolds,
   initSpaceCache,
   destroySpaceCache,
   listArtifactsTree,
@@ -44,9 +48,8 @@ const SPACE = 'space-1'
 
 beforeEach(() => {
   scanTreeViaWorker.mockClear()
-  scanFlatViaWorker.mockClear()
-  initSpaceWatcher.mockClear()
-  destroySpaceWatcher.mockClear()
+  retainSpaceWatcher.mockClear()
+  releaseSpaceWatcher.mockClear()
   scanTreeViaWorker.mockResolvedValue([])
 })
 
@@ -62,18 +65,17 @@ describe('initSpaceCache / getCacheStats', () => {
   it('initializes an empty cache and requests a watcher for a normal root', async () => {
     await initSpaceCache(SPACE, ROOT)
     expect(getCacheStats(SPACE)).toEqual({
-      flatItems: 0,
       treeNodes: 0,
       loadedDirs: 0,
       watcherActive: true,
     })
-    expect(initSpaceWatcher).toHaveBeenCalledWith(SPACE, ROOT)
+    expect(retainSpaceWatcher).toHaveBeenCalledWith(SPACE, ROOT, 'artifact-cache')
   })
 
   it('does not request a watcher for a disk-root path', async () => {
     await initSpaceCache(SPACE, '/')
     expect(getCacheStats(SPACE)?.watcherActive).toBe(false)
-    expect(initSpaceWatcher).not.toHaveBeenCalled()
+    expect(retainSpaceWatcher).not.toHaveBeenCalled()
   })
 })
 
@@ -126,7 +128,7 @@ describe('invalidation', () => {
     await initSpaceCache(SPACE, ROOT)
     await destroySpaceCache(SPACE)
     expect(getCacheStats(SPACE)).toBeNull()
-    expect(destroySpaceWatcher).toHaveBeenCalledWith(SPACE)
+    expect(releaseSpaceWatcher).toHaveBeenCalledWith(SPACE, 'artifact-cache')
   })
 })
 
@@ -139,5 +141,69 @@ describe('onArtifactChange', () => {
     off()
     off()
     expect(listener).not.toHaveBeenCalled()
+  })
+})
+
+describe('space lifecycle', () => {
+  it('keeps a space while any client shows it and frees it with the last release', async () => {
+    await retainSpaceCache(SPACE, ROOT, 'client-a')
+    await retainSpaceCache(SPACE, ROOT, 'client-b')
+    await releaseSpaceCache(SPACE, 'client-a')
+    expect(getCacheStats(SPACE)).not.toBeNull()
+
+    await releaseSpaceCache(SPACE, 'client-b')
+    expect(getCacheStats(SPACE)).toBeNull()
+    expect(releaseSpaceWatcher).toHaveBeenCalledWith(SPACE, 'artifact-cache')
+  })
+
+  it('bounds cached spaces, evicting unheld ones before held ones', async () => {
+    await retainSpaceCache('held', ROOT, 'client-a')
+    await listArtifactsTree('idle-old', ROOT)
+    for (let i = 0; i < MAX_CACHED_SPACES; i++) await listArtifactsTree(`idle-${i}`, ROOT)
+
+    expect(getCacheStats('held')).not.toBeNull()
+    expect(getCacheStats('idle-old')).toBeNull()
+    for (const id of ['held', 'idle-old', ...Array.from({ length: MAX_CACHED_SPACES }, (_, i) => `idle-${i}`)]) {
+      await destroySpaceCache(id)
+    }
+  })
+
+  it('drops a hold that is not renewed within the lease, and keeps a renewed one', async () => {
+    await retainSpaceCache('leased', ROOT, 'gone-client')
+    await retainSpaceCache('leased', ROOT, 'live-client')
+    const later = Date.now() + SPACE_HOLD_LEASE_MS + 1000
+    // The live client renews just before the sweep.
+    vi.spyOn(Date, 'now').mockReturnValue(later - 1000)
+    await retainSpaceCache('leased', ROOT, 'live-client')
+    vi.restoreAllMocks()
+
+    expect(await sweepExpiredSpaceHolds(later)).toBe(1)
+    expect(getCacheStats('leased')).not.toBeNull()
+
+    // Nobody renews: the cache and its watcher go.
+    expect(await sweepExpiredSpaceHolds(later + SPACE_HOLD_LEASE_MS)).toBe(1)
+    expect(getCacheStats('leased')).toBeNull()
+  })
+
+  it('reports a renewal as recreated once the hold lapsed and the cache was dropped', async () => {
+    expect(await retainSpaceCache('lapsed', ROOT, 'c1')).toBe(true)
+    expect(await retainSpaceCache('lapsed', ROOT, 'c1')).toBe(false)
+
+    await sweepExpiredSpaceHolds(Date.now() + SPACE_HOLD_LEASE_MS + 1000)
+    expect(getCacheStats('lapsed')).toBeNull()
+
+    expect(await retainSpaceCache('lapsed', ROOT, 'c1')).toBe(true)
+    await releaseSpaceCache('lapsed', 'c1')
+  })
+
+  it('never evicts a space a client still shows, however many are held', async () => {
+    const held = Array.from({ length: MAX_CACHED_SPACES + 2 }, (_, i) => `held-${i}`)
+    for (const id of held) await retainSpaceCache(id, ROOT, `client-${id}`)
+    await listArtifactsTree('idle', ROOT)
+
+    for (const id of held) expect(getCacheStats(id), id).not.toBeNull()
+    for (const id of held) await releaseSpaceCache(id, `client-${id}`)
+    for (const id of held) expect(getCacheStats(id)).toBeNull()
+    await destroySpaceCache('idle')
   })
 })

@@ -22,6 +22,7 @@ import {
   launchElectronApp
 } from '../../e2e/fixtures/electron'
 import { navigateToChat } from '../../e2e/fixtures/helpers'
+import { openFromHeaderMenu } from '../lib/open-artifact'
 import { installRenderObserversNow, resetRenderObservers, readRenderMetrics } from '../lib/render-metrics'
 import { CdpMetricsCollector, type CdpSnapshot } from '../lib/cdp-metrics'
 import { ProcessMetricsSampler } from '../lib/process-metrics'
@@ -55,12 +56,7 @@ test('S7b browser view (heavy html)', async () => {
     const throttle = currentThrottle()
     await cdp.setCpuThrottlingRate(throttle)
 
-    // UI locale isn't fixed by test config (observed both English and
-    // Chinese renders across runs) — match both, same convention as the
-    // existing e2e helpers (tests/e2e/fixtures/helpers.ts).
-    const openButton = window.getByTitle(/Open browser|打开浏览器/).first()
-    await openButton.waitFor({ state: 'visible', timeout: 15000 })
-    await openButton.click()
+    await openFromHeaderMenu(window, 'Open browser')
 
     const addressBar = window.getByPlaceholder(/Enter URL or search Bing|输入网址或搜索必应/)
     await addressBar.waitFor({ state: 'visible', timeout: 20000 })

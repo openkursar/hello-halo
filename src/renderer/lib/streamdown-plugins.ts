@@ -47,15 +47,18 @@ function createLazyPluginHook<T>(loader: () => Promise<T>): () => T | undefined 
 }
 
 /**
- * Shiki code highlighter plugin.
+ * Shiki code highlighter plugin (bounded token cache, see `shiki-code-plugin.ts`).
  *
  * Dark theme first: inline `color` uses the first theme's values, which must
  * be readable on dark backgrounds (our default). The second theme goes into
  * the `--shiki-dark` CSS var for light mode.
+ *
+ * Pass it only to finished content. A streaming renderer re-highlights the
+ * whole block on every delta, so streaming code renders without it.
  */
 export const useCodePlugin = createLazyPluginHook<CodeHighlighterPlugin>(() =>
-  import('@streamdown/code').then(m =>
-    m.createCodePlugin({ themes: ['github-dark', 'github-light'] })
+  import('./shiki-code-plugin').then(m =>
+    m.createShikiCodePlugin({ themes: ['github-dark', 'github-light'] })
   )
 )
 

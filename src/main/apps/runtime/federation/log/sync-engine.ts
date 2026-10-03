@@ -23,6 +23,7 @@ import type {
   FeedEntry,
   FeedNackFrame,
   FeedSubscribeFrame,
+  FeedUnsubscribeFrame,
 } from './types'
 
 const DEFAULT_BATCH_MAX = 64
@@ -63,7 +64,7 @@ export interface FeedProducerDeps {
    * treated as "caught up" for retention purposes. Omitted only by callers that
    * never prune (or by tests exercising delivery in isolation).
    */
-  knownPeers?: () => string[]
+  knownPeers?: (feedKey: string) => string[]
   /**
    * Current retention floor for a feed (entries at/below it no longer exist).
    * Surfaced on every `feed-entries` frame so a consumer whose cursor is behind
@@ -155,15 +156,14 @@ export function createFeedProducer(deps: FeedProducerDeps): FeedProducer {
     return fitted
   }
 
-  /** Send one batch starting above fromSeq; returns the last seq sent (0 if none). */
-  function pushBatch(peer: string, feedKey: string, fromSeq: number): number {
+  /** The batch above fromSeq, or null for a genuinely idle feed (nothing to send or report). */
+  function buildBatch(feedKey: string, fromSeq: number): FeedEntriesFrame | null {
     const floor = deps.truncatedBeforeSeq?.(feedKey) ?? 0
     const entries = fitBatch(feedKey, deps.read(feedKey, fromSeq, batchMax))
-    // Nothing to send AND nothing to report: a genuinely idle feed, not a gap.
-    if (entries.length === 0 && floor <= fromSeq) return 0
+    if (entries.length === 0 && floor <= fromSeq) return null
     const latest = deps.latestSeq(feedKey)
     const lastSeq = entries.length > 0 ? entries[entries.length - 1].seq : fromSeq
-    deps.send(peer, {
+    return {
       kind: 'feed-entries',
       officeId: deps.officeId,
       feedKey,
@@ -173,8 +173,13 @@ export function createFeedProducer(deps: FeedProducerDeps): FeedProducer {
       // floor, even with no entries in this batch (an idle-since-pruning feed).
       more: Math.max(lastSeq, floor) < latest,
       truncatedBeforeSeq: floor,
-    })
-    return lastSeq
+    }
+  }
+
+  /** Send one batch starting above fromSeq. */
+  function pushBatch(peer: string, feedKey: string, fromSeq: number): void {
+    const frame = buildBatch(feedKey, fromSeq)
+    if (frame) deps.send(peer, frame)
   }
 
   function onSubscribe(peer: string, feedKey: string, afterSeq: number): void {
@@ -189,7 +194,18 @@ export function createFeedProducer(deps: FeedProducerDeps): FeedProducer {
     // is below what we previously acked) is safe and is how a consumer that lost
     // its cursor recovers.
     deps.setPeerCursor(feedKey, peer, afterSeq)
-    pushBatch(peer, feedKey, afterSeq)
+    // Always answer a subscribe, even with nothing to send: the consumer re-drives
+    // a subscribe until some batch arrives, so a silent answer to an idle feed
+    // was a re-subscribe every minute, forever.
+    deps.send(peer, buildBatch(feedKey, afterSeq) ?? {
+      kind: 'feed-entries',
+      officeId: deps.officeId,
+      feedKey,
+      entries: [],
+      upToSeq: deps.latestSeq(feedKey),
+      more: false,
+      truncatedBeforeSeq: deps.truncatedBeforeSeq?.(feedKey) ?? 0,
+    })
   }
 
   function ensureSubscribed(peer: string, feedKey: string): boolean {
@@ -265,8 +281,19 @@ export function createFeedProducer(deps: FeedProducerDeps): FeedProducer {
   function notifyAppended(feedKey: string): void {
     const set = subs.get(feedKey)
     if (!set) return
+    // Caught-up subscribers share a cursor, so the window is read and sized once
+    // per distinct cursor rather than once per peer.
+    const byCursor = new Map<number, string[]>()
     set.forEach((peer) => {
-      pushBatch(peer, feedKey, deps.getPeerCursor(feedKey, peer))
+      const cursor = deps.getPeerCursor(feedKey, peer)
+      const peers = byCursor.get(cursor)
+      if (peers) peers.push(peer)
+      else byCursor.set(cursor, [peer])
+    })
+    byCursor.forEach((peers, cursor) => {
+      const frame = buildBatch(feedKey, cursor)
+      if (!frame) return
+      for (const peer of peers) deps.send(peer, frame)
     })
   }
 
@@ -281,8 +308,8 @@ export function createFeedProducer(deps: FeedProducerDeps): FeedProducer {
   }
 
   function prune(truncate: (feedKey: string, floor: number) => void): void {
-    const known = deps.knownPeers?.() ?? []
     subs.forEach((set, feedKey) => {
+      const known = deps.knownPeers?.(feedKey) ?? []
       // Union of who is currently subscribed with every peer that is entitled to
       // read this feed at all — a peer that is merely offline, or has not joined
       // yet, still counts (its unset cursor defaults to 0 via getPeerCursor), so
@@ -329,7 +356,7 @@ export function createFeedProducer(deps: FeedProducerDeps): FeedProducer {
 export interface FeedConsumerDeps {
   officeId: string
   /** Emit a control frame toward the feed's author; the caller owns routing. */
-  send: (frame: FeedSubscribeFrame | FeedAckFrame | FeedNackFrame) => void
+  send: (frame: FeedSubscribeFrame | FeedUnsubscribeFrame | FeedAckFrame | FeedNackFrame) => void
   /** Apply one in-order entry (domain handler). May throw to defer (will retry). */
   apply: (feedKey: string, entry: FeedEntry) => void
   /** Persisted applied watermark for this remote feed. */
@@ -339,11 +366,30 @@ export interface FeedConsumerDeps {
   observeHlc?: (hlc: string) => void
   /** Max out-of-order entries buffered above the gap per feed (default 8192). */
   pendingMax?: number
+  /**
+   * Runs one received batch's store writes (hlc, applies, cursor) as a unit, so a
+   * batch costs one commit instead of several per entry. The ack is sent after it
+   * returns, so nothing is acknowledged before it is durable.
+   */
+  transaction?: <T>(fn: () => T) => T
 }
 
 export interface FeedConsumer {
   /** Ask the author to (re)start the stream from our applied watermark. */
   subscribe(feedKey: string): void
+  /**
+   * Subscribe once: a no-op when this consumer already subscribed to the feed
+   * (the re-drive and the producer's own heal cover a lost subscribe). Returns
+   * true iff it sent a subscribe. Use `subscribe` for an explicit restart after
+   * a reconnect.
+   */
+  ensureSubscribed(feedKey: string): boolean
+  /**
+   * Stop receiving a feed: the author is told to stop pushing, and the applied
+   * cursor stays so a later subscribe resumes from it. Returns false when this
+   * consumer was not subscribed.
+   */
+  unsubscribe(feedKey: string): boolean
   /** Handle a received batch: order, dedup, apply, ack, and nack any gap. */
   onEntries(frame: FeedEntriesFrame): void
   /**
@@ -382,6 +428,8 @@ export function createFeedConsumer(deps: FeedConsumerDeps): FeedConsumer {
   // the last one. Present only while a subscribed feed has yet to yield its first
   // batch; cleared on the first onEntries.
   const awaitingFirstBatch = new Map<string, { attempts: number; ticksWaited: number }>()
+  // Feeds this consumer has subscribed to in this process.
+  const subscribed = new Set<string>()
 
   function bufferFor(feedKey: string): Map<number, FeedEntry> {
     let m = pending.get(feedKey)
@@ -406,7 +454,22 @@ export function createFeedConsumer(deps: FeedConsumerDeps): FeedConsumer {
     // lost, the retransmit tick re-asks until a batch arrives. Re-arming on every
     // subscribe() means a reconnect restarts the fast window.
     awaitingFirstBatch.set(feedKey, { attempts: 0, ticksWaited: 0 })
+    subscribed.add(feedKey)
     sendSubscribe(feedKey)
+  }
+
+  function ensureSubscribed(feedKey: string): boolean {
+    if (subscribed.has(feedKey)) return false
+    subscribe(feedKey)
+    return true
+  }
+
+  function unsubscribe(feedKey: string): boolean {
+    if (!subscribed.delete(feedKey)) return false
+    awaitingFirstBatch.delete(feedKey)
+    pending.delete(feedKey)
+    deps.send({ kind: 'feed-unsubscribe', officeId: deps.officeId, feedKey })
+    return true
   }
 
   function resubscribeStale(): { feedKey: string; attempts: number }[] {
@@ -440,6 +503,25 @@ export function createFeedConsumer(deps: FeedConsumerDeps): FeedConsumer {
     // A batch arrived ⇒ the producer has us registered; stop the re-drive burst.
     awaitingFirstBatch.delete(feedKey)
     const buf = bufferFor(feedKey)
+    const cursor = deps.transaction
+      ? deps.transaction(() => admitAndApply(frame, buf))
+      : admitAndApply(frame, buf)
+
+    deps.send({ kind: 'feed-ack', officeId: deps.officeId, feedKey, ackedSeq: cursor })
+
+    // A complete batch (no more coming) that still leaves a gap below upToSeq
+    // means a frame was lost — request it explicitly instead of waiting.
+    if (!more && cursor < upToSeq) {
+      const gaps = computeGaps(cursor, Array.from(buf.keys()).sort((a, b) => a - b), upToSeq)
+      if (gaps.length > 0) {
+        deps.send({ kind: 'feed-nack', officeId: deps.officeId, feedKey, missing: gaps })
+      }
+    }
+  }
+
+  /** Buffer the batch and apply the contiguous run; returns the new applied cursor. */
+  function admitAndApply(frame: FeedEntriesFrame, buf: Map<number, FeedEntry>): number {
+    const { feedKey } = frame
     let cursor = deps.getLocalCursor(feedKey)
 
     // The author has permanently discarded everything at/below truncatedBeforeSeq
@@ -487,6 +569,7 @@ export function createFeedConsumer(deps: FeedConsumerDeps): FeedConsumer {
 
     // Apply the contiguous run from cursor+1. A throwing apply defers the rest:
     // the entry stays buffered and is retried on the next batch/retransmit.
+    const startCursor = cursor
     while (buf.has(cursor + 1)) {
       const next = buf.get(cursor + 1)!
       try {
@@ -501,20 +584,14 @@ export function createFeedConsumer(deps: FeedConsumerDeps): FeedConsumer {
       }
       buf.delete(cursor + 1)
       cursor += 1
-      deps.setLocalCursor(feedKey, cursor)
+      // Without a transaction every applied entry persists its cursor at once, so
+      // a crash mid-batch never re-applies what already took effect. Inside one,
+      // the cursor commits together with the rows, so a single write suffices.
+      if (!deps.transaction) deps.setLocalCursor(feedKey, cursor)
     }
-
-    deps.send({ kind: 'feed-ack', officeId: deps.officeId, feedKey, ackedSeq: cursor })
-
-    // A complete batch (no more coming) that still leaves a gap below upToSeq
-    // means a frame was lost — request it explicitly instead of waiting.
-    if (!more && cursor < upToSeq) {
-      const gaps = computeGaps(cursor, Array.from(buf.keys()).sort((a, b) => a - b), upToSeq)
-      if (gaps.length > 0) {
-        deps.send({ kind: 'feed-nack', officeId: deps.officeId, feedKey, missing: gaps })
-      }
-    }
+    if (deps.transaction && cursor !== startCursor) deps.setLocalCursor(feedKey, cursor)
+    return cursor
   }
 
-  return { subscribe, onEntries, resubscribeStale }
+  return { subscribe, ensureSubscribed, unsubscribe, onEntries, resubscribeStale }
 }

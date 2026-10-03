@@ -4,7 +4,7 @@
 
 import { useEffect, useRef, useState, useCallback, Suspense, lazy } from 'react'
 import { useAppStore } from './stores/app.store'
-import { useChatStore } from './stores/chat.store'
+import { useChatStore, initChatMemoryPressureListener } from './stores/chat.store'
 import { useOnboardingStore } from './stores/onboarding.store'
 import { initAIBrowserStoreListeners } from './stores/ai-browser.store'
 import { initTerminalStoreListeners } from './stores/terminal.store'
@@ -581,10 +581,12 @@ export default function App() {
     const cleanupBrowser = initAIBrowserStoreListeners()
     const cleanupTerminal = initTerminalStoreListeners()
     const cleanupGoal = initGoalStoreListeners()
+    const cleanupChatMemory = initChatMemoryPressureListener()
     return () => {
       cleanupBrowser()
       cleanupTerminal()
       cleanupGoal()
+      cleanupChatMemory()
     }
   }, [])
 

@@ -123,7 +123,7 @@ function getTracker(): ToolSessionTracker {
     report: (session) => trackHome('home.tool.session', { ...session }),
   })
   tracker = created
-  canvasLifecycle.onTabsChange(tabs => created.syncOpenTabs(new Set(tabs.map(tab => tab.id))))
+  canvasLifecycle.onTabListChange(tabs => created.syncOpenTabs(new Set(tabs.map(tab => tab.id))))
   canvasLifecycle.onBrowserStateChange((tabId, state) => created.browserLoading(tabId, state.isLoading))
   return created
 }

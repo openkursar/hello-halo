@@ -26,6 +26,7 @@ import { registerAgentHandlers } from '../ipc/agent'
 import { registerArtifactHandlers } from '../ipc/artifact'
 import { registerTerminalHandlers } from '../ipc/terminal'
 import { registerSystemHandlers } from '../ipc/system'
+import { registerCanvasPreviewHandlers } from '../ipc/canvas-preview'
 import { registerUpdaterHandlers, initAutoUpdater } from '../services/updater'
 import { registerAuthHandlers } from '../ipc/auth'
 import { registerBootstrapStatusHandler } from './state'
@@ -73,6 +74,10 @@ export function initializeEssentialServices(): void {
 
   // System: Window controls (maximize/minimize/close) are basic functionality
   registerSystemHandlers()
+
+  // Canvas HTML preview origin: a restored HTML tab asks for it on first render,
+  // before the extended phase. Two tiny handlers, no startup cost.
+  registerCanvasPreviewHandlers()
 
   // Updater: Lightweight, starts checking for updates in background
   registerUpdaterHandlers()

@@ -505,6 +505,23 @@ export function SystemSection({ config, setConfig }: SystemSectionProps) {
             </button>
           </div>
 
+          {/* Crash Reports */}
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pt-4 border-t border-border">
+            <div className="flex-1">
+              <p className="font-medium">{t('Crash Reports')}</p>
+              <p className="text-sm text-muted-foreground">
+                {t('Crash reports stay on this computer. Open the folder to send them to support when asked.')}
+              </p>
+            </div>
+            <button
+              onClick={() => api.openCrashReportsFolder()}
+              className="flex items-center gap-2 self-end sm:self-auto px-3 py-1.5 text-sm bg-secondary hover:bg-secondary/80 rounded-lg transition-colors"
+            >
+              <FolderOpen className="w-4 h-4" />
+              {t('Open Folder')}
+            </button>
+          </div>
+
           {/* Restart Halo */}
           <div className="flex items-center justify-between pt-4 border-t border-border">
             <div className="flex-1">

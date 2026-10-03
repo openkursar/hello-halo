@@ -255,3 +255,28 @@ describe('createTeamTriggerScheduler', () => {
     expect(h.eventRouter.on).not.toHaveBeenCalled()
   })
 })
+
+describe('team file triggers hold the space watcher', () => {
+  it('retains the owning space while a file trigger is subscribed and releases it on removal', () => {
+    const h = makeHarness()
+    h.teams.set('team-1', { id: 'team-1', currentEpochId: null, owningSpaceId: 'space-9' })
+    const fileWatch = { retain: vi.fn(), release: vi.fn() }
+    const ts = createTeamTriggerScheduler({
+      scheduler: h.scheduler, store: h.store, eventRouter: h.eventRouter, runTeam: h.runTeam,
+      activeRunEpochId: () => null, fileWatch,
+    })
+    h.triggers.push(eventTrigger({ id: 'f1', sourceType: 'file', config: { pattern: '*.csv' } }))
+    h.triggers.push(eventTrigger({ id: 'w1' }))
+    ts.syncTeam('team-1')
+    expect(fileWatch.retain).toHaveBeenCalledTimes(1)
+    expect(fileWatch.retain).toHaveBeenCalledWith('space-9', 'team-trigger:team-1:f1')
+
+    ts.syncTeam('team-1')
+    expect(fileWatch.release).toHaveBeenCalledTimes(1)
+    expect(fileWatch.retain).toHaveBeenCalledTimes(2)
+
+    ts.removeTeam('team-1')
+    expect(fileWatch.release).toHaveBeenCalledTimes(2)
+    expect(fileWatch.release).toHaveBeenLastCalledWith('space-9', 'team-trigger:team-1:f1')
+  })
+})

@@ -15,7 +15,8 @@ const apiMock = vi.hoisted(() => ({
   appChatClear: vi.fn(),
   appSessionDelete: vi.fn(),
   getSessionState: vi.fn(),
-  subscribeToConversation: vi.fn(),
+  retainConversationDetail: vi.fn(() => () => {}),
+  isConversationDetailRetained: vi.fn(() => true),
   sendMessage: vi.fn(),
   stopGeneration: vi.fn(),
   injectMessage: vi.fn(),
@@ -151,7 +152,7 @@ describe('the conversation on screen', () => {
 })
 
 describe('opening a digital-human conversation', () => {
-  it('reads the newest page into the cache and subscribes remote clients', async () => {
+  it('reads the newest page into the cache', async () => {
     const store = makeStore()
     apiMock.appChatTranscript.mockResolvedValue(page([m('session-msg-1', 'user', 'hi'), m('session-msg-2', 'assistant', 'hello')], { total: 2 }))
 
@@ -159,7 +160,6 @@ describe('opening a digital-human conversation', () => {
     await vi.waitFor(() => expect(store.getState().conversationCache.has(DH)).toBe(true))
 
     expect(apiMock.appChatTranscript).toHaveBeenCalledWith({ appId: APP, spaceId: SPACE, conversationId: DH, limit: 50 })
-    expect(apiMock.subscribeToConversation).toHaveBeenCalledWith(DH)
     const conversation = store.getState().conversationCache.get(DH)!
     expect(conversation.appId).toBe(APP)
     expect(conversation.messages.map(x => x.id)).toEqual(['session-msg-1', 'session-msg-2'])
@@ -619,7 +619,7 @@ describe('space conversations through the same verbs', () => {
 
     await store.getState().handleAgentComplete({ spaceId: SPACE, conversationId: 'c1' } as never)
 
-    expect(apiMock.getConversation).toHaveBeenCalledWith(SPACE, 'c1')
+    expect(apiMock.getConversation).toHaveBeenCalledWith(SPACE, 'c1', undefined)
     expect(store.getState().sessions.get('c1')).toMatchObject({ isGenerating: false, streamingContent: '' })
     expect(store.getState().unseenCompletions.has('c1')).toBe(true)
     expect(store.getState().conversationCache.get('c1')!.messages).toHaveLength(1)
@@ -760,5 +760,95 @@ describe('review fixes', () => {
     await completing
 
     expect(store.getState().conversationCache.get(DH)!.messages).toEqual([])
+  })
+})
+
+describe('settling a finished space turn', () => {
+  const T = '2026-09-01T10:00:00.000Z'
+  const earlier = [m('u1', 'user', 'first'), m('a1', 'assistant', 'one', { thoughtsSummary: { count: 2 } as never, thoughts: null as never })]
+
+  function settledStore() {
+    const store = makeStore()
+    const conversation = { id: 'c1', spaceId: SPACE, title: 'T', createdAt: T, updatedAt: T, messageCount: 2, messages: earlier } as unknown as Conversation
+    store.setState({
+      spaceStates: new Map([[SPACE, { conversations: [{ id: 'c1', spaceId: SPACE, title: 'T', createdAt: T, updatedAt: T, messageCount: 2 }], currentConversationId: 'c1' }]]),
+      conversationCache: new Map([['c1', conversation]]),
+    })
+    return store
+  }
+
+  async function sendAndComplete(store: ReturnType<typeof settledStore>, persisted: Message[], from?: string) {
+    apiMock.sendMessage.mockResolvedValue({ success: true })
+    await store.getState().sendMessage('second')
+    const turnId = store.getState().sessions.get('c1')!.turnId
+    apiMock.getConversation.mockResolvedValue({
+      success: true,
+      data: { id: 'c1', spaceId: SPACE, title: 'T', createdAt: T, updatedAt: T, messages: persisted, ...(from ? { messagesFrom: from } : {}) },
+    })
+    await store.getState().handleAgentComplete({ spaceId: SPACE, conversationId: 'c1' } as never)
+    return turnId
+  }
+
+  it('reads only from the last user message on, and keeps earlier rows and their loaded thoughts', async () => {
+    const store = settledStore()
+    const loaded = [{ id: 't1', type: 'thinking', content: 'x', timestamp: T }] as never
+    store.setState(s => ({ conversationCache: new Map([['c1', { ...s.conversationCache.get('c1')!, messages: [earlier[0], { ...earlier[1], thoughts: loaded }] }]]) }))
+    const before = store.getState().conversationCache.get('c1')!.messages
+
+    await sendAndComplete(store, [m('u1', 'user', 'first'), m('a1', 'assistant', 'one', { thoughtsSummary: { count: 2 } as never, thoughts: null as never }), m('u2', 'user', 'second'), m('a2', 'assistant', 'two')], undefined)
+    expect(apiMock.getConversation).toHaveBeenLastCalledWith(SPACE, 'c1', { fromMessageId: 'u1' })
+
+    const after = store.getState().conversationCache.get('c1')!.messages
+    expect(after.map(x => x.id)).toEqual(['u1', 'a1', 'u2', 'a2'])
+    expect(after[0]).toBe(before[0])
+    expect(after[1].thoughts).toBe(loaded)
+  })
+
+  it('joins a cut read onto the held messages and gives the optimistic bubble\'s row to its persisted twin', async () => {
+    const store = settledStore()
+    apiMock.sendMessage.mockResolvedValue({ success: true })
+    await store.getState().sendMessage('second')
+    const bubble = store.getState().conversationCache.get('c1')!.messages.at(-1)!
+    apiMock.getConversation.mockResolvedValue({
+      success: true,
+      data: { id: 'c1', spaceId: SPACE, title: 'T', createdAt: T, updatedAt: T, messagesFrom: 'u1', messages: [m('u1', 'user', 'first'), m('a1', 'assistant', 'one'), m('u2', 'user', 'second'), m('a2', 'assistant', 'two')] },
+    })
+    await store.getState().handleAgentComplete({ spaceId: SPACE, conversationId: 'c1' } as never)
+
+    const after = store.getState().conversationCache.get('c1')!.messages
+    expect(after.map(x => x.id)).toEqual(['u1', 'a1', 'u2', 'a2'])
+    expect(after[2].clientKey).toBe(bubble.clientKey)
+    expect(store.getState().spaceStates.get(SPACE)!.conversations[0].messageCount).toBe(4)
+    expect(store.getState().sessions.get('c1')).toMatchObject({ isGenerating: false })
+  })
+
+  it('reads the whole conversation when the held messages no longer contain the cut point', async () => {
+    const store = settledStore()
+    apiMock.sendMessage.mockResolvedValue({ success: true })
+    await store.getState().sendMessage('second')
+    const whole = { id: 'c1', spaceId: SPACE, title: 'T', createdAt: T, updatedAt: T, messages: [m('u9', 'user', 'second'), m('a9', 'assistant', 'two')] }
+    apiMock.getConversation
+      .mockResolvedValueOnce({ success: true, data: { ...whole, messagesFrom: 'gone' } })
+      .mockResolvedValueOnce({ success: true, data: whole })
+    await store.getState().handleAgentComplete({ spaceId: SPACE, conversationId: 'c1' } as never)
+
+    expect(apiMock.getConversation).toHaveBeenLastCalledWith(SPACE, 'c1')
+    expect(store.getState().conversationCache.get('c1')!.messages.map(x => x.id)).toEqual(['u9', 'a9'])
+  })
+
+  it('keeps the bubble of a turn sent while the finished one was being read', async () => {
+    const store = settledStore()
+    apiMock.sendMessage.mockResolvedValue({ success: true })
+    await store.getState().sendMessage('second')
+    let finishRead!: (value: unknown) => void
+    apiMock.getConversation.mockReturnValueOnce(new Promise(resolve => { finishRead = resolve }))
+    const completing = store.getState().handleAgentComplete({ spaceId: SPACE, conversationId: 'c1' } as never)
+    await store.getState().sendMessage('third')
+    finishRead({ success: true, data: { id: 'c1', spaceId: SPACE, title: 'T', createdAt: T, updatedAt: T, messages: [...earlier, m('u2', 'user', 'second'), m('a2', 'assistant', 'two')] } })
+    await completing
+
+    const contents = store.getState().conversationCache.get('c1')!.messages.map(x => x.content)
+    expect(contents).toEqual(['first', 'one', 'second', 'two', 'third'])
+    expect(store.getState().sessions.get('c1')!.isGenerating).toBe(true)
   })
 })

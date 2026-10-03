@@ -5,9 +5,9 @@
  */
 export function showsMessageList(view: {
   messageCount: number
-  streamingContent: string
+  hasStreamingContent: boolean
   isThinking: boolean
   error: string | null
 }): boolean {
-  return view.messageCount > 0 || !!view.streamingContent || view.isThinking || !!view.error
+  return view.messageCount > 0 || view.hasStreamingContent || view.isThinking || !!view.error
 }

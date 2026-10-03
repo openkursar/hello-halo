@@ -11,7 +11,9 @@ const destroy = vi.fn(async () => ({ success: true }))
 vi.mock('../../../src/renderer/api', () => ({
   api: {
     onBrowserStateChange: () => () => {},
-    onArtifactChanged: () => () => {},
+    onArtifactChangedBatch: () => () => {},
+    onMemoryPressure: () => () => {},
+    getMemoryPressure: async () => 'normal',
     showBrowserView: vi.fn(async () => ({ success: true })),
     hideBrowserView: (...a: unknown[]) => hide(...(a as [])),
     destroyBrowserView: (...a: unknown[]) => destroy(...(a as [])),

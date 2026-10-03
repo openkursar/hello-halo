@@ -73,6 +73,8 @@ function resolveImageSrc(src: string | undefined, basePath: string): string {
   return `halo-file://${basePath}/${src}`
 }
 
+const STREAMDOWN_CONTROLS = { code: true } as const
+
 interface MarkdownViewerProps {
   tab: CanvasTab
   onScrollChange?: (position: number) => void
@@ -99,20 +101,18 @@ export function MarkdownViewer({ tab, onScrollChange, onEditRequest }: MarkdownV
   )
   const isChunked = viewMode === 'rendered' && chunks !== null && chunks.length > 1
 
-  // Restore scroll position (rendered/chunked views only — source view's
-  // restore is handled internally by CodeMirrorEditor via its `scrollPosition` prop).
-  // No `key={tab.id}` on this component means React reuses it across tab
-  // switches instead of remounting, so a tab with no saved position must
-  // explicitly zero the scroller — otherwise it inherits the previous tab's
-  // native scrollTop, and Virtuoso can mount the wrong window off it.
+  // Restore scroll position on mount and on a view change (rendered/chunked
+  // views only — source view's restore is handled by CodeMirrorEditor's
+  // `scrollPosition` prop).
   useEffect(() => {
     if (viewMode === 'source') return
     // Chunked mode measures item heights lazily, so the target offset may not
     // exist yet on the first frame — restoring what we can is still closer than
     // jumping to the top.
     const scroller = isChunked ? chunkScrollerRef.current : containerRef.current
-    if (scroller) scroller.scrollTop = tab.scrollPosition ?? 0
-  }, [tab.id, viewMode, isChunked])
+    if (scroller) scroller.scrollTop = tab.view.scrollPosition ?? 0
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode, isChunked])
 
   // Save scroll position
   const handleScroll = useCallback(() => {
@@ -129,6 +129,8 @@ export function MarkdownViewer({ tab, onScrollChange, onEditRequest }: MarkdownV
     el.addEventListener('scroll', onNativeScroll)
     return () => el.removeEventListener('scroll', onNativeScroll)
   }, [isChunked, onScrollChange])
+
+  const streamdownPlugins = useMemo(() => (codePlugin ? { code: codePlugin } : undefined), [codePlugin])
 
   // Hoisted out of the JSX: an inline object is a new identity on every render,
   // which defeats memoization inside Streamdown and costs the most in chunked
@@ -283,8 +285,8 @@ export function MarkdownViewer({ tab, onScrollChange, onEditRequest }: MarkdownV
               <div className={`prose prose-invert max-w-none px-6 sm:px-8 ${index === 0 ? 'pt-6 sm:pt-8' : 'pt-6'}`}>
                 <Streamdown
                   mode="static"
-                  controls={{ code: true }}
-                  plugins={codePlugin ? { code: codePlugin } : undefined}
+                  controls={STREAMDOWN_CONTROLS}
+                  plugins={streamdownPlugins}
                   components={markdownComponents}
                 >
                   {chunk}
@@ -303,8 +305,8 @@ export function MarkdownViewer({ tab, onScrollChange, onEditRequest }: MarkdownV
           <div className="prose prose-invert max-w-none p-6 sm:p-8">
             <Streamdown
               mode="static"
-              controls={{ code: true }}
-              plugins={codePlugin ? { code: codePlugin } : undefined}
+              controls={STREAMDOWN_CONTROLS}
+              plugins={streamdownPlugins}
               components={markdownComponents}
             >
               {content}
@@ -318,7 +320,7 @@ export function MarkdownViewer({ tab, onScrollChange, onEditRequest }: MarkdownV
             language="markdown"
             readOnly
             onScroll={onScrollChange}
-            scrollPosition={tab.scrollPosition}
+            scrollPosition={tab.view.scrollPosition}
           />
         </div>
       )}

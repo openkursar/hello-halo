@@ -118,3 +118,6 @@ win-update-helper/bin/
 
 # Editor swap files
 *.swp
+
+# Python bytecode from the perf fixture generator
+__pycache__/

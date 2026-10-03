@@ -338,6 +338,19 @@ export interface TeamStore {
   getJoinedMemberTaskTitle(teamId: string, appId: string): string | undefined
   /** Live busy assignments from the last snapshot of a joined office. */
   getJoinedMemberBusy(teamId: string, appId: string): RosterBusyEntry[]
+  /**
+   * Apply a run-state change of a joined office on top of its last snapshot:
+   * each listed member's status/task/busy is replaced (idle with nothing busy
+   * clears it), and the office's observable status is stored when given. No
+   * membership row is touched.
+   */
+  applyJoinedMemberStatus(
+    teamId: string,
+    change: {
+      status?: TeamStatus
+      members: Array<{ appId: string; status: TeamMemberRuntimeStatus; currentTaskTitle?: string; busy?: RosterBusyEntry[] }>
+    }
+  ): void
 
   // ── team_edges ────────────────────────────────
   replaceEdgesForTeam(teamId: string, edges: TeamEdge[]): void
@@ -376,6 +389,8 @@ export interface TeamStore {
   deleteActivity(activityId: string): void
   listActivityByEpoch(teamId: string, epochId: string): TeamActivity[]
   listRecentActivityByEpoch(teamId: string, epochId: string, limit: number): TeamActivity[]
+  /** Acts of an epoch created strictly after `sinceCreatedAt`, oldest first. */
+  listActivityByEpochSince(teamId: string, epochId: string, sinceCreatedAt: number): TeamActivity[]
   /** Every act of a team, across epochs — the replication snapshot's source. */
   getConversationStats(teamId: string, ownAppIds: string[]): {
     involved: Set<string>

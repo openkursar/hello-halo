@@ -1390,6 +1390,22 @@ export function readTeamMemberMessages(appId: string, teamId: string, epochId: s
 }
 
 /**
+ * A locally-owned member's team-channel history as rows stamped with `seq`
+ * (1-based ordinal in the append-only transcript, the same numbering the
+ * owner-side federation serializer uses), only those after `sinceSeq` when
+ * given — so a viewer that already holds the history receives just the tail.
+ */
+export function readTeamMemberHistory(
+  appId: string,
+  teamId: string,
+  epochId: string,
+  sinceSeq?: number
+): Array<Record<string, unknown> & { seq: number }> {
+  const rows = readTeamMemberMessages(appId, teamId, epochId).map((m, i) => ({ ...m, seq: i + 1 }))
+  return sinceSeq !== undefined && sinceSeq > 0 ? rows.slice(sinceSeq) : rows
+}
+
+/**
  * Load persisted chat messages for any app-chat conversation by its
  * conversationId (native default, native local, IM, or HTTP). Derives the JSONL
  * runId from the key and reads the transcript. Used by the messages IPC/HTTP

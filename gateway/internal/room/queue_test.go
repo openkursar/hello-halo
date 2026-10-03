@@ -100,3 +100,43 @@ func TestQueuePopBlocksUntilPushAndClose(t *testing.T) {
 		t.Fatal("Push accepted after Close")
 	}
 }
+
+func TestFeedPlaneByteBudgetDropsOldestFeedOnly(t *testing.T) {
+	m := metrics.New()
+	q := NewPlaneQueue(m)
+	q.Push(wire.PlaneControl, []byte("c1"))
+	big := make([]byte, wire.PlaneCapacityBytes[wire.PlaneFeed]/2+1)
+	q.Push(wire.PlaneFeed, big)
+	q.Push(wire.PlaneFeed, big) // over the byte budget: the first feed frame goes
+	if got := q.Len(wire.PlaneFeed); got != 1 {
+		t.Fatalf("feed plane len = %d, want 1", got)
+	}
+	if got := q.Len(wire.PlaneControl); got != 1 {
+		t.Fatalf("control plane len = %d, want 1", got)
+	}
+	if drops := m.FramesDroppedTotal[wire.PlaneFeed].Load(); drops != 1 {
+		t.Fatalf("feed drops = %d, want 1", drops)
+	}
+	// Drains control first, then feed; byte accounting returns to zero.
+	if d, _ := q.Pop(); string(d) != "c1" {
+		t.Fatalf("first pop = %q, want c1", d)
+	}
+	q.Pop()
+	q.Push(wire.PlaneFeed, big)
+	q.Push(wire.PlaneFeed, []byte("small"))
+	if got := q.Len(wire.PlaneFeed); got != 2 {
+		t.Fatalf("feed plane len after drain = %d, want 2", got)
+	}
+}
+
+func TestResolvePlaneUsesKnownHintElseKind(t *testing.T) {
+	if p := wire.ResolvePlane("feed", "feed-entries"); p != wire.PlaneFeed {
+		t.Fatalf("hinted feed = %v", p)
+	}
+	if p := wire.ResolvePlane("", "feed-entries"); p != wire.PlaneControl {
+		t.Fatalf("unhinted feed-entries = %v, want control", p)
+	}
+	if p := wire.ResolvePlane("bogus", "stream-frames"); p != wire.PlaneStream {
+		t.Fatalf("unknown hint = %v, want stream by kind", p)
+	}
+}

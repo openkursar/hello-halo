@@ -765,11 +765,10 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
           const delta = event.delta.thinking || ''
           blockState.content += delta
 
-          // Send delta to renderer for incremental update
+          // Delta only: the accumulated text goes out once, with isComplete at block stop.
           emitAgentEvent('agent:thought-delta', spaceId, conversationId, {
             thoughtId: blockState.thoughtId,
-            delta,
-            content: blockState.content  // Also send full content for fallback
+            delta
           })
         }
       }

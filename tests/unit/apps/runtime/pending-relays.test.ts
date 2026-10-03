@@ -19,6 +19,7 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import {
   PendingRelayStore,
+  TARGET_IDLE_TTL_MS,
   renderRelayContext,
   sanitizeRuntimeTags,
   buildQuoteFromMessage,
@@ -26,6 +27,8 @@ import {
 } from '../../../../src/main/apps/runtime/pending-relays'
 
 const TARGET = 'app-chat:app1:wecom-bot:direct:lisi'
+/** "Now" for the persistence suite: shortly after the fixtures' event time. */
+const FIXTURE_NOW = 1_753_600_000_000
 const OWNER_VIEW = { includeOrigin: true, allowTranscript: true }
 const GUEST_VIEW = { includeOrigin: false, allowTranscript: false }
 
@@ -196,13 +199,13 @@ describe('PendingRelayStore — persistence', () => {
   })
 
   it('survives a restart round-trip', async () => {
-    const store = new PendingRelayStore(file)
+    const store = new PendingRelayStore(file, { now: () => FIXTURE_NOW })
     store.append(TARGET, makeEvent({ id: 'persisted' }))
 
     await new Promise(resolve => setTimeout(resolve, 50))
     expect(existsSync(file)).toBe(true)
 
-    const reloaded = new PendingRelayStore(file)
+    const reloaded = new PendingRelayStore(file, { now: () => FIXTURE_NOW })
     const events = reloaded.peek(TARGET) as RelayPushEvent[]
     expect(events.map(e => e.id)).toEqual(['persisted'])
     expect(events[0].subject).toEqual({ id: 'zhangsan', name: '张三' })
@@ -210,20 +213,29 @@ describe('PendingRelayStore — persistence', () => {
   })
 
   it('flush writes synchronously for shutdown', () => {
-    const store = new PendingRelayStore(file)
+    const store = new PendingRelayStore(file, { now: () => FIXTURE_NOW })
     store.append(TARGET, makeEvent({ id: 'last-moment' }))
     store.flush()
 
     expect(readFileSync(file, 'utf8')).toContain('last-moment')
-    expect(new PendingRelayStore(file).count(TARGET)).toBe(1)
+    expect(new PendingRelayStore(file, { now: () => FIXTURE_NOW }).count(TARGET)).toBe(1)
   })
 
   it('starts fresh on a corrupt file or unknown version', () => {
     writeFileSync(file, 'not json{{{', 'utf8')
-    expect(new PendingRelayStore(file).count(TARGET)).toBe(0)
+    expect(new PendingRelayStore(file, { now: () => FIXTURE_NOW }).count(TARGET)).toBe(0)
 
     writeFileSync(file, JSON.stringify({ version: 99, pending: { [TARGET]: [makeEvent()] } }), 'utf8')
-    expect(new PendingRelayStore(file).count(TARGET)).toBe(0)
+    expect(new PendingRelayStore(file, { now: () => FIXTURE_NOW }).count(TARGET)).toBe(0)
+  })
+
+  it('drops a target whose newest event is past the idle TTL, and keeps a fresh one', () => {
+    const fresh = makeEvent({ id: 'fresh', at: FIXTURE_NOW - 1000 })
+    const stale = makeEvent({ id: 'stale', at: FIXTURE_NOW - TARGET_IDLE_TTL_MS - 1 })
+    writeFileSync(file, JSON.stringify({ version: 2, pending: { [TARGET]: [fresh], 'app-chat:app1:wecom-bot:direct:gone': [stale] } }), 'utf8')
+    const store = new PendingRelayStore(file, { now: () => FIXTURE_NOW })
+    expect(store.count(TARGET)).toBe(1)
+    expect(store.count('app-chat:app1:wecom-bot:direct:gone')).toBe(0)
   })
 
   it('rejects events that would throw while rendering', () => {
@@ -240,7 +252,7 @@ describe('PendingRelayStore — persistence', () => {
       },
     }), 'utf8')
 
-    const store = new PendingRelayStore(file)
+    const store = new PendingRelayStore(file, { now: () => FIXTURE_NOW })
     const events = store.peek(TARGET)
     expect(events.map(e => e.id)).toEqual(['ok'])
     // The surviving event must render without throwing

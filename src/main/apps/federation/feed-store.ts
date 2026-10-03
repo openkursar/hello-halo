@@ -48,6 +48,8 @@ export class FeedStore implements IFeedStore {
   private readonly stmtPutCache: Database.Statement
   private readonly stmtListCache: Database.Statement
   private readonly stmtCacheMaxSeq: Database.Statement
+  private readonly stmtCacheMinSeq: Database.Statement
+  private readonly stmtDeleteCacheFeed: Database.Statement
   private readonly stmtListCacheFeedIds: Database.Statement
   private readonly stmtGetMeta: Database.Statement
   private readonly stmtSetTruncated: Database.Statement
@@ -124,6 +126,10 @@ export class FeedStore implements IFeedStore {
     this.stmtCacheMaxSeq = db.prepare(`
       SELECT COALESCE(MAX(seq), 0) AS m FROM feed_cache WHERE office_id = ? AND feed_id = ?
     `)
+    this.stmtCacheMinSeq = db.prepare(`
+      SELECT COALESCE(MIN(seq), 0) AS m FROM feed_cache WHERE office_id = ? AND feed_id = ?
+    `)
+    this.stmtDeleteCacheFeed = db.prepare(`DELETE FROM feed_cache WHERE office_id = ? AND feed_id = ?`)
     this.stmtListCacheFeedIds = db.prepare(`
       SELECT DISTINCT feed_id FROM feed_cache WHERE office_id = ?
     `)
@@ -238,6 +244,14 @@ export class FeedStore implements IFeedStore {
     return (this.stmtCacheMaxSeq.get(officeId, feedId) as { m: number }).m
   }
 
+  getCacheMinSeq(officeId: string, feedId: string): number {
+    return (this.stmtCacheMinSeq.get(officeId, feedId) as { m: number }).m
+  }
+
+  deleteCacheFeed(officeId: string, feedId: string): number {
+    return this.stmtDeleteCacheFeed.run(officeId, feedId).changes
+  }
+
   listCacheFeedIds(officeId: string): string[] {
     return (this.stmtListCacheFeedIds.all(officeId) as { feed_id: string }[]).map((r) => r.feed_id)
   }
@@ -266,5 +280,9 @@ export class FeedStore implements IFeedStore {
   getOfficeHlcHigh(officeId: string): string | null {
     const row = this.stmtOfficeHlcHigh.get(officeId) as { m: string | null } | undefined
     return row?.m ?? null
+  }
+
+  transaction<T>(fn: () => T): T {
+    return this.db.transaction(fn)()
   }
 }

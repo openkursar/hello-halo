@@ -24,6 +24,7 @@ import type { TabState } from '../../../services/canvas-lifecycle'
 import { noteTerminalInput } from '../../../services/tool-session-telemetry'
 import { buildTheme, getMinimumContrastRatio } from '../../../lib/terminal-theme'
 import { latchTerminalEnd, type TerminalEndState } from '../../../lib/terminal-liveness'
+import { useViewerResources } from '../viewer-resources'
 
 interface TerminalViewerProps {
   tab: TabState
@@ -40,6 +41,7 @@ export function TerminalViewer({ tab }: TerminalViewerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
+  const resources = useViewerResources()
   const sessionId = tab.terminalSessionId
 
   const aiWriting = useTerminalStore(s => (sessionId ? s.aiWriting.has(sessionId) : false))
@@ -47,13 +49,6 @@ export function TerminalViewer({ tab }: TerminalViewerProps) {
   // Session gone entirely (e.g. app restarted — ptys don't survive restarts)
   const [missing, setMissing] = useState(false)
   const [ended, setEnded] = useState<TerminalEndState | null>(null)
-
-  // Only the active tab is rendered, so switching between two terminal tabs
-  // reuses this component instance — both flags belong to one session.
-  useEffect(() => {
-    setMissing(false)
-    setEnded(null)
-  }, [sessionId])
 
   useEffect(() => {
     setEnded(prev => latchTerminalEnd(prev, sessionInfo))
@@ -68,7 +63,8 @@ export function TerminalViewer({ tab }: TerminalViewerProps) {
   useEffect(() => {
     if (!sessionId || !containerRef.current) return
 
-    const term = new Terminal({
+    const scope = resources.scope()
+    const term = scope.add(new Terminal({
       fontFamily: 'Menlo, Monaco, "Cascadia Code", "Courier New", monospace',
       fontSize: 13,
       cursorBlink: true,
@@ -77,7 +73,7 @@ export function TerminalViewer({ tab }: TerminalViewerProps) {
       theme: buildTheme(),
       minimumContrastRatio: getMinimumContrastRatio(),
       allowProposedApi: true,
-    })
+    }))
     const fit = new FitAddon()
     term.loadAddon(fit)
     term.open(containerRef.current)
@@ -107,7 +103,7 @@ export function TerminalViewer({ tab }: TerminalViewerProps) {
     }
 
     // Keyboard → pty
-    const dataSub = term.onData(sendInput)
+    scope.add(term.onData(sendInput))
 
     // Flow control: register as a live consumer, then acknowledge chars AFTER
     // xterm has rendered them (the write callback), in CHAR_COUNT_ACK_SIZE
@@ -136,12 +132,12 @@ export function TerminalViewer({ tab }: TerminalViewerProps) {
     // order (the "open a running task" corruption). Once flushed we stream live.
     let replayApplied = false
     const pendingLive: string[] = []
-    const unsubData = api.onTerminalData((payload: unknown) => {
+    scope.add(api.onTerminalData((payload: unknown) => {
       const e = payload as { sessionId: string; data: string }
       if (e.sessionId !== sessionId || disposed) return
       if (replayApplied) writeLive(e.data)
       else pendingLive.push(e.data)
-    })
+    }))
 
     // Replay recent output, then flush buffered live output, then fit + report
     // initial size. A failed replay means the session no longer exists in the
@@ -170,7 +166,7 @@ export function TerminalViewer({ tab }: TerminalViewerProps) {
     })
 
     // Keep pty sized to the container.
-    const ro = new ResizeObserver(() => {
+    const ro = scope.add(new ResizeObserver(() => {
       if (disposed) return
       try {
         fit.fit()
@@ -178,34 +174,31 @@ export function TerminalViewer({ tab }: TerminalViewerProps) {
       } catch {
         // ignore transient zero-size
       }
-    })
+    }))
     ro.observe(containerRef.current)
 
     // xterm.js caches theme colors; toggling the class alone does not repaint.
-    const themeObserver = new MutationObserver(() => {
+    const themeObserver = scope.add(new MutationObserver(() => {
       if (disposed || !termRef.current) return
       termRef.current.options.theme = buildTheme()
       termRef.current.options.minimumContrastRatio = getMinimumContrastRatio()
-    })
+    }))
     themeObserver.observe(document.documentElement, {
       attributes: true,
       attributeFilter: ['class'],
     })
 
-    return () => {
+    // Released first: stop gating flow control the moment this consumer goes
+    // away, or an unacked backlog would keep the pty paused with nobody to ack.
+    scope.add(() => {
       disposed = true
-      // Stop gating flow control the moment this consumer goes away, or an
-      // unacked backlog would keep the pty paused with nobody left to ack.
       void api.terminalDetach(sessionId)
-      ro.disconnect()
-      themeObserver.disconnect()
-      dataSub.dispose()
-      unsubData()
-      term.dispose()
       termRef.current = null
       fitRef.current = null
-    }
-  }, [sessionId])
+    })
+
+    return () => scope.dispose()
+  }, [resources, sessionId])
 
   if (!sessionId) {
     return (

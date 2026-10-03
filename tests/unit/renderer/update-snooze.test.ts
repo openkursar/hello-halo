@@ -18,7 +18,7 @@ const {
   clearUpdateSnooze,
   isUpdateSnoozed,
   snoozeUpdate,
-} = await import('../../../src/renderer/components/updater/update-snooze')
+} = await import('../../../src/renderer/services/update-snooze')
 
 const NOW = Date.UTC(2026, 8, 29, 1, 0, 0)
 

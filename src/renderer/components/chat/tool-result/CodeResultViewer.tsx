@@ -10,10 +10,10 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { Copy, Check, ChevronDown, ChevronUp, FileText } from 'lucide-react'
-import { useAsyncHighlight } from '../../../hooks/useAsyncHighlight'
 import { useTranslation } from '../../../i18n'
 import type { ViewerBaseProps } from './types'
-import { countLines, truncateToLines, removeLineNumberPrefix } from './detection'
+import { useBoundedHighlight } from './bounded-highlight'
+import { countLines, truncateToLines, PREVIEW_MAX_CHARS, removeLineNumberPrefix } from './detection'
 
 const PREVIEW_LINES = 8
 const MAX_EXPANDED_HEIGHT = 400
@@ -40,13 +40,13 @@ export function CodeResultViewer({
 
   // Parse content
   const { content: previewContent, totalLines, truncated } = useMemo(() => {
-    return truncateToLines(cleanedOutput, PREVIEW_LINES)
+    return truncateToLines(cleanedOutput, PREVIEW_LINES, PREVIEW_MAX_CHARS)
   }, [cleanedOutput])
 
   const displayContent = isExpanded ? cleanedOutput : previewContent
 
-  // Async highlight: shows plain text instantly, then swaps in highlighted HTML
-  const highlightedCode = useAsyncHighlight(displayContent, language)
+  // Async highlight: plain text first, then highlighted HTML (head only when huge)
+  const highlightedCode = useBoundedHighlight(displayContent, language)
 
   // Copy handler - copy cleaned content
   const handleCopy = useCallback(async () => {

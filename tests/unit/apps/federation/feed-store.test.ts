@@ -162,3 +162,27 @@ describe('FeedStore', () => {
     })
   })
 })
+
+describe('app_federation v7: the retired office-wide ctrl feed', () => {
+  it('is dropped from every feed table; per-target ctrl and session feeds are kept', () => {
+    const dbManager = createDatabaseManager(':memory:')
+    const db = dbManager.getAppDatabase()
+    dbManager.runMigrations(db, MIGRATION_NAMESPACE, migrations.filter((m) => m.version <= 6))
+    const store = new FeedStore(db)
+    const retired = 'node-1\u0000ctrl'
+    const kept = ['node-1\u0000ctrl:node-2', 'node-1\u0000session:app-a|office-a|e1']
+    for (const feedId of [retired, ...kept]) {
+      store.appendEntry(makeEntry(1, { feedId }))
+      store.setPeerCursor(OFFICE, feedId, 'node-2', 1, 1)
+      store.setLocalCursor(OFFICE, feedId, 1, 1)
+      store.putCache(OFFICE, feedId, 1, '{}')
+    }
+    dbManager.runMigrations(db, MIGRATION_NAMESPACE, migrations)
+    const rows = (table: string) =>
+      (db.prepare(`SELECT DISTINCT feed_id FROM ${table} ORDER BY feed_id`).all() as Array<{ feed_id: string }>).map((r) => r.feed_id)
+    for (const table of ['feed_log', 'feed_peer_cursor', 'feed_local_cursor', 'feed_cache']) {
+      expect(rows(table), table).toEqual([...kept].sort())
+    }
+    dbManager.closeAll()
+  })
+})

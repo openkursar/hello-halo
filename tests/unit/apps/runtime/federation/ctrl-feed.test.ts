@@ -20,7 +20,7 @@ import {
   MIGRATION_NAMESPACE,
   migrations,
 } from '../../../../../src/main/apps/federation/migrations'
-import { createCtrlFeed, type CtrlFeed } from '../../../../../src/main/apps/runtime/federation/ctrl-feed'
+import { createCtrlFeed, ctrlTargetKind, type CtrlFeed } from '../../../../../src/main/apps/runtime/federation/ctrl-feed'
 import { feedIdKey, type FeedSyncFrame } from '../../../../../src/main/apps/runtime/federation/log/types'
 import type { SerializedWakeRequest } from '../../../../../src/main/apps/runtime/federation/types'
 import type { TurnCompletion } from '../../../../../src/main/apps/runtime/team/message-bus'
@@ -29,7 +29,7 @@ const OFFICE = 'office-1'
 const AUTH = 'node-authority'
 const OWNER = 'node-owner'
 const GIVE_UP_MS = 60_000
-const AUTH_CTRL_KEY = feedIdKey({ officeId: OFFICE, author: AUTH, kind: 'ctrl' })
+const AUTH_CTRL_KEY = feedIdKey({ officeId: OFFICE, author: AUTH, kind: ctrlTargetKind(OWNER) })
 
 function makeRequest(appId = 'app-x'): SerializedWakeRequest {
   return {

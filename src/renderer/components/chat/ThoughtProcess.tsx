@@ -25,6 +25,8 @@ import {
   getThoughtColor,
   getThoughtLabelKey,
   getToolFriendlyFormat,
+  groupChildThoughts,
+  NO_CHILD_THOUGHTS,
 } from './thought-utils'
 import { useSmartScroll } from '../../hooks/useSmartScroll'
 import { useLazyVisible } from '../../hooks/useLazyVisible'
@@ -377,7 +379,8 @@ function LazyThoughtItem({
   )
 }
 
-export function ThoughtProcess({ thoughts, isThinking }: ThoughtProcessProps) {
+// Memoized: a text delta changes neither prop, and this panel can hold hundreds of steps.
+export const ThoughtProcess = memo(function ThoughtProcess({ thoughts, isThinking }: ThoughtProcessProps) {
   // Start collapsed, but auto-expand when streaming starts
   const [isExpanded, setIsExpanded] = useState(false)
   const [hasAutoExpanded, setHasAutoExpanded] = useState(false)
@@ -437,6 +440,18 @@ export function ThoughtProcess({ thoughts, isThinking }: ThoughtProcessProps) {
     })
   }, [thoughts])
 
+  // Task/Agent steps get only their own sub-agent steps, with a stable identity.
+  const childGroupsRef = useRef<Map<string, Thought[]>>()
+  const childGroups = useMemo(() => {
+    const groups = groupChildThoughts(thoughts, childGroupsRef.current)
+    childGroupsRef.current = groups
+    return groups
+  }, [thoughts])
+
+  // Only count system-level errors (type: 'error'), not tool execution failures (tool_result with isError)
+  // Tool failures are normal during agent investigation and should not affect overall status
+  const errorCount = useMemo(() => thoughts.filter(t => t.type === 'error').length, [thoughts])
+
   // Smart auto-scroll: only scrolls when user is at bottom
   // Stops auto-scroll when user scrolls up to read history.
   // `behavior: 'auto'` is not a preference — steps arrive faster than a smooth
@@ -454,10 +469,6 @@ export function ThoughtProcess({ thoughts, isThinking }: ThoughtProcessProps) {
   if (thoughts.length === 0 && !isThinking) {
     return null
   }
-
-  // Only count system-level errors (type: 'error'), not tool execution failures (tool_result with isError)
-  // Tool failures are normal during agent investigation and should not affect overall status
-  const errorCount = thoughts.filter(t => t.type === 'error').length
 
   // Check if there's content to show in the scrollable area
   const hasDisplayContent = displayThoughts.length > 0
@@ -552,7 +563,7 @@ export function ThoughtProcess({ thoughts, isThinking }: ThoughtProcessProps) {
                   // unmount/remount when an item shifts from "recent" to "old"
                   // as new thoughts arrive — which previously caused 1-2 frame flicker.
                   const isRecentItem = index >= displayThoughts.length - 3
-                  // Task/Agent thoughts need the full thoughts array for SubAgentTimeline
+                  // Task/Agent thoughts need their sub-agent steps for SubAgentTimeline
                   const isTaskThought = thought.type === 'tool_use' && (thought.toolName === 'Task' || thought.toolName === 'Agent')
                   return (
                     <LazyThoughtItem
@@ -561,7 +572,7 @@ export function ThoughtProcess({ thoughts, isThinking }: ThoughtProcessProps) {
                       isLast={isLast}
                       scrollContainerRef={contentRef}
                       eager={isRecentItem}
-                      allThoughts={isTaskThought ? thoughts : undefined}
+                      allThoughts={isTaskThought ? childGroups.get(thought.id) ?? NO_CHILD_THOUGHTS : undefined}
                       isThinking={isTaskThought ? isThinking : undefined}
                     />
                   )
@@ -594,4 +605,4 @@ export function ThoughtProcess({ thoughts, isThinking }: ThoughtProcessProps) {
       </div>
     </div>
   )
-}
+})

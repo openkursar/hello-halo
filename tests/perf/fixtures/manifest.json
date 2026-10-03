@@ -24,6 +24,10 @@
       "bytes": 51264,
       "sha256": "f058ce662b9c193f0d3a691598f85db6c23b9caa7d38aae194a47b71ef582f9a"
     },
+    "docx-typical-5images.docx": {
+      "bytes": 1159773,
+      "sha256": "36e83c8f10c9c7382a174bffe3b8e47566afbc03281d38adf1917c3e49367dbb"
+    },
     "html-extreme-2mb.html": {
       "bytes": 2097500,
       "sha256": "b73a69d00d388dbbe5c2ca5c4f2134347e69e480f55b7bebcc2e5d1d85bedc7e"
@@ -79,6 +83,10 @@
     "text-typical.log": {
       "bytes": 5128,
       "sha256": "c7845f9da1b59eda02a2aa997aa7672c206768505ae23706f727c9f7780a5ab5"
+    },
+    "xlsx-typical.xlsx": {
+      "bytes": 26838,
+      "sha256": "ee5e5c1a6953a6dfe6cb7e39260d7dd5e351a754db0a17c62a6c48719f489e0c"
     }
   }
 }

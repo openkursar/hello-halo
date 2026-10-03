@@ -5,7 +5,7 @@
  * TodoWrite is rendered separately at the bottom (only one instance)
  */
 
-import { useState, useMemo, useRef, type RefObject } from 'react'
+import { useEffect, useState, useMemo, useRef, type RefObject } from 'react'
 import {
   Lightbulb,
   Loader2,
@@ -28,12 +28,15 @@ import {
 import { useLazyVisible } from '../../hooks/useLazyVisible'
 import type { Thought, ThoughtsSummary } from '../../types'
 import { getCurrentLanguage, useTranslation } from '../../i18n'
+import { holdOpenThoughts } from '../../stores/chat.store'
 
 interface CollapsedThoughtProcessProps {
   thoughts: Thought[]
   defaultExpanded?: boolean
   /** Start in full-height mode (max-h-[80vh] instead of 300px). Useful for debugging views. */
   defaultMaximized?: boolean
+  /** The message these thoughts belong to; while expanded, its loaded thoughts are kept. */
+  messageId?: string
 }
 
 
@@ -197,9 +200,10 @@ function LazyCollapsedThoughtItem({
   )
 }
 
-export function CollapsedThoughtProcess({ thoughts, defaultExpanded = false, defaultMaximized = false }: CollapsedThoughtProcessProps) {
+export function CollapsedThoughtProcess({ thoughts, defaultExpanded = false, defaultMaximized = false, messageId }: CollapsedThoughtProcessProps) {
   const { t } = useTranslation()
   const [isExpanded, setIsExpanded] = useState(defaultExpanded)
+  useEffect(() => (messageId && isExpanded ? holdOpenThoughts(messageId) : undefined), [messageId, isExpanded])
   const [isMaximized, setIsMaximized] = useState(defaultMaximized)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
 

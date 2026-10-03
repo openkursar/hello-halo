@@ -26,6 +26,7 @@ import {
   trashArtifact,
   validateFilePath,
 } from './_shared'
+import { retainArtifactSpace, releaseArtifactSpace, queryFiles } from '../../services/artifact.service'
 
 export function registerArtifactRoutes(app: Express): void {
   // ===== Artifact Routes =====
@@ -36,6 +37,18 @@ export function registerArtifactRoutes(app: Express): void {
       const maxDepth = Number.isFinite(parsedMaxDepth) ? Math.max(0, parsedMaxDepth) : 2
       const artifacts = await listArtifacts(req.params.spaceId, maxDepth)
       res.json({ success: true, data: artifacts })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // Best path matches for a typed query (the @ menu)
+  app.get('/api/spaces/:spaceId/artifacts/query', async (req: Request, res: Response) => {
+    try {
+      const query = typeof req.query.q === 'string' ? req.query.q : ''
+      const parsedLimit = typeof req.query.limit === 'string' ? Number.parseInt(req.query.limit, 10) : Number.NaN
+      const limit = Number.isFinite(parsedLimit) ? parsedLimit : 50
+      res.json({ success: true, data: await queryFiles(req.params.spaceId, query, limit) })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }
@@ -273,6 +286,34 @@ export function registerArtifactRoutes(app: Express): void {
       }
       const resolvedPath = await createFolder(req.params.spaceId, parentPath || '', name)
       res.json({ success: true, data: { path: resolvedPath } })
+    } catch (error) {
+      res.status(500).json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // A client starts / stops showing a space (keeps or frees its cache and watcher)
+  app.post('/api/spaces/:spaceId/artifacts/retain', async (req: Request, res: Response) => {
+    const { clientId } = req.body as { clientId?: string }
+    if (typeof clientId !== 'string' || !clientId) {
+      res.status(400).json({ success: false, error: 'Missing clientId' })
+      return
+    }
+    try {
+      res.json({ success: true, data: await retainArtifactSpace(req.params.spaceId, clientId) })
+    } catch (error) {
+      res.status(500).json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  app.post('/api/spaces/:spaceId/artifacts/release', async (req: Request, res: Response) => {
+    const { clientId } = req.body as { clientId?: string }
+    if (typeof clientId !== 'string' || !clientId) {
+      res.status(400).json({ success: false, error: 'Missing clientId' })
+      return
+    }
+    try {
+      await releaseArtifactSpace(req.params.spaceId, clientId)
+      res.json({ success: true })
     } catch (error) {
       res.status(500).json({ success: false, error: (error as Error).message })
     }

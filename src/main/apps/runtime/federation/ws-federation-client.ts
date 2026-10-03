@@ -19,28 +19,21 @@
 import WebSocket from 'ws'
 
 import { framePlane, type FederationMessage, type FramePlane, type NodeId } from './types'
+import { PlaneQueue } from './plane-queue'
 
 const LOG_TAG = '[FedClient]'
 
+/**
+ * The wire envelope. A feed-plane frame carries its plane: a relay cannot tell a
+ * transcript frame from a ctrl-feed one by kind, and does not read payloads.
+ */
+function envelope(frame: FederationMessage, to: NodeId | null): string {
+  const plane = framePlane(frame)
+  return JSON.stringify({ type: 'federation', ...(to ? { to } : {}), ...(plane === 'feed' ? { plane } : {}), payload: frame })
+}
+
 const BACKOFF_BASE_MS = 1000
 const BACKOFF_MAX_MS = 30_000
-
-/**
- * Per-plane bounded outbound queues. When the link is congested the planes
- * drain in strict priority (control → stream → artifact), and each plane's cap is
- * enforced independently so a flood of large artifact frames can neither
- * head-of-line-block nor evict coordination traffic. Control is sized so it never
- * realistically overflows; if it ever did it sheds its OWN oldest, never trading
- * a control guarantee for a lower plane. Artifact is the smallest because its
- * frames are the largest and the most droppable (a viewer simply re-fetches).
- */
-const PLANE_QUEUE_CAP: Record<FramePlane, number> = {
-  control: 1024,
-  stream: 256,
-  artifact: 32,
-}
-/** Drain order: highest priority first. */
-const PLANE_DRAIN_ORDER: readonly FramePlane[] = ['control', 'stream', 'artifact']
 
 export type WsFederationClientState = 'connecting' | 'open' | 'closed'
 
@@ -117,6 +110,10 @@ export interface WsLinkHealth {
   failedAttempts: number
   /** Frames shed by queue overflow since this client was created, by plane. */
   dropped: Record<FramePlane, number>
+  /** Federation frames and bytes received since this client was created, by plane. */
+  received: Record<FramePlane, { frames: number; bytes: number }>
+  /** The same, by frame kind (`<plane>.<kind>` outside the control plane). */
+  receivedByKind: Record<string, { frames: number; bytes: number }>
 }
 
 /**
@@ -138,17 +135,22 @@ export class WsFederationClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   // Outbound frames held until the link is authed, segmented by plane so they
   // drain in priority and overflow is shed per-plane.
-  private readonly outbound: Record<FramePlane, Array<{ frame: FederationMessage; to: NodeId | null }>> = {
-    control: [],
-    stream: [],
-    artifact: [],
-  }
+  // Frames waiting for the link, by plane (see PlaneQueue for the bounds).
+  private readonly outbound = new PlaneQueue<{ frame: FederationMessage; to: NodeId | null }>()
   // Frames shed by overflow, and when each plane last reported it. Counted rather
   // than logged per frame: a link that cannot connect sheds one every couple of
   // seconds, and a per-frame line buries the fact that thousands are gone.
-  private readonly dropped: Record<FramePlane, number> = { control: 0, stream: 0, artifact: 0 }
-  private readonly lastDropLogAt: Record<FramePlane, number> = { control: 0, stream: 0, artifact: 0 }
+  private readonly dropped: Record<FramePlane, number> = { control: 0, stream: 0, feed: 0, artifact: 0 }
+  private readonly lastDropLogAt: Record<FramePlane, number> = { control: 0, stream: 0, feed: 0, artifact: 0 }
   private unreachableReported = false
+  // Inbound volume, the number a joiner's cost is judged by (health line).
+  private readonly received: Record<FramePlane, { frames: number; bytes: number }> = {
+    control: { frames: 0, bytes: 0 },
+    stream: { frames: 0, bytes: 0 },
+    feed: { frames: 0, bytes: 0 },
+    artifact: { frames: 0, bytes: 0 },
+  }
+  private readonly receivedByKind = new Map<string, { frames: number; bytes: number }>()
 
   constructor(private readonly deps: WsFederationClientDeps) {
     // Accept http(s) or ws(s); normalize to a ws(s) /ws endpoint.
@@ -167,19 +169,17 @@ export class WsFederationClient {
    */
   send(frame: FederationMessage, to?: NodeId | null): void {
     if (this.authed && this.socket?.readyState === WebSocket.OPEN) {
-      this.socket.send(JSON.stringify({ type: 'federation', ...(to ? { to } : {}), payload: frame }))
+      this.socket.send(envelope(frame, to ?? null))
       return
     }
     const plane = framePlane(frame)
-    const queue = this.outbound[plane]
-    if (queue.length >= PLANE_QUEUE_CAP[plane]) {
-      // Overflow sheds within the SAME plane only — a full artifact queue never
-      // evicts a queued control frame. Drop oldest of this plane.
-      queue.shift()
-      this.dropped[plane] += 1
+    // Overflow sheds within the SAME plane only — a full artifact queue never
+    // evicts a queued control frame.
+    const dropped = this.outbound.push(plane, { frame, to: to ?? null }, () => JSON.stringify(frame).length)
+    if (dropped > 0) {
+      this.dropped[plane] += dropped
       this.reportDropped(plane)
     }
-    queue.push({ frame, to: to ?? null })
   }
 
   /**
@@ -208,6 +208,13 @@ export class WsFederationClient {
       connected: this.authed && this.socket?.readyState === WebSocket.OPEN,
       failedAttempts: this.authed ? 0 : this.reconnectAttempt,
       dropped: { ...this.dropped },
+      received: {
+        control: { ...this.received.control },
+        stream: { ...this.received.stream },
+        feed: { ...this.received.feed },
+        artifact: { ...this.received.artifact },
+      },
+      receivedByKind: Object.fromEntries([...this.receivedByKind].map(([kind, r]) => [kind, { ...r }])),
     }
   }
 
@@ -289,8 +296,9 @@ export class WsFederationClient {
 
   private handleMessage(data: WebSocket.RawData): void {
     let message: { type?: string; payload?: unknown; error?: string }
+    const text = data.toString()
     try {
-      message = JSON.parse(data.toString())
+      message = JSON.parse(text)
     } catch {
       console.warn(`${LOG_TAG} dropped non-JSON message url=${this.wsUrl}`)
       return
@@ -347,9 +355,22 @@ export class WsFederationClient {
         console.warn(`${LOG_TAG} auth failed url=${this.wsUrl} error=${message.error ?? 'unknown'}`)
         this.close()
         break
-      case 'federation':
-        this.deps.onFrame(message.payload as FederationMessage)
+      case 'federation': {
+        const frame = message.payload as FederationMessage
+        const tally = this.received[framePlane(frame)]
+        tally.frames += 1
+        tally.bytes += text.length
+        // A kind that rides a plane other than control is named with it, so a
+        // transcript frame is told apart from the same kind on the ctrl feed.
+        const plane = framePlane(frame)
+        const kindKey = plane === 'control' ? frame.kind : `${plane}.${frame.kind}`
+        let byKind = this.receivedByKind.get(kindKey)
+        if (!byKind) this.receivedByKind.set(kindKey, (byKind = { frames: 0, bytes: 0 }))
+        byKind.frames += 1
+        byKind.bytes += text.length
+        this.deps.onFrame(frame)
         break
+      }
       case 'gw:host-lost':
         console.warn(`${LOG_TAG} gateway reports host lost url=${this.wsUrl}`)
         this.deps.onGatewayHostLost?.()
@@ -361,14 +382,9 @@ export class WsFederationClient {
   private flushOutbound(): void {
     if (!this.authed || this.socket?.readyState !== WebSocket.OPEN) return
     // Drain in strict plane priority so coordination goes out ahead of any
-    // backlog of stream/artifact frames buffered during the reconnect.
-    for (const plane of PLANE_DRAIN_ORDER) {
-      const queue = this.outbound[plane]
-      const pending = queue.splice(0, queue.length)
-      for (const { frame, to } of pending) {
-        this.socket.send(JSON.stringify({ type: 'federation', ...(to ? { to } : {}), payload: frame }))
-      }
-    }
+    // backlog of stream/feed/artifact frames buffered during the reconnect.
+    const socket = this.socket
+    this.outbound.drain(({ frame, to }) => socket.send(envelope(frame, to)))
   }
 
   private scheduleReconnect(): void {

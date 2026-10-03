@@ -4,10 +4,12 @@ vi.mock('react', () => ({
   useState: (initial: any) => env.runner.state(initial), useRef: (initial: any) => env.runner.ref(initial),
   useMemo: (compute: any, deps: any[]) => env.runner.memo(compute, deps),
   useEffect: (effect: any, deps: any[]) => env.runner.effect(effect, deps),
+  createContext: (value: any) => ({ Provider: () => null, _value: value }),
+  useContext: (context: any) => context._value,
 }))
 vi.mock('../../../src/renderer/api', () => ({ api: env.api }))
 vi.mock('../../../src/renderer/i18n', () => ({ default: { t: (s: string) => s } }))
-vi.mock('../../../src/renderer/hooks/useRemoteSubscription', () => ({ useRemoteSubscription: () => {} }))
+vi.mock('../../../src/renderer/hooks/useConversationDetail', () => ({ useConversationDetail: () => {} }))
 vi.mock('../../../src/renderer/stores/chat.store', () => ({ useChatStore: (select: any) => select({ getSession: () => env.live }) }))
 vi.mock('../../../src/renderer/stores/team.store', async importOriginal => {
   const original = await importOriginal<typeof import('../../../src/renderer/stores/team.store')>()

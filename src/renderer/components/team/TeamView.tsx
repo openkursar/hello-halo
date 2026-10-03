@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, Info, Settings, Users, PanelLeft, UserPlus, Play, Pause, BookmarkPlus } from 'lucide-react'
 import { isRemoteMember, type RosterMember, type TeamDetail } from '../../../shared/apps/team-types'
-import { useTeamStore } from '../../stores/team.store'
+import { useTeamStore, useTeamView, useSelectTeamTask } from '../../stores/team.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { usePeopleViewStore } from '../../stores/people-view.store'
 import { useAppsStore } from '../../stores/apps.store'
@@ -29,11 +29,11 @@ export function TeamView({ detail, onBack }: { detail: TeamDetail; onBack?: () =
     window.addEventListener('resize', resize)
     return () => window.removeEventListener('resize', resize)
   }, [])
-  const conversations = useTeamStore(s => s.conversations)
-  const tasksError = useTeamStore(s => s.conversationsError)
-  const loadingTasks = useTeamStore(s => s.isLoadingConversations)
-  const selectedId = useTeamStore(s => s.selectedConversationId)
-  const select = useTeamStore(s => s.selectConversation)
+  const conversations = useTeamView(v => v.conversations)
+  const tasksError = useTeamView(v => v.conversationsError)
+  const loadingTasks = useTeamView(v => v.isLoadingConversations)
+  const selectedId = useTeamView(v => v.selectedConversationId)
+  const select = useSelectTeamTask()
   const tasks = useMemo(() => visibleTasks(conversations), [conversations])
   // A temporary space collaboration: coordinated from its space conversation,
   // so the persistent-team chrome (settings, invite, run/pause) stays hidden,

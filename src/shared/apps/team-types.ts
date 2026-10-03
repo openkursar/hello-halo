@@ -967,6 +967,11 @@ export interface TeamDetail {
   pendingEscalations?: TeamPendingEscalation[]
   /** Periodic checks running across this office's open runs and conversations. */
   checks?: TeamCheckView[]
+  /**
+   * The epoch `tasks`/`findings`/`activities` were read from; null when no board
+   * is open. A board event for any other epoch does not belong to this view.
+   */
+  boardEpochId?: string | null
 }
 
 export interface TeamEpochSummary {
@@ -1083,9 +1088,19 @@ export interface CollabSummary {
 
 // ── Observability event payloads ──
 
+/**
+ * What a `team:updated` changed, so a listener reloads only that. 'status' is
+ * the office row alone (carried on the event); 'members' the roster, members and
+ * edges; 'board' the open board's tasks, findings, activity and checks; 'epochs'
+ * the run history; 'conversations' the task list.
+ */
+export type TeamUpdatedChange = 'status' | 'members' | 'board' | 'epochs' | 'conversations'
+
 export interface TeamUpdatedEvent {
   teamId: string
   team?: Team
+  /** Absent → treat everything as changed (every emitter predating the hint). */
+  changed?: TeamUpdatedChange[]
   /**
    * The office's status as a viewer observes it, which `team.status` is not:
    * that field is the persisted RUN status and knows nothing about a member
@@ -1162,10 +1177,12 @@ export interface TeamPresenceEvent {
  *                the same calm way as a reconnect (no user action needed).
  *   'access-lost' — this machine's membership was refused on re-entry;
  *                reconnecting alone cannot fix it, the user needs a fresh invite.
+ *   'update-required' — the office runs another Halo version; this machine (or
+ *                the host) must update before it can rejoin.
  * The renderer maps each kind to humanized, location-free copy; the wire kind
  * itself is code-only and never shown to a user.
  */
-export type TeamOfficeStatusKind = 'paused' | 'resumed' | 'authority-changed' | 'access-lost'
+export type TeamOfficeStatusKind = 'paused' | 'resumed' | 'authority-changed' | 'access-lost' | 'update-required'
 
 export interface TeamOfficeStatusEvent {
   teamId: string

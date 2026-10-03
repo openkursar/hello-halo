@@ -1,5 +1,5 @@
 /**
- * A hot-standby emits a renderer refresh after applying a replicated write.
+ * A hot-standby reports the board rows it applied from a replicated write.
  *
  * Same 3-node in-process office as office-authority.test.ts (each node its own
  * :memory: store + an OfficeAuthority over a synchronous node-id hub). The
@@ -42,6 +42,7 @@ interface ReplicaEmit {
   officeId: string
   op: string
   taskId?: string
+  id?: unknown
 }
 
 interface Node {
@@ -67,7 +68,7 @@ function finding(id: string): BlackboardFinding {
   }
 }
 
-describe('D-2 — standby emits team:updated after applying a replicated write', () => {
+describe('a standby reports each replicated board row it applied', () => {
   const created: DatabaseManager[] = []
   afterEach(() => {
     for (const d of created) d.closeAll()
@@ -102,7 +103,7 @@ describe('D-2 — standby emits team:updated after applying a replicated write',
       for (const peer of ids) {
         fed.upsertNode({
           nodeId: peer, officeId: OFFICE, identity: peer, displayName: peer,
-          joinedAt: joinedAt[peer], lastSeen: 0, status: 'online',
+          joinedAt: joinedAt[peer], lastSeen: 0, status: 'online', advertisedUrl: null,
         })
       }
       auth.patchAuthorityState(OFFICE, { term: 1, authorityNodeId: 'A', rosterEpoch: 1 }, 0)
@@ -123,7 +124,11 @@ describe('D-2 — standby emits team:updated after applying a replicated write',
         onBecomeAuthority: () => {},
         onAuthorityChange: () => {},
         resolveArtifactBytes: async () => null,
-        onReplicaApplied: (info) => emits.push(info),
+        onReplicaApplied: (officeId, applied) => {
+          for (const e of applied.entries) {
+            emits.push({ officeId, op: e.op, ...(e.taskId !== undefined ? { taskId: e.taskId } : {}), id: e.payload.id })
+          }
+        },
         schedule: () => () => {},
         jitter: () => 0,
       })
@@ -143,8 +148,9 @@ describe('D-2 — standby emits team:updated after applying a replicated write',
     expect(nodes.B.team.getTaskById('t1')).toBeTruthy()
     expect(nodes.C.team.getTaskById('t1')).toBeTruthy()
 
-    expect(nodes.B.emits).toEqual([{ officeId: OFFICE, op: 'post_task', taskId: 't1' }])
-    expect(nodes.C.emits).toEqual([{ officeId: OFFICE, op: 'post_task', taskId: 't1' }])
+    // The applied row travels with the signal, so listeners merge it without a re-read.
+    expect(nodes.B.emits).toEqual([{ officeId: OFFICE, op: 'post_task', taskId: 't1', id: 't1' }])
+    expect(nodes.C.emits).toEqual([{ officeId: OFFICE, op: 'post_task', taskId: 't1', id: 't1' }])
 
     expect(nodes.A.emits).toEqual([])
   })
@@ -156,8 +162,8 @@ describe('D-2 — standby emits team:updated after applying a replicated write',
       payload: finding('f1') as unknown as Record<string, unknown>,
     })
 
-    expect(nodes.B.emits).toEqual([{ officeId: OFFICE, op: 'post_finding' }])
-    expect(nodes.C.emits).toEqual([{ officeId: OFFICE, op: 'post_finding' }])
+    expect(nodes.B.emits).toEqual([{ officeId: OFFICE, op: 'post_finding', id: 'f1' }])
+    expect(nodes.C.emits).toEqual([{ officeId: OFFICE, op: 'post_finding', id: 'f1' }])
     expect(nodes.B.emits[0].taskId).toBeUndefined()
   })
 

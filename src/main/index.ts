@@ -10,6 +10,7 @@
 // This replaces console.log/warn/error globally with electron-log
 // Logs are written to: ~/Library/Logs/Halo/ (macOS), %USERPROFILE%\AppData\Roaming\Halo\logs (Windows)
 import log from 'electron-log/main.js'
+import { createNumberedArchiveFn, MAIN_LOG_ARCHIVES, MAIN_LOG_MAX_BYTES } from './foundation/logging'
 
 // Initialize for renderer process support (IPC transport)
 log.initialize()
@@ -20,14 +21,20 @@ log.initialize()
 const isDev = process.env.NODE_ENV === 'development'
 log.transports.file.level = 'info'           // Always log info+ to file
 log.transports.console.level = isDev ? 'debug' : 'info'
-log.transports.file.maxSize = 5 * 1024 * 1024 // 5MB per file, auto-rotate
+// 10 MB per file plus numbered archives: forensics must reach back at least
+// 48 hours, which a single archive does not cover on a busy install.
+log.transports.file.maxSize = MAIN_LOG_MAX_BYTES
+log.transports.file.archiveLogFn = createNumberedArchiveFn(MAIN_LOG_ARCHIVES)
 // Default is sync fs.writeFileSync per line, which blocks the main process
 // event loop (and every window with it) on every log call. Async queues
 // writes instead. Must be set before the first log call: the file object
 // caches this at creation and ignores later changes.
 log.transports.file.sync = false
 
-// Catch unhandled errors and log them.
+// Catch unhandled errors and log them. The library's own dialog is off: it is
+// the synchronous dialog.showErrorBox, which freezes the whole main process —
+// every digital human and background task with it — until the user clicks.
+// Unexpected uncaught exceptions get a non-blocking notice instead.
 // Use onError callback to suppress benign/transient errors — returning false prevents
 // electron-log from showing the native error dialog. A separate process.on('uncaughtException')
 // handler does NOT work because Node.js calls ALL registered listeners; the return in one
@@ -40,7 +47,8 @@ log.transports.file.sync = false
 //     background failures the user can do nothing about. These are logged as warnings
 //     and must not crash or alert the main process.
 log.errorHandler.startCatching({
-  onError({ error }) {
+  showDialog: false,
+  onError({ error, errorName }) {
     const message = error?.message || ''
     const code = (error as NodeJS.ErrnoException | undefined)?.code || ''
     const stack = error?.stack || ''
@@ -82,6 +90,8 @@ log.errorHandler.startCatching({
       log.warn(`[Main] Ignored Node autoSelectFamily assertion: ${message}`)
       return false
     }
+
+    if (errorName === 'Unhandled') showUncaughtErrorNotice(error)
   }
 })
 
@@ -156,6 +166,9 @@ if (process.env.HALO_E2E_TEST && process.env.HALO_DATA_DIR) {
 // Log path isolation (per-variant / per-cluster-node) — see
 // foundation/logging/log-isolation.ts for the rules. Must run pre-ready.
 isolateLogPath(app)
+
+// Custom-scheme privileges (the HTML preview origin) are only accepted pre-ready.
+registerPrivilegedSchemes()
 
 // Single instance lock: Prevent multiple instances of the application
 // Must be called before app.whenReady()
@@ -245,12 +258,14 @@ import { registerDeepLinkHandling, handleDeepLinkArgv } from './services/deep-li
 import { stopOpenAICompatRouter } from './openai-compat-router'
 import { manualCheckForUpdates } from './services/updater'
 import { initAnalytics } from './services/analytics'
-import { registerProtocols } from './foundation/protocol.service'
+import { registerPrivilegedSchemes, registerProtocols } from './foundation/protocol.service'
 import { setMainWindow } from './foundation/window.service'
 import { checkAndArmSessionIntegrity, markSessionCleanExit } from './foundation/session-integrity'
-import { relaunchApp } from './services/lifecycle'
-import { initInstanceId, shutdownHealthSystem, onRendererCrash, onRendererUnresponsive } from './services/health'
-import { reconcileAllSpaces } from './services/artifact-cache.service'
+import { announceRendererHalted, decideAllWindowsClosed, remindRendererHalted, showUncaughtErrorNotice } from './services/lifecycle'
+import { getBackgroundService } from './platform/background'
+import { classifyRendererGone, RendererRecoveryPolicy, type RendererRecoveryDecision } from './services/renderer-recovery'
+import { recordProcessGone, recordRendererHang, startPerfTelemetry, writePreCrashSnapshot } from './services/perf'
+import { initInstanceId, shutdownHealthSystem, onRendererCrash, onRendererUnresponsive, sampleResourcesNow } from './services/health'
 import { initSdk } from './services/agent/resolved-sdk'
 
 // Headless server mode: apply no-display / no-sandbox switches before the app
@@ -293,34 +308,29 @@ function announceFirstScreen(): void {
     }
   }
 }
-let recentRecoveryWindowStart = 0
-let recoveryAttempts = 0
+const rendererRecovery = new RendererRecoveryPolicy()
 
-function recoverRenderer(reason: string): void {
-  if (isAppQuitting) {
-    return
+function recoverRenderer(reason: string, kind: 'crash' | 'hang'): RendererRecoveryDecision {
+  const decision = kind === 'crash' ? rendererRecovery.record(Date.now()) : rendererRecovery.recordHang()
+  if (decision.action === 'ignore') return decision
+
+  if (decision.action === 'halt') {
+    console.error(
+      `[Main] Renderer crashed ${decision.attempt} times within a minute (${reason}). ` +
+      'Recovery halted; main process and background work keep running until the user restarts.'
+    )
+    writePreCrashSnapshot('renderer-halt')
+    announceRendererHalted(mainWindow, reason, decision.attempt)
+    return decision
   }
 
-  const now = Date.now()
-  if (now - recentRecoveryWindowStart > 60000) {
-    recentRecoveryWindowStart = now
-    recoveryAttempts = 0
-  }
-
-  recoveryAttempts += 1
-  console.warn(`[Main] Renderer issue detected (${reason}). Attempting recovery #${recoveryAttempts}`)
-
-  if (recoveryAttempts > 3) {
-    console.error('[Main] Renderer failed repeatedly. Relaunching app for a clean state.')
-    relaunchApp('renderer-recovery')
-    return
-  }
+  console.warn(`[Main] Renderer issue detected (${reason}). Reloading (crashes in window: ${decision.attempt})`)
 
   if (mainWindow && !mainWindow.isDestroyed()) {
     try {
       mainWindow.webContents.reloadIgnoringCache()
       mainWindow.show()
-      return
+      return decision
     } catch (error) {
       console.error('[Main] Failed to reload renderer, recreating window:', error)
       try {
@@ -333,6 +343,7 @@ function recoverRenderer(reason: string): void {
   }
 
   createWindow()
+  return decision
 }
 
 /**
@@ -560,13 +571,30 @@ function createWindow(): void {
   })
 
   mainWindow.on('unresponsive', () => {
+    if (isAppQuitting) return
     onRendererUnresponsive()
-    recoverRenderer('unresponsive')
+    recordRendererHang()
+    recoverRenderer('unresponsive', 'hang')
   })
 
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
-    onRendererCrash({ reason: details.reason })
-    recoverRenderer(`render-process-gone:${details.reason}`)
+    if (isAppQuitting) return
+    onRendererCrash({ reason: details.reason, exitCode: details.exitCode })
+    // Refresh memory pressure before the reloaded window asks for it.
+    if (classifyRendererGone(details.reason) === 'memory') void sampleResourcesNow()
+    const decision = recoverRenderer(`render-process-gone:${details.reason}`, 'crash')
+    recordProcessGone({
+      processType: 'renderer',
+      mainWindow: true,
+      reason: details.reason,
+      exitCode: details.exitCode,
+      recovery: decision.action,
+      crashesInWindow: decision.attempt,
+    })
+  })
+
+  mainWindow.on('show', () => {
+    if (rendererRecovery.isHalted()) remindRendererHalted(mainWindow)
   })
 
   // Close-to-tray: hide window instead of destroying (macOS + Windows only).
@@ -582,13 +610,6 @@ function createWindow(): void {
   mainWindow.on('closed', () => {
     setMainWindow(null)
     mainWindow = null
-  })
-
-  // Reconcile artifact caches on window focus (recover missed watcher events)
-  mainWindow.on('focus', () => {
-    reconcileAllSpaces('window-focus').catch((err) => {
-      console.error('[Main] Artifact reconciliation error on focus:', err)
-    })
   })
 
   // Notify all subscribers about the new window
@@ -706,8 +727,11 @@ app.whenReady().then(async () => {
     setImmediate(() => {
       initializeExtendedServices()
 
-      // Initialize analytics (after IPC handlers registered and window created)
-      initAnalytics().catch(err => console.warn('[Analytics] Init failed:', err))
+      // Initialize analytics (after IPC handlers registered and window created),
+      // then performance telemetry, whose next-launch report needs analytics up.
+      initAnalytics()
+        .catch(err => console.warn('[Analytics] Init failed:', err))
+        .finally(() => startPerfTelemetry())
     })
   })
 
@@ -770,27 +794,58 @@ if (process.platform === 'darwin') {
   })
 }
 
+// Every other process that dies while main stays up: GPU, utility, and
+// renderers other than the main window's (browser views, previews).
+app.on('child-process-gone', (_event, details) => {
+  if (isAppQuitting || details.reason === 'clean-exit') return
+  console.warn(`[Main] Child process gone: type=${details.type} reason=${details.reason} exitCode=${details.exitCode}`)
+  recordProcessGone({
+    processType: details.type === 'GPU' ? 'gpu' : details.type === 'Utility' ? 'utility' : 'other',
+    mainWindow: false,
+    reason: details.reason,
+    exitCode: details.exitCode,
+    recovery: 'none',
+    crashesInWindow: 0,
+  })
+})
+
+app.on('render-process-gone', (_event, webContents, details) => {
+  if (isAppQuitting || details.reason === 'clean-exit') return
+  if (mainWindow && !mainWindow.isDestroyed() && webContents === mainWindow.webContents) return
+  console.warn(`[Main] Secondary renderer gone: reason=${details.reason} exitCode=${details.exitCode}`)
+  recordProcessGone({
+    processType: 'renderer',
+    mainWindow: false,
+    reason: details.reason,
+    exitCode: details.exitCode,
+    recovery: 'none',
+    crashesInWindow: 0,
+  })
+})
+
 app.on('before-quit', () => {
   isAppQuitting = true
   shutdownServicesWithTimeout(SHUTDOWN_TIMEOUT_MS).catch(console.error)
 })
 
 app.on('window-all-closed', () => {
-  // Headless server mode: the only BrowserWindows are incidental hidden
-  // automation surfaces (daemon / offscreen browser). Their unexpected close
-  // (e.g. a renderer OOM in the container) must NOT quit the service — process
-  // lifetime is owned by the signal handlers instead.
-  if (isServerMode()) return
-
-  // With close-to-tray, this event only fires during actual quit
-  // (isAppQuitting=true, so the close handler did not preventDefault).
-  // On non-macOS, ensure clean shutdown before exiting.
-  // On macOS, the quit sequence continues automatically from before-quit.
-  if (process.platform !== 'darwin') {
-    shutdownServicesWithTimeout(SHUTDOWN_TIMEOUT_MS)
-      .catch(console.error)
-      .finally(() => app.quit())
+  const decision = decideAllWindowsClosed({
+    serverMode: isServerMode(),
+    platform: process.platform,
+    quitting: isAppQuitting,
+    keepAlive: getBackgroundService()?.shouldKeepAlive() ?? false,
+    windowRecreated: BrowserWindow.getAllWindows().length > 0,
+    trayAvailable: getBackgroundService()?.hasTray() ?? false,
+  })
+  if (decision === 'stay') {
+    if (!isAppQuitting && process.platform !== 'darwin' && !isServerMode()) {
+      console.log('[Main] All windows closed; staying alive for background work (reopen from tray or relaunch)')
+    }
+    return
   }
+  shutdownServicesWithTimeout(SHUTDOWN_TIMEOUT_MS)
+    .catch(console.error)
+    .finally(() => app.quit())
 })
 
 // Export mainWindow for IPC handlers

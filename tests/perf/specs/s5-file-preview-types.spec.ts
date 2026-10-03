@@ -100,6 +100,16 @@ test('S5 html (2MB)', async () => {
   expect(result.status).toBe('ok')
 })
 
+test('S5 html typical (5KB)', async () => {
+  // Small pages are where a separate preview process costs the most relative to rendering itself.
+  const result = await runFilePreviewScenario({
+    scenario: 's5-html-typical',
+    fixtureFileName: 'html-typical.html',
+    idleCpuMs: 30000
+  })
+  expect(result.status).toBe('ok')
+})
+
 test('S5 text/log (5MB)', async () => {
   const result = await runFilePreviewScenario({
     scenario: 's5-text',
@@ -116,6 +126,18 @@ test('S5 pdf (300 pages)', async () => {
     idleCpuMs: 60000,
     loadingKind: 'pdf',
     includePerProcess: true
+  })
+  expect(result.status).toBe('ok')
+})
+
+// Parsed in a module worker; the precondition is cell text from the first rows,
+// so a worker that fails to load (empty grid, spinner, or fallback) cannot pass.
+test('S5 xlsx typical', async () => {
+  const result = await runFilePreviewScenario({
+    scenario: 's5-xlsx',
+    fixtureFileName: 'xlsx-typical.xlsx',
+    idleCpuMs: 60000,
+    expectVisibleText: ['name', 'item-1', 'item-2']
   })
   expect(result.status).toBe('ok')
 })

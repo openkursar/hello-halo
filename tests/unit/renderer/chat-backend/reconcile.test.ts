@@ -8,8 +8,10 @@ import type { Message } from '../../../../src/renderer/types'
 import {
   createPendingUserMessage,
   isPendingMessage,
+  joinFromAnchor,
   prependOlder,
   reconcileTranscript,
+  rereadAnchor,
 } from '../../../../src/renderer/stores/chat/backend/reconcile'
 import { messageRowKey, messageRowKeys } from '../../../../src/renderer/utils/message-row-key'
 import { windowAfterKeysChange } from '../../../../src/renderer/components/chat/transcript/useHistoryWindow'
@@ -143,5 +145,23 @@ describe('history window over a list that grew at the front', () => {
   it('starts from the tail when the list was empty', () => {
     const keys = Array.from({ length: 100 }, (_, i) => `k${i}`)
     expect(windowAfterKeysChange({ start: 0, count: 0, firstKey: null }, keys, 40).start).toBe(60)
+  })
+})
+
+describe('re-reading from the last message the user sent', () => {
+  it('anchors on the last own user message, skipping injections and the optimistic bubble', () => {
+    const pending = createPendingUserMessage('new', undefined)
+    const messages = [msg('u1', 'user', 'a'), msg('a1', 'assistant', 'b'), msg('u2', 'user', 'c'), msg('i3', 'user', 'mid-turn', { source: 'injection' }), pending]
+    expect(rereadAnchor(messages)).toBe('u2')
+    expect(rereadAnchor([msg('a1', 'assistant', 'b')])).toBeUndefined()
+  })
+
+  it('joins a cut read onto the held messages before the cut point', () => {
+    const held = [msg('u1', 'user', 'a'), msg('a1', 'assistant', 'b'), msg('u2', 'user', 'c'), createPendingUserMessage('d', undefined)]
+    const read = [msg('u2', 'user', 'c'), msg('a2', 'assistant', 'e')]
+    const joined = joinFromAnchor(held, read, 'u2')!
+    expect(joined.map(m => m.id)).toEqual(['u1', 'a1', 'u2', 'a2'])
+    expect(joined[0]).toBe(held[0])
+    expect(joinFromAnchor(held, read, 'unknown')).toBeNull()
   })
 })

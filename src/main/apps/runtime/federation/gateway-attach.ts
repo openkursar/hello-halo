@@ -23,8 +23,15 @@
 
 import WebSocket from 'ws'
 
-import { framePlane, type FederationMessage, type FramePlane, type NodeId } from './types'
+import { framePlane, type FederationMessage, type NodeId } from './types'
+import { PlaneQueue } from './plane-queue'
 import { GATEWAY_WIRE_PV } from './protocol-m2'
+
+/** The wire envelope; a feed-plane frame names its plane for the relay (it does not read payloads). */
+function envelope(frame: FederationMessage, to: NodeId | null): string {
+  const plane = framePlane(frame)
+  return JSON.stringify({ type: 'federation', to, ...(plane === 'feed' ? { plane } : {}), payload: frame })
+}
 
 const LOG_TAG = '[GwAttach]'
 
@@ -33,14 +40,6 @@ const BACKOFF_MAX_MS = 30_000
 
 /** Directory entry TTL is 90s (§9.3); refresh comfortably inside it. */
 const ANNOUNCE_INTERVAL_MS = 60_000
-
-/** Same per-plane bounded outbound queues as the joiner client (§5.3). */
-const PLANE_QUEUE_CAP: Record<FramePlane, number> = {
-  control: 1024,
-  stream: 256,
-  artifact: 32,
-}
-const PLANE_DRAIN_ORDER: readonly FramePlane[] = ['control', 'stream', 'artifact']
 
 export type GatewayAttachState = 'connecting' | 'open' | 'attached' | 'closed'
 
@@ -122,11 +121,8 @@ export class GatewayAttachClient {
   private reconnectAttempt = 0
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private announceTimer: ReturnType<typeof setInterval> | null = null
-  private readonly outbound: Record<FramePlane, Array<{ to: NodeId | null; frame: FederationMessage }>> = {
-    control: [],
-    stream: [],
-    artifact: [],
-  }
+  // Frames waiting for the room, by plane (see PlaneQueue for the bounds).
+  private readonly outbound = new PlaneQueue<{ to: NodeId | null; frame: FederationMessage }>()
 
   constructor(private readonly deps: GatewayAttachDeps) {
     const base = deps.gatewayUrl.replace(/\/+$/, '').replace(/^http/, 'ws')
@@ -146,16 +142,12 @@ export class GatewayAttachClient {
    */
   send(to: NodeId | null, frame: FederationMessage): void {
     if (this.isAttached()) {
-      this.socket!.send(JSON.stringify({ type: 'federation', to, payload: frame }))
+      this.socket!.send(envelope(frame, to))
       return
     }
     const plane = framePlane(frame)
-    const queue = this.outbound[plane]
-    if (queue.length >= PLANE_QUEUE_CAP[plane]) {
-      queue.shift()
-      console.warn(`${LOG_TAG} ${plane} queue full; dropped oldest ${plane} frame url=${this.wsUrl}`)
-    }
-    queue.push({ to, frame })
+    const dropped = this.outbound.push(plane, { to, frame }, () => JSON.stringify(frame).length)
+    if (dropped > 0) console.warn(`${LOG_TAG} ${plane} queue full; dropped ${dropped} oldest ${plane} frame(s) url=${this.wsUrl}`)
   }
 
   /** Ask the gateway to drop a member's session (kick/leave transport cleanup). */
@@ -330,13 +322,8 @@ export class GatewayAttachClient {
 
   private flushOutbound(): void {
     if (!this.isAttached()) return
-    for (const plane of PLANE_DRAIN_ORDER) {
-      const queue = this.outbound[plane]
-      const pending = queue.splice(0, queue.length)
-      for (const { to, frame } of pending) {
-        this.socket!.send(JSON.stringify({ type: 'federation', to, payload: frame }))
-      }
-    }
+    const socket = this.socket!
+    this.outbound.drain(({ to, frame }) => socket.send(envelope(frame, to)))
   }
 
   private startAnnounce(): void {

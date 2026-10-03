@@ -815,8 +815,18 @@ async function categoryK(host, joiners, hasModel) {
       // Not "all N reach the transcript": whatever is still queued when the
       // run seals gets discarded by design (see runtime/team/DESIGN.md). The
       // invariant under concurrency is that every node agrees on what landed.
+      // Compare only once the member is idle on both nodes. While it works, its
+      // owner reads the in-flight reply that replicas withhold until the turn
+      // ends, so the two transcripts differ by design; how long the model keeps
+      // working is not what K1 tests.
+      const IDLE_WAIT_MS = 300_000
+      const idle = await pollUntil(async () => {
+        const det = await detailOnAll([host, joiners[0]], off.officeId)
+        return det.every((d) => (d.detail?.members ?? []).some((m) => m.appId === remote.appId && m.status !== 'working'))
+          ? true : null
+      }, { timeoutMs: IDLE_WAIT_MS, intervalMs: 5000 })
       let last = -1
-      const settled = await pollUntil(async () => {
+      const settled = idle && await pollUntil(async () => {
         const chats = await chatOnAll([host, joiners[0]], off.officeId, remote.appId, runEpochId)
         const sigs = chats.map((c) => JSON.stringify((c.messages ?? []).map((m) => [m.role, m.content])))
         const consistent = sigs.every((sig) => sig === sigs[0])
@@ -826,9 +836,12 @@ async function categoryK(host, joiners, hasModel) {
         return stable && consistent ? { delivered, consistent } : null
       }, { timeoutMs: 120_000, intervalMs: 5000 })
       const ok = transportOk && alive && accepted === N && !!settled
+      const verdict = !idle
+        ? `member never went idle within ${IDLE_WAIT_MS / 1000}s`
+        : settled ? `${settled.delivered}/${N}` : 'idle on both nodes but transcripts never agreed'
       reporter[ok ? 'pass' : 'fail']('K1',
         `${N} concurrent sends: transportOk=${transportOk} accepted=${accepted}/${N} ` +
-        `deliveredAndAgreedAcrossNodes=${settled ? `${settled.delivered}/${N}` : 'never settled'} ` +
+        `deliveredAndAgreedAcrossNodes=${verdict} ` +
         `(the remainder is discarded at run seal by design) elapsed=${elapsedMs}ms alive=${alive}`)
     }
   }

@@ -14,6 +14,8 @@ export const systemRpc = {
   isWindowMaximized: rawRpcMethod('window:is-maximized'),
   toggleMaximizeWindow: rawRpcMethod('window:toggle-maximize'),
   openLogFolder: rawRpcMethod('system:open-log-folder'),
+  /** Open the crash reports (minidumps + pre-crash snapshots) folder; data = { path, pending } */
+  openCrashReportsFolder: rawRpcMethod('system:open-crash-reports-folder'),
   relaunch: rawRpcMethod('system:relaunch'),
   pickLocalEntries: rawRpcMethod('system:pick-local-entries'),
 }

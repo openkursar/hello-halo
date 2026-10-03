@@ -19,7 +19,7 @@ import { useEngineCapabilities } from '../../stores/engine.store'
 import { MessageList } from '../chat/MessageList'
 import type { MessageListHandle } from '../chat/MessageList'
 import { ScrollToBottomButton } from '../chat/ScrollToBottomButton'
-import { useRemoteSubscription } from '../../hooks/useRemoteSubscription'
+import { useConversationDetail } from '../../hooks/useConversationDetail'
 import { useWsRecovery } from '../../hooks/useWsRecovery'
 import { useTranslation } from '../../i18n'
 import type { Message } from '../../types'
@@ -46,8 +46,8 @@ export function ImChatView({ appId, spaceId, session, clearKey, footerAction }: 
 
   const conversationId = buildImSessionKey(appId, session.channel, session.chatType, session.chatId)
 
-  // ── Subscribe to agent events (remote/Capacitor clients use WebSocket) ──
-  useRemoteSubscription(conversationId)
+  // Live reply detail for this conversation, desktop and remote alike.
+  useConversationDetail(conversationId)
 
   // Persisted messages
   const [messages, setMessages] = useState<Message[]>([])
@@ -278,6 +278,7 @@ export function ImChatView({ appId, spaceId, session, clearKey, footerAction }: 
         ) : (
           <div className="h-full">
             <MessageList
+              key={conversationId}
               ref={messageListRef}
               sidePadClassName="px-4"
               conversationId={conversationId}

@@ -50,7 +50,7 @@ export function GoalCanvasSupport() {
       }
     }
     syncTitles()
-    const unsubscribeTabs = canvasLifecycle.onTabsChange(syncTitles)
+    const unsubscribeTabs = canvasLifecycle.onTabListChange(syncTitles)
     const unsubscribeChat = useChatStore.subscribe((state, previous) => {
       if (state.spaceStates !== previous.spaceStates) syncTitles()
     })

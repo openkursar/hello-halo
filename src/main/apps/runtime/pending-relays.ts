@@ -115,6 +115,17 @@ const MESSAGE_CAP = 2000
 /** Cap for the source-context snapshot. */
 const QUOTE_CAP = 1500
 
+/**
+ * A target whose newest event is this old is dropped. Pushes may legitimately
+ * wait weeks for the next inbound message, so this is far longer than that; it
+ * only bounds how many targets a spool can accumulate (chats that never speak
+ * again).
+ */
+export const TARGET_IDLE_TTL_MS = 90 * 24 * 60 * 60 * 1000
+
+/** At most one expiry sweep per this interval. */
+const SWEEP_INTERVAL_MS = 60 * 60 * 1000
+
 // ============================================
 // Store
 // ============================================
@@ -132,10 +143,14 @@ export class PendingRelayStore {
   private filePath: string
   private dirty = false
   private flushScheduled = false
+  private readonly now: () => number
+  private lastSweepAt = 0
 
-  constructor(filePath: string) {
+  constructor(filePath: string, options: { now?: () => number } = {}) {
     this.filePath = filePath
+    this.now = options.now ?? Date.now
     this.load()
+    this.sweepExpired()
   }
 
   /**
@@ -157,6 +172,7 @@ export class PendingRelayStore {
     events.push(capped)
     this.collapseOverflow(events)
     this.pending.set(targetKey, events)
+    if (this.now() - this.lastSweepAt >= SWEEP_INTERVAL_MS) this.sweepExpired()
     this.requestPersist()
 
     console.log(
@@ -242,6 +258,22 @@ export class PendingRelayStore {
     } catch (err) {
       console.error('[PendingRelays] Failed to flush spool:', err)
     }
+  }
+
+  /** Drop targets whose newest event is past {@link TARGET_IDLE_TTL_MS}. */
+  private sweepExpired(): void {
+    const now = this.now()
+    this.lastSweepAt = now
+    let dropped = 0
+    for (const [key, events] of this.pending) {
+      const newest = events.reduce((max, e) => Math.max(max, e.at), 0)
+      if (now - newest < TARGET_IDLE_TTL_MS) continue
+      this.pending.delete(key)
+      dropped += events.length
+    }
+    if (dropped === 0) return
+    this.requestPersist()
+    console.log(`[PendingRelays] Dropped ${dropped} event(s) of targets idle for over ${TARGET_IDLE_TTL_MS / 86_400_000} days`)
   }
 
   // ── Overflow collapse ────────────────────────────────

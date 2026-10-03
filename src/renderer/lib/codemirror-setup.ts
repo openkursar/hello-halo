@@ -14,7 +14,7 @@
  * - No autocomplete, no linting (not needed for viewing)
  */
 
-import { EditorState, Extension, Compartment } from '@codemirror/state'
+import { EditorState, Extension, Compartment, Transaction } from '@codemirror/state'
 import {
   EditorView,
   lineNumbers,
@@ -69,7 +69,7 @@ import { diff } from '@codemirror/legacy-modes/mode/diff'
 import { lua } from '@codemirror/legacy-modes/mode/lua'
 import { perl } from '@codemirror/legacy-modes/mode/perl'
 import { haskell } from '@codemirror/legacy-modes/mode/haskell'
-import { clike } from '@codemirror/legacy-modes/mode/clike'
+import { kotlin, csharp, scala, dart, objectiveC } from '@codemirror/legacy-modes/mode/clike'
 import { properties } from '@codemirror/legacy-modes/mode/properties'
 import { protobuf } from '@codemirror/legacy-modes/mode/protobuf'
 import { cmake } from '@codemirror/legacy-modes/mode/cmake'
@@ -181,15 +181,15 @@ const languageMap: Record<string, () => LanguageSupport | Extension> = {
   groovy: () => StreamLanguage.define(groovy),
 
   // C-like languages (legacy modes)
-  kotlin: () => StreamLanguage.define(clike),
-  kt: () => StreamLanguage.define(clike),
-  kts: () => StreamLanguage.define(clike),
-  csharp: () => StreamLanguage.define(clike),
-  cs: () => StreamLanguage.define(clike),
-  scala: () => StreamLanguage.define(clike),
-  dart: () => StreamLanguage.define(clike),
-  objectivec: () => StreamLanguage.define(clike),
-  m: () => StreamLanguage.define(clike), // Objective-C
+  kotlin: () => StreamLanguage.define(kotlin),
+  kt: () => StreamLanguage.define(kotlin),
+  kts: () => StreamLanguage.define(kotlin),
+  csharp: () => StreamLanguage.define(csharp),
+  cs: () => StreamLanguage.define(csharp),
+  scala: () => StreamLanguage.define(scala),
+  dart: () => StreamLanguage.define(dart),
+  objectivec: () => StreamLanguage.define(objectiveC),
+  m: () => StreamLanguage.define(objectiveC), // Objective-C
 
   // R language (proper support)
   r: () => StreamLanguage.define(r),
@@ -478,7 +478,10 @@ export function getContent(view: EditorView): string {
 }
 
 /**
- * Replace the entire document content
+ * Replace the entire document with content that came from outside the editor
+ * (a disk refresh, a revert). The replacement is not an edit the user made, so
+ * it stays out of undo history: undoing it would restore stale text, and each
+ * whole-document inverse kept there costs the full old document in memory.
  */
 export function setContent(view: EditorView, content: string): void {
   view.dispatch({
@@ -487,6 +490,7 @@ export function setContent(view: EditorView, content: string): void {
       to: view.state.doc.length,
       insert: content,
     },
+    annotations: Transaction.addToHistory.of(false),
   })
 }
 

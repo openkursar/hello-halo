@@ -17,6 +17,7 @@ import { capabilityPolicyFromPreset } from '../../../shared/apps/capability-poli
 import type { CapabilityPresetId } from '../../../shared/apps/capability-policy'
 import { DelegationPresetPicker } from '../capability/DelegationPresetPicker'
 import { api } from '../../api'
+import { requestUpdateCheck } from '../../services/request-update-check'
 import { useAppsStore } from '../../stores/apps.store'
 import { useTeamStore } from '../../stores/team.store'
 import { useTranslation } from '../../i18n'
@@ -68,6 +69,7 @@ export function TeamJoinDialog({ onClose, onCreateDigitalHuman, initialLink }: T
   const [joining, setJoining] = useState(false)
   const [submitted, setSubmitted] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [updateRequired, setUpdateRequired] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
 
   useEffect(() => { void loadApps() }, [loadApps])
@@ -96,6 +98,7 @@ export function TeamJoinDialog({ onClose, onCreateDigitalHuman, initialLink }: T
   const join = async () => {
     setSubmitted(true)
     setError(null)
+    setUpdateRequired(false)
     if (!parsed) {
       setError(t('That invite link is not valid.'))
       return
@@ -133,6 +136,7 @@ export function TeamJoinDialog({ onClose, onCreateDigitalHuman, initialLink }: T
         return
       }
       setError(joinErrorText(res.error, t))
+      setUpdateRequired(res.error === 'VERSION_INCOMPATIBLE')
     } catch {
       setError(joinErrorText(undefined, t))
     } finally {
@@ -258,6 +262,14 @@ export function TeamJoinDialog({ onClose, onCreateDigitalHuman, initialLink }: T
           {error && (
             <div className="rounded-lg border border-border bg-secondary/40 px-3 py-2.5 text-sm text-foreground">
               <p>{error}</p>
+              {updateRequired && (
+                <button
+                  onClick={() => void requestUpdateCheck()}
+                  className="mt-2 rounded-md bg-primary px-3 py-1 text-xs text-primary-foreground transition-colors hover:bg-primary/90"
+                >
+                  {t('Check for updates')}
+                </button>
+              )}
               <button
                 onClick={() => setShowHelp(v => !v)}
                 className="mt-1.5 text-xs font-medium text-muted-foreground underline-offset-2 hover:underline"
@@ -306,7 +318,7 @@ function joinErrorText(code: string | undefined, t: (k: string) => string): stri
     case 'NO_MEMBERS':
       return t('Select at least one digital human to bring.')
     case 'VERSION_INCOMPATIBLE':
-      return t('Your Halo version is not compatible with the host. Update both apps to the latest version and try again.')
+      return t('This team requires everyone to update Halo to the latest version')
     case 'AUTH_REJECTED':
       return t('This invite is no longer valid — it may have expired, been revoked, or the team was closed. Ask for a new invite link.')
     default:

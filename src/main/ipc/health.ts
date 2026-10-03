@@ -14,6 +14,29 @@ import {
   exportReport,
   runImmediateCheck
 } from '../services/health'
+import { getMemoryPressure, onMemoryPressure } from '../platform/background'
+import { sendToRenderer } from '../foundation/window.service'
+import { broadcastToAll } from '../http/websocket'
+import type { MemoryPressureEvent } from '../../shared/types/memory-pressure'
+
+let memoryPressureForwarding: (() => void) | null = null
+
+/**
+ * Forward memory-pressure level changes to the window and remote clients.
+ * Transport's job, so the health service never imports the HTTP tier.
+ */
+export function forwardMemoryPressure(): void {
+  memoryPressureForwarding?.()
+  memoryPressureForwarding = onMemoryPressure((level) => {
+    const payload: MemoryPressureEvent = { level }
+    sendToRenderer('app:memory-pressure', payload)
+    try {
+      broadcastToAll('app:memory-pressure', payload as unknown as Record<string, unknown>)
+    } catch {
+      // Remote access not started: no remote clients to tell.
+    }
+  })
+}
 import { healthRpc } from '../../shared/rpc/contracts/health.contract'
 import { registerRawRpcHandlers } from './rpc'
 
@@ -21,6 +44,7 @@ import { registerRawRpcHandlers } from './rpc'
  * Register health-related IPC handlers
  */
 export function registerHealthHandlers(): void {
+  forwardMemoryPressure()
   registerRawRpcHandlers(healthRpc, {
     // Get current health status (quick query)
     getHealthStatus: async () => {
@@ -112,6 +136,8 @@ export function registerHealthHandlers(): void {
         return { success: false, error: (error as Error).message }
       }
     },
+
+    getMemoryPressure: async () => ({ success: true, data: { level: getMemoryPressure() } }),
   })
 
   console.log('[Settings] Health handlers registered')

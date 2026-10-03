@@ -112,7 +112,8 @@ export type { OfficeAuthority, OfficeAuthorityDeps } from './authority/office-au
 export { createLocationAwareBlackboard } from './authority/location-aware-blackboard'
 export type { OutboundBlackboardWrite } from './authority/location-aware-blackboard'
 export type { OwnerStatus } from './authority/reconcile'
-export type { MemberWriteRecord } from './authority/replication'
+export type { MemberWriteRecord, ReplicaAppliedBatch, ReplicaAppliedEntry } from './authority/replication'
+export { projectReplicaApplied } from './replica-events'
 export { classifyArtifactFetchFailure } from './authority/artifact-fetch'
 export type { ArtifactRef } from './protocol-m2'
 export type {

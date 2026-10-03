@@ -173,6 +173,8 @@ export interface ActivationState {
   eventUnsubscribers: Array<() => void>
   /** Keep-alive disposer from background service */
   keepAliveDisposer: (() => void) | null
+  /** Space whose file watcher this App holds for its file subscriptions */
+  fileWatchSpaceId?: string | null
 }
 
 // ============================================
@@ -229,6 +231,15 @@ export interface AppRuntimeDeps {
   memory: import('../../platform/memory').MemoryService
   background: import('../../platform/background').BackgroundService
   getSpacePath: (spaceId: string) => string | null
+  /**
+   * Hold a space's file watcher while an activated App has a file subscription
+   * there. Watchers are reference-counted; without a hold, file events only
+   * flow while the user happens to have the space open.
+   */
+  fileWatch?: {
+    retain(spaceId: string, holder: string): void
+    release(spaceId: string, holder: string): void
+  }
   /** IM session registry for proactive push routing (null if not initialized) */
   imSessionRegistry?: import('./im-session-registry').ImSessionRegistry | null
   /**

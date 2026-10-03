@@ -187,6 +187,131 @@ def gen_image(path, width, height):
         f.write(out)
 
 
+# ---------- DOCX ----------
+
+def _noise_png(width, height, seed):
+    """Incompressible pixels from a fixed LCG, so each embedded image costs its
+    full size as a blob in the renderer — a leaked one is visible, not a rounding error."""
+    state = seed & 0xFFFFFFFF
+    raw = bytearray()
+    for _ in range(height):
+        raw.append(0)
+        row = bytearray(width * 3)
+        for i in range(width * 3):
+            state = (state * 1664525 + 1013904223) & 0xFFFFFFFF
+            row[i] = state >> 24
+        raw += row
+    out = b"\x89PNG\r\n\x1a\n"
+    out += _png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+    out += _png_chunk(b"IDAT", zlib.compress(bytes(raw), 0))
+    out += _png_chunk(b"IEND", b"")
+    return out
+
+
+def gen_docx(path, n_images, width, height):
+    """A minimal WordprocessingML package with `n_images` embedded pictures.
+    Entries are stored (no deflate) with a fixed timestamp so the bytes do not
+    depend on the host's zlib or clock."""
+    import zipfile
+
+    ns = ('xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+          'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" '
+          'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
+          'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+          'xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"')
+    cx, cy = width * 9525, height * 9525
+    body = []
+    rels = []
+    for i in range(1, n_images + 1):
+        body.append(f"<w:p><w:r><w:t>Figure {i}</w:t></w:r></w:p>")
+        body.append(
+            f'<w:p><w:r><w:drawing><wp:inline><wp:extent cx="{cx}" cy="{cy}"/>'
+            f'<wp:docPr id="{i}" name="Picture {i}"/><a:graphic>'
+            '<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic>'
+            f'<pic:nvPicPr><pic:cNvPr id="{i}" name="image{i}.png"/><pic:cNvPicPr/></pic:nvPicPr>'
+            f'<pic:blipFill><a:blip r:embed="rId{i}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>'
+            f'<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm>'
+            '<a:prstGeom prst="rect"/></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline>'
+            "</w:drawing></w:r></w:p>"
+        )
+        rels.append(
+            f'<Relationship Id="rId{i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" '
+            f'Target="media/image{i}.png"/>'
+        )
+    header = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    parts = [
+        ("[Content_Types].xml", header +
+         '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+         '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+         '<Default Extension="xml" ContentType="application/xml"/>'
+         '<Default Extension="png" ContentType="image/png"/>'
+         '<Override PartName="/word/document.xml" '
+         'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+         "</Types>"),
+        ("_rels/.rels", header +
+         '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+         '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" '
+         'Target="word/document.xml"/></Relationships>'),
+        ("word/document.xml", header + f"<w:document {ns}><w:body>" + "".join(body) + "</w:body></w:document>"),
+        ("word/_rels/document.xml.rels", header +
+         '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' + "".join(rels) +
+         "</Relationships>"),
+    ]
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as z:
+        for name, text in parts:
+            z.writestr(zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0)), text.encode("utf-8"))
+        for i in range(1, n_images + 1):
+            z.writestr(zipfile.ZipInfo(f"word/media/image{i}.png", (1980, 1, 1, 0, 0, 0)),
+                       _noise_png(width, height, seed=i))
+
+
+# ---------- XLSX ----------
+
+def gen_xlsx(path, n_rows):
+    """A minimal SpreadsheetML workbook, one sheet of inline-string and numeric
+    cells. Stored entries with a fixed timestamp, so the bytes are
+    host-independent. Row r (1-based data row) has cells "item-r", r, r * 1.5."""
+    from xml.sax.saxutils import escape
+    import zipfile
+
+    header = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"'
+    rel_ns = 'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+
+    def s_cell(ref, text):
+        return f'<c r="{ref}" t="inlineStr"><is><t>{escape(text)}</t></is></c>'
+
+    def n_cell(ref, value):
+        return f'<c r="{ref}"><v>{value}</v></c>'
+
+    rows = ['<row r="1">' + s_cell("A1", "name") + s_cell("B1", "qty") + s_cell("C1", "price") + "</row>"]
+    for r in range(1, n_rows + 1):
+        n = r + 1
+        rows.append(f'<row r="{n}">' + s_cell(f"A{n}", f"item-{r}") + n_cell(f"B{n}", r) + n_cell(f"C{n}", f"{r * 1.5:g}") + "</row>")
+    parts = [
+        ("[Content_Types].xml", header +
+         '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+         '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+         '<Default Extension="xml" ContentType="application/xml"/>'
+         '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+         '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+         "</Types>"),
+        ("_rels/.rels", header +
+         '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+         '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" '
+         'Target="xl/workbook.xml"/></Relationships>'),
+        ("xl/workbook.xml", header + f'<workbook {ns} {rel_ns}><sheets><sheet name="Items" sheetId="1" r:id="rId1"/></sheets></workbook>'),
+        ("xl/_rels/workbook.xml.rels", header +
+         '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+         '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
+         'Target="worksheets/sheet1.xml"/></Relationships>'),
+        ("xl/worksheets/sheet1.xml", header + f"<worksheet {ns}><sheetData>" + "".join(rows) + "</sheetData></worksheet>"),
+    ]
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as z:
+        for name, text in parts:
+            z.writestr(zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0)), text.encode("utf-8"))
+
+
 # ---------- PDF ----------
 
 def gen_pdf(path, n_pages):
@@ -322,6 +447,8 @@ FIXTURES = [
     ("html-extreme-2mb.html", lambda: gen_html(p("html-extreme-2mb.html"), 2 * 1024 * 1024)),
     ("text-typical.log", lambda: gen_text_log(p("text-typical.log"), 5 * 1024)),
     ("text-extreme-5mb.log", lambda: gen_text_log(p("text-extreme-5mb.log"), 5 * 1024 * 1024)),
+    ("docx-typical-5images.docx", lambda: gen_docx(p("docx-typical-5images.docx"), 5, 320, 240)),
+    ("xlsx-typical.xlsx", lambda: gen_xlsx(p("xlsx-typical.xlsx"), 200)),
 ]
 
 

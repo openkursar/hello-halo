@@ -1,3 +1,5 @@
+import { readFileSync } from 'fs'
+import { join } from 'path'
 /**
  * Transcript scrolling primitives: the history window's reset rule, row
  * containment classes, and message-relative reading positions.
@@ -7,8 +9,8 @@
  */
 
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { windowStartAfterCountChange } from '../../../src/renderer/components/chat/transcript/useHistoryWindow'
-import { transcriptRowClass } from '../../../src/renderer/components/chat/transcript/row'
+import { windowStartAfterCountChange, pageUp, pageDown, liveAround, liveAtEnd, liveRangeAfterKeysChange, recoverViewport, rowIndexAt, retiredRowsOnScreen, type LiveRange } from '../../../src/renderer/components/chat/transcript/useHistoryWindow'
+import { estimatedRowHeight, transcriptRowClass } from '../../../src/renderer/components/chat/transcript/row'
 import {
   captureTranscriptPosition,
   restoreTranscriptPosition,
@@ -140,5 +142,161 @@ describe('reading position', () => {
     expect(scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'auto' })
     centerRowInView(scroller, fakeElement(() => ({ top: 5000, left: 0, width: 800, height: 40 })))
     expect(scrollTo).toHaveBeenLastCalledWith({ top: 1400, behavior: 'auto' })
+  })
+})
+
+describe('live-row cap', () => {
+  const CAP = 300
+  const keys = (n: number, prefix = 'k') => Array.from({ length: n }, (_, i) => `${prefix}${i}`)
+
+  it('paging up past the cap mounts older rows and retires the newest', () => {
+    // 2,000 rows, reader has paged up to 300 live rows at the tail.
+    let range: LiveRange = { start: 1700, liveStart: 1700, liveEnd: null }
+    range = pageUp(range, 2000, 30, CAP)
+    expect(range).toEqual({ start: 1670, liveStart: 1670, liveEnd: 1970 })
+    range = pageUp(range, 2000, 30, CAP)
+    expect(range).toEqual({ start: 1640, liveStart: 1640, liveEnd: 1940 })
+  })
+
+  it('paging down brings retired rows back and retires the oldest; reaching the end follows it again', () => {
+    let range: LiveRange = { start: 1640, liveStart: 1640, liveEnd: 1940 }
+    range = pageDown(range, 2000, 30, CAP)
+    expect(range).toEqual({ start: 1640, liveStart: 1670, liveEnd: 1970 })
+    range = pageDown(range, 2000, 30, CAP)
+    expect(range).toEqual({ start: 1640, liveStart: 1700, liveEnd: null })
+  })
+
+  it('paging up first brings back retired rows above before mounting older history', () => {
+    const range = pageUp({ start: 1640, liveStart: 1700, liveEnd: null }, 2000, 30, CAP)
+    expect(range).toEqual({ start: 1640, liveStart: 1670, liveEnd: 1970 })
+  })
+
+  it('never keeps more than the cap live, and below the cap never retires anything', () => {
+    expect(pageUp({ start: 100, liveStart: 100, liveEnd: null }, 200, 30, CAP)).toEqual({ start: 70, liveStart: 70, liveEnd: null })
+    const far = liveAround({ start: 1700, liveStart: 1700, liveEnd: null }, 2000, 10, CAP)
+    expect(far).toEqual({ start: 5, liveStart: 5, liveEnd: 305 })
+  })
+
+  it('jumping to the end makes the newest rows live and leaves mounted rows as placeholders', () => {
+    expect(liveAtEnd({ start: 5, liveStart: 5, liveEnd: 305 }, 2000, CAP)).toEqual({ start: 5, liveStart: 1700, liveEnd: null })
+  })
+
+  it('rows appended while following the end push the oldest live rows out', () => {
+    const prev = { start: 1700, liveStart: 1700, liveEnd: null, count: 2000, firstKey: 'k0' }
+    const next = liveRangeAfterKeysChange(prev, keys(2002), 40, CAP)
+    expect(next).toMatchObject({ start: 1700, liveStart: 1702, liveEnd: null, prepended: 0 })
+  })
+
+  it('rows appended while the reader is far up stay outside the live range', () => {
+    const prev = { start: 1640, liveStart: 1640, liveEnd: 1940, count: 2000, firstKey: 'k0' }
+    expect(liveRangeAfterKeysChange(prev, keys(2003), 40, CAP)).toMatchObject({ liveStart: 1640, liveEnd: 1940 })
+  })
+
+  it('a page prepended in front shifts the live range with the rows it showed', () => {
+    const prev = { start: 10, liveStart: 20, liveEnd: 200, count: 400, firstKey: 'k0' }
+    const next = liveRangeAfterKeysChange(prev, [...keys(50, 'old'), ...keys(400)], 40, CAP)
+    expect(next).toMatchObject({ start: 60, liveStart: 70, liveEnd: 250, prepended: 50 })
+  })
+
+  it('a cleared list starts again from the tail with everything live', () => {
+    const prev = { start: 1640, liveStart: 1700, liveEnd: null, count: 2000, firstKey: 'k0' }
+    expect(liveRangeAfterKeysChange(prev, keys(3, 'new'), 40, CAP)).toMatchObject({ start: 0, liveStart: 0, liveEnd: null })
+  })
+})
+
+describe('row height estimates', () => {
+  it('tier replies by length, and the class matches the estimate', () => {
+    const reply = (n: number) => ({ role: 'assistant' as const, content: 'x'.repeat(n) })
+    expect(estimatedRowHeight({ role: 'user', content: 'x'.repeat(5000) })).toBe(96)
+    expect(estimatedRowHeight(reply(100))).toBe(240)
+    expect(estimatedRowHeight(reply(1400))).toBe(600)
+    expect(estimatedRowHeight(reply(8000))).toBe(1000)
+    for (const n of [100, 1400, 8000]) {
+      expect(transcriptRowClass(reply(n))).toContain(`auto_${estimatedRowHeight(reply(n))}px`)
+    }
+  })
+})
+
+describe('viewport that jumped past the live rows', () => {
+  const CAP = 300
+  const view = (probe: Partial<{ showsLive: boolean; rowAtTop: number | null; atEnd: boolean }>) =>
+    ({ showsLive: false, rowAtTop: null, atEnd: false, ...probe })
+
+  it('jump far below (scrollbar drag into retired rows): the rows under the viewport come back', () => {
+    const range: LiveRange = { start: 0, liveStart: 0, liveEnd: 300 }
+    expect(recoverViewport(range, 2000, view({ rowAtTop: 1500 }), CAP)).toEqual({ start: 0, liveStart: 1495, liveEnd: 1795 })
+  })
+
+  it('jump far above (Home, or a click high in the track): the rows under the viewport come back', () => {
+    const range: LiveRange = { start: 1000, liveStart: 1700, liveEnd: null }
+    expect(recoverViewport(range, 2000, view({ rowAtTop: 1100 }), CAP)).toEqual({ start: 1000, liveStart: 1095, liveEnd: 1395 })
+  })
+
+  it('reaching the end while the newest rows are retired makes them live, so following resumes on real rows', () => {
+    const range: LiveRange = { start: 0, liveStart: 0, liveEnd: 300 }
+    expect(recoverViewport(range, 2000, view({ atEnd: true, rowAtTop: 1990 }), CAP)).toEqual({ start: 0, liveStart: 1700, liveEnd: null })
+  })
+
+  it('rows appended afterwards are live, not placeholders', () => {
+    const atEnd = recoverViewport({ start: 0, liveStart: 0, liveEnd: 300 }, 2000, view({ atEnd: true }), CAP)!
+    const next = liveRangeAfterKeysChange({ ...atEnd, count: 2000, firstKey: 'k0' }, Array.from({ length: 2002 }, (_, i) => `k${i}`), 40, CAP)
+    expect(next.liveEnd).toBeNull()
+  })
+
+  it('leaves the window alone while the viewport shows live rows', () => {
+    expect(recoverViewport({ start: 0, liveStart: 100, liveEnd: 400 }, 2000, view({ showsLive: true, rowAtTop: 150 }), CAP)).toBeNull()
+  })
+
+  it('with no row under the viewport and newer rows retired, goes to the end', () => {
+    expect(recoverViewport({ start: 0, liveStart: 0, liveEnd: 300 }, 2000, view({}), CAP)).toEqual({ start: 0, liveStart: 1700, liveEnd: null })
+  })
+})
+
+describe('rows retired from the top while following the end', () => {
+  const following: LiveRange = { start: 0, liveStart: 12, liveEnd: null }
+
+  it('come back when the reader is parked on them', () => {
+    // The sentinel above the first live row is 400 px into the viewport.
+    expect(retiredRowsOnScreen(following, 500, 100)).toBe(true)
+  })
+
+  it('stay retired for a reader at the end, or when nothing is retired', () => {
+    expect(retiredRowsOnScreen(following, -3000, 100)).toBe(false)
+    expect(retiredRowsOnScreen({ start: 0, liveStart: 0, liveEnd: null }, 500, 100)).toBe(false)
+    expect(retiredRowsOnScreen(following, null, 100)).toBe(false)
+  })
+
+  it('are left to the bottom sentinel once the window stopped following the end', () => {
+    expect(retiredRowsOnScreen({ start: 0, liveStart: 12, liveEnd: 40 }, 500, 100)).toBe(false)
+  })
+
+  it('arise when appends push a capped window that follows the end', () => {
+    const keys = Array.from({ length: 11 }, (_, i) => `k${i}`)
+    const next = liveRangeAfterKeysChange({ start: 0, liveStart: 0, liveEnd: null, count: 10, firstKey: 'k0' }, keys, 40, 5)
+    expect(next).toMatchObject({ start: 0, liveStart: 6, liveEnd: null })
+    expect(retiredRowsOnScreen(next, 200, 100)).toBe(true)
+  })
+})
+
+describe('finding the row at the viewport top', () => {
+  // Rows 100..119, 50 px each, starting at y = 1000.
+  const bottomOf = (index: number) => (index >= 100 && index <= 119 ? 1000 + (index - 99) * 50 : null)
+
+  it('uses row geometry, so an overlay over the transcript cannot hide the row', () => {
+    // An overlay covering y = 1201 is irrelevant: no hit-testing is involved.
+    expect(rowIndexAt(100, 119, bottomOf, 1201)).toBe(104)
+    expect(rowIndexAt(100, 119, bottomOf, 1000)).toBe(100)
+    expect(rowIndexAt(100, 119, bottomOf, 1049)).toBe(100)
+    expect(rowIndexAt(100, 119, bottomOf, 1050)).toBe(101)
+  })
+
+  it('returns null below every row or for an empty range', () => {
+    expect(rowIndexAt(100, 119, bottomOf, 2000)).toBeNull()
+    expect(rowIndexAt(5, 4, bottomOf, 0)).toBeNull()
+  })
+
+  it('the history window does not hit-test for it', () => {
+    const source = readFileSync(join(__dirname, '../../../src/renderer/components/chat/transcript/useHistoryWindow.ts'), 'utf8')
+    expect(source).not.toMatch(/elementFromPoint/)
   })
 })

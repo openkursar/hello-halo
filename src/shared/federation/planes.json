@@ -1,0 +1,6 @@
+[
+  { "name": "control", "capFrames": 1024, "capBytes": 0 },
+  { "name": "stream", "capFrames": 256, "capBytes": 0 },
+  { "name": "feed", "capFrames": 256, "capBytes": 4194304 },
+  { "name": "artifact", "capFrames": 32, "capBytes": 0 }
+]

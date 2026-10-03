@@ -149,6 +149,11 @@ describe('federation live run-state propagation', () => {
     }
   }
 
+  /** Roster projections a joiner received: full rosters and run-state updates. */
+  function projections(bReceived: FederationMessage[]): number {
+    return bReceived.filter((f) => f.kind === 'roster' || f.kind === 'member-status').length
+  }
+
   function lastRoster(bReceived: FederationMessage[]): RosterSnapshot {
     const frames = bReceived.filter((f): f is RosterFrame => f.kind === 'roster')
     expect(frames.length).toBeGreaterThan(0)
@@ -265,17 +270,17 @@ describe('federation live run-state propagation', () => {
       })
       // Admit B so the host has a joiner to project to.
       hostManager.handleHostInbound({ clientId: B_CLIENT_ID, officeId: OFFICE, frame: joinRequestFromB() })
-      const baseline = bReceived.filter((f) => f.kind === 'roster').length
+      const baseline = projections(bReceived)
 
       // A burst of member-status churn (simulated as repeated schedule calls).
       for (let i = 0; i < 25; i++) hostManager.scheduleRosterRefresh(OFFICE)
 
       // Nothing extra fired synchronously (coalesced behind the timer).
-      expect(bReceived.filter((f) => f.kind === 'roster').length).toBe(baseline)
+      expect(projections(bReceived)).toBe(baseline)
 
-      // After the coalesce window, exactly ONE additional roster went out.
+      // After the coalesce window, exactly ONE additional projection went out.
       vi.advanceTimersByTime(1000)
-      expect(bReceived.filter((f) => f.kind === 'roster').length).toBe(baseline + 1)
+      expect(projections(bReceived)).toBe(baseline + 1)
     } finally {
       vi.useRealTimers()
     }
@@ -289,7 +294,7 @@ describe('federation live run-state propagation', () => {
         getCurrentRunEpoch: () => ({ teamId: OFFICE, epochId: EPOCH }),
       })
       hostManager.handleHostInbound({ clientId: B_CLIENT_ID, officeId: OFFICE, frame: joinRequestFromB() })
-      const baseline = bReceived.filter((f) => f.kind === 'roster').length
+      const baseline = projections(bReceived)
 
       const write: BlackboardWriteRecord = {
         teamId: OFFICE, epochId: EPOCH, op: 'update_task',
@@ -298,7 +303,7 @@ describe('federation live run-state propagation', () => {
       hostManager.routeAuthorityWrite(write)
       hostManager.routeAuthorityWrite(write)
       vi.advanceTimersByTime(1000)
-      expect(bReceived.filter((f) => f.kind === 'roster').length).toBe(baseline + 1)
+      expect(projections(bReceived)).toBe(baseline + 1)
     } finally {
       vi.useRealTimers()
     }
@@ -317,7 +322,7 @@ describe('federation live run-state propagation', () => {
         getCurrentRunEpoch: () => ({ teamId: OFFICE, epochId: EPOCH }),
       })
       hostManager.handleHostInbound({ clientId: B_CLIENT_ID, officeId: OFFICE, frame: joinRequestFromB() })
-      const rosterCount = () => bReceived.filter((f) => f.kind === 'roster').length
+      const rosterCount = () => projections(bReceived)
 
       const afterJoin = rosterCount()
 
@@ -356,11 +361,11 @@ describe('federation live run-state propagation', () => {
         getMemberRuntimeStatus: () => 'idle',
       })
       hostManager.handleHostInbound({ clientId: B_CLIENT_ID, officeId: OFFICE, frame: joinRequestFromB() })
-      const afterJoin = bReceived.filter((f) => f.kind === 'roster').length
+      const afterJoin = projections(bReceived)
 
       // Long stretch with every member idle → the loop must stay silent.
       vi.advanceTimersByTime(60_000)
-      expect(bReceived.filter((f) => f.kind === 'roster').length).toBe(afterJoin)
+      expect(projections(bReceived)).toBe(afterJoin)
 
       hostManager.stopAll()
     } finally {

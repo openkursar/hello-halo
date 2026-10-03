@@ -195,6 +195,41 @@ describe('AC-6.1 — WS per-credential event scoping (real ws)', () => {
     office.close()
   })
 
+  it('a remote-control client gets streaming detail only for subscribed conversations, status for all', async () => {
+    const pin = await RawClient.connectAndAuth(port, pinToken)
+    pin.subscribe('conv-open')
+    await settle()
+
+    broadcastToWebSocket('agent:message', { conversationId: 'conv-open', text: 'open-delta' })
+    broadcastToWebSocket('agent:message', { conversationId: 'conv-bg', text: 'bg-delta' })
+    broadcastToWebSocket('agent:thought-delta', { conversationId: 'conv-bg', text: 'bg-thought' })
+    broadcastToWebSocket('agent:complete', { conversationId: 'conv-bg', text: 'bg-done' })
+
+    await waitFor(() => pin.events().length >= 2)
+    await settle()
+
+    const texts = pin.events().map((e) => e.data?.text)
+    expect(texts).toEqual(['open-delta', 'bg-done'])
+
+    pin.close()
+  })
+
+  it('an office peer gets status events only for conversations it subscribed to', async () => {
+    const office = await RawClient.connectAndAuth(port, officeToken)
+    const ownKey = buildTeamSessionKey('app-x', OFFICE, EPOCH)
+    const otherOwnKey = buildTeamSessionKey('app-z', OFFICE, EPOCH)
+    office.subscribe(ownKey)
+    await settle()
+
+    broadcastToWebSocket('agent:complete', { conversationId: otherOwnKey, teamId: OFFICE, text: 'unsubscribed-done' })
+    broadcastToWebSocket('agent:complete', { conversationId: ownKey, teamId: OFFICE, text: 'subscribed-done' })
+
+    await waitFor(() => office.events().length > 0)
+    await settle()
+    expect(office.events().map((e) => e.data?.text)).toEqual(['subscribed-done'])
+    office.close()
+  })
+
   // ── Gate 3: broadcastToAll (global) ─────────────────────────────────────────
 
   it('broadcastToAll gives an office-member only events for its own teamId; absent/foreign teamId is dropped; PIN sees all', async () => {

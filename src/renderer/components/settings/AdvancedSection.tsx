@@ -14,6 +14,12 @@ import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 import { DEFAULT_DISABLED_TOOLS } from '../../../shared/constants/disabled-tools'
 import { DEFAULT_MAX_TURNS } from '../../../shared/constants/agent-limits'
 import {
+  DEFAULT_MAX_RESIDENT_SESSIONS,
+  MAX_MAX_RESIDENT_SESSIONS,
+  MIN_MAX_RESIDENT_SESSIONS,
+  clampMaxResidentSessions,
+} from '../../../shared/constants/session-budget'
+import {
   TEAM_CIRCUIT_DEFAULTS,
   TEAM_DEFAULT_TURN_TIMEOUT_MS,
   TEAM_DEFAULT_MAX_CONCURRENT_TURNS,
@@ -146,6 +152,9 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
   })
   const [teamMaxConcurrentTurns, setTeamMaxConcurrentTurnsState] = useState(
     config?.agent?.teamMaxConcurrentTurns ?? TEAM_DEFAULT_MAX_CONCURRENT_TURNS
+  )
+  const [maxResidentSessions, setMaxResidentSessionsState] = useState(
+    config?.agent?.maxResidentSessions ?? DEFAULT_MAX_RESIDENT_SESSIONS
   )
   const [capsPanelOpen, setCapsPanelOpen] = useState(false)
   const [engineAvailability, setEngineAvailability] = useState<EngineAvailabilityReport | null>(null)
@@ -293,6 +302,17 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
     } catch (error) {
       console.error('[AdvancedSection] Failed to update teamMaxConcurrentTurns:', error)
       setTeamMaxConcurrentTurnsState(config?.agent?.teamMaxConcurrentTurns ?? TEAM_DEFAULT_MAX_CONCURRENT_TURNS)
+    }
+  }
+
+  const handleMaxResidentSessionsChange = async (value: number) => {
+    const clamped = clampMaxResidentSessions(value)
+    setMaxResidentSessionsState(clamped)
+    try {
+      await saveAgentConfig({ maxResidentSessions: clamped })
+    } catch (error) {
+      console.error('[AdvancedSection] Failed to update maxResidentSessions:', error)
+      setMaxResidentSessionsState(config?.agent?.maxResidentSessions ?? DEFAULT_MAX_RESIDENT_SESSIONS)
     }
   }
 
@@ -662,6 +682,35 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
               const val = parseInt(e.target.value, 10)
               if (!isNaN(val)) {
                 handleTeamMaxConcurrentTurnsChange(val)
+              }
+            }}
+            className="w-24 self-end sm:self-auto px-3 py-1.5 text-sm bg-secondary border border-border rounded-lg text-right focus:outline-none focus:ring-2 focus:ring-primary/50"
+          />
+        </div>
+
+        {/* Resident Session Budget */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pt-4 border-t border-border">
+          <div className="flex-1">
+            <p className="font-medium">{t('Active Conversation Limit')}</p>
+            <p className="text-sm text-muted-foreground">
+              {t('Most conversations kept ready at once. Each one keeps an AI process in memory; beyond the limit the least recently used pause and resume on their next message. Halved automatically when the computer is low on memory.')}
+            </p>
+          </div>
+          <input
+            type="number"
+            min={MIN_MAX_RESIDENT_SESSIONS}
+            max={MAX_MAX_RESIDENT_SESSIONS}
+            value={maxResidentSessions}
+            onChange={(e) => {
+              const val = parseInt(e.target.value, 10)
+              if (!isNaN(val)) {
+                setMaxResidentSessionsState(val)
+              }
+            }}
+            onBlur={(e) => {
+              const val = parseInt(e.target.value, 10)
+              if (!isNaN(val)) {
+                handleMaxResidentSessionsChange(val)
               }
             }}
             className="w-24 self-end sm:self-auto px-3 py-1.5 text-sm bg-secondary border border-border rounded-lg text-right focus:outline-none focus:ring-2 focus:ring-primary/50"

@@ -58,6 +58,7 @@ export class AuthorityStore implements IAuthorityStore {
   private readonly stmtListAfter: Database.Statement
   private readonly stmtPruneBefore: Database.Statement
   private readonly stmtCountByTask: Database.Statement
+  private readonly stmtLogStats: Database.Statement
   private readonly stmtGetAuthority: Database.Statement
   private readonly stmtUpsertAuthority: Database.Statement
 
@@ -89,6 +90,10 @@ export class AuthorityStore implements IAuthorityStore {
     `)
     this.stmtCountByTask = db.prepare(`
       SELECT COUNT(*) AS c FROM blackboard_replication_log WHERE office_id = ? AND task_id = ?
+    `)
+    this.stmtLogStats = db.prepare(`
+      SELECT COUNT(*) AS rows, COALESCE(SUM(LENGTH(payload)), 0) AS bytes
+        FROM blackboard_replication_log WHERE office_id = ?
     `)
     this.stmtGetAuthority = db.prepare(`SELECT * FROM office_authority WHERE office_id = ?`)
     this.stmtUpsertAuthority = db.prepare(`
@@ -144,6 +149,14 @@ export class AuthorityStore implements IAuthorityStore {
 
   countByTaskId(officeId: string, taskId: string): number {
     return (this.stmtCountByTask.get(officeId, taskId) as { c: number }).c
+  }
+
+  getLogStats(officeId: string): { rows: number; bytes: number } {
+    return this.stmtLogStats.get(officeId) as { rows: number; bytes: number }
+  }
+
+  transaction<T>(fn: () => T): T {
+    return this.db.transaction(fn)()
   }
 
   // ── office_authority ──

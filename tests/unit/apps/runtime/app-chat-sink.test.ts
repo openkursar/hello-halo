@@ -36,11 +36,14 @@ vi.mock('../../../../src/main/apps/runtime/session-store', () => ({
 const { stopGeneration } = vi.hoisted(() => ({ stopGeneration: vi.fn(async () => {}) }))
 
 vi.mock('../../../../src/main/services/agent/control', () => ({ stopGeneration }))
+vi.mock('../../../../src/main/services/agent', () => ({ listResidentSessions: () => [] }))
 
 import {
   getAppChatSink,
   hasActiveAppChatRound,
   disposeAppChatSink,
+  sweepIdleAppChatSinks,
+  SINK_IDLE_RELEASE_MS,
 } from '../../../../src/main/apps/runtime/app-chat-sink'
 
 // ============================================
@@ -489,5 +492,22 @@ describe('app-chat sink escalation cut', () => {
     feedToolResult(sink, 'call-2')
 
     expect(stopGeneration).not.toHaveBeenCalled()
+  })
+})
+
+describe('idle sink release', () => {
+  it('releases only idle sinks without a round and without a resident session', () => {
+    const idle = makeSink('app-chat:app-1:wecom-bot:group:idle')
+    const resident = makeSink('app-chat:app-1:wecom-bot:group:resident')
+    const later = Date.now() + SINK_IDLE_RELEASE_MS + 1
+
+    expect(sweepIdleAppChatSinks((id) => id.endsWith(':resident'), Date.now())).toBe(0)
+    expect(sweepIdleAppChatSinks((id) => id.endsWith(':resident'), later)).toBeGreaterThanOrEqual(1)
+
+    // The resident one is kept; the idle one is rebuilt fresh on next use.
+    expect(makeSink('app-chat:app-1:wecom-bot:group:resident')).toBe(resident)
+    expect(makeSink('app-chat:app-1:wecom-bot:group:idle')).not.toBe(idle)
+    disposeAppChatSink('app-chat:app-1:wecom-bot:group:idle')
+    disposeAppChatSink('app-chat:app-1:wecom-bot:group:resident')
   })
 })

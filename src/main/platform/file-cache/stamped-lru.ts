@@ -7,7 +7,13 @@
  * cache correct for an append-only log that grows under a running turn without
  * anyone having to invalidate it: the first read after an append re-derives.
  * Eviction is least-recently-used, bounded by entry count and by total weight
- * (file bytes, a stand-in for the derived value's memory).
+ * (file bytes, a stand-in for the derived value's memory). A single file heavier
+ * than the whole budget is never retained: its value is returned and dropped,
+ * so one huge file cannot pin its derived value in memory — callers of such
+ * files must read them partially instead.
+ *
+ * `derive` receives the entry the file had before it changed (if still cached),
+ * so an append-only file can be derived incrementally from where it left off.
  */
 
 import { statSync } from 'fs'
@@ -24,8 +30,12 @@ interface Entry<T> {
 }
 
 export interface StampedLru<T> {
-  /** Value derived by `derive`, reused while the file at `path` is unchanged; null when the file is unreadable. */
-  get(path: string, derive: () => T | null): T | null
+  /**
+   * Value derived by `derive`, reused while the file at `path` is unchanged;
+   * null when the file is unreadable. `previous` is the value derived before the
+   * file last changed, when it was still cached.
+   */
+  get(path: string, derive: (previous: T | undefined) => T | null): T | null
   delete(path: string): void
   clear(): void
   readonly size: number
@@ -62,9 +72,7 @@ export function createStampedLru<T>({ maxEntries, maxWeight }: StampedLruOptions
   }
 
   function evict(): void {
-    // The newest entry always stays, even alone over budget: dropping it would
-    // make a single oversized file re-parse on every read for no memory gain.
-    while (entries.size > 1 && (entries.size > maxEntries || totalWeight > maxWeight)) {
+    while (entries.size > 0 && (entries.size > maxEntries || totalWeight > maxWeight)) {
       const oldest = entries.keys().next().value as string
       drop(oldest)
     }
@@ -84,8 +92,9 @@ export function createStampedLru<T>({ maxEntries, maxWeight }: StampedLruOptions
         return hit.value
       }
       drop(path)
-      const value = derive()
+      const value = derive(hit?.value)
       if (value === null) return null
+      if (current.weight > maxWeight) return value
       entries.set(path, { stamp: current.stamp, weight: current.weight, value })
       totalWeight += current.weight
       evict()

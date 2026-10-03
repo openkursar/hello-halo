@@ -9,6 +9,7 @@ import { api, createEmptySessionState } from './internal'
 import { selectActiveConversationId } from './active'
 import { conversationKind, backendFor } from './backend'
 import { noteTurnEnded, noteTurnSent, trackHome } from '../../services/home-telemetry'
+import { holdTurnDetail, releaseTurnDetail } from './detail-retention'
 
 export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 'injectMessage' | 'dequeueMessage' | 'approveTool' | 'rejectTool' | 'continueAfterInterrupt'> = (set, get) => ({
   sendMessage: async (content, images, thinkingEnabled, options) => {
@@ -17,8 +18,12 @@ export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 
       console.error('[ChatStore] No conversation or space selected')
       return false
     }
+    holdTurnDetail(conversationId)
     const sent = await backendFor(conversationId).send({ set, get }, conversationId, { content, images, thinkingEnabled, options })
-    if (!sent) noteTurnEnded(conversationId, 'error')
+    if (!sent) {
+      releaseTurnDetail(conversationId)
+      noteTurnEnded(conversationId, 'error')
+    }
     return sent
   },
 
@@ -126,8 +131,13 @@ export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 
     const recipient = kind === 'digital-human' ? 'digital_human' : 'halo'
     trackHome('home.composer.send', { source: 'continue', recipient, hasImages: false, imageCount: 0, isInject: false })
     noteTurnSent(conversationId, recipient)
+    holdTurnDetail(conversationId)
     void backendFor(conversationId)
       .send({ set, get }, conversationId, { content: 'continue' })
-      .catch((error) => console.error('[ChatStore] continueAfterInterrupt failed:', error))
+      .then((sent) => { if (!sent) releaseTurnDetail(conversationId) })
+      .catch((error) => {
+        releaseTurnDetail(conversationId)
+        console.error('[ChatStore] continueAfterInterrupt failed:', error)
+      })
   },
 })

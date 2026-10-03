@@ -120,6 +120,7 @@ export const MessageRow = memo(function MessageRow({
           {hasInlineThoughts ? (
             <CollapsedThoughtProcess
               thoughts={message.thoughts as Thought[]}
+              messageId={message.id}
               defaultExpanded={defaultThoughtsExpanded}
               defaultMaximized={defaultThoughtsMaximized}
             />

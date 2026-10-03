@@ -51,7 +51,7 @@ export interface FeedServiceDeps {
    * when this service's feeds are never pruned (see session-feed's own producers,
    * which do not use this service).
    */
-  knownPeers?: () => NodeId[]
+  knownPeers?: (feedKey: string) => NodeId[]
   /**
    * Domain hook run on every tick (after retransmit + prune). The ctrl plane uses
    * it to sweep its give-up deadlines; kept generic so the substrate owns no
@@ -75,6 +75,8 @@ export interface FeedService {
   appendLocal(kind: FeedKind, type: string, payload: unknown): FeedEntry
   /** Start consuming a remote author's feed (sends subscribe from our watermark). */
   subscribeRemote(author: NodeId, kind: FeedKind): void
+  /** Consume a remote author's feed, subscribing only if not already subscribed. Returns true iff it subscribed. */
+  ensureSubscribedRemote(author: NodeId, kind: FeedKind): boolean
   /**
    * Register `peer` as a subscriber of THIS node's own feed of `kind` without an
    * explicit subscribe from it — the producer-side self-heal for a lost
@@ -149,6 +151,10 @@ export function createFeedService(deps: FeedServiceDeps): FeedService {
     consumer.subscribe(feedIdKey({ officeId, author, kind }))
   }
 
+  function ensureSubscribedRemote(author: NodeId, kind: FeedKind): boolean {
+    return consumer.ensureSubscribed(feedIdKey({ officeId, author, kind }))
+  }
+
   function ensurePeerSubscribed(kind: FeedKind, peer: NodeId): boolean {
     return producer.ensureSubscribed(peer, ownFeedKey(kind))
   }
@@ -157,6 +163,9 @@ export function createFeedService(deps: FeedServiceDeps): FeedService {
     switch (frame.kind) {
       case 'feed-subscribe':
         producer.onSubscribe(fromNode, frame.feedKey, frame.afterSeq)
+        break
+      case 'feed-unsubscribe':
+        producer.unsubscribe(fromNode, frame.feedKey)
         break
       case 'feed-ack':
         producer.onAck(fromNode, frame.feedKey, frame.ackedSeq)
@@ -217,6 +226,7 @@ export function createFeedService(deps: FeedServiceDeps): FeedService {
   return {
     appendLocal,
     subscribeRemote,
+    ensureSubscribedRemote,
     ensurePeerSubscribed,
     handleInbound,
     dropPeer,

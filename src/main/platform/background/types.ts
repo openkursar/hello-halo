@@ -25,6 +25,16 @@ export type StatusChangeHandler = (status: BackgroundStatus) => void
 export type Unsubscribe = () => void
 
 /**
+ * A condition the user must act on, pinned to the top of the tray menu until
+ * cleared (e.g. the window was stopped after repeated renderer crashes).
+ */
+export interface TrayNotice {
+  message: string
+  actionLabel: string
+  onAction: () => void
+}
+
+/**
  * BackgroundService -- The public contract consumed by apps/runtime and bootstrap.
  *
  * This interface is the sole dependency boundary. Consumers import only this type
@@ -40,6 +50,18 @@ export interface BackgroundService {
    * Safe to call multiple times (idempotent).
    */
   initTray(): void
+
+  /**
+   * Pin (or clear, with null) a notice at the top of the tray menu. Works before
+   * the tray exists; the notice is applied when the tray is created.
+   */
+  setTrayNotice(notice: TrayNotice | null): void
+
+  /**
+   * Whether a tray icon was created. Without one the app cannot be reached with
+   * no window open, so it must not stay alive invisibly.
+   */
+  hasTray(): boolean
 
   // ──────────────────────────────────────────────
   // Keep-Alive
@@ -58,10 +80,14 @@ export interface BackgroundService {
    * If the caller crashes without calling the disposer, the reason will
    * be auto-pruned after MAX_KEEP_ALIVE_TTL (default: 24 hours).
    *
+   * A caller whose disposer is guaranteed (it lives exactly as long as a state
+   * it owns) may pass `ttlMs: Infinity` so a long-lived reason does not silently
+   * lapse after a day.
+   *
    * @param reason - A unique identifier for this keep-alive reason (e.g. "app:jd-price-monitor")
    * @returns Unsubscribe function to remove this reason
    */
-  registerKeepAliveReason(reason: string): Unsubscribe
+  registerKeepAliveReason(reason: string, options?: { ttlMs?: number }): Unsubscribe
 
   // ──────────────────────────────────────────────
   // Daemon Browser Window

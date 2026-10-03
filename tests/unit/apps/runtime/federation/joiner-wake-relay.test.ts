@@ -26,6 +26,7 @@ import {
 } from '../../../../../src/main/apps/team/migrations'
 import { createFederationManager, type FederationManager } from '../../../../../src/main/apps/runtime/federation/manager'
 import { feedIdKey } from '../../../../../src/main/apps/runtime/federation/log/types'
+import { ctrlTargetKind } from '../../../../../src/main/apps/runtime/federation/ctrl-feed'
 import type { SerializedWakeRequest } from '../../../../../src/main/apps/runtime/federation/types'
 
 const OFFICE = 'office-relay'
@@ -109,7 +110,7 @@ describe('joiner wake relay addressing', () => {
       correlationId: 'corr-ack',
     })
     const feedStore = getFeedStore()!
-    const ownCtrlKey = feedIdKey({ officeId: OFFICE, author: NODE_SELF, kind: 'ctrl' })
+    const ownCtrlKey = feedIdKey({ officeId: OFFICE, author: NODE_SELF, kind: ctrlTargetKind(NODE_HOST) })
     const seq = feedStore.getMaxSeq(OFFICE, ownCtrlKey)
 
     // The authority's ack arrives over the joined office's single upstream leg,
@@ -136,7 +137,7 @@ describe('joiner wake relay addressing', () => {
     expect(sent).toBe(true)
 
     const feedStore = getFeedStore()!
-    const ownCtrlKey = feedIdKey({ officeId: OFFICE, author: NODE_SELF, kind: 'ctrl' })
+    const ownCtrlKey = feedIdKey({ officeId: OFFICE, author: NODE_SELF, kind: ctrlTargetKind(NODE_HOST) })
     const entries = feedStore.listAfter(OFFICE, ownCtrlKey, 0, 10)
     expect(entries).toHaveLength(1)
     expect(entries[0].type).toBe('wake')

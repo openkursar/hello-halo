@@ -6,6 +6,8 @@ import {
   listConversations,
   createConversation,
   getConversation,
+  getConversationFrom,
+  withImageFiles,
   updateConversation,
   deleteConversation,
   addMessage,
@@ -42,11 +44,14 @@ export function registerConversationHandlers(): void {
     },
 
     // Get a specific conversation
-    getConversation: async (spaceId: string, conversationId: string) => {
+    getConversation: async (spaceId: string, conversationId: string, options?: { fromMessageId?: string }) => {
       try {
-        const conversation = getConversation(spaceId, conversationId)
+        const conversation = options?.fromMessageId
+          ? getConversationFrom(spaceId, conversationId, options.fromMessageId)
+          : getConversation(spaceId, conversationId)
         if (!conversation) return { success: false, error: 'Conversation not found' }
-        return { success: true, data: conversation }
+        // The desktop renderer loads stored images by file URL (remote clients get them inline).
+        return { success: true, data: withImageFiles(spaceId, conversation) }
       } catch (error: unknown) {
         const err = error as Error
         return { success: false, error: err.message }

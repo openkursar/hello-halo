@@ -35,6 +35,7 @@ import {
   setContent,
   hasChanges,
 } from '../../../lib/codemirror-setup'
+import { useViewerResources } from '../viewer-resources'
 
 // ============================================
 // Types
@@ -101,6 +102,7 @@ export const CodeMirrorEditor = memo(
     const viewRef = useRef<EditorView | null>(null)
     const originalContentRef = useRef<string>(content)
     const lastScrollPositionRef = useRef<number>(0)
+    const resources = useViewerResources()
 
     // Keep refs up to date with latest callbacks
     const onChangeRef = useRef(onChange)
@@ -151,11 +153,11 @@ export const CodeMirrorEditor = memo(
         extensions,
       })
 
-      // Create view
-      const view = new EditorView({
+      const scope = resources.scope()
+      const view = scope.add(new EditorView({
         state,
         parent: containerRef.current,
-      })
+      }))
 
       viewRef.current = view
       originalContentRef.current = content
@@ -169,7 +171,7 @@ export const CodeMirrorEditor = memo(
       }
 
       return () => {
-        view.destroy()
+        scope.dispose()
         viewRef.current = null
       }
       // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -448,6 +448,107 @@ function startSessionCleanup(): void {
   }, 60 * 1000) // Check every minute
 }
 
+// ============================================
+// Resident Session Limit
+// ============================================
+
+/**
+ * Upper bound on resident sessions (one engine process each), set by the owner
+ * of the budget policy (apps/runtime). null = unlimited.
+ */
+let residentSessionLimit: number | null = null
+let overLimitWarned = false
+let evictionCount = 0
+
+export interface ResidentSessionInfo {
+  conversationId: string
+  spaceId: string
+  lastUsedAt: number
+  /** Mid-turn, awaiting init, holding team agents or background tasks, or being created — never evicted. */
+  busy: boolean
+}
+
+/**
+ * A task CC started in the background (a shell, agent or workflow) reports back
+ * as a later turn of this session; evicting it would kill the task. The idle
+ * sweep does not consult this, so a task whose completion never arrives cannot
+ * pin the process forever.
+ */
+function hasRunningTasks(conversationId: string): boolean {
+  const consumer = consumers.get(conversationId)
+  return !!consumer?.isRunning && consumer.hasRunningTasks()
+}
+
+function isEvictionUnsafe(conversationId: string): boolean {
+  return isSessionBusy(conversationId)
+    || hasRunningTasks(conversationId)
+    || turnsAwaitingInit.has(conversationId)
+    || sessionsUnderCreation.has(conversationId)
+    || inFlightSessionCreations.has(conversationId)
+}
+
+export function listResidentSessions(): ResidentSessionInfo[] {
+  return Array.from(v2Sessions.values()).map((info) => ({
+    conversationId: info.conversationId,
+    spaceId: info.spaceId,
+    lastUsedAt: info.lastUsedAt,
+    busy: isEvictionUnsafe(info.conversationId),
+  }))
+}
+
+/**
+ * Close an idle resident session to free its engine process. Refuses busy or
+ * in-creation sessions. The conversation resumes from its stored session id on
+ * its next turn, exactly as after the idle-timeout sweep.
+ */
+export function evictIdleSession(conversationId: string, reason: string): boolean {
+  if (!v2Sessions.has(conversationId) || isEvictionUnsafe(conversationId)) return false
+  cleanupSession(conversationId, `evicted: ${reason}`)
+  evictionCount += 1
+  return true
+}
+
+/** The resident limit in force (null = unlimited), for performance reporting. */
+export function getResidentSessionLimit(): number | null {
+  return residentSessionLimit
+}
+
+/** Idle sessions evicted since process start (for performance reporting). */
+export function getSessionEvictionCount(): number {
+  return evictionCount
+}
+
+export function setResidentSessionLimit(limit: number | null): void {
+  residentSessionLimit = limit === null ? null : Math.max(1, Math.floor(limit))
+  overLimitWarned = false
+}
+
+/**
+ * Before a new session is created, evict least-recently-used idle sessions
+ * until one more fits under the limit. When every resident session is busy the
+ * new one is created over the limit (never refused); warned once per crossing.
+ */
+function enforceResidentSessionLimit(creatingConversationId: string): void {
+  const limit = residentSessionLimit
+  if (limit === null) return
+  const candidates = Array.from(v2Sessions.values())
+    .filter((info) => info.conversationId !== creatingConversationId)
+    .sort((a, b) => a.lastUsedAt - b.lastUsedAt)
+  let resident = candidates.length
+  for (const info of candidates) {
+    if (resident < limit) break
+    if (evictIdleSession(info.conversationId, `resident session limit ${limit}`)) resident -= 1
+  }
+  if (resident >= limit) {
+    if (!overLimitWarned) {
+      overLimitWarned = true
+      console.warn(`[Agent] Resident sessions over limit: ${resident + 1}/${limit}, all others busy`)
+    }
+  } else {
+    overLimitWarned = false
+  }
+}
+
 /**
  * Stop the session cleanup interval
  */
@@ -944,6 +1045,7 @@ async function getOrCreateV2SessionInner(
   // Create new session
   // If sessionId exists, pass resume to let CC restore history from disk
   // After first message, the process stays alive and maintains context in memory
+  enforceResidentSessionLimit(conversationId)
   console.log(`[Agent][${conversationId}] Creating new V2 session...`)
 
   if (buildMcpServers) {

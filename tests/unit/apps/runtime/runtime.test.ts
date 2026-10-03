@@ -1758,7 +1758,8 @@ describe('AppRuntimeService', () => {
       await service.activate(appId)
 
       expect(mockBackground.registerKeepAliveReason).toHaveBeenCalledWith(
-        `automation-apps-active:${appId}`
+        `automation-apps-active:${appId}`,
+        { ttlMs: Infinity }
       )
     })
 
@@ -1925,6 +1926,43 @@ describe('AppRuntimeService', () => {
       expect(mockScheduler.removeJob).toHaveBeenCalled()
       expect(unsubFn).toHaveBeenCalled()
       expect(keepAliveDisposer).toHaveBeenCalled()
+    })
+
+    it('holds the space file watcher while a file subscription is active', async () => {
+      const appId = randomUUID()
+      const fileWatch = { retain: vi.fn(), release: vi.fn() }
+      const app = {
+        id: appId,
+        specId: 'test-app',
+        spaceId: 'space-001',
+        spec: createTestSpec({
+          subscriptions: [{ id: 'watch', source: { type: 'file', config: { pattern: '*.md' } } }],
+        }),
+        status: 'active' as const,
+        userConfig: {},
+        userOverrides: {},
+        permissions: { granted: [], denied: [] },
+        installedAt: Date.now(),
+      }
+      mockAppManager.getApp.mockReturnValue(app)
+
+      const service = createAppRuntimeService({
+        store, appManager: mockAppManager, scheduler: mockScheduler, eventRouter: mockEventRouter,
+        memory: mockMemory, background: mockBackground, getSpacePath: () => '/tmp/test-space', fileWatch,
+      })
+      await service.activate(appId)
+      expect(fileWatch.retain).toHaveBeenCalledWith('space-001', `automation:${appId}`)
+
+      // Dropping the file subscription releases the hold without deactivating.
+      mockAppManager.getApp.mockReturnValue({
+        ...app,
+        spec: createTestSpec({ subscriptions: [{ id: 'sched', source: { type: 'schedule', config: { every: '30m' } } }] }),
+      })
+      service.syncAppSubscriptions(appId)
+      expect(fileWatch.release).toHaveBeenCalledWith('space-001', `automation:${appId}`)
+
+      await service.deactivate(appId)
+      expect(fileWatch.release).toHaveBeenCalledTimes(1)
     })
 
     it('should be safe to deactivate non-activated app', async () => {
@@ -2723,6 +2761,42 @@ describe('AppRuntimeService', () => {
     it('should register a status change handler on the manager', () => {
       createService()
       expect(mockAppManager.onAppStatusChange).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('app status publishing', () => {
+    const inactiveApp = (id: string) => ({
+      id, status: 'paused', userConfig: {}, userOverrides: {}, permissions: { granted: [], denied: [] },
+    })
+
+    it('skips a publish whose state equals the last one sent, and re-announces after uninstall', () => {
+      const appId = randomUUID()
+      mockAppManager.getApp.mockReturnValue(inactiveApp(appId))
+      createService()
+      const onStatus = mockAppManager.onAppStatusChange.mock.calls[0][0]
+      const onUninstalled = mockAppManager.onAppUninstalled.mock.calls[0][0]
+      const statusSends = () => vi.mocked(sendToRenderer).mock.calls.filter(([ch]) => ch === 'app:status_changed').length
+      vi.mocked(sendToRenderer).mockClear()
+
+      onStatus(appId, 'active', 'paused')
+      onStatus(appId, 'active', 'paused')
+      expect(statusSends()).toBe(1)
+
+      onUninstalled({ id: appId })
+      onStatus(appId, 'active', 'paused')
+      expect(statusSends()).toBe(2)
+    })
+
+    it('getAllAppStates reuses a recently computed state instead of re-querying', () => {
+      const appId = randomUUID()
+      mockAppManager.getApp.mockReturnValue(inactiveApp(appId))
+      mockAppManager.listApps.mockReturnValue([{ id: appId }])
+      const service = createService()
+      const spy = vi.spyOn(service, 'getAppState')
+
+      service.getAllAppStates()
+      service.getAllAppStates()
+      expect(spy).toHaveBeenCalledTimes(1)
     })
   })
 

@@ -204,7 +204,7 @@ func (r *Room) routeFromMember(s *session.Session, hdr *wire.FederationHeader, e
 		s.SendGwError(wire.CodeMalformed, "unencodable frame")
 		return
 	}
-	plane := wire.ClassifyPlane(hdr.Kind)
+	plane := wire.ResolvePlane(env.Plane, hdr.Kind)
 	delivered := 0
 	if host.SendData(plane, data) {
 		r.metrics.FramesForwardedTotal[plane].Add(1)
@@ -217,7 +217,7 @@ func (r *Room) routeFromMember(s *session.Session, hdr *wire.FederationHeader, e
 // broadcasts to admitted members. join-grant / join-reject envelopes drive the
 // admission gate.
 func (r *Room) routeFromHost(s *session.Session, hdr *wire.FederationHeader, env *wire.Envelope) {
-	plane := wire.ClassifyPlane(hdr.Kind)
+	plane := wire.ResolvePlane(env.Plane, hdr.Kind)
 	// Host→member frames need no from stamp: the member's single upstream peer
 	// IS the host, so origin is unambiguous.
 	data := marshalForward(env, "")

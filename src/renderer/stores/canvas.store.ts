@@ -6,7 +6,7 @@
  * operations to canvasLifecycle while maintaining API compatibility.
  *
  * IMPORTANT: This is a transitional layer. New code should use
- * useCanvasLifecycle hook directly. This store is kept for backward
+ * useCanvasLifecycle hooks directly. This store is kept for backward
  * compatibility with existing components.
  *
  * The actual state management is done by CanvasLifecycle singleton.
@@ -14,6 +14,8 @@
  */
 
 import { create } from 'zustand'
+import i18n from '../i18n'
+import { useNotificationStore } from './notification.store'
 import {
   canvasLifecycle,
   type TabState,
@@ -32,16 +34,13 @@ export type CanvasTab = TabState
 interface CanvasState {
   // State (synced from canvasLifecycle)
   isOpen: boolean
-  tabs: TabState[]
+  /** Tab-list snapshot: fields outside the tab strip (content, bytes) may lag. */
+  tabs: readonly TabState[]
   activeTabId: string | null
   isTransitioning: boolean
 
   // Maximized mode state (Canvas takes full screen, hide Header/Chat/Rail)
   isMaximized: boolean
-
-  // Computed
-  getActiveTab: () => TabState | null
-  getTabCount: () => number
 
   // Tab Actions (delegate to canvasLifecycle)
   openFile: (path: string, title?: string) => Promise<void>
@@ -87,7 +86,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
   // Subscribe to canvasLifecycle state changes synchronously
   // canvasLifecycle is auto-initialized on module load, ensuring IPC listeners
   // are ready before any React components mount
-  canvasLifecycle.onTabsChange((tabs) => {
+  canvasLifecycle.onTabListChange((tabs) => {
     set({ tabs })
   })
 
@@ -99,6 +98,15 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     set({ isOpen })
   })
 
+  canvasLifecycle.onBudgetEviction(({ closedTabs, limit }) => {
+    useNotificationStore.getState().show({
+      title: i18n.t('Closed {{count}} least recently used tab(s)', { count: closedTabs }),
+      body: i18n.t('The canvas keeps up to {{limit}} tabs open. Tabs with unsaved changes are never closed.', { limit }),
+      variant: 'default',
+      duration: 5000,
+    })
+  })
+
   return {
     // Initial state - synchronized from canvasLifecycle singleton
     isOpen: canvasLifecycle.getIsOpen(),
@@ -108,16 +116,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
 
     // Maximized mode - local state (not in canvasLifecycle)
     isMaximized: false,
-
-    // Computed: Get active tab
-    getActiveTab: () => {
-      const { tabs, activeTabId } = get()
-      if (!activeTabId) return null
-      return tabs.find(tab => tab.id === activeTabId) || null
-    },
-
-    // Computed: Get tab count
-    getTabCount: () => get().tabs.length,
 
     // ============================================
     // Tab Actions (delegate to canvasLifecycle)
@@ -251,23 +249,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
  */
 export function useCanvasIsOpen(): boolean {
   return useCanvasStore(state => state.isOpen)
-}
-
-/**
- * Selector: Get active tab
- */
-export function useActiveTab(): TabState | null {
-  return useCanvasStore(state => {
-    if (!state.activeTabId) return null
-    return state.tabs.find(tab => tab.id === state.activeTabId) || null
-  })
-}
-
-/**
- * Selector: Get tab count
- */
-export function useTabCount(): number {
-  return useCanvasStore(state => state.tabs.length)
 }
 
 /**
