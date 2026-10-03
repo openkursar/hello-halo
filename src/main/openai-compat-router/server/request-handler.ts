@@ -25,7 +25,7 @@ import {
   streamAnthropicPassthrough,
   pipeAnthropicPassthrough
 } from '../stream'
-import { isNativeAnthropicHost, normalizeClaudeCodeAttribution, normalizeSystemPrompt, resolveClaudeCodeUserAgent, safeJsonParse, pickSessionAffinityHeaders, pickSessionId, inlineToolSchemaRefs } from '../utils'
+import { isNativeAnthropicHost, normalizeAnthropicReasoning, normalizeClaudeCodeAttribution, normalizeSystemPrompt, resolveClaudeCodeUserAgent, safeJsonParse, pickSessionAffinityHeaders, pickSessionId, inlineToolSchemaRefs } from '../utils'
 import { proxyFetch } from '../../services/proxy-fetch'
 import { getApiTypeFromUrl, isValidEndpointUrl, getEndpointUrlError, shouldForceStream } from './api-type'
 import { runInterceptors } from '../interceptors'
@@ -337,13 +337,17 @@ async function handleAnthropicPassthrough(
     anthropicRequest.model = wireModel
   }
 
+  // Runs on the wire model: thinking controls depend on the model that answers.
+  const { request: upstreamRequest, modified: reasoningNormalized } =
+    normalizeAnthropicReasoning(anthropicRequest, config)
+
   const toolCount = anthropicRequest.tools?.length ?? 0
   const pipeMode = isNativeAnthropicHost(backendUrl) ? 'raw' : 'repair'
 
-  // Use raw body buffer when neither interceptors nor model override modified the request.
+  // Use raw body buffer when nothing above modified the request.
   // This avoids a JSON.stringify round-trip — the upstream receives byte-identical body from SDK.
-  const canUseRawBody = rawBody && !requestModified && !modelOverridden
-  const fetchBody: Buffer | unknown = canUseRawBody ? rawBody : anthropicRequest
+  const canUseRawBody = rawBody && !requestModified && !modelOverridden && !reasoningNormalized
+  const fetchBody: Buffer | unknown = canUseRawBody ? rawBody : upstreamRequest
 
   if (debug) {
     console.log(`[RequestHandler] Raw body forwarding: ${canUseRawBody ? 'yes' : 'no (modified)'}`)

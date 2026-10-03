@@ -154,6 +154,44 @@ describe('openai-codex provider adapter', () => {
       expect((body.reasoning as { summary?: string }).summary).toBeUndefined()
     })
 
+    it('holds the effort to the levels the catalog lists for the model', () => {
+      setCodexModelCapabilities([{ slug: 'm-levels', supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh'] }])
+      const body: Record<string, unknown> = { model: 'm-levels', input: [], reasoning: { effort: 'max' } }
+
+      applyProviderAdapter(CODEX_URL, body, {}, CODEX_ADAPTER_ID, context())
+
+      expect((body.reasoning as { effort: string }).effort).toBe('xhigh')
+    })
+
+    it('bounds the effort by the Codex CLI enum before the catalog is read', () => {
+      setCodexModelCapabilities([])
+      const body: Record<string, unknown> = { model: 'm-unknown', input: [], reasoning: { effort: 'max' } }
+
+      applyProviderAdapter(CODEX_URL, body, {}, CODEX_ADAPTER_ID, context())
+
+      expect((body.reasoning as { effort: string }).effort).toBe('xhigh')
+    })
+
+    it('runs an off switch the catalog does not list at the lowest listed level', () => {
+      setCodexModelCapabilities([{ slug: 'm-levels', supported_reasoning_levels: ['medium', 'high'] }])
+      const body: Record<string, unknown> = { model: 'm-levels', input: [], reasoning: { effort: 'none' } }
+
+      applyProviderAdapter(CODEX_URL, body, {}, CODEX_ADAPTER_ID, context())
+
+      expect((body.reasoning as { effort: string }).effort).toBe('medium')
+    })
+
+    it('keeps an off switch the catalog lists or cannot rule on', () => {
+      setCodexModelCapabilities([{ slug: 'm-none', supported_reasoning_levels: ['none', 'low'] }])
+      const listed: Record<string, unknown> = { model: 'm-none', input: [], reasoning: { effort: 'none' } }
+      applyProviderAdapter(CODEX_URL, listed, {}, CODEX_ADAPTER_ID, context())
+      expect((listed.reasoning as { effort: string }).effort).toBe('none')
+
+      const unread: Record<string, unknown> = { model: 'm-unread', input: [], reasoning: { effort: 'none' } }
+      applyProviderAdapter(CODEX_URL, unread, {}, CODEX_ADAPTER_ID, context())
+      expect((unread.reasoning as { effort: string }).effort).toBe('none')
+    })
+
     it('gives every function tool its strict flag', () => {
       const body: Record<string, unknown> = {
         model: 'm-tools',

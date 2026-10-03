@@ -10,10 +10,11 @@
 
 import { describe, it, expect } from 'vitest'
 import {
+  resolveReasoning,
   resolveReasoningEffortValue,
   isThinkingEffort,
 } from '../../../src/main/openai-compat-router/converters/reasoning-effort'
-import { reasoningEffortProfileById } from '../../../src/shared/constants/model-capabilities'
+import { reasoningEffortProfileById } from '../../../src/shared/constants/reasoning-effort-profiles'
 import {
   clampReasoningEffort,
   inferReasoningEffortFromBudget,
@@ -65,17 +66,78 @@ describe('reasoningEffortProfileById', () => {
       .toBe(reasoningEffortProfileById('glm-5.3').disableValue)
   })
 
-  it('assumes the narrow ladder for an unknown model', () => {
-    expect(reasoningEffortProfileById('some-proxy-model').levels).toEqual(['low', 'medium', 'high'])
-    expect(reasoningEffortProfileById(undefined).disableValue).toBeUndefined()
+  it('places no restriction on an unknown model', () => {
+    expect(reasoningEffortProfileById('some-proxy-model')).toEqual({})
+    expect(reasoningEffortProfileById(undefined)).toEqual({})
   })
 
-  it('marks GLM-5/5.1/5-Turbo/4.7/4.6 as not supporting reasoning_effort at all', () => {
+  it('marks GLM-5/5.1/5-Turbo/4.7/4.6 as switched by thinking.type, not reasoning_effort', () => {
     // docs.bigmodel.cn: the field is documented from GLM-5.2 onward only.
     for (const id of ['glm-5', 'glm-5.1', 'glm-5-turbo', 'glm-4.7', 'glm-4.6', 'glm-4.5']) {
       expect(reasoningEffortProfileById(id).levels, id).toEqual([])
       expect(reasoningEffortProfileById(id).disableValue, id).toBeUndefined()
+      expect(reasoningEffortProfileById(id).thinkingToggle, id).toBe(true)
     }
+  })
+
+  it('matches a Claude version exactly, so a newer minor never inherits an older rule', () => {
+    expect(reasoningEffortProfileById('claude-opus-5').anthropic?.disableType).toBeUndefined()
+    expect(reasoningEffortProfileById('claude-opus-5').disableValue).toBeUndefined()
+    // Opus 5.5 cannot stop thinking; it must not read as Opus 5.
+    expect(reasoningEffortProfileById('claude-opus-5-5').disableValue).toBe('low')
+    expect(reasoningEffortProfileById('claude-sonnet-5-5').anthropic?.disableType).toBe('between_tools')
+    expect(reasoningEffortProfileById('claude-opus-4-20250514').anthropic?.mode).toBe('budget')
+    expect(reasoningEffortProfileById('claude-opus-4-6').anthropic?.mode).toBe('adaptive')
+  })
+
+  it('resolves dated, platform-prefixed and dotted Claude ids', () => {
+    const opus46 = reasoningEffortProfileById('claude-opus-4-6')
+    for (const id of ['anthropic/claude-opus-4.6', 'anthropic.claude-opus-4-6-v1:0', 'claude-opus-4-6@20260101']) {
+      expect(reasoningEffortProfileById(id), id).toBe(opus46)
+    }
+    expect(reasoningEffortProfileById('claude-opus-5-5[1m]').disableValue).toBe('low')
+  })
+
+  it('holds OpenAI models to the ladder their model page documents', () => {
+    const cases: Array<[string, string, string]> = [
+      // [model, effort for a picked max, value for a picked off]
+      ['gpt-6.1-sol', 'max', 'low'],
+      ['gpt-6-astra', 'max', 'low'],
+      ['gpt-6-sol', 'max', 'none'],
+      ['openai/gpt-5.6-terra', 'max', 'none'],
+      ['gpt-5.5', 'xhigh', 'none'],
+      ['gpt-5.5-2026-04-23', 'xhigh', 'none'],
+      ['gpt-5.4-mini', 'xhigh', 'none'],
+      ['gpt-5.5-pro', 'xhigh', 'medium'],
+      ['gpt-5-pro', 'high', 'high'],
+      ['gpt-5.3-codex', 'xhigh', 'low'],
+      ['gpt-5.1', 'high', 'none'],
+      ['gpt-5-2025-08-07', 'high', 'minimal'],
+      ['gpt-5-mini', 'high', 'minimal'],
+      ['o3', 'high', 'low'],
+      ['openai/o4-mini', 'high', 'low'],
+    ]
+    for (const [model, max, off] of cases) {
+      expect(resolveReasoningEffortValue(adaptive, undefined, model, 'max'), model).toBe(max)
+      expect(resolveReasoningEffortValue(adaptive, undefined, model, 'off'), model).toBe(off)
+    }
+  })
+
+  it('keeps short o-series patterns out of unrelated ids', () => {
+    for (const id of ['gpt-4o3', 'foo-o3-bar', 'o30-model', 'qwen3-o1x']) {
+      expect(reasoningEffortProfileById(id), id).toEqual({})
+    }
+  })
+
+  it('does not let a version pattern absorb a later two-digit version', () => {
+    expect(reasoningEffortProfileById('gpt-5.10')).not.toBe(reasoningEffortProfileById('gpt-5.1'))
+  })
+
+  it('gives a Claude model newer than the table the current generation\'s controls', () => {
+    const future = reasoningEffortProfileById('claude-opus-5-6')
+    expect(future.anthropic).toEqual({ mode: 'adaptive', effort: true })
+    // Whether it can stop thinking is unknown, so off runs at the lowest level.
+    expect(future.disableValue).toBe('low')
   })
 
   it('gives GLM-5.2 the two effort tiers its API does not silently alias', () => {
@@ -85,7 +147,7 @@ describe('reasoningEffortProfileById', () => {
 })
 
 describe('resolveReasoningEffortValue', () => {
-  it('caps an inferred level at what an unknown upstream accepts', () => {
+  it('caps a Halo-inferred level at what any upstream accepts', () => {
     expect(resolveReasoningEffortValue(enabled(32_000), undefined, 'some-proxy-model'))
       .toBe('high')
   })
@@ -105,12 +167,26 @@ describe('resolveReasoningEffortValue', () => {
     expect(resolveReasoningEffortValue(undefined, undefined, 'gpt-4o')).toBeUndefined()
   })
 
-  it('omits the field for GLM-5/5.1/4.7 — reasoning_effort is not in their API surface', () => {
-    // Their only real thinking toggle is `thinking.type`, which Halo does not
-    // send yet, so an inferred "off" here has no wire value to carry it.
-    expect(resolveReasoningEffortValue(disabled, undefined, 'glm-5')).toBeUndefined()
-    expect(resolveReasoningEffortValue(enabled(32_000), 'off', 'glm-5.1')).toBeUndefined()
-    expect(resolveReasoningEffortValue(disabled, undefined, 'glm-4.7')).toBeUndefined()
+  it('switches GLM-5/5.1/4.7 off through thinking.type — reasoning_effort is not in their API', () => {
+    for (const [thinking, declared, model] of [
+      [disabled, undefined, 'glm-5'],
+      [enabled(32_000), 'off', 'glm-5.1'],
+      [disabled, undefined, 'glm-4.7'],
+    ] as const) {
+      expect(resolveReasoning(thinking, declared, model), model).toEqual({ effort: undefined, disableThinking: true })
+    }
+  })
+
+  it('switches DeepSeek off through thinking.type and leaves its effort mapping to DeepSeek', () => {
+    expect(resolveReasoning(adaptive, undefined, 'deepseek-v4-pro', 'off'))
+      .toEqual({ effort: undefined, disableThinking: true })
+    expect(resolveReasoning(adaptive, undefined, 'deepseek-v4-pro', 'xhigh'))
+      .toEqual({ effort: 'xhigh', disableThinking: false })
+  })
+
+  it('never sends a thinking toggle to a model that has none', () => {
+    expect(resolveReasoning(disabled, undefined, 'gpt-4o').disableThinking).toBe(false)
+    expect(resolveReasoning(adaptive, undefined, 'glm-5.2', 'off').disableThinking).toBe(false)
   })
 
   it('still forwards a user-declared value verbatim even where Halo infers nothing', () => {
@@ -161,8 +237,13 @@ describe('resolveReasoningEffortValue', () => {
       expect(resolveReasoningEffortValue(adaptive, 'off', 'glm-5.2', 'max')).toBe('max')
     })
 
-    it('clamps to what the model accepts rather than forwarding verbatim', () => {
-      expect(resolveReasoningEffortValue(adaptive, undefined, 'some-proxy-model', 'max')).toBe('high')
+    it('forwards the pick as is to a model without a profile — the upstream maps it', () => {
+      expect(resolveReasoningEffortValue(adaptive, undefined, 'some-proxy-model', 'max')).toBe('max')
+      expect(resolveReasoningEffortValue(adaptive, undefined, 'some-proxy-model', 'xhigh')).toBe('xhigh')
+    })
+
+    it('clamps to what a profiled model accepts', () => {
+      expect(resolveReasoningEffortValue(adaptive, undefined, 'anthropic/claude-opus-4.6', 'xhigh')).toBe('high')
       expect(resolveReasoningEffortValue(adaptive, undefined, 'glm-5.3', 'max')).toBe('max')
       expect(resolveReasoningEffortValue(adaptive, undefined, 'glm-5.3', 'medium')).toBe('low')
       expect(resolveReasoningEffortValue(adaptive, undefined, 'glm-5.2', 'low')).toBe('high')
@@ -172,6 +253,9 @@ describe('resolveReasoningEffortValue', () => {
       expect(resolveReasoningEffortValue(adaptive, 'high', 'glm-5.2', 'off')).toBe('none')
       // Always-thinking models cannot stop; off lands on their lowest level.
       expect(resolveReasoningEffortValue(adaptive, undefined, 'glm-5.3', 'off')).toBe('low')
+      expect(resolveReasoningEffortValue(adaptive, undefined, 'claude-opus-5-5', 'off')).toBe('low')
+      expect(resolveReasoningEffortValue(adaptive, undefined, 'gpt-6-astra', 'off')).toBe('low')
+      expect(resolveReasoningEffortValue(adaptive, undefined, 'gpt-6.1-sol', 'off')).toBe('low')
       expect(resolveReasoningEffortValue(adaptive, undefined, 'gpt-4o', 'off')).toBeUndefined()
     })
 

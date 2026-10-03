@@ -212,6 +212,26 @@ describe('Request Converters', () => {
       expect(responses.request.reasoning).toEqual({ effort: 'low' })
     })
 
+    it('should switch thinking off through thinking.type where the model has that toggle', () => {
+      const request: AnthropicRequest = {
+        model: 'deepseek-v4-pro',
+        max_tokens: 1024,
+        messages: [{ role: 'user', content: 'Hello' }],
+        thinking: { type: 'adaptive' }
+      }
+
+      const off = convertAnthropicToOpenAIChat(request, { pickedReasoningEffort: 'off' })
+      expect(off.request.thinking).toEqual({ type: 'disabled' })
+      expect(off.request.reasoning_effort).toBeUndefined()
+
+      const on = convertAnthropicToOpenAIChat(request, { pickedReasoningEffort: 'max' })
+      expect(on.request.thinking).toBeUndefined()
+      expect(on.request.reasoning_effort).toBe('max')
+
+      const other = convertAnthropicToOpenAIChat({ ...request, model: 'gpt-4o' }, { pickedReasoningEffort: 'off' })
+      expect(other.request.thinking).toBeUndefined()
+    })
+
     // ====================================================================
     // reasoning_content injection from thinking blocks
     // ====================================================================

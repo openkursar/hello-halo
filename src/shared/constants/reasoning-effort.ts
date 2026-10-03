@@ -29,6 +29,14 @@ export type ReasoningEffortLevel = (typeof REASONING_EFFORT_LEVELS)[number]
 export type ReasoningEffortSetting = ReasoningEffortLevel | string
 
 /**
+ * Levels the Codex CLI can express — its `ReasoningEffort` enum. The Codex
+ * engine and the ChatGPT subscription backend both take no others.
+ */
+export const CODEX_REASONING_EFFORT_LEVELS: readonly ReasoningEffortLevel[] = [
+  'minimal', 'low', 'medium', 'high', 'xhigh'
+]
+
+/**
  * Level applied when the user configured none. Equals the fixed budget Halo
  * used before the ladder existed, so an unconfigured model keeps its behavior.
  */

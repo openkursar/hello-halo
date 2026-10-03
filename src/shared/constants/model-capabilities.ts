@@ -9,8 +9,6 @@
  *     correct output-length parameter (`max_completion_tokens` for reasoning
  *     models, `max_tokens` otherwise). OpenAI rejects `max_tokens` on the
  *     o1/o3/o4-mini and gpt-5-thinking families with HTTP 400.
- *   - Reasoning effort ladders: which effort levels an upstream accepts, and
- *     how it is told to stop thinking.
  *
  * Vision resolution order, from a model id alone (data lives in
  * src/shared/data/model-capabilities.json):
@@ -37,7 +35,6 @@ import type {
   ModelCapability,
   ModelCapabilitiesPreset
 } from '../types/model-capabilities'
-import type { ReasoningEffortLevel } from './reasoning-effort'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Preset lookup — shared with ModelCapabilitiesService
@@ -234,89 +231,4 @@ export function isReasoningModelById(modelId: string | undefined | null): boolea
     const next = lower[prefix.length]
     return next === undefined || next === '-' || next === '.'
   })
-}
-
-/** How an upstream expresses reasoning effort on the OpenAI-compatible wire. */
-export interface ReasoningEffortProfile {
-  /** Levels this upstream accepts. An inferred level outside it clamps down. */
-  levels: readonly ReasoningEffortLevel[]
-  /**
-   * Wire value that stops the model from thinking. Absent means the field is
-   * omitted instead, which is how most upstreams are told not to think.
-   */
-  disableValue?: string
-}
-
-/**
- * Ladder assumed for a model with no entry below: the narrow set every
- * OpenAI-compatible endpoint has always accepted.
- *
- * Halo only picks a level itself when the user declared none, and guessing
- * `max` at an endpoint that never heard of it turns a working conversation
- * into an HTTP 400. A user who knows their upstream accepts more sets the
- * level in Model Config, which bypasses this ladder.
- */
-const DEFAULT_REASONING_EFFORT_PROFILE: ReasoningEffortProfile = {
-  levels: ['low', 'medium', 'high']
-}
-
-/**
- * `reasoning_effort` is not part of every GLM model's API — bigmodel.cn only
- * documents it from GLM-5.2 onward. Sending it to an earlier model is sending
- * a field that model's schema does not declare, so those models get no entry
- * (they fall through to {@link DEFAULT_REASONING_EFFORT_PROFILE}'s `levels`,
- * which only matters for a Halo-*inferred* level — see `resolveReasoningEffortValue`)
- * and no `disableValue`, meaning the field is omitted rather than guessed.
- * Their only real thinking toggle is the separate `thinking.type` field,
- * which Halo does not send yet — "thinking off" is a no-op for them today.
- */
-const NO_REASONING_EFFORT_FIELD: ReasoningEffortProfile = { levels: [] }
-
-/**
- * Upstreams that deviate from {@link DEFAULT_REASONING_EFFORT_PROFILE}.
- * Matched like the vision blacklist — lowercase substring, so proxy-prefixed
- * ids (`Pro/zai-org/GLM-5`) still resolve. First match wins, so entries must
- * stay ordered from most to least specific.
- *
- * Deliberately short: an entry here is a claim about a specific upstream's API,
- * and a wrong claim fails as an HTTP 400 the user cannot act on.
- */
-const REASONING_EFFORT_PROFILES: ReadonlyArray<{
-  pattern: string
-  profile: ReasoningEffortProfile
-}> = [
-  // GLM-5.3 and GLM-5.3-FLASH always think: they reject every request that
-  // tries to stop them ("该模型始终思考，不支持关闭思考") and only accept
-  // low/high/max, so a "thinking off" request must still send an effort,
-  // mapped to their lowest level.
-  {
-    pattern: 'glm-5.3',
-    profile: { levels: ['low', 'high', 'max'], disableValue: 'low' }
-  },
-  // GLM-5.2 is the earliest model in the family whose schema documents
-  // `reasoning_effort` at all. Its API silently remaps low/medium -> high and
-  // xhigh -> max, so only the two tiers that are not aliases of another tier
-  // are exposed. `none`/`minimal` both drop the model out of thinking; `none`
-  // is used as the disable value for clarity.
-  {
-    pattern: 'glm-5.2',
-    profile: { levels: ['high', 'max'], disableValue: 'none' }
-  },
-  // GLM-5, GLM-5.1, GLM-5-Turbo: pre-5.2, no reasoning_effort support.
-  { pattern: 'glm-5', profile: NO_REASONING_EFFORT_FIELD },
-  // GLM-4.7, GLM-4.6, GLM-4.5 and their variants: same pre-5.2 restriction.
-  { pattern: 'glm-4', profile: NO_REASONING_EFFORT_FIELD },
-]
-
-/**
- * Effort profile for a wire model id. Used by the openai-compat router, where
- * only the request body's `model` string is available.
- */
-export function reasoningEffortProfileById(
-  modelId: string | undefined | null
-): ReasoningEffortProfile {
-  if (!modelId) return DEFAULT_REASONING_EFFORT_PROFILE
-  const lower = modelId.toLowerCase()
-  return REASONING_EFFORT_PROFILES.find((entry) => lower.includes(entry.pattern))?.profile
-    ?? DEFAULT_REASONING_EFFORT_PROFILE
 }

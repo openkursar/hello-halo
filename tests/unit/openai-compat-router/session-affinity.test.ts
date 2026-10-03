@@ -30,6 +30,7 @@ const convertAnthropicToOpenAIChat = vi.fn()
 const convertAnthropicToOpenAIResponses = vi.fn()
 const convertOpenAIChatToAnthropic = vi.fn()
 const convertOpenAIResponsesToAnthropic = vi.fn()
+const normalizeAnthropicReasoning = vi.fn((...[request]: unknown[]) => ({ request, modified: false }))
 vi.mock('../../../src/main/openai-compat-router/converters', () => ({
   convertAnthropicToOpenAIChat: (...a: unknown[]) => convertAnthropicToOpenAIChat(...a),
   convertAnthropicToOpenAIResponses: (...a: unknown[]) => convertAnthropicToOpenAIResponses(...a),
@@ -53,15 +54,15 @@ vi.mock('../../../src/main/services/proxy-fetch', () => ({
   proxyFetch: (...a: unknown[]) => proxyFetch(...a),
 }))
 
-const applyProviderAdapter = vi.fn(() => null)
+const applyProviderAdapter = vi.fn<unknown[], null>(() => null)
 vi.mock('../../../src/main/openai-compat-router/server/provider-adapters', () => ({
   applyProviderAdapter: (...a: unknown[]) => applyProviderAdapter(...a),
 }))
 
-const getApiTypeFromUrl = vi.fn(() => 'chat_completions')
-const isValidEndpointUrl = vi.fn(() => true)
-const getEndpointUrlError = vi.fn(() => 'bad url')
-const shouldForceStream = vi.fn(() => false)
+const getApiTypeFromUrl = vi.fn<unknown[], string>(() => 'chat_completions')
+const isValidEndpointUrl = vi.fn<unknown[], boolean>(() => true)
+const getEndpointUrlError = vi.fn<unknown[], string>(() => 'bad url')
+const shouldForceStream = vi.fn<unknown[], boolean>(() => false)
 vi.mock('../../../src/main/openai-compat-router/server/api-type', () => ({
   getApiTypeFromUrl: (...a: unknown[]) => getApiTypeFromUrl(...a),
   isValidEndpointUrl: (...a: unknown[]) => isValidEndpointUrl(...a),
@@ -71,14 +72,15 @@ vi.mock('../../../src/main/openai-compat-router/server/api-type', () => ({
 
 // Keep the real pickSessionAffinityHeaders — the drop/restore behavior under
 // test lives there — while stubbing the other utils used by the handler.
-const isNativeAnthropicHost = vi.fn(() => false)
-const normalizeSystemPrompt = vi.fn((request: unknown) => ({ request, modified: false }))
+const isNativeAnthropicHost = vi.fn<unknown[], boolean>(() => false)
+const normalizeSystemPrompt = vi.fn((...[request]: unknown[]) => ({ request, modified: false }))
 vi.mock('../../../src/main/openai-compat-router/utils', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/main/openai-compat-router/utils')>()
   return {
     ...actual,
     isNativeAnthropicHost: (...a: unknown[]) => isNativeAnthropicHost(...a),
     normalizeSystemPrompt: (...a: unknown[]) => normalizeSystemPrompt(...a),
+    normalizeAnthropicReasoning: (...a: unknown[]) => normalizeAnthropicReasoning(...a),
   }
 })
 

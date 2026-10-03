@@ -1,12 +1,12 @@
 /**
  * Reasoning effort → OpenAI-compatible wire values.
  *
- * A level the user declared in Model Config is sent as-is, including values
- * Halo does not recognize: it states what that model accepts, so a new
- * provider level works the day it ships, and a wrong one surfaces the
- * upstream's own error instead of being silently downgraded. A level picked
- * for the session, or one Halo *inferred* from the request, is clamped to what
- * the model is known to accept.
+ * A level picked for the session is forwarded as picked unless the model's
+ * profile says otherwise: upstreams that serve Codex already map the whole
+ * ladder. A level the user declared in Model Config is sent verbatim,
+ * including values Halo does not recognize, so a new provider level works the
+ * day it ships and a wrong one surfaces the upstream's own error. A level Halo
+ * *inferred* from the request is held to what any endpoint accepts.
  */
 
 import {
@@ -15,16 +15,37 @@ import {
   isReasoningEffortLevel,
   type ReasoningEffortSetting,
 } from '../../../shared/constants/reasoning-effort'
-import { reasoningEffortProfileById } from '../../../shared/constants/model-capabilities'
+import {
+  INFERRED_REASONING_EFFORT_LEVELS,
+  forcedThinkingLevel,
+  profileEffort,
+  reasoningEffortProfileById,
+  type ReasoningEffortProfile,
+} from '../../../shared/constants/reasoning-effort-profiles'
 
 export interface AnthropicThinkingConfig {
   type: string
   budget_tokens?: number
 }
 
+export interface ResolvedReasoning {
+  /** Value for `reasoning_effort` / `reasoning.effort`; undefined omits the field. */
+  effort?: string
+  /**
+   * Send `thinking: { type: 'disabled' }` (Chat Completions): thinking is off
+   * and the model's profile stops it through that toggle.
+   */
+  disableThinking: boolean
+}
+
+function resolveOff(profile: ReasoningEffortProfile): ResolvedReasoning {
+  const forced = forcedThinkingLevel(profile)
+  if (forced) return { effort: forced, disableThinking: false }
+  return { effort: profile.disableValue, disableThinking: !!profile.thinkingToggle }
+}
+
 /**
- * Wire value for `reasoning_effort` / `reasoning.effort`, or undefined when
- * the field should be omitted.
+ * Reasoning settings for one request.
  *
  * @param thinking Thinking block of the incoming Anthropic request. Its type
  *        decides whether the model thinks at all; `adaptive` is the mode newer
@@ -37,32 +58,45 @@ export interface AnthropicThinkingConfig {
  *        adaptive block. Anything that is not a ladder level is ignored — it
  *        arrives decoded from the request's key.
  */
+export function resolveReasoning(
+  thinking: AnthropicThinkingConfig | undefined,
+  declared: ReasoningEffortSetting | undefined,
+  modelId: string,
+  picked?: unknown
+): ResolvedReasoning {
+  const profile = reasoningEffortProfileById(modelId)
+
+  if (isReasoningEffortLevel(picked)) {
+    return picked === 'off'
+      ? resolveOff(profile)
+      : { effort: profileEffort(picked, profile), disableThinking: false }
+  }
+
+  const thinkingOff = !thinking || thinking.type === 'disabled' || declared === 'off'
+  if (thinkingOff) return resolveOff(profile)
+
+  if (declared) return { effort: declared, disableThinking: false }
+
+  const inferred = thinking.type === 'enabled'
+    ? inferReasoningEffortFromBudget(thinking.budget_tokens)
+    : 'high'
+
+  if (inferred === 'off') return resolveOff(profile)
+
+  return {
+    effort: clampReasoningEffort(inferred, profile.levels ?? INFERRED_REASONING_EFFORT_LEVELS),
+    disableThinking: false
+  }
+}
+
+/** The effort value alone; see {@link resolveReasoning}. */
 export function resolveReasoningEffortValue(
   thinking: AnthropicThinkingConfig | undefined,
   declared: ReasoningEffortSetting | undefined,
   modelId: string,
   picked?: unknown
 ): string | undefined {
-  const profile = reasoningEffortProfileById(modelId)
-
-  if (isReasoningEffortLevel(picked)) {
-    return picked === 'off'
-      ? profile.disableValue
-      : clampReasoningEffort(picked, profile.levels)
-  }
-
-  const thinkingOff = !thinking || thinking.type === 'disabled' || declared === 'off'
-  if (thinkingOff) return profile.disableValue
-
-  if (declared) return declared
-
-  const inferred = thinking.type === 'enabled'
-    ? inferReasoningEffortFromBudget(thinking.budget_tokens)
-    : 'high'
-
-  if (inferred === 'off') return profile.disableValue
-
-  return clampReasoningEffort(inferred, profile.levels)
+  return resolveReasoning(thinking, declared, modelId, picked).effort
 }
 
 /**

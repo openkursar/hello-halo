@@ -335,12 +335,12 @@ export async function resolveCredentialsForSdk(
   console.debug(`[SDK Config] resolveCredentialsForSdk: provider=${credentials.provider}, model=${credentials.model}, baseUrl=${credentials.baseUrl}`)
 
   if (credentials.delegatedAuth) {
-    return resolveDelegatedAuth(credentials)
+    return resolveDelegatedAuth(credentials, pickedReasoningEffort)
   }
 
   // Experimental: route Anthropic through local router for interceptor coverage
   if (PROXY_ANTHROPIC && credentials.provider === 'anthropic') {
-    return resolveAnthropicPassthrough(credentials)
+    return resolveAnthropicPassthrough(credentials, pickedReasoningEffort)
   }
 
   // ── Original logic (identical to pre-optimization code) ──
@@ -498,12 +498,13 @@ export function computeSessionInputsFingerprint(sdkOptions: Record<string, any>)
  * in a dedicated header instead of the occupied auth channel.
  */
 async function resolveDelegatedAuth(
-  credentials: ApiCredentials
+  credentials: ApiCredentials,
+  pickedReasoningEffort?: ReasoningEffortLevel
 ): Promise<ResolvedSdkCredentials> {
   const router = await ensureOpenAICompatRouter({ debug: false })
 
   const routingConfig = encodeBackendConfig(
-    credentialsToBackendConfig(credentials, { apiType: 'anthropic_passthrough' })
+    credentialsToBackendConfig(credentials, { apiType: 'anthropic_passthrough', pickedReasoningEffort })
   )
 
   let sdkModel = resolveModelId(credentials.model)
@@ -530,14 +531,15 @@ async function resolveDelegatedAuth(
  * Isolated from the main path — only called when PROXY_ANTHROPIC = true.
  */
 async function resolveAnthropicPassthrough(
-  credentials: ApiCredentials
+  credentials: ApiCredentials,
+  pickedReasoningEffort?: ReasoningEffortLevel
 ): Promise<ResolvedSdkCredentials> {
   const router = await ensureOpenAICompatRouter({ debug: false })
   const configUrl = credentials.baseUrl.replace(/\/+$/, '') + '/v1/messages'
 
   // Encode with real wire id; router strips any [1m] suffix before forwarding.
   const anthropicApiKey = encodeBackendConfig(
-    credentialsToBackendConfig(credentials, { url: configUrl, apiType: 'anthropic_passthrough' })
+    credentialsToBackendConfig(credentials, { url: configUrl, apiType: 'anthropic_passthrough', pickedReasoningEffort })
   )
 
   let sdkModel = resolveModelId(credentials.model)

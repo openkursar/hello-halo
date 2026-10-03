@@ -11,7 +11,7 @@ import { persist } from 'zustand/middleware'
 import type { ReasoningEffortLevel } from '../../shared/constants/reasoning-effort'
 
 /** The stops the slider offers, least to most. Engines clamp to their own ladder. */
-export const THINKING_LEVELS = ['off', 'low', 'medium', 'high', 'max'] as const satisfies readonly ReasoningEffortLevel[]
+export const THINKING_LEVELS = ['off', 'low', 'medium', 'high', 'xhigh', 'max'] as const satisfies readonly ReasoningEffortLevel[]
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number]
 
 interface ThinkingLevelState {

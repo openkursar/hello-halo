@@ -380,7 +380,11 @@ describe('ChatGPTProvider', () => {
 
     it('persists only normalized overlay fields and replays hidden models and adapter capabilities offline', async () => {
       proxyFetch.mockResolvedValueOnce(catalogResponse([
-        { slug: 'gpt-6-sol', visibility: 'hide', supports_reasoning_summary_parameter: false, use_responses_lite: true, unused: 'not persisted' },
+        {
+          slug: 'gpt-6-sol', visibility: 'hide', supports_reasoning_summary_parameter: false, use_responses_lite: true,
+          supported_reasoning_levels: [{ effort: 'low', description: 'Fast' }, { effort: 'xhigh', description: 'Deep' }],
+          unused: 'not persisted'
+        },
         { slug: 'remote-only', display_name: 'Remote model', visibility: 'list', priority: -1, input_modalities: ['text'], context_window: 345678 }
       ]))
       const provider = getChatGPTProvider()
@@ -388,6 +392,7 @@ describe('ChatGPTProvider', () => {
       const cache = fresh[CHATGPT_PROVIDER_ID].modelCatalogCache
       expect(cache).toMatchObject({ provider: 'chatgpt', version: 1 })
       expect(cache.entries[0]).not.toHaveProperty('unused')
+      expect(cache.entries[0].supported_reasoning_levels).toEqual(['low', 'xhigh'])
       expect(Number.isFinite(Date.parse(cache.fetchedAt))).toBe(true)
       proxyFetch.mockRejectedValueOnce(new Error('offline'))
       const offline = (await provider.refreshConfig(configWith({ modelCatalogCache: cache }))).data as any
@@ -398,7 +403,7 @@ describe('ChatGPTProvider', () => {
       expect(payload.modelCapabilities['remote-only']).toEqual({ contextWindow: 345678 })
       expect(payload.modelVision['remote-only']).toBe(false)
       expect(payload.modelCatalogCache).toBeUndefined()
-      expect(getCodexModelCapability('gpt-6-sol')).toEqual({ reasoningSummary: false, responsesLite: true })
+      expect(getCodexModelCapability('gpt-6-sol')).toEqual({ reasoningSummary: false, responsesLite: true, reasoningLevels: ['low', 'xhigh'] })
     })
 
     it.each([null, {}, [{ slug: '' }], [{ slug: 123 }]])('uses cached metadata on a malformed remote catalog: %j', async (models) => {

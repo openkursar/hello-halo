@@ -285,18 +285,41 @@ consumers read:
 | `reasoningEffort` | `codex/options.ts` → `model_reasoning_effort` | `minimal` `low` `medium` `high` `xhigh` |
 | `pickedReasoningEffort` | `codex/options.ts` → router key | the picked level alone |
 
-The OpenAI-compat router cannot read a picked level off the wire: Claude Code
-sends a non-Claude model name only `thinking: {type: 'adaptive'}` plus an
-`output_config.effort` the router does not read, and Codex's effort reaches it
-only as "thinking on". So the pick travels in the router key
-(`BackendRequestConfig.pickedReasoningEffort`) next to the Model Config value.
-The Claude path encodes the key before SDK options exist, so each call site
-computes the pick once and hands the same value to both
-`resolveCredentialsForSdk` and `applyReasoningEffort`; Codex encodes its key
-from `sdkOptions.pickedReasoningEffort`. The router's converter
-(`resolveReasoningEffortValue`) takes the pick first, clamped to the model's
-profile (`'off'` → its disable value), then the Model Config value verbatim,
-then a level inferred from the request.
+Neither engine carries a picked level to the wire on its own. Codex's effort
+reaches the router only as "thinking on". Claude Code's V2 session drops
+`--effort`, and it decides a request's thinking shape from a model list frozen
+at its release, so a Claude model newer than that list gets a legacy
+`budget_tokens` block and no effort at all. Every Claude Code engine request is
+routed through the local router (`PROXY_ANTHROPIC`, delegated auth, and the
+OpenAI-compat providers alike), so the router is where the level is applied.
+The pick travels in the router key (`BackendRequestConfig.pickedReasoningEffort`)
+next to the Model Config value. The Claude path encodes the key before SDK
+options exist, so each call site computes the pick once and hands the same
+value to both `resolveCredentialsForSdk` and `applyReasoningEffort`; Codex
+encodes its key from `sdkOptions.pickedReasoningEffort`.
+
+The router reads both wires from one table,
+`shared/constants/reasoning-effort-profiles.ts`. Its default is to forward a
+picked level as is — upstreams that serve Claude Code or Codex already map
+that ladder — and an entry exists only for a model where forwarding is known
+to fail or do nothing: levels it rejects, an off switch it lacks (off then runs
+at its lowest level), or an off switch in another field (`thinking.type` for
+DeepSeek and GLM, `between_tools` for Sonnet 5.5). Precedence on both wires:
+the pick, then the Model Config value verbatim, then a level inferred from the
+request (held to `low`..`high` where the model has no profile ladder).
+
+- OpenAI wire — `converters/reasoning-effort.ts` (`resolveReasoning`) yields
+  `reasoning_effort` / `reasoning.effort` and, for a toggle model switched off,
+  `thinking: {type: 'disabled'}`. The ChatGPT Codex adapter then holds the
+  effort to the levels the account's model catalog lists
+  (`supported_reasoning_levels`), else to the Codex CLI enum.
+- Anthropic wire — `utils/normalize-anthropic-reasoning.ts` reshapes
+  passthrough requests that carry a thinking block (Claude Code's auxiliary
+  calls carry none and are left alone): an adaptive Claude model gets `thinking: {type: 'adaptive',
+  display: 'summarized'}` plus `output_config.effort`; a budget model keeps the
+  engine-sized budget. With no pick and no Model Config value it only repairs a
+  block the model would reject (a legacy budget on an adaptive model becomes
+  adaptive at the level the budget encodes).
 
 Depth is frozen when the engine spawns: `--effort` is a launch argument and
 Codex reads `model_reasoning_effort` at thread start, while the SDK's only
@@ -309,20 +332,19 @@ conversation's own level through `applySessionReasoningEffort` — it must
 resolve the same level the first send will, or the warmed session is rebuilt
 on that send; and a session warmed without a level can never acquire one.
 
-What this does *not* express is switching thinking off: with no `thinking`
-option set, a model whose default is adaptive keeps reasoning, and
-`setMaxThinkingTokens(null)` clears the limit rather than stopping it. A
-send with thinking off therefore only lowers the budget on that path today. Making it a true
-off switch means sending `thinking: { type: 'disabled' }`, which is a
-deliberate behavior change and not part of this contract yet.
+Switching thinking off is enforced by the router, not the engine: with no
+`thinking` option set, a model whose default is adaptive keeps reasoning, and
+`setMaxThinkingTokens(null)` clears the limit rather than stopping it. A picked
+`'off'` reaches the router in the key, which sends each model the off switch
+its profile names. An HTTP send with `thinkingEnabled: false` and no picked
+level still only lowers the budget.
 
 The two engine ladders overlap but neither contains the other, so a level is
 clamped per engine rather than forwarded. These values configure a local
 process, where an out-of-enum value fails as an opaque startup error rather
 than a reportable API error — nothing unrecognized is passed through. The
-OpenAI-compat router is the exception and deliberately forwards a
-user-declared level verbatim, because there the upstream returns an error the
-user can act on.
+router is the exception and forwards levels, because there the upstream
+returns an error the user can act on.
 
 `reasoningEffort` exists only on `ModelCapabilityOverride`, never on a preset:
 a value there is always something the user typed, which is what makes

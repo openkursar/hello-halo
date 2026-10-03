@@ -29,6 +29,7 @@ const convertAnthropicToOpenAIChat = vi.fn()
 const convertAnthropicToOpenAIResponses = vi.fn()
 const convertOpenAIChatToAnthropic = vi.fn()
 const convertOpenAIResponsesToAnthropic = vi.fn()
+const normalizeAnthropicReasoning = vi.fn((...[request]: unknown[]) => ({ request, modified: false }))
 vi.mock('../../../src/main/openai-compat-router/converters', () => ({
   convertAnthropicToOpenAIChat: (...a: unknown[]) => convertAnthropicToOpenAIChat(...a),
   convertAnthropicToOpenAIResponses: (...a: unknown[]) => convertAnthropicToOpenAIResponses(...a),
@@ -78,6 +79,7 @@ vi.mock('../../../src/main/openai-compat-router/utils', async (importOriginal) =
     ...actual,
     isNativeAnthropicHost: (...a: unknown[]) => isNativeAnthropicHost(...a),
     normalizeSystemPrompt: (request: unknown, ...args: unknown[]) => normalizeSystemPrompt(request, ...args),
+    normalizeAnthropicReasoning: (...a: unknown[]) => normalizeAnthropicReasoning(...a),
   }
 })
 
@@ -284,6 +286,24 @@ describe('handleMessagesRequest dispatch', () => {
     const body = proxyFetch.mock.calls[0][1].body
     expect(Buffer.isBuffer(body)).toBe(false)
     expect(body).toBe(JSON.stringify(normalized))
+  })
+
+  it('forwards the reasoning-normalized request instead of the raw body', async () => {
+    const req = anthReq()
+    const reasoned = anthReq({ thinking: { type: 'adaptive' }, output_config: { effort: 'max' } })
+    runInterceptors.mockResolvedValue({ intercepted: false, request: req })
+    normalizeAnthropicReasoning.mockReturnValueOnce({ request: reasoned, modified: true })
+    proxyFetch.mockResolvedValue(fakeResponse({ ok: true, text: '{}' }))
+    const config = baseConfig({
+      apiType: 'anthropic_passthrough',
+      url: 'https://third-party/v1/messages',
+      pickedReasoningEffort: 'max',
+    })
+
+    await handleMessagesRequest(req, config, makeRes() as unknown as ExpressResponse, { rawBody: Buffer.from('RAW-BYTES') })
+
+    expect(normalizeAnthropicReasoning).toHaveBeenCalledWith(req, config)
+    expect(proxyFetch.mock.calls[0][1].body).toBe(JSON.stringify(reasoned))
   })
 })
 

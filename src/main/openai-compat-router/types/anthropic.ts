@@ -155,8 +155,14 @@ export type AnthropicToolChoice =
 // ============================================================================
 
 export interface AnthropicThinkingConfig {
-  type: 'enabled' | 'disabled' | 'adaptive'
+  type: 'enabled' | 'disabled' | 'adaptive' | 'between_tools'
   budget_tokens?: number
+  display?: string
+}
+
+export interface AnthropicOutputConfig {
+  effort?: string
+  [key: string]: unknown
 }
 
 export interface AnthropicRequestMetadata {
@@ -181,6 +187,7 @@ export interface AnthropicRequest {
   tool_choice?: AnthropicToolChoice
   metadata?: AnthropicRequestMetadata
   thinking?: AnthropicThinkingConfig
+  output_config?: AnthropicOutputConfig
 }
 
 // ============================================================================

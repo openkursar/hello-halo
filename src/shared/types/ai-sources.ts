@@ -210,6 +210,8 @@ export interface CodexCatalogEntry {
   context_window?: number
   supports_reasoning_summary_parameter?: boolean
   use_responses_lite?: boolean
+  /** Effort levels the model accepts (the wire's `{ effort }` presets, flattened). */
+  supported_reasoning_levels?: string[]
 }
 
 export interface ModelCatalogCache {

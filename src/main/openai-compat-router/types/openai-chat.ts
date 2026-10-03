@@ -207,6 +207,10 @@ export interface OpenAIChatRequest {
   // Halo does not recognize are forwarded untouched.
   // @see https://platform.openai.com/docs/api-reference/chat/create#reasoning_effort
   reasoning_effort?: string
+
+  // Extended - Thinking switch for upstreams that stop thinking outside the
+  // effort field (DeepSeek, GLM). Sent only to switch it off.
+  thinking?: { type: 'disabled' }
 }
 
 // ============================================================================

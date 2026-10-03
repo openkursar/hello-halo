@@ -8,7 +8,7 @@ import {
   convertAnthropicToolsToOpenAIChat,
   convertAnthropicToolChoiceToOpenAIChat
 } from '../tools'
-import { resolveReasoningEffortValue, isThinkingEffort } from '../reasoning-effort'
+import { resolveReasoning, isThinkingEffort } from '../reasoning-effort'
 import { supportsVisionById, isReasoningModelById } from '../../../../shared/constants/model-capabilities'
 import { buildStreamOptionsIncludeUsage } from './stream-options'
 import { resolveOutputTokenLimit } from './max-tokens'
@@ -80,7 +80,7 @@ export function convertAnthropicToOpenAIChat(
   }
 
   // Convert thinking -> reasoning_effort (top-level string per Chat Completions spec)
-  const reasoningEffort = resolveReasoningEffortValue(
+  const { effort: reasoningEffort, disableThinking } = resolveReasoning(
     anthropicRequest.thinking,
     options?.reasoningEffort,
     anthropicRequest.model,
@@ -88,6 +88,9 @@ export function convertAnthropicToOpenAIChat(
   )
   if (reasoningEffort) {
     openaiRequest.reasoning_effort = reasoningEffort
+  }
+  if (disableThinking) {
+    openaiRequest.thinking = { type: 'disabled' }
   }
 
   // Ensure every assistant message carries the reasoning_content field when

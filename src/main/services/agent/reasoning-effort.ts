@@ -17,6 +17,7 @@
  */
 
 import {
+  CODEX_REASONING_EFFORT_LEVELS,
   DEFAULT_REASONING_EFFORT,
   MIN_ANSWER_TOKENS,
   MIN_THINKING_BUDGET,
@@ -30,11 +31,6 @@ import type { ResolvedModelCapabilities } from './types'
 
 /** Levels `@anthropic-ai/claude-agent-sdk` accepts for its `effort` option. */
 const ANTHROPIC_EFFORT_LEVELS: readonly ReasoningEffortLevel[] = ['low', 'medium', 'high', 'max']
-
-/** Levels Codex accepts for `model_reasoning_effort`. */
-const CODEX_EFFORT_LEVELS: readonly ReasoningEffortLevel[] = [
-  'minimal', 'low', 'medium', 'high', 'xhigh'
-]
 
 /** Codex exposes no way to stop reasoning, so 'off' takes its cheapest level. */
 const CODEX_EFFORT_FOR_OFF = 'low'
@@ -122,7 +118,7 @@ export function resolveAnthropicEffort(
 /** Value for Codex's `model_reasoning_effort` thread config. */
 export function resolveCodexReasoningEffort(effort: ReasoningEffortSetting): string {
   if (effort === 'off') return CODEX_EFFORT_FOR_OFF
-  return clampReasoningEffort(toLevel(effort), CODEX_EFFORT_LEVELS) ?? CODEX_EFFORT_FOR_OFF
+  return clampReasoningEffort(toLevel(effort), CODEX_REASONING_EFFORT_LEVELS) ?? CODEX_EFFORT_FOR_OFF
 }
 
 /**

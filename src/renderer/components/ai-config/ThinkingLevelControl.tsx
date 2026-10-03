@@ -84,6 +84,7 @@ export function ThinkingLevelControl({ value, configured, onChange }: ThinkingLe
     low: t('Low'),
     medium: t('Medium'),
     high: t('High'),
+    xhigh: t('Extra High'),
     max: t('Max'),
   }
 

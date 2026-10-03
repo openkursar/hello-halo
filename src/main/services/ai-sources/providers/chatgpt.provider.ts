@@ -325,6 +325,18 @@ interface TokenSet {
 
 type CatalogModel = CodexCatalogEntry
 
+/**
+ * Effort names from `supported_reasoning_levels`: `{ effort }` presets on the
+ * wire, plain strings once cached. Undefined when absent or empty.
+ */
+function normalizeReasoningLevels(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const levels = value
+    .map((item) => typeof item === 'string' ? item : (item as { effort?: unknown } | null)?.effort)
+    .filter((effort): effort is string => typeof effort === 'string' && !!effort)
+  return levels.length > 0 ? levels : undefined
+}
+
 function normalizeCatalog(value: unknown): CatalogModel[] {
   if (!Array.isArray(value)) throw new Error('Invalid model catalog')
   return value.map((entry: unknown) => {
@@ -344,6 +356,8 @@ function normalizeCatalog(value: unknown): CatalogModel[] {
     if (Array.isArray(raw.input_modalities) && raw.input_modalities.every((item) => typeof item === 'string')) {
       model.input_modalities = raw.input_modalities
     }
+    const reasoningLevels = normalizeReasoningLevels(raw.supported_reasoning_levels)
+    if (reasoningLevels) model.supported_reasoning_levels = reasoningLevels
     return model
   })
 }

@@ -1,9 +1,10 @@
 /**
  * Codex model capabilities, as last reported by that backend's model catalog.
  *
- * Two things the request shape depends on are only knowable from the catalog —
- * whether a model accepts `reasoning.summary`, and whether it requires the
- * Responses-Lite layout — and the catalog is fetched by the AI source provider,
+ * Three things the request shape depends on are only knowable from the catalog —
+ * whether a model accepts `reasoning.summary`, whether it requires the
+ * Responses-Lite layout, and which effort levels it takes — and the catalog is
+ * fetched by the AI source provider,
  * which lives in a different module from the adapter that needs them. The
  * provider writes; the adapter reads; nothing else touches this.
  *
@@ -21,6 +22,8 @@ export interface CodexModelCapability {
   reasoningSummary: boolean
   /** Whether the model requires Responses-Lite request layout. */
   responsesLite: boolean
+  /** Effort levels the model accepts; undefined when the catalog lists none. */
+  reasoningLevels?: readonly string[]
 }
 
 const capabilities = new Map<string, CodexModelCapability>()
@@ -30,6 +33,7 @@ export interface CodexCatalogCapabilities {
   slug?: string
   supports_reasoning_summary_parameter?: boolean
   use_responses_lite?: boolean
+  supported_reasoning_levels?: string[]
 }
 
 /**
@@ -45,7 +49,8 @@ export function setCodexModelCapabilities(models: CodexCatalogCapabilities[]): v
     if (!model?.slug) continue
     capabilities.set(model.slug, {
       reasoningSummary: model.supports_reasoning_summary_parameter !== false,
-      responsesLite: model.use_responses_lite === true
+      responsesLite: model.use_responses_lite === true,
+      reasoningLevels: model.supported_reasoning_levels
     })
   }
 }
