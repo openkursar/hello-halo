@@ -191,6 +191,17 @@ describe('event bursts', () => {
     expect(subscriptions).toHaveLength(1)
   })
 
+  it('lets a query wait out a start still in flight instead of seeing an unwatched space', async () => {
+    writeFileSync(join(tmp, 'a.txt'), '')
+    const starting = watcher.startWatcher('s1', tmp)
+    expect(watcher.queryPaths('s1', '', 10)).toBeNull()
+
+    await watcher.watcherStarted('s1')
+    expect(watcher.queryPaths('s1', '', 10)).not.toBeNull()
+    await starting
+    await expect(watcher.watcherStarted('never-started')).resolves.toBeUndefined()
+  })
+
   it('keeps the space path index current from events', async () => {
     writeFileSync(join(tmp, 'old.txt'), '')
     await watcher.startWatcher('s1', tmp)

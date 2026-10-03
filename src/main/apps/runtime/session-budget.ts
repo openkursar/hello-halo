@@ -4,7 +4,8 @@
  * Every resident chat session (space chat, digital-human chat, IM, team member)
  * is one engine process, so this is the first resource to run out as digital
  * humans multiply. The budget is the configured maximum (Settings, default 10),
- * halved while memory pressure is above normal. The limit is pushed down to the
+ * halved while system memory pressure is above normal. Renderer memory is not
+ * counted: closing engine processes does not shrink the window. The limit is pushed down to the
  * engine, which applies it before creating any new session; automation runs,
  * whose sessions are transient, make room through `admitTransientSession()`.
  *
@@ -14,7 +15,7 @@
  */
 
 import { getConfig, onAgentConfigChange } from '../../foundation/config.service'
-import { getMemoryPressure, onMemoryPressure, type MemoryPressureLevel } from '../../platform/background'
+import { getSystemMemoryPressure, onSystemMemoryPressure, type MemoryPressureLevel } from '../../platform/background'
 import {
   evictIdleSession,
   listResidentSessions,
@@ -32,7 +33,7 @@ let currentLimit: number | null = null
 let disposers: Array<() => void> = []
 
 function currentComputedLimit(): number {
-  return computeResidentSessionLimit(getConfig().agent?.maxResidentSessions, getMemoryPressure())
+  return computeResidentSessionLimit(getConfig().agent?.maxResidentSessions, getSystemMemoryPressure())
 }
 
 /** Evict idle resident sessions beyond `limit`, least recently used first. */
@@ -68,7 +69,7 @@ export function initSessionBudget(): void {
   apply('init')
   disposers = [
     onAgentConfigChange(() => apply('config')),
-    onMemoryPressure((level) => apply(`memory ${level}`)),
+    onSystemMemoryPressure((level) => apply(`system memory ${level}`)),
   ]
 }
 

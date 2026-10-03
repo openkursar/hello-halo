@@ -115,6 +115,12 @@ after three consecutive fallback samples. Escalation is immediate; recovery
 needs three consecutive calmer samples and settles on the highest level among
 them. Sampling runs every 120 s, every 30 s while the level is above normal.
 
+A second level counts available system memory only
+(`getSystemMemoryPressure` / `onSystemMemoryPressure`). The resident engine
+session budget follows it: closing engine processes frees system memory but not
+the window's, so a heavy renderer must not keep that budget lowered. Renderer
+caches and hidden canvas tabs follow the combined level.
+
 Every level change is logged once with its numbers and forwarded to the window
 and remote clients as `app:memory-pressure` `{ level }` (health orchestrator);
 the current level is queried with `health:get-memory-pressure`.

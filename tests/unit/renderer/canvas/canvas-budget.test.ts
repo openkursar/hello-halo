@@ -240,6 +240,43 @@ describe('releasing a view while the user switches to its tab', () => {
   })
 })
 
+describe('a budget pass while the user switches tabs', () => {
+  it('keeps a tab open that the user switched to while the pass was closing it', async () => {
+    const page = await canvasLifecycle.openUrl('https://old.test')
+    await flush()
+    for (let i = 1; i < MAX_OPEN_TABS; i++) await openFile(`/w/${i}.ts`)
+
+    const finishRelease = holdDestroys()
+    await openFile('/w/extra.ts')
+    expect(destroyBrowserView).toHaveBeenCalledTimes(1)
+    await canvasLifecycle.switchTab(page)
+    finishRelease()
+    await flush()
+
+    expect(canvasLifecycle.getTab(page)).toBeDefined()
+    expect(canvasLifecycle.getActiveTabId()).toBe(page)
+    expect(canvasLifecycle.getTab(page)!.browserViewId).toBeDefined()
+  })
+
+  it('does not unload the content of a tab the user switched to while the pass awaited', async () => {
+    await canvasLifecycle.openUrl('https://old.test')
+    await flush()
+    const big = 'a'.repeat(HIDDEN_CONTENT_BUDGET_BYTES)
+    const file = await openFile('/w/big.txt', big)
+    for (let i = 2; i < MAX_OPEN_TABS; i++) await openFile(`/w/${i}.ts`)
+
+    const finishRelease = holdDestroys()
+    await openFile('/w/extra.ts')
+    await canvasLifecycle.switchTab(file)
+    finishRelease()
+    await flush()
+
+    expect(canvasLifecycle.getActiveTabId()).toBe(file)
+    expect(canvasLifecycle.getTab(file)).toMatchObject({ content: big })
+    expect(canvasLifecycle.getTab(file)!.contentUnloaded).toBeFalsy()
+  })
+})
+
 describe('creating a tab\'s browser view', () => {
   it('creates exactly one view when the tab is shown twice while it is being created', async () => {
     let finishCreate: () => void = () => {}

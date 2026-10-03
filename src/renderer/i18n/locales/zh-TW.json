@@ -530,6 +530,7 @@
   "Copy to this workspace": "複製到此工作空間",
   "Copying...": "複製中...",
   "Core capabilities": "核心功能",
+  "Could not add the dropped files": "無法新增拖曳的檔案",
   "Could not apply this action. Please try again.": "無法套用此操作。請再試一次。",
   "Could not apply this change. Your answer and draft are preserved. Check the current status and retry.": "無法套用此變更。您的回答與草稿已保留。請檢查目前狀態並重試。",
   "Could not apply this change. Your draft is retained. Please retry.": "無法套用此變更。您的草稿已保留。請重試。",

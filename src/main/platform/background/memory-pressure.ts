@@ -26,6 +26,12 @@
  *
  * Escalation is immediate; de-escalation needs three consecutive samples below
  * the current level, and then settles on the highest level seen among them.
+ *
+ * Two levels are kept. `getMemoryPressure()` counts both triggers, for memory
+ * the renderer itself holds (canvas tabs, cached conversations).
+ * `getSystemMemoryPressure()` counts available system memory only, for budgets
+ * whose release does not shrink the renderer (resident engine sessions): a
+ * heavy window would otherwise keep that budget lowered without relief.
  */
 
 import type { MemoryPressureLevel } from '../../../shared/types/memory-pressure'
@@ -73,6 +79,8 @@ export class MemoryPressureTracker {
   private belowStreakMax: MemoryPressureLevel = 'normal'
   private fallbackStreak = 0
 
+  constructor(private readonly countRenderer = true) {}
+
   get current(): MemoryPressureLevel {
     return this.level
   }
@@ -82,7 +90,7 @@ export class MemoryPressureTracker {
     this.fallbackStreak = reading.availableSource === 'fallback' ? this.fallbackStreak + 1 : 0
     const trustRatio = reading.availableSource !== 'fallback' || this.fallbackStreak >= FALLBACK_TRUST_SAMPLES
     const byRatio = trustRatio ? levelOfRatio(reading.availableRatio) : 'normal'
-    return higher(byRatio, levelOfRenderer(reading.rendererMb))
+    return this.countRenderer ? higher(byRatio, levelOfRenderer(reading.rendererMb)) : byRatio
   }
 
   /** Feed one reading; returns the resulting level. */
@@ -111,6 +119,25 @@ type PressureListener = (level: MemoryPressureLevel, previous: MemoryPressureLev
 
 const tracker = new MemoryPressureTracker()
 const listeners = new Set<PressureListener>()
+const systemTracker = new MemoryPressureTracker(false)
+const systemListeners = new Set<PressureListener>()
+
+function subscribe(set: Set<PressureListener>, listener: PressureListener): () => void {
+  set.add(listener)
+  return () => {
+    set.delete(listener)
+  }
+}
+
+function notify(set: Set<PressureListener>, level: MemoryPressureLevel, previous: MemoryPressureLevel): void {
+  for (const listener of set) {
+    try {
+      listener(level, previous)
+    } catch (error) {
+      console.error('[MemoryPressure] Listener failed:', error)
+    }
+  }
+}
 
 export function getMemoryPressure(): MemoryPressureLevel {
   return tracker.current
@@ -118,10 +145,17 @@ export function getMemoryPressure(): MemoryPressureLevel {
 
 /** Called with (level, previous) on every level change. Returns an unsubscribe. */
 export function onMemoryPressure(listener: PressureListener): () => void {
-  listeners.add(listener)
-  return () => {
-    listeners.delete(listener)
-  }
+  return subscribe(listeners, listener)
+}
+
+/** The level from available system memory alone (see the header). */
+export function getSystemMemoryPressure(): MemoryPressureLevel {
+  return systemTracker.current
+}
+
+/** Called with (level, previous) on every system-memory level change. Returns an unsubscribe. */
+export function onSystemMemoryPressure(listener: PressureListener): () => void {
+  return subscribe(systemListeners, listener)
 }
 
 /**
@@ -129,21 +163,19 @@ export function onMemoryPressure(listener: PressureListener): () => void {
  * this — it is the single source of resource numbers.
  */
 export function evaluateMemoryPressure(reading: MemoryReading): MemoryPressureLevel {
+  const previousSystem = systemTracker.current
+  const systemLevel = systemTracker.evaluate(reading)
   const previous = tracker.current
   const level = tracker.evaluate(reading)
-  if (level !== previous) {
+  if (level !== previous || systemLevel !== previousSystem) {
     const ratio = reading.availableRatio === null ? 'n/a' : `${Math.round(reading.availableRatio * 100)}%`
     console.warn(
-      `[MemoryPressure] ${previous} -> ${level} (available=${ratio} source=${reading.availableSource} ` +
+      `[MemoryPressure] ${previous} -> ${level}, system ${previousSystem} -> ${systemLevel} ` +
+      `(available=${ratio} source=${reading.availableSource} ` +
       `renderer=${reading.rendererMb === null ? 'n/a' : `${Math.round(reading.rendererMb)}MB`})`
     )
-    for (const listener of listeners) {
-      try {
-        listener(level, previous)
-      } catch (error) {
-        console.error('[MemoryPressure] Listener failed:', error)
-      }
-    }
   }
+  if (systemLevel !== previousSystem) notify(systemListeners, systemLevel, previousSystem)
+  if (level !== previous) notify(listeners, level, previous)
   return level
 }

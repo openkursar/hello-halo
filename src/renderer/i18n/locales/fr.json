@@ -537,6 +537,7 @@
   "Copy to this workspace": "Copier vers cet espace de travail",
   "Copying...": "Copie en cours...",
   "Core capabilities": "Capacités principales",
+  "Could not add the dropped files": "Impossible d'ajouter les fichiers déposés",
   "Could not apply this action. Please try again.": "Impossible d'appliquer cette action. Veuillez réessayer.",
   "Could not apply this change. Your answer and draft are preserved. Check the current status and retry.": "Impossible d'appliquer cette modification. Votre réponse et votre brouillon sont conservés. Vérifiez l'état actuel et réessayez.",
   "Could not apply this change. Your draft is retained. Please retry.": "Impossible d'appliquer cette modification. Votre brouillon est conservé. Veuillez réessayer.",

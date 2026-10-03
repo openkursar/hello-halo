@@ -278,6 +278,7 @@ export function ImChatView({ appId, spaceId, session, clearKey, footerAction }: 
         ) : (
           <div className="h-full">
             <MessageList
+              key={conversationId}
               ref={messageListRef}
               sidePadClassName="px-4"
               conversationId={conversationId}

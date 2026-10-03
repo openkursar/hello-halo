@@ -1,6 +1,6 @@
 /**
- * Session budget: configured maximum (clamped, default 10) halved under memory
- * pressure, pushed to the engine, lowered budgets trimmed right away (idle
+ * Session budget: configured maximum (clamped, default 10) halved under system
+ * memory pressure, pushed to the engine, lowered budgets trimmed right away (idle
  * sessions only, least recently used first), transient runs make room.
  */
 
@@ -24,8 +24,8 @@ vi.mock('../../../../src/main/foundation/config.service', () => ({
   },
 }))
 vi.mock('../../../../src/main/platform/background', () => ({
-  getMemoryPressure: () => state.pressure,
-  onMemoryPressure: (handler: (level: string) => void) => {
+  getSystemMemoryPressure: () => state.pressure,
+  onSystemMemoryPressure: (handler: (level: string) => void) => {
     state.pressureHandlers.push(handler)
     return () => { state.pressureHandlers = state.pressureHandlers.filter((h) => h !== handler) }
   },

@@ -518,7 +518,9 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       if (res.success && res.data) {
         const epochId = (res.data as { epochId: string }).epochId
         await get().loadConversations(teamId)
-        get().selectConversation(epochId)
+        // Selection is per surface: the Teams page's only when it shows this
+        // team. A canvas tab selects in its own view (the caller's onCreated).
+        if (get().currentTeamId === teamId) get().selectConversation(epochId)
         return epochId
       }
       notifyError(i18n.t('Couldn\u2019t start a new session'), (res.error as string) || undefined)
@@ -755,17 +757,23 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       const res = await api.teamSaveCollab(teamId, name)
       if (res.success) {
         await get().loadTeams()
-        if (get().currentTeamId === teamId) {
+        // The ephemeral workbench showed the collaboration's single room
+        // implicitly (it ignores the selection). Saving flips the workbench to
+        // selection-driven routing, so every surface showing this team (the
+        // Teams page or a canvas tab) reselects the room — otherwise the user
+        // lands in the blank new-task state and their conversation "disappears".
+        if (get().currentTeamId === teamId || get().views[teamId]) {
           await get().loadDetail(teamId)
           await get().loadConversations(teamId)
-          // The ephemeral workbench showed the collaboration's single room
-          // implicitly (it ignores the selection). Saving flips the workbench
-          // to selection-driven routing, so without this the user lands in the
-          // blank new-task state and their running conversation "disappears".
-          if (!get().selectedConversationId) {
-            const room = get().conversations.find(c => c.kind === 'collab')
-            if (room) get().selectConversation(room.epochId)
-          }
+        }
+        if (get().currentTeamId === teamId && !get().selectedConversationId) {
+          const room = get().conversations.find(c => c.kind === 'collab')
+          if (room) get().selectConversation(room.epochId)
+        }
+        const view = get().views[teamId]
+        if (view && !view.selectedConversationId) {
+          const room = view.conversations.find(c => c.kind === 'collab')
+          if (room) get().selectViewConversation(teamId, room.epochId)
         }
         return true
       }
@@ -1126,13 +1134,14 @@ export function memberById(detail: TeamDetail | null, appId: string): TeamMember
 }
 
 /**
- * Whether a member (by appId) runs on someone else's machine. Used outside React
- * (e.g. the chat store) to decide whether a team-overlay session's transcript is
- * locally reloadable or only exists as relayed live frames. Reads the current
- * detail snapshot; returns false when the member isn't resolved yet.
+ * Whether a member (by appId) of `teamId` runs on someone else's machine. Used
+ * outside React (e.g. the chat store) to decide whether a team-overlay session's
+ * transcript is locally reloadable or only exists as relayed live frames. Reads
+ * whichever surface has the team loaded (Teams page or a canvas tab); returns
+ * false when the member isn't resolved yet.
  */
-export function isRemoteMemberAppId(appId: string): boolean {
-  const member = memberById(useTeamStore.getState().detail, appId)
+export function isRemoteMemberAppId(teamId: string, appId: string): boolean {
+  const member = memberById(detailOf(useTeamStore.getState(), teamId), appId)
   if (!member) return false
   return isRemoteMember(member)
 }

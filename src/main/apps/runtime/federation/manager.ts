@@ -42,6 +42,7 @@ import type { OutboundBlackboardWrite } from './authority/location-aware-blackbo
 import type { BlackboardWriteRecord } from '../team/blackboard'
 import {
   FEDERATION_PROTOCOL_VERSION,
+  isSameProtocol,
   type ArtifactRef,
   type BlackboardWriteFrame,
   type M2Frame,
@@ -1636,6 +1637,11 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     // a proven identity activates every origin assertion below.
     const sessionIdentity = deps.getSessionIdentity?.(ctx.clientId) ?? null
     const fromNode = resolveFromNode(frame)
+    // A node whose join was refused is not in the office until a join of its is
+    // admitted: drop everything else it sends, so its traffic neither keeps it
+    // looking online nor (re)subscribes it to this node's ctrl feed.
+    const sender = fromNode ?? sessionIdentity
+    if (sender && frame.kind !== 'join-request' && entry.federation.coordinator.isAdmissionRefused(sender)) return
     if (!fromNode) {
       // Feed-sync frames (subscribe/entries/ack/nack) carry no payload fromNode, so
       // attribute them to the sending peer's NODE id — the ctrl-feed producer keys
@@ -1719,6 +1725,14 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     entry.nodeToClient.set(fromNode, ctx.clientId)
     // A direct client session supersedes any earlier gateway path for this node.
     entry.nodeToGateway.delete(fromNode)
+    // A join on another protocol version will be refused (the coordinator
+    // decides and answers); wiring its ctrl feed first would push our wakes to a
+    // node that cannot run them and never returns their completions.
+    if (frame.kind === 'join-request' && !isSameProtocol(frame.pv)) {
+      entry.ctrlFeed?.dropPeer(fromNode)
+      ;(entry.federation.link as LanMeshLink).deliver(fromNode, frame)
+      return
+    }
     // Reliable ctrl-plane: consume this peer's ctrl feed so its turn-completes
     // arrive reliably. A (re)join restarts the stream from our cursor; any other
     // frame only makes sure a subscription exists — re-subscribing on every frame

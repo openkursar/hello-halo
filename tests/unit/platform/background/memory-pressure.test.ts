@@ -3,7 +3,7 @@
  * after three calmer samples, and distrust of a lone fallback reading.
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { MemoryPressureTracker, type MemoryReading } from '../../../../src/main/platform/background/memory-pressure'
 
 const reading = (availableRatio: number | null, rendererMb: number | null = 300, source: MemoryReading['availableSource'] = 'kernel'): MemoryReading =>
@@ -23,6 +23,38 @@ describe('MemoryPressureTracker.classify', () => {
     [0.1, 1600, 'critical'],
   ] as const)('available=%s renderer=%sMB → %s', (ratio, renderer, expected) => {
     expect(new MemoryPressureTracker().classify(reading(ratio, renderer))).toBe(expected)
+  })
+})
+
+describe('system-only tracker', () => {
+  it('ignores renderer memory and still follows available system memory', () => {
+    const t = new MemoryPressureTracker(false)
+    expect(t.classify(reading(0.5, 1600))).toBe('normal')
+    expect(t.classify(reading(0.1, 300))).toBe('low')
+    expect(t.classify(reading(0.05, 2000))).toBe('critical')
+  })
+})
+
+describe('process-wide levels', () => {
+  it('a heavy renderer raises the combined level but not the system level', async () => {
+    const mod = await import('../../../../src/main/platform/background/memory-pressure')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const combined: string[] = []
+    const system: string[] = []
+    const offCombined = mod.onMemoryPressure((level) => combined.push(level))
+    const offSystem = mod.onSystemMemoryPressure((level) => system.push(level))
+
+    mod.evaluateMemoryPressure(reading(0.5, 1200))
+    expect(mod.getMemoryPressure()).toBe('low')
+    expect(mod.getSystemMemoryPressure()).toBe('normal')
+
+    mod.evaluateMemoryPressure(reading(0.05, 1200))
+    expect(combined).toEqual(['low', 'critical'])
+    expect(system).toEqual(['critical'])
+
+    offCombined()
+    offSystem()
+    warn.mockRestore()
   })
 })
 

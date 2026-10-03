@@ -21,7 +21,9 @@ export { setDaemonStealthInjector } from './daemon-browser'
 export {
   evaluateMemoryPressure,
   getMemoryPressure,
+  getSystemMemoryPressure,
   onMemoryPressure,
+  onSystemMemoryPressure,
 } from './memory-pressure'
 export type { MemoryPressureLevel, MemoryReading } from './memory-pressure'
 import type {

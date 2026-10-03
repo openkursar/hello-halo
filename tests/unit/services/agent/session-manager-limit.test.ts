@@ -123,6 +123,29 @@ describe('resident session limit', () => {
     expect(v2Sessions.size).toBe(2)
   })
 
+  it('never evicts an idle session whose background task has not reported back', async () => {
+    let tasksRunning = true
+    createSession.mockResolvedValueOnce(fakeSession())
+    startConsumer.mockReturnValueOnce({
+      isRunning: true,
+      getActiveSessionState: () => null,
+      getTeamLifecycleThoughts: () => [],
+      hasRunningTasks: () => tasksRunning,
+      stop: vi.fn(),
+    })
+    await getOrCreateV2Session('space', 'building', { systemPrompt: 'p', model: 'm' }, undefined, undefined, {} as never)
+    v2Sessions.get('building')!.lastUsedAt = 1
+    await resident('idle', 2)
+    setResidentSessionLimit(2)
+
+    await resident('new', 3)
+    expect([...v2Sessions.keys()].sort()).toEqual(['building', 'new'])
+    expect(listResidentSessions().find((s) => s.conversationId === 'building')?.busy).toBe(true)
+
+    tasksRunning = false
+    expect(evictIdleSession('building', 'test')).toBe(true)
+  })
+
   it('listResidentSessions reports busy state; evictIdleSession refuses busy sessions', async () => {
     await resident('idle', 1)
     await resident('busy', 2)

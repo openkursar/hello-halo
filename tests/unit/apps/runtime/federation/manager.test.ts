@@ -29,6 +29,7 @@ import {
   migrations as fedMigrations,
 } from '../../../../../src/main/apps/federation/migrations'
 import { TeamStore } from '../../../../../src/main/apps/team/store'
+import { DEFAULT_OFFICE_SCOPE } from '../../../../../src/main/apps/federation/types'
 import {
   MIGRATION_NAMESPACE as TEAM_NS,
   migrations as teamMigrations,
@@ -36,6 +37,8 @@ import {
 import { createFederationManager } from '../../../../../src/main/apps/runtime/federation/manager'
 import { createFederation } from '../../../../../src/main/apps/runtime/federation/index'
 import { LanMeshLink } from '../../../../../src/main/apps/runtime/federation/lan-mesh-provider'
+import { FEDERATION_PROTOCOL_VERSION } from '../../../../../src/main/apps/runtime/federation/protocol-m2'
+import { isFeedSyncFrame } from '../../../../../src/main/apps/runtime/federation/log/types'
 import type {
   FederationMessage,
   JoinRequest,
@@ -78,7 +81,7 @@ describe('FederationManager (host role, faked WS hop)', () => {
    */
   function wireTwoNodes(opts?: { verify?: (token: string) => OfficeCredentialLike | null }) {
     const verify =
-      opts?.verify ?? ((token: string) => (token === VALID_TOKEN ? { officeId: OFFICE } : null))
+      opts?.verify ?? ((token: string) => (token === VALID_TOKEN ? { officeId: OFFICE, scope: DEFAULT_OFFICE_SCOPE } : null))
 
     // B's inbound frames (host → joiner), captured for assertions.
     const bReceived: FederationMessage[] = []
@@ -228,6 +231,32 @@ describe('FederationManager (host role, faked WS hop)', () => {
     expect(onGrant).not.toHaveBeenCalled()
     expect(federationStore.getNode(OFFICE, NODE_B)).toBeNull()
     expect(teamStore.listMembersByTeam(OFFICE)).toHaveLength(0)
+  })
+
+  it('a node refused on another protocol version is not fed wakes and its heartbeats do not count', () => {
+    const { hostManager, bLink, bReceived } = wireTwoNodes()
+    joinFromB(bLink)
+    const seenBefore = federationStore.getNode(OFFICE, NODE_B)!.lastSeen
+    bReceived.length = 0
+
+    hostManager.handleHostInbound({
+      clientId: B_CLIENT_ID,
+      officeId: OFFICE,
+      frame: {
+        kind: 'join-request', officeId: OFFICE, fromNode: NODE_B, identityId: 'identity-b', displayName: 'Node B',
+        credentialToken: VALID_TOKEN, bringMembers: [], pv: FEDERATION_PROTOCOL_VERSION - 1,
+      },
+    })
+    expect(bReceived.map((f) => f.kind)).toEqual(['join-reject'])
+    expect(bReceived.some((f) => isFeedSyncFrame(f))).toBe(false)
+
+    hostManager.handleHostInbound({
+      clientId: B_CLIENT_ID,
+      officeId: OFFICE,
+      frame: { kind: 'heartbeat', officeId: OFFICE, fromNode: NODE_B, ts: seenBefore + 60_000 },
+    })
+    expect(federationStore.getNode(OFFICE, NODE_B)!.lastSeen).toBe(seenBefore)
+    expect(bReceived.some((f) => isFeedSyncFrame(f))).toBe(false)
   })
 
   it('drops an inbound frame for an unhosted office without throwing', () => {

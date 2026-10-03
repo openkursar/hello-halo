@@ -38,6 +38,7 @@ import {
   MAX_OPEN_TABS,
 } from '../../shared/constants/canvas-budget'
 import { planCanvasBudget, type CanvasBudgetLimits } from './canvas-budget'
+import { holdArtifactSpace } from './artifact-space-holds'
 
 // ============================================
 // Types
@@ -401,6 +402,11 @@ class CanvasLifecycle {
 
   // Track which space the current tabs belong to
   private currentSpaceId: string | null = null
+  /**
+   * Keeps the space's watcher alive while a tab shows one of its files, so
+   * open files refresh and detect disk conflicts even with the file tree closed.
+   */
+  private spaceHold: { spaceId: string; release: () => void } | null = null
 
   // Container bounds getter (set by BrowserViewer)
   private containerBoundsGetter: (() => DOMRect | null) | null = null
@@ -547,6 +553,8 @@ class CanvasLifecycle {
 
     // Destroy all browser views
     this.closeAll()
+    this.spaceHold?.release()
+    this.spaceHold = null
 
     console.log('[CanvasLifecycle] Destroyed')
   }
@@ -1180,11 +1188,12 @@ class CanvasLifecycle {
 
     let closed = 0
     for (const tabId of plan.close) {
-      if (tabId === this.activeTabId || !this.tabs.has(tabId)) continue
-      await this.closeTab(tabId)
-      if (!this.tabs.has(tabId)) closed++
+      if (await this.closeTabForBudget(tabId)) closed++
     }
     for (const tabId of plan.unloadContent) {
+      // Re-checked here: earlier awaits in this pass may have let the user switch to or edit it.
+      const tab = this.tabs.get(tabId)
+      if (!tab || tabId === this.activeTabId || tab.isDirty || tab.contentUnloaded) continue
       this.patchTab(tabId, { content: undefined, bytes: undefined, contentUnloaded: true })
     }
     for (const tabId of plan.releaseView) {
@@ -1200,6 +1209,28 @@ class CanvasLifecycle {
       console.log(`[CanvasLifecycle] Closed ${closed} least recently used tab(s) over the ${MAX_OPEN_TABS}-tab limit`)
       this.budgetEvictionCallbacks.forEach(cb => cb({ closedTabs: closed, limit: MAX_OPEN_TABS }))
     }
+  }
+
+  /**
+   * Closes a tab the budget planned to close, unless the user switched to or
+   * edited it while this pass awaited. A browser view is detached before it is
+   * released, so a switch during the release recreates the view and the tab
+   * stays open. Returns whether the tab was closed.
+   */
+  private async closeTabForBudget(tabId: string): Promise<boolean> {
+    const untouched = () => {
+      const tab = this.tabs.get(tabId)
+      return !!tab && tabId !== this.activeTabId && !tab.isDirty
+    }
+    if (!untouched()) return false
+    const tab = this.tabs.get(tabId)!
+    if (tab.browserViewId) {
+      this.patchTab(tabId, { browserViewId: undefined, browserViewOwned: undefined })
+      await this.releaseBrowserView(tab)
+      if (!untouched()) return false
+    }
+    await this.closeTab(tabId)
+    return !this.tabs.has(tabId)
   }
 
   setMemoryPressure(level: MemoryPressureLevel): void {
@@ -1742,6 +1773,7 @@ class CanvasLifecycle {
     }
 
     this.currentSpaceId = spaceId
+    this.syncSpaceHold()
     return false
   }
 
@@ -1824,7 +1856,23 @@ class CanvasLifecycle {
     this.tabsSnapshot = null
     this.tabListSnapshot = this.getTabs()
     const tabs = this.tabListSnapshot
+    this.syncSpaceHold()
     this.tabListChangeCallbacks.forEach(cb => cb(tabs))
+  }
+
+  private syncSpaceHold(): void {
+    let wanted: string | null = null
+    if (this.currentSpaceId) {
+      for (const tab of this.tabs.values()) {
+        if (tab.path) {
+          wanted = this.currentSpaceId
+          break
+        }
+      }
+    }
+    if (this.spaceHold?.spaceId === wanted) return
+    this.spaceHold?.release()
+    this.spaceHold = wanted ? { spaceId: wanted, release: holdArtifactSpace(wanted) } : null
   }
 
   private notifyActiveTabChange(): void {

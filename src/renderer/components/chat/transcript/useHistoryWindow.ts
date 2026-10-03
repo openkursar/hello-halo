@@ -165,6 +165,16 @@ export function rowIndexAt(first: number, last: number, bottomOf: (index: number
   return lo
 }
 
+/**
+ * Whether rows retired from the top while following the end are on screen:
+ * the top sentinel (right above the first live row) sits below the viewport's
+ * top edge. A reader parked at the top then sees placeholders; a reader at the
+ * end does not, and must not be moved.
+ */
+export function retiredRowsOnScreen(range: LiveRange, sentinelBottom: number | null, viewTop: number): boolean {
+  return range.liveEnd === null && range.liveStart > range.start && sentinelBottom !== null && sentinelBottom > viewTop
+}
+
 /** Distance from the end that counts as "at the end" (the follower re-attaches at 2 px). */
 const AT_END_PX = 24
 
@@ -390,6 +400,15 @@ export function useHistoryWindow(
       cancelAnimationFrame(recheckFrame.current)
       recheckFrame.current = requestAnimationFrame(() => {
         if (inRange(endSentinel, 'bottom')) loadNewer()
+      })
+    } else if (liveStart > start && scroller) {
+      // Following the end retires the oldest live rows as new ones arrive; the
+      // top sentinel stayed in range, so its observer does not fire again.
+      cancelAnimationFrame(recheckFrame.current)
+      recheckFrame.current = requestAnimationFrame(() => {
+        const range = currentRef.current
+        const sentinelBottom = sentinel?.getBoundingClientRect().bottom ?? null
+        if (retiredRowsOnScreen(range, sentinelBottom, scroller.getBoundingClientRect().top)) loadOlder()
       })
     }
 

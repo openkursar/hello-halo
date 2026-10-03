@@ -129,9 +129,10 @@
 ## 5. Security boundaries found on the performance path
 
 - ⚙ Untrusted HTML never runs in the app origin: no `allow-same-origin` on a srcdoc frame. Files
-  preview in `halo-preview://` (own site, own CSP, confined to the file's directory after
-  `realpath`, no dot-files, refused for the filesystem root / home / Halo data roots,
-  `connect-src 'self'`); generated content without a file uses an opaque srcdoc sandbox.
+  inside a space preview in `halo-preview://` (own site, own CSP, confined to the file's directory
+  after `realpath`, no dot-files, refused for the filesystem root / home / Halo data roots,
+  `connect-src 'self'`); files outside every space and generated content use an opaque srcdoc
+  sandbox, whose script cannot read sibling files.
 - `halo-file:` stays out of the app CSP's `connect-src`/`frame-src`/`script-src`, stays an
   unprivileged scheme, and its documents are served inert (`CSP: sandbox`). A scheme that serves
   files maps opaque tokens to roots registered by main; it never derives a root from the URL.

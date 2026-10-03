@@ -426,6 +426,15 @@ export function refreshIgnoreRules(spaceId: string, rootPath: string): void {
 }
 
 /**
+ * Settles once an in-flight start of `spaceId` has finished, whether or not it
+ * succeeded. Messages are handled concurrently, so a query sent right after
+ * `init-space` must wait here or it sees an unwatched space.
+ */
+export async function watcherStarted(spaceId: string): Promise<void> {
+  await startingWatchers.get(spaceId)?.catch(() => undefined)
+}
+
+/**
  * Best matches for a file query in a watched space; the first query starts
  * building the space's index (results are partial while `indexing`). Null for
  * a space that is not watched.

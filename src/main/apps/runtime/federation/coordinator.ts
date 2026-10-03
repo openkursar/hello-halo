@@ -281,6 +281,12 @@ export interface FederationCoordinator {
    * The throttled refresh during a run uses this.
    */
   refreshRoster(): void
+  /**
+   * Host role: whether `nodeId`'s latest join-request was refused and it has
+   * not been admitted since. Such a node is not a member of the live office:
+   * its frames other than a fresh join-request are not to be acted on.
+   */
+  isAdmissionRefused(nodeId: NodeId): boolean
 }
 
 export function createFederationCoordinator(
@@ -810,6 +816,10 @@ export function createFederationCoordinator(
   function handleHeartbeat(fromNode: NodeId, ts: number): void {
     const node = federationStore.getNode(officeId, fromNode)
     if (!node) return
+    // A refused node (e.g. on another protocol version) keeps its socket and
+    // heartbeats; counting them would keep it "online" and route wakes to it.
+    // Its silence then takes the normal suspect → offline path.
+    if (!lastJoinRequest && rejectedJoinNodes.has(fromNode)) return
 
     // Once confirmed-offline, a bare heartbeat must NOT silently revive the
     // node — recovery requires a fresh join handshake (the node may hold stale
@@ -1347,5 +1357,6 @@ export function createFederationCoordinator(
     getPresence: snapshot,
     broadcastRoster,
     refreshRoster,
+    isAdmissionRefused: (nodeId) => rejectedJoinNodes.has(nodeId),
   }
 }

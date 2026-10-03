@@ -2,10 +2,11 @@
  * HTML Viewer - HTML preview with source toggle
  *
  * Features:
- * - Live preview isolated from the app: on the desktop the file is served
- *   from its own origin (halo-preview://, an out-of-process frame whose
- *   relative URLs resolve in the file's directory and which may use https:
- *   CDNs); without a local file it is a srcdoc in an opaque-origin sandbox.
+ * - Live preview isolated from the app: on the desktop a file inside a space
+ *   is served from its own origin (halo-preview://, an out-of-process frame
+ *   whose relative URLs resolve in the file's directory and which may use
+ *   https: CDNs); any other file, or no file, is a srcdoc in an opaque-origin
+ *   sandbox (main refuses the origin and the viewer falls back).
  *   Either way page script cannot reach the app window, its preload API or
  *   its storage.
  * - Toggle between preview and source view

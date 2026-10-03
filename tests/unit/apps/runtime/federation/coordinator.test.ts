@@ -607,6 +607,27 @@ describe('FederationCoordinator', () => {
       expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('online')
     })
 
+    it('a node refused on another protocol version stops counting as online until it rejoins', () => {
+      const { coordinator } = makeHost()
+      joinBob()
+      expect(coordinator.isAdmissionRefused(BOB)).toBe(false)
+
+      hub.deliver(BOB, HOST, makeJoinRequest({ pv: FEDERATION_PROTOCOL_VERSION - 1 }))
+      expect(coordinator.isAdmissionRefused(BOB)).toBe(true)
+
+      // Its socket stays up and keeps heartbeating; silence still runs its course.
+      clock += SUSPECT_MS + 1
+      hub.deliver(BOB, HOST, { kind: 'heartbeat', officeId: OFFICE, fromNode: BOB, ts: clock })
+      coordinator.sweepPresence()
+      expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('suspect')
+
+      // Updating and rejoining on the same version admits it again.
+      hub.deliver(BOB, HOST, makeJoinRequest({ pv: FEDERATION_PROTOCOL_VERSION }))
+      expect(coordinator.isAdmissionRefused(BOB)).toBe(false)
+      hub.deliver(BOB, HOST, { kind: 'heartbeat', officeId: OFFICE, fromNode: BOB, ts: clock })
+      expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('online')
+    })
+
     it('recovers suspect→online on a heartbeat (jitter absorbed, no offline)', () => {
       const { coordinator } = makeHost()
       const carol = recordingPeer(hub, CAROL)

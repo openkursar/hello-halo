@@ -288,7 +288,10 @@ on a re-join, including the one at startup, as an `update-required` office
 status). A join that carries no version at all is admitted: every socket-borne
 join sets one, so only an in-process link omits it. `isSameProtocol` in
 `protocol-m2.ts` is the single place where this decision is made. Keep the gate
-there, and keep it small.
+there, and keep it small. A refused node that keeps its socket open is not in
+the office until a join of its is admitted: the host drops its other frames
+(heartbeats included, so it goes suspect → offline as usual) and never wires
+its ctrl feed, so no wake is pushed to a node that cannot answer it.
 
 This holds because federation ships only on internal experience builds whose
 users upgrade together. A breaking wire or semantic change ships by bumping the

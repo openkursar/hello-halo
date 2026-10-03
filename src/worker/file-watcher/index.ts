@@ -21,6 +21,7 @@ import {
   stopAll,
   refreshIgnoreRules,
   queryPaths,
+  watcherStarted,
   setOnEventsCallback,
   setOnOverflowCallback,
   setOnErrorCallback
@@ -89,6 +90,7 @@ async function handleMessage(msg: MainToWorkerMessage): Promise<void> {
       }
 
       case 'query-files': {
+        await watcherStarted(msg.spaceId)
         send({
           type: 'query-result',
           requestId: msg.requestId,

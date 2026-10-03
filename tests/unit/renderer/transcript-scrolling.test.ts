@@ -9,7 +9,7 @@ import { join } from 'path'
  */
 
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { windowStartAfterCountChange, pageUp, pageDown, liveAround, liveAtEnd, liveRangeAfterKeysChange, recoverViewport, rowIndexAt, type LiveRange } from '../../../src/renderer/components/chat/transcript/useHistoryWindow'
+import { windowStartAfterCountChange, pageUp, pageDown, liveAround, liveAtEnd, liveRangeAfterKeysChange, recoverViewport, rowIndexAt, retiredRowsOnScreen, type LiveRange } from '../../../src/renderer/components/chat/transcript/useHistoryWindow'
 import { estimatedRowHeight, transcriptRowClass } from '../../../src/renderer/components/chat/transcript/row'
 import {
   captureTranscriptPosition,
@@ -249,6 +249,32 @@ describe('viewport that jumped past the live rows', () => {
 
   it('with no row under the viewport and newer rows retired, goes to the end', () => {
     expect(recoverViewport({ start: 0, liveStart: 0, liveEnd: 300 }, 2000, view({}), CAP)).toEqual({ start: 0, liveStart: 1700, liveEnd: null })
+  })
+})
+
+describe('rows retired from the top while following the end', () => {
+  const following: LiveRange = { start: 0, liveStart: 12, liveEnd: null }
+
+  it('come back when the reader is parked on them', () => {
+    // The sentinel above the first live row is 400 px into the viewport.
+    expect(retiredRowsOnScreen(following, 500, 100)).toBe(true)
+  })
+
+  it('stay retired for a reader at the end, or when nothing is retired', () => {
+    expect(retiredRowsOnScreen(following, -3000, 100)).toBe(false)
+    expect(retiredRowsOnScreen({ start: 0, liveStart: 0, liveEnd: null }, 500, 100)).toBe(false)
+    expect(retiredRowsOnScreen(following, null, 100)).toBe(false)
+  })
+
+  it('are left to the bottom sentinel once the window stopped following the end', () => {
+    expect(retiredRowsOnScreen({ start: 0, liveStart: 12, liveEnd: 40 }, 500, 100)).toBe(false)
+  })
+
+  it('arise when appends push a capped window that follows the end', () => {
+    const keys = Array.from({ length: 11 }, (_, i) => `k${i}`)
+    const next = liveRangeAfterKeysChange({ start: 0, liveStart: 0, liveEnd: null, count: 10, firstKey: 'k0' }, keys, 40, 5)
+    expect(next).toMatchObject({ start: 0, liveStart: 6, liveEnd: null })
+    expect(retiredRowsOnScreen(next, 200, 100)).toBe(true)
   })
 })
 

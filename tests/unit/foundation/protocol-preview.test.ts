@@ -57,6 +57,9 @@ beforeAll(() => {
 
 afterAll(() => rmSync(base, { recursive: true, force: true }))
 
+/** A scope where the test tree is a space and nothing is protected. */
+const inSpace = () => ({ protectedDirs: [], siteDirs: [base] })
+
 describe('resolvePreviewFile', () => {
   it('serves files in the tree', () => {
     expect(resolvePreviewFile(site, '/index.html')).toBe(join(site, 'index.html'))
@@ -95,14 +98,14 @@ describe('preview origin', () => {
   const serve = (url: string) => handlers.get('halo-preview')!(new Request(url))
 
   it('opens a fresh host per preview, pointing at the file', () => {
-    const a = openPreview(join(site, 'index.html'), [])
-    const b = openPreview(join(site, 'index.html'), [])
+    const a = openPreview(join(site, 'index.html'), inSpace())
+    const b = openPreview(join(site, 'index.html'), inSpace())
     expect(a.url).toMatch(/^halo-preview:\/\/[0-9a-f]{32}\/index\.html$/)
     expect(a.host).not.toBe(b.host)
   })
 
   it('serves the file with the preview policy and no caching', async () => {
-    const { url } = openPreview(join(site, 'index.html'), [])
+    const { url } = openPreview(join(site, 'index.html'), inSpace())
     const res = await serve(url)
     expect(res.status).toBe(200)
     expect(await res.text()).toBe('<p>hi</p>')
@@ -111,7 +114,7 @@ describe('preview origin', () => {
   })
 
   it('refuses paths outside its directory and hosts it never opened or already closed', async () => {
-    const { host } = openPreview(join(site, 'index.html'), [])
+    const { host } = openPreview(join(site, 'index.html'), inSpace())
     expect((await serve(`halo-preview://${host}/escape/secret.txt`)).status).toBe(404)
     expect((await serve(`halo-preview://${'0'.repeat(32)}/index.html`)).status).toBe(404)
     closePreview(host)
@@ -119,7 +122,7 @@ describe('preview origin', () => {
   })
 
   it('only answers reads', async () => {
-    const { host } = openPreview(join(site, 'index.html'), [])
+    const { host } = openPreview(join(site, 'index.html'), inSpace())
     const res = await handlers.get('halo-preview')!(new Request(`halo-preview://${host}/index.html`, { method: 'POST', body: 'x' }))
     expect(res.status).toBe(405)
   })
@@ -140,7 +143,7 @@ describe('preview origin', () => {
   })
 
   it('serves nothing hidden, even when asked through the host', async () => {
-    const { host } = openPreview(join(site, 'index.html'), [])
+    const { host } = openPreview(join(site, 'index.html'), inSpace())
     for (const p of ['/.ssh/id_rsa', '/.env', '/visible-ssh/id_rsa']) {
       expect((await serve(`halo-preview://${host}${p}`)).status, p).toBe(404)
     }
@@ -148,14 +151,14 @@ describe('preview origin', () => {
 
   it('does not open a hidden file as the preview page', () => {
     writeFileSync(join(site, '.page.html'), '<p>')
-    expect(() => openPreview(join(site, '.page.html'), [])).toThrow(/Hidden/)
+    expect(() => openPreview(join(site, '.page.html'), inSpace())).toThrow(/Hidden/)
   })
 })
 
 describe('preview storage', () => {
   it("erases the page's storage when its preview closes, once", () => {
     clearStorageData.mockClear()
-    const { host } = openPreview(join(site, 'index.html'), [])
+    const { host } = openPreview(join(site, 'index.html'), inSpace())
     closePreview(host)
     closePreview(host)
     expect(clearStorageData).toHaveBeenCalledTimes(1)
@@ -168,10 +171,10 @@ describe('preview storage', () => {
   })
 
   it('erases the storage of previews dropped by the open-preview cap', () => {
-    const first = openPreview(join(site, 'index.html'), [])
+    const first = openPreview(join(site, 'index.html'), inSpace())
     clearStorageData.mockClear()
     const opened = [first.host]
-    for (let i = 0; i < 64; i++) opened.push(openPreview(join(site, 'index.html'), []).host)
+    for (let i = 0; i < 64; i++) opened.push(openPreview(join(site, 'index.html'), inSpace()).host)
     expect(clearStorageData).toHaveBeenCalledWith(expect.objectContaining({ origin: `halo-preview://${first.host}` }))
     for (const host of opened) closePreview(host)
   })
@@ -179,7 +182,7 @@ describe('preview storage', () => {
   it('keeps closing when clearing fails', async () => {
     const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     clearStorageData.mockRejectedValueOnce(new Error('busy'))
-    const { host } = openPreview(join(site, 'index.html'), [])
+    const { host } = openPreview(join(site, 'index.html'), inSpace())
     expect(() => closePreview(host)).not.toThrow()
     await new Promise(r => setTimeout(r, 0))
     expect(spy).toHaveBeenCalled()
@@ -188,50 +191,72 @@ describe('preview storage', () => {
 })
 
 describe('which directories may be served', () => {
-  // Paths only; nothing here touches the disk except the last test.
+  // Paths only; nothing here touches the disk except the last tests.
   const home = '/fake/users/me'
   const dataDir = join(home, '.halo')
   const userData = join(home, 'Library', 'Application Support', 'halo')
   const protectedDirs = [home, dataDir, userData]
+  const anywhere = { protectedDirs, siteDirs: ['/'] }
+  const only = (dirs: string[]) => ({ protectedDirs: dirs, siteDirs: ['/'] })
 
   it('refuses the filesystem root', () => {
-    expect(isPreviewRootAllowed('/', protectedDirs)).toBe(false)
+    expect(isPreviewRootAllowed('/', anywhere)).toBe(false)
   })
 
   it('refuses the home directory and every ancestor of it', () => {
-    expect(isPreviewRootAllowed(home, protectedDirs)).toBe(false)
-    expect(isPreviewRootAllowed(join(home, '..'), protectedDirs)).toBe(false)
-    expect(isPreviewRootAllowed(dirname(dirname(home)), protectedDirs)).toBe(false)
+    expect(isPreviewRootAllowed(home, anywhere)).toBe(false)
+    expect(isPreviewRootAllowed(join(home, '..'), anywhere)).toBe(false)
+    expect(isPreviewRootAllowed(dirname(dirname(home)), anywhere)).toBe(false)
   })
 
   it('refuses a directory that contains the Halo data or app-data directory', () => {
-    expect(isPreviewRootAllowed(join(home, 'Library'), [userData])).toBe(false)
-    expect(isPreviewRootAllowed(join(home, 'Library', 'Application Support'), [userData])).toBe(false)
-    expect(isPreviewRootAllowed(dataDir, [dataDir])).toBe(false)
+    expect(isPreviewRootAllowed(join(home, 'Library'), only([userData]))).toBe(false)
+    expect(isPreviewRootAllowed(join(home, 'Library', 'Application Support'), only([userData]))).toBe(false)
+    expect(isPreviewRootAllowed(dataDir, only([dataDir]))).toBe(false)
   })
 
   it('allows project directories below home and directories beside it', () => {
-    expect(isPreviewRootAllowed(join(home, 'projects', 'site'), protectedDirs)).toBe(true)
-    expect(isPreviewRootAllowed(join(home, 'Documents'), protectedDirs)).toBe(true)
-    expect(isPreviewRootAllowed(join(dirname(home), 'home-other'), protectedDirs)).toBe(true)
+    expect(isPreviewRootAllowed(join(home, 'projects', 'site'), anywhere)).toBe(true)
+    expect(isPreviewRootAllowed(join(home, 'Documents'), anywhere)).toBe(true)
+    expect(isPreviewRootAllowed(join(dirname(home), 'home-other'), anywhere)).toBe(true)
   })
 
   it("allows Halo's own artifact folder, which lives inside the data directory", () => {
-    expect(isPreviewRootAllowed(join(dataDir, 'temp', 'artifacts'), protectedDirs)).toBe(true)
+    expect(isPreviewRootAllowed(join(dataDir, 'temp', 'artifacts'), anywhere)).toBe(true)
   })
 
   it('is not fooled by a sibling with the same name prefix', () => {
-    expect(isPreviewRootAllowed(home + '-backup', protectedDirs)).toBe(true)
+    expect(isPreviewRootAllowed(home + '-backup', anywhere)).toBe(true)
+  })
+
+  it('serves only directories inside a space; Downloads and Desktop are not sites', () => {
+    const space = join(home, 'projects', 'site')
+    const scope = { protectedDirs, siteDirs: [space] }
+    expect(isPreviewRootAllowed(space, scope)).toBe(true)
+    expect(isPreviewRootAllowed(join(space, 'dist', 'report'), scope)).toBe(true)
+    expect(isPreviewRootAllowed(join(home, 'Downloads'), scope)).toBe(false)
+    expect(isPreviewRootAllowed(join(home, 'Desktop'), scope)).toBe(false)
+    expect(isPreviewRootAllowed(join(home, 'projects'), scope)).toBe(false)
+    expect(isPreviewRootAllowed(space + '-copy', scope)).toBe(false)
+    expect(isPreviewRootAllowed(space, { protectedDirs, siteDirs: [] })).toBe(false)
   })
 
   it('refuses to open a preview for such a directory', () => {
     mkdirSync(join(base, 'home', 'proj'), { recursive: true })
     writeFileSync(join(base, 'home', 'report.html'), '<p>')
     writeFileSync(join(base, 'home', 'proj', 'report.html'), '<p>')
-    const guarded = [join(base, 'home')]
-    expect(() => openPreview(join(base, 'home', 'report.html'), guarded)).toThrow(/too broad/)
+    const guarded = { protectedDirs: [join(base, 'home')], siteDirs: [base] }
+    expect(() => openPreview(join(base, 'home', 'report.html'), guarded)).toThrow(/preview site/)
     writeFileSync(join(base, 'report-at-base.html'), '<p>')
-    expect(() => openPreview(join(base, 'report-at-base.html'), guarded)).toThrow(/too broad/)
+    expect(() => openPreview(join(base, 'report-at-base.html'), guarded)).toThrow(/preview site/)
     expect(openPreview(join(base, 'home', 'proj', 'report.html'), guarded).url).toMatch(/^halo-preview:\/\//)
+  })
+
+  it('refuses a file outside every space, so it is previewed under browser file rules', () => {
+    mkdirSync(join(base, 'downloads'), { recursive: true })
+    writeFileSync(join(base, 'downloads', 'page.html'), '<p>')
+    const scope = { protectedDirs: [], siteDirs: [join(base, 'site')] }
+    expect(() => openPreview(join(base, 'downloads', 'page.html'), scope)).toThrow(/preview site/)
+    expect(openPreview(join(site, 'index.html'), scope).url).toMatch(/^halo-preview:\/\//)
   })
 })

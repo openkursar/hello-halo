@@ -464,12 +464,24 @@ export interface ResidentSessionInfo {
   conversationId: string
   spaceId: string
   lastUsedAt: number
-  /** Mid-turn, awaiting init, holding team agents, or being created — never evicted. */
+  /** Mid-turn, awaiting init, holding team agents or background tasks, or being created — never evicted. */
   busy: boolean
+}
+
+/**
+ * A task CC started in the background (a shell, agent or workflow) reports back
+ * as a later turn of this session; evicting it would kill the task. The idle
+ * sweep does not consult this, so a task whose completion never arrives cannot
+ * pin the process forever.
+ */
+function hasRunningTasks(conversationId: string): boolean {
+  const consumer = consumers.get(conversationId)
+  return !!consumer?.isRunning && consumer.hasRunningTasks()
 }
 
 function isEvictionUnsafe(conversationId: string): boolean {
   return isSessionBusy(conversationId)
+    || hasRunningTasks(conversationId)
     || turnsAwaitingInit.has(conversationId)
     || sessionsUnderCreation.has(conversationId)
     || inFlightSessionCreations.has(conversationId)

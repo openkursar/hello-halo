@@ -530,6 +530,7 @@
   "Copy to this workspace": "このワークスペースにコピー",
   "Copying...": "コピー中...",
   "Core capabilities": "コア機能",
+  "Could not add the dropped files": "ドロップされたファイルを追加できませんでした",
   "Could not apply this action. Please try again.": "このアクションを適用できませんでした。もう一度お試しください。",
   "Could not apply this change. Your answer and draft are preserved. Check the current status and retry.": "この変更を適用できませんでした。回答と下書きは保持されています。現在の状態を確認して、再試行してください。",
   "Could not apply this change. Your draft is retained. Please retry.": "この変更を適用できませんでした。下書きは保持されています。再試行してください。",

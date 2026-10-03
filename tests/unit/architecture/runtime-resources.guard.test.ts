@@ -82,6 +82,7 @@ describe('engine sessions are created under the session budget', () => {
   const ALLOWED: Record<string, string> = {
     'src/main/services/agent/session-manager.ts': 'resident sessions: enforces the resident limit before creating',
     'src/main/services/api-validator.service.ts': 'one-shot credential validation session, closed immediately',
+    'src/main/services/agent/dsh/module.ts': 'engine adapter: its one-shot query() runs over its own session',
   }
 
   it('a transient automation session is admitted first', () => {

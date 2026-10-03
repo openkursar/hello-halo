@@ -460,7 +460,7 @@ ContentCanvas.tsx          # Main container; renders <TabContent key={tab.id}>
 └── viewers/
     ├── CodeViewer.tsx     # CodeMirror 6; also json/text and unknown types
     ├── MarkdownViewer.tsx # Streamdown (static mode)
-    ├── HtmlViewer.tsx     # halo-preview:// origin for files; opaque srcdoc otherwise
+    ├── HtmlViewer.tsx     # halo-preview:// origin for files in a space; opaque srcdoc otherwise
     ├── ImageViewer.tsx    # Zoom/pan
     ├── CsvViewer.tsx      # Table view
     ├── BrowserViewer.tsx  # Live web pages

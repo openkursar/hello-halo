@@ -13,6 +13,11 @@
  *   and no access to the app window or its storage;
  * - resolves relative CSS/JS/images/fetches natively, confined to that
  *   directory tree (traversal and symlinks out of it are refused);
+ * - is offered only for a file inside a space (`siteDirs`): a generated
+ *   multi-file page there needs its own files. A file elsewhere (Downloads,
+ *   Desktop, a mounted drive) shares its folder with unrelated files, so it is
+ *   previewed under browser file rules instead (the caller's srcdoc fallback:
+ *   sibling images and styles display, script cannot read other files);
  * - never serves dot-files or dot-directories (.ssh, .env, .git …), and is not
  *   offered for a directory that is broad enough to contain them: the
  *   filesystem root, the home directory or its ancestors, or anything holding
@@ -105,16 +110,25 @@ function isSameOrInside(parent: string, child: string): boolean {
   return c === p || c.startsWith(p.endsWith(sep) ? p : p + sep)
 }
 
+/** Where a preview site may be served from. */
+export interface PreviewScope {
+  /** Directories a site may never be, contain or be an ancestor of (home, Halo data, app data). */
+  protectedDirs: readonly string[]
+  /** Directories a site must lie within (the spaces). */
+  siteDirs: readonly string[]
+}
+
 /**
- * Whether a directory may be served as a preview site. Refused: the filesystem
- * root, and any directory that is, contains, or is an ancestor of one of
- * `protectedDirs` (the home directory, the Halo data directory, app data) —
- * a page there could read credentials and data that live beside the file.
- * Directories below those are fine. Paths must already be real paths.
+ * Whether a directory may be served as a preview site. It must lie within one
+ * of `siteDirs`. Refused even there: the filesystem root, and any directory
+ * that is, contains, or is an ancestor of one of `protectedDirs` — a page
+ * there could read credentials and data that live beside the file.
+ * Paths must already be real paths.
  */
-export function isPreviewRootAllowed(root: string, protectedDirs: readonly string[]): boolean {
+export function isPreviewRootAllowed(root: string, scope: PreviewScope): boolean {
   if (dirname(root) === root) return false
-  return !protectedDirs.some((dir) => isSameOrInside(root, dir))
+  if (scope.protectedDirs.some((dir) => isSameOrInside(root, dir))) return false
+  return scope.siteDirs.some((dir) => isSameOrInside(dir, root))
 }
 
 /** Whether a path has a segment that names a hidden file or directory. */
@@ -128,11 +142,15 @@ function hasHiddenSegment(path: string): boolean {
  * directory is not one to serve (see isPreviewRootAllowed) or the file itself
  * is hidden; the caller previews without an origin instead.
  */
-export function openPreview(filePath: string, protectedDirs: readonly string[]): { url: string; host: string } {
+export function openPreview(filePath: string, scope: PreviewScope): { url: string; host: string } {
   const root = realpathSync(dirname(filePath))
   if (hasHiddenSegment(basename(filePath))) throw new Error('Hidden files are not previewed from their directory')
-  if (!isPreviewRootAllowed(root, protectedDirs.map((dir) => safeRealpath(dir)))) {
-    throw new Error('This directory is too broad to serve as a preview site')
+  const realScope: PreviewScope = {
+    protectedDirs: scope.protectedDirs.map(safeRealpath),
+    siteDirs: scope.siteDirs.map(safeRealpath),
+  }
+  if (!isPreviewRootAllowed(root, realScope)) {
+    throw new Error('Only a file inside a space, below its protected directories, is served as a preview site')
   }
   const host = randomBytes(16).toString('hex')
   previewRoots.set(host, root)

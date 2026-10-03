@@ -117,8 +117,8 @@ Generated HTML is untrusted. It never runs in the app origin:
 
 | Where | Frame | Origin / process | Relative URLs | Remote resources |
 |---|---|---|---|---|
-| Desktop, file on disk | `src="halo-preview://<random host>/<file>"`, sandbox + `allow-same-origin` | its own site → out-of-process frame, no preload bridge, own storage | served natively from the file's directory tree only (`..`, encoded traversal and symlinks out of it are refused) | its own CSP (`PREVIEW_DOCUMENT_POLICY`): https: scripts/styles/images/fonts, same-origin fetches only (`connect-src 'self'`, `form-action 'self'`); never `halo-file:`, other previews or the app |
-| No file (generated content), remote clients, preview origin unavailable | `srcdoc`, sandbox **without** `allow-same-origin` | opaque; inherits the app CSP | `<base href="halo-file://<dir>/">` when a local file exists (images only — the inherited CSP blocks scripts/styles from it) | per the app CSP |
+| Desktop, file inside a space | `src="halo-preview://<random host>/<file>"`, sandbox + `allow-same-origin` | its own site → out-of-process frame, no preload bridge, own storage | served natively from the file's directory tree only (`..`, encoded traversal and symlinks out of it are refused) | its own CSP (`PREVIEW_DOCUMENT_POLICY`): https: scripts/styles/images/fonts, same-origin fetches only (`connect-src 'self'`, `form-action 'self'`); never `halo-file:`, other previews or the app |
+| No file (generated content), file outside every space (Downloads, Desktop, drives — its folder holds unrelated files), remote clients, preview origin unavailable | `srcdoc`, sandbox **without** `allow-same-origin` | opaque; inherits the app CSP | `<base href="halo-file://<dir>/">` when a local file exists (images only — the inherited CSP blocks scripts/styles from it) | per the app CSP |
 
 The main process (`foundation/protocol.service.ts`) maps each preview host to
 one directory; the viewer asks for a host on mount (`canvas-preview:open`) and
