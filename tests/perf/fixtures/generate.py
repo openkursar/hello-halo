@@ -189,6 +189,20 @@ def gen_image(path, width, height):
 
 # ---------- DOCX ----------
 
+def _zlib_stored(data):
+    """A zlib stream of uncompressed blocks. `zlib.compress(data, 0)` is not used
+    because how zlib splits stored blocks differs between zlib versions, which
+    changes the bytes; here every block but the last is the format maximum."""
+    max_block = 0xFFFF
+    out = bytearray(b"\x78\x01")
+    for start in range(0, max(len(data), 1), max_block):
+        block = data[start:start + max_block]
+        final = 1 if start + max_block >= len(data) else 0
+        out += struct.pack("<BHH", final, len(block), len(block) ^ 0xFFFF) + block
+    out += struct.pack(">I", zlib.adler32(data) & 0xFFFFFFFF)
+    return bytes(out)
+
+
 def _noise_png(width, height, seed):
     """Incompressible pixels from a fixed LCG, so each embedded image costs its
     full size as a blob in the renderer — a leaked one is visible, not a rounding error."""
@@ -203,15 +217,15 @@ def _noise_png(width, height, seed):
         raw += row
     out = b"\x89PNG\r\n\x1a\n"
     out += _png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
-    out += _png_chunk(b"IDAT", zlib.compress(bytes(raw), 0))
+    out += _png_chunk(b"IDAT", _zlib_stored(bytes(raw)))
     out += _png_chunk(b"IEND", b"")
     return out
 
 
 def gen_docx(path, n_images, width, height):
     """A minimal WordprocessingML package with `n_images` embedded pictures.
-    Entries are stored (no deflate) with a fixed timestamp so the bytes do not
-    depend on the host's zlib or clock."""
+    Zip entries and the PNG streams inside them are stored (no deflate), with a
+    fixed timestamp, so the bytes do not depend on the host's zlib or clock."""
     import zipfile
 
     ns = ('xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
