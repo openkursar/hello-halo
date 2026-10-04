@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { writeFileSync, rmSync, mkdtempSync } from 'fs'
+import { writeFileSync, readFileSync, readdirSync, rmSync, mkdtempSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { ImSessionRegistry } from '../../../../src/main/apps/runtime/im-session-registry'
@@ -276,5 +276,67 @@ describe('ImSessionRegistry — native local sessions', () => {
     expect(reg.findSession('app1', 'local', 'uuid-1')?.customName).toBe('My chat')
     expect(reg.removeSession('app1', 'local', 'uuid-1')).toBe(true)
     expect(reg.findSession('app1', 'local', 'uuid-1')).toBeUndefined()
+  })
+})
+
+describe('ImSessionRegistry — persistence', () => {
+  let dir: string
+  let file: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'im-reg-'))
+    file = join(dir, 'sessions.json')
+  })
+
+  afterEach(async () => {
+    await new Promise(resolve => setTimeout(resolve, 50))
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  const settle = () => new Promise(resolve => setTimeout(resolve, 50))
+
+  it('survives deleting a local chat: reset then removal persist in separate microtasks', async () => {
+    const reg = new ImSessionRegistry(file)
+    for (let i = 0; i < 30; i++) reg.register('app1', 'wecom-bot', `contact-${i}-${'x'.repeat(20)}`, 'direct', 'inst-1', { lastMessage: 'an earlier message' })
+    reg.createLocalSession('app1', 'doomed')
+    await settle()
+
+    // deleteNativeChatSession's order: the clear path resets activity, an await
+    // later the record is removed — two structural writes back to back.
+    reg.resetActivity('app1', 'local', 'doomed')
+    await Promise.resolve()
+    await Promise.resolve()
+    reg.removeSession('app1', 'local', 'doomed')
+    await settle()
+
+    const reloaded = new ImSessionRegistry(file)
+    expect(reloaded.getAllSessions('app1')).toHaveLength(30)
+    expect(readdirSync(dir)).toEqual(['sessions.json'])
+  })
+
+  it('sets an unreadable file aside instead of overwriting it', async () => {
+    const broken = '[{"appId":"app1"}]garbage'
+    writeFileSync(file, broken, 'utf8')
+    const reg = new ImSessionRegistry(file)
+    expect(reg.listAll()).toHaveLength(0)
+
+    reg.createLocalSession('app1', 'fresh')
+    await settle()
+
+    const aside = readdirSync(dir).filter(name => name.startsWith('sessions.json.unreadable-'))
+    expect(aside).toHaveLength(1)
+    expect(readFileSync(join(dir, aside[0]), 'utf8')).toBe(broken)
+    expect(new ImSessionRegistry(file).findSession('app1', 'local', 'fresh')).toBeDefined()
+  })
+
+  it('restoreSession adds a missing record but never replaces a registered one', () => {
+    const reg = new ImSessionRegistry(file)
+    const record = {
+      appId: 'app1', channel: 'native', source: 'native' as const, instanceId: '', chatId: 'default',
+      chatType: 'direct' as const, displayName: '', proactive: false, lastActiveAt: 1000, messageCount: 1,
+    }
+    expect(reg.restoreSession(record)).toBe(true)
+    expect(reg.restoreSession({ ...record, lastActiveAt: 2000 })).toBe(false)
+    expect(reg.findSession('app1', 'native', 'default')?.lastActiveAt).toBe(1000)
   })
 })

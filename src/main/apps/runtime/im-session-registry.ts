@@ -8,18 +8,20 @@
  *
  * Persistence: JSON file on disk, loaded at startup, written on every mutation.
  * Data volume is small (a few to tens of sessions per app), so full-file
- * writes are acceptable.
+ * writes are acceptable. Every conversation list reads this file, so a write
+ * replaces it atomically and never overlaps another, and a file that cannot
+ * be read is set aside rather than overwritten.
  *
  * Thread safety: All mutations are synchronous (single Node.js event loop),
  * but disk writes are fire-and-forget async to avoid blocking.
  */
 
-import { readFileSync, writeFile, mkdirSync } from 'fs'
-import { dirname } from 'path'
+import { readFileSync, renameSync } from 'fs'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
 import { classifySessionSource, LOCAL_SESSION_CHANNEL } from '../../../shared/types/im-channel'
 import { truncateUtf16Safe } from './text-truncate'
 import { getPendingRelayStore } from './pending-relays'
+import { AtomicFileWriter } from './atomic-file-writer'
 
 // ============================================
 // Types
@@ -65,6 +67,8 @@ export class ImSessionRegistry {
   /** File path for JSON persistence */
   private filePath: string
 
+  private readonly writer: AtomicFileWriter
+
   /** There are in-memory changes not yet written to disk. */
   private dirty = false
 
@@ -76,6 +80,7 @@ export class ImSessionRegistry {
 
   constructor(filePath: string) {
     this.filePath = filePath
+    this.writer = new AtomicFileWriter(filePath, '[ImSessionRegistry]')
     this.load()
   }
 
@@ -215,6 +220,20 @@ export class ImSessionRegistry {
     session.lastMessage = undefined
     session.messageCount = 0
     this.requestPersist(true)
+  }
+
+  /**
+   * Add a record rebuilt from data kept elsewhere (a transcript older than the
+   * registry's tracking of it). Never replaces a registered session.
+   *
+   * @returns true if the record was added
+   */
+  restoreSession(record: ImSessionRecord): boolean {
+    const key = this.buildKey(record.appId, record.channel, record.chatId)
+    if (this.sessions.has(key)) return false
+    this.sessions.set(key, { ...record })
+    this.requestPersist(true)
+    return true
   }
 
   /**
@@ -446,32 +465,50 @@ export class ImSessionRegistry {
     return `${appId}:${channel}:${chatId}`
   }
 
-  /** Load sessions from disk. Silent on missing/corrupt file. */
+  /** Load sessions from disk; a missing file starts empty, an unreadable one is set aside first. */
   private load(): void {
+    let records: ImSessionRecord[]
     try {
-      const raw = readFileSync(this.filePath, 'utf8')
-      const records: ImSessionRecord[] = JSON.parse(raw)
-      if (!Array.isArray(records)) return
-
-      for (const r of records) {
-        if (r.appId && r.channel && r.chatId) {
-          // Backward compat: old sessions may lack instanceId
-          if (!r.instanceId) {
-            r.instanceId = ''
-          }
-          // Backward compat: records persisted before `source` existed were
-          // all IM sessions; derive from the channel value for correctness.
-          if (!r.source) {
-            r.source = classifySessionSource(r.channel)
-          }
-          const key = this.buildKey(r.appId, r.channel, r.chatId)
-          this.sessions.set(key, r)
-        }
+      records = JSON.parse(readFileSync(this.filePath, 'utf8'))
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        console.log('[ImSessionRegistry] No existing sessions file, starting fresh')
+      } else {
+        this.setAside(error)
       }
-      console.log(`[ImSessionRegistry] Loaded ${this.sessions.size} sessions from disk`)
-    } catch {
-      // File doesn't exist or is corrupt — start fresh
-      console.log('[ImSessionRegistry] No existing sessions file, starting fresh')
+      return
+    }
+    if (!Array.isArray(records)) {
+      this.setAside(new Error('not a session list'))
+      return
+    }
+
+    for (const r of records) {
+      if (r.appId && r.channel && r.chatId) {
+        // Backward compat: old sessions may lack instanceId
+        if (!r.instanceId) {
+          r.instanceId = ''
+        }
+        // Backward compat: records persisted before `source` existed were
+        // all IM sessions; derive from the channel value for correctness.
+        if (!r.source) {
+          r.source = classifySessionSource(r.channel)
+        }
+        const key = this.buildKey(r.appId, r.channel, r.chatId)
+        this.sessions.set(key, r)
+      }
+    }
+    console.log(`[ImSessionRegistry] Loaded ${this.sessions.size} sessions from disk`)
+  }
+
+  /** Move an unreadable file out of the way, so starting empty never overwrites it. */
+  private setAside(reason: unknown): void {
+    const asidePath = `${this.filePath}.unreadable-${Date.now()}`
+    try {
+      renameSync(this.filePath, asidePath)
+      console.error(`[ImSessionRegistry] Sessions file unreadable, kept as ${asidePath}; starting empty:`, reason)
+    } catch (error) {
+      console.error(`[ImSessionRegistry] Sessions file unreadable and could not be set aside (${String(error)}); starting empty:`, reason)
     }
   }
 
@@ -520,20 +557,7 @@ export class ImSessionRegistry {
 
   /** Write all sessions to disk (fire-and-forget). */
   private persist(): void {
-    const records = Array.from(this.sessions.values())
-    const json = JSON.stringify(records, null, 2)
-
-    try {
-      mkdirSync(dirname(this.filePath), { recursive: true })
-    } catch {
-      // Directory likely already exists
-    }
-
-    writeFile(this.filePath, json, 'utf8', (err) => {
-      if (err) {
-        console.error('[ImSessionRegistry] Failed to persist sessions:', err)
-      }
-    })
+    this.writer.write(JSON.stringify(Array.from(this.sessions.values()), null, 2))
   }
 }
 

@@ -21,10 +21,10 @@
  *   state, not conversation storage.
  */
 
-import { readFileSync, writeFile, writeFileSync, mkdirSync } from 'fs'
-import { dirname } from 'path'
+import { readFileSync } from 'fs'
 import { randomUUID } from 'crypto'
 import { truncateUtf16Safe } from './text-truncate'
+import { AtomicFileWriter } from './atomic-file-writer'
 import { parseAppChatKey } from '../../../shared/apps/im-keys'
 
 // ============================================
@@ -141,6 +141,7 @@ const SWEEP_INTERVAL_MS = 60 * 60 * 1000
 export class PendingRelayStore {
   private pending = new Map<string, RelayEvent[]>()
   private filePath: string
+  private readonly writer: AtomicFileWriter
   private dirty = false
   private flushScheduled = false
   private readonly now: () => number
@@ -148,6 +149,7 @@ export class PendingRelayStore {
 
   constructor(filePath: string, options: { now?: () => number } = {}) {
     this.filePath = filePath
+    this.writer = new AtomicFileWriter(filePath, '[PendingRelays]')
     this.now = options.now ?? Date.now
     this.load()
     this.sweepExpired()
@@ -253,8 +255,7 @@ export class PendingRelayStore {
     if (!this.dirty) return
     this.dirty = false
     try {
-      mkdirSync(dirname(this.filePath), { recursive: true })
-      writeFileSync(this.filePath, this.serialize(), 'utf8')
+      this.writer.writeSync(this.serialize())
     } catch (err) {
       console.error('[PendingRelays] Failed to flush spool:', err)
     }
@@ -354,17 +355,7 @@ export class PendingRelayStore {
 
   /** Write the full spool to disk (fire-and-forget). */
   private persist(): void {
-    const json = this.serialize()
-    try {
-      mkdirSync(dirname(this.filePath), { recursive: true })
-    } catch {
-      // Directory likely already exists
-    }
-    writeFile(this.filePath, json, 'utf8', (err) => {
-      if (err) {
-        console.error('[PendingRelays] Failed to persist spool:', err)
-      }
-    })
+    this.writer.write(this.serialize())
   }
 }
 

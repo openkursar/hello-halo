@@ -42,7 +42,6 @@ import type { SchedulerService } from '../../platform/scheduler'
 import type { MemoryService } from '../../platform/memory'
 import type { BackgroundService } from '../../platform/background'
 import { join } from 'path'
-import { homedir } from 'os'
 import { getSpace } from '../../services/space.service'
 import { getWebhookIngressRouter } from '../../http/server'
 import * as watcherHost from '../../services/watcher-host.service'
@@ -55,12 +54,12 @@ import { WebhookSource, type WebhookSecretResolver } from './sources/webhook.sou
 import { ImChannelManager, WecomBotProvider, WeixinIlinkBotProvider, FeishuBotProvider, setActiveImChannelManager } from './im-channels'
 import { ImSessionRegistry, setImSessionRegistry } from './im-session-registry'
 import { PendingRelayStore, setPendingRelayStore, getPendingRelayStore } from './pending-relays'
+import { restoreLegacyDefaultChats } from './legacy-default-chats'
 import { dispatchInboundMessage, clearSupplementBuffersForInstance } from './dispatch-inbound'
 import { clearAllImPermissionContexts } from './im-permission-registry'
 import { clearAllImStreamHandles } from './im-stream-registry'
 import { destroyAllChatBrowserContexts } from './app-chat-browser'
-import { getConfig } from '../../foundation/config.service'
-import { getDataFolderName } from '../../foundation/product-config'
+import { getConfig, getHaloDir } from '../../foundation/config.service'
 import { onMcpAppsChange } from '../manager/service'
 import { createHaloAppsMcpServer, createSpaceTeamMcpServer, TEAM_TOOLSET_GUIDE } from '../conversation-mcp'
 import { TEAM_MCP_SERVER_NAME } from '../../../shared/apps/team-types'
@@ -322,13 +321,16 @@ export async function initAppRuntime(
   eventRouter.registerSource(webhookSource)
 
   // ── IM Session Registry ─────────────────────────────────────────────
-  // The registry tracks all known IM sessions across digital humans.
-  const registryPath = join(homedir(), `.${getDataFolderName()}`, 'im-sessions.json')
-  const registry = new ImSessionRegistry(registryPath)
+  // The registry lists every digital-human session (IM, HTTP, local and
+  // default chats). Its files live in this instance's data dir, so a dev
+  // build or a HALO_DATA_DIR node never shares them with another install.
+  const haloDir = getHaloDir()
+  const registry = new ImSessionRegistry(join(haloDir, 'im-sessions.json'))
   setImSessionRegistry(registry)
   imSessionRegistryInstance = registry
 
-  for (const app of deps.appManager.listApps({ type: 'automation' })) {
+  const automationApps = deps.appManager.listApps({ type: 'automation' })
+  for (const app of automationApps) {
     if (app.status === 'uninstalled' || store.getSessionEnvironment(`environment-backfill:${app.id}`)) continue
     try {
       retainAppEnvironments(deps.appManager, store, app)
@@ -336,13 +338,12 @@ export async function initAppRuntime(
       console.warn('[Runtime] Legacy environment backfill blocked; original storage must be restored', { appId: app.id, error })
     }
   }
-
+  restoreLegacyDefaultChats(automationApps, store, registry)
 
   // ── Pending Relay Spool ─────────────────────────────────────────────
   // Records notify_bot pushes against their target sessions so the target's
   // AI regains awareness of them on its next inbound message.
-  const relaySpoolPath = join(homedir(), `.${getDataFolderName()}`, 'im-pending-relays.json')
-  setPendingRelayStore(new PendingRelayStore(relaySpoolPath))
+  setPendingRelayStore(new PendingRelayStore(join(haloDir, 'im-pending-relays.json')))
 
   // ── IM Channel Manager (multi-instance) ─────────────────────────────
   // Manages all IM channel instances (WeCom Bot, Feishu Bot, DingTalk Bot, etc.)
