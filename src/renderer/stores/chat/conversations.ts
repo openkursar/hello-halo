@@ -307,7 +307,7 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'openConver
   deleteAppChatSession: (appId, spaceId, conversationId) =>
     deleteAppChatSession({ set, get }, { appId, spaceId, conversationId }),
 
-  openConversation: async (conversationId) => {
+  openConversation: async (conversationId, options) => {
     const ref = refFor(get(), conversationId)
     if (!ref) {
       warnNoSpace('openConversation', conversationId)
@@ -319,7 +319,7 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'openConver
       })
       return
     }
-    await openOnce({ set, get }, ref)
+    await openOnce({ set, get }, ref, options)
   },
 
   // Delete conversation

@@ -92,6 +92,15 @@ vi.mock('../../../../src/main/apps/runtime/federation/manager', () => ({
   }),
 }))
 
+// A member send writes the references into its text; that needs only the block
+// formatter, not the whole engine.
+vi.mock('../../../../src/main/services/agent', async () => ({
+  formatReferencesBlock: (await vi.importActual<typeof import('../../../../src/main/services/agent/references')>(
+    '../../../../src/main/services/agent/references',
+  )).formatReferencesBlock,
+  getWorkingDir: (spaceId: string) => `/spaces/${spaceId}`,
+}))
+
 import { registerTeamRoutes } from '../../../../src/main/http/routes/team.routes'
 
 // ── Test server ──────────────────────────────────────────────────────────────
@@ -654,6 +663,33 @@ describe('POST /api/teams/:teamId/members/:appId/send scope gating', () => {
     expect(sendToMember).toHaveBeenCalledWith(
       expect.not.objectContaining({ external: expect.anything() }),
     )
+  })
+
+  it('writes the places the person pointed at into the text, relative only to a space of the owner\u2019s own', async () => {
+    const reference = {
+      id: 'r1',
+      source: { kind: 'file', path: '/spaces/s1/src/a.ts', precision: 'lines' },
+      range: { startLine: 4, endLine: 4 },
+      quote: 'x()',
+    }
+    listMembersByTeam.mockReturnValue([
+      { appId: 'caller', memberIdentity: 'id-reader' },
+      { appId: 'member-1', memberIdentity: 'id-target' },
+    ])
+    getCurrentEpochForTeam.mockReturnValue({ id: 'epoch-1' })
+    await withServer(buildApp(null), async (base) => {
+      // Cards alone are a message too.
+      expect((await post(base, 'X', 'member-1', { message: '', spaceId: 's1', references: [reference] })).status).toBe(200)
+      expect((await post(base, 'X', 'member-1', { message: 'hi', references: [{ id: 1 }] })).status).toBe(400)
+    })
+    await withServer(buildApp('X'), async (base) => {
+      expect((await post(base, 'X', 'member-1', { message: 'hi', spaceId: 's1', references: [reference] })).status).toBe(200)
+    })
+    const [own, teammate] = sendToMember.mock.calls.map(([input]) => (input as { message: string }).message)
+    expect(own).toMatch(/^<halo_references>\n[\s\S]*\[1\] src\/a\.ts, line 4\n/)
+    // A teammate's machine cannot name a folder of this one.
+    expect(teammate).toMatch(/^hi\n\n<halo_references>\n[\s\S]*\[1\] \/spaces\/s1\/src\/a\.ts, line 4\n/)
+    expect(sendToMember).toHaveBeenCalledTimes(2)
   })
 
   it('honors an explicit ?epochId in the body over the current epoch', async () => {

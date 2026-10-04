@@ -1,9 +1,10 @@
 /**
- * A goal sent with attached paths: the paths ride on the message the model
- * reads, while the goal itself is parsed from the typed text alone.
+ * A goal sent with cards: the cards ride on the message as references, while
+ * the goal itself is parsed from the typed text alone.
  */
 
 import { expect, it, vi } from 'vitest'
+import type { ContentReference } from '../../../src/shared/types/content-reference'
 
 const env = vi.hoisted(() => ({ ui: { composerGoalMode: new Set<string>(['d']), setComposerGoalMode: () => {} } }))
 vi.mock('react', async original => ({ ...await original<typeof import('react')>(), useCallback: (fn: any) => fn, useMemo: (compute: any) => compute(), useEffect: () => {} }))
@@ -20,21 +21,29 @@ vi.mock('../../../src/renderer/components/goal/GoalShelf', () => ({ GoalShelf: (
 vi.mock('../../../src/renderer/components/goal/goal-actions', () => ({ notifyGoalUpdateFailed: vi.fn(), pendingGoal: (input: any) => input, saveGoal: vi.fn(async () => true) }))
 
 import { useGoalComposer } from '../../../src/renderer/components/goal/useGoalComposer'
-import { splitAttachedPaths } from '../../../src/shared/attached-paths'
 
-it('sends the goal text with the paths appended, and parses the goal from the text only', async () => {
+const references: ContentReference[] = [
+  { id: 'r1', source: { kind: 'path', path: '/Users/me/Docs/q3.pdf', isDirectory: false } },
+  { id: 'r2', source: { kind: 'file', path: '/repo/src/a.ts', precision: 'lines' }, range: { startLine: 3, endLine: 4 }, quote: 'x', note: 'tidy' },
+]
+
+it('sends the goal text with the cards as references, and parses the goal from the text only', async () => {
   const send = vi.fn(async () => true)
   const composer = useGoalComposer({ spaceId: 's', conversationId: 'c', draftKey: 'd', isGenerating: false, send })!
-  const paths = [{ path: '/Users/me/Docs/q3.pdf', isDirectory: false }, { path: '/Users/me/site', isDirectory: true }]
 
-  expect(await composer.submit('Ship the Q3 report', undefined, true, paths)).toBe(true)
+  expect(await composer.submit('Ship the Q3 report', undefined, true, references)).toBe(true)
 
-  const [content, images, thinking, goal] = send.mock.calls[0] as unknown as [string, unknown, boolean, { objective: string }]
-  expect(splitAttachedPaths(content)).toEqual({
-    text: 'Ship the Q3 report',
-    paths: [{ path: '/Users/me/Docs/q3.pdf', isDirectory: false }, { path: '/Users/me/site/', isDirectory: true }],
-  })
+  const [content, images, thinking, goal, sent] = send.mock.calls[0] as unknown as [string, unknown, boolean, { objective: string }, ContentReference[]]
+  expect(content).toBe('Ship the Q3 report')
   expect(images).toBeUndefined()
   expect(thinking).toBe(true)
-  expect(goal.objective).not.toContain('attached_paths')
+  expect(sent).toEqual(references)
+  expect(goal.objective).toBe('Ship the Q3 report')
+})
+
+it('a goal with no cards sends no references', async () => {
+  const send = vi.fn(async () => true)
+  const composer = useGoalComposer({ spaceId: 's', conversationId: 'c', draftKey: 'd', isGenerating: false, send })!
+  await composer.submit('Ship it', undefined, true, [])
+  expect((send.mock.calls[0] as unknown[])[4]).toBeUndefined()
 })

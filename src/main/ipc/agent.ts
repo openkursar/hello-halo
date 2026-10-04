@@ -7,8 +7,6 @@
  */
 
 import {
-  sendMessage,
-  injectMessage,
   stopGeneration,
   getSessionState,
   ensureSessionWarm,
@@ -24,7 +22,8 @@ import {
   onAgentBroadcast
 } from '../services/agent'
 import type { GoalInput } from '../../shared/types/goal'
-import type { ReasoningEffortLevel } from '../../shared/constants/reasoning-effort'
+import type { AgentInjectRequest, AgentSendRequest } from '../../shared/types/agent-send'
+import * as agentController from '../controllers/agent.controller'
 import { getEngineCapabilities, getActiveEngine, getDegradedFromEngine } from '../services/agent/resolved-sdk'
 import { getEngineAvailability } from '../services/agent/engine-availability'
 import { defaultCapabilitiesFor } from '../services/agent/capabilities'
@@ -146,35 +145,8 @@ export function registerAgentHandlers(): void {
   // ============================================
 
   registerRawRpcHandlers(agentRpc, {
-    // Send message to agent (with optional images for multi-modal, optional thinking mode)
-    sendMessage: async (
-      request: {
-        spaceId: string
-        conversationId: string
-        message: string
-        resumeSessionId?: string
-        images?: Array<{
-          id: string
-          type: 'image'
-          mediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'
-          data: string
-          name?: string
-          size?: number
-        }>
-        thinkingEnabled?: boolean  // Enable extended thinking mode
-        reasoningEffort?: ReasoningEffortLevel  // Depth picked for this send
-        goal?: GoalInput  // Set as the conversation goal before this message runs
-      }
-    ) => {
-      try {
-        await sendMessage(request)
-        return { success: true }
-      } catch (error: unknown) {
-        const err = error as Error
-        analytics.trackErrorSurface('agent-send', err)
-        return { success: false, error: err.message }
-      }
-    },
+    // Send message to agent; checked and built field by field by the controller (shared with HTTP)
+    sendMessage: (request: AgentSendRequest) => agentController.sendMessage(request),
 
     // Stop generation for a specific conversation (or all if not specified)
     stopGeneration: async (conversationId?: string) => {
@@ -288,18 +260,7 @@ export function registerAgentHandlers(): void {
 
     // Inject a mid-turn message into an active session.
     // Called when user sends a message while generation is in progress (Agent Team mode).
-    injectMessage: async (
-      data: { conversationId: string; message: string }
-    ) => {
-      try {
-        injectMessage(data.conversationId, data.message)
-        return { success: true }
-      } catch (error: unknown) {
-        const err = error as Error
-        console.error(`[IPC] agent:inject-message error:`, err)
-        return { success: false, error: err.message }
-      }
-    },
+    injectMessage: async (data: AgentInjectRequest) => agentController.injectMessage(data),
 
     // Test MCP server connections
     testMcpConnections: async () => {

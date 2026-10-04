@@ -34,6 +34,8 @@ Halo is a local-first Electron AI product with:
 - **Space management**: Halo temporary space + dedicated spaces with centralized storage
 - **Conversation management**: Lazy-loaded with thoughts separation, starred conversations, Pulse panel for task status
 - **Content Canvas**: Multi-tab preview (Code/Markdown/HTML/Image/JSON/CSV/Browser) with CodeMirror 6
+- **Code changes & AI review**: Git changes view in the canvas (repositories of the space, four compare scopes, read-only diffs, stage/discard/commit/sync) with built-in quick/team AI review run as a background conversation; a reply's own edits open in the same view
+- **Unified references**: selecting text in canvas content or the chat → comment / add to chat → numbered cards in the composer beside the canvas, sent as `metadata.references` and expanded for the model; cards go back to the place; `path:line` mentions in replies open the file
 - **AI Browser**: 14 tools (consolidated from 28), Accessibility Tree, anti-detection stealth
 - **AI Sources**: Multi-provider architecture (OAuth + Custom API Key + CLI-delegated), v2 format
 - **Remote Access**: HTTP Server + WebSocket, PIN auth, tunnel support

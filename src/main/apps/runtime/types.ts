@@ -7,6 +7,7 @@
 
 import type { RunOutcome, AppStatus } from '../manager'
 import type { AppRunStartInfo } from '../../../shared/apps/app-types'
+import type { ContentReference } from '../../../shared/types/content-reference'
 
 // ============================================
 // Trigger Types
@@ -43,6 +44,8 @@ export interface TriggerContext {
     sessionId?: string
     /** Free-text follow-up to send as the resumed turn. Falls back to "Continue." */
     userMessage?: string
+    /** Places the user pointed at with the follow-up, in the order they added them. */
+    references?: ContentReference[]
     /**
      * True when this is a free-text follow-up to a run that already completed
      * successfully (report_to_user was called). Such a turn is conversational,
@@ -357,9 +360,12 @@ export interface AppRuntimeService {
    * - Finished run: reopens the run and resumes its session so the user can keep
    *   talking to it with full context (e.g. "this part is wrong, fix it").
    *
+   * `references` are files and folders the user attached; the text may be empty
+   * when they carry the message.
+   *
    * @throws Error if the run/app is not found, or the app is busy with another run.
    */
-  injectIntoRun(appId: string, runId: string, text: string): Promise<void>
+  injectIntoRun(appId: string, runId: string, text: string, references?: ContentReference[]): Promise<void>
 
   // ── Activity Queries ────────────────────────
 

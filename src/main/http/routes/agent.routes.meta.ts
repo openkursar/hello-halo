@@ -17,6 +17,11 @@ export const MODULE: RouteModuleMeta = {
         'A turn you start can stop to ask a question, and answering it is not open to you — the user answers it in the Halo app. Do not start one you are unwilling to leave pending.',
       ].join('\n'),
     },
+    // The chat UI adding to its own running turn; an assistant reaches another
+    // conversation through conversation_send instead.
+    'POST /api/agent/inject-message': {
+      expose: 'internal',
+    },
     'POST /api/agent/stop': {
       expose: 'ai',
       group: 'conversation',

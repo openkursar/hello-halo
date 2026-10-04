@@ -26,6 +26,10 @@ beforeAll(async () => {
     received.push(req.body)
     res.json({ success: true })
   })
+  app.post('/api/apps/:appId/chat/send', (req, res) => {
+    received.push(req.body)
+    res.json({ success: true })
+  })
   await new Promise<void>((resolve) => {
     server = app.listen(0, '127.0.0.1', () => resolve())
   })
@@ -68,6 +72,37 @@ describe('self-API withheld body fields', () => {
     const { status } = await post('/api/agent/goal/set', { goal: { objective: 'x' } })
     expect(status).toBe(200)
     expect(received).toHaveLength(1)
+  })
+
+  it('refuses the user\'s canvas and references on both chat routes, path parameters included', async () => {
+    received.length = 0
+    const references = [{ id: 'r', source: { kind: 'path', path: '/tmp/a', isDirectory: false } }]
+    const agent = await post('/api/agent/message', { spaceId: 's', conversationId: 'c', message: 'hi', references })
+    expect(agent.status).toBe(400)
+    expect(agent.body).toMatchObject({ field: 'references' })
+    const app = await post('/api/apps/app-1/chat/send', { spaceId: 's', message: 'hi', canvasContext: { isOpen: true } })
+    expect(app.status).toBe(400)
+    expect(app.body).toMatchObject({ field: 'canvasContext' })
+    expect(received).toHaveLength(0)
+    const plain = await post('/api/apps/app-1/chat/send', { spaceId: 's', message: 'hi' })
+    expect(plain.status).toBe(200)
+  })
+
+  it('checks every spelling Express dispatches to the route, on its own', async () => {
+    const spellings = ['/api/agent/message/', '/api/Agent/MESSAGE', '/api/apps/app-1/Chat/Send/']
+    const references = [{ id: 'r', source: { kind: 'path', path: '/tmp/a', isDirectory: false } }]
+    received.length = 0
+    for (const path of spellings) {
+      const { status, body } = await post(path, { spaceId: 's', conversationId: 'c', message: 'hi', references })
+      expect(status, path).toBe(400)
+      expect(body, path).toMatchObject({ field: 'references' })
+    }
+    expect(received).toHaveLength(0)
+    // Without the field the same spellings do reach the handler: the check is all that stands between.
+    for (const path of spellings) {
+      expect((await post(path, { spaceId: 's', conversationId: 'c', message: 'hi' })).status, path).toBe(200)
+    }
+    expect(received).toHaveLength(spellings.length)
   })
 })
 

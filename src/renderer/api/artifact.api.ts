@@ -13,7 +13,7 @@ import type {
   ApiResponse,
 } from './_shared'
 import { MAX_PREVIEW_DOCUMENT_SIZE, formatPreviewSize } from '../../shared/constants/artifact-preview'
-import type { ArtifactChangeBatchEvent, FileQueryResult } from '../../shared/types/artifact'
+import type { ArtifactChangeBatchEvent, FileQueryResult, ResolvedArtifactPath } from '../../shared/types/artifact'
 
 // Batches raised inside this renderer (a lapsed space hold: changes were lost),
 // delivered to the same subscribers as those from main.
@@ -34,6 +34,14 @@ export const artifactApi = {
       return window.halo.queryArtifactFiles(spaceId, query, limit)
     }
     return httpRequest('GET', `/api/spaces/${spaceId}/artifacts/query?q=${encodeURIComponent(query)}&limit=${limit}`)
+  },
+
+  // Which mentioned paths are existing files or folders of the space (one stat each, no scan)
+  resolveArtifactPaths: async (spaceId: string, paths: string[], baseDir?: string): Promise<ApiResponse<ResolvedArtifactPath[]>> => {
+    if (isElectron()) {
+      return window.halo.resolveArtifactPaths(spaceId, paths, baseDir)
+    }
+    return httpRequest('POST', `/api/spaces/${spaceId}/artifacts/resolve`, { paths, ...(baseDir ? { baseDir } : {}) })
   },
 
   listArtifactsTree: async (spaceId: string): Promise<ApiResponse> => {

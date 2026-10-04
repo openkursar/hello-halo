@@ -8,6 +8,8 @@
 import type { ReasoningEffortLevel, ReasoningEffortSetting } from '../../../shared/constants/reasoning-effort'
 import type { Goal, GoalInput } from '../../../shared/types/goal'
 import type { ApiRetryState } from '../../../shared/types/api-retry'
+import type { ContentReference } from '../../../shared/types/content-reference'
+import type { MessageTask } from '../../../shared/types/message-task'
 
 // ============================================
 // API Credentials
@@ -132,6 +134,12 @@ export interface AgentRequest {
   knowledgeBaseId?: string         // When set, run as a "chat with this knowledge base" turn:
                               // working dir = the KB's wiki dir, that KB injected into the prompt
   goal?: GoalInput            // Set as the conversation goal before this message runs (engines with features.goal)
+  /** Places the user pointed at, in the order they added them; already checked (shared/content-reference parseReferences). */
+  references?: ContentReference[]
+  /** Built-in task this message starts. Set in-process only (services/code-review); no transport carries it. */
+  task?: MessageTask
+  /** What `task` asks the model, written by the task's owner; in-process only, never persisted. */
+  taskInstructions?: string
 }
 
 // ============================================

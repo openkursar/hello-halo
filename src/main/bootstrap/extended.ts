@@ -108,6 +108,8 @@ import { registerCliConfigHandlers } from '../ipc/cli-config'
 import { registerModelCapabilitiesHandlers } from '../ipc/model-capabilities'
 import { registerWeixinIlinkHandlers } from '../ipc/weixin-ilink'
 import { registerTlonHandlers } from '../ipc/tlon'
+import { registerGitHandlers } from '../ipc/git'
+import { registerCodeReviewHandlers } from '../ipc/code-review'
 import { initTlonWatchers, shutdownTlon, migrateKBsToTextIndex } from '../services/tlon'
 import { shutdownOcr } from '../services/ocr'
 import {
@@ -1581,6 +1583,12 @@ export function initializeExtendedServices(): void {
 
   // Tlon: knowledge base management IPC handlers
   registerTlonHandlers()
+
+  // Git: the changes view's repository queries and writes (git runs on first use, never at startup)
+  registerGitHandlers()
+
+  // Code review: the changes view's review buttons and its latest-review record
+  registerCodeReviewHandlers()
 
   // Windows-specific: Initialize Git Bash in background
   if (process.platform === 'win32') {

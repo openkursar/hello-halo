@@ -16,7 +16,9 @@
  */
 
 import { hasLiveTurn, sendIntoLiveTurn } from '../../services/agent/live-turn'
+import { formatReferencesBlock } from '../../services/agent'
 import type { TranscriptProvenance } from '../../../shared/types/transcript'
+import type { ContentReference } from '../../../shared/types/content-reference'
 import { hasActiveAppChatRound, peekAppChatSink } from './app-chat-sink'
 
 const LOG_TAG = '[AppChatLiveTurn]'
@@ -54,9 +56,17 @@ export function isAppChatConversationGenerating(conversationId: string): boolean
  * `provenance` marks how the message entered the transcript. The user adding to
  * their own running turn passes `{ source: 'injection' }`, which the transcript
  * shows as an annotation on the reply instead of a bubble of its own.
+ * `references` are the places that user pointed at: the engine reads them
+ * expanded ahead of the text, the transcript keeps them as records.
  */
-export function injectIntoAppChat(conversationId: string, text: string, provenance?: TranscriptProvenance): boolean {
-  if (!sendIntoLiveTurn(conversationId, text)) return false
+export function injectIntoAppChat(
+  conversationId: string,
+  text: string,
+  provenance?: TranscriptProvenance,
+  references?: ContentReference[]
+): boolean {
+  const engineText = references && references.length > 0 ? formatReferencesBlock(references, undefined) + text : text
+  if (!sendIntoLiveTurn(conversationId, engineText)) return false
 
   // Written only once the engine has taken it, and deliberately after: the
   // transcript is a record of what happened, and until the send returns nothing
@@ -64,7 +74,7 @@ export function injectIntoAppChat(conversationId: string, text: string, provenan
   // here, so this ordering costs the reader nothing.
   try {
     const sink = peekAppChatSink(conversationId)
-    if (provenance) sink?.writeUserMessage(text, undefined, undefined, provenance)
+    if (provenance || references) sink?.writeUserMessage(text, undefined, undefined, provenance, references)
     else sink?.writeUserMessage(text)
   } catch (err) {
     // The message DID arrive; only the record of it failed. Reporting failure

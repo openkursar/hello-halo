@@ -31,6 +31,7 @@ import { ScrollToBottomButton } from '../chat/ScrollToBottomButton'
 import { InputArea } from '../chat/InputArea'
 import { useTranslation } from '../../i18n'
 import type { Message } from '../../types'
+import type { ContentReference } from '../../../shared/types/content-reference'
 
 interface SessionDetailViewProps {
   /** App ID that owns this run */
@@ -66,6 +67,7 @@ export function SessionDetailView({ appId, runId }: SessionDetailViewProps) {
   const continueApp = useAppsStore(s => s.continueApp)
   const [isContinuing, setIsContinuing] = useState(false)
   const [continueError, setContinueError] = useState(false)
+  const [sendRefused, setSendRefused] = useState(false)
 
   const errorEntry = activityEntries?.find(
     e => e.runId === runId && e.type === 'run_error' && e.content.resumeAvailable === true
@@ -110,6 +112,7 @@ export function SessionDetailView({ appId, runId }: SessionDetailViewProps) {
 
   // ── Initial load on run change ──
   useEffect(() => {
+    setSendRefused(false)
     loadSession(true)
   }, [appId, runId]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -134,26 +137,46 @@ export function SessionDetailView({ appId, runId }: SessionDetailViewProps) {
   // ── Send a message to this run ──
   // Backend routes: live run → inject into the current turn; finished run →
   // resume the run's session and continue. The view doesn't need to distinguish.
-  const handleSend = useCallback((text: string) => {
+  // Refused (the run is closed, or the app is busy with another one): the echo
+  // is taken back and false tells the composer to put the words and cards back.
+  const handleSend = useCallback(async (text: string, references?: ContentReference[]): Promise<boolean> => {
     const trimmed = text.trim()
-    if (!trimmed) return
+    const attached = references?.length ? references : undefined
+    if (!trimmed && !attached) return false
+    const echoId = `user-${Date.now()}`
+    setSendRefused(false)
     // Optimistic echo; the next JSONL poll/reload reconciles to the persisted copy.
     setMessages(prev => [...prev, {
-      id: `user-${Date.now()}`,
+      id: echoId,
       role: 'user',
       content: trimmed,
       timestamp: new Date().toISOString(),
+      ...(attached ? { metadata: { references: attached } } : {}),
     }])
     setLoadState('loaded')
     requestAnimationFrame(() => messageListRef.current?.scrollToBottom('auto'))
-    api.appInjectRun(appId, runId, trimmed)
-      .then(res => {
-        if (!res.success) console.error('[SessionDetailView] Send failed:', res.error)
+    try {
+      const res = await api.appInjectRun(appId, runId, trimmed, attached)
+      if (res.success) {
         // Pull the AI's response in promptly without waiting for the next poll tick.
-        else setTimeout(() => loadSession(false), 600)
-      })
-      .catch(err => console.error('[SessionDetailView] Send error:', err))
+        setTimeout(() => loadSession(false), 600)
+        return true
+      }
+      console.error('[SessionDetailView] Send refused:', res.error)
+    } catch (err) {
+      console.error('[SessionDetailView] Send error:', err)
+    }
+    setMessages(prev => prev.filter(m => m.id !== echoId))
+    setSendRefused(true)
+    return false
   }, [appId, runId, loadSession])
+
+  // The composer's send; a run takes text and attached paths, not images.
+  const handleComposerSend = useCallback(
+    (text: string, _images?: unknown, _thinkingEnabled?: boolean, options?: { references?: ContentReference[] }) =>
+      handleSend(text, options?.references),
+    [handleSend]
+  )
 
   // ── Loading state ──
   if (loadState === 'loading') {
@@ -257,8 +280,15 @@ export function SessionDetailView({ appId, runId }: SessionDetailViewProps) {
           Live: typing routes to onInject (mid-turn steer). Finished: a normal
           send that resumes the run. onStop is omitted so no Stop button shows. */}
       <div className="shrink-0 p-4">
+        {sendRefused && (
+          <p role="alert" className="px-1 pb-2 text-xs text-destructive">
+            {t('Your message was not sent: this task may be closed, or the digital human is busy with another one.')}
+          </p>
+        )}
         <InputArea
-          onSend={handleSend}
+          key={`run:${appId}:${runId}`}
+          draftKey={`run:${appId}:${runId}`}
+          onSend={handleComposerSend}
           onInject={handleSend}
           isGenerating={isLive}
           placeholder={isLive ? t('Add a message to guide this run...') : t('Reply to continue this run...')}

@@ -40,6 +40,8 @@ function makeHandle(overrides: Partial<ActiveRunHandle> = {}): {
     runId: 'run-1',
     appId: 'app-1',
     spaceId: 'space-1',
+    triggerType: 'manual',
+    startedAt: 0,
     session: { send },
     writer: { writeTrigger, writeEvent },
     ...overrides,
@@ -84,7 +86,7 @@ describe('active-runs: injectIntoActiveRun', () => {
 
     injectIntoActiveRun('app-1', 'run-1', 'check the staging URL')
 
-    expect(writeTrigger).toHaveBeenCalledWith('check the staging URL')
+    expect(writeTrigger).toHaveBeenCalledWith('check the staging URL', undefined, undefined, undefined, undefined)
     expect(send).toHaveBeenCalledWith('check the staging URL')
 
     // Ordering: persist before send (so a message survives even if the turn ends instantly)
@@ -99,7 +101,7 @@ describe('active-runs: injectIntoActiveRun', () => {
 
     injectIntoActiveRun('app-1', 'run-1', '  go back to step 2  \n')
 
-    expect(writeTrigger).toHaveBeenCalledWith('go back to step 2')
+    expect(writeTrigger).toHaveBeenCalledWith('go back to step 2', undefined, undefined, undefined, undefined)
     expect(send).toHaveBeenCalledWith('go back to step 2')
   })
 
@@ -173,6 +175,8 @@ describe('active-runs: injection persistence (real JSONL round-trip)', () => {
       runId,
       appId,
       spaceId: 'space-real',
+      triggerType: 'manual',
+      startedAt: 0,
       session: { send },
       writer,
     })

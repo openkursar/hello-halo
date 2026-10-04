@@ -93,3 +93,12 @@ export interface FileQueryResult {
   /** The space has at least one indexed path, whether or not any matched. */
   hasPaths: boolean
 }
+
+/** One answer of `artifact:resolve-paths`: whether a mentioned path is a file or folder of the space. */
+export interface ResolvedArtifactPath {
+  /** The path as asked. */
+  path: string
+  /** Absolute path of an existing file or folder inside the space; null when missing or outside it. */
+  absolutePath: string | null
+  isDirectory: boolean
+}

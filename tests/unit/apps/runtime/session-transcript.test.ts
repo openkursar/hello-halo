@@ -388,6 +388,37 @@ describe('provenance', () => {
   })
 })
 
+describe('references', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'halo-transcript-refs-'))
+  })
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  const pointed = [{ id: 'r1', source: { kind: 'path' as const, path: '/tmp/a.pdf', isDirectory: false } }]
+
+  it('round-trips the places a message pointed at, a message of cards alone included', () => {
+    const writer = openSessionWriter(dir, 'app-1', 'run-1')
+    writer.writeTrigger('', undefined, undefined, undefined, pointed)
+    writer.writeTrigger('and why?', undefined, undefined, { source: 'injection' }, pointed)
+    writer.writeTrigger('plain')
+    const messages = readSessionMessages(dir, 'app-1', 'run-1')
+    expect(messages.map(m => [m.content, m.metadata?.references?.length ?? 0, m.source ?? null])).toEqual([
+      ['', 1, null],
+      ['and why?', 1, 'injection'],
+      ['plain', 0, null],
+    ])
+    expect(messages[0].metadata?.references).toEqual(pointed)
+  })
+
+  it('reads references only from trigger records', () => {
+    const notTrigger: StoredEvent = { ...user('x', 1), _isTrigger: undefined, _references: pointed }
+    expect(convertEventsToMessages([notTrigger])[0].metadata).toBeUndefined()
+  })
+})
+
 describe('parse cache', () => {
   let dir: string
   beforeEach(() => {

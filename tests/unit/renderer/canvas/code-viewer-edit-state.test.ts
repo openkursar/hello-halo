@@ -9,6 +9,8 @@ import { renderToStaticMarkup } from 'react-dom/server'
 
 vi.mock('../../../../src/renderer/i18n', () => ({ useTranslation: () => ({ t: (text: string) => text }) }))
 vi.mock('../../../../src/renderer/api', () => ({ api: { isRemoteMode: () => false } }))
+vi.mock('../../../../src/renderer/hooks/useCanvasLifecycle', () => ({ useCanvasActions: () => ({ consumeReveal: vi.fn() }) }))
+vi.mock('../../../../src/renderer/components/references', () => ({ referenceExtension: () => [], revealInEditor: vi.fn(), notifyRevealOutcome: vi.fn() }))
 
 const { CodeViewer } = await import('../../../../src/renderer/components/canvas/viewers/CodeViewer')
 

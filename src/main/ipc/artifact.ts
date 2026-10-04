@@ -11,6 +11,7 @@ import { shell } from 'electron'
 import {
   listArtifacts,
   queryFiles,
+  resolveArtifactPaths,
   listArtifactsTree,
   loadTreeChildren,
   retainArtifactSpace,
@@ -49,6 +50,17 @@ export function registerArtifactHandlers(): void {
         return { success: true, data: await queryFiles(spaceId, query, limit) }
       } catch (error) {
         console.error('[IPC] artifact:query-files error:', error)
+        return { success: false, error: (error as Error).message }
+      }
+    },
+
+    // Which mentioned paths are existing files of the space (links in AI replies)
+    resolveArtifactPaths: async (spaceId: string, paths: string[], baseDir?: string) => {
+      try {
+        if (typeof spaceId !== 'string' || !Array.isArray(paths)) return { success: false, error: 'Invalid arguments' }
+        return { success: true, data: await resolveArtifactPaths(spaceId, paths, typeof baseDir === 'string' ? baseDir : undefined) }
+      } catch (error) {
+        console.error('[IPC] artifact:resolve-paths error:', error)
         return { success: false, error: (error as Error).message }
       }
     },

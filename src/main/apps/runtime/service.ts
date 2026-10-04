@@ -57,6 +57,7 @@ import { truncateUtf16Safe } from './text-truncate'
 import { getSpace } from '../../services/space.service'
 import { getEscalationQuestions, formatEscalationAnswer } from '../../../shared/apps/app-types'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
+import type { ContentReference } from '../../../shared/types/content-reference'
 import { broadcastToAll } from '../../http/websocket'
 import { destroyChatBrowserContextsForApp } from './app-chat-browser'
 import { sendToRenderer } from '../../foundation/window.service'
@@ -362,7 +363,8 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     app: InstalledApp,
     sessionId?: string,
     userMessage?: string,
-    interactive?: boolean
+    interactive?: boolean,
+    references?: ContentReference[]
   ): TriggerContext {
     return {
       type: 'continue_followup',
@@ -372,6 +374,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         sessionId,
         userMessage,
         interactive,
+        ...(references?.length ? { references } : {}),
       },
     }
   }
@@ -1497,20 +1500,20 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       })
     },
 
-    async injectIntoRun(appId: string, runId: string, text: string): Promise<void> {
+    async injectIntoRun(appId: string, runId: string, text: string, references?: ContentReference[]): Promise<void> {
       const app = appManager.getApp(appId)
       if (!app) {
         throw new Error(`App not found: ${appId}`)
       }
       const trimmed = text.trim()
-      if (!trimmed) {
+      if (!trimmed && !references?.length) {
         throw new Error('Cannot send an empty message')
       }
 
       // Live run → inject into the current turn; the AI absorbs it at the next
       // tool boundary (steer an in-progress run).
       if (isRunActive(runId)) {
-        injectIntoActiveRun(appId, runId, trimmed)
+        injectIntoActiveRun(appId, runId, trimmed, references)
         console.log(`[Runtime] Injected into live run: app=${appId}, run=${runId.slice(0, 8)}`)
         return
       }
@@ -1534,7 +1537,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       // A follow-up to a prematurely-ended run (status 'error', report never
       // called) is left non-interactive so it still drives the task to completion.
       const interactive = run.status === 'ok'
-      const trigger = buildContinueTriggerContext(app, run.sessionId, trimmed, interactive)
+      const trigger = buildContinueTriggerContext(app, run.sessionId, trimmed, interactive, references)
       executeWithConcurrency(app, trigger, {
         existingRunId: run.runId,
         existingSessionKey: run.sessionKey,

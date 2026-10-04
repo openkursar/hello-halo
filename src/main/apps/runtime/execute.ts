@@ -43,6 +43,7 @@ import { autoSyncRunResult } from './im-auto-sync'
 import { getApiCredentials, getApiCredentialsForSource, getHeadlessElectronPath, getMcpServersForRequires } from '../../services/agent/helpers'
 import { resolveCredentialsForSdk, buildUserSessionSdkOptions } from '../../services/agent/sdk-config'
 import { toEngineSystemPrompt } from '../../services/agent/system-prompt'
+import { formatReferencesBlock } from '../../services/agent'
 import { applyReasoningEffort } from '../../services/agent/reasoning-effort'
 import { getOrCreateV2Session } from '../../services/agent/session-manager'
 import { admitTransientSession } from './session-budget'
@@ -588,9 +589,12 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     // ── 5b. Open session writer for "View process" ────────
     const spacePath = environment.spacePath
     let sessionWriter: SessionWriter | undefined
+    // A follow-up from the run-detail view may carry the places the user pointed
+    // at: recorded as references, read by the engine expanded ahead of the text.
+    const followupReferences = trigger.type === 'continue_followup' ? trigger.continue?.references : undefined
     if (spacePath) {
       sessionWriter = openSessionWriter(spacePath, app.id, runId)
-      sessionWriter.writeTrigger(initialMessage)
+      sessionWriter.writeTrigger(initialMessage, undefined, undefined, undefined, followupReferences)
     }
 
     // ── 5c. Make the run injectable ────────────────────────
@@ -611,7 +615,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     // ── 6. Process stream (headless: persist JSONL + detect report_to_user) ──
     let streamResult = await processStream(
       session,
-      initialMessage,
+      formatReferencesBlock(followupReferences, workDir) + initialMessage,
       abortController,
       runTag,
       sessionWriter,

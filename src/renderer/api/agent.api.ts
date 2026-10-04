@@ -12,47 +12,11 @@ import type {
   ApiResponse,
 } from './_shared'
 import type { Goal, GoalInput } from '../../shared/types/goal'
-import type { ReasoningEffortLevel } from '../../shared/constants/reasoning-effort'
+import type { AgentInjectRequest, AgentSendRequest } from '../../shared/types/agent-send'
 
 export const agentApi = {
   // ===== Agent =====
-  sendMessage: async (request: {
-    spaceId: string
-    conversationId: string
-    message: string
-    resumeSessionId?: string
-    images?: Array<{
-      id: string
-      type: 'image'
-      mediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'
-      data: string
-      name?: string
-      size?: number
-    }>
-    thinkingEnabled?: boolean  // Enable extended thinking mode
-    reasoningEffort?: ReasoningEffortLevel  // Depth picked for this send; overrides thinkingEnabled
-    knowledgeBaseId?: string  // Chat-with-knowledge-base turn
-    goal?: GoalInput  // Set as the conversation goal before this message runs
-    canvasContext?: {  // Canvas context for AI awareness
-      isOpen: boolean
-      tabCount: number
-      activeTab: {
-        type: string
-        title: string
-        url?: string
-        path?: string
-        terminalSessionId?: string
-      } | null
-      tabs: Array<{
-        type: string
-        title: string
-        url?: string
-        path?: string
-        terminalSessionId?: string
-        isActive: boolean
-      }>
-    }
-  }): Promise<ApiResponse> => {
+  sendMessage: async (request: AgentSendRequest): Promise<ApiResponse> => {
     // Subscribe to conversation events before sending
     if (!isElectron()) {
       subscribeToConversation(request.conversationId)
@@ -61,7 +25,7 @@ export const agentApi = {
     if (isElectron()) {
       return window.halo.sendMessage(request)
     }
-    return httpRequest('POST', '/api/agent/message', request)
+    return httpRequest('POST', '/api/agent/message', { ...request })
   },
 
   stopGeneration: async (conversationId?: string): Promise<ApiResponse> => {
@@ -121,11 +85,11 @@ export const agentApi = {
   },
 
   // Inject a mid-turn message into an active session (Agent Team mode)
-  injectMessage: async (data: { conversationId: string; message: string }): Promise<ApiResponse> => {
+  injectMessage: async (data: AgentInjectRequest): Promise<ApiResponse> => {
     if (isElectron()) {
       return window.halo.injectMessage(data)
     }
-    return httpRequest('POST', '/api/agent/inject-message', data)
+    return httpRequest('POST', '/api/agent/inject-message', { ...data })
   },
 
   // Test MCP server connections

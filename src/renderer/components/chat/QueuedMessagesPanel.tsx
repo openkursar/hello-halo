@@ -28,7 +28,8 @@ export function QueuedMessagesPanel({ messages }: QueuedMessagesPanelProps) {
         {messages.map((msg, i) => (
           <div key={i} className="flex items-start gap-1.5 text-xs text-muted-foreground/60">
             <span className="mt-px shrink-0 select-none">↳</span>
-            <span className="break-words min-w-0">{msg}</span>
+            {/* A message of cards that name nothing (an untitled conversation's passage) */}
+            <span className="break-words min-w-0">{msg || t('References')}</span>
           </div>
         ))}
       </div>

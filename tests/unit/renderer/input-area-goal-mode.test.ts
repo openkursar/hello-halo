@@ -14,6 +14,18 @@ vi.mock('../../../src/renderer/api', () => ({ api: {} }))
 vi.mock('../../../src/renderer/i18n', () => ({ useTranslation: () => ({ t: (text: string) => text }), default: { t: (text: string) => text } }))
 vi.mock('../../../src/renderer/stores/app.store', () => ({ useAppStore: (select: any) => select({ config: null }) }))
 vi.mock('../../../src/renderer/stores/chat.store', () => ({ useChatStore: Object.assign((select: any) => select({ pendingComposerInput: null, currentSpaceId: 's' }), { getState: () => ({ clearComposerDraft: vi.fn() }), setState: vi.fn() }) }))
+vi.mock('../../../src/renderer/stores/space.store', () => ({ useSpaceStore: (select: any) => select({ currentSpace: null }) }))
+// The composer's cards: the real store, its hooks read straight from the state (no React render here).
+vi.mock('../../../src/renderer/stores/composer-references.store', async original => {
+  const real = await original<typeof import('../../../src/renderer/stores/composer-references.store')>()
+  const store = real.useComposerReferencesStore
+  return {
+    ...real,
+    useComposerReferences: (key: string) => store.getState().drafts.get(key) ?? [],
+    useComposerReferencesStore: Object.assign((select: any) => select(store.getState()), store),
+  }
+})
+vi.mock('../../../src/renderer/components/references', () => ({ ComposerReferenceChips: () => null, notifyReferenceLimit: vi.fn(), commitCommentEdits: vi.fn(), useHasNewCommentText: () => false }))
 vi.mock('../../../src/renderer/stores/onboarding.store', () => ({ useOnboardingStore: () => ({ isActive: false, currentStep: null }) }))
 vi.mock('../../../src/renderer/components/onboarding/onboardingData', () => ({ getOnboardingPrompt: () => '' }))
 vi.mock('../../../src/renderer/components/chat/composer-menu/useComposerToolsets', () => ({ useComposerToolsets: () => ({ list: [], extraEnabled: [], requested: new Set(), toggle: vi.fn() }) }))

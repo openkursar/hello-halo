@@ -15,12 +15,12 @@ import {
   Loader2,
   Braces,
 } from 'lucide-react'
-import { TodoCard, parseTodoInput } from '../tool/TodoCard'
+import { TodoCard } from '../tool/TodoCard'
+import { describeThoughtActivity, parseTodoInput } from '../../utils/thought-activity'
 import { ToolResultViewer } from './tool-result'
 import { SubAgentTimeline } from './SubAgentTimeline'
 import { ErrorContent } from './ErrorContent'
 import {
-  truncateText,
   getThoughtIcon,
   getThoughtColor,
   getThoughtLabelKey,
@@ -37,101 +37,6 @@ interface ThoughtProcessProps {
   thoughts: Thought[]
   isThinking: boolean
 }
-
-// i18n static keys for extraction (DO NOT REMOVE)
-// prettier-ignore
-void function _i18nActionKeys(t: (k: string) => string) {
-  t('Generating {{tool}}...'); t('Reading {{file}}...'); t('Writing {{file}}...');
-  t('Editing {{file}}...'); t('Searching {{pattern}}...'); t('Matching {{pattern}}...');
-  t('Executing {{command}}...'); t('Fetching {{url}}...'); t('Searching {{query}}...');
-  t('Updating tasks...'); t('Executing {{task}}...'); t('Waiting for user response...');
-  t('Setting goal...'); t('Updating goal...'); t('Completing goal...'); t('Abandoning goal...');
-  t('Processing...'); t('Thinking...');
-}
-
-// Get human-friendly action summary for collapsed header (isThinking=true only)
-// Shows what the agent is currently doing with key details (filename, command, etc.)
-function getActionSummaryData(thoughts: Thought[]): { key: string; params?: Record<string, string> } {
-  // Search from end to find the most recent main-agent action (skip sub-agent thoughts)
-  for (let i = thoughts.length - 1; i >= 0; i--) {
-    const th = thoughts[i]
-    if (th.parentToolUseId) continue  // Skip sub-agent thoughts
-    if (th.type === 'tool_use' && th.toolName) {
-      // If tool is still streaming (not ready), show generating
-      if (th.isStreaming || !th.isReady) {
-        return { key: 'Generating {{tool}}...', params: { tool: th.toolName } }
-      }
-      const input = th.toolInput
-      switch (th.toolName) {
-        case 'Read': return { key: 'Reading {{file}}...', params: { file: extractFileName(input?.file_path) } }
-        case 'Write': return { key: 'Writing {{file}}...', params: { file: extractFileName(input?.file_path) } }
-        case 'Edit': return { key: 'Editing {{file}}...', params: { file: extractFileName(input?.file_path) } }
-        case 'Grep': return { key: 'Searching {{pattern}}...', params: { pattern: extractSearchTerm(input?.pattern) } }
-        case 'Glob': return { key: 'Matching {{pattern}}...', params: { pattern: extractSearchTerm(input?.pattern) } }
-        case 'Bash': return { key: 'Executing {{command}}...', params: { command: extractCommand(input?.command) } }
-        case 'WebFetch': return { key: 'Fetching {{url}}...', params: { url: extractUrl(input?.url) } }
-        case 'WebSearch': return { key: 'Searching {{query}}...', params: { query: extractSearchTerm(input?.query) } }
-        case 'TodoWrite': return { key: 'Updating tasks...' }
-        case 'Task':
-          if (input?.subagent_type === 'web-searcher') {
-            return { key: 'Searching {{query}}...', params: { query: extractSearchTerm(input?.prompt) } }
-          }
-          return { key: 'Executing {{task}}...', params: { task: extractSearchTerm(input?.description) } }
-        case 'NotebookEdit': return { key: 'Editing {{file}}...', params: { file: extractFileName(input?.notebook_path) } }
-        case 'AskUserQuestion': return { key: 'Waiting for user response...' }
-        case 'Goal': return { key: goalActionKey(input?.action) }
-        default: return { key: 'Processing...' }
-      }
-    }
-    // If most recent is thinking, show thinking status
-    if (th.type === 'thinking') {
-      return { key: 'Thinking...' }
-    }
-  }
-  return { key: 'Thinking...' }
-}
-
-function goalActionKey(action: unknown): string {
-  switch (action) {
-    case 'update': return 'Updating goal...'
-    case 'complete': return 'Completing goal...'
-    case 'abandon': return 'Abandoning goal...'
-    default: return 'Setting goal...'
-  }
-}
-
-// Extract filename from path (e.g., "/foo/bar/config.json" -> "config.json")
-function extractFileName(path: unknown): string {
-  if (typeof path !== 'string' || !path) return 'file'
-  const name = path.split(/[/\\]/).pop() || path
-  return truncateText(name, 20)
-}
-
-// Extract command summary (e.g., "npm install lodash --save" -> "npm install...")
-function extractCommand(cmd: unknown): string {
-  if (typeof cmd !== 'string' || !cmd) return 'command'
-  // Get first part of command (before first space or first 20 chars)
-  const firstPart = cmd.split(' ').slice(0, 2).join(' ')
-  return truncateText(firstPart, 20)
-}
-
-// Extract search term or pattern
-function extractSearchTerm(term: unknown): string {
-  if (typeof term !== 'string' || !term) return '...'
-  return truncateText(term, 15)
-}
-
-// Extract domain from URL
-function extractUrl(url: unknown): string {
-  if (typeof url !== 'string' || !url) return 'page'
-  try {
-    const domain = new URL(url).hostname.replace('www.', '')
-    return truncateText(domain, 20)
-  } catch {
-    return truncateText(url, 20)
-  }
-}
-
 
 // How long the finished reasoning took, measured between its first and last
 // step. Derived from the steps themselves rather than from the clock at render
@@ -408,7 +313,7 @@ export const ThoughtProcess = memo(function ThoughtProcess({ thoughts, isThinkin
   // without this memo — a backwards scan of the whole step list, on the hottest
   // render path in the app.
   const actionSummary = useMemo(
-    () => (isThinking ? getActionSummaryData(thoughts) : null),
+    () => (isThinking ? describeThoughtActivity(thoughts) : null),
     [isThinking, thoughts]
   )
 

@@ -10,21 +10,25 @@
 
 import { v2Sessions } from './session-manager'
 import { addMessage } from '../conversation.service'
+import { getWorkingDir } from './helpers'
+import { formatReferencesBlock } from './references'
+import type { ContentReference } from '../../../shared/types/content-reference'
 
 /**
- * Inject a plain-text message into an active V2 session mid-turn.
+ * Inject a message into an active V2 session mid-turn.
  *
- * 1. Persists the message (source: 'injection')
- * 2. Sends to CC subprocess via v2Session.send()
+ * 1. Persists the message (source: 'injection'), with its references
+ * 2. Sends to CC subprocess via v2Session.send(), references expanded ahead of the text
  *
  * CC absorbs this at the next tool boundary within the current turn; the turn
  * completes normally with a single result. Images are not supported here.
  *
  * @param conversationId - Target conversation
- * @param message - Plain text message to inject
+ * @param message - Message text; may be empty when references carry it
+ * @param references - Places the user pointed at, already checked
  * @throws Error if no active V2 session exists for this conversation
  */
-export function injectMessage(conversationId: string, message: string): void {
+export function injectMessage(conversationId: string, message: string, references?: ContentReference[]): void {
   const v2SessionInfo = v2Sessions.get(conversationId)
   if (!v2SessionInfo) {
     throw new Error(`No active V2 session for conversation: ${conversationId}`)
@@ -35,8 +39,10 @@ export function injectMessage(conversationId: string, message: string): void {
     role: 'user',
     content: message,
     source: 'injection',
+    ...(references && references.length > 0 ? { metadata: { references } } : {}),
   })
 
-  v2SessionInfo.session.send(message)
-  console.log(`[Agent][${conversationId}] Injection message sent and persisted (${message.length} chars)`)
+  const text = formatReferencesBlock(references, getWorkingDir(v2SessionInfo.spaceId)) + message
+  v2SessionInfo.session.send(text)
+  console.log(`[Agent][${conversationId}] Injection message sent and persisted (${text.length} chars${references?.length ? `, references=${references.length}` : ''})`)
 }

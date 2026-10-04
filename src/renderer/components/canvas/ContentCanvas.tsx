@@ -109,8 +109,9 @@ export function ContentCanvas({ className = '' }: ContentCanvasProps) {
         switchToTabIndex(parseInt(e.key))
       }
 
-      // Escape: Collapse canvas (minimize to chat)
-      if (e.key === 'Escape') {
+      // Escape: Collapse canvas (minimize to chat), unless something inside it
+      // (a menu, a popover, a viewer's own layer) already used the key.
+      if (e.key === 'Escape' && !e.defaultPrevented) {
         e.preventDefault()
         setOpen(false)
       }

@@ -13,6 +13,9 @@ export { TerminalCloseGuard } from './TerminalCloseGuard'
 // Opens chat tables in the canvas (wraps pages that host one)
 export { CanvasTableOpener } from './CanvasTableOpener'
 
+// For the page layout: whether a tab's viewer shows a file list of its own
+export { viewerBringsFileList } from './viewer-registry'
+
 // Tab bar
 export { CanvasTabs, CanvasTabBar } from './CanvasTabs'
 

@@ -46,6 +46,7 @@ import {
   formatCanvasContext,
   buildMessageContent,
 } from './message-utils'
+import { formatTurnAttachments } from './references'
 import { prepareNonVisionImageFallback, OCR_TOOLSET_ID } from './image-attachments'
 import { resolveCredentialsForSdk, buildUserSessionSdkOptions } from './sdk-config'
 import { resolveSpaceMemorySession, buildSpaceMemoryPreamble } from './space-memory'
@@ -78,12 +79,14 @@ export async function sendMessage(
     resumeSessionId,
     images,
     thinkingEnabled,
-    canvasContext
+    canvasContext,
+    references,
+    task
   } = request
   // Validated before the message is recorded, so a refused goal leaves no trace.
   const turnGoal = request.goal ? prepareGoalInput(request.goal) : null
 
-  console.log(`[Agent] sendMessage: conv=${conversationId}${images && images.length > 0 ? `, images=${images.length}` : ''}${thinkingEnabled ? ', thinking=ON' : ''}${canvasContext?.isOpen ? `, canvas tabs=${canvasContext.tabCount}` : ''}`)
+  console.log(`[Agent] sendMessage: conv=${conversationId}${images && images.length > 0 ? `, images=${images.length}` : ''}${thinkingEnabled ? ', thinking=ON' : ''}${canvasContext?.isOpen ? `, canvas tabs=${canvasContext.tabCount}` : ''}${references?.length ? `, references=${references.length}` : ''}${task ? `, task=${task.type}/${task.variant}` : ''}`)
 
   // Counted here, not at the IPC handler, so every transport that reaches
   // space chat (desktop IPC and remote HTTP) goes through one call site.
@@ -117,11 +120,16 @@ export async function sendMessage(
   // Add user message to conversation (with images if provided).
   // Assistant placeholder is NOT created here — it is created by the session
   // consumer when CC emits system:init (unified for user + autonomous turns).
+  const messageMetadata = {
+    ...(turnGoal ? { goal: turnGoal } : {}),
+    ...(references && references.length > 0 ? { references } : {}),
+    ...(task ? { task } : {}),
+  }
   const userMessage = addMessage(spaceId, conversationId, {
     role: 'user',
     content: message,
     images: images,
-    ...(turnGoal ? { metadata: { goal: turnGoal } } : {})
+    ...(Object.keys(messageMetadata).length > 0 ? { metadata: messageMetadata } : {})
   })
   let goalApplied = false
 
@@ -268,7 +276,8 @@ export async function sendMessage(
     const memoryPreamble = spaceMemory && !sessionId
       ? await buildSpaceMemoryPreamble(spaceMemory.layout, conversationId)
       : ''
-    const messageWithContext = memoryPreamble + canvasPrefix + (imageFallback?.contextBlock ?? '') + message
+    const attachments = formatTurnAttachments({ references, task, taskInstructions: request.taskInstructions, workDir })
+    const messageWithContext = memoryPreamble + canvasPrefix + attachments + (imageFallback?.contextBlock ?? '') + message
     const messageContent = buildMessageContent(messageWithContext, imageFallback ? undefined : images)
 
     // Send to CC's REPL — consumer handles the response. Mark the dispatch

@@ -12,6 +12,7 @@ import type {
   TeamArtifactOpenResult,
 } from '../../shared/apps/team-types'
 import type { ImageAttachment } from '../../shared/types/image-attachment'
+import type { ContentReference } from '../../shared/types/content-reference'
 
 export const teamApi = {
   // ===== Teams =====
@@ -77,6 +78,8 @@ export const teamApi = {
    * through the office's owner (team wake) rather than local app-chat, which
    * cannot resolve a non-local app. The owner runs the turn and relays the
    * stream + result back. Desktop-only (needs the federation connection).
+   * References travel as text written into the message; `spaceId` is the
+   * space they were taken in, so their paths read relative to its folder.
    */
   teamSendToMember: async (input: {
     teamId: string
@@ -85,6 +88,8 @@ export const teamApi = {
     message: string
     images?: ImageAttachment[]
     thinkingEnabled?: boolean
+    spaceId?: string
+    references?: ContentReference[]
   }): Promise<ApiResponse> => {
     if (isElectron()) return window.halo.teamSendToMember(input)
     return httpRequest('POST', `/api/teams/${input.teamId}/members/${input.appId}/send`, {
@@ -92,6 +97,8 @@ export const teamApi = {
       message: input.message,
       images: input.images,
       thinkingEnabled: input.thinkingEnabled,
+      spaceId: input.spaceId,
+      references: input.references,
     })
   },
 

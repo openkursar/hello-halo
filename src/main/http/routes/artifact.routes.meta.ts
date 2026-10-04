@@ -23,6 +23,8 @@ export const MODULE: RouteModuleMeta = {
     // Per-client lifetime of a space's watcher and caches; only the renderer calls these.
     'POST /api/spaces/:spaceId/artifacts/retain': { expose: 'internal' },
     'POST /api/spaces/:spaceId/artifacts/release': { expose: 'internal' },
+    // Decides which `path:line` mentions in a reply render as links; the agent has its own file tools.
+    'POST /api/spaces/:spaceId/artifacts/resolve': { expose: 'internal' },
 
     'GET /api/spaces/:spaceId/artifacts/tree': {
       expose: 'ai',

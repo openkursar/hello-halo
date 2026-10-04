@@ -5,11 +5,8 @@
 
 import type { Thought } from '../../types'
 import type { FileChangesSummary } from '../../types'
-import type { FileChange, FileChanges, EditChunk } from './types'
+import type { FileChange, FileChanges } from './types'
 import { calculateDiffStats } from '../../../shared/file-changes'
-
-// Re-export EditChunk for DiffContent
-export type { EditChunk } from './types'
 
 /**
  * Extract file name from path
@@ -143,59 +140,9 @@ export function hasFileChanges(changes: FileChanges): boolean {
 }
 
 /**
- * Get all file changes as a flat array (for modal navigation)
- */
-export function getAllFileChanges(changes: FileChanges): FileChange[] {
-  return [...changes.edits, ...changes.writes]
-}
-
-/**
- * Format stats for display (e.g., "+12 -5")
- */
-export function formatStats(stats: { added: number; removed: number }): string {
-  const parts: string[] = []
-  if (stats.added > 0) parts.push(`+${stats.added}`)
-  if (stats.removed > 0) parts.push(`-${stats.removed}`)
-  return parts.join(' ') || '+0'
-}
-
-/**
- * Convert full FileChanges to lightweight FileChangesSummary
- * for storage in message.metadata
- */
-export function toFileChangesSummary(fileChanges: FileChanges): FileChangesSummary {
-  return {
-    edited: fileChanges.edits.map(e => ({
-      file: e.file,
-      added: e.stats.added,
-      removed: e.stats.removed
-    })),
-    created: fileChanges.writes.map(w => ({
-      file: w.file,
-      lines: w.stats.added
-    })),
-    totalFiles: fileChanges.totalFiles,
-    totalAdded: fileChanges.totalAdded,
-    totalRemoved: fileChanges.totalRemoved
-  }
-}
-
-/**
- * Extract file changes summary from thoughts.
- * Returns undefined if no file changes found.
- */
-export function extractFileChangesSummary(thoughts: Thought[]): FileChangesSummary | undefined {
-  const fileChanges = extractFileChanges(thoughts)
-  if (!hasFileChanges(fileChanges)) {
-    return undefined
-  }
-  return toFileChangesSummary(fileChanges)
-}
-
-/**
  * Convert FileChangesSummary back to FileChanges for display components.
  * The resulting FileChange objects have no diff content (oldString/newString),
- * so the diff modal won't show actual diffs — only stats and file names.
+ * only stats and file names.
  *
  * Callers must pass a normalized summary (see normalizeFileChangesSummary).
  */

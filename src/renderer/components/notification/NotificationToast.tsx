@@ -5,7 +5,8 @@
  *
  * Each toast auto-dismisses after its `duration` (0 = sticky). A toast marked
  * `dismissible: false` drops the close button and outlives its own action.
- * Toasts are ordered oldest-first (newest at the bottom of the stack).
+ * Toasts are ordered oldest-first (newest at the bottom of the stack). Screen
+ * readers hear each toast once, through ToastAnnouncer.
  *
  * Mount once in App.tsx — it reads from useNotificationStore.
  */
@@ -13,6 +14,7 @@
 import { useEffect, useRef, useCallback, lazy, Suspense } from 'react'
 import { X, Bell, CheckCircle2, AlertTriangle, AlertCircle } from 'lucide-react'
 import { useNotificationStore, type ToastItem, type ToastVariant } from '../../stores/notification.store'
+import { useTranslation } from '../../i18n'
 
 // This component is mounted at the app root, so a static import would pull the
 // markdown parser into the entry chunk for a surface most sessions never show
@@ -54,6 +56,7 @@ const variantStyles: Record<ToastVariant, VariantStyle> = {
 // ── Single Toast ────────────────────────────────────────
 
 function Toast({ toast }: { toast: ToastItem }) {
+  const { t } = useTranslation()
   const dismiss = useNotificationStore((s) => s.dismiss)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const dismissible = toast.dismissible !== false
@@ -132,6 +135,7 @@ function Toast({ toast }: { toast: ToastItem }) {
           {dismissible && (
             <button
               onClick={handleDismiss}
+              aria-label={t('Dismiss')}
               className="flex-shrink-0 text-muted-foreground hover:text-foreground transition-colors"
             >
               <X className="w-4 h-4" />
@@ -143,18 +147,53 @@ function Toast({ toast }: { toast: ToastItem }) {
   )
 }
 
+// ── Screen reader announcements ─────────────────────────
+
+/**
+ * What a screen reader hears, one line per toast shown: errors in an alert
+ * region, everything else in a polite status region. Both regions stay
+ * mounted — a region inserted together with its text is not announced by
+ * every reader — and the cards themselves carry no live role, so nothing is
+ * read twice. `aria-atomic="false"` overrides both roles' implicit `true`: a
+ * new toast reads only its own line, not the ones still showing, and a
+ * re-render changes no text and reads nothing. Showing an id again is a new
+ * event (a new `createdAt`) and is read again. Markdown bodies are long,
+ * server-authored copy, so only their title is read.
+ */
+function ToastAnnouncer({ toasts }: { toasts: ToastItem[] }) {
+  const line = (toast: ToastItem) => (
+    <div key={`${toast.id}:${toast.createdAt}`}>
+      <span>{toast.title}</span>
+      {toast.body && toast.bodyFormat !== 'markdown' && <span> {toast.body}</span>}
+    </div>
+  )
+  return (
+    <>
+      <div role="status" aria-live="polite" aria-atomic="false" className="sr-only">
+        {toasts.filter((toast) => toast.variant !== 'error').map(line)}
+      </div>
+      <div role="alert" aria-live="assertive" aria-atomic="false" className="sr-only">
+        {toasts.filter((toast) => toast.variant === 'error').map(line)}
+      </div>
+    </>
+  )
+}
+
 // ── Container ───────────────────────────────────────────
 
 export function NotificationToast() {
   const toasts = useNotificationStore((s) => s.toasts)
 
-  if (toasts.length === 0) return null
-
   return (
-    <div className="fixed bottom-4 inset-x-4 sm:inset-x-auto sm:right-4 z-50 flex flex-col items-stretch sm:items-end gap-2 pointer-events-none">
-      {toasts.map((toast) => (
-        <Toast key={toast.id} toast={toast} />
-      ))}
-    </div>
+    <>
+      <ToastAnnouncer toasts={toasts} />
+      {toasts.length > 0 && (
+        <div className="fixed bottom-4 inset-x-4 sm:inset-x-auto sm:right-4 z-50 flex flex-col items-stretch sm:items-end gap-2 pointer-events-none">
+          {toasts.map((toast) => (
+            <Toast key={toast.id} toast={toast} />
+          ))}
+        </div>
+      )}
+    </>
   )
 }

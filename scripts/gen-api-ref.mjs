@@ -65,6 +65,7 @@ const CONT_INDENT = '          '
 const ROUTE_FILES = [
   'config', 'ai-sources', 'space', 'agent', 'terminal', 'artifact',
   'notify', 'im', 'system', 'apps', 'team', 'store', 'tlon', 'task',
+  'git', 'code-review',
 ]
 
 /**

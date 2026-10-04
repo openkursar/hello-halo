@@ -13,6 +13,7 @@ import {
   joinTeamOffice,
   leaveTeamOffice,
 } from '../../controllers/team-invite.controller'
+import { toMemberMessage } from '../../controllers/team-member-message.controller'
 import type { OfficeScope } from '../../apps/federation/index'
 import type { ImageAttachment } from '../../../shared/types/image-attachment'
 import type {
@@ -400,15 +401,22 @@ export function registerTeamRoutes(app: Express): void {
         }
       }
 
-      const { message, images, thinkingEnabled } = (req.body ?? {}) as {
-        message?: string
+      const { images, thinkingEnabled } = (req.body ?? {}) as {
         images?: ImageAttachment[]
         thinkingEnabled?: boolean
       }
-      if (typeof message !== 'string' || message.length === 0) {
+      // The space names a folder of this machine, so only the owner's own
+      // client may say which one its references were taken in.
+      const built = toMemberMessage({ ...req.body, spaceId: cred ? undefined : req.body?.spaceId })
+      if (!built.ok) {
+        res.status(400).json({ success: false, error: built.error })
+        return
+      }
+      if (built.message.length === 0) {
         res.status(400).json({ success: false, error: 'Missing required field: message' })
         return
       }
+      const message = built.message
       // One chain for send, history and stop (open run epoch → the member's
       // long-lived chat → the latest epoch even when sealed), so a caller that
       // omits epochId writes to, reads from and stops the same conversation.

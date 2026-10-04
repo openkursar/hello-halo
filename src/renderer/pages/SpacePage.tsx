@@ -29,16 +29,19 @@ import { Header } from '../components/layout/Header'
 import { SpaceSelector } from '../components/layout/SpaceSelector'
 import { MobileOverflowMenu } from '../components/layout/MobileOverflowMenu'
 import { HeaderMoreMenu } from '../components/layout/HeaderMoreMenu'
-import { CanvasTableOpener, ContentCanvas, TerminalCloseGuard } from '../components/canvas'
+import { CanvasTableOpener, ContentCanvas, TerminalCloseGuard, viewerBringsFileList } from '../components/canvas'
 import { GoalCanvasSupport } from '../components/goal'
+import { ReferenceLayer } from '../components/references'
 import { GitBashWarningBanner } from '../components/setup/GitBashWarningBanner'
 import { api } from '../api'
 import { useLayoutPreferences } from '../hooks/useLayoutPreferences'
 import { useConversationTouchedFiles } from '../hooks/useConversationTouchedFiles'
+import { useRailYield } from '../hooks/useRailYield'
 import { useWindowMaximize } from '../components/canvas/viewers/useWindowMaximize'
 import { X, MessageSquare, Folder } from 'lucide-react'
 import { SearchIcon } from '../components/search/SearchIcon'
 import { useSearchShortcuts } from '../hooks/useSearchShortcuts'
+import { useChangesShortcut } from '../hooks/useSpaceQuickActions'
 import { useTranslation } from '../i18n'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { useSpaceDigitalHumans } from '../hooks/useSpaceDigitalHumans'
@@ -97,6 +100,11 @@ export function SpacePage() {
   const isCanvasTransitioning = useCanvasStore(state => state.isTransitioning)
   const setCanvasOpen = useCanvasStore(state => state.setOpen)
   const setCanvasMaximized = useCanvasStore(state => state.setMaximized)
+  const activeTabId = useCanvasStore(state => state.activeTabId)
+  const activeTabBringsFileList = useCanvasStore(state => {
+    const tab = state.tabs.find(item => item.id === state.activeTabId)
+    return tab !== undefined && viewerBringsFileList(tab.type)
+  })
 
   // Mobile detection
   const isMobile = useIsMobile()
@@ -114,10 +122,33 @@ export function SpacePage() {
     chatWidthMax,
   } = useLayoutPreferences(currentSpace?.id, isMaximized)
 
+  // The rail steps aside while the canvas needs its room (see utils/rail-yield);
+  // the user's own setting stays as it is, so the rail comes back by itself.
+  const mainRowRef = useRef<HTMLDivElement>(null)
+  const canvasBoxRef = useRef<HTMLDivElement>(null)
+  const {
+    yielded: railYielded,
+    mayAutoOpen: railMayAutoOpen,
+    userSet: userSetRail,
+    setRailWidth,
+  } = useRailYield({
+    // Only while the desktop row (measured below) is on screen.
+    canvasOpen: !isMobile && isCanvasOpen && !!currentSpace,
+    activeTabId,
+    bringsFileList: activeTabBringsFileList,
+    rowRef: mainRowRef,
+    canvasRef: canvasBoxRef,
+  })
+  const railShown = effectiveRailExpanded && !railYielded
+  const setRailByUser = useCallback((open: boolean) => {
+    setRailExpanded(open)
+    userSetRail(open)
+  }, [setRailExpanded, userSetRail])
+
   const digitalHumans = useSpaceDigitalHumans(currentSpace?.id ?? null)
   // Read by the async space init, whose closure would otherwise see mount-time values.
   const homeViewStateRef = useRef({ dhCount: 0, railOpen: false })
-  homeViewStateRef.current = { dhCount: digitalHumans.length, railOpen: !isMobile && effectiveRailExpanded }
+  homeViewStateRef.current = { dhCount: digitalHumans.length, railOpen: !isMobile && railShown }
   const pendingHomeViewEntryRef = useRef<HomeEntry | null>(null)
 
   useEffect(() => {
@@ -273,10 +304,18 @@ export function SpacePage() {
     initSpace()
   }, [currentSpace?.id]) // Only re-run when space ID changes
 
-  // Persist artifact rail width on drag end
+  // Persist artifact rail width on drag end; a rail the user just sized stays open beside the canvas.
   const handleArtifactRailWidthChange = useCallback((width: number) => {
     persistLayout({ artifactRailWidth: width })
-  }, [])
+    userSetRail(true)
+  }, [userSetRail])
+
+  // The composer is out of sight behind a maximized canvas, or the full-screen canvas on a phone.
+  const composerVisible = !isCanvasMaximized && !(isMobile && isCanvasOpen)
+  const revealComposer = useCallback(() => {
+    if (isCanvasMaximized) setCanvasMaximized(false)
+    if (isMobile && isCanvasOpen) setCanvasOpen(false)
+  }, [isCanvasMaximized, isMobile, isCanvasOpen, setCanvasMaximized, setCanvasOpen])
 
   // Exit maximized mode when canvas closes
   useEffect(() => {
@@ -318,18 +357,19 @@ export function SpacePage() {
   // hide the fact that local files just changed. Scoped to growth *within*
   // the same conversation — switching to a different (or brand-new) one
   // just resyncs the baseline below, it never forces the rail open, since
-  // that conversation's changes aren't new right now.
+  // that conversation's changes aren't new right now. Not while the rail is
+  // stepping aside for the canvas: the two would take turns.
   const touchedFiles = useConversationTouchedFiles()
   const touchedFilesBaselineRef = useRef({ conversationId: activeConversationId, size: touchedFiles.size })
 
   useEffect(() => {
     const baseline = touchedFilesBaselineRef.current
     const sameConversation = baseline.conversationId === activeConversationId
-    if (sameConversation && touchedFiles.size > baseline.size && !effectiveRailExpanded) {
+    if (sameConversation && touchedFiles.size > baseline.size && !effectiveRailExpanded && railMayAutoOpen) {
       setRailExpanded(true)
     }
     touchedFilesBaselineRef.current = { conversationId: activeConversationId, size: touchedFiles.size }
-  }, [touchedFiles, activeConversationId, effectiveRailExpanded, setRailExpanded])
+  }, [touchedFiles, activeConversationId, effectiveRailExpanded, setRailExpanded, railMayAutoOpen])
 
   // Consume a workspace card's asset-chip request (space.store's
   // pendingArtifactRailTab, set by SpacesPage before switching here) — force
@@ -338,9 +378,9 @@ export function SpacePage() {
   const pendingArtifactRailTab = useSpaceStore(state => state.pendingArtifactRailTab)
   useEffect(() => {
     if (!pendingArtifactRailTab) return
-    setRailExpanded(true)
+    setRailByUser(true)
     useSpaceStore.getState().setPendingArtifactRailTab(null)
-  }, [pendingArtifactRailTab, setRailExpanded])
+  }, [pendingArtifactRailTab, setRailByUser])
 
   // Listen for exit-maximized event from overlay
   useEffect(() => {
@@ -356,6 +396,7 @@ export function SpacePage() {
     enabled: true,
     onSearch: (scope) => openSearch(scope, 'shortcut')
   })
+  useChangesShortcut()
 
   if (!currentSpace) {
     return (
@@ -373,6 +414,13 @@ export function SpacePage() {
             collapsed. Renders its prompt via a portal; no layout footprint. */}
         <TerminalCloseGuard />
         <GoalCanvasSupport />
+        {/* Selections in the canvas and the chat become cards in this conversation's composer. */}
+        <ReferenceLayer
+          conversationId={activeConversationId}
+          conversationTitle={currentConversationTitle ?? ''}
+          composerVisible={composerVisible}
+          onRevealComposer={revealComposer}
+        />
 
         {/*
           ChatCapsule overlay is now managed via IPC to render above BrowserView.
@@ -420,20 +468,20 @@ export function SpacePage() {
               <div className="hidden sm:block">
                 <button
                   onClick={() => {
-                    const open = !effectiveRailExpanded
+                    const open = !railShown
                     trackHome('home.rail.toggle', { open, surface: 'header_button' })
-                    setRailExpanded(open)
+                    setRailByUser(open)
                   }}
                   className={`w-8 h-8 rounded-sm flex items-center justify-center transition-colors ease-halo ${
                     // Open reads as pressed, not highlighted: the rail itself
                     // already shows the state, and accent color is kept for
                     // where-you-are navigation.
-                    effectiveRailExpanded
+                    railShown
                       ? 'bg-secondary text-foreground'
                       : 'text-faint-foreground hover:bg-secondary hover:text-foreground'
                   }`}
-                  title={effectiveRailExpanded ? t('Close workspace resources') : t('Open workspace resources')}
-                  aria-pressed={effectiveRailExpanded}
+                  title={railShown ? t('Close workspace resources') : t('Open workspace resources')}
+                  aria-pressed={railShown}
                 >
                   <Folder className="w-[17px] h-[17px]" strokeWidth={1.8} />
                 </button>
@@ -456,7 +504,7 @@ export function SpacePage() {
         )}
 
         {/* Main content */}
-        <div className="flex-1 flex overflow-hidden">
+        <div ref={mainRowRef} className="flex-1 flex overflow-hidden">
           {/* Conversation list sidebar - always visible on desktop (prototype has
               no "fully hidden" state, only the canvas-open narrow one); width
               drag-resize and the canvas-open collapse still apply. Unmounted
@@ -502,6 +550,7 @@ export function SpacePage() {
 
               {/* Content Canvas - main viewing area when open, full width when maximized */}
               <div
+                ref={canvasBoxRef}
                 className={`
                   min-w-0 overflow-hidden
                   ${isCanvasOpen || isCanvasMaximized
@@ -524,16 +573,18 @@ export function SpacePage() {
           {/* Artifact rail - defaults collapsed and auto-opens when the
               conversation writes/edits files, or a workspace card's asset chip
               asks for a specific tab (both effects above); otherwise follows
-              the user's own toggle, persisted per space. Only exception:
-              forced closed while the canvas is maximized (see useEffect
-              above), restoring on exit. */}
+              the user's own toggle, persisted per space. Exceptions: forced
+              closed while the canvas is maximized (see useEffect above),
+              restoring on exit, and hidden while it steps aside for the
+              canvas (useRailYield). */}
           {!isMobile && (
             <ArtifactRail
-              externalExpanded={effectiveRailExpanded}
-              onExpandedChange={setRailExpanded}
+              externalExpanded={railShown}
+              onExpandedChange={setRailByUser}
               initialTab={pendingArtifactRailTab ?? undefined}
               initialWidth={artifactRailWidthConfig}
               onWidthChange={handleArtifactRailWidthChange}
+              onOpenWidthChange={setRailWidth}
             />
           )}
         </div>

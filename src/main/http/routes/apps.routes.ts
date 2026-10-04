@@ -42,7 +42,6 @@ import {
 } from './_shared'
 import type {
   ActivityQueryOptions,
-  AppChatRequest,
   AppErrorCode,
   AppListFilter,
   EscalationResponse,
@@ -51,9 +50,7 @@ import type {
 } from './_shared'
 import { resolveAppChatTarget, resolveUserInjectTarget, type AppChatTarget } from '../../controllers/app-chat-target.controller'
 import type { EscalationAnswerPayload } from '../../../shared/apps/app-types'
-import { isReasoningEffortLevel } from '../../../shared/constants/reasoning-effort'
-import type { ImageAttachment } from '../../../shared/types/image-attachment'
-import type { CanvasContext } from '../../../shared/types/canvas-context'
+import { parseTurnReferences, toAppChatRequest } from '../../controllers/chat-turn-input'
 import { getStudioSummary, listPeopleDirectory, getAppCapabilityInventory, getAppSpaceChangePreview, moveAppDefaultSpace, readAppRunMessages, getDigitalHumanMemoryStatus, consolidateDigitalHumanMemoryNow } from '../../apps/runtime'
 
 async function respondOperation(res: Response, name: string, operation: () => unknown | Promise<unknown>): Promise<void> {
@@ -62,56 +59,6 @@ async function respondOperation(res: Response, name: string, operation: () => un
   } catch (error) {
     console.error(`[HTTP][Apps] ${name} failed:`, error)
     res.json({ success: false, error: error instanceof Error ? error.message : String(error) })
-  }
-}
-
-const MAX_CANVAS_TABS = 50
-const MAX_CANVAS_FIELD_CHARS = 500
-
-function canvasField(value: unknown): string | undefined {
-  return typeof value === 'string' && value ? value.slice(0, MAX_CANVAS_FIELD_CHARS) : undefined
-}
-
-function canvasTab(value: unknown): { type: string; title: string; url?: string; path?: string; terminalSessionId?: string } | null {
-  if (!value || typeof value !== 'object') return null
-  const tab = value as Record<string, unknown>
-  if (typeof tab.type !== 'string' || typeof tab.title !== 'string') return null
-  const url = canvasField(tab.url)
-  const path = canvasField(tab.path)
-  const terminalSessionId = canvasField(tab.terminalSessionId)
-  return {
-    type: tab.type.slice(0, MAX_CANVAS_FIELD_CHARS),
-    title: tab.title.slice(0, MAX_CANVAS_FIELD_CHARS),
-    ...(url ? { url } : {}),
-    ...(path ? { path } : {}),
-    ...(terminalSessionId ? { terminalSessionId } : {}),
-  }
-}
-
-/**
- * The canvas context a client sent with a chat message, or undefined when it is
- * not one. It is rendered into the model's prompt, so it is rebuilt field by
- * field with bounded sizes instead of passed through.
- */
-function parseCanvasContext(value: unknown): CanvasContext | undefined {
-  if (!value || typeof value !== 'object') return undefined
-  const candidate = value as Record<string, unknown>
-  if (candidate.isOpen !== true || !Number.isFinite(candidate.tabCount) || !Array.isArray(candidate.tabs)) return undefined
-
-  const tabs: CanvasContext['tabs'] = []
-  for (const raw of candidate.tabs.slice(0, MAX_CANVAS_TABS)) {
-    const tab = canvasTab(raw)
-    if (!tab) return undefined
-    tabs.push({ ...tab, isActive: (raw as { isActive?: unknown }).isActive === true })
-  }
-  const active = candidate.activeTab === null ? null : canvasTab(candidate.activeTab)
-  if (active === null && candidate.activeTab !== null) return undefined
-
-  return {
-    isOpen: true,
-    tabCount: Math.min(Math.max(0, Math.trunc(candidate.tabCount as number)), MAX_CANVAS_TABS),
-    activeTab: active,
-    tabs,
   }
 }
 
@@ -734,14 +681,19 @@ export function registerAppsRoutes(app: Express): void {
   app.post('/api/apps/:appId/runs/:runId/inject', async (req: Request, res: Response) => {
     try {
       const { appId, runId } = req.params
-      const { text } = req.body as { text?: string }
-      if (!appId || !runId || !text) {
+      const { text, references: rawReferences } = (req.body ?? {}) as { text?: string; references?: unknown }
+      const references = parseTurnReferences(rawReferences)
+      if (!references.ok) {
+        res.status(400).json({ success: false, error: references.error })
+        return
+      }
+      if (!appId || !runId || (!text && !references.references)) {
         res.status(400).json({ success: false, error: 'Missing appId, runId, or text' })
         return
       }
       const runtime = getRuntimeOrFail(res)
       if (!runtime) return
-      await runtime.injectIntoRun(appId, runId, text)
+      await runtime.injectIntoRun(appId, runId, text ?? '', references.references)
       console.log('[HTTP] POST /api/apps/%s/runs/%s/inject', appId, runId)
       res.json({ success: true })
     } catch (error) {
@@ -1054,44 +1006,18 @@ export function registerAppsRoutes(app: Express): void {
       }
       const runtime = getRuntimeOrFail(res)
       if (!runtime) return
-      const target = resolveTargetOrFail(appId, req.body?.conversationId, res)
-      if (!target) return
 
-      const body = (req.body ?? {}) as {
-        spaceId?: unknown
-        message?: unknown
-        images?: ImageAttachment[]
-        thinkingEnabled?: unknown
-        reasoningEffort?: unknown
-        canvasContext?: unknown
-      }
-      if (typeof body.spaceId !== 'string' || !body.spaceId) {
-        res.status(400).json({ success: false, error: 'Missing required field: spaceId' })
+      // Built field by field rather than spread from the body (shared with IPC):
+      // the request shape carries identity (teamContext, senderIdentity,
+      // relayOrigin) that decides how a turn is attributed and what it may do.
+      // Everything identity-bearing is derived server-side.
+      const built = toAppChatRequest(appId, req.body)
+      if (!built.ok) {
+        res.status(built.status).json({ success: false, error: built.error })
         return
       }
-      if (typeof body.message !== 'string' || body.message.length === 0) {
-        res.status(400).json({ success: false, error: 'Missing required field: message' })
-        return
-      }
-
-      // Built field by field rather than spread from the body: the request shape
-      // carries identity (teamContext, senderIdentity, relayOrigin) that decides
-      // how a turn is attributed and what it may do, and a spread hands those to
-      // whoever is calling. Everything identity-bearing is derived server-side.
-      const conversationId = target.conversationId
-      const canvasContext = parseCanvasContext(body.canvasContext)
-      const request: AppChatRequest = {
-        appId,
-        spaceId: body.spaceId,
-        message: body.message,
-        conversationId,
-        ...(Array.isArray(body.images) && body.images.length > 0 ? { images: body.images } : {}),
-        ...(body.thinkingEnabled !== undefined ? { thinkingEnabled: !!body.thinkingEnabled } : {}),
-        ...(isReasoningEffortLevel(body.reasoningEffort) ? { reasoningEffort: body.reasoningEffort } : {}),
-        useChatThinkingLevel: true,
-        ...(canvasContext ? { canvasContext } : {}),
-        ...(target.teamContext ? { teamContext: target.teamContext } : {}),
-      }
+      const request = built.request
+      const conversationId = request.conversationId
       sendAppChatMessage(request).catch((error: unknown) => {
         const err = error as Error
         console.error(`[HTTP] POST /api/apps/:appId/chat/send background error:`, err.message)
@@ -1113,8 +1039,13 @@ export function registerAppsRoutes(app: Express): void {
   app.post('/api/apps/:appId/chat/inject', async (req: Request, res: Response) => {
     try {
       const { appId } = req.params
-      const { conversationId, message } = (req.body ?? {}) as { conversationId?: unknown; message?: unknown }
-      if (typeof conversationId !== 'string' || typeof message !== 'string' || !message.trim()) {
+      const { conversationId, message, references: rawReferences } = (req.body ?? {}) as { conversationId?: unknown; message?: unknown; references?: unknown }
+      const references = parseTurnReferences(rawReferences)
+      if (!references.ok) {
+        res.status(400).json({ success: false, error: references.error })
+        return
+      }
+      if (typeof conversationId !== 'string' || typeof message !== 'string' || (!message.trim() && !references.references)) {
         res.status(400).json({ success: false, error: 'Missing required fields: conversationId, message' })
         return
       }
@@ -1123,7 +1054,7 @@ export function registerAppsRoutes(app: Express): void {
         res.status(target.status).json({ success: false, error: target.error })
         return
       }
-      const delivered = injectIntoAppChat(target.conversationId, message.trim(), { source: 'injection' })
+      const delivered = injectIntoAppChat(target.conversationId, message.trim(), { source: 'injection' }, references.references)
       console.log('[HTTP] POST /api/apps/%s/chat/inject (conversationId=%s, delivered=%s)', appId, conversationId, delivered)
       res.json({ success: true, data: { delivered } })
     } catch (error) {

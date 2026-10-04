@@ -211,8 +211,9 @@ vi.mock('../../../../src/main/apps/runtime/person-context-tool', () => ({
 vi.mock('../../../../src/main/apps/runtime/report-tool', () => ({
   createReportToolServer: () => ({ _isMcpServer: true, name: 'halo-report' }),
 }))
+const sessionRegistry = vi.hoisted(() => ({ current: null as null | { register: ReturnType<typeof vi.fn> } }))
 vi.mock('../../../../src/main/apps/runtime/im-session-registry', () => ({
-  getImSessionRegistry: () => null,
+  getImSessionRegistry: () => sessionRegistry.current,
 }))
 vi.mock('../../../../src/main/apps/runtime/session-store', () => ({
   loadChatSessionId: () => undefined,
@@ -531,5 +532,24 @@ describe('the consumer of a digital-human chat knows the model\'s context window
     expect(creation.contextWindow).toBe(321_000)
     // A reuse refreshes the consumer; leaving the window out would clear it.
     expect(updateConsumerDisplayModel).toHaveBeenLastCalledWith(own, 'test-model', 321_000)
+  })
+})
+
+describe('the conversation list names a message of cards alone', () => {
+  it('by its first card, as a space conversation would', async () => {
+    const register = vi.fn()
+    sessionRegistry.current = { register }
+    keptMemberContext()
+    try {
+      await sendAppChatMessage({
+        appId: app.id,
+        spaceId: 'space-1',
+        message: '',
+        references: [{ id: 'r1', source: { kind: 'file', path: '/spaces/a/src/a.ts', precision: 'lines' }, range: { startLine: 3, endLine: 5 } }],
+      }).catch(() => {})
+      expect(register.mock.calls[0]?.[5]).toMatchObject({ lastMessage: 'a.ts:3-5' })
+    } finally {
+      sessionRegistry.current = null
+    }
   })
 })

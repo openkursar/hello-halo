@@ -13,7 +13,7 @@
  */
 
 import { addMessage, getConversation, listConversations, updateMessageById } from '../conversation.service'
-import { onAgentEvent, sendMessage } from '../agent'
+import { formatMessageAttachmentsBrief, getWorkingDir, onAgentEvent, sendMessage } from '../agent'
 import { isSpaceConversationId } from '../../../shared/apps/im-keys'
 import { shortConversationId } from '../../../shared/conversation-reference'
 import { isNativeConversationBusy, hasLiveNativeSession } from './busy'
@@ -72,13 +72,16 @@ export function createChatConversationSource(): ConversationSource {
     readTranscript(spaceId, conversationId): TranscriptLine[] | null {
       const conversation = getConversation(spaceId, conversationId)
       if (!conversation) return null
-      return conversation.messages.map((m) => ({
-        id: m.id,
-        role: m.role,
-        content: m.content,
-        timestamp: m.timestamp,
-        source: m.source,
-      }))
+      let workDir: string | undefined
+      return conversation.messages.map((m) => {
+        const { references, task } = m.metadata ?? {}
+        let content = m.content
+        if (references?.length || task) {
+          workDir ??= getWorkingDir(spaceId)
+          content = [formatMessageAttachmentsBrief(references, task, workDir), m.content].filter(Boolean).join('\n')
+        }
+        return { id: m.id, role: m.role, content, timestamp: m.timestamp, source: m.source }
+      })
     },
 
     isBusy: isNativeConversationBusy,

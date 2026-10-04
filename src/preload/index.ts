@@ -10,8 +10,10 @@ import type { EscalationResponse } from '../shared/apps/app-types'
 import type { UpdaterChannel, UpdaterStatusPayload } from '../shared/types/updater'
 import type { GoalInput } from '../shared/types/goal'
 import type { CanvasContext } from '../shared/types/canvas-context'
+import type { ContentReference } from '../shared/types/content-reference'
+import type { AgentInjectRequest, AgentSendRequest } from '../shared/types/agent-send'
 import type { Thought, TranscriptPage } from '../shared/types/transcript'
-import type { ArtifactChangeBatchEvent, FileQueryResult } from '../shared/types/artifact'
+import type { ArtifactChangeBatchEvent, FileQueryResult, ResolvedArtifactPath } from '../shared/types/artifact'
 import type { MemoryPressureEvent } from '../shared/types/memory-pressure'
 import type { AIBrowserActiveView, AIBrowserConversationReleased, AIBrowserLivePage, AIBrowserStopResult, AIBrowserViewGone } from '../shared/types/ai-browser'
 import type { MemorySettings, MemoryStatus } from '../shared/types/memory'
@@ -34,6 +36,8 @@ import { authRpc } from '../shared/rpc/contracts/auth.contract'
 import { systemRpc } from '../shared/rpc/contracts/system.contract'
 import { healthRpc } from '../shared/rpc/contracts/health.contract'
 import { canvasPreviewRpc } from '../shared/rpc/contracts/canvas-preview.contract'
+import { gitRpc } from '../shared/rpc/contracts/git.contract'
+import { codeReviewRpc } from '../shared/rpc/contracts/code-review.contract'
 import { configRpc } from '../shared/rpc/contracts/config.contract'
 import { agentRpc } from '../shared/rpc/contracts/agent.contract'
 import { terminalRpc } from '../shared/rpc/contracts/terminal.contract'
@@ -68,6 +72,9 @@ import type {
 import type { NotifyChannelsProductConfig } from '../shared/types/notification-channels'
 import type { StoreInstallProgress, StoreCapabilities, CategoryTaxonomy, DiscoverLayout, ResolvedDiscover, MyPublication, StoreCollection, StoreSignInStatus } from '../shared/store/store-types'
 import type { AppType, AppSpec } from '../shared/apps/spec-types'
+
+type GitRpcClient = RpcClient<typeof gitRpc>
+type CodeReviewRpcClient = RpcClient<typeof codeReviewRpc>
 
 // Seed --display-scale before the renderer's first paint. The main process
 // passes the persisted scale via additionalArguments at window creation;
@@ -181,43 +188,7 @@ export interface HaloAPI {
   ) => Promise<IpcResponse>
 
   // Agent
-  sendMessage: (request: {
-    spaceId: string
-    conversationId: string
-    message: string
-    resumeSessionId?: string
-    images?: Array<{
-      id: string
-      type: 'image'
-      mediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'
-      data: string
-      name?: string
-      size?: number
-    }>
-    thinkingEnabled?: boolean  // Enable extended thinking mode
-    reasoningEffort?: ReasoningEffortLevel  // Depth picked for this send; overrides thinkingEnabled
-    knowledgeBaseId?: string  // Chat-with-knowledge-base turn
-    goal?: GoalInput  // Set as the conversation goal before this message runs
-    canvasContext?: {  // Canvas context for AI awareness
-      isOpen: boolean
-      tabCount: number
-      activeTab: {
-        type: string
-        title: string
-        url?: string
-        path?: string
-        terminalSessionId?: string
-      } | null
-      tabs: Array<{
-        type: string
-        title: string
-        url?: string
-        path?: string
-        terminalSessionId?: string
-        isActive: boolean
-      }>
-    }
-  }) => Promise<IpcResponse>
+  sendMessage: (request: AgentSendRequest) => Promise<IpcResponse>
   stopGeneration: (conversationId?: string) => Promise<IpcResponse>
   approveTool: (conversationId: string) => Promise<IpcResponse>
   rejectTool: (conversationId: string) => Promise<IpcResponse>
@@ -226,7 +197,7 @@ export interface HaloAPI {
   testMcpConnections: () => Promise<{ success: boolean; servers: unknown[]; error?: string }>
   probeMcpApp: (appId: string) => Promise<{ success: boolean; result?: unknown; error?: string }>
   answerQuestion: (data: { conversationId: string; id: string; answers: Record<string, string> }) => Promise<IpcResponse>
-  injectMessage: (data: { conversationId: string; message: string }) => Promise<IpcResponse>
+  injectMessage: (data: AgentInjectRequest) => Promise<IpcResponse>
   getEngineCapabilities: () => Promise<IpcResponse>
   getEngineAvailability: () => Promise<IpcResponse>
   listToolsets: (data: { spaceId: string; conversationId: string }) => Promise<IpcResponse>
@@ -297,6 +268,8 @@ export interface HaloAPI {
   // Artifact
   listArtifacts: (spaceId: string, maxDepth?: number) => Promise<IpcResponse>
   queryArtifactFiles: (spaceId: string, query: string, limit: number) => Promise<IpcResponse<FileQueryResult>>
+  /** Which mentioned paths are existing files or folders of the space; relative ones resolve against `baseDir`. */
+  resolveArtifactPaths: (spaceId: string, paths: string[], baseDir?: string) => Promise<IpcResponse<ResolvedArtifactPath[]>>
   listArtifactsTree: (spaceId: string) => Promise<IpcResponse>
   loadArtifactChildren: (spaceId: string, dirPath: string) => Promise<IpcResponse>
   retainArtifactSpace: (spaceId: string, clientId: string) => Promise<IpcResponse>
@@ -579,7 +552,7 @@ export interface HaloAPI {
   appGetRunStats: (input: { appId: string; window?: number }) => Promise<IpcResponse<import('../shared/apps/app-types').RunStats>>
   appGetOverview: (input?: { spaceId?: string }) => Promise<IpcResponse<import('../shared/apps/app-types').AppOverviewEntry[]>>
   appContinueRun: (input: { appId: string; runId: string }) => Promise<IpcResponse>
-  appInjectRun: (input: { appId: string; runId: string; text: string }) => Promise<IpcResponse>
+  appInjectRun: (input: { appId: string; runId: string; text: string; references?: ContentReference[] }) => Promise<IpcResponse>
   appUpdateConfig: (input: { appId: string; config: Record<string, unknown> }) => Promise<IpcResponse>
   appUpdateFrequency: (input: { appId: string; subscriptionId: string; frequency: string }) => Promise<IpcResponse>
   appUpdateOverrides: (input: { appId: string; overrides: Record<string, unknown> }) => Promise<IpcResponse>
@@ -606,10 +579,10 @@ export interface HaloAPI {
   // App Chat
   // conversationId addresses a specific native/local session; omit for the app's
   // native default session.
-  appChatSend: (request: { appId: string; spaceId: string; message: string; images?: ImageAttachment[]; thinkingEnabled?: boolean; reasoningEffort?: ReasoningEffortLevel; canvasContext?: CanvasContext; conversationId?: string; teamContext?: unknown }) => Promise<IpcResponse<{ conversationId: string }>>
+  appChatSend: (request: { appId: string; spaceId: string; message: string; images?: ImageAttachment[]; thinkingEnabled?: boolean; reasoningEffort?: ReasoningEffortLevel; canvasContext?: CanvasContext; references?: ContentReference[]; conversationId?: string; teamContext?: unknown }) => Promise<IpcResponse<{ conversationId: string }>>
   appChatStop: (appId: string, conversationId?: string) => Promise<IpcResponse>
   // Add a message to the running turn; delivered:false when no turn was in flight
-  appChatInject: (input: { appId: string; conversationId: string; message: string }) => Promise<IpcResponse<{ delivered: boolean }>>
+  appChatInject: (input: { appId: string; conversationId: string; message: string; references?: ContentReference[] }) => Promise<IpcResponse<{ delivered: boolean }>>
   appChatStatus: (appId: string, conversationId?: string) => Promise<IpcResponse<{ isGenerating: boolean; conversationId: string }>>
   appChatMessages: (input: { appId: string; spaceId: string; conversationId?: string }) => Promise<IpcResponse>
   // Paged read, newest page first; messages carry thoughts:null (see appChatMessageThoughts)
@@ -697,7 +670,7 @@ export interface HaloAPI {
   /** Remote office: leave a joined office, removing the local shadow (joiner). */
   teamLeaveOffice: (input: { officeId: string }) => Promise<IpcResponse>
   /** Send a message to a remote member via the office owner (team wake). */
-  teamSendToMember: (input: { teamId: string; appId: string; epochId: string; message: string; images?: ImageAttachment[]; thinkingEnabled?: boolean }) => Promise<IpcResponse>
+  teamSendToMember: (input: { teamId: string; appId: string; epochId: string; message: string; images?: ImageAttachment[]; thinkingEnabled?: boolean; spaceId?: string; references?: ContentReference[] }) => Promise<IpcResponse>
   /** Stop a member's running turn, wherever that member runs. */
   teamStopMember: (input: { teamId: string; appId: string; epochId?: string }) => Promise<IpcResponse>
   /** Conversations (office-shared session objects). */
@@ -777,6 +750,25 @@ export interface HaloAPI {
   // Canvas HTML preview origin
   openHtmlPreview: (filePath: string) => Promise<IpcResponse<{ url: string; host: string }>>
   closeHtmlPreview: (host: string) => Promise<IpcResponse<void>>
+
+  // Git (changes view): repositories of a space, status, change lists, writes
+  gitListRepositories: GitRpcClient['gitListRepositories']
+  gitGetStatus: GitRpcClient['gitGetStatus']
+  gitGetChanges: GitRpcClient['gitGetChanges']
+  gitGetFileContents: GitRpcClient['gitGetFileContents']
+  gitListRevisionOptions: GitRpcClient['gitListRevisionOptions']
+  gitStage: GitRpcClient['gitStage']
+  gitUnstage: GitRpcClient['gitUnstage']
+  gitDiscard: GitRpcClient['gitDiscard']
+  gitCommit: GitRpcClient['gitCommit']
+  gitSync: GitRpcClient['gitSync']
+  gitCreateSnapshot: GitRpcClient['gitCreateSnapshot']
+  gitCountChangedSince: GitRpcClient['gitCountChangedSince']
+
+  // Code review (changes view): start a review, the latest review of a repository
+  codeReviewStart: CodeReviewRpcClient['codeReviewStart']
+  codeReviewGetLatest: CodeReviewRpcClient['codeReviewGetLatest']
+  codeReviewAvailability: CodeReviewRpcClient['codeReviewAvailability']
 
   // Telemetry (fire-and-forget — no response)
   trackEvent: (event: string, properties?: Record<string, unknown>) => void
@@ -1024,6 +1016,12 @@ const api: HaloAPI = {
 
   // Canvas HTML preview origin
   ...bindRpc(canvasPreviewRpc),
+
+  // Git (changes view)
+  ...bindRpc(gitRpc),
+
+  // Code review (changes view)
+  ...bindRpc(codeReviewRpc),
 
   // Health System
   ...bindRpc(healthRpc),

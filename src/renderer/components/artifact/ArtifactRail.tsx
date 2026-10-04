@@ -64,6 +64,8 @@ interface ArtifactRailProps {
   // Width persistence
   initialWidth?: number             // Persisted width from config
   onWidthChange?: (width: number) => void  // Callback when user finishes resizing
+  /** The width the rail takes when open: its stored width, or wider to fit its tabs. Reported at rest, not mid-drag. */
+  onOpenWidthChange?: (width: number) => void
   /** One-shot external tab request (e.g. a workspace card's asset chip) —
    * every change switches to that tab, not just the first. */
   initialTab?: RailTab
@@ -105,6 +107,7 @@ export function ArtifactRail({
   onExpandedChange,
   initialWidth,
   onWidthChange,
+  onOpenWidthChange,
   initialTab
 }: ArtifactRailProps) {
   const { t } = useTranslation()
@@ -156,6 +159,12 @@ export function ArtifactRail({
     setMinWidth(next)
   }, [isExpanded, isMobile, t])
   const effectiveWidth = Math.max(width, minWidth)
+  const onOpenWidthChangeRef = useRef(onOpenWidthChange)
+  onOpenWidthChangeRef.current = onOpenWidthChange
+  // Before the page's own layout effects, so it knows the width before first paint.
+  useLayoutEffect(() => {
+    if (!isDragging) onOpenWidthChangeRef.current?.(effectiveWidth)
+  }, [effectiveWidth, isDragging])
 
   // A tab view is emitted by the shell, which knows when a tab was activated,
   // once the tab has reported its list — mounted-but-hidden tabs report too,

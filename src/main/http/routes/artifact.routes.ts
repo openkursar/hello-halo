@@ -26,7 +26,7 @@ import {
   trashArtifact,
   validateFilePath,
 } from './_shared'
-import { retainArtifactSpace, releaseArtifactSpace, queryFiles } from '../../services/artifact.service'
+import { retainArtifactSpace, releaseArtifactSpace, queryFiles, resolveArtifactPaths } from '../../services/artifact.service'
 
 export function registerArtifactRoutes(app: Express): void {
   // ===== Artifact Routes =====
@@ -49,6 +49,21 @@ export function registerArtifactRoutes(app: Express): void {
       const parsedLimit = typeof req.query.limit === 'string' ? Number.parseInt(req.query.limit, 10) : Number.NaN
       const limit = Number.isFinite(parsedLimit) ? parsedLimit : 50
       res.json({ success: true, data: await queryFiles(req.params.spaceId, query, limit) })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // Which mentioned paths are existing files or folders of the space (links in AI replies)
+  app.post('/api/spaces/:spaceId/artifacts/resolve', async (req: Request, res: Response) => {
+    try {
+      const { paths, baseDir } = req.body ?? {}
+      if (!Array.isArray(paths)) {
+        res.status(400).json({ success: false, error: 'Missing paths' })
+        return
+      }
+      const data = await resolveArtifactPaths(req.params.spaceId, paths, typeof baseDir === 'string' ? baseDir : undefined)
+      res.json({ success: true, data })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }

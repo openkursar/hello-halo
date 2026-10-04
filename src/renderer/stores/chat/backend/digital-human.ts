@@ -10,6 +10,8 @@
 import { api, createEmptySessionState } from '../internal'
 import type { Conversation, Thought } from '../internal'
 import type { TranscriptPage } from '../../../../shared/types/transcript'
+import type { ContentReference } from '../../../../shared/types/content-reference'
+import { messageSummaryText } from '../../../../shared/content-reference'
 import i18n from '../../../i18n'
 import { cacheConversation, cacheLoadedThoughts } from './cache'
 import { digitalHumanAppId } from './kind'
@@ -179,7 +181,8 @@ async function send(ctx: BackendContext, conversationId: string, request: SendRe
   }
   const { appId, spaceId } = target
   const { content, images, thinkingEnabled } = request
-  const pending = createPendingUserMessage(content, images)
+  const references = request.options?.references?.length ? request.options.references : undefined
+  const pending = createPendingUserMessage(content, images, references ? { references } : undefined)
 
   // Turn state and the optimistic bubble land in one commit.
   ctx.set((state) => {
@@ -208,6 +211,7 @@ async function send(ctx: BackendContext, conversationId: string, request: SendRe
       thinkingEnabled,
       conversationId,
       canvasContext: buildCanvasContext(),
+      ...(references ? { references } : {}),
     })
     if (!response.success) {
       console.error(`${LOG_TAG} Message refused for ${conversationId}: ${response.error ?? 'unknown error'}`)
@@ -239,17 +243,16 @@ async function stop(ctx: BackendContext, conversationId: string): Promise<void> 
   }
 }
 
-async function inject(ctx: BackendContext, conversationId: string, message: string): Promise<void> {
+async function inject(ctx: BackendContext, conversationId: string, message: string, references?: ContentReference[]): Promise<boolean> {
   const target = resolve(ctx, conversationId)
   if (!target) throw new Error(`No digital human for ${conversationId}`)
-  const response = await api.appChatInject({ appId: target.appId, conversationId, message })
+  const response = await api.appChatInject({ appId: target.appId, conversationId, message, ...(references?.length ? { references } : {}) })
   if (!response.success) throw new Error(response.error || i18n.t('Failed to add message'))
+  if (response.data?.delivered !== false) return true
   // The turn ended between the click and delivery: the text still has to go
   // somewhere, and a fresh turn is where it belongs.
-  if (response.data?.delivered === false) {
-    ctx.get().dequeueMessage(conversationId, message)
-    await send(ctx, conversationId, { content: message })
-  }
+  ctx.get().dequeueMessage(conversationId, messageSummaryText(message, references))
+  return send(ctx, conversationId, { content: message, ...(references?.length ? { options: { references } } : {}) })
 }
 
 async function settleTurn(ctx: BackendContext, ref: ConversationRef, turnId: number): Promise<void> {

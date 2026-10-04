@@ -17,6 +17,7 @@ import type { CapabilityInventory } from '../../shared/apps/capability-inventory
 import type { AppSpaceChangePreview } from '../../shared/apps/app-environment'
 import type { ImageAttachment } from '../../shared/types/image-attachment'
 import type { CanvasContext } from '../../shared/types/canvas-context'
+import type { ContentReference } from '../../shared/types/content-reference'
 import type { ReasoningEffortLevel } from '../../shared/constants/reasoning-effort'
 import type { MemoryStatus } from '../../shared/types/memory'
 import type { Thought, TranscriptPage } from '../../shared/types/transcript'
@@ -233,11 +234,11 @@ export const appsApi = {
     return httpRequest('POST', `/api/apps/${appId}/runs/${runId}/continue`)
   },
 
-  appInjectRun: async (appId: string, runId: string, text: string): Promise<ApiResponse> => {
+  appInjectRun: async (appId: string, runId: string, text: string, references?: ContentReference[]): Promise<ApiResponse> => {
     if (isElectron()) {
-      return window.halo.appInjectRun({ appId, runId, text })
+      return window.halo.appInjectRun({ appId, runId, text, ...(references ? { references } : {}) })
     }
-    return httpRequest('POST', `/api/apps/${appId}/runs/${runId}/inject`, { text })
+    return httpRequest('POST', `/api/apps/${appId}/runs/${runId}/inject`, { text, ...(references ? { references } : {}) })
   },
 
   appUpdateConfig: async (appId: string, config: Record<string, unknown>): Promise<ApiResponse> => {
@@ -396,7 +397,7 @@ export const appsApi = {
   // App Chat
   // conversationId addresses a specific native/local session; omit for the app's
   // native default session.
-  appChatSend: async (request: { appId: string; spaceId: string; message: string; images?: ImageAttachment[]; thinkingEnabled?: boolean; reasoningEffort?: ReasoningEffortLevel; canvasContext?: CanvasContext; conversationId?: string; teamContext?: unknown }): Promise<ApiResponse<{ conversationId: string }>> => {
+  appChatSend: async (request: { appId: string; spaceId: string; message: string; images?: ImageAttachment[]; thinkingEnabled?: boolean; reasoningEffort?: ReasoningEffortLevel; canvasContext?: CanvasContext; references?: ContentReference[]; conversationId?: string; teamContext?: unknown }): Promise<ApiResponse<{ conversationId: string }>> => {
     // Subscribe to agent events so remote/Capacitor clients receive streaming updates.
     // The view also subscribes on mount (via useConversationDetail), but the API-level
     // subscription mirrors sendMessage's pattern and ensures coverage if the API is
@@ -420,11 +421,15 @@ export const appsApi = {
 
   // Add a message to the turn a digital human is running. delivered is false when
   // no turn was in flight to take it — the caller sends it as a new message.
-  appChatInject: async (input: { appId: string; conversationId: string; message: string }): Promise<ApiResponse<{ delivered: boolean }>> => {
+  appChatInject: async (input: { appId: string; conversationId: string; message: string; references?: ContentReference[] }): Promise<ApiResponse<{ delivered: boolean }>> => {
     if (isElectron()) {
       return window.halo.appChatInject(input)
     }
-    return httpRequest('POST', `/api/apps/${input.appId}/chat/inject`, { conversationId: input.conversationId, message: input.message })
+    return httpRequest('POST', `/api/apps/${input.appId}/chat/inject`, {
+      conversationId: input.conversationId,
+      message: input.message,
+      ...(input.references ? { references: input.references } : {}),
+    })
   },
 
   appChatStatus: async (appId: string, conversationId?: string): Promise<ApiResponse<{ isGenerating: boolean; conversationId: string }>> => {

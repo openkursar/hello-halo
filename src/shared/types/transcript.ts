@@ -11,8 +11,10 @@
  */
 
 import type { FileChangesSummary } from '../file-changes'
+import type { ContentReference } from './content-reference'
 import type { GoalInput } from './goal'
 import type { ImageAttachment } from './image-attachment'
+import type { MessageTask } from './message-task'
 import type { KBSource } from './tlon'
 
 // ============================================
@@ -146,6 +148,10 @@ export interface TranscriptMessageMetadata extends TranscriptProvenanceMetadata 
   fileChanges?: FileChangesSummary
   /** The goal the user set with this message (user messages only). */
   goal?: GoalInput
+  /** Places the user pointed at, in the order they added them (user messages only). */
+  references?: ContentReference[]
+  /** Built-in task this message starts (user messages only). */
+  task?: MessageTask
 }
 
 export interface TranscriptMessage {

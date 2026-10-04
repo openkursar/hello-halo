@@ -8,7 +8,7 @@
  * - When complete: indicator fades out smoothly
  */
 
-import { useState, useMemo, useCallback, memo } from 'react'
+import { useState, useMemo, useCallback, useRef, memo } from 'react'
 import {
   Lightbulb,
   Wrench,
@@ -36,8 +36,14 @@ import { useTranslation } from '../../i18n'
 import { useChatStore, selectActiveConversationId } from '../../stores/chat.store'
 import { SourceChips } from './SourceChips'
 import { GoalSetBadge } from '../goal'
-import { AttachedPathChips } from './AttachedPathChips'
-import { splitAttachedPaths } from '../../../shared/attached-paths'
+import { messageReferences } from '../../../shared/content-reference'
+import { useSpaceStore } from '../../stores/space.store'
+import {
+  MessageReferenceChips,
+  MessageTaskCard,
+  useConversationReferenceScope,
+  useTextReferences,
+} from '../references'
 
 interface MessageItemProps {
   message: Message
@@ -265,10 +271,24 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
     [message.metadata?.fileChanges]
   )
 
-  const userAttachments = useMemo(
-    () => (isUser && message.content ? splitAttachedPaths(message.content) : null),
-    [isUser, message.content]
+  // A user message's text and its references; a legacy `<attached_paths>` block comes back as file chips.
+  const userParts = useMemo(
+    () => (isUser ? messageReferences(message.content ?? '', message.metadata?.references) : null),
+    [isUser, message.content, message.metadata?.references]
   )
+  const task = isUser ? message.metadata?.task : undefined
+  const userReferences = userParts?.references ?? []
+  const userHasCards = !!task || userReferences.length > 0
+  const spaceRoot = useSpaceStore(s => (s.currentSpace ? s.currentSpace.workingDir || s.currentSpace.path : undefined))
+
+  // A finished reply in the main chat can be pointed at, passage by passage.
+  const referenceScope = useConversationReferenceScope()
+  const contentRef = useRef<HTMLDivElement>(null)
+  useTextReferences(contentRef, {
+    source: !isUser && referenceScope && !isStreaming && !isWorking && !message.id.startsWith('pending-')
+      ? { kind: 'message', conversationId: referenceScope.conversationId, messageId: message.id, conversationTitle: referenceScope.conversationTitle }
+      : null,
+  })
 
   // Handle copying message content to clipboard
   const handleCopyMessage = useCallback(async () => {
@@ -339,8 +359,9 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
         isUser ? 'message-user px-3.5 py-2.5' : 'message-assistant px-4 py-3'
       } ${isStreaming ? 'streaming-message' : ''} ${isWorking ? 'message-working' : ''} ${
         // Assistant bubbles hold the column width so the layout does not shift when
-        // the streaming bubble is replaced; user bubbles shrink to their content.
-        isInContainer ? 'w-full' : isUser ? 'max-w-[85%]' : 'w-[85%]'
+        // the streaming bubble is replaced; user bubbles shrink to their content
+        // (within the cards' column when the message carries cards).
+        isInContainer ? 'w-full' : isUser ? (userHasCards ? 'max-w-full' : 'max-w-[85%]') : 'w-[85%]'
       }`}
     >
       {/* Working indicator - shows when AI is working */}
@@ -358,16 +379,12 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
         <MessageImages images={message.images} />
       )}
 
-      {userAttachments && userAttachments.paths.length > 0 && (
-        <AttachedPathChips paths={userAttachments.paths} className={userAttachments.text.trim() ? 'mb-2' : ''} />
-      )}
-
       {/* Message content with streaming cursor */}
-      <div className="break-words leading-relaxed" data-message-content>
+      <div ref={contentRef} className="break-words leading-relaxed" data-message-content>
         {message.content && (
           isUser ? (
             // User messages: simple whitespace-preserving text
-            <span className="whitespace-pre-wrap">{userAttachments ? userAttachments.text.trimEnd() : message.content}</span>
+            <span className="whitespace-pre-wrap">{userParts ? userParts.text.trimEnd() : message.content}</span>
           ) : (
             // Assistant messages: full markdown rendering
             <MarkdownRenderer content={message.content} />
@@ -449,15 +466,14 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
         />
       )}
 
-      {/* File changes footer - shows immediately from metadata, or from loaded thoughts */}
-      {/* Diff content is lazy-loaded from thoughts when user clicks a file */}
+      {/* File changes footer - counts from metadata or loaded thoughts; opens the reply's edits in the canvas */}
       {!isUser && (fileChangesSummary || hasThoughts) && (
         <FileChangesFooter
           fileChangesSummary={fileChangesSummary}
           thoughts={message.thoughts}
-          onLoadThoughts={
-            hasSeparatedThoughts && currentSpaceId && currentConversationId
-              ? () => loadMessageThoughts(currentSpaceId, currentConversationId, message.id)
+          reply={
+            currentSpaceId && currentConversationId
+              ? { spaceId: currentSpaceId, conversationId: currentConversationId, messageId: message.id, timestamp: message.timestamp }
               : undefined
           }
         />
@@ -490,12 +506,22 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
     </div>
   )
 
+  // A user message's task card and reference chips sit above its bubble; a message of references alone shows no empty bubble.
+  const userBubbleEmpty = isUser && !userParts?.text.trim() && !message.images?.length && !message.metadata?.goal && !message.error
+  const content = userHasCards ? (
+    <div className={`flex flex-col items-end gap-1.5 ${isInContainer ? 'w-full' : 'max-w-[85%]'}`}>
+      {task && <MessageTaskCard task={task} />}
+      <MessageReferenceChips references={userReferences} baseDir={spaceRoot} className="max-w-full justify-end" />
+      {!userBubbleEmpty && bubble}
+    </div>
+  ) : bubble
+
   // When in container, just return the bubble without wrapper
   if (isInContainer) {
     // Even in container, we need data-message-id for search navigation
     return (
       <div data-message-id={message.id}>
-        {bubble}
+        {content}
       </div>
     )
   }
@@ -506,7 +532,7 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
       className={`flex ${isUser ? 'justify-end' : 'justify-start'} animate-fade-in`}
       data-message-id={message.id}
     >
-      {bubble}
+      {content}
     </div>
   )
 })

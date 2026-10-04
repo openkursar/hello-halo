@@ -1,6 +1,6 @@
 {
   "name": "halo",
-  "version": "2.1.16-dev.0-rc.35",
+  "version": "2.1.16-dev.0-rc.38",
   "description": "AI that gets things done",
   "type": "module",
   "main": "./out/main/index.cjs",
@@ -105,6 +105,7 @@
     "@codemirror/lang-yaml": "^6.1.2",
     "@codemirror/language": "^6.12.1",
     "@codemirror/legacy-modes": "^6.5.2",
+    "@codemirror/merge": "^6.12.2",
     "@codemirror/search": "^6.6.0",
     "@codemirror/state": "^6.5.4",
     "@codemirror/view": "^6.39.11",
@@ -161,7 +162,6 @@
     "qrcode": "^1.5.4",
     "react": "^18.2.0",
     "react-arborist": "^3.4.3",
-    "react-diff-viewer-continued": "^3.4.0",
     "react-dom": "^18.2.0",
     "react-i18next": "^16.5.2",
     "react-markdown": "^10.1.0",

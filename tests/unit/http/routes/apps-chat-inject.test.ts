@@ -54,7 +54,7 @@ describe('POST chat/inject', () => {
     await withServer(async (post) => {
       const res = await post('/api/apps/app-1/chat/inject', { conversationId: 'app-chat:app-1', message: '  also this  ' })
       expect(res.body).toEqual({ success: true, data: { delivered: true } })
-      expect(injectIntoAppChat).toHaveBeenCalledWith('app-chat:app-1', 'also this', { source: 'injection' })
+      expect(injectIntoAppChat).toHaveBeenCalledWith('app-chat:app-1', 'also this', { source: 'injection' }, undefined)
 
       await post('/api/apps/app-1/chat/inject', { conversationId: 'app-chat:app-1:local:direct:abc', message: 'x' })
       expect(injectIntoAppChat.mock.calls[1][0]).toBe('app-chat:app-1:local:direct:abc')

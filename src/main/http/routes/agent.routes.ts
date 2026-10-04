@@ -9,20 +9,16 @@ import {
 
 export function registerAgentRoutes(app: Express): void {
   // ===== Agent Routes =====
+  // The controller builds the turn field by field, the same as for IPC, so the
+  // canvas context and references reach the model from remote clients too.
   app.post('/api/agent/message', async (req: Request, res: Response) => {
-    const { spaceId, conversationId, message, resumeSessionId, images, thinkingEnabled, reasoningEffort, knowledgeBaseId, goal } = req.body
-    const result = await agentController.sendMessage({
-      spaceId,
-      conversationId,
-      message,
-      resumeSessionId,
-      images,  // Pass images for multi-modal messages (remote access)
-      thinkingEnabled,  // Pass thinking mode for extended thinking (remote access)
-      reasoningEffort,  // Depth picked for this send; validated where it is applied
-      knowledgeBaseId,  // Chat-with-knowledge-base turn (remote access)
-      goal  // Conversation goal set before this message runs (remote access)
-    })
+    const result = await agentController.sendMessage(req.body)
     res.json(result)
+  })
+
+  // The user adding to the turn a conversation is running (type while generating).
+  app.post('/api/agent/inject-message', async (req: Request, res: Response) => {
+    res.json(agentController.injectMessage(req.body))
   })
 
   app.post('/api/agent/stop', async (req: Request, res: Response) => {

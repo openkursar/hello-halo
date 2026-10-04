@@ -2,10 +2,11 @@
  * Local files and folders the user attached to a message, by absolute path.
  *
  * On the desktop a local file needs no upload: the agent reads it where it is.
- * The composer shows attachments as chips and appends this block on send, so
- * the transcript, what the model reads, and what a later `conversation_read`
- * sees are the same text. The transcript renderer splits the block back off
- * to show the chips again.
+ * A message now carries attachments as `path` references
+ * (`shared/types/content-reference`); messages written before that carry them
+ * as a block at the end of their text, which this module reads so they still
+ * show as cards and still title the conversation (see `messageReferences` in
+ * `shared/content-reference`). Nothing writes the block any more.
  *
  * Shape (always the message's tail; a folder keeps a trailing separator):
  *
@@ -28,8 +29,8 @@
  * message is text. So text or a file name that merely contains a tag never
  * produces an attachment or loses text.
  *
- * Lives in `shared/` because the composer writes this form and every surface
- * that shows a user message reads it; a second copy of the format drifts.
+ * Lives in `shared/` because every surface that shows or titles a user
+ * message reads it; a second copy of the format drifts.
  */
 
 export interface AttachedPath {
@@ -54,10 +55,6 @@ export function canAttachPath(path: string): boolean {
   return path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path) || path.startsWith('\\\\')
 }
 
-function encodeLine(path: string): string {
-  return /[\r\n]/.test(path) || path.startsWith('"') ? JSON.stringify(path) : path
-}
-
 function decodeLine(line: string): string | null {
   if (!line.startsWith('"')) return canAttachPath(line) ? line : null
   try {
@@ -72,24 +69,11 @@ function endsWithSeparator(path: string): boolean {
   return path.endsWith('/') || path.endsWith('\\')
 }
 
-function withTrailingSeparator(path: string): string {
-  if (endsWithSeparator(path)) return path
-  return path + (path.includes('\\') && !path.includes('/') ? '\\' : '/')
-}
-
 /** The last path segment, for display. */
 export function attachedPathName(path: string): string {
   const trimmed = path.replace(/[\\/]+$/, '')
   const segments = trimmed.split(/[\\/]/)
   return segments[segments.length - 1] || trimmed || path
-}
-
-/** Every path given is written; callers admit only paths that pass `canAttachPath`. */
-export function appendAttachedPaths(text: string, paths: AttachedPath[]): string {
-  if (paths.length === 0) return text
-  const lines = paths.map(p => encodeLine(p.isDirectory ? withTrailingSeparator(p.path) : p.path))
-  const block = `${OPEN_TAG}\n${lines.join('\n')}\n${CLOSE_TAG}`
-  return text ? `${text}\n\n${block}` : block
 }
 
 /** Splits a message into its text and the paths attached to it. */

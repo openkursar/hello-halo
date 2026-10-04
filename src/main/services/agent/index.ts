@@ -116,6 +116,12 @@ export type { McpProbeResult } from './mcp-probe'
 export { createCanUseTool, resolveQuestion, rejectQuestion, rejectAllQuestions } from './permission-handler'
 export type { ToolGate } from './permission-handler'
 export { listToolsets, openToolsetByUser, closeToolsetByUser } from './toolsets'
+/**
+ * Toolsets opened or closed by Halo itself for one conversation (opener
+ * 'system'): unlike the user's toggle they never change the last-used set new
+ * conversations start from. `getToolset` answers whether one is available.
+ */
+export { openToolset, closeToolset, getToolset } from './toolsets'
 export type { ToolsetStatus, ToolsetsChangedEvent } from './toolsets'
 export { getWorkingDir, getApiCredentials, getApiCredentialsForConversation } from './helpers'
 /**
@@ -125,6 +131,13 @@ export { getWorkingDir, getApiCredentials, getApiCredentialsForConversation } fr
  */
 export { addSdkHooks } from './sdk-config'
 export { parseSDKMessage, buildMessageContent, formatCanvasContext } from './message-utils'
+/**
+ * What a user turn carries besides its text, as the model reads it (references
+ * and built-in task blocks), and the brief form a cross-conversation reader sees.
+ */
+export { formatTurnAttachments, formatReferencesBlock, formatMessageAttachmentsBrief } from './references'
+/** Making text that is not the user's own safe to place inside those blocks (see prompt-text.ts). */
+export { inlineCode, inlinePath, inlineText } from './prompt-text'
 export { getOrCreateV2Session, activeSessions, v2Sessions, getConsumerHandle, SessionOptionsStaleError } from './session-manager'
 // Whether a conversation's session must not be disturbed: a turn in flight, or team agents still working between turns.
 export { isSessionBusy } from './session-manager'

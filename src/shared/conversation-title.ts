@@ -7,20 +7,30 @@
  * the backend's version arrives.
  */
 
-import { attachedPathName, splitAttachedPaths } from './attached-paths'
+import { messageSummaryText, truncateChars } from './content-reference'
+import type { ContentReference } from './types/content-reference'
 
 const MAX_TITLE_LENGTH = 50
+const PREVIEW_LENGTH = 50
 
 /**
- * Returns null when the message has no text (e.g. image-only), so the caller
- * keeps the existing title instead of blanking it. Attached paths are not the
- * topic; a message of only attachments is titled by their names.
+ * The conversation list's preview of a message, by the same rule as the
+ * title; undefined when the message names nothing.
  */
-export function titleFromFirstMessage(content: string): string | null {
-  const { text: body, paths } = splitAttachedPaths(content)
-  const text = (body.trim() ? body : paths.map(p => attachedPathName(p.path)).join(', '))
-    .replace(/\s+/g, ' ')
-    .trim()
+export function previewFromMessage(content: string, references?: readonly ContentReference[]): string | undefined {
+  const text = messageSummaryText(content, references)
+  if (!text) return undefined
+  return text.length > PREVIEW_LENGTH ? truncateChars(text, PREVIEW_LENGTH) + '...' : text
+}
+
+/**
+ * Returns null when the message names nothing (e.g. image-only), so the caller
+ * keeps the existing title instead of blanking it. Attached paths and other
+ * references are not the topic; a message of references alone is titled by
+ * them (see `messageSummaryText`).
+ */
+export function titleFromFirstMessage(content: string, references?: readonly ContentReference[]): string | null {
+  const text = messageSummaryText(content, references).replace(/\s+/g, ' ').trim()
   if (!text) return null
 
   // Count code points so an emoji or astral character is never cut in half.

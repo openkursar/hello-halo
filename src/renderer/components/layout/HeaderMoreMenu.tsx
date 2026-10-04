@@ -1,27 +1,33 @@
 /**
- * HeaderMoreMenu - desktop entry point for opening the built-in browser or a
- * space terminal as a Canvas tab.
+ * HeaderMoreMenu - desktop entry point for opening the built-in browser, a
+ * space terminal or the changes view as a Canvas tab.
  *
- * These used to be footer buttons on ArtifactRail. Same destination
- * (ContentCanvas, via useSpaceQuickActions), just moved out of the rail —
- * they're quick actions, not space resources, and this way they stay
- * reachable even when the rail is collapsed.
+ * These are quick actions rather than space resources, so they live here and
+ * stay reachable when the artifact rail is collapsed.
  */
 
 import { useState } from 'react'
-import { Globe, TerminalSquare, Loader2, MoreHorizontal } from 'lucide-react'
+import { Globe, TerminalSquare, Loader2, MoreHorizontal, GitCompareArrows } from 'lucide-react'
 import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
-import { useSpaceQuickActions } from '../../hooks/useSpaceQuickActions'
+import { CHANGES_SHORTCUT_LABEL, useSpaceQuickActions } from '../../hooks/useSpaceQuickActions'
 import { useTranslation } from '../../i18n'
 import { trackHome } from '../../services/home-telemetry'
 import { trackToolOpen } from '../../services/tool-session-telemetry'
 
 export function HeaderMoreMenu() {
   const { t } = useTranslation()
-  const { canOpenBrowser, openBrowser, terminalAvailable, terminalCreating, openTerminal } = useSpaceQuickActions()
+  const {
+    canOpenBrowser,
+    openBrowser,
+    terminalAvailable,
+    terminalCreating,
+    openTerminal,
+    canOpenChanges,
+    openChanges,
+  } = useSpaceQuickActions()
   const [isOpen, setIsOpen] = useState(false)
 
-  if (!canOpenBrowser && !terminalAvailable) return null
+  if (!canOpenBrowser && !terminalAvailable && !canOpenChanges) return null
 
   const handleOpenChange = (open: boolean) => {
     if (open && !isOpen) trackHome('home.header.action', { action: 'more', surface: 'desktop' })
@@ -34,6 +40,11 @@ export function HeaderMoreMenu() {
 
   const handleOpenTerminal = () => {
     trackToolOpen('terminal', 'more_menu', openTerminal())
+  }
+
+  const handleOpenChanges = () => {
+    setIsOpen(false)
+    void openChanges()
   }
 
   return (
@@ -72,6 +83,21 @@ export function HeaderMoreMenu() {
               <span>
                 <span className="block text-sm text-foreground">{t('Open terminal')}</span>
                 <span className="block text-xs text-muted-foreground">{t('Current workspace directory')}</span>
+              </span>
+            </button>
+          )}
+          {canOpenChanges && (
+            <button
+              onClick={handleOpenChanges}
+              className="w-full flex items-start gap-2.5 px-3 py-2 text-left hover:bg-secondary/80 transition-colors"
+            >
+              <GitCompareArrows className="w-4 h-4 text-orange-500 flex-shrink-0 mt-0.5" />
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center justify-between gap-2 text-sm text-foreground">
+                  {t('Changes')}
+                  <kbd className="font-sans text-[10px] leading-[15px] text-muted-foreground border border-border rounded px-1">{CHANGES_SHORTCUT_LABEL}</kbd>
+                </span>
+                <span className="block text-xs text-muted-foreground">{t('Review, stage and commit Git changes')}</span>
               </span>
             </button>
           )}

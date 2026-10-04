@@ -62,8 +62,11 @@ import {
   trackHomeOnce,
 } from '../../services/home-telemetry'
 import { useGoalComposer } from '../goal'
+import { ConversationReferenceScope } from '../references'
+import { useActiveConversationTitle } from '../../hooks/useActiveConversationTitle'
 import { showsMessageList } from './conversation-body'
 import type { GoalInput } from '../../../shared/types/goal'
+import type { ContentReference } from '../../../shared/types/content-reference'
 import { isConversationCollabEnabled } from '../../../shared/apps/app-types'
 
 interface ChatViewProps {
@@ -99,6 +102,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
   )
   const activeConversationId = useChatStore(selectActiveConversationId)
   const isDigitalHuman = !!activeConversationId && conversationKind(activeConversationId) === 'digital-human'
+  const activeConversationTitle = useActiveConversationTitle()
   // String identity, so this only re-renders when the selection changes.
   const currentSourceId = useAppStore(state => {
     const src = state.config?.aiSources
@@ -334,8 +338,8 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
   } : undefined, [currentSpaceId, selectedAppId, digitalHumanOptions, digitalHumanSelectorLocked, clearAppChatSelection, selectAppChatConversation])
 
   const sendWithGoal = useCallback(
-    (content: string, images: ImageAttachment[] | undefined, thinkingEnabled: boolean, goal: GoalInput) =>
-      sendMessage(content, images, thinkingEnabled, { goal }),
+    (content: string, images: ImageAttachment[] | undefined, thinkingEnabled: boolean, goal: GoalInput, references?: ContentReference[]) =>
+      sendMessage(content, images, thinkingEnabled, { goal, ...(references?.length ? { references } : {}) }),
     [sendMessage]
   )
   // Goals belong to space conversations; a digital human keeps none.
@@ -434,20 +438,27 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
   }, [currentSpace, onboardingHtml, onboardingPrompt, onboardingResponse, setMockAnimating, setMockThinking])
 
   // Handle send (with optional images for multi-modal messages, optional thinking mode)
-  const handleSend = useCallback(async (content: string, images?: ImageAttachment[], thinkingEnabled?: boolean) => {
+  const handleSend = useCallback(async (
+    content: string,
+    images?: ImageAttachment[],
+    thinkingEnabled?: boolean,
+    options?: { references?: ContentReference[] }
+  ) => {
     // In onboarding mode, intercept and play mock response
     if (isOnboarding && currentStep === 'send-message') {
       handleOnboardingSend()
       return
     }
 
-    // Can send if has text OR has images
-    if ((!content.trim() && (!images || images.length === 0)) || isGenerating) return
+    // Can send with text, images, or only the places the user pointed at
+    const references = options?.references?.length ? options.references : undefined
+    // Not sent: false has the composer put back what it took.
+    if ((!content.trim() && (!images || images.length === 0) && !references) || isGenerating) return false
 
     if (activeConversationId) noteTurnSent(activeConversationId, isDigitalHuman ? 'digital_human' : 'halo')
     // Sending returns the reader to the end, wherever they were reading.
     messageListRef.current?.scrollToBottom('auto')
-    return sendMessage(content, images, thinkingEnabled)
+    return sendMessage(content, images, thinkingEnabled, references ? { references } : undefined)
   }, [isOnboarding, currentStep, handleOnboardingSend, isGenerating, activeConversationId, isDigitalHuman, sendMessage])
 
   // Handle stop - stops the current conversation's generation
@@ -457,8 +468,10 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
     }
   }, [activeConversationId, stopGeneration])
 
-  const handleInject = useCallback((content: string) => {
-    if (activeConversationId) injectMessage(activeConversationId, content)
+  const handleInject = useCallback(async (content: string, references?: ContentReference[]) => {
+    // Not added: false has the composer put back what it took.
+    if (!activeConversationId) return false
+    return injectMessage(activeConversationId, content, references)
   }, [activeConversationId, injectMessage])
 
 
@@ -595,31 +608,39 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
               avatarName={isDigitalHuman ? activeAppName : undefined}
             />
           ) : (
-            <LiveTranscript
-              key={activeConversationId ?? 'empty'}
-              ref={messageListRef}
-              conversationId={activeConversationId ?? undefined}
-              thoughtsLoader={thoughtsLoader}
-              messages={displayMessages}
-              mockStreamingContent={mockStreamingContent}
-              isGenerating={displayIsGenerating}
-              isThinking={displayIsThinking}
-              compactInfo={compactInfo}
-              error={error}
-              errorType={errorType}
-              onContinue={activeConversationId ? () => continueAfterInterrupt(activeConversationId) : undefined}
-              onStop={handleStop}
-              isCompact={isCompact}
-              pendingQuestion={pendingQuestion}
-              onAnswerQuestion={activeConversationId ? (answers) => answerQuestion(activeConversationId, answers) : undefined}
-              onAtBottomStateChange={handleAtBottomStateChange}
-              onLoadEarlier={hasEarlier ? handleLoadEarlier : undefined}
-              footerExtra={isDigitalHuman
-                ? (realMessages.length > 0 && !isGenerating && activeConversationId
-                  ? <ClearChatControl conversationId={activeConversationId} />
-                  : null)
-                : <TeamCollabPanel conversationId={activeConversationId ?? undefined} />}
-            />
+            // Replies here can be pointed at, and their file mentions open in the canvas.
+            <ConversationReferenceScope
+              conversationId={activeConversationId}
+              conversationTitle={activeConversationTitle ?? ''}
+              spaceId={currentSpaceId}
+              baseDir={currentSpace ? currentSpace.workingDir || currentSpace.path : undefined}
+            >
+              <LiveTranscript
+                key={activeConversationId ?? 'empty'}
+                ref={messageListRef}
+                conversationId={activeConversationId ?? undefined}
+                thoughtsLoader={thoughtsLoader}
+                messages={displayMessages}
+                mockStreamingContent={mockStreamingContent}
+                isGenerating={displayIsGenerating}
+                isThinking={displayIsThinking}
+                compactInfo={compactInfo}
+                error={error}
+                errorType={errorType}
+                onContinue={activeConversationId ? () => continueAfterInterrupt(activeConversationId) : undefined}
+                onStop={handleStop}
+                isCompact={isCompact}
+                pendingQuestion={pendingQuestion}
+                onAnswerQuestion={activeConversationId ? (answers) => answerQuestion(activeConversationId, answers) : undefined}
+                onAtBottomStateChange={handleAtBottomStateChange}
+                onLoadEarlier={hasEarlier ? handleLoadEarlier : undefined}
+                footerExtra={isDigitalHuman
+                  ? (realMessages.length > 0 && !isGenerating && activeConversationId
+                    ? <ClearChatControl conversationId={activeConversationId} />
+                    : null)
+                  : <TeamCollabPanel conversationId={activeConversationId ?? undefined} />}
+              />
+            </ConversationReferenceScope>
           )}
         </div>
 

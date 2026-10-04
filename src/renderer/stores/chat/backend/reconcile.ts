@@ -14,7 +14,7 @@ const PENDING_ID_PREFIX = 'pending-'
 
 let pendingSeq = 0
 
-export function createPendingUserMessage(content: string, images: Message['images']): Message {
+export function createPendingUserMessage(content: string, images: Message['images'], metadata?: Message['metadata']): Message {
   const id = `${PENDING_ID_PREFIX}${Date.now()}-${++pendingSeq}`
   return {
     id,
@@ -23,6 +23,7 @@ export function createPendingUserMessage(content: string, images: Message['image
     content,
     timestamp: new Date().toISOString(),
     ...(images && images.length > 0 ? { images } : {}),
+    ...(metadata && Object.keys(metadata).length > 0 ? { metadata } : {}),
   }
 }
 
@@ -54,6 +55,7 @@ function withLoadedThoughts(prior: Message, fresh: Message): Message {
 function samePendingContent(pending: Message, persisted: Message): boolean {
   return pending.content.trim() === persisted.content.trim()
     && (pending.images?.length ?? 0) === (persisted.images?.length ?? 0)
+    && (pending.metadata?.references?.length ?? 0) === (persisted.metadata?.references?.length ?? 0)
 }
 
 export interface ReconcileResult {

@@ -25,6 +25,8 @@ const XlsxViewer = lazy(() => import('./viewers/XlsxViewer'))
 const DocxViewer = lazy(() => import('./viewers/DocxViewer'))
 const PdfViewer = lazy(() => import('./viewers/PdfViewer'))
 const PptxViewer = lazy(() => import('./viewers/PptxViewer'))
+// The changes view carries the merge editor and is opened on demand.
+const ChangesViewer = lazy(() => import('./viewers/changes/ChangesViewer'))
 
 /** Everything the host hands a viewer; each viewer takes the part it needs. */
 export interface ViewerProps {
@@ -43,6 +45,8 @@ export interface ViewerSpec {
   ownsLoading?: boolean
   /** Shows its own error fallback (open externally / download) instead of the host's. */
   ownsError?: boolean
+  /** Shows a file list of its own: while it is the active tab, the space's resource rail steps aside. */
+  bringsFileList?: boolean
 }
 
 function MarkdownEntry(props: ViewerProps) {
@@ -69,9 +73,15 @@ export const VIEWERS: Record<ContentType, ViewerSpec> = {
   terminal: { Component: TerminalViewer },
   team: { Component: TeamViewer },
   goal: { Component: GoalEditor },
+  changes: { Component: ChangesViewer, bringsFileList: true },
 }
 
 /** The viewer for `type`; a type with no viewer shows as text rather than a blank pane. */
 export function viewerFor(type: string): ViewerSpec {
   return (VIEWERS as Record<string, ViewerSpec | undefined>)[type] ?? VIEWERS.text
+}
+
+/** Whether a tab of `type` shows a file list of its own. */
+export function viewerBringsFileList(type: string): boolean {
+  return viewerFor(type).bringsFileList === true
 }

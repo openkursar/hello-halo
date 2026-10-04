@@ -24,6 +24,15 @@ import type { TabState } from '../../../services/canvas-lifecycle'
 import { noteTerminalInput } from '../../../services/tool-session-telemetry'
 import { buildTheme, getMinimumContrastRatio } from '../../../lib/terminal-theme'
 import { latchTerminalEnd, type TerminalEndState } from '../../../lib/terminal-liveness'
+import { useCanvasActions } from '../../../hooks/useCanvasLifecycle'
+import {
+  attachTerminalReferences,
+  notifyTerminalOutputMissing,
+  openCommentCard,
+  openCommentCardAtComposer,
+  revealInTerminal,
+  terminalTopRect,
+} from '../../references'
 import { useViewerResources } from '../viewer-resources'
 
 interface TerminalViewerProps {
@@ -59,6 +68,16 @@ export function TerminalViewer({ tab }: TerminalViewerProps) {
   // Gate keyboard input inside the (mount-scoped) effect via a ref.
   const deadRef = useRef(dead)
   deadRef.current = dead
+  // The tab title at the moment output is pointed at, read inside the mount-scoped effect.
+  const titleRef = useRef(tab.title)
+  titleRef.current = tab.title
+  const tabIdRef = useRef(tab.id)
+  tabIdRef.current = tab.id
+  // Opened to show output from a card in the composer: the composer keeps the caret.
+  const keepFocusRef = useRef(false)
+  keepFocusRef.current = !!tab.reveal?.keepFocus
+  // Set once the replay is written: output searched for before that is not there yet.
+  const [replayed, setReplayed] = useState(false)
 
   useEffect(() => {
     if (!sessionId || !containerRef.current) return
@@ -104,6 +123,9 @@ export function TerminalViewer({ tab }: TerminalViewerProps) {
 
     // Keyboard → pty
     scope.add(term.onData(sendInput))
+
+    // Selected output can be handed to the chat.
+    scope.add(attachTerminalReferences(term, () => ({ kind: 'terminal', title: titleRef.current, sessionId })))
 
     // Flow control: register as a live consumer, then acknowledge chars AFTER
     // xterm has rendered them (the write callback), in CHAR_COUNT_ACK_SIZE
@@ -156,13 +178,17 @@ export function TerminalViewer({ tab }: TerminalViewerProps) {
       replayApplied = true
       for (const chunk of pendingLive) writeLive(chunk)
       pendingLive.length = 0
+      // xterm parses writes asynchronously; an empty write's callback runs after everything before it.
+      term.write('', () => {
+        if (!disposed) setReplayed(true)
+      })
       try {
         fit.fit()
         sendResize(term.cols, term.rows)
       } catch {
         // container not measured yet — ResizeObserver will retry
       }
-      term.focus()
+      if (!keepFocusRef.current) term.focus()
     })
 
     // Keep pty sized to the container.
@@ -198,7 +224,26 @@ export function TerminalViewer({ tab }: TerminalViewerProps) {
     })
 
     return () => scope.dispose()
-  }, [resources, sessionId])
+    // The session is the tab's for life, and the viewer mounts once per tab.
+  }, [resources])
+
+  // Going back to output a reference points at, once the replay is in the buffer.
+  const { consumeReveal } = useCanvasActions()
+  const reveal = tab.reveal
+  useEffect(() => {
+    if (!reveal || !replayed) return
+    const term = termRef.current
+    if (!term) return
+    const shown = reveal.quote ? revealInTerminal(term, reveal.quote) : null
+    if (!shown) notifyTerminalOutputMissing()
+    // A comment gone back to opens beside its output, or at the top when the output is gone, so it can still be edited.
+    if (reveal.commentId) {
+      const at = shown ?? terminalTopRect(term)
+      if (at) openCommentCard(reveal.commentId, at)
+      else openCommentCardAtComposer(reveal.commentId)
+    }
+    consumeReveal(tabIdRef.current, reveal.seq)
+  }, [reveal, replayed, consumeReveal])
 
   if (!sessionId) {
     return (

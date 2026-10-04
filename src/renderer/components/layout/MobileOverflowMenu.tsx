@@ -8,7 +8,7 @@
  */
 
 import { useState } from 'react'
-import { MoreHorizontal, Sparkles, Search, Settings, ChevronRight, X, Globe, TerminalSquare, Loader2 } from 'lucide-react'
+import { MoreHorizontal, Sparkles, Search, Settings, ChevronRight, X, Globe, TerminalSquare, Loader2, GitCompareArrows } from 'lucide-react'
 import { useAppStore } from '../../stores/app.store'
 import { useActiveModelTarget } from '../../hooks/useActiveModelTarget'
 import { openPersonModelSettings } from '../../utils/people-navigation'
@@ -40,7 +40,15 @@ export function MobileOverflowMenu({ onSearch }: MobileOverflowMenuProps) {
     ? getModelDisplayName(aiSources, modelTarget.modelSourceId, modelTarget.modelId)
     : getModelDisplayName(aiSources, modelTarget.conversation?.modelSourceId, modelTarget.conversation?.modelId)
 
-  const { canOpenBrowser, openBrowser, terminalAvailable, terminalCreating, openTerminal } = useSpaceQuickActions()
+  const {
+    canOpenBrowser,
+    openBrowser,
+    terminalAvailable,
+    terminalCreating,
+    openTerminal,
+    canOpenChanges,
+    openChanges,
+  } = useSpaceQuickActions()
 
   const closeMenu = (after?: () => void) => {
     setIsAnimatingOut(true)
@@ -63,6 +71,7 @@ export function MobileOverflowMenu({ onSearch }: MobileOverflowMenuProps) {
 
   const handleOpenBrowser = () => closeMenu(() => trackToolOpen('browser', 'mobile_menu', openBrowser()))
   const handleOpenTerminal = () => closeMenu(() => trackToolOpen('terminal', 'mobile_menu', openTerminal()))
+  const handleOpenChanges = () => closeMenu(() => { void openChanges() })
 
   const goSettings = () => {
     trackNavigate('settings', 'header', 'header')
@@ -170,6 +179,16 @@ export function MobileOverflowMenu({ onSearch }: MobileOverflowMenuProps) {
                     <TerminalSquare className="w-4 h-4 text-violet-500 flex-shrink-0" />
                   )}
                   <span className="text-sm text-foreground">{t('Open terminal')}</span>
+                </button>
+              )}
+
+              {canOpenChanges && (
+                <button
+                  onClick={handleOpenChanges}
+                  className="w-full px-4 py-3 flex items-center gap-3 hover:bg-secondary/80 transition-colors"
+                >
+                  <GitCompareArrows className="w-4 h-4 text-orange-500 flex-shrink-0" />
+                  <span className="text-sm text-foreground">{t('Changes')}</span>
                 </button>
               )}
             </div>

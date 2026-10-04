@@ -7,6 +7,7 @@ import { readTeamMemberHistory } from '../apps/runtime/app-chat'
 import { getTeamStore } from '../apps/team'
 import { getFederationManager } from '../apps/runtime/federation/manager'
 import { generateTeamInvite, revokeTeamInvite, joinTeamOffice, leaveTeamOffice } from '../controllers/team-invite.controller'
+import { toMemberMessage } from '../controllers/team-member-message.controller'
 import type { TeamService } from '../apps/team'
 import type { OfficeScope } from '../apps/federation/index'
 import type {
@@ -203,8 +204,15 @@ export function registerTeamIpc(): void {
         message: string
         images?: ImageAttachment[]
         thinkingEnabled?: boolean
+        spaceId?: string
+        references?: unknown
       }
-    ) => handle('team:send-to-member', (s) => s.sendToMember(input))
+    ): Promise<Envelope> => {
+      const built = toMemberMessage(input)
+      if (!built.ok) return { success: false, error: built.error }
+      const { teamId, appId, epochId, images, thinkingEnabled } = input
+      return handle('team:send-to-member', (s) => s.sendToMember({ teamId, appId, epochId, message: built.message, images, thinkingEnabled }))
+    }
   )
 
   // ── team:stop-member — abort the turn ONE member is running ───────────────

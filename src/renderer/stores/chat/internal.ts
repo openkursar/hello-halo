@@ -16,6 +16,7 @@ import { canvasLifecycle } from '../../services/canvas-lifecycle'
 import type { StoreApi } from 'zustand'
 import type { GoalInput } from '../../../shared/types/goal'
 import type { ApiRetryEvent } from '../../../shared/types/api-retry'
+import type { ContentReference } from '../../../shared/types/content-reference'
 
 // Conversation cache bounds (backend/cache.ts): entries, and estimated heap
 // (one conversation can hold megabytes of inline images or v1 thoughts).
@@ -30,6 +31,8 @@ export const LOADED_THOUGHTS_BYTES = 16 * 1024 * 1024
 export interface SendMessageOptions {
   /** Set as the conversation goal before this message runs. */
   goal?: GoalInput
+  /** Places the user pointed at, in the order they added them; the text may then be empty. */
+  references?: ContentReference[]
 }
 
 export interface SpaceState {
@@ -227,7 +230,11 @@ export interface ChatState {
    */
   sendMessage: (content: string, images?: ImageAttachment[], thinkingEnabled?: boolean, options?: SendMessageOptions) => Promise<boolean>
   stopGeneration: (conversationId?: string) => Promise<void>
-  injectMessage: (conversationId: string, message: string) => Promise<void>
+  /**
+   * Add to the running turn; references may carry the message alone. Resolves
+   * false when nothing went out, so the caller can restore the draft.
+   */
+  injectMessage: (conversationId: string, message: string, references?: ContentReference[]) => Promise<boolean>
   /** Drop a message from the "queued for the running turn" list. */
   dequeueMessage: (conversationId: string, message: string) => void
   /** Empty a conversation's history in place (digital-human default sessions). */
@@ -236,9 +243,10 @@ export interface ChatState {
   deleteAppChatSession: (appId: string, spaceId: string, conversationId: string) => Promise<boolean>
   /**
    * Read a conversation in (if it is not cached) and pick up a running turn,
-   * without changing what is selected.
+   * without changing what is selected. `warm: false` also leaves its engine
+   * session alone, for a view that only reports on the conversation.
    */
-  openConversation: (conversationId: string) => Promise<void>
+  openConversation: (conversationId: string, options?: { warm?: boolean }) => Promise<void>
   /** Read the next older page of a paged conversation into the cache. */
   loadEarlierMessages: (conversationId: string) => Promise<void>
   /** Make sure one message (a search result) is among the loaded ones. */

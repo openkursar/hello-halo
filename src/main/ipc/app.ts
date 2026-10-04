@@ -87,6 +87,8 @@ import type { AppListFilter, UninstallOptions, UpgradeStrategy } from '../apps/m
 import type { ActivityQueryOptions, RunQueryOptions, EscalationResponse, AppChatRequest } from '../apps/runtime'
 import { getSpace } from '../services/space.service'
 import { resolveUserInjectTarget } from '../controllers/app-chat-target.controller'
+import { parseTurnReferences, toAppChatRequest } from '../controllers/chat-turn-input'
+import type { ContentReference } from '../../shared/types/content-reference'
 import { broadcastToAll } from '../http/websocket'
 import * as appController from '../controllers/app.controller'
 import { analytics } from '../services/analytics/analytics.service'
@@ -485,11 +487,13 @@ export function registerAppHandlers(): void {
     },
 
     // ── app:inject-run ───────────────────────────────────────────────────────
-    appInjectRun: async (input: { appId: string; runId: string; text: string }) => {
+    appInjectRun: async (input: { appId: string; runId: string; text: string; references?: ContentReference[] }) => {
       try {
+        const references = parseTurnReferences(input.references)
+        if (!references.ok) return { success: false, error: references.error }
         const r = requireRuntime()
         if (!r.success) return r
-        await r.runtime.injectIntoRun(input.appId, input.runId, input.text)
+        await r.runtime.injectIntoRun(input.appId, input.runId, input.text, references.references)
         console.log(`[AppIPC] app:inject-run: appId=${input.appId}, runId=${input.runId}`)
         return { success: true }
       } catch (error: unknown) {
@@ -650,17 +654,23 @@ export function registerAppHandlers(): void {
     // ── app:chat-send ─────────────────────────────────────────────────────
     appChatSend: async (request: AppChatRequest) => {
       try {
+        // Built field by field, exactly as the HTTP route does: identity is derived, never taken.
+        const built = toAppChatRequest(request?.appId, request)
+        if (!built.ok) {
+          console.warn(`[AppIPC] app:chat-send refused: appId=${request?.appId} ${built.error}`)
+          return { success: false, error: built.error }
+        }
         // Fire-and-forget: streaming events are pushed to renderer via agent:* channels.
         // We don't await the full completion here because the renderer listens for
         // real-time events (agent:message, agent:thought, etc.) keyed by conversationId.
-        sendAppChatMessage({ ...request, useChatThinkingLevel: true }).catch((error: unknown) => {
+        sendAppChatMessage(built.request).catch((error: unknown) => {
           const err = error as Error
           console.error(`[AppIPC] app:chat-send background error:`, err.message)
         })
         // Echo back the session actually addressed: the caller's explicit
-        // conversationId (native local / IM / HTTP session) or the app's
-        // native default when none was supplied.
-        const conversationId = request.conversationId ?? getAppChatConversationId(request.appId)
+        // conversationId (native local / team session) or the app's native
+        // default when none was supplied.
+        const conversationId = built.request.conversationId ?? getAppChatConversationId(request.appId)
         console.log(`[AppIPC] app:chat-send: appId=${request.appId} conversationId=${conversationId}`)
         return {
           success: true,
@@ -697,15 +707,17 @@ export function registerAppHandlers(): void {
     // The user adding to the turn a digital human is running. `delivered: false`
     // means no turn was in flight to take it (it ended in the meantime) — the
     // caller then sends the text as a new message.
-    appChatInject: async (input: { appId: string; conversationId: string; message: string }) => {
+    appChatInject: async (input: { appId: string; conversationId: string; message: string; references?: ContentReference[] }) => {
       try {
         const message = typeof input?.message === 'string' ? input.message.trim() : ''
-        if (!message || !input?.conversationId) {
+        const references = parseTurnReferences(input?.references)
+        if (!references.ok) return { success: false, error: references.error }
+        if ((!message && !references.references) || !input?.conversationId) {
           return { success: false, error: 'Missing conversationId or message' }
         }
         const target = resolveUserInjectTarget(input.appId, input.conversationId)
         if (!target.ok) return { success: false, error: target.error }
-        const delivered = injectIntoAppChat(target.conversationId, message, { source: 'injection' })
+        const delivered = injectIntoAppChat(target.conversationId, message, { source: 'injection' }, references.references)
         console.log(`[AppIPC] app:chat-inject: appId=${input.appId} conversationId=${input.conversationId} delivered=${delivered}`)
         return { success: true, data: { delivered } }
       } catch (error: unknown) {

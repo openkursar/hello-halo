@@ -51,8 +51,10 @@ function formatDefaultChatTitle(timestamp: number, t: (s: string, opts?: Record<
  * all and pairs it with the owner's name instead.
  */
 export function appChatSessionLabel(row: AppChatConversationRow, t: (s: string, opts?: Record<string, unknown>) => string): string {
+  // A default row is listed only when it holds messages, so a missing preview
+  // (a chat kept from an older build, a message of cards alone) falls back to its date.
   return row.isDefault
-    ? (row.lastMessage || t('No messages yet'))
+    ? (row.lastMessage || formatDefaultChatTitle(row.updatedAt, t))
     : (row.customName || row.displayName.trim() || row.lastMessage || formatDefaultChatTitle(row.updatedAt, t))
 }
 

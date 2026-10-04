@@ -49,11 +49,3 @@ export interface FileChanges {
   totalAdded: number      // Total lines added
   totalRemoved: number    // Total lines removed
 }
-
-// Diff modal state
-export interface DiffModalState {
-  isOpen: boolean
-  currentFile: FileChange | null
-  allFiles: FileChange[]  // For navigation between files
-  currentIndex: number    // Current file index
-}

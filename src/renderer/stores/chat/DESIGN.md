@@ -121,6 +121,9 @@ replaces it when the turn completes.
   (nothing shows it); one whose history was cleared after the read is not merged.
 - Opening a cached conversation shows it at once and merges a background re-read;
   `open` also recovers a turn already running (thoughts, pending question, retry).
+  A space conversation's open also warms its engine session for a first message;
+  a view that only reports on a conversation it does not show (the changes
+  view's review card, `hooks/useReviewProgress`) opens with `{ warm: false }`.
 - Reconnect (`useWsRecovery` in `ChatView`) and the foreground-resume path in
   `App.tsx` both end in `handleAgentComplete` for a session the backend says is
   over; a digital-human id resolves its space from the cached conversation.

@@ -19,7 +19,7 @@ import { memo } from 'react'
 import { Users, ArrowUpRight } from 'lucide-react'
 import { canvasLifecycle } from '../../../services/canvas-lifecycle'
 import { useTranslation } from '../../../i18n'
-import { useCollabSummary } from './useCollabSummary'
+import { useCollabSummary } from '../../../hooks/useCollabSummary'
 import type { CollabMemberSummary } from '../../../../shared/apps/team-types'
 
 function StatusDot({ status }: { status: CollabMemberSummary['status'] }) {

@@ -10,6 +10,8 @@ import { selectActiveConversationId } from './active'
 import { conversationKind, backendFor } from './backend'
 import { noteTurnEnded, noteTurnSent, trackHome } from '../../services/home-telemetry'
 import { holdTurnDetail, releaseTurnDetail } from './detail-retention'
+import { messageSummaryText } from '../../../shared/content-reference'
+import type { ContentReference } from '../../../shared/types/content-reference'
 
 export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 'injectMessage' | 'dequeueMessage' | 'approveTool' | 'rejectTool' | 'continueAfterInterrupt'> = (set, get) => ({
   sendMessage: async (content, images, thinkingEnabled, options) => {
@@ -43,26 +45,30 @@ export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 
   },
 
   // Add a message to the turn that is running. It shows in the queued panel at
-  // once and is taken back if the backend could not deliver it.
-  injectMessage: async (conversationId: string, message: string) => {
+  // once and is taken back if the backend could not deliver it. A message may
+  // be only the places the user pointed at; the panel then names them.
+  injectMessage: async (conversationId: string, message: string, references?: ContentReference[]) => {
     const trimmed = message.trim()
-    if (!trimmed) return
+    const pointedAt = references?.length ? references : undefined
+    if (!trimmed && !pointedAt) return false
+    const queued = messageSummaryText(trimmed, pointedAt)
 
     set((state) => {
       const newSessions = new Map(state.sessions)
       const session = newSessions.get(conversationId) || createEmptySessionState()
       newSessions.set(conversationId, {
         ...session,
-        queuedMessages: [...session.queuedMessages, trimmed]
+        queuedMessages: [...session.queuedMessages, queued]
       })
       return { sessions: newSessions }
     })
 
     try {
-      await backendFor(conversationId).inject({ set, get }, conversationId, trimmed)
+      return await backendFor(conversationId).inject({ set, get }, conversationId, trimmed, pointedAt)
     } catch (error) {
       console.error('[ChatStore] injectMessage failed:', error)
-      get().dequeueMessage(conversationId, trimmed)
+      get().dequeueMessage(conversationId, queued)
+      return false
     }
   },
 

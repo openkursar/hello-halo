@@ -11,15 +11,26 @@
 
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { Copy, Check, Code, Eye, ExternalLink, Pencil } from 'lucide-react'
-import { Virtuoso } from 'react-virtuoso'
+import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { Streamdown } from 'streamdown'
 import 'streamdown/styles.css'
 import { useCodePlugin } from '../../../lib/streamdown-plugins'
 import { splitMarkdownIntoChunks } from '../../../lib/markdown-chunks'
 import { api } from '../../../api'
 import type { CanvasTab } from '../../../stores/canvas.store'
+import { useCanvasActions } from '../../../hooks/useCanvasLifecycle'
 import { useTranslation } from '../../../i18n'
-import { CodeMirrorEditor } from './CodeMirrorEditor'
+import {
+  notifyRevealOutcome,
+  openCommentCardAtComposer,
+  openCommentCardAtTopOf,
+  referenceExtension,
+  revealInEditor,
+  revealInElement,
+  useTextReferences,
+} from '../../references'
+import { CodeMirrorEditor, type CodeMirrorEditorRef } from './CodeMirrorEditor'
+import { countLines } from './count-lines'
 
 /**
  * Above this size the document is rendered a viewport at a time instead of all
@@ -100,6 +111,79 @@ export function MarkdownViewer({ tab, onScrollChange, onEditRequest }: MarkdownV
     [content]
   )
   const isChunked = viewMode === 'rendered' && chunks !== null && chunks.length > 1
+
+  // ── References: the preview's text and the source's lines can be pointed at ──
+  const textScopeRef = useRef<HTMLDivElement>(null)
+  const sourceEditorRef = useRef<CodeMirrorEditorRef>(null)
+  const virtuosoRef = useRef<VirtuosoHandle>(null)
+  useTextReferences(textScopeRef, {
+    source: tab.path ? { kind: 'file', path: tab.path, precision: 'passage' } : null,
+    sourceText: content,
+  })
+  const pathRef = useRef(tab.path)
+  pathRef.current = tab.path
+  const [sourceExtensions] = useState(() => [referenceExtension({
+    source: () => (pathRef.current ? { kind: 'file', path: pathRef.current, precision: 'lines' } : null),
+  })])
+  // First source line of each chunk, to bring a chunk holding a line into the window.
+  const chunkStartLines = useMemo(() => {
+    if (!chunks) return null
+    const starts: number[] = []
+    let line = 1
+    for (const chunk of chunks) {
+      starts.push(line)
+      line += countLines(chunk)
+    }
+    return starts
+  }, [chunks])
+
+  // Going back to a place: a passage is looked for in the preview; exact lines show in the source.
+  const { consumeReveal } = useCanvasActions()
+  const reveal = tab.reveal
+  const contentReady = !tab.isLoading && tab.content !== undefined
+  const revealTabIdRef = useRef(tab.id)
+  revealTabIdRef.current = tab.id
+  useEffect(() => {
+    if (!reveal || !contentReady) return
+    const finish = (outcome: 'exact' | 'moved' | 'lost') => {
+      notifyRevealOutcome(outcome)
+      // A passage gone from the preview: its comment opens at the top of it, to be edited all the same.
+      if (outcome === 'lost' && reveal.commentId && viewMode !== 'source') {
+        const place = textScopeRef.current
+        if (place) openCommentCardAtTopOf(reveal.commentId, place)
+        else openCommentCardAtComposer(reveal.commentId)
+      }
+      consumeReveal(revealTabIdRef.current, reveal.seq)
+    }
+    const comment = { commentId: reveal.commentId }
+    if (viewMode === 'source') {
+      const view = sourceEditorRef.current?.getView()
+      if (!view) return
+      finish(revealInEditor(view, { range: reveal.range, quote: reveal.passage ? undefined : reveal.quote, ...comment }))
+      return
+    }
+    if (!reveal.passage && reveal.range) {
+      // Lines are exact only in the source; the effect runs again once it shows.
+      setViewMode('source')
+      return
+    }
+    const scope = textScopeRef.current
+    if (reveal.quote && scope && revealInElement(scope, reveal.quote, comment)) {
+      finish('exact')
+      return
+    }
+    if (isChunked && reveal.range && chunkStartLines && virtuosoRef.current) {
+      let index = 0
+      while (index + 1 < chunkStartLines.length && chunkStartLines[index + 1] <= reveal.range.startLine) index++
+      virtuosoRef.current.scrollToIndex({ index, align: 'start' })
+      const frame = requestAnimationFrame(() => requestAnimationFrame(() => {
+        const found = !!reveal.quote && !!textScopeRef.current && revealInElement(textScopeRef.current, reveal.quote, comment)
+        finish(found ? 'exact' : 'lost')
+      }))
+      return () => cancelAnimationFrame(frame)
+    }
+    finish('lost')
+  }, [reveal, contentReady, viewMode, isChunked, chunkStartLines, consumeReveal])
 
   // Restore scroll position on mount and on a view change (rendered/chunked
   // views only — source view's restore is handled by CodeMirrorEditor's
@@ -266,10 +350,14 @@ export function MarkdownViewer({ tab, onScrollChange, onEditRequest }: MarkdownV
         </div>
       </div>
 
-      {/* Content */}
+      {/* Content — one element around every view, so the preview's text stays
+          registered for references across view switches (the source's editor
+          numbers its own lines and is skipped there). */}
+      <div ref={textScopeRef} className="flex-1 min-h-0 flex flex-col">
       {isChunked ? (
         <div className="flex-1 min-h-0">
           <Virtuoso
+            ref={virtuosoRef}
             style={{ height: '100%' }}
             data={chunks!}
             scrollerRef={(el) => { chunkScrollerRef.current = el as HTMLElement | null }}
@@ -316,14 +404,17 @@ export function MarkdownViewer({ tab, onScrollChange, onEditRequest }: MarkdownV
       ) : (
         <div className="flex-1 overflow-hidden">
           <CodeMirrorEditor
+            ref={sourceEditorRef}
             content={content}
             language="markdown"
             readOnly
             onScroll={onScrollChange}
             scrollPosition={tab.view.scrollPosition}
+            extensions={sourceExtensions}
           />
         </div>
       )}
+      </div>
     </div>
   )
 }

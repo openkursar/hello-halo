@@ -1,6 +1,23 @@
+/**
+ * Messages written before attachments became path references carry them as a
+ * block at the end of their text; those still read back as paths. The block
+ * is written here the way the composer used to write it.
+ */
+
 import { describe, it, expect } from 'vitest'
-import { appendAttachedPaths, attachedPathName, canAttachPath, splitAttachedPaths } from '../../../src/shared/attached-paths'
+import { attachedPathName, canAttachPath, splitAttachedPaths, type AttachedPath } from '../../../src/shared/attached-paths'
 import { titleFromFirstMessage } from '../../../src/shared/conversation-title'
+
+/** The block as the composer used to append it: one path per line, JSON for a path that cannot be a line, folders with a trailing separator. */
+function appendAttachedPaths(text: string, paths: AttachedPath[]): string {
+  if (paths.length === 0) return text
+  const lines = paths.map(({ path, isDirectory }) => {
+    const written = isDirectory && !/[\\/]$/.test(path) ? path + (path.includes('\\') && !path.includes('/') ? '\\' : '/') : path
+    return /[\r\n]/.test(written) || written.startsWith('"') ? JSON.stringify(written) : written
+  })
+  const block = `<attached_paths>\n${lines.join('\n')}\n</attached_paths>`
+  return text ? `${text}\n\n${block}` : block
+}
 
 describe('attached paths', () => {
   it('round-trips text with files and folders', () => {

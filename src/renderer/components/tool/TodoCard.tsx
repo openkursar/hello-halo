@@ -16,17 +16,9 @@ import {
   ListTodo,
 } from 'lucide-react'
 import { useTranslation } from '../../i18n'
+import type { TodoItem, TodoStatus } from '../../utils/thought-activity'
 
 // Note: Loader2 is used for in_progress task icon animation
-
-// Todo item status from Claude Code SDK
-type TodoStatus = 'pending' | 'in_progress' | 'completed'
-
-interface TodoItem {
-  content: string
-  status: TodoStatus
-  activeForm?: string  // Present tense form for in_progress display
-}
 
 interface TodoCardProps {
   todos: TodoItem[]
@@ -156,23 +148,4 @@ export function TodoCard({ todos, isAgentActive = true }: TodoCardProps) {
       </div>
     </div>
   )
-}
-
-// Parse TodoWrite tool input to TodoItem array
-export function parseTodoInput(input: Record<string, unknown>): TodoItem[] {
-  const todos = input.todos as Array<{
-    content: string
-    status: string
-    activeForm?: string
-  }> | undefined
-
-  if (!todos || !Array.isArray(todos)) {
-    return []
-  }
-
-  return todos.map(t => ({
-    content: t.content || '',
-    status: (t.status as TodoStatus) || 'pending',
-    activeForm: t.activeForm,
-  }))
 }

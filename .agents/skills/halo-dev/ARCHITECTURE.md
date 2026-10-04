@@ -28,7 +28,7 @@ Apps Layer (src/main/apps)
 
 Services Layer (src/main/services)
   - domain services: agent, ai-browser, ai-sources, space, conversation,
-    artifact, analytics, remote, etc.
+    artifact, analytics, remote, git, etc.
   - app-bridge.ts   : DI seam so services reach Apps data without importing up
   - memory-consolidation: background agent that reorganises an oversized memory
                     (digital human or space) into topics; space turns reach it
@@ -147,7 +147,14 @@ src/
 │       │                              #   resources/api-ref/ by scripts/gen-api-ref.mjs.
 │       │                              #   Reads generated files only: the coupling to the
 │       │                              #   transport layer is build-time, never runtime.
+│       ├── code-review/               # The changes view's review buttons: snapshot, background review
+│       │                              #   conversation, built-in review task, latest review per
+│       │                              #   repository. See code-review/DESIGN.md
 │       ├── email-mcp/                 # Email-as-MCP tool server
+│       ├── git/                       # git CLI for a space's repositories (its folder + direct sub-folders):
+│       │                              #   status, change lists for four compare scopes, file sides,
+│       │                              #   working-tree snapshots, stage/discard/commit/sync. Reads take
+│       │                              #   no index lock. No agent/conversation deps. See git/DESIGN.md
 │       ├── git-bash/                   # Windows bash env for Claude Code CLI (detection + installer + mock fallback)
 │       ├── health/                    # Diagnostics & recovery
 │       ├── logging/                   # Logging subsystem: controller (Developer Mode toggle)
@@ -232,6 +239,17 @@ src/
     │   │                              #   settings and the team member settings
     │   ├── brand/, icons/, tool/, updater/, notification/
     │   ├── team/                      #   Digital team / office UI (board, member chat, join)
+    │   ├── references/                #   Unified references: content → the composer beside
+    │   │                              #   the canvas and back. One public surface (index.ts):
+    │   │                              #   adapters (CodeMirror incl. merge sides — comments as
+    │   │                              #   cards under their lines —, rendered text, xterm), the
+    │   │                              #   page's ReferenceLayer (floating bar, comment box,
+    │   │                              #   comment markers, floating comment card), chips with
+    │   │                              #   their lists, reveal (going back), `path:line` links.
+    │   │                              #   References wait in stores/composer-references.store.ts
+    │   │                              #   (memory only; comments being written in
+    │   │                              #   comment-edits.ts) and travel on the user message's
+    │   │                              #   metadata.references
     │   ├── diff/, search/, pulse/, onboarding/, artifact/
     │   └── ErrorBoundary.tsx
     ├── stores/                        # Zustand stores (one per domain: app, chat, space, canvas,
@@ -274,7 +292,7 @@ Key types:
 | `AuthType` | `api-key` \| `oauth` \| `delegated` — see the delegated note below |
 | `ConversationMeta` | Lightweight list item (no messages) |
 | `Conversation` | Full conversation with `messages`, `sessionId`, `version` |
-| `Message` | Contains `content`, `toolCalls`, `thoughts` (null=separated), `images`, `tokenUsage`, `thoughtsSummary`, `metadata.fileChanges`, `error` |
+| `Message` | Contains `content`, `toolCalls`, `thoughts` (null=separated), `images`, `tokenUsage`, `thoughtsSummary`, `metadata.fileChanges`, `metadata.references` / `metadata.task` (user messages), `error` |
 | `Thought` | Agent reasoning: `thinking`, `text`, `tool_use`, `tool_result`, `system`, `result`, `error` |
 | `ThoughtsSummary` | Lightweight summary: `count`, `types`, `duration` (for collapsed display without loading thoughts) |
 | `ToolCall` | Tool invocation: `id`, `name`, `status`, `input`, `output`, `requiresApproval`, `description` |
@@ -287,6 +305,8 @@ Key types:
 | `TokenUsage` | Token usage stats: input/output/cache/cost |
 | `CompactInfo` | Context compression notification |
 | `FileChangesSummary` | Lightweight file changes in message metadata |
+| `ContentReference` | A place the user pointed at and sent with a message (file lines, a diff side, terminal output, a message passage, a local path): location + excerpt as it was + note. The transcript keeps the record; the model reads it expanded as `<halo_references>` (`services/agent/references.ts`) |
+| `MessageTask` | A built-in task a user message starts (today: code review from the changes view). Set only in the main process; the model reads it as `<halo_task>` |
 
 **`delegated` auth type** (`claude-cli` source): Halo holds no credential — the
 bundled Claude Code CLI authenticates itself from its own store, keyed by
@@ -316,7 +336,7 @@ All channels follow `module:action` format. Modules are organized by functional 
 | Auth & config | `auth`, `config`, `cli-config`, `model-capabilities` |
 | Conversation & agent | `conversation`, `agent` (incl. `agent:toolsets-*` + `toolsets:changed` event) |
 | Terminal | `terminal` (`terminal:list/create/input/resize/kill/replay` + `terminal:data`/`terminal:lifecycle` events) |
-| Space & artifact | `space`, `artifact`, `search` |
+| Space & artifact | `space`, `artifact`, `search`, `git` (the changes view: `git:*` typed-RPC channels, failures carry a `GitErrorCode`; remote twin `POST /api/git/*`), `code-review` (the changes view's review buttons: `code-review:start/get-latest/availability`; remote twin `/api/code-review/*`) |
 | Browser | `browser`, `browser-policy`, `ai-browser`, `overlay` |
 | Apps & store | `app`, `store`, `onboarding` |
 | IM channels | `im-channels`, `im-sessions`, `wecom-bot`, `weixin-ilink` |
@@ -473,6 +493,8 @@ ContentCanvas.tsx          # Main container; renders <TabContent key={tab.id}>
     ├── PdfViewer.tsx      # pdfjs-dist; remote/web only (desktop uses BrowserView)
     ├── PptxViewer.tsx     # Placeholder — no renderer; open externally / download
     ├── TerminalViewer.tsx / TeamViewer.tsx
+    ├── changes/           # Code changes read-only as diffs (@codemirror/merge): a space's Git repositories
+    │                      # (scopes, staging, commit, AI review) or one AI reply's edits; entry ChangesViewer.tsx
     └── OfficeFallback.tsx # Shared unreadable/unsupported state with escape hatches
 ```
 
@@ -519,7 +541,7 @@ thing the cap exists to prevent.
 ### Layout Modes
 
 - **No Canvas**: Full-width chat
-- **With Canvas**: Narrow chat (user-configurable, stored in space preferences) + Canvas + ArtifactRail
+- **With Canvas**: Narrow chat (user-configurable, stored in space preferences) + Canvas + ArtifactRail. The rail steps aside, without changing the user's setting, while the active tab's viewer brings its own file list (`bringsFileList` in the viewer registry) or an open rail would leave the canvas under 480 px; opening it by hand keeps it until the active tab changes or the canvas closes (`hooks/useRailYield`, rules in `utils/rail-yield`)
 
 ### Interface Layout
 
@@ -825,7 +847,7 @@ conversation consulting the guide must not unlock spec authoring in another.
 | i18n | i18next 25.7 |
 | Code Editor | CodeMirror 6 |
 | Markdown | react-markdown 10 + remark-gfm + rehype-highlight |
-| Diff | diff + react-diff-viewer-continued |
+| Diff | @codemirror/merge |
 | HTTP | Express 5 |
 | WebSocket | ws 8 |
 | Agent | @anthropic-ai/claude-code (claude-agent-sdk) |
@@ -843,6 +865,8 @@ When touching a module, read its design doc first:
 - `src/main/services/updater/DESIGN.md` — Auto-update: the two apply paths, why staged update descriptions are signed at build time, and the reversal contract with the native helper
 - `src/main/services/agent/toolsets/DESIGN.md` — Toolset Broker (on-demand in-process MCP loading; how tool capabilities enter a session, including the self-API switch — see §17.1)
 - `src/main/services/ai-terminal/DESIGN.md` — AI Terminal (pty + xterm headless, MCP tools, xterm.js viewer)
+- `src/main/services/git/DESIGN.md` — Git for the changes view: how git is run and located (Windows included), the request gate, compare scopes, snapshots, writes, measured costs
+- `src/main/services/code-review/DESIGN.md` — Starting an AI review of a repository's changes as a background conversation, its built-in task, and the latest review per repository
 - `src/main/services/conversation-interop/DESIGN.md` — Cross-conversation read/send/wait: delivery rules, circuit breaker, and the `ConversationSource` contract (space conversations built in, digital-human chats registered by `apps/runtime`)
 - `src/main/apps/spec/DESIGN.md`
 - `src/main/apps/manager/DESIGN.md`

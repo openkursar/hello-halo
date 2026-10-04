@@ -11,6 +11,7 @@ import { jsonrepair } from 'jsonrepair'
 import { isTransparentTool } from '../../services/agent/constants'
 import type { TeamTriggerContext } from '../../../shared/apps/team-types'
 import type { ImageAttachment, ImageMediaType } from '../../../shared/types/image-attachment'
+import type { ContentReference } from '../../../shared/types/content-reference'
 import type {
   Thought,
   TranscriptMessage,
@@ -36,6 +37,8 @@ export interface StoredEvent {
   _source?: TranscriptSource
   /** Provenance details stored beside `_source` */
   _metadata?: TranscriptProvenanceMetadata
+  /** Places the user pointed at with a trigger message, in the order they added them */
+  _references?: ContentReference[]
   /** The SDK message payload */
   message?: {
     role?: string
@@ -203,9 +206,17 @@ export function convertEventsToMessages(events: StoredEvent[], lines?: readonly 
         // own format) — SDK round-trip user events may carry image blocks that
         // are tool plumbing, not something the user attached.
         const images = event._isTrigger ? extractImageAttachments(content, line) : []
-        if (textContent || images.length > 0) {
+        // A message may be only the places the user pointed at.
+        const references = event._isTrigger && Array.isArray(event._references) && event._references.length > 0
+          ? event._references
+          : undefined
+        if (textContent || images.length > 0 || references) {
           const source = parseSource(event._source)
-          const metadata = { ...teamMetadata, ...(source ? pickProvenanceMetadata(event._metadata) : {}) }
+          const metadata = {
+            ...teamMetadata,
+            ...(source ? pickProvenanceMetadata(event._metadata) : {}),
+            ...(references ? { references } : {}),
+          }
           messages.push({
             id: messageId(line),
             role: roleForTranscriptSource(source),

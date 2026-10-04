@@ -376,7 +376,7 @@ describe('a digital-human turn', () => {
   it('adds a message to the running turn and lists it as queued', async () => {
     const store = await opened()
     await store.getState().sendMessage('go')
-    await store.getState().injectMessage(DH, '  also this  ')
+    expect(await store.getState().injectMessage(DH, '  also this  ')).toBe(true)
     expect(apiMock.appChatInject).toHaveBeenCalledWith({ appId: APP, conversationId: DH, message: 'also this' })
     expect(store.getState().sessions.get(DH)!.queuedMessages).toEqual(['also this'])
   })
@@ -385,16 +385,34 @@ describe('a digital-human turn', () => {
     const store = await opened()
     apiMock.appChatInject.mockResolvedValue({ success: true, data: { delivered: false } })
 
-    await store.getState().injectMessage(DH, 'too late')
+    expect(await store.getState().injectMessage(DH, 'too late')).toBe(true)
 
     expect(apiMock.appChatSend).toHaveBeenCalledWith(expect.objectContaining({ message: 'too late', conversationId: DH }))
     expect(store.getState().sessions.get(DH)!.queuedMessages).toEqual([])
   })
 
+  it('reports nothing sent when the turn had ended and the new message was refused', async () => {
+    const store = await opened()
+    apiMock.appChatInject.mockResolvedValue({ success: true, data: { delivered: false } })
+    apiMock.appChatSend.mockResolvedValue({ success: false, error: 'busy' })
+
+    expect(await store.getState().injectMessage(DH, 'too late')).toBe(false)
+
+    expect(store.getState().sessions.get(DH)!.queuedMessages).toEqual([])
+    expect(store.getState().conversationCache.get(DH)!.messages.some(x => x.content === 'too late')).toBe(false)
+  })
+
   it('takes a queued message back when it could not be delivered', async () => {
     const store = await opened()
     apiMock.appChatInject.mockResolvedValue({ success: false, error: 'nope' })
-    await store.getState().injectMessage(DH, 'lost')
+    expect(await store.getState().injectMessage(DH, 'lost')).toBe(false)
+    expect(store.getState().sessions.get(DH)!.queuedMessages).toEqual([])
+  })
+
+  it('reports nothing sent when the request never reached the digital human', async () => {
+    const store = await opened()
+    apiMock.appChatInject.mockRejectedValue(new Error('offline'))
+    expect(await store.getState().injectMessage(DH, 'lost')).toBe(false)
     expect(store.getState().sessions.get(DH)!.queuedMessages).toEqual([])
   })
 
@@ -568,13 +586,44 @@ describe('space conversations through the same verbs', () => {
     apiMock.injectMessage.mockResolvedValue({ success: true })
 
     await store.getState().sendMessage('hi')
-    await store.getState().injectMessage('c1', 'more')
+    expect(await store.getState().injectMessage('c1', 'more')).toBe(true)
     await store.getState().stopGeneration()
 
     expect(apiMock.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ spaceId: SPACE, conversationId: 'c1', message: 'hi' }))
     expect(apiMock.injectMessage).toHaveBeenCalledWith({ conversationId: 'c1', message: 'more' })
     expect(apiMock.stopGeneration).toHaveBeenCalledWith('c1')
     expect(apiMock.appChatSend).not.toHaveBeenCalled()
+  })
+
+  it('sends an injection no live turn took as a new message', async () => {
+    const store = spaceStore()
+    apiMock.injectMessage.mockResolvedValue({ success: false, error: 'No active V2 session' })
+    apiMock.sendMessage.mockResolvedValue({ success: true })
+
+    expect(await store.getState().injectMessage('c1', 'more')).toBe(true)
+
+    expect(apiMock.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ conversationId: 'c1', message: 'more' }))
+    expect(store.getState().sessions.get('c1')!.queuedMessages).toEqual([])
+  })
+
+  it('reports nothing sent when an injection went nowhere', async () => {
+    const store = spaceStore()
+    apiMock.injectMessage.mockResolvedValue({ success: false, error: 'No active V2 session' })
+    apiMock.sendMessage.mockResolvedValue({ success: false, error: 'refused' })
+    expect(await store.getState().injectMessage('c1', 'more')).toBe(false)
+    expect(store.getState().sessions.get('c1')!.queuedMessages).toEqual([])
+    expect(store.getState().conversationCache.get('c1')!.messages).toEqual([])
+
+    // The request itself failed (a remote client offline): nothing was queued for the turn either.
+    apiMock.injectMessage.mockRejectedValue(new Error('offline'))
+    expect(await store.getState().injectMessage('c1', 'again')).toBe(false)
+    expect(store.getState().sessions.get('c1')!.queuedMessages).toEqual([])
+  })
+
+  it('has nothing to add for blank text without references', async () => {
+    const store = spaceStore()
+    expect(await store.getState().injectMessage('c1', '   ')).toBe(false)
+    expect(apiMock.injectMessage).not.toHaveBeenCalled()
   })
 
   it('a selected digital human takes the message that would have gone to the regular conversation', async () => {

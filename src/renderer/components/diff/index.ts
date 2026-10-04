@@ -1,19 +1,13 @@
 /**
- * Diff Components - File changes visualization
- *
- * Three-layer progressive disclosure:
- * 1. FileChangesFooter - Stats bar at message bubble bottom
- * 2. FileChangesList - Scrollable file list when expanded
- * 3. DiffModal - Full diff view when file is clicked
+ * File changes of an AI reply: the footer under the reply, and reading the
+ * changes out of the reply's Write / Edit tool calls. The diffs themselves are
+ * shown by the canvas changes view.
  */
 
 export { FileChangesFooter } from './FileChangesFooter'
-export { FileChangesList } from './FileChangesList'
-export { DiffModal } from './DiffModal'
-export { DiffContent } from './DiffContent'
 
 // Types
-export type { FileChange, FileChanges, FileChangeType, DiffModalState, EditChunk } from './types'
+export type { FileChange, FileChanges, FileChangeType, EditChunk } from './types'
 
 // Utils
-export { extractFileChanges, hasFileChanges, getAllFileChanges, formatStats, toFileChangesSummary, extractFileChangesSummary, summaryToFileChanges } from './utils'
+export { extractFileChanges, hasFileChanges, summaryToFileChanges } from './utils'

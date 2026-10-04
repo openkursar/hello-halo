@@ -6,16 +6,19 @@
 import { api } from '../internal'
 import type { Conversation, ConversationMeta, Message, Thought } from '../internal'
 import i18n from '../../../i18n'
-import { titleFromFirstMessage } from '../../../../shared/conversation-title'
+import { previewFromMessage, titleFromFirstMessage } from '../../../../shared/conversation-title'
+import { messageSummaryText } from '../../../../shared/content-reference'
+import type { ContentReference } from '../../../../shared/types/content-reference'
 import { buildCanvasContext } from './canvas-context'
 import { cacheConversation, cacheLoadedThoughts } from './cache'
 import { recoverSessionState } from './recover'
 import { beginTurn, endTurnWithError, finishedTurnState } from './turn'
 import { createPendingUserMessage, joinFromAnchor, reconcileTranscript, rereadAnchor } from './reconcile'
-import type { ChatBackend, SendRequest, BackendContext } from './types'
+import type { ChatBackend, SendRequest, BackendContext, OpenOptions } from './types'
 import { noteTurnEnded } from '../../../services/home-telemetry'
 
 function metaFromConversation(conversation: Conversation): ConversationMeta {
+  const last = conversation.messages?.[conversation.messages.length - 1]
   return {
     id: conversation.id,
     spaceId: conversation.spaceId,
@@ -23,9 +26,8 @@ function metaFromConversation(conversation: Conversation): ConversationMeta {
     createdAt: conversation.createdAt,
     updatedAt: conversation.updatedAt,
     messageCount: conversation.messages?.length || 0,
-    preview: conversation.messages?.length
-      ? conversation.messages[conversation.messages.length - 1].content.slice(0, 50)
-      : undefined,
+    // Same rule as main's index, so a reload does not change the line.
+    preview: last ? previewFromMessage(last.content, last.metadata?.references) ?? '' : undefined,
     starred: conversation.starred,
     // Carried through reloads so the engine badge does not blink off between turns.
     engineId: conversation.engineId,
@@ -67,10 +69,11 @@ async function load(ctx: BackendContext, spaceId: string, conversationId: string
   }
 }
 
-async function open(ctx: BackendContext, { spaceId, conversationId }: { spaceId: string; conversationId: string }): Promise<void> {
+async function open(ctx: BackendContext, { spaceId, conversationId }: { spaceId: string; conversationId: string }, options?: OpenOptions): Promise<void> {
   if (!ctx.get().conversationCache.has(conversationId)) await load(ctx, spaceId, conversationId)
 
   await recoverSessionState(ctx, conversationId)
+  if (options?.warm === false) return
 
   // A ready V2 session means the first message does not pay the cold start.
   try {
@@ -139,6 +142,7 @@ async function send(ctx: BackendContext, conversationId: string, request: SendRe
 
   const { content, images, thinkingEnabled, options } = request
   const goal = options?.goal
+  const references = options?.references?.length ? options.references : undefined
   let userMessage: Message | undefined
 
   // Main titles a conversation from its first message the moment it records
@@ -146,7 +150,7 @@ async function send(ctx: BackendContext, conversationId: string, request: SendRe
   const titleSource = conversationMeta ?? conversation
   const previousTitle = titleSource?.title
   const autoTitle = titleSource && titleSource.messageCount === 0 && !titleSource.titleCustomized
-    ? titleFromFirstMessage(content)
+    ? titleFromFirstMessage(content, references)
     : null
   const withTitle = <T extends { title: string }>(item: T, title: string | null | undefined): T =>
     title ? { ...item, title } : item
@@ -183,10 +187,10 @@ async function send(ctx: BackendContext, conversationId: string, request: SendRe
   try {
     beginTurn(set, conversationId)
 
-    userMessage = {
-      ...createPendingUserMessage(content, images),
-      ...(goal ? { metadata: { goal } } : {})
-    }
+    userMessage = createPendingUserMessage(content, images, {
+      ...(goal ? { goal } : {}),
+      ...(references ? { references } : {}),
+    })
 
     set((state) => {
       const conversationCache = new Map(state.conversationCache)
@@ -221,7 +225,8 @@ async function send(ctx: BackendContext, conversationId: string, request: SendRe
       images,
       thinkingEnabled,
       canvasContext: buildCanvasContext(),
-      ...(goal ? { goal } : {})
+      ...(goal ? { goal } : {}),
+      ...(references ? { references } : {})
     })
     // A refusal comes back before main records the message or starts a turn,
     // so no agent event will ever end this one.
@@ -259,8 +264,14 @@ async function stop(ctx: BackendContext, conversationId: string): Promise<void> 
   }
 }
 
-async function inject(_ctx: BackendContext, conversationId: string, message: string): Promise<void> {
-  await api.injectMessage({ conversationId, message })
+async function inject(ctx: BackendContext, conversationId: string, message: string, references?: ContentReference[]): Promise<boolean> {
+  const response = await api.injectMessage({ conversationId, message, ...(references?.length ? { references } : {}) })
+  if (!response || response.success !== false) return true
+  // No live session took it (the turn ended in the meantime): the text still
+  // has to go somewhere, and a fresh turn is where it belongs.
+  console.warn(`[ChatStore] Injection into ${conversationId} refused (${response.error ?? 'unknown'}); sending it as a new message`)
+  ctx.get().dequeueMessage(conversationId, messageSummaryText(message, references))
+  return send(ctx, conversationId, { content: message, ...(references?.length ? { options: { references } } : {}) })
 }
 
 async function settleTurn(ctx: BackendContext, { spaceId, conversationId }: { spaceId: string; conversationId: string }, turnId: number): Promise<void> {

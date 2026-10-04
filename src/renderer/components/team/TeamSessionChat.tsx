@@ -25,6 +25,8 @@ import { InputArea } from '../chat/InputArea'
 import { useConversationDetail } from '../../hooks/useConversationDetail'
 import { useTranslation } from '../../i18n'
 import type { Message, Thought, ImageAttachment } from '../../types'
+import type { ContentReference } from '../../../shared/types/content-reference'
+import { messageSummaryText } from '../../../shared/content-reference'
 import { shouldShowRelayedTranscript } from '../../../shared/apps/team-types'
 import { buildTeamSessionKey } from '../../../shared/apps/im-keys'
 
@@ -299,12 +301,28 @@ export function TeamSessionChat({
     setMessages(prev => prev.map(m => (m.id === messageId ? { ...m, error: reason } : m)))
   }, [])
 
-  const handleSend = useCallback(async (content: string, images?: ImageAttachment[], thinkingEnabled?: boolean) => {
+  const handleSend = useCallback(async (
+    content: string,
+    images?: ImageAttachment[],
+    thinkingEnabled?: boolean,
+    options?: { references?: ContentReference[] }
+  ) => {
+    const references = options?.references?.length ? options.references : undefined
+    // Attached files and folders are paths on this computer; a teammate on
+    // another one could not open them. Other references carry their excerpt
+    // and travel written into the message.
+    if (isRemote && references?.some(ref => ref.source.kind === 'path')) {
+      useChatStore.getState().setSessionError(
+        conversationId,
+        t('Attached files and folders stay on this computer, so {{owner}} can\u2019t open them. Remove them and send again.', { owner: ownerName || t('this teammate') })
+      )
+      return false
+    }
     // Draft mode: create the conversation on the first send, then use its epoch
     // for the whole turn (session key + teamContext). No pre-click gate.
     let eid = epochId
     if (!eid && ensureEpochId) {
-      eid = await ensureEpochId(content)
+      eid = await ensureEpochId(content.trim() ? content : messageSummaryText(content, references))
       if (!eid) {
         useChatStore.getState().setSessionError(conversationId, t('Couldn\u2019t start the conversation. Please try again.'))
         return false
@@ -326,6 +344,7 @@ export function TeamSessionChat({
       content,
       timestamp: new Date().toISOString(),
       ...(images && images.length > 0 ? { images } : {}),
+      ...(references ? { metadata: { references } } : {}),
     }
     setMessages(prev => [...prev, userMsg])
     setLoadState('loaded')
@@ -334,8 +353,8 @@ export function TeamSessionChat({
 
     try {
       const res = isRemote
-        ? await api.teamSendToMember({ teamId, appId, epochId: eid, message: content, images, thinkingEnabled })
-        : await api.appChatSend({ appId, spaceId, message: content, images, thinkingEnabled, conversationId: convId, teamContext })
+        ? await api.teamSendToMember({ teamId, appId, epochId: eid, message: content, images, thinkingEnabled, ...(references ? { spaceId, references } : {}) })
+        : await api.appChatSend({ appId, spaceId, message: content, images, thinkingEnabled, conversationId: convId, teamContext, ...(references ? { references } : {}) })
 
       const remoteResult = isRemote && res.success
         ? (res.data as { ok?: boolean; reason?: string; delivery?: 'queued' | 'mid_turn' } | undefined)

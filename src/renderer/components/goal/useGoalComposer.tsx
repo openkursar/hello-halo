@@ -12,7 +12,7 @@ import { canvasLifecycle } from '../../services/canvas-lifecycle'
 import { useConversationGoal, useGoalStore, useGoalSupported, type GoalInput } from '../../stores/goal.store'
 import { useGoalUiStore } from '../../stores/goal-ui.store'
 import type { ImageAttachment } from '../../types'
-import { appendAttachedPaths, type AttachedPath } from '../../../shared/attached-paths'
+import type { ContentReference } from '../../../shared/types/content-reference'
 import { GoalShelf } from './GoalShelf'
 import { notifyGoalUpdateFailed, pendingGoal, saveGoal } from './goal-actions'
 import { parseGoalDraft } from './parseGoalDraft'
@@ -25,7 +25,13 @@ interface UseGoalComposerOptions {
   draftKey: string | undefined
   isGenerating: boolean
   /** Send the message with the goal attached. Resolves whether it was sent. */
-  send: (content: string, images: ImageAttachment[] | undefined, thinkingEnabled: boolean, goal: GoalInput) => Promise<boolean>
+  send: (
+    content: string,
+    images: ImageAttachment[] | undefined,
+    thinkingEnabled: boolean,
+    goal: GoalInput,
+    references?: ContentReference[],
+  ) => Promise<boolean>
 }
 
 function GoalModeChip({ onExit }: { onExit: () => void }) {
@@ -93,14 +99,14 @@ export function useGoalComposer({
     if (modeKey) useGoalUiStore.getState().setComposerGoalMode(modeKey, on)
   }, [modeKey])
 
-  const submit = useCallback(async (text: string, images: ImageAttachment[] | undefined, thinkingEnabled: boolean, paths?: AttachedPath[]) => {
+  const submit = useCallback(async (text: string, images: ImageAttachment[] | undefined, thinkingEnabled: boolean, references?: ContentReference[]) => {
     const input = parseGoalDraft(text)
     if (!input || !spaceId || !conversationId) return false
     setMode(false)
     // Mid-turn, the goal goes to the running turn, which picks it up at its next step.
     const accepted = isGenerating
       ? await saveGoal(spaceId, conversationId, input)
-      : await sendWithGoal(spaceId, conversationId, input, () => send(appendAttachedPaths(text, paths ?? []), images, thinkingEnabled, input))
+      : await sendWithGoal(spaceId, conversationId, input, () => send(text, images, thinkingEnabled, input, references?.length ? references : undefined))
     if (!accepted) setMode(true)
     return accepted
   }, [spaceId, conversationId, isGenerating, send, setMode])

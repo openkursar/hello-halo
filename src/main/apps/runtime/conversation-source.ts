@@ -25,7 +25,7 @@
 import { getAppManager } from '../manager'
 import { getSpace } from '../../services/space.service'
 import { getConfig } from '../../foundation/config.service'
-import { onAgentEvent, v2Sessions } from '../../services/agent'
+import { formatMessageAttachmentsBrief, onAgentEvent, v2Sessions } from '../../services/agent'
 import type {
   ConversationSource,
   SourceConversation,
@@ -160,7 +160,10 @@ export function createDigitalHumanConversationSource(): ConversationSource {
       return messages.map((m): TranscriptLine => ({
         id: m.id,
         role: m.role,
-        content: m.content,
+        // The places a message pointed at are named, never their excerpts.
+        content: m.metadata?.references?.length
+          ? [formatMessageAttachmentsBrief(m.metadata.references, undefined), m.content].filter(Boolean).join('\n')
+          : m.content,
         timestamp: m.timestamp,
         source: m.source,
       }))

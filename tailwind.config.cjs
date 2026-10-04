@@ -49,6 +49,10 @@ module.exports = {
         'halo-success': 'hsl(var(--halo-success))',
         'halo-warning': 'hsl(var(--halo-warning))',
         'halo-error': 'hsl(var(--halo-error))',
+        // Diff text and line backgrounds (see globals.css)
+        'diff-add': 'hsl(var(--diff-add) / <alpha-value>)',
+        'diff-del': 'hsl(var(--diff-del) / <alpha-value>)',
+        'diff-mod': 'hsl(var(--diff-mod) / <alpha-value>)',
 
         // App type accent colors
         'app-skill': 'hsl(var(--app-skill))',

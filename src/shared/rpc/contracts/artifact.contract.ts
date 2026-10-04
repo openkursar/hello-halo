@@ -9,6 +9,7 @@ import { rawRpcMethod } from '../define'
 export const artifactRpc = {
   listArtifacts: rawRpcMethod('artifact:list'),
   queryArtifactFiles: rawRpcMethod('artifact:query-files'),
+  resolveArtifactPaths: rawRpcMethod('artifact:resolve-paths'),
   listArtifactsTree: rawRpcMethod('artifact:list-tree'),
   loadArtifactChildren: rawRpcMethod('artifact:load-children'),
   retainArtifactSpace: rawRpcMethod('artifact:retain-space'),

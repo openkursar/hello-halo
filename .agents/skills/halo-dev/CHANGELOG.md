@@ -2,6 +2,39 @@
 
 > Focus: architectural and module-level milestones relevant to engineering decisions.
 
+## 2026-10-03 - Git changes view, AI code review, unified references
+
+Two capabilities that share one model: content and the conversation point at
+each other.
+
+- `services/git/` (new, see its DESIGN.md): the git CLI for a space's
+  repositories (the space folder and its direct sub-folders). Every request
+  names its space and is gated to a discovered repository; repository paths
+  cannot leave the working tree. Reads take no index lock and never run a
+  program the repository brings (fsmonitor, external diff, textconv,
+  repository-scoped filter drivers); writes the user clicks keep git's native
+  behavior. Content reads pass a concurrency gate (`GIT_BUSY` when full).
+  Typed-RPC domain `git:*`, remote twin `/api/git/*`.
+- `services/code-review/` (new): starts a quick (one agent) or team (three
+  members) review as a background conversation whose first message carries a
+  `MessageTask`; builds the review instructions itself and hands them to the
+  engine as an in-process field, so `services/agent` only wraps them in
+  `<halo_task>` and knows nothing about git. Keeps the latest review per
+  repository. Domain `code-review:*`.
+- References: `ContentReference` on user messages (`metadata.references`;
+  digital-human JSONL `_references`), expanded for the model as
+  `<halo_references>` by one shared formatter used by every chat entry; one-line
+  fields are sanitized so content cannot forge block boundaries. The old
+  `<attached_paths>` tail is read for old messages only.
+- Renderer: `components/references/` (one public surface; adapters for
+  CodeMirror incl. both merge sides, rendered text and xterm; `ReferenceLayer`
+  mounted on the space page only; only it may set the composer target — guard
+  test); content type `changes` with its viewer under `canvas/viewers/changes/`;
+  `react-diff-viewer-continued` and the full-screen diff modal removed in favor
+  of `@codemirror/merge`.
+- Guards added: canvas viewers may not key effects on an alias of the tab id;
+  only `ReferenceLayer` writes the composer references target.
+
 ## 2026-09-21 - Feishu/Lark IM channel: bot provisioned by QR, no developer console
 
 Third IM provider, and the first whose setup flow *creates* the platform-side

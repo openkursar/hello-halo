@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import type { ImageAttachment } from '../../types'
-import type { AttachedPath } from '../../../shared/attached-paths'
+import type { ContentReference } from '../../../shared/types/content-reference'
 
 /**
  * What the composer needs to offer goal mode. Built by `useGoalComposer`; a
@@ -29,9 +29,9 @@ export interface GoalComposerConfig {
   canSubmit: (text: string) => boolean
   /**
    * Resolves false when nothing was sent, so the composer restores the draft.
-   * Attached paths ride on the message, never on the goal text.
+   * The composer's cards ride on the message, never on the goal text.
    */
-  submit: (text: string, images: ImageAttachment[] | undefined, thinkingEnabled: boolean, paths?: AttachedPath[]) => Promise<boolean>
+  submit: (text: string, images: ImageAttachment[] | undefined, thinkingEnabled: boolean, references?: ContentReference[]) => Promise<boolean>
   /** Current goal, shown between the live-sessions capsule and the composer card. */
   shelf: ReactNode
 }

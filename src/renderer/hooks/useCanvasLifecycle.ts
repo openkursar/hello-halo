@@ -17,6 +17,9 @@ import {
   type TabState,
   type BrowserState,
   type ContentType,
+  type ChangesSource,
+  type RevealTarget,
+  type OpenFileOptions,
 } from '../services/canvas-lifecycle'
 
 const subscribeTabList = (onChange: () => void) => canvasLifecycle.onTabListChange(onChange)
@@ -62,7 +65,7 @@ export function useTabCount(): number {
 }
 
 const canvasActions = {
-  openFile: (path: string, title?: string) => canvasLifecycle.openFile(path, title),
+  openFile: (path: string, titleOrOptions?: string | OpenFileOptions) => canvasLifecycle.openFile(path, titleOrOptions),
   openUrl: (url: string, title?: string) => canvasLifecycle.openUrl(url, title),
   attachAIBrowserView: (viewId: string, url: string, title?: string) =>
     canvasLifecycle.attachAIBrowserView(viewId, url, title),
@@ -70,6 +73,11 @@ const canvasActions = {
     canvasLifecycle.openContent(content, title, type, language),
   openTerminal: (sessionId: string, title?: string) => canvasLifecycle.openTerminal(sessionId, title),
   openTeam: (teamId: string, title?: string) => canvasLifecycle.openTeam(teamId, title),
+  openChanges: (source: ChangesSource, options?: { reveal?: RevealTarget }) => canvasLifecycle.openChanges(source, options),
+  setTabTitle: (tabId: string, title: string) => canvasLifecycle.setTabTitle(tabId, title),
+  /** How tabs of `type` reload on the tab bar's Refresh; returns the unregister function. */
+  setRefreshHandler: (type: ContentType, handler: (tab: TabState) => Promise<void>) =>
+    canvasLifecycle.setRefreshHandler(type, handler),
   closeTab: (tabId: string) => canvasLifecycle.closeTab(tabId),
   closeAllTabs: () => canvasLifecycle.closeAll({ confirmDirty: true }),
   switchTab: (tabId: string) => canvasLifecycle.switchTab(tabId),
@@ -85,6 +93,8 @@ const canvasActions = {
   saveScrollPosition: (tabId: string, position: number) => canvasLifecycle.saveScrollPosition(tabId, position),
   toggleEditMode: (tabId: string) => canvasLifecycle.toggleEditMode(tabId),
   setEditMode: (tabId: string, editMode: boolean) => canvasLifecycle.setEditMode(tabId, editMode),
+  /** The viewer handled the tab's reveal request `seq`. */
+  consumeReveal: (tabId: string, seq: number) => canvasLifecycle.consumeReveal(tabId, seq),
   setOpen: (open: boolean) => canvasLifecycle.setOpen(open),
   toggleOpen: () => canvasLifecycle.toggleOpen(),
   // Native browser view placement, driven by the viewer that owns the container.

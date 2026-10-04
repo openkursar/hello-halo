@@ -5,6 +5,7 @@
 
 import {
   sendMessage as agentSendMessage,
+  injectMessage as agentInjectMessage,
   stopGeneration as agentStopGeneration,
   isGenerating,
   getActiveSessions,
@@ -13,22 +14,12 @@ import {
   probeMcpApp as agentProbeMcpApp,
   resolveQuestion
 } from '../services/agent'
-import type { ImageAttachment } from '../../shared/types/image-attachment'
+import type { AgentRequest } from '../services/agent'
 import { markIntentionalStop } from '../apps/runtime'
-import type { GoalInput } from '../../shared/types/goal'
-import type { ReasoningEffortLevel } from '../../shared/constants/reasoning-effort'
-
-export interface SendMessageRequest {
-  spaceId: string
-  conversationId: string
-  message: string
-  resumeSessionId?: string
-  images?: ImageAttachment[]  // Optional images for multi-modal messages
-  thinkingEnabled?: boolean   // Enable extended thinking mode
-  reasoningEffort?: ReasoningEffortLevel  // Depth picked for this send
-  knowledgeBaseId?: string           // Chat-with-knowledge-base turn
-  goal?: GoalInput                   // Set as the conversation goal before this message runs
-}
+import { analytics } from '../services/analytics/analytics.service'
+import { isReasoningEffortLevel } from '../../shared/constants/reasoning-effort'
+import type { AgentInjectRequest, AgentSendRequest } from '../../shared/types/agent-send'
+import { parseCanvasContext, parseTurnReferences } from './chat-turn-input'
 
 export interface ControllerResponse<T = unknown> {
   success: boolean
@@ -36,17 +27,83 @@ export interface ControllerResponse<T = unknown> {
   error?: string
 }
 
+type Fields = Partial<Record<keyof AgentSendRequest, unknown>>
+
+const optionalString = (value: unknown): string | undefined =>
+  typeof value === 'string' && value ? value : undefined
+
+/**
+ * The turn a client asked for, built field by field: only what a client may
+ * send crosses (a built-in task, for one, is started in-process only), and
+ * what reaches the model's prompt is checked and bounded first.
+ */
+export function toAgentRequest(body: unknown): { ok: true; request: AgentRequest } | { ok: false; error: string } {
+  if (!body || typeof body !== 'object') return { ok: false, error: 'Invalid request' }
+  const fields = body as Fields
+  if (typeof fields.spaceId !== 'string' || !fields.spaceId || typeof fields.conversationId !== 'string' || !fields.conversationId) {
+    return { ok: false, error: 'Missing required fields: spaceId, conversationId' }
+  }
+  if (typeof fields.message !== 'string') return { ok: false, error: 'message must be a string' }
+  const references = parseTurnReferences(fields.references)
+  if (!references.ok) return references
+  const canvasContext = parseCanvasContext(fields.canvasContext)
+  const resumeSessionId = optionalString(fields.resumeSessionId)
+  const knowledgeBaseId = optionalString(fields.knowledgeBaseId)
+  return {
+    ok: true,
+    request: {
+      spaceId: fields.spaceId,
+      conversationId: fields.conversationId,
+      message: fields.message,
+      ...(resumeSessionId ? { resumeSessionId } : {}),
+      ...(Array.isArray(fields.images) && fields.images.length > 0 ? { images: fields.images as AgentRequest['images'] } : {}),
+      ...(typeof fields.thinkingEnabled === 'boolean' ? { thinkingEnabled: fields.thinkingEnabled } : {}),
+      ...(isReasoningEffortLevel(fields.reasoningEffort) ? { reasoningEffort: fields.reasoningEffort } : {}),
+      ...(knowledgeBaseId ? { knowledgeBaseId } : {}),
+      // Checked by the service, where a refused goal can leave no trace.
+      ...(fields.goal !== undefined && fields.goal !== null ? { goal: fields.goal as AgentRequest['goal'] } : {}),
+      ...(canvasContext ? { canvasContext } : {}),
+      ...(references.references ? { references: references.references } : {}),
+    },
+  }
+}
+
 /**
  * Send a message to the agent
  */
-export async function sendMessage(
-  request: SendMessageRequest
-): Promise<ControllerResponse> {
+export async function sendMessage(body: unknown): Promise<ControllerResponse> {
+  const parsed = toAgentRequest(body)
+  if (!parsed.ok) {
+    console.warn(`[Agent] Send refused at the boundary: ${parsed.error}`)
+    return { success: false, error: parsed.error }
+  }
   try {
-    await agentSendMessage(request)
+    await agentSendMessage(parsed.request)
     return { success: true }
   } catch (error: unknown) {
     const err = error as Error
+    analytics.trackErrorSurface('agent-send', err)
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * Add a message to the turn a space conversation is running.
+ */
+export function injectMessage(body: unknown): ControllerResponse {
+  const fields = (body && typeof body === 'object' ? body : {}) as Partial<Record<keyof AgentInjectRequest, unknown>>
+  const references = parseTurnReferences(fields.references)
+  if (!references.ok) return { success: false, error: references.error }
+  const message = typeof fields.message === 'string' ? fields.message : ''
+  if (typeof fields.conversationId !== 'string' || !fields.conversationId || (!message.trim() && !references.references)) {
+    return { success: false, error: 'Missing required fields: conversationId, message' }
+  }
+  try {
+    agentInjectMessage(fields.conversationId, message, references.references)
+    return { success: true }
+  } catch (error: unknown) {
+    const err = error as Error
+    console.error('[Agent] inject-message failed:', err)
     return { success: false, error: err.message }
   }
 }

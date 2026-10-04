@@ -24,7 +24,7 @@
  */
 
 import { useState, useRef, useCallback, useEffect, forwardRef } from 'react'
-import { X, Loader2, AlertCircle, Plus, XCircle, Maximize2, Minimize2, RefreshCw, Target } from 'lucide-react'
+import { X, Loader2, AlertCircle, Plus, XCircle, Maximize2, Minimize2, RefreshCw, Target, GitCompareArrows } from 'lucide-react'
 import { type TabState } from '../../services/canvas-lifecycle'
 import { useActiveTabId, useCanvasActions, useTabList } from '../../hooks/useCanvasLifecycle'
 import { useCanvasStore } from '../../stores/canvas.store'
@@ -432,6 +432,8 @@ const TabItem = forwardRef<HTMLDivElement, TabItemProps>(function TabItem({
           <AlertCircle className="w-4 h-4 text-destructive" />
         ) : tab.type === 'goal' ? (
           <Target className="w-4 h-4 text-primary" />
+        ) : tab.type === 'changes' ? (
+          <GitCompareArrows className="w-4 h-4 text-primary" />
         ) : (
           <FileIcon
             extension={extension}

@@ -32,6 +32,7 @@ import type { TurnSink } from '../../services/agent/turn-sink'
 import type { ImageAttachment } from '../../services/agent/types'
 import type { ProgressEvent } from '../../../shared/types/inbound-message'
 import type { TranscriptProvenance } from '../../../shared/types/transcript'
+import type { ContentReference } from '../../../shared/types/content-reference'
 import { parseAppChatKey } from '../../../shared/apps/im-keys'
 import { classifySessionSource, LOCAL_SESSION_CHANNEL } from '../../../shared/types/im-channel'
 import { getImSessionRegistry } from './im-session-registry'
@@ -197,9 +198,10 @@ class AppChatSink implements TurnSink {
     text: string,
     images?: ImageAttachment[],
     teamOrigin?: Pick<TeamTriggerContext, 'kind' | 'correlationId'>,
-    provenance?: TranscriptProvenance
+    provenance?: TranscriptProvenance,
+    references?: ContentReference[]
   ): void {
-    this.getWriter()?.writeTrigger(text, images, teamOrigin, provenance)
+    this.getWriter()?.writeTrigger(text, images, teamOrigin, provenance, references)
   }
 
   /**

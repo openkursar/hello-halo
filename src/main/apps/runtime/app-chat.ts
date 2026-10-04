@@ -56,7 +56,10 @@ import { createAIBrowserMcpServer } from '../../services/ai-browser'
 import { createTerminalMcpServer, getGlobalTerminalContext, isTerminalAvailable } from '../../services/ai-terminal'
 import { acquireChatBrowserContext, endChatBrowserTurn, destroyChatBrowserContext } from './app-chat-browser'
 import { buildMessageContent, formatCanvasContext } from '../../services/agent/message-utils'
+import { formatTurnAttachments } from '../../services/agent'
 import type { CanvasContext } from '../../services/agent/types'
+import type { ContentReference } from '../../../shared/types/content-reference'
+import { messageSummaryText } from '../../../shared/content-reference'
 import { prepareNonVisionImageFallback } from '../../services/agent/image-attachments'
 import {
   getOrCreateV2Session,
@@ -205,6 +208,12 @@ export interface AppChatRequest {
   useChatThinkingLevel?: boolean
   /** What the user has open in the canvas, so the agent can refer to it naturally. */
   canvasContext?: CanvasContext
+  /**
+   * Places the user pointed at, in the order they added them; already checked at the
+   * transport boundary. Built-in tasks are not taken here: only space chat
+   * starts them (services/code-review).
+   */
+  references?: ContentReference[]
   /**
    * Optional callback invoked with each progress event during AI execution.
    * Used by IM channel adapters for real-time streaming progress to the IM channel.
@@ -482,12 +491,13 @@ async function runAppChatTurn(
     hasImages: Array.isArray(images) && images.length > 0,
   })
 
-  // Register external (HTTP/API) sessions for UI visibility + HTTP read parity.
-  // No-op for native chat and for IM sessions (owned by dispatch-inbound).
+  // Keeps the conversation list's summary of this session current (IM sessions
+  // are kept by dispatch-inbound). A message of cards alone is named by the
+  // same rule as in a space conversation; one that names nothing keeps the last.
   registerExternalChatSession(conversationId, app.id, {
     displayName: senderIdentity?.name,
     lastSender: senderIdentity?.name,
-    lastMessage: request.recorded?.content ?? message,
+    lastMessage: request.recorded?.content ?? (messageSummaryText(message, request.references) || undefined),
   })
 
   const memory = getAppMemoryService()
@@ -1058,7 +1068,8 @@ async function runAppChatTurn(
       request.recorded?.content ?? message,
       images,
       teamContext ? { kind: teamContext.kind ?? 'human_message', correlationId: teamContext.correlationId } : undefined,
-      request.recorded?.provenance
+      request.recorded?.provenance,
+      request.references
     )
 
     // ── 8. Dispatch and wait for this message's turn ────
@@ -1096,7 +1107,9 @@ async function runAppChatTurn(
     // With the non-vision fallback active, image blocks are replaced by the
     // injected attachment-paths block.
     const messageContent = buildMessageContent(
-      memoryPreamble + livePreamble + formatCanvasContext(request.canvasContext) + (imageFallback?.contextBlock ?? '') + message,
+      memoryPreamble + livePreamble + formatCanvasContext(request.canvasContext)
+        + formatTurnAttachments({ references: request.references, workDir })
+        + (imageFallback?.contextBlock ?? '') + message,
       imageFallback ? undefined : images
     )
 

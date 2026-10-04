@@ -15,7 +15,8 @@ import {
   ChevronDown,
   Braces,
 } from 'lucide-react'
-import { TodoCard, parseTodoInput } from '../tool/TodoCard'
+import { TodoCard } from '../tool/TodoCard'
+import { parseTodoInput } from '../../utils/thought-activity'
 import { ToolResultViewer } from './tool-result'
 import { SubAgentTimeline } from './SubAgentTimeline'
 import { ErrorContent } from './ErrorContent'

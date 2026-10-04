@@ -39,14 +39,35 @@ describe('canvas viewers', () => {
   })
 
   it('never reset state when the tab changes', () => {
-    // A viewer mounts once per tab, so an effect keyed on the tab identity is
-    // either dead code or a sign the viewer is being reused across tabs.
+    // A viewer mounts once per tab, so an effect keyed on the tab identity —
+    // under its own name or another — is either dead code or a sign the viewer
+    // is being reused across tabs.
     const offenders = VIEWER_FILES.flatMap((file) =>
-      effectDependencyLists(readSource(file))
-        .filter((deps) => /\btab\.(id|terminalSessionId)\b/.test(deps.text))
-        .map((deps) => ({ file, line: deps.line, text: deps.text }))
+      tabIdentityEffects(readSource(file)).map((deps) => ({ file, line: deps.line, text: deps.text }))
     )
     expect(offenders, formatMatches(offenders)).toEqual([])
+  })
+
+  it('recognize the tab identity under another name', () => {
+    const source = [
+      'const tabId = tab.id',
+      'let { terminalSessionId: session, title } = tab',
+      'const { id } = tab',
+      'const key = tabId',
+      'useEffect(() => {}, [tabId])',
+      'useLayoutEffect(() => {}, [session, title])',
+      'useEffect(() => {}, [id])',
+      'useEffect(() => {}, [key])',
+      'useEffect(() => {}, [tab.terminalSessionId])',
+      'useEffect(() => {}, [tabIdRef, other.tabId, title])',
+    ].join('\n')
+    expect(tabIdentityEffects(source).map((deps) => deps.text)).toEqual([
+      '[tabId])',
+      '[session, title])',
+      '[id])',
+      '[key])',
+      '[tab.terminalSessionId])',
+    ])
   })
 })
 
@@ -116,6 +137,39 @@ describe('third-party renderers used by viewers', () => {
     expect(patched).toHaveLength(2)
   })
 })
+
+const TAB_IDENTITY = /\btab\.(?:id|terminalSessionId)\b/
+
+/** Effect dependency arrays holding the tab identity: `tab.id`, `tab.terminalSessionId`, or a name bound to either. */
+function tabIdentityEffects(source: string): Array<{ line: number; text: string }> {
+  const names = [...tabIdentityAliases(source)].map((name) => new RegExp(`(?<![\\w$.])${name.replace(/\$/g, '\\$')}(?![\\w$])`))
+  return effectDependencyLists(source).filter((deps) => TAB_IDENTITY.test(deps.text) || names.some((name) => name.test(deps.text)))
+}
+
+/** Names bound to the tab identity: `const x = tab.id`, `const { id: x } = tab`, and names bound to those in turn. */
+function tabIdentityAliases(source: string): Set<string> {
+  const aliases = new Set<string>()
+  for (const match of source.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*tab\.(?:id|terminalSessionId)\b/g)) {
+    aliases.add(match[1])
+  }
+  for (const match of source.matchAll(/\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*tab\b(?![\w$.])/g)) {
+    for (const entry of match[1].split(',')) {
+      const binding = /^\s*(id|terminalSessionId)\s*(?::\s*([A-Za-z_$][\w$]*))?\s*(?:=[\s\S]*)?$/.exec(entry)
+      if (binding) aliases.add(binding[2] ?? binding[1])
+    }
+  }
+  const copies = [...source.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([A-Za-z_$][\w$]*)\s*(?=;|$)/gm)]
+  for (let grew = true; grew;) {
+    grew = false
+    for (const [, name, from] of copies) {
+      if (aliases.has(from) && !aliases.has(name)) {
+        aliases.add(name)
+        grew = true
+      }
+    }
+  }
+  return aliases
+}
 
 /** The dependency array of every useEffect/useLayoutEffect call in `source`. */
 function effectDependencyLists(source: string): Array<{ line: number; text: string }> {

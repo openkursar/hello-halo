@@ -1,7 +1,7 @@
 # Content Canvas
 
-The tabbed pane beside the chat that shows files, web pages, terminals, teams
-and goals. One `canvasLifecycle` (`services/canvas-lifecycle.ts`) owns every
+The tabbed pane beside the chat that shows files, web pages, terminals, teams,
+goals and code changes. One `canvasLifecycle` (`services/canvas-lifecycle.ts`) owns every
 tab and every native resource behind one (BrowserViews, file content, pty
 attachment); React renders what it says.
 
@@ -14,7 +14,7 @@ attachment); React renders what it says.
 | React bindings | `hooks/useCanvasLifecycle.ts` | `useTabList`, `useActiveTab`, `useActiveTabId`, `useCanvasIsOpen`, `useTabCount`, `useBrowserState`, `useCanvasActions` |
 | Legacy store proxy | `stores/canvas.store.ts` | open/maximized state for pages outside the canvas; budget-eviction toast |
 | Host | `ContentCanvas.tsx` | tab bar, keyboard shortcuts, `TabContent` (loading/error states + `ViewerHost` boundary) |
-| Registry | `viewer-registry.tsx` | `VIEWERS: Record<ContentType, ViewerSpec>`, `viewerFor(type)` |
+| Registry | `viewer-registry.tsx` | `VIEWERS: Record<ContentType, ViewerSpec>`, `viewerFor(type)`, `viewerBringsFileList(type)` (exported for the page layout) |
 | Viewer resources | `viewer-resources.ts` | `DisposableStore`, `useViewerResources()` |
 | Viewers | `viewers/*` | rendering one tab |
 
@@ -52,6 +52,104 @@ latter for atomic temp+rename writers; `resync` = every file tab):
   real divergence sets `diskConflict`, and the editor asks: load the disk
   version, or keep my edits (a save then overwrites). Our own save echoing
   back is not a conflict.
+
+## Going back to a place
+
+A row of a reference chip's list (or a `path:line` link in a reply) asks a tab
+to show a place through `TabState.reveal` — a one-shot `RevealRequest { seq,
+range?, quote?, passage?, keepFocus?, commentId?, path?, side?, page? }` set by
+`openFile(path, { reveal })`, `openTerminal(sessionId, title, { reveal })`,
+`openChanges(source, { reveal })` or `revealInTab(tabId, target)`. `keepFocus`
+means the request came from the composer: the viewer shows the place without
+taking keyboard focus. `commentId` means a pending comment was gone back to in
+order to edit it: its card there takes the focus instead — pass it to
+`revealInEditor` / `revealInElement` (a terminal opens it with
+`openCommentCard` beside the output).
+
+- The viewer handles it once its content is in, then calls
+  `useCanvasActions().consumeReveal(tab.id, seq)`; a stale `seq` never clears a
+  newer request, and a repeat request for the same place gets a new `seq`.
+- The place is found again by its text when the content changed
+  (`components/references` → `revealInEditor` / `revealInElement`, or
+  `relocateLines` over a document the viewer holds itself): found as it was,
+  found elsewhere ("moved", lit at its new place), or gone ("lost", the
+  original lines shown unlit). `notifyRevealOutcome` says which.
+- A viewer that cannot show the place (the file is not among what it shows)
+  hands it on with `revealFileAt(path, target)`, which opens the file there or
+  says the file no longer exists.
+- A comment can always be edited. Its card takes the focus when it mounts, so
+  a tab or editor still on the way is waited for (`focusCommentCard`). With no
+  card to show it in — a view that draws none for it, a passage gone from
+  rendered text, a closed terminal, a deleted message or file, a file that
+  cannot be read — it opens in the floating card after the usual notice:
+  beside its lines or at the top of the place when that shows, else beside the
+  composer's comments chip (`openCommentCardAtComposer`).
+- The light is a decoration (or CSS highlight) removed on a timer, never an
+  animation alone, so it survives reduced motion.
+
+## Changes view
+
+The `changes` content type (`viewers/changes/`) shows code changes read-only
+as diffs. `openChanges(source, { reveal })` keeps one tab per source:
+
+| Source | Tab | Shows |
+|---|---|---|
+| `{ kind: 'git', spaceId, repoRoot? }` | one per space | the space's Git repositories (the space folder and the folders directly inside it): compare scope, "Changes" and "Overview & review" sub-pages, file list, staging and commit |
+| `{ kind: 'message', spaceId, conversationId, messageId, title, replyAt }` | one per reply | what one AI reply wrote with its file tools ("View changes" under the reply); no repository, scope or commit |
+
+- **Data per mounted viewer.** Each git tab's viewer creates its own vanilla
+  store (`state/git-changes-store.ts`) and disposes it on unmount. It loads on
+  mount (opening or returning to the tab), on window focus, after the user's
+  own operations and on the tab's Refresh (`setRefreshHandler('changes')`) —
+  never on a timer. File events only feed the "New changes in N files" hint
+  from a debounced status read, which waits while the window is hidden (coming
+  back reloads, or checks then); the diffs on screen are redrawn only when the
+  user asks. The viewer holds the space's file watching while it is mounted.
+- **Memory in `tab.view.changes`** (type in `types/changes-view.ts`, so the
+  lifecycle does not reach into the viewer): sub-page, repository, scope,
+  filter, folded and loaded cards, files a reference forced into view, scroll
+  anchors, the detail page and the commit message draft. Display preferences
+  (side by side, collapse unchanged, file list, tree, hide generated) are per
+  user, in `stores/changes-view-prefs.store.ts`; going back to a place never
+  changes them.
+- **Bounded rendering and reads.** Cards are virtualized and scrolling fast
+  shows placeholders instead; at most 12 cards hold CodeMirror editors
+  (`diff/editor-slots.ts`, off-screen ones released first). File contents are
+  read three at a time, newest request first, and a read for a card that has
+  scrolled away is dropped before it starts (`state/request-queue.ts`); texts
+  share a 32M-character cache per load. Generated and very large diffs wait for
+  "Load diff"; binary and over-limit files never load text.
+- **Landing where a jump aims.** The list lays out unseen cards by each card's
+  own estimate (`heightEstimates`) and measures resizes at once; a new editor's
+  body keeps its previous height until CodeMirror has measured its lines; a
+  card shown from the file list is kept at the top while the heights around it
+  settle, and a reveal is applied only once it has. Editors scroll places into
+  view on the stack's scroller (`EditorView.scrollHandler`), since CodeMirror's
+  own scrolling misreads the list's inner layers. Pending comments keep their
+  lines unfolded (`onLines` → `expandCollapsedAt`).
+- **Width-driven layout.** Columns follow the viewer's own width (the canvas
+  can be narrow on a wide window): side by side needs a 640px diff area; the
+  file list docks from 740px and is a modal drawer below that. The view
+  re-renders only when the width crosses one of these steps.
+- **Pointing and going back.** Both sides of every diff are referenceable
+  (`referenceExtension`; in the inline layout the deleted lines are the before
+  side). A reply's edits carry no repository, so their references hold the
+  text only. The viewer consumes `reveal` itself: `page: 'overview'` opens that
+  sub-page; `path` + `side` + `range` switches to the deepest repository holding
+  the file and shows the line in the diff (a renamed file's before side by its
+  old path, the inline layout's before side found again by its text), unfolding
+  a collapsed unchanged region; what it cannot show goes to `revealFileAt`.
+- **AI review.** The overview's review card starts a review through
+  `api.codeReviewStart` (a conversation of the space; its last reply is the
+  report). The card exists only while the overview is shown, so it follows the
+  review with `useReviewProgress` only then. It counts the files changed since
+  the reviewed snapshot (a snapshot of the whole working tree in the main
+  process) when it first appears, when it appears again after the view saw
+  file changes (a detail page or the Changes page unmounts it), on Refresh and
+  after a discard — never on focus or on file events while it is shown. The
+  count is kept for the view's lifetime (`ChangedSinceCounter`), so coming back
+  shows the last one at once. Report links to files of the list open a detail
+  page walked through the files the report names; Esc returns to the link.
 
 ## Budgets
 
@@ -159,11 +257,12 @@ Rules:
 ## Adding a viewer
 
 - [ ] Add the content type to `CONTENT_TYPES`; the compiler lists the registry entry to add.
-- [ ] Register it in `viewer-registry.tsx` (lazy import for heavy parsers; `ownsLoading`/`ownsError` if it renders those itself).
+- [ ] Register it in `viewer-registry.tsx` (lazy import for heavy parsers; `ownsLoading`/`ownsError` if it renders those itself; `bringsFileList` if it shows a file list of its own, so the space's resource rail steps aside while it is the active tab).
 - [ ] Take `ViewerProps` (use the subset you need); no canvas store/hook imports.
 - [ ] Every imperative resource through `useViewerResources()`.
 - [ ] Derivations memoized; lists over ~128k chars virtualized (chunk Virtuoso / TableVirtuoso / CodeMirror viewport).
 - [ ] Scroll/view memory in `tab.view`, not component state.
 - [ ] Native resources (BrowserView, pty, worker pool) get a single release point in the lifecycle and a budget entry.
 - [ ] Third-party renderer: count `createObjectURL`/`revokeObjectURL` and listener add/remove; unpaired ones get a `patches/` fix plus a guard (docx-preview, xterm).
+- [ ] Text the user can point at goes through a `components/references` adapter (CodeMirror extension — it also draws pending comments as cards under their lines —, `useTextReferences`, terminal), and the viewer consumes `tab.reveal`, `commentId` included (see "Going back to a place").
 - [ ] Unit tests for its pure logic; a `tests/perf` scenario if it can hold large content.

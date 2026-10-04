@@ -11,7 +11,7 @@
  * - Copy to clipboard, open external
  */
 
-import { useRef, useState, useCallback, useMemo } from 'react'
+import { useRef, useState, useCallback, useMemo, useEffect } from 'react'
 import {
   Copy,
   Check,
@@ -24,7 +24,9 @@ import {
 } from 'lucide-react'
 import { api } from '../../../api'
 import type { CanvasTab } from '../../../stores/canvas.store'
+import { useCanvasActions } from '../../../hooks/useCanvasLifecycle'
 import { useTranslation } from '../../../i18n'
+import { notifyRevealOutcome, referenceExtension, revealInEditor } from '../../references'
 import { CodeMirrorEditor, type CodeMirrorEditorRef } from './CodeMirrorEditor'
 import { countLines } from './count-lines'
 
@@ -69,6 +71,28 @@ export function CodeViewer({
   const canOpenExternal = !api.isRemoteMode() && tab.path
   const canEdit = !!tab.path // Can only edit files with a path
   const lineCount = useMemo(() => countLines(tab.content || ''), [tab.content])
+
+  // Lines of the file on disk can be pointed at; unsaved edits are not what the AI would read.
+  const tabRef = useRef(tab)
+  tabRef.current = tab
+  const [editorExtensions] = useState(() => [referenceExtension({
+    source: () => {
+      const current = tabRef.current
+      return current.path && !current.isDirty ? { kind: 'file', path: current.path, precision: 'lines' } : null
+    },
+  })])
+
+  // Going back to a place in this file, once its text is in the editor.
+  const { consumeReveal } = useCanvasActions()
+  const reveal = tab.reveal
+  const contentReady = !tab.isLoading && tab.content !== undefined
+  useEffect(() => {
+    if (!reveal || !contentReady) return
+    const view = editorRef.current?.getView()
+    if (!view) return
+    notifyRevealOutcome(revealInEditor(view, { range: reveal.range, quote: reveal.passage ? undefined : reveal.quote, commentId: reveal.commentId }))
+    consumeReveal(tabRef.current.id, reveal.seq)
+  }, [reveal, contentReady, consumeReveal])
 
   // ============================================
   // Handlers
@@ -324,6 +348,7 @@ export function CodeViewer({
           onChange={isEditing ? onContentChange : undefined}
           onScroll={handleScroll}
           scrollPosition={tab.view.scrollPosition}
+          extensions={editorExtensions}
         />
       </div>
     </div>

@@ -10,6 +10,7 @@
  */
 import type { ChatGet, ChatSet, ImageAttachment, Thought } from '../internal'
 import type { SendMessageOptions } from '../internal'
+import type { ContentReference } from '../../../../shared/types/content-reference'
 
 export interface BackendContext {
   set: ChatSet
@@ -28,13 +29,18 @@ export interface SendRequest {
   options?: SendMessageOptions
 }
 
+export interface OpenOptions {
+  /** Warm the conversation's engine session for a first message (default true). */
+  warm?: boolean
+}
+
 export interface ChatBackend {
   /**
    * Make the conversation ready to show: read it into the cache if it is not
    * there, and pick up a turn that is already running. Never blocks the caller
    * on a cached conversation.
    */
-  open(ctx: BackendContext, ref: ConversationRef): Promise<void>
+  open(ctx: BackendContext, ref: ConversationRef, options?: OpenOptions): Promise<void>
 
   /** Re-read after events may have been missed (reconnect); keeps what the view shows in place. */
   refresh(ctx: BackendContext, ref: ConversationRef): Promise<void>
@@ -44,8 +50,13 @@ export interface ChatBackend {
 
   stop(ctx: BackendContext, conversationId: string): Promise<void>
 
-  /** Add a message to the turn that is running. */
-  inject(ctx: BackendContext, conversationId: string, message: string): Promise<void>
+  /**
+   * Add a message to the turn that is running. If that turn ended in the
+   * meantime, the message goes out as a new one instead, its queued entry
+   * taken back first. Resolves false when that new message was refused, so
+   * nothing went out; throws when the message could not be handed over at all.
+   */
+  inject(ctx: BackendContext, conversationId: string, message: string, references?: ContentReference[]): Promise<boolean>
 
   /** Turn ended: replace the streamed turn with its persisted form in one commit. */
   settleTurn(ctx: BackendContext, ref: ConversationRef, turnId: number): Promise<void>

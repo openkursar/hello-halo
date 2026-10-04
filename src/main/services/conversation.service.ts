@@ -20,8 +20,7 @@ import { getSpace, touchSpaceActivity } from './space.service'
 import { getSeedKBIds } from './tlon'
 import { getConfig } from '../foundation/config.service'
 import { v4 as uuidv4 } from 'uuid'
-import { titleFromFirstMessage } from '../../shared/conversation-title'
-import { splitAttachedPaths } from '../../shared/attached-paths'
+import { previewFromMessage, titleFromFirstMessage } from '../../shared/conversation-title'
 import { DEFAULT_TOOLSETS } from '../../shared/constants/toolsets'
 import type { Thought, TranscriptMessage } from '../../shared/types/transcript'
 import { summarizeThoughts } from '../../shared/transcript'
@@ -55,10 +54,12 @@ export interface ConversationMeta {
    */
   engineId?: 'anthropic' | 'halo' | 'codex' | 'dsh' | null
   /**
-   * Set when the user renamed the conversation. Suppresses the first-message
-   * auto-title, so a rename survives even if it happens before the first user
-   * message. Absent on legacy data = auto-title still applies. Carried in the
-   * meta so the renderer can apply the same rule optimistically.
+   * Set when the title was chosen rather than derived: the user renamed the
+   * conversation, or it was created with a title that must stay (a review).
+   * Suppresses the first-message auto-title, so the title survives even if it
+   * was set before the first user message. Absent on legacy data = auto-title
+   * still applies. Carried in the meta so the renderer can apply the same rule
+   * optimistically.
    */
   titleCustomized?: boolean
 }
@@ -127,7 +128,6 @@ interface ConversationIndex {
 }
 
 const INDEX_VERSION = 1
-const PREVIEW_LENGTH = 50
 const CONVERSATION_FORMAT_VERSION = 2
 
 // ============================================================================
@@ -445,15 +445,9 @@ function writeIndex(conversationsDir: string, conversations: ConversationMeta[])
 
 function toMeta(conversation: Conversation): ConversationMeta {
   const lastMessage = conversation.messages[conversation.messages.length - 1]
-  let preview: string | undefined
-
-  if (lastMessage) {
-    const text = splitAttachedPaths(lastMessage.content).text
-    preview = text.slice(0, PREVIEW_LENGTH)
-    if (text.length > PREVIEW_LENGTH) {
-      preview += '...'
-    }
-  }
+  const preview = lastMessage
+    ? previewFromMessage(lastMessage.content, lastMessage.metadata?.references) ?? ''
+    : undefined
 
   const meta: ConversationMeta = {
     id: conversation.id,
@@ -631,8 +625,15 @@ export function listConversations(spaceId: string): ConversationMeta[] {
  * @param reasoningEffort Level it starts at (the composer passes its last-used
  *        pick). Taken at creation so the warm-up that follows spawns the
  *        session at this level; anything that is not a ladder level is dropped.
+ * @param options.keepTitle The given title stays: the first message does not
+ *        replace it.
  */
-export function createConversation(spaceId: string, title?: string, reasoningEffort?: unknown): Conversation {
+export function createConversation(
+  spaceId: string,
+  title?: string,
+  reasoningEffort?: unknown,
+  options?: { keepTitle?: boolean }
+): Conversation {
   const id = uuidv4()
   const now = new Date().toISOString()
 
@@ -702,6 +703,7 @@ export function createConversation(spaceId: string, title?: string, reasoningEff
     // Only persist knowledge bases when the space/default seed is non-empty.
     ...(knowledgeBaseIds.length > 0 ? { knowledgeBaseIds: [...knowledgeBaseIds] } : {}),
     ...(isReasoningEffortLevel(reasoningEffort) ? { reasoningEffort } : {}),
+    ...(title && options?.keepTitle ? { titleCustomized: true } : {}),
   }
 
   const conversationsDir = getConversationsDir(spaceId)
@@ -870,7 +872,7 @@ export function addMessage(spaceId: string, conversationId: string, message: Omi
     message.role === 'user' &&
     !conversation.titleCustomized
   ) {
-    conversation.title = titleFromFirstMessage(message.content) ?? conversation.title
+    conversation.title = titleFromFirstMessage(message.content, message.metadata?.references) ?? conversation.title
   }
 
   // Ensure version is set for new writes

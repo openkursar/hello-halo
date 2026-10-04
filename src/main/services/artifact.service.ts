@@ -10,13 +10,13 @@
 
 import { statSync, existsSync, realpathSync, readFileSync, writeFileSync, openSync, readSync, closeSync } from 'fs'
 import { promises as fsAsync, type Stats } from 'fs'
-import { join, extname, basename, dirname, sep } from 'path'
+import { join, extname, basename, dirname, sep, isAbsolute, resolve as resolvePath } from 'path'
 import { shell } from 'electron'
 import { getTempSpacePath } from '../foundation/config.service'
 import { MAX_PREVIEW_DOCUMENT_SIZE, formatPreviewSize } from '../../shared/constants/artifact-preview'
-import { getSpace } from './space.service'
+import { getSpace, getSpaceDir } from './space.service'
 import { queryFilesViaWorker } from './watcher-host.service'
-import type { FileQueryItem, FileQueryResult } from '../../shared/types/artifact'
+import type { FileQueryItem, FileQueryResult, ResolvedArtifactPath } from '../../shared/types/artifact'
 import {
   listArtifactsTree as listArtifactsTreeCached,
   loadDirectoryChildren,
@@ -97,6 +97,85 @@ async function queryPathIndex(
     type: isFolder ? 'folder' : 'file',
   }))
   return { items, truncated: result.truncated, indexing: result.indexing, hasPaths: result.hasPaths }
+}
+
+/** Most paths one `resolveArtifactPaths` call answers; the rest are not looked at. */
+export const MAX_RESOLVED_PATHS = 200
+const MAX_RESOLVED_PATH_CHARS = 4096
+/** Filesystem lookups in flight at once, well inside libuv's thread pool. */
+const RESOLVE_CONCURRENCY = 16
+
+const foldCase = process.platform === 'darwin' || process.platform === 'win32'
+  ? (p: string) => p.toLowerCase()
+  : (p: string) => p
+
+/** Whether `child` is `root` or below it, compared as strings (both already resolved). */
+function isLiterallyWithin(child: string, root: string): boolean {
+  const c = foldCase(child)
+  const r = foldCase(root)
+  return c === r || c.startsWith(r.endsWith(sep) ? r : r + sep)
+}
+
+/**
+ * A path that can only name a file on this machine's own disks: not a network
+ * share (`\\host\share`, `//host/share`), not a Win32 device or extended path
+ * (`\\.\`, `\\?\`), not drive-relative (`C:foo`, which follows that drive's
+ * own current directory). Merely stat-ing a share makes Windows connect to the
+ * host and offer the user's credentials.
+ */
+function isPlainLocalPath(path: string): boolean {
+  return !/^[\\/]{2}/.test(path) && !/^[A-Za-z]:(?![\\/])/.test(path)
+}
+
+async function mapWithLimit<T, R>(items: T[], limit: number, map: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let next = 0
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++
+      results[index] = await map(items[index])
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return results
+}
+
+/**
+ * Which of `paths` name an existing file or folder inside the space —
+ * relative ones resolved against `baseDir` when that lies inside the space,
+ * else against its working directory.
+ *
+ * The paths come from AI replies, so nothing outside the space is ever
+ * touched: each one must lie inside the space as written before the
+ * filesystem is asked about it, and again once links are resolved. An unknown
+ * space answers nothing. One lookup per path, never a scan.
+ */
+export async function resolveArtifactPaths(spaceId: string, paths: string[], baseDir?: string): Promise<ResolvedArtifactPath[]> {
+  const asked = paths.slice(0, MAX_RESOLVED_PATHS).filter((path): path is string => typeof path === 'string')
+  const missing = (path: string): ResolvedArtifactPath => ({ path, absolutePath: null, isDirectory: false })
+  const workDir = getSpaceDir(spaceId)
+  if (!workDir) return asked.map(missing)
+
+  const root = resolvePath(workDir)
+  const realRoot = await fsAsync.realpath(root).catch(() => null)
+  if (!realRoot) return asked.map(missing)
+  const base = baseDir && isAbsolute(baseDir) && isPlainLocalPath(baseDir) && isLiterallyWithin(resolvePath(baseDir), root)
+    ? resolvePath(baseDir)
+    : root
+
+  return mapWithLimit(asked, RESOLVE_CONCURRENCY, async (path) => {
+    if (!path || path.length > MAX_RESOLVED_PATH_CHARS || !isPlainLocalPath(path)) return missing(path)
+    const candidate = resolvePath(base, path)
+    if (!isLiterallyWithin(candidate, root)) return missing(path)
+    try {
+      const real = await fsAsync.realpath(candidate)
+      if (!isLiterallyWithin(real, realRoot)) return missing(path)
+      const stats = await fsAsync.stat(real)
+      return { path, absolutePath: candidate, isDirectory: stats.isDirectory() }
+    } catch {
+      return missing(path)
+    }
+  })
 }
 
 /**

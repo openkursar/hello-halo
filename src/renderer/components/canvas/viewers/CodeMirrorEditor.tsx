@@ -26,7 +26,7 @@ import {
   memo,
 } from 'react'
 import { EditorView } from '@codemirror/view'
-import { EditorState } from '@codemirror/state'
+import { EditorState, type Extension } from '@codemirror/state'
 import {
   createEditorState,
   setReadOnly,
@@ -59,6 +59,8 @@ export interface CodeMirrorEditorProps {
   /** Tints the editor background to signal it's writable (prototype:
    * `.canvas.editing .cc-code`) */
   isEditing?: boolean
+  /** More extensions for the editor (e.g. a viewer's reference adapter); read once, at mount. */
+  extensions?: Extension[]
 }
 
 export interface CodeMirrorEditorRef {
@@ -95,6 +97,7 @@ export const CodeMirrorEditor = memo(
       scrollPosition,
       className = '',
       isEditing = false,
+      extensions: extraExtensions,
     },
     ref
   ) {
@@ -107,6 +110,7 @@ export const CodeMirrorEditor = memo(
     // Keep refs up to date with latest callbacks
     const onChangeRef = useRef(onChange)
     const onScrollRef = useRef(onScroll)
+    const extraExtensionsRef = useRef(extraExtensions)
 
     useEffect(() => {
       onChangeRef.current = onChange
@@ -137,6 +141,8 @@ export const CodeMirrorEditor = memo(
             return false
           },
         }),
+
+        ...(extraExtensionsRef.current ?? []),
       ],
       [] // Stable - uses refs for callbacks
     )

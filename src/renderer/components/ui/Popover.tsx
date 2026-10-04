@@ -194,7 +194,10 @@ export function PopoverContent({
     }
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false)
+      if (e.key !== 'Escape') return
+      // Mark the key used, so window-level handlers (the canvas collapsing on Esc) leave it alone.
+      e.preventDefault()
+      setOpen(false)
     }
 
     document.addEventListener('mousedown', handleMouseDown)

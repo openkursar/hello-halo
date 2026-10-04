@@ -135,6 +135,13 @@ vi.mock('../../../../src/main/services/agent/session-manager', () => ({
   getOrCreateV2Session: vi.fn(),
 }))
 
+// The engine's public surface would load every toolset; a run needs only the references block.
+vi.mock('../../../../src/main/services/agent', async () => ({
+  formatReferencesBlock: (await vi.importActual<typeof import('../../../../src/main/services/agent/references')>(
+    '../../../../src/main/services/agent/references',
+  )).formatReferencesBlock,
+}))
+
 // The fake session used by createSession — swapped per test via nextSession.
 let nextSession: FakeSession
 vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({

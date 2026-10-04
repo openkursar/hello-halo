@@ -118,7 +118,7 @@ describe('injectIntoAppChat', () => {
 
     expect(injectIntoAppChat(CONVO, 'also this', { source: 'injection' })).toBe(true)
 
-    expect(writeTrigger).toHaveBeenCalledWith('also this', undefined, undefined, { source: 'injection' })
+    expect(writeTrigger).toHaveBeenCalledWith('also this', undefined, undefined, { source: 'injection' }, undefined)
   })
 
   it('records the message only after the engine has taken it', () => {

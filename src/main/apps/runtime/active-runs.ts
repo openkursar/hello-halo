@@ -18,6 +18,8 @@
 
 import type { SessionWriter } from './session-store'
 import type { TriggerType } from './types'
+import type { ContentReference } from '../../../shared/types/content-reference'
+import { formatReferencesBlock } from '../../services/agent'
 
 /** A live, injectable automation run. */
 export interface ActiveRunHandle {
@@ -77,9 +79,9 @@ export function listActiveRuns(appId: string): ActiveRunHandle[] {
  * @throws if the message is empty, the run is not active, or it belongs to a
  *         different app (defends against a stale/forged runId).
  */
-export function injectIntoActiveRun(appId: string, runId: string, text: string): void {
+export function injectIntoActiveRun(appId: string, runId: string, text: string, references?: ContentReference[]): void {
   const trimmed = text.trim()
-  if (!trimmed) {
+  if (!trimmed && !references?.length) {
     throw new Error('Cannot inject an empty message')
   }
 
@@ -92,10 +94,12 @@ export function injectIntoActiveRun(appId: string, runId: string, text: string):
   }
 
   // Persist first so the message survives reload even if the turn ends immediately.
-  run.writer?.writeTrigger(trimmed)
+  // The record keeps the references; the engine reads them expanded.
+  run.writer?.writeTrigger(trimmed, undefined, undefined, undefined, references)
 
   // Push into the live turn. CC enqueues it at the next tool-round boundary.
-  run.session.send(trimmed)
+  const engineText = formatReferencesBlock(references, undefined) + trimmed
+  run.session.send(engineText)
 
-  console.log(`[ActiveRuns][${runId.slice(0, 8)}] Injected mid-run supplement (${trimmed.length} chars)`)
+  console.log(`[ActiveRuns][${runId.slice(0, 8)}] Injected mid-run supplement (${engineText.length} chars)`)
 }

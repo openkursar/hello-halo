@@ -27,7 +27,7 @@ vi.mock('../../../../src/renderer/components/canvas/viewers/TerminalViewer', () 
 vi.mock('../../../../src/renderer/components/canvas/viewers/TeamViewer', () => ({ TeamViewer: () => null }))
 vi.mock('../../../../src/renderer/components/goal', () => ({ GoalEditor: () => null }))
 
-const { VIEWERS, viewerFor } = await import('../../../../src/renderer/components/canvas/viewer-registry')
+const { VIEWERS, viewerFor, viewerBringsFileList } = await import('../../../../src/renderer/components/canvas/viewer-registry')
 const { CONTENT_TYPES, canvasLifecycle } = await import('../../../../src/renderer/services/canvas-lifecycle')
 
 describe('viewer registry', () => {
@@ -39,6 +39,12 @@ describe('viewer registry', () => {
   it('shows an unknown type with the text viewer', () => {
     expect(viewerFor('hologram')).toBe(VIEWERS.text)
     expect(viewerFor('markdown')).toBe(VIEWERS.markdown)
+  })
+
+  it('says which viewers bring their own file list (the page moves its resource rail aside for them)', () => {
+    expect(viewerBringsFileList('changes')).toBe(true)
+    expect(viewerBringsFileList('code')).toBe(false)
+    expect(viewerBringsFileList('hologram')).toBe(false)
   })
 
   it('opens a file the backend classifies with an unknown type as text', async () => {

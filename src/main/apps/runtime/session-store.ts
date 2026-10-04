@@ -18,6 +18,7 @@ import { existsSync, mkdirSync, appendFileSync, readFileSync, writeFileSync, fst
 import { join } from 'path'
 import type { TeamTriggerContext } from '../../../shared/apps/team-types'
 import type { ImageAttachment } from '../../../shared/types/image-attachment'
+import type { ContentReference } from '../../../shared/types/content-reference'
 import type {
   Thought,
   TranscriptMessage,
@@ -44,13 +45,16 @@ export interface SessionWriter {
    *
    * `provenance` marks a message that did not come from the owner typing into
    * this conversation (an injection, another conversation, ...). Write the text
-   * to show, not any framed text the model was given.
+   * to show, not any framed text the model was given. `references` are the
+   * places the user pointed at, kept as records; the expanded block the model
+   * read is not stored.
    */
   writeTrigger(
     content: string,
     images?: ImageAttachment[],
     teamOrigin?: Pick<TeamTriggerContext, 'kind' | 'correlationId'>,
-    provenance?: TranscriptProvenance
+    provenance?: TranscriptProvenance,
+    references?: ContentReference[]
   ): void
 }
 
@@ -92,7 +96,7 @@ export function openSessionWriter(spacePath: string, appId: string, runId: strin
       appendLine({ _ts: new Date().toISOString(), ...event } as StoredEvent)
     },
 
-    writeTrigger(content, images, teamOrigin, provenance): void {
+    writeTrigger(content, images, teamOrigin, provenance, references): void {
       const blocks: Array<Record<string, unknown>> = [{ type: 'text', text: content }]
       for (const img of images ?? []) {
         blocks.push({
@@ -108,6 +112,7 @@ export function openSessionWriter(spacePath: string, appId: string, runId: strin
         ...(teamOrigin ? { _teamOrigin: teamOrigin } : {}),
         ...(provenance ? { _source: provenance.source } : {}),
         ...(provenance?.metadata ? { _metadata: provenance.metadata } : {}),
+        ...(references && references.length > 0 ? { _references: references } : {}),
         message: { role: 'user', content: blocks },
       })
     },

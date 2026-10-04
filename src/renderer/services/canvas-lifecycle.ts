@@ -39,6 +39,8 @@ import {
 } from '../../shared/constants/canvas-budget'
 import { planCanvasBudget, type CanvasBudgetLimits } from './canvas-budget'
 import { holdArtifactSpace } from './artifact-space-holds'
+import type { ChangesViewMemory } from '../types/changes-view'
+import type { ReferenceLineRange } from '../../shared/types/content-reference'
 
 // ============================================
 // Types
@@ -66,6 +68,7 @@ export const CONTENT_TYPES = [
   'terminal',
   'team',
   'goal',
+  'changes',
 ] as const
 
 export type ContentType = (typeof CONTENT_TYPES)[number]
@@ -95,6 +98,59 @@ export interface BrowserState {
  */
 export interface TabViewState {
   scrollPosition?: number
+  /** Where a changes tab was left; owned by the changes viewer. */
+  changes?: ChangesViewMemory
+}
+
+/**
+ * What a changes tab shows: the Git repositories of a space (`repoRoot` picks
+ * the one a new tab starts on), or the edits one AI reply made with its edit tools.
+ */
+export type ChangesSource =
+  | { kind: 'git'; spaceId: string; repoRoot?: string }
+  | { kind: 'message'; spaceId: string; conversationId: string; messageId: string; title: string; replyAt: number }
+
+/**
+ * A one-shot request to show a place in a tab's content (going back to what a
+ * reference points at). The viewer handles it once its content is in, then
+ * clears it with `consumeReveal`.
+ */
+export interface RevealRequest {
+  /** Differs on every request, so asking for the same place twice reveals it again. */
+  seq: number
+  range?: ReferenceLineRange
+  /** The text as it was, to find the place again when the content changed. */
+  quote?: string
+  /**
+   * The quote is rendered text (a Markdown preview passage), so it finds the
+   * place only in rendered content and `range` is approximate.
+   */
+  passage?: boolean
+  /**
+   * Asked from the composer, where the user goes on typing: the viewer shows
+   * the place without taking keyboard focus.
+   */
+  keepFocus?: boolean
+  /** A pending comment on the place, gone back to for editing: its card there takes the focus. */
+  commentId?: string
+  /** Changes view only: the file and the side of its diff. */
+  path?: string
+  side?: 'before' | 'after'
+  /** Changes view only: the sub-page to show. */
+  page?: 'overview'
+}
+
+export type RevealTarget = Omit<RevealRequest, 'seq'>
+
+export interface OpenFileOptions {
+  title?: string
+  reveal?: RevealTarget
+}
+
+function isSameChangesSource(a: ChangesSource, b: ChangesSource): boolean {
+  if (a.kind === 'git' && b.kind === 'git') return a.spaceId === b.spaceId
+  if (a.kind === 'message' && b.kind === 'message') return a.conversationId === b.conversationId && a.messageId === b.messageId
+  return false
 }
 
 /**
@@ -139,6 +195,10 @@ export interface TabState {
   teamId?: string
   /** Conversation whose goal the goal editor edits. */
   goal?: { spaceId: string; conversationId: string }
+  /** What a changes tab shows. */
+  changes?: ChangesSource
+  /** A place to show once; see RevealRequest. */
+  reveal?: RevealRequest
   /**
    * Whether the Canvas owns the BrowserView's lifecycle.
    * true  — created via createBrowserView (openUrl/openPdf): destroy on close.
@@ -429,6 +489,7 @@ class CanvasLifecycle {
   /** Tab id -> activation sequence number; larger = used more recently. */
   private lastActivated = new Map<string, number>()
   private activationSeq = 0
+  private revealSeq = 0
 
   /** Cached `getTabs()` result; cleared by any change. */
   private tabsSnapshot: readonly TabState[] | null = null
@@ -573,12 +634,15 @@ class CanvasLifecycle {
 
   /**
    * Open a file in the canvas
-   * Uses fast path for known extensions, backend detection for unknown ones
+   * Uses fast path for known extensions, backend detection for unknown ones.
+   * With `reveal`, the viewer shows that place once the content is in.
    */
-  async openFile(path: string, title?: string): Promise<string> {
+  async openFile(path: string, titleOrOptions?: string | OpenFileOptions): Promise<string> {
+    const { title, reveal } = typeof titleOrOptions === 'string' ? { title: titleOrOptions, reveal: undefined } : titleOrOptions ?? {}
     // Check if file is already open
     for (const [tabId, tab] of this.tabs) {
       if (tab.path === path) {
+        if (reveal) this.patchTab(tabId, { reveal: this.createRevealRequest(reveal) })
         this.setOpen(true)
         await this.switchTab(tabId)
         return tabId
@@ -641,6 +705,7 @@ class CanvasLifecycle {
       language,
       isDirty: false,
       isLoading: true,
+      ...(reveal ? { reveal: this.createRevealRequest(reveal) } : {}),
     }
 
     this.addTab(tab)
@@ -652,6 +717,25 @@ class CanvasLifecycle {
     this.loadFileContent(tabId, path, type)
 
     return tabId
+  }
+
+  /** A reveal request for `target`, distinct from every earlier one. */
+  createRevealRequest(target: RevealTarget): RevealRequest {
+    this.revealSeq += 1
+    return { ...target, seq: this.revealSeq }
+  }
+
+  /** Shows `target` in an open tab, activating it. */
+  async revealInTab(tabId: string, target: RevealTarget): Promise<void> {
+    if (!this.tabs.has(tabId)) return
+    this.patchTab(tabId, { reveal: this.createRevealRequest(target) })
+    this.setOpen(true)
+    await this.switchTab(tabId)
+  }
+
+  /** The viewer handled the reveal request `seq`; a newer request is kept. */
+  consumeReveal(tabId: string, seq: number): void {
+    if (this.tabs.get(tabId)?.reveal?.seq === seq) this.patchTab(tabId, { reveal: undefined })
   }
 
   /**
@@ -840,11 +924,14 @@ class CanvasLifecycle {
 
   /**
    * Open a terminal session in the canvas. Terminal tabs render in React
-   * (TerminalViewer) — no BrowserView. Dedups by session id.
+   * (TerminalViewer) — no BrowserView. Dedups by session id. With `reveal`,
+   * the viewer shows that output once its replay is in.
    */
-  async openTerminal(sessionId: string, title?: string): Promise<string> {
+  async openTerminal(sessionId: string, title?: string, options: { reveal?: RevealTarget } = {}): Promise<string> {
+    const reveal = options.reveal ? this.createRevealRequest(options.reveal) : undefined
     for (const [tabId, tab] of this.tabs) {
       if (tab.type === 'terminal' && tab.terminalSessionId === sessionId) {
+        if (reveal) this.patchTab(tabId, { reveal })
         this.setOpen(true)
         await this.switchTab(tabId)
         return tabId
@@ -859,6 +946,7 @@ class CanvasLifecycle {
       terminalSessionId: sessionId,
       isDirty: false,
       isLoading: false,
+      ...(reveal ? { reveal } : {}),
     }
 
     this.addTab(tab)
@@ -907,6 +995,37 @@ class CanvasLifecycle {
       type: 'goal',
       title: i18n.t('Goal'),
       goal: { spaceId, conversationId },
+      isDirty: false,
+      isLoading: false,
+    }
+
+    this.addTab(tab)
+    await this.switchTab(tabId)
+    return tabId
+  }
+
+  /**
+   * Open the changes view for `source`, reusing its tab: one per space for Git,
+   * one per reply for the edits a reply made.
+   */
+  async openChanges(source: ChangesSource, options: { reveal?: RevealTarget } = {}): Promise<string> {
+    const reveal = options.reveal ? this.createRevealRequest(options.reveal) : undefined
+    for (const [tabId, tab] of this.tabs) {
+      if (tab.type === 'changes' && tab.changes && isSameChangesSource(tab.changes, source)) {
+        if (reveal) this.patchTab(tabId, { reveal })
+        this.setOpen(true)
+        await this.switchTab(tabId)
+        return tabId
+      }
+    }
+
+    const tabId = generateTabId()
+    const tab: NewTab = {
+      id: tabId,
+      type: 'changes',
+      title: source.kind === 'message' ? `${i18n.t('Changes')} · ${source.title}` : i18n.t('Changes'),
+      changes: source,
+      reveal,
       isDirty: false,
       isLoading: false,
     }

@@ -3,7 +3,7 @@
  *
  * Layout (following industry standard):
  * ┌──────────────────────────────────────────────────────┐
- * │ [Image previews] [Attached path chips]               │
+ * │ [Image previews] [Reference cards]                   │
  * │ ┌──────────────────────────────────────────────────┐ │
  * │ │ Textarea                                         │ │
  * │ └──────────────────────────────────────────────────┘ │
@@ -30,8 +30,11 @@ import { ComposerMenu, type ComposerMenuSection } from './composer-menu/Composer
 import { useComposerToolsets } from './composer-menu/useComposerToolsets'
 import { sortToolsets, toolsetDescription, toolsetIcon, toolsetLabel } from './composer-menu/toolset-display'
 import type { ToolsetStatus } from '../../stores/toolsets.store'
-import { AttachedPathChips } from './AttachedPathChips'
-import { appendAttachedPaths, canAttachPath, type AttachedPath, type PickedLocalEntry } from '../../../shared/attached-paths'
+import { canAttachPath, type AttachedPath, type PickedLocalEntry } from '../../../shared/attached-paths'
+import type { ContentReference } from '../../../shared/types/content-reference'
+import { useComposerReferences, useComposerReferencesStore } from '../../stores/composer-references.store'
+import { useSpaceStore } from '../../stores/space.store'
+import { commitCommentEdits, ComposerReferenceChips, notifyReferenceLimit, useHasNewCommentText } from '../references'
 import { api } from '../../api'
 import { isElectron } from '../../api/transport'
 import { ImageAttachmentPreview } from './ImageAttachmentPreview'
@@ -151,10 +154,20 @@ interface MentionGroup {
   startIndex: number
 }
 
+/** What a send carries besides text, images and the thinking switch. */
+export interface ComposerSendOptions {
+  /** The cards in the composer, in order (their numbers). */
+  references?: ContentReference[]
+}
+
 interface InputAreaProps {
-  onSend: (content: string, images?: ImageAttachment[], thinkingEnabled?: boolean) => void | Promise<void | boolean>
-  /** Called when user submits a message while generation is in progress (mid-turn inject) */
-  onInject?: (content: string) => void
+  /** Resolving false means nothing was sent: the text, images and cards come back. */
+  onSend: (content: string, images?: ImageAttachment[], thinkingEnabled?: boolean, options?: ComposerSendOptions) => void | Promise<void | boolean>
+  /**
+   * Called when user submits a message while generation is in progress (mid-turn inject).
+   * Resolving false means nothing was added: the text and cards come back.
+   */
+  onInject?: (content: string, references?: ContentReference[]) => Promise<void | boolean>
   /** Stop the current generation. Omit for inject-only inputs that cannot stop the
    *  underlying process (e.g. the automation run-detail supplement input); the Stop
    *  button is then hidden. */
@@ -220,10 +233,13 @@ interface InputAreaProps {
 }
 
 // Draft attachments stay in memory; image data must not fill browser storage.
-interface InputDraft { content: string; images: ImageAttachment[]; paths: AttachedPath[] }
+// The cards live in the composer-references store under the same key.
+interface InputDraft { content: string; images: ImageAttachment[] }
 const inputDrafts = new Map<string, InputDraft>()
 // A failed send can settle after its original input has been replaced.
 const draftRecoverySubscribers = new Map<string, Set<(draft: InputDraft) => void>>()
+// Cards of a composer with no draft key live under a key of its own, gone with it.
+let composerInstanceSeq = 0
 
 // Image constraints
 const MAX_IMAGE_SIZE = 20 * 1024 * 1024  // 20MB max per image (before compression)
@@ -271,13 +287,19 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
   const [content, setContent] = useState(() => draftKey ? inputDrafts.get(draftKey)?.content ?? '' : '')
   const [isFocused, setIsFocused] = useState(false)
   const [images, setImages] = useState<ImageAttachment[]>(() => draftKey ? inputDrafts.get(draftKey)?.images ?? [] : [])
-  const [paths, setPaths] = useState<AttachedPath[]>(() => draftKey ? inputDrafts.get(draftKey)?.paths ?? [] : [])
+  const [instanceKey] = useState(() => `composer-${++composerInstanceSeq}`)
+  const referenceKey = draftKey ?? instanceKey
+  const references = useComposerReferences(referenceKey)
+  const writingComment = useHasNewCommentText(referenceKey)
+  useEffect(() => {
+    if (draftKey) return
+    return () => { useComposerReferencesStore.getState().take(instanceKey) }
+  }, [draftKey, instanceKey])
   useEffect(() => {
     if (!draftKey) return
     const restore = (draft: InputDraft) => {
       setContent(current => current || draft.content)
       setImages(current => current.length ? current : draft.images)
-      setPaths(current => current.length ? current : draft.paths)
     }
     const listeners = draftRecoverySubscribers.get(draftKey) ?? new Set<(draft: InputDraft) => void>()
     listeners.add(restore)
@@ -291,10 +313,10 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
   }, [draftKey])
   useEffect(() => {
     if (draftKey) {
-      if (content || images.length || paths.length) inputDrafts.set(draftKey, { content, images, paths })
+      if (content || images.length) inputDrafts.set(draftKey, { content, images })
       else inputDrafts.delete(draftKey)
     }
-  }, [draftKey, content, images, paths])
+  }, [draftKey, content, images])
   const [isDragOver, setIsDragOver] = useState(false)
   const [isProcessingImages, setIsProcessingImages] = useState(false)
   const [imageError, setImageError] = useState<ImageError | null>(null)
@@ -321,6 +343,23 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
   const goalMode = !!goal?.active
   // A remote client's files are not on the host, so only uploaded images make sense there.
   const canAttachLocalPaths = isElectron()
+
+  // ── References (shown as chips; their counts bump as references arrive) ──
+  const spaceRoot = useSpaceStore(state => (state.currentSpace ? state.currentSpace.workingDir || state.currentSpace.path : undefined))
+  const focusText = useCallback(() => {
+    const textarea = textareaRef.current
+    if (!textarea) return
+    textarea.focus()
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length)
+  }, [])
+
+  // A selection elsewhere added a reference here, and may want the caret here too.
+  const signal = useComposerReferencesStore(state => (state.signal?.key === referenceKey ? state.signal : null))
+  useEffect(() => {
+    if (!signal) return
+    useComposerReferencesStore.getState().consumeSignal(signal.seq)
+    if (signal.focus === 'text') requestAnimationFrame(focusText)
+  }, [signal, focusText])
 
   const openAttachMenu = useCallback(() => {
     setSlashMenuOpen(false)
@@ -475,7 +514,7 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
     setImages(prev => prev.filter(img => img.id !== id))
   }
 
-  /** Refused items are reported here, before any chip appears, so nothing looks attached that will not be sent. */
+  /** Refused items are reported here, before any card appears, so nothing looks attached that will not be sent. */
   const reportUnattachable = (count: number, reason: 'no-local-path' | 'not-absolute') => {
     if (count === 0) return
     console.warn('[InputArea] Items not attached', { count, reason, desktop: canAttachLocalPaths })
@@ -484,19 +523,17 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
       : t('Only images can be attached from this device'))
   }
 
+  /** Local files and folders become path cards, numbered with the other cards. */
   const addPaths = (candidates: AttachedPath[]) => {
-    const added = candidates.filter(p => canAttachPath(p.path))
-    reportUnattachable(candidates.length - added.length, 'not-absolute')
-    if (added.length === 0) return
-    setPaths(prev => {
-      const known = new Set(prev.map(p => p.path))
-      return [...prev, ...added.filter(p => !known.has(p.path) && known.add(p.path))]
-    })
+    const accepted = candidates.filter(p => canAttachPath(p.path))
+    reportUnattachable(candidates.length - accepted.length, 'not-absolute')
+    if (accepted.length === 0) return
+    const { refused } = useComposerReferencesStore.getState().add(
+      referenceKey,
+      accepted.map(p => ({ source: { kind: 'path' as const, path: p.path, isDirectory: p.isDirectory } })),
+    )
+    if (refused === 'limit') notifyReferenceLimit()
     requestAnimationFrame(() => textareaRef.current?.focus())
-  }
-
-  const removePath = (path: string) => {
-    setPaths(prev => prev.filter(p => p.path !== path))
   }
 
   /**
@@ -958,14 +995,39 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
   // Handle send — routes to inject path when generation is in progress
   const handleSend = () => {
     const textToSend = isOnboardingSendStep ? onboardingPrompt : content.trim()
+    // Sending means the writing is done: comments still open in the content go in as written.
+    commitCommentEdits(referenceKey)
+    const referenceCount = useComposerReferencesStore.getState().drafts.get(referenceKey)?.length ?? 0
+    // Resolving false (or failing) means nothing went out: what was taken comes back, in order.
+    const handBackIfRefused = (result: unknown, sentImages: ImageAttachment[], sentReferences: ContentReference[], inject: boolean) => {
+      if (!draftKey || !(result instanceof Promise)) return
+      const key = draftKey
+      const restoreDraft = () => {
+        const recoveryKey = currentDraftKey.current ?? key
+        const saved = inputDrafts.get(recoveryKey)
+        const restored = {
+          content: saved?.content || textToSend,
+          images: saved?.images.length ? saved.images : sentImages,
+        }
+        inputDrafts.set(recoveryKey, restored)
+        useComposerReferencesStore.getState().restore(recoveryKey, sentReferences)
+        draftRecoverySubscribers.get(recoveryKey)?.forEach(listener => listener(restored))
+      }
+      void result.then(accepted => {
+        if (accepted === false) restoreDraft()
+      }).catch(error => {
+        console.warn('[InputArea] Send failed', { draftKey: key, inject, error })
+        restoreDraft()
+      })
+    }
 
     if (isGenerating && !goalMode) {
-      // Mid-turn inject: text and attached paths (no images, no thinking toggle)
-      if ((textToSend || paths.length > 0) && onInject) {
+      // Mid-turn inject: text and cards (no images, no thinking toggle)
+      if ((textToSend || referenceCount > 0) && onInject) {
         trackSend(textToSend, [], true)
-        onInject(appendAttachedPaths(textToSend, paths))
+        const injected = useComposerReferencesStore.getState().take(referenceKey)
+        handBackIfRefused(onInject(textToSend, injected.length > 0 ? injected : undefined), [], injected, true)
         setContent('')
-        setPaths([])
         if (draftKey) useChatStore.getState().clearComposerDraft(draftKey)
         handleMentionClose()
         handleSlashClose()
@@ -974,44 +1036,29 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
       return
     }
 
-    const hasContent = goalMode ? goal!.canSubmit(textToSend) : (textToSend || images.length > 0 || paths.length > 0)
+    const hasContent = goalMode ? goal!.canSubmit(textToSend) : (textToSend || images.length > 0 || referenceCount > 0)
     if (hasContent) {
       // A goal set mid-turn goes to the running turn, not a new message, so attachments wait for the next one.
       const keepImages = goalMode && isGenerating
       const sentImages = keepImages ? [] : images
-      const sentPaths = keepImages ? [] : paths
+      // The onboarding send is a scripted demo: the cards stay for a real message.
+      const sentReferences = keepImages || isOnboardingSendStep ? [] : useComposerReferencesStore.getState().take(referenceKey)
       trackSend(textToSend, sentImages, false)
       const result = goalMode
-        ? goal!.submit(textToSend, sentImages.length > 0 ? sentImages : undefined, THINKING_ENABLED, sentPaths)
-        : onSend(appendAttachedPaths(textToSend, sentPaths), sentImages.length > 0 ? sentImages : undefined, THINKING_ENABLED)
+        ? goal!.submit(textToSend, sentImages.length > 0 ? sentImages : undefined, THINKING_ENABLED, sentReferences)
+        : onSend(
+          textToSend,
+          sentImages.length > 0 ? sentImages : undefined,
+          THINKING_ENABLED,
+          sentReferences.length > 0 ? { references: sentReferences } : undefined,
+        )
       if (draftKey) inputDrafts.delete(draftKey)
-      if (draftKey && result instanceof Promise) {
-        const restoreDraft = () => {
-          const recoveryKey = currentDraftKey.current ?? draftKey
-          const saved = inputDrafts.get(recoveryKey)
-          const restored = {
-            content: saved?.content || textToSend,
-            images: saved?.images.length ? saved.images : sentImages,
-            paths: saved?.paths.length ? saved.paths : sentPaths,
-          }
-          inputDrafts.set(recoveryKey, restored)
-          draftRecoverySubscribers.get(recoveryKey)?.forEach(listener => listener(restored))
-        }
-        void result.then(accepted => {
-          if (accepted === false) restoreDraft()
-        }).catch(error => {
-          console.warn('[InputArea] Send failed', { draftKey, error })
-          restoreDraft()
-        })
-      }
+      handBackIfRefused(result, sentImages, sentReferences, false)
 
       if (!isOnboardingSendStep) {
         setContent('')
         if (draftKey) useChatStore.getState().clearComposerDraft(draftKey)
-        if (!keepImages) {
-          setImages([])
-          setPaths([])
-        }
+        if (!keepImages) setImages([])
         handleMentionClose()
         handleSlashClose()
         // Reset height
@@ -1130,15 +1177,15 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
   }
 
   // In onboarding mode, can always send (prefilled content)
-  // Can send if has text OR has images (and not processing/generating)
-  // During generation (inject mode): only plain text is allowed, no images
-  // Normal mode: text or images, not currently processing
+  // Can send if has text, images or references — a comment still being written counts (and not processing images)
+  // During generation (inject mode): text and references, no images
+  const hasReferences = references.length > 0 || writingComment
   const canSend = isOnboardingSendStep ||
     (goalMode
       ? (goal!.canSubmit(content) && !isProcessingImages)
       : isGenerating
-        ? ((content.trim().length > 0 || paths.length > 0) && !!onInject)
-        : ((content.trim().length > 0 || images.length > 0 || paths.length > 0) && !isProcessingImages)
+        ? ((content.trim().length > 0 || hasReferences) && !!onInject)
+        : ((content.trim().length > 0 || images.length > 0 || hasReferences) && !isProcessingImages)
     )
   const hasImages = images.length > 0
   const cardRadius = standalone ? 'rounded-[22px]' : 'rounded-[18px]'
@@ -1154,7 +1201,7 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
       ? t('Switch recipient after the current reply finishes')
       : null
   const conversationBlockedReason = mentionConversations.length === 0 ? t('No other conversations in this space yet') : null
-  const attachedCount = images.length + paths.length
+  const attachedCount = images.length + references.filter(ref => ref.source.kind === 'path').length
 
   // Add → things this message carries; Context → where the work points;
   // Capabilities → what the AI may use. Unavailable rows stay visible and say why.
@@ -1377,10 +1424,6 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
             </>
           )}
 
-          {paths.length > 0 && (
-            <AttachedPathChips paths={paths} onRemove={removePath} className="px-3 pt-3" />
-          )}
-
           {/* Image processing indicator */}
           {isProcessingImages && (
             <div className="px-4 py-2 flex items-center gap-2 text-xs text-muted-foreground border-b border-border/30">
@@ -1403,6 +1446,8 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
             </div>
           )}
 
+          {/* References and attached files, on the same layer as the goal chip. */}
+          <ComposerReferenceChips composerKey={referenceKey} references={references} baseDir={spaceRoot} className="px-3.5 pt-2.5" />
           {goalMode && goal.chip}
 
           {/* Textarea area */}

@@ -11,7 +11,7 @@
 
 import { memo, useContext, useMemo, useRef, useState } from 'react'
 import { Maximize2 } from 'lucide-react'
-import { Streamdown } from 'streamdown'
+import { Streamdown, defaultRehypePlugins } from 'streamdown'
 import type { PluginConfig } from 'streamdown'
 import 'streamdown/styles.css'
 import 'katex/dist/katex.min.css'
@@ -19,6 +19,7 @@ import { useCodePlugin, useMathPlugin } from '../../lib/streamdown-plugins'
 import { createStreamingMarkdown } from '../../lib/streaming-markdown'
 import { useTranslation } from '../../i18n'
 import { OpenTableContext } from './open-table-context'
+import { fileLinkHandlers, rehypeFileMentions, useFileLinkOptions, useFileMentionLinks } from '../references'
 
 function tableToCsv(table: HTMLTableElement): string {
   return Array.from(table.rows)
@@ -156,6 +157,8 @@ const components = {
 // re-render every code block, link and table on each parent render.
 const CONTROLS = { code: true } as const
 const LINK_SAFETY = { enabled: true } as const
+// Runs after Streamdown's own sanitizing, so the marks it adds survive.
+const FILE_MENTION_REHYPE_PLUGINS = [...Object.values(defaultRehypePlugins), rehypeFileMentions]
 
 export const MarkdownRenderer = memo(function MarkdownRenderer({
   content,
@@ -182,10 +185,17 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
     [content, streaming, streamingParser],
   )
 
+  // File mentions become links only where a provider asks for them, and only
+  // once the reply is complete — a streaming reply is never checked.
+  const providedFileLinks = useFileLinkOptions()
+  const fileLinks = streaming ? null : providedFileLinks
+  const containerRef = useRef<HTMLDivElement>(null)
+  useFileMentionLinks(containerRef, markdown, fileLinks)
+
   if (!content) return null
 
   return (
-    <div className={`markdown-content overflow-x-auto ${className}`}>
+    <div ref={containerRef} className={`markdown-content overflow-x-auto ${className}`} {...fileLinkHandlers(fileLinks)}>
       <Streamdown
         mode={mode}
         parseIncompleteMarkdown={false}
@@ -194,6 +204,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
         controls={CONTROLS}
         linkSafety={LINK_SAFETY}
         plugins={plugins}
+        rehypePlugins={fileLinks ? FILE_MENTION_REHYPE_PLUGINS : undefined}
       >
         {markdown}
       </Streamdown>

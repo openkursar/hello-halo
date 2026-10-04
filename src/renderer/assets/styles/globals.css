@@ -77,6 +77,13 @@
   --halo-warning: 38 92% 50%;
   --halo-error: 0 62% 50%;
 
+  /* Diff text (+N / −N, status letters) and, at low alpha, line and word
+     backgrounds. Separate from the brand colors because small text on the
+     card surface must clear 4.5:1 in both themes. */
+  --diff-add: 142 71% 45%;
+  --diff-del: 0 72% 63%;
+  --diff-mod: 38 92% 50%;
+
   /* App type accent colors (skill = cyan, mcp = amber). Brightened for the
      dark default; .light carries the source values. */
   --app-skill: 174 60% 48%;
@@ -130,6 +137,10 @@
   --halo-success: 142 71% 40%;
   --halo-warning: 38 92% 45%;
   --halo-error: 0 72% 51%;
+
+  --diff-add: 142 72% 29%;
+  --diff-del: 0 72% 45%;
+  --diff-mod: 32 100% 32%;
 
   /* App type accent colors — light values (skill #0d9488, mcp #b26a00) */
   --app-skill: 175 84% 32%;
@@ -1170,6 +1181,19 @@ html.platform-desktop body::after {
   border-right: 1px solid hsl(var(--border) / 0.3);
 }
 
+/* A diff not drawn yet (fast scroll, loading, or past the editor cap): faint
+   code lines instead of a blank box. A background only, so it adds no
+   elements, no animation and no reads. */
+.diff-skeleton {
+  --diff-skeleton-line: linear-gradient(hsl(var(--muted)) 8px, transparent 0);
+  background-image:
+    var(--diff-skeleton-line), var(--diff-skeleton-line), var(--diff-skeleton-line),
+    var(--diff-skeleton-line), var(--diff-skeleton-line), var(--diff-skeleton-line);
+  background-position: 16px 6px, 32px 26px, 32px 46px, 48px 66px, 32px 106px, 16px 126px;
+  background-size: 180px 140px, 320px 140px, 260px 140px, 120px 140px, 360px 140px, 220px 140px;
+  background-repeat: repeat-y;
+}
+
 /* Image attachment styles */
 .image-attachment-item {
   animation: image-pop-in 0.2s ease-out;
@@ -1222,6 +1246,64 @@ html.platform-desktop body::after {
   padding: 2px 4px;
   border-radius: 2px;
   margin: 0 2px;
+}
+
+/* Unified references in rendered text (CSS Custom Highlight API, so the page's
+   DOM is never rewritten): passages waiting in the composer, and the place a
+   card went back to, lit until the highlight is removed (not an animation, so
+   reduced motion still shows it). */
+::highlight(halo-ref) {
+  background-color: hsl(var(--primary) / 0.2);
+}
+
+::highlight(halo-reveal) {
+  background-color: hsl(var(--halo-warning) / 0.32);
+}
+
+/* A file mention in a reply that names a file of the space. The box stays the
+   inline code's own: only colour and underline change, so nothing moves when
+   a mention turns into a link after the existence check answers. */
+.markdown-content code[data-file-link] {
+  color: hsl(var(--primary));
+  text-decoration: underline dashed hsl(var(--primary) / 0.5);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.markdown-content code[data-file-link]:hover {
+  text-decoration-style: solid;
+}
+
+.markdown-content code[data-file-link]:focus-visible {
+  outline: 2px solid hsl(var(--primary) / 0.5);
+  outline-offset: 1px;
+}
+
+/* A reference chip's count after a reference joined it. The colour carries it when motion is reduced. */
+@keyframes chip-bump {
+  0% {
+    transform: scale(1);
+    color: hsl(var(--primary));
+  }
+  35% {
+    transform: scale(1.14);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.animate-chip-bump {
+  display: inline-block;
+  animation: chip-bump 420ms var(--ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  @keyframes chip-bump {
+    0%, 60% {
+      color: hsl(var(--primary));
+    }
+  }
 }
 
 /* Drag-over state for input area */

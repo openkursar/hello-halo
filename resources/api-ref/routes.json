@@ -189,6 +189,10 @@
   },
   {
     "method": "POST",
+    "path": "/api/agent/inject-message"
+  },
+  {
+    "method": "POST",
     "path": "/api/agent/stop",
     "group": "conversation"
   },
@@ -298,6 +302,10 @@
     "method": "GET",
     "path": "/api/spaces/:spaceId/artifacts/query",
     "group": "workspace"
+  },
+  {
+    "method": "POST",
+    "path": "/api/spaces/:spaceId/artifacts/resolve"
   },
   {
     "method": "GET",
@@ -1215,5 +1223,65 @@
   {
     "method": "POST",
     "path": "/api/task-state/remove"
+  },
+  {
+    "method": "POST",
+    "path": "/api/git/repositories"
+  },
+  {
+    "method": "POST",
+    "path": "/api/git/status"
+  },
+  {
+    "method": "POST",
+    "path": "/api/git/changes"
+  },
+  {
+    "method": "POST",
+    "path": "/api/git/file-contents"
+  },
+  {
+    "method": "POST",
+    "path": "/api/git/revision-options"
+  },
+  {
+    "method": "POST",
+    "path": "/api/git/stage"
+  },
+  {
+    "method": "POST",
+    "path": "/api/git/unstage"
+  },
+  {
+    "method": "POST",
+    "path": "/api/git/discard"
+  },
+  {
+    "method": "POST",
+    "path": "/api/git/commit"
+  },
+  {
+    "method": "POST",
+    "path": "/api/git/sync"
+  },
+  {
+    "method": "POST",
+    "path": "/api/git/snapshot"
+  },
+  {
+    "method": "POST",
+    "path": "/api/git/count-changed-since"
+  },
+  {
+    "method": "POST",
+    "path": "/api/code-review/start"
+  },
+  {
+    "method": "GET",
+    "path": "/api/code-review/latest"
+  },
+  {
+    "method": "GET",
+    "path": "/api/code-review/availability"
   }
 ]
