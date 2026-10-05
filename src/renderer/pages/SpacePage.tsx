@@ -566,7 +566,7 @@ export function SpacePage() {
           {/* Mobile Layout */}
           {isMobile && (
             <div className="flex-1 flex flex-col min-w-0">
-              <ChatView isCompact={false} />
+              <ChatView isCompact={false} isVisible={!isCanvasOpen} />
             </div>
           )}
 

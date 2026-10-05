@@ -23,6 +23,14 @@ export function selectActiveConversationId(state: ActiveInput): string | null {
   return spaceState?.selectedAppChat?.conversationId ?? spaceState?.currentConversationId ?? null
 }
 
+/** Remembered selection is not proof that the chat is actually on screen. */
+export function selectViewedConversationId(
+  state: ActiveInput & Pick<ChatState, 'visibleConversationId'>
+): string | null {
+  const id = selectActiveConversationId(state)
+  return id && state.visibleConversationId === id && !document.hidden && document.hasFocus() ? id : null
+}
+
 export function selectActiveConversation(
   state: ActiveInput & Pick<ChatState, 'conversationCache'>
 ): Conversation | null {

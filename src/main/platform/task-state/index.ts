@@ -8,16 +8,16 @@
  * Usage in bootstrap/extended.ts:
  *
  *   import { initTaskState } from '../platform/task-state'
- *   const taskState = await initTaskState({ db })
+ *   const taskState = await initTaskState({ db, isConversationGone })
  */
 
 import type { DatabaseManager } from '../store'
 import { TaskStateStore } from './store'
 import { createTaskStateService } from './service'
 import { MIGRATION_NAMESPACE, migrations } from './migrations'
-import type { TaskStateService } from './service'
+import type { ConversationGoneCheck, TaskStateService } from './service'
 
-export type { TaskStateService } from './service'
+export type { ConversationGoneCheck, TaskStateService } from './service'
 export type { ConversationTaskState } from './types'
 
 let serviceInstance: TaskStateService | null = null
@@ -32,6 +32,8 @@ export function getTaskStateService(): TaskStateService | null {
 
 interface InitTaskStateDeps {
   db: DatabaseManager
+  /** Called lazily, on writes and on pruneGone(), never during init. */
+  isConversationGone: ConversationGoneCheck
 }
 
 export async function initTaskState(deps: InitTaskStateDeps): Promise<TaskStateService> {
@@ -39,7 +41,7 @@ export async function initTaskState(deps: InitTaskStateDeps): Promise<TaskStateS
   deps.db.runMigrations(appDb, MIGRATION_NAMESPACE, migrations)
 
   const store = new TaskStateStore(appDb)
-  const service = createTaskStateService(store)
+  const service = createTaskStateService(store, deps.isConversationGone)
   serviceInstance = service
 
   console.log('[TaskState] Initialized')

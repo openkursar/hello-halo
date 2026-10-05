@@ -42,7 +42,7 @@ import { registerPerfHandlers } from '../ipc/perf'
 import { registerGitBashHandlers, initializeGitBashOnStartup } from '../ipc/git-bash'
 import { cleanupAllCaches } from '../services/artifact-cache.service'
 import { flushSpaceActivity } from '../services/space.service'
-import { onConversationDeleted } from '../services/conversation.service'
+import { onConversationDeleted, isConversationGone } from '../services/conversation.service'
 import { disposeSearchContext } from '../services/web-search'
 import {
   initConversationInterop,
@@ -70,7 +70,7 @@ import { initMemory } from '../platform/memory'
 import { setMemorySdk } from '../platform/memory/sdk'
 import { tool as sdkTool, createSdkMcpServer as sdkCreateMcpServer } from '../services/agent/resolved-sdk'
 import { initAppManager, shutdownAppManager } from '../apps/manager'
-import { initAppRuntime, shutdownAppRuntime, getEventRouter, getActivityStore, getImSessionRegistry, createDigitalHumanConversationSource, createRunConversationSource, releaseTeamEpochSessions } from '../apps/runtime'
+import { initAppRuntime, shutdownAppRuntime, getEventRouter, getActivityStore, getImSessionRegistry, isNativeChatGone, createDigitalHumanConversationSource, createRunConversationSource, releaseTeamEpochSessions } from '../apps/runtime'
 import { initTeamStore, shutdownTeamStore, getTeamStore, initTeamService, shutdownTeamService, getTeamService } from '../apps/team'
 import type { TeamStore } from '../apps/team'
 import { initFederationStore, shutdownFederationStore, getFederationStore, getAuthorityStore } from '../apps/federation'
@@ -83,7 +83,7 @@ import { getRemoteAccessStatus } from '../services/remote'
 import type { OwnerStatus, MemberWriteRecord, ArtifactRef } from '../apps/runtime/federation'
 import { SELF_NODE_ID, TEAM_EVENTS, buildTeamSessionKey } from '../../shared/apps/team-types'
 import type { BlackboardTask, BlackboardFinding, TaskStatus, TeamActivity, TeamUpdatedEvent, TeamEpoch, TeamCheck, TeamOfficeStatusKind } from '../../shared/apps/team-types'
-import { parseTeamSessionKey, parseTeamChatKey } from '../../shared/apps/im-keys'
+import { parseTeamSessionKey, parseTeamChatKey, nativeChatAppId, isSpaceConversationId } from '../../shared/apps/im-keys'
 import { createTeamRuntime, setActiveTeamRuntime, getActiveTeamRuntime, createTeamTriggerScheduler, createDefaultSessionDeps, createTeamArtifactReader, createTeamMemberRecordReader, createTeamArtifactOpener, createLocalArtifactResolver, createLocalArtifactPathResolver, createMemberWorkDirResolver, RemoteArtifactError, pruneSharedFileCopies, defaultSharedCopyRoot, teamFolderDir } from '../apps/runtime/team'
 import { readTeamMemberMessages, isAppChatConversationGenerating } from '../apps/runtime/app-chat'
 import type { TeamTriggerScheduler } from '../apps/runtime/team'
@@ -175,7 +175,12 @@ async function initPlatformAndApps(): Promise<void> {
   // Note: SDK is initialized earlier in index.ts (before essential services)
   const db = await initStore()
   platformDb = db
-  taskStateService = await initTaskState({ db })
+  taskStateService = await initTaskState({
+    db,
+    isConversationGone: (conversationId, spaceId) => isSpaceConversationId(conversationId)
+      ? isConversationGone(spaceId, conversationId)
+      : nativeChatAppId(conversationId) ? isNativeChatGone(conversationId) : false,
+  })
 
   // ── Phase 1: Platform services (parallel) ───────────────────────────────
   // Dispatch-layer concurrency cap for the scheduler. The runtime execution
@@ -250,6 +255,10 @@ async function initPlatformAndApps(): Promise<void> {
   // initAppRuntime creates the EventRouter internally, wires source adapters
   // (FileWatcherSource, WebhookSource), activates Apps, and starts the router.
   const runtime = await initAppRuntime({ db, appManager, scheduler, memory, background })
+
+  // Digital-human chats can only be judged once the manager and the session
+  // registry are up.
+  taskStateService.pruneGone()
 
   // ── Analytics subscribers ───────────────────────────────────────────────
   // Wire lifecycle events (install/uninstall/run) into the analytics pipeline.

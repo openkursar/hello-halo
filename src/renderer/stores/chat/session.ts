@@ -6,6 +6,8 @@ import { PULSE_READ_GRACE_PERIOD_MS, api, createEmptySessionState } from './inte
 import type { Thought, PulseReadInfo } from './internal'
 import { conversationKind, backendFor } from './backend'
 import { shedBackgroundDetail } from './backend/cache'
+import { selectViewedConversationId } from './active'
+import { readTransition } from './task-read'
 
 // Store-level timer for pulseReadAt cleanup (independent of UI components)
 let _pulseCleanupTimer: ReturnType<typeof setTimeout> | null = null
@@ -43,7 +45,7 @@ function splitTaskStateRows(rows: TaskStateRow[]): {
   return { unseenCompletions, pulseReadAt }
 }
 
-export const createSessionSlice: ChatSlice<'answerQuestion' | 'loadMessageThoughts' | 'cleanupPulseReadAt' | 'keepPulseItem' | 'removePulseItem' | 'loadPersistedTaskState' | 'syncPersistedTaskState' | 'resetSession' | 'setSessionError' | 'markSessionStopped' | 'reset' | 'resetSpace' | 'forgetConversation' | 'shedBackgroundDetail'> = (set, get) => ({
+export const createSessionSlice: ChatSlice<'answerQuestion' | 'loadMessageThoughts' | 'cleanupPulseReadAt' | 'keepPulseItem' | 'removePulseItem' | 'setVisibleConversation' | 'readActiveCompletion' | 'loadPersistedTaskState' | 'syncPersistedTaskState' | 'resetSession' | 'setSessionError' | 'markSessionStopped' | 'reset' | 'resetSpace' | 'forgetConversation' | 'shedBackgroundDetail'> = (set, get) => ({
   answerQuestion: async (conversationId: string, answers: Record<string, string>) => {
     const session = get().sessions.get(conversationId)
     if (!session?.pendingQuestion) {
@@ -139,6 +141,28 @@ export const createSessionSlice: ChatSlice<'answerQuestion' | 'loadMessageThough
       console.error('[ChatStore] taskRemoveState error:', err))
   },
 
+  setVisibleConversation: (conversationId) => {
+    if (get().visibleConversationId !== conversationId) set({ visibleConversationId: conversationId })
+    if (conversationId) get().readActiveCompletion()
+  },
+
+  // Only an unseen completion: an error stays until the user opens it again.
+  readActiveCompletion: () => {
+    let persistRead: (() => void) | undefined
+    set((state) => {
+      const conversationId = selectViewedConversationId(state)
+      if (!conversationId || !state.unseenCompletions.has(conversationId)) return state
+      const session = state.sessions.get(conversationId)
+      if (session?.error && session.errorType !== 'interrupted' && !session.errorSeen) return state
+      const read = readTransition(state, conversationId, { spaceId: state.currentSpaceId!, title: '' })
+      persistRead = read?.persist
+      return read ? read.patch : state
+    })
+    if (!persistRead) return
+    persistRead()
+    get().cleanupPulseReadAt()
+  },
+
   // Cold-start hydration from the persisted task-state table (platform/task-state),
   // so completed-but-unseen conversations and in-progress grace periods survive
   // an app restart instead of only living in this renderer-memory Map.
@@ -148,8 +172,14 @@ export const createSessionSlice: ChatSlice<'answerQuestion' | 'loadMessageThough
   // state (e.g. selected a conversation) that must not be clobbered.
   loadPersistedTaskState: async () => {
     for (let attempt = 0; attempt < 5; attempt++) {
+      const before = get()
       const res = await api.taskListState()
       if (res.success) {
+        const current = get()
+        if (current.unseenCompletions !== before.unseenCompletions || current.pulseReadAt !== before.pulseReadAt) {
+          await get().syncPersistedTaskState()
+          return
+        }
         const { unseenCompletions: fetched, pulseReadAt: fetchedRead } = splitTaskStateRows((res.data ?? []) as TaskStateRow[])
 
         set((state) => {
@@ -166,6 +196,7 @@ export const createSessionSlice: ChatSlice<'answerQuestion' | 'loadMessageThough
         // Purges any rows that already expired while the app was closed, and
         // (re)schedules the timer for the rest — same self-healing pass the
         // 60s in-session timer already runs on every tick.
+        get().readActiveCompletion()
         get().cleanupPulseReadAt()
         return
       }
@@ -176,13 +207,30 @@ export const createSessionSlice: ChatSlice<'answerQuestion' | 'loadMessageThough
 
   // Full resync triggered by a `task:state_changed` push — see internal.ts
   // for why this replaces rather than merges.
-  syncPersistedTaskState: async () => {
-    const res = await api.taskListState()
-    if (!res.success) return
-    const { unseenCompletions, pulseReadAt } = splitTaskStateRows((res.data ?? []) as TaskStateRow[])
-    set({ unseenCompletions, pulseReadAt })
-    get().cleanupPulseReadAt()
-  },
+  syncPersistedTaskState: (() => {
+    let requestId = 0
+    return async () => {
+      const id = ++requestId
+      // Only the latest request may apply. Local task changes invalidate its
+      // snapshot too; re-read instead of persisting an obsolete unread row.
+      while (id === requestId) {
+        const before = get()
+        const res = await api.taskListState()
+        if (id !== requestId) return
+        if (!res.success) {
+          console.warn('[ChatStore] Cannot sync task state; local state retained:', res.error)
+          return
+        }
+        const current = get()
+        if (current.unseenCompletions !== before.unseenCompletions || current.pulseReadAt !== before.pulseReadAt) continue
+        const { unseenCompletions, pulseReadAt } = splitTaskStateRows((res.data ?? []) as TaskStateRow[])
+        set({ unseenCompletions, pulseReadAt })
+        get().readActiveCompletion()
+        get().cleanupPulseReadAt()
+        return
+      }
+    }
+  })(),
 
   // Reset a specific session to empty state (e.g., clear app chat, before new send)
   resetSession: (conversationId: string) => {
@@ -244,6 +292,7 @@ export const createSessionSlice: ChatSlice<'answerQuestion' | 'loadMessageThough
       pulseReadAt: new Map(),
       conversationLoadErrors: new Map(),
       currentSpaceId: null,
+      visibleConversationId: null,
       pendingPulseNavigation: null,
       pendingComposerInput: null,
       artifacts: [],

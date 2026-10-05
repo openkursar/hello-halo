@@ -153,7 +153,7 @@ import { buildLiveInstancesSection, buildMemorySection } from './prompt'
 import { createReportToolServer, type ReportToolContext } from './report-tool'
 // Key builders live in shared/ so the renderer can import them without
 // depending on main-process modules.
-import { getAppChatConversationId, buildImSessionKey, buildTeamSessionKey, parseTeamSessionKey, buildLocalSessionKey, parseAppChatKey } from '../../../shared/apps/im-keys'
+import { getAppChatConversationId, buildImSessionKey, buildTeamSessionKey, parseTeamSessionKey, buildLocalSessionKey, parseAppChatKey, parseNativeChatKey } from '../../../shared/apps/im-keys'
 import { classifySessionSource, LOCAL_SESSION_CHANNEL, NATIVE_SESSION_CHANNEL, NATIVE_DEFAULT_CHAT_ID } from '../../../shared/types/im-channel'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
 import { sendToRenderer } from '../../foundation/window.service'
@@ -1914,4 +1914,21 @@ export async function deleteNativeChatSession(
   getTaskStateService()?.remove(conversationId)
   emitSessionUpdated(appId, { channel: parsed.channel, chatId: parsed.chatId, chatType: parsed.chatType }, {})
   console.log(`[AppChat][${appId}] Native local session deleted: ${conversationId}`)
+}
+
+/**
+ * Whether a chat-board conversation is known to no longer exist: its digital
+ * human is gone or uninstalled, or (a local session) its record was deleted.
+ * False while the manager or registry is not up yet — that proves nothing.
+ */
+export function isNativeChatGone(conversationId: string): boolean {
+  const ref = parseNativeChatKey(conversationId)
+  if (!ref) return false
+  const manager = getAppManager()
+  if (!manager) return false
+  const app = manager.getApp(ref.appId)
+  if (!app || app.status === 'uninstalled') return true
+  if (ref.kind === 'default') return false
+  const registry = getImSessionRegistry()
+  return !!registry && !registry.findSession(ref.appId, LOCAL_SESSION_CHANNEL, ref.chatId)
 }

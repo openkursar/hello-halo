@@ -137,6 +137,10 @@ export interface ChatState {
   // Current space pointer
   currentSpaceId: string | null
 
+  // Reported by the mounted chat view, not inferred from the remembered selection.
+  visibleConversationId: string | null
+  setVisibleConversation: (conversationId: string | null) => void
+
   // Pulse: pending cross-space navigation target (set by navigateToConversation, consumed by SpacePage init)
   pendingPulseNavigation: string | null
 
@@ -296,6 +300,9 @@ export interface ChatState {
   cleanupPulseReadAt: () => void
   keepPulseItem: (conversationId: string) => void
   removePulseItem: (conversationId: string) => void
+  // The conversation on screen finished while the window was in the background;
+  // the user is back on it, so it is read the way opening it would read it.
+  readActiveCompletion: () => void
 
   // Cold-start hydration from the main-process task-state table (survives
   // restart — see platform/task-state). Merge-only: never overwrites an

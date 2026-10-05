@@ -13,6 +13,7 @@
  */
 
 import { test, expect, type Page, type ElectronApplication } from '@playwright/test'
+import type { HaloAPI } from '../../../src/preload'
 import fs from 'fs'
 import path from 'path'
 import {
@@ -152,9 +153,8 @@ test.describe('digital-human conversation on the chat page', () => {
           if (/Loading conversation|加载会话|正在加载/.test(document.body.innerText)) w.__loadingSeen = (w.__loadingSeen ?? 0) + 1
         }).observe(document.body, { childList: true, subtree: true, characterData: true })
       })
-      // The first row of the list that is not the digital human's is a regular conversation.
       await window.keyboard.press('Escape')
-      await window.getByText(/New conversation|新对话|新会话/).first().click()
+      await window.getByRole('button', { name: /^(New|New conversation|新对话|新会话)$/ }).first().click()
       await settle(window, 400)
       await openSeededConversation(session)
       await expect(window.getByText(seeded.turns[2].reply).first()).toBeVisible({ timeout: 5000 })
@@ -296,6 +296,72 @@ test.describe('digital-human conversation on the chat page', () => {
       await expect.poll(async () => window.locator(SCROLLER).evaluate(el => el.getBoundingClientRect().width), { timeout: 10000 })
         .toBeLessThan(fullWidth - 100)
       await expect(window.locator('textarea')).toBeVisible()
+    } finally {
+      await session.close()
+    }
+  })
+
+  test('keeps a completion unread on settings and reads it when the existing chat returns', async () => {
+    test.setTimeout(90000)
+    const session = await launch({ width: 1280, height: 800 })
+    try {
+      const { window, app, seeded, turnEvent } = session
+      await window.waitForSelector('textarea', { timeout: 20000 })
+      await openSeededConversation(session)
+      await expect(window.getByText(seeded.turns[2].reply).first()).toBeVisible({ timeout: 15000 })
+      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus())
+      await expect.poll(() => window.evaluate(() => document.hasFocus())).toBe(true)
+      const state = () => window.evaluate(async id => {
+        const response = await (globalThis.window as unknown as { halo: HaloAPI }).halo.taskListState()
+        if (!response.success) throw new Error(response.error)
+        return (response.data as Array<{ conversationId: string; state: string }>).find(row => row.conversationId === id)?.state ?? null
+      }, seeded.conversationId)
+
+      await window.getByRole('button', { name: 'Settings', exact: true }).first().click()
+      await expect(window.locator('textarea')).toHaveCount(0)
+      await sendAgentEvent(app, 'agent:complete', { ...turnEvent, type: 'complete' })
+      await expect.poll(state).toBe('unseen')
+      await window.evaluate(() => globalThis.dispatchEvent(new Event('focus')))
+      await settle(window)
+      expect(await state()).toBe('unseen')
+
+      await window.getByRole('button', { name: 'Conversation', exact: true }).first().click()
+      await expect(window.getByText(seeded.turns[2].reply).first()).toBeVisible()
+      await expect.poll(state).toBe('read')
+      await window.evaluate(() => {
+        globalThis.dispatchEvent(new Event('focus'))
+        document.dispatchEvent(new Event('visibilitychange'))
+      })
+      await settle(window)
+      expect(await state()).toBe('read')
+    } finally {
+      await session.close()
+    }
+  })
+
+  test('keeps a completion unread behind the full-screen canvas and reads it on reveal', async () => {
+    test.setTimeout(90000)
+    const session = await launch({ width: 1280, height: 800 })
+    try {
+      const { window, app, seeded, turnEvent } = session
+      await window.waitForSelector('textarea', { timeout: 20000 })
+      await openSeededConversation(session)
+      await expect(window.getByText(seeded.turns[2].reply).first()).toBeVisible({ timeout: 15000 })
+      await window.getByTitle(/Open workspace resources|展开工作区资源/).click()
+      await window.getByText('notes.md').first().click()
+      await window.getByTitle(/Enter fullscreen|进入全屏/).click()
+      await expect(window.locator('textarea')).toHaveCount(0)
+      await sendAgentEvent(app, 'agent:complete', { ...turnEvent, type: 'complete' })
+      const state = () => window.evaluate(async id => {
+        const response = await (globalThis.window as unknown as { halo: HaloAPI }).halo.taskListState()
+        if (!response.success) throw new Error(response.error)
+        return (response.data as Array<{ conversationId: string; state: string }>).find(row => row.conversationId === id)?.state ?? null
+      }, seeded.conversationId)
+      await expect.poll(state).toBe('unseen')
+
+      await window.getByTitle(/Exit fullscreen|退出全屏/).click()
+      await expect(window.locator('textarea')).toBeVisible()
+      await expect.poll(state).toBe('read')
     } finally {
       await session.close()
     }

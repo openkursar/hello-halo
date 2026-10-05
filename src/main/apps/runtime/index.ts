@@ -132,6 +132,7 @@ export {
   createNativeChatSession,
   forkNativeChatSession,
   deleteNativeChatSession,
+  isNativeChatGone,
   renameChatSession,
 } from './app-chat'
 export type { AppChatRequest, NativeSessionResult } from './app-chat'

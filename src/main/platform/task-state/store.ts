@@ -146,8 +146,9 @@ export class TaskStateStore {
     })
   }
 
-  remove(conversationId: string): void {
-    this.stmtDelete.run(conversationId)
+  /** Returns whether a row was deleted. */
+  remove(conversationId: string): boolean {
+    return this.stmtDelete.run(conversationId).changes > 0
   }
 
   deleteAllInSpace(spaceId: string): void {

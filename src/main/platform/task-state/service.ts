@@ -23,6 +23,7 @@ const SWEEP_INTERVAL_MS = 60 * 60 * 1000
 
 export interface TaskStateService {
   list(): ConversationTaskState[]
+  /** Writes for a conversation that no longer exists drop its row instead. */
   markUnseen(conversationId: string, spaceId: string, title: string): void
   markRead(conversationId: string, spaceId: string, title: string, originalStatus: 'completed-unseen' | 'error'): void
   setKept(conversationId: string, kept: boolean): void
@@ -30,8 +31,16 @@ export interface TaskStateService {
   /** Drop every row of one digital human's conversations (app permanently deleted). */
   removeAppConversations(appId: string): void
   deleteAllInSpace(spaceId: string): void
+  /** Drop rows of conversations that no longer exist. Returns how many went. */
+  pruneGone(): number
   dispose(): void
 }
+
+/**
+ * Whether a conversation is known to no longer exist. Supplied by the tiers
+ * that own conversations; must answer false when it cannot tell.
+ */
+export type ConversationGoneCheck = (conversationId: string, spaceId: string) => boolean
 
 
 function broadcast(): void {
@@ -43,7 +52,22 @@ function broadcast(): void {
   broadcastToAll(CHANNEL, {})
 }
 
-export function createTaskStateService(store: TaskStateStore): TaskStateService {
+export function createTaskStateService(
+  store: TaskStateStore,
+  isConversationGone: ConversationGoneCheck
+): TaskStateService {
+  // A client can report a conversation after it was deleted (a turn ending as
+  // its session is torn down). Its row would have nothing to open, so nothing
+  // would ever clear it. The reporting client already shows the item, so the
+  // broadcast goes out even with no row to remove.
+  const dropIfGone = (conversationId: string, spaceId: string): boolean => {
+    if (!isConversationGone(conversationId, spaceId)) return false
+    store.remove(conversationId)
+    console.warn(`[TaskState] Dropped report for deleted conversation: conversation=${conversationId}, space=${spaceId}`)
+    broadcast()
+    return true
+  }
+
   const sweepTimer = setInterval(() => {
     const removed = store.deleteExpiredRead(GRACE_PERIOD_MS)
     if (removed > 0) {
@@ -63,13 +87,13 @@ export function createTaskStateService(store: TaskStateStore): TaskStateService 
     list: () => store.list(),
 
     markUnseen(conversationId, spaceId, title) {
-      if (!isFollowedConversationId(conversationId)) return
+      if (!isFollowedConversationId(conversationId) || dropIfGone(conversationId, spaceId)) return
       store.upsertUnseen(conversationId, spaceId, title, Date.now())
       broadcast()
     },
 
     markRead(conversationId, spaceId, title, originalStatus) {
-      if (!isFollowedConversationId(conversationId)) return
+      if (!isFollowedConversationId(conversationId) || dropIfGone(conversationId, spaceId)) return
       store.upsertRead(conversationId, spaceId, title, originalStatus, Date.now())
       broadcast()
     },
@@ -91,6 +115,18 @@ export function createTaskStateService(store: TaskStateStore): TaskStateService 
 
     deleteAllInSpace(spaceId) {
       store.deleteAllInSpace(spaceId)
+    },
+
+    pruneGone() {
+      let removed = 0
+      for (const row of store.list()) {
+        if (isConversationGone(row.conversationId, row.spaceId) && store.remove(row.conversationId)) removed++
+      }
+      if (removed > 0) {
+        console.log(`[TaskState] Pruned ${removed} row(s) of conversations that no longer exist`)
+        broadcast()
+      }
+      return removed
     },
 
     dispose() {

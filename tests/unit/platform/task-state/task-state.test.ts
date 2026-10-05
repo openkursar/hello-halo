@@ -5,6 +5,7 @@
  * - Store CRUD: unseen -> read transitions, keep/remove, space cascade
  * - Expiry sweep (grace-period cutoff)
  * - Service-level guard: listed digital-human sessions persist, channel sessions do not
+ * - Rows of conversations that no longer exist are refused and pruned
  */
 
 import { describe, it, expect, beforeEach } from 'vitest'
@@ -128,13 +129,15 @@ describe('TaskStateService', () => {
   let dbManager: DatabaseManager
   let store: TaskStateStore
   let service: TaskStateService
+  let gone: Set<string>
 
   beforeEach(() => {
     dbManager = createDatabaseManager(':memory:')
     const db = dbManager.getAppDatabase()
     dbManager.runMigrations(db, MIGRATION_NAMESPACE, migrations)
     store = new TaskStateStore(db)
-    service = createTaskStateService(store)
+    gone = new Set()
+    service = createTaskStateService(store, (conversationId) => gone.has(conversationId))
   })
 
   it('persists the digital-human sessions listed beside conversations', () => {
@@ -165,6 +168,28 @@ describe('TaskStateService', () => {
 
     service.remove('conv-1')
     expect(service.list()).toHaveLength(0)
+  })
+
+  it('a report for a conversation that no longer exists drops its row instead', () => {
+    service.markUnseen('conv-1', 'space-1', 'Title')
+    gone.add('conv-1')
+
+    service.markUnseen('conv-1', 'space-1', 'Title')
+    expect(service.list()).toHaveLength(0)
+
+    service.markRead('conv-1', 'space-1', 'Title', 'completed-unseen')
+    expect(service.list()).toHaveLength(0)
+  })
+
+  it('pruneGone removes only rows of conversations that no longer exist', () => {
+    service.markUnseen('conv-1', 'space-1', 'One')
+    service.markRead('conv-2', 'space-1', 'Two', 'error')
+    service.markUnseen('conv-3', 'space-1', 'Three')
+    gone.add('conv-1').add('conv-2')
+
+    expect(service.pruneGone()).toBe(2)
+    expect(service.list().map(row => row.conversationId)).toEqual(['conv-3'])
+    expect(service.pruneGone()).toBe(0)
   })
 
   it('dispose() stops the sweep timer without throwing', () => {

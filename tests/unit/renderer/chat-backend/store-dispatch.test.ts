@@ -26,6 +26,7 @@ const apiMock = vi.hoisted(() => ({
   taskMarkUnseen: vi.fn(() => Promise.resolve()),
   taskMarkRead: vi.fn(() => Promise.resolve()),
   listConversations: vi.fn(),
+  taskRemoveState: vi.fn(() => Promise.resolve()),
   deleteConversation: vi.fn(),
 }))
 
@@ -77,6 +78,7 @@ function makeStore() {
     composerDrafts: new Map(),
     conversationLoadErrors: new Map(),
     currentSpaceId: SPACE,
+    visibleConversationId: null,
     isLoadingConversation: false,
     ...createGettersSlice(set as never, get as never),
     ...createConversationsSlice(set as never, get as never),
@@ -100,6 +102,7 @@ function page(messages: Message[], extra: Partial<TranscriptPage> = {}): { succe
 
 function selectDigitalHuman(store: ReturnType<typeof makeStore>, conversationId = DH) {
   store.getState().selectAppChatConversation(SPACE, APP, conversationId)
+  store.getState().setVisibleConversation(conversationId)
 }
 
 beforeEach(() => {
@@ -303,7 +306,7 @@ describe('a digital-human turn', () => {
     expect(messageRowKey(messages[2])).toBe(pendingKey)
     expect(store.getState().sessions.get(DH)).toMatchObject({ isGenerating: false, streamingContent: '' })
     expect(store.getState().sessions.get(DH)!.turnId).toBe(turnId)
-    // Digital-human chats never enter Pulse.
+    // A digital-human reply seen on screen does not create an unread task.
     expect(store.getState().unseenCompletions.size).toBe(0)
     expect(apiMock.taskMarkUnseen).not.toHaveBeenCalled()
   })
@@ -652,12 +655,83 @@ describe('space conversations through the same verbs', () => {
 
   it('does not mark a finished space turn unseen while its conversation is on screen', async () => {
     const store = spaceStore()
+    store.getState().setVisibleConversation('c1')
     apiMock.getConversation.mockResolvedValue({ success: true, data: { ...conversation, messages: [m('a', 'assistant', 'done')] } })
     store.setState({ sessions: new Map([['c1', { ...createEmptySessionState(), isGenerating: true, turnId: 1 }]]) })
 
     await store.getState().handleAgentComplete({ spaceId: SPACE, conversationId: 'c1' } as never)
 
     expect(store.getState().unseenCompletions.has('c1')).toBe(false)
+  })
+
+  it.each([
+    { visible: false, hidden: false, focused: true },
+    { visible: true, hidden: false, focused: false },
+    { visible: true, hidden: true, focused: true },
+  ])('tracks completion while the selected chat is not being viewed: %o', async ({ visible, hidden, focused }) => {
+    const store = spaceStore()
+    store.setState({ visibleConversationId: visible ? 'c1' : null })
+    vi.stubGlobal('document', { hidden, hasFocus: () => focused })
+    apiMock.getConversation.mockResolvedValue({ success: true, data: { ...conversation, messages: [m('a', 'assistant', 'done')] } })
+
+    await store.getState().handleAgentComplete({ spaceId: SPACE, conversationId: 'c1' } as never)
+
+    expect(store.getState().unseenCompletions.has('c1')).toBe(true)
+    expect(apiMock.taskMarkUnseen).toHaveBeenCalledWith('c1', SPACE, 'T')
+
+    vi.stubGlobal('document', { hidden: false, hasFocus: () => true })
+    store.getState().setVisibleConversation('c1')
+    expect(store.getState().unseenCompletions.has('c1')).toBe(false)
+    expect(apiMock.taskMarkRead).toHaveBeenCalledWith('c1', SPACE, 'T', 'completed-unseen')
+  })
+
+  it('requires explicit selection to acknowledge a failed background turn', async () => {
+    const store = spaceStore()
+    let resolveRead!: (value: unknown) => void
+    apiMock.getConversation.mockReturnValue(new Promise(resolve => { resolveRead = resolve }))
+    store.getState().handleAgentError({ spaceId: SPACE, conversationId: 'c1', error: 'upstream failed' } as never)
+    const completion = store.getState().handleAgentComplete({ spaceId: SPACE, conversationId: 'c1' } as never)
+
+    store.getState().setVisibleConversation('c1')
+    expect(store.getState().unseenCompletions.has('c1')).toBe(true)
+    expect(store.getState().sessions.get('c1')!.error).toBe('upstream failed')
+    expect(apiMock.taskMarkRead).not.toHaveBeenCalled()
+
+    await store.getState().selectConversation('c1')
+    expect(store.getState().unseenCompletions.has('c1')).toBe(false)
+    expect(apiMock.taskMarkRead).toHaveBeenCalledWith('c1', SPACE, 'T', 'error')
+    resolveRead({ success: true, data: conversation })
+    await completion
+  })
+
+  it.each(['failed', 'empty', 'rejected'] as const)('does not delete unread state when conversation metadata is unavailable: %s', async outcome => {
+    const store = makeStore()
+    store.setState({ unseenCompletions: new Map([['c1', { spaceId: SPACE, title: 'T' }]]) })
+    if (outcome === 'rejected') apiMock.listConversations.mockRejectedValue(new Error('offline'))
+    else apiMock.listConversations.mockResolvedValue(outcome === 'failed' ? { success: false, error: 'offline' } : { success: true, data: [] })
+
+    await store.getState().selectConversation('c1')
+
+    expect(store.getState().unseenCompletions.has('c1')).toBe(true)
+    expect(apiMock.taskRemoveState).not.toHaveBeenCalled()
+    expect(apiMock.taskMarkRead).not.toHaveBeenCalled()
+  })
+
+  it('reads a completion when the user returns while its metadata is loading', async () => {
+    const store = makeStore()
+    store.setState({ spaceStates: new Map([[SPACE, { conversations: [], currentConversationId: 'c1' }]]) })
+    let resolveList!: (value: unknown) => void
+    apiMock.listConversations.mockReturnValue(new Promise(resolve => { resolveList = resolve }))
+    apiMock.getConversation.mockResolvedValue({ success: true, data: conversation })
+
+    const completion = store.getState().handleAgentComplete({ spaceId: SPACE, conversationId: 'c1' } as never)
+    store.getState().setVisibleConversation('c1')
+    resolveList({ success: true, data: [conversation] })
+    await completion
+
+    expect(store.getState().unseenCompletions.has('c1')).toBe(false)
+    expect(apiMock.taskMarkUnseen).toHaveBeenCalledOnce()
+    expect(apiMock.taskMarkRead).toHaveBeenCalledOnce()
   })
 
   it('reloads a finished space turn from the space store and marks it unseen when nobody watches', async () => {

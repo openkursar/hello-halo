@@ -213,15 +213,8 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'openConver
       conversationMeta = spaceState.conversations.find((c) => c.id === conversationId)
 
       if (!conversationMeta) {
-        // Still not found after reload — clean up stale pulse state to prevent stuck entries
-        console.log(`[ChatStore] selectConversation: ${conversationId} not found after reload, cleaning up stale state`)
-        set((s) => {
-          const newUnseenCompletions = new Map(s.unseenCompletions)
-          newUnseenCompletions.delete(conversationId)
-          const newPulseReadAt = new Map(s.pulseReadAt)
-          newPulseReadAt.delete(conversationId)
-          return { unseenCompletions: newUnseenCompletions, pulseReadAt: newPulseReadAt }
-        })
+        // An unavailable or incomplete index is not proof of deletion. Main owns gone checks.
+        console.warn(`[ChatStore] Cannot select conversation ${conversationId} in space ${currentSpaceId}: metadata unavailable; task state retained`)
         return
       }
     }

@@ -42,6 +42,7 @@ import {
 } from '../onboarding/onboardingData'
 import { api } from '../../api'
 import { useConversationDetail } from '../../hooks/useConversationDetail'
+import { useVisibleConversation } from '../../hooks/useVisibleConversation'
 import type { ImageAttachment, Thought } from '../../types'
 import type { SlashCommandItem } from '../../types/slash-command'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
@@ -71,9 +72,10 @@ import { isConversationCollabEnabled } from '../../../shared/apps/app-types'
 
 interface ChatViewProps {
   isCompact?: boolean
+  isVisible?: boolean
 }
 
-export function ChatView({ isCompact = false }: ChatViewProps) {
+export function ChatView({ isCompact = false, isVisible = true }: ChatViewProps) {
   const { t } = useTranslation()
   const { currentSpace } = useSpaceStore()
   // Subscriptions are per field on purpose. The chat store is the shared
@@ -101,6 +103,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
     s => (currentSpaceId ? s.spaceStates.get(currentSpaceId)?.selectedAppChat ?? null : null)
   )
   const activeConversationId = useChatStore(selectActiveConversationId)
+  useVisibleConversation(isVisible ? activeConversationId : null)
   const isDigitalHuman = !!activeConversationId && conversationKind(activeConversationId) === 'digital-human'
   const activeConversationTitle = useActiveConversationTitle()
   // String identity, so this only re-renders when the selection changes.

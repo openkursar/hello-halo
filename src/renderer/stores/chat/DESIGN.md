@@ -56,6 +56,14 @@ model control follows the same rule (`useActiveModelTarget`): a digital human's
 model is read from its settings and edited there; the control never writes a
 conversation while one is on screen.
 
+The mounted `ChatView` reports `visibleConversationId` through
+`setVisibleConversation`, clearing it on unmount or when the mobile canvas covers
+it. A selected id alone does not mean the user is viewing it. Completion tracking
+and foreground reads share `selectViewedConversationId`: the reported id must
+match the active selection, and the document must be visible and focused.
+Mounting, switching conversation and foregrounding read only that conversation's
+unseen completion; plain errors remain pending until explicitly opened.
+
 ## Turn lifecycle (digital human)
 
 1. `send`: session turn state and the optimistic bubble (`pending-*` id,

@@ -5,7 +5,7 @@ import type { ChatSlice } from './internal'
 import { api, createEmptySessionState } from './internal'
 import type { AgentEventBase, Thought, ToolCall } from './internal'
 import { nextTextBlockVersion } from './text-block-version'
-import { selectActiveConversationId } from './active'
+import { selectViewedConversationId } from './active'
 import { conversationKind, backendFor } from './backend'
 import { startedTurnState } from './backend/turn'
 import { noteTurnEnded } from '../../services/home-telemetry'
@@ -123,17 +123,12 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
     const endedSession = get().sessions.get(conversationId)
     noteTurnEnded(conversationId, endedSession?.error ? 'error' : 'ok')
 
-    // Check if user is currently viewing this conversation. `document.hasFocus()`
-    // guards against the window being backgrounded (minimized, another app
-    // focused) while sitting on this conversation — otherwise a task that
-    // finishes while the user stepped away gets silently marked "seen" and
-    // never shows up in the task panel.
+    // A remembered selection can be hidden behind settings or a full-screen canvas.
     const state = get()
     const kind = conversationKind(conversationId)
     const isUserViewingThisConversation =
       state.currentSpaceId === spaceId &&
-      selectActiveConversationId(state) === conversationId &&
-      document.hasFocus()
+      selectViewedConversationId(state) === conversationId
 
     // Track unseen completion if user is not viewing this conversation. Space
     // and digital-human conversations are followed; IM sessions and team
@@ -165,6 +160,8 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
       })
       api.taskMarkUnseen(conversationId, spaceId, title).catch(err =>
         console.error('[ChatStore] taskMarkUnseen error:', err))
+      // Loading missing metadata may have yielded while the user returned to the chat.
+      get().readActiveCompletion()
     }
 
     // Captured BEFORE any async work: if a new turn starts while the backend

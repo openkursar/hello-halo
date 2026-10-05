@@ -39,6 +39,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   unseenCompletions: new Map<string, { spaceId: string; title: string }>(),
   pulseReadAt: new Map<string, { readAt: number; originalStatus: 'completed-unseen' | 'error'; spaceId: string; title: string }>(),
   currentSpaceId: null,
+  visibleConversationId: null,
   pendingPulseNavigation: null,
   pendingAppChatNavigation: null,
   pendingComposerInput: null,

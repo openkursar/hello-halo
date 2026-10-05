@@ -18,7 +18,7 @@ export const CODEX_ADAPTER_ID = 'openai-codex'
  * the local router — so the two versions have no reason to move together.
  * Bump this when a CLI release changes the catalog or the wire shape.
  */
-export const CODEX_CLI_VERSION = '0.157.1'
+export const CODEX_CLI_VERSION = '0.160.0'
 
 /** A catalog entry shipped with Halo, as the source and the picker read it. */
 export interface CodexSubscriptionModel {
@@ -38,18 +38,20 @@ export interface CodexSubscriptionModel {
  * list by slug and keeps the shipped entry wherever the backend stays silent.
  * This is therefore the base of the picker, not merely a pre-fetch seed.
  *
- * Entries are the `visibility: "list"` models of the catalog shipped with the
- * CLI this source emulates ({@link CODEX_CLI_VERSION}, tag `rust-v0.157.1`), in
- * ascending `priority`. Models that catalog hides are not offered here.
+ * Entries are the `visibility: "list"` models the backend serves to a covered
+ * account at {@link CODEX_CLI_VERSION} (the CLI no longer ships a static list),
+ * in ascending `priority` as the backend assigns them. Models the backend hides
+ * are not offered here.
  */
 export const CODEX_SUBSCRIPTION_MODELS: readonly CodexSubscriptionModel[] = [
-  { slug: 'gpt-6-astra', name: 'GPT-6-Astra', priority: 1 },
-  { slug: 'gpt-6-sol', name: 'GPT-6-Sol', priority: 2 },
-  { slug: 'gpt-6-luna', name: 'GPT-6-Luna', priority: 3 },
-  { slug: 'gpt-5.6-sol', name: 'GPT-5.6-Sol', priority: 4 },
-  { slug: 'gpt-5.6-terra', name: 'GPT-5.6-Terra', priority: 7 },
-  { slug: 'gpt-5.6-luna', name: 'GPT-5.6-Luna', priority: 8 },
-  { slug: 'gpt-5.5', name: 'GPT-5.5', priority: 12 }
+  { slug: 'gpt-6.1-sol', name: 'GPT-6.1-Sol', priority: 1 },
+  { slug: 'gpt-6-astra', name: 'GPT-6-Astra', priority: 2 },
+  { slug: 'gpt-6-sol', name: 'GPT-6-Sol', priority: 3 },
+  { slug: 'gpt-6-luna', name: 'GPT-6-Luna', priority: 4 },
+  { slug: 'gpt-5.6-sol', name: 'GPT-5.6-Sol', priority: 5 },
+  { slug: 'gpt-5.6-terra', name: 'GPT-5.6-Terra', priority: 8 },
+  { slug: 'gpt-5.6-luna', name: 'GPT-5.6-Luna', priority: 9 },
+  { slug: 'gpt-5.5', name: 'GPT-5.5', priority: 13 }
 ]
 
 /**

@@ -14,7 +14,7 @@
  */
 
 import { join } from 'path'
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, renameSync } from 'fs'
+import { existsSync, statSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, renameSync } from 'fs'
 import { isReasoningEffortLevel, type ReasoningEffortLevel } from '../../shared/constants/reasoning-effort'
 import { getSpace, touchSpaceActivity } from './space.service'
 import { getSeedKBIds } from './tlon'
@@ -22,6 +22,7 @@ import { getConfig } from '../foundation/config.service'
 import { v4 as uuidv4 } from 'uuid'
 import { previewFromMessage, titleFromFirstMessage } from '../../shared/conversation-title'
 import { DEFAULT_TOOLSETS } from '../../shared/constants/toolsets'
+import { isSpaceConversationId } from '../../shared/apps/im-keys'
 import type { Thought, TranscriptMessage } from '../../shared/types/transcript'
 import { summarizeThoughts } from '../../shared/transcript'
 
@@ -595,10 +596,13 @@ function getConversationsDir(spaceId: string): string {
     throw new Error(error)
   }
 
-  const convDir = space.isTemp
+  return conversationsDirOf(space)
+}
+
+function conversationsDirOf(space: { path: string; isTemp?: boolean }): string {
+  return space.isTemp
     ? join(space.path, 'conversations')
     : join(space.path, '.halo', 'conversations')
-  return convDir
 }
 
 // List all conversations for a space (returns lightweight metadata)
@@ -733,6 +737,28 @@ export function createConversation(
 export function getConversation(spaceId: string, conversationId: string): Conversation | null {
   const result = cachedRead(spaceId, conversationId)
   return result ? result.conversation : null
+}
+
+/**
+ * Whether a conversation is known to no longer exist: its space is gone, or
+ * the space's conversation folder is there without its file. A folder that
+ * cannot be seen (a space on an unmounted drive) proves nothing, so false.
+ */
+export function isConversationGone(spaceId: string, conversationId: string): boolean {
+  if (!isSpaceConversationId(conversationId)) return false
+  if (conversationId.includes('..')) return true
+  const space = getSpace(spaceId)
+  if (!space) return true
+  const conversationsDir = conversationsDirOf(space)
+  if (!existsSync(conversationsDir)) return false
+  try {
+    statSync(join(conversationsDir, `${conversationId}.json`))
+    return false
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return existsSync(conversationsDir)
+    console.warn(`[Conversation] Cannot check deletion: space=${spaceId}, conversation=${conversationId}; task state retained`, error)
+    return false
+  }
 }
 
 /**
