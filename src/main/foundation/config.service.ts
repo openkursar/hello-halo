@@ -615,6 +615,7 @@ export function onApiConfigChange(handler: ApiConfigChangeHandler): () => void {
 export interface NetworkConfigPayload {
   proxy: string | undefined
   browserUseProxy: boolean
+  noProxy: string | undefined
 }
 
 type NetworkConfigChangeHandler = (network: NetworkConfigPayload) => void
@@ -871,6 +872,7 @@ interface HaloConfig {
   network?: {
     proxy?: string  // Manual proxy URL. Empty string or undefined = use system proxy.
     browserUseProxy?: boolean  // When true, AI Browser also uses the Settings proxy. Default false = system proxy.
+    noProxy?: string  // Hosts reached directly, NO_PROXY style ("a.com, .b.com"); local addresses always are.
   }
   // Browser configuration
   browser?: {
@@ -1468,6 +1470,7 @@ export function saveConfig(config: HaloConfigPatch): HaloConfig {
       const payload: NetworkConfigPayload = {
         proxy: newConfig.network?.proxy,
         browserUseProxy: newConfig.network?.browserUseProxy === true,
+        noProxy: newConfig.network?.noProxy,
       }
       networkConfigChangeHandlers.forEach(handler => {
         try { handler(payload) } catch (e) {

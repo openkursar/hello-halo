@@ -6,10 +6,15 @@ import type { ApiCredentials } from '../../../../../src/main/services/agent/type
 
 const state = vi.hoisted(() => ({
   haloDir: '', getApiCredentials: vi.fn(), ensureRouter: vi.fn(), prepareMcp: vi.fn(),
+  network: {} as { proxy?: string; noProxy?: string },
 }))
 vi.mock('../../../../../src/main/foundation/config.service', async importOriginal => {
   const actual = await importOriginal<typeof import('../../../../../src/main/foundation/config.service')>()
-  return { ...actual, getHaloDir: () => state.haloDir }
+  return {
+    ...actual,
+    getHaloDir: () => state.haloDir,
+    getConfig: () => ({ ...actual.getConfig(), network: state.network }),
+  }
 })
 vi.mock('../../../../../src/main/services/agent/helpers', async importOriginal => {
   const actual = await importOriginal<typeof import('../../../../../src/main/services/agent/helpers')>()
@@ -98,5 +103,17 @@ describe('Codex captured-account egress', () => {
     await expect(resolveCodexOptions({ apiCredentials })).rejects.toThrow('captured API credentials')
     expect(state.getApiCredentials).not.toHaveBeenCalled()
     expect(state.prepareMcp).not.toHaveBeenCalled()
+  })
+})
+
+describe('Codex proxy environment', () => {
+  it('keeps the inherited NO_PROXY and adds the local addresses and the hosts listed in Settings', async () => {
+    state.network = { proxy: 'http://127.0.0.1:7890', noProxy: '.weixin.qq.com' }
+
+    const resolved = await resolveCodexOptions({ cwd: '/work', env: { NO_PROXY: 'corp.example.com' }, apiCredentials: credentials() })
+
+    expect(resolved.env.NO_PROXY).toBe('localhost,127.0.0.1,[::1],corp.example.com,.weixin.qq.com')
+    expect(resolved.env.no_proxy).toBe(resolved.env.NO_PROXY)
+    state.network = {}
   })
 })

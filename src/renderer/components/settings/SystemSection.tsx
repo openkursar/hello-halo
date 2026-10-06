@@ -16,6 +16,7 @@ import { Switch } from '../ui/Switch'
 import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 import { useSecurityPolicy } from '../../hooks/useSecurityPolicy'
 import { BrowserAllowlistCard } from './BrowserAllowlistCard'
+import { ProxyBypassField } from './ProxyBypassField'
 
 interface SystemSectionProps {
   config: HaloConfig | null
@@ -429,6 +430,8 @@ export function SystemSection({ config, setConfig }: SystemSectionProps) {
             <p className="mt-1.5 text-xs text-muted-foreground">
               {t('Supports http://, https://')}
             </p>
+
+            <ProxyBypassField config={config} setConfig={setConfig} />
 
             {/* Browser proxy toggle — only visible when a proxy is configured */}
             {proxyInput.trim() && (

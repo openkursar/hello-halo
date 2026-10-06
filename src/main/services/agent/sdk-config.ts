@@ -36,6 +36,7 @@ import {
 import { getActiveEngine, getEngineCapabilities } from './resolved-sdk'
 import { getDeviceIdentity } from '../../foundation/device-identity'
 import { applyOfficeRuntimeEnv } from '../office-runtime'
+import { applyProxyEnv } from '../proxy-policy'
 import { buildRequestIdentity } from './request-identity-factory'
 import { createMemoryWriteHooks, type MemoryWriteGuardConfig } from '../../platform/memory'
 import { buildModelPricingTable } from '../../../shared/constants/model-pricing'
@@ -812,10 +813,6 @@ export function buildSdkEnv(params: SdkEnvParams): Record<string, string | numbe
       return configDir
     })(),
 
-    // Localhost bypasses proxy (for OpenAI compat router)
-    NO_PROXY: 'localhost,127.0.0.1',
-    no_proxy: 'localhost,127.0.0.1',
-
     // Disable non-essential traffic
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     DISABLE_TELEMETRY: '1',
@@ -876,38 +873,14 @@ export function buildSdkEnv(params: SdkEnvParams): Record<string, string | numbe
     // DEBUG_CLAUDE_AGENT_SDK: '1',
   }
 
-  // Propagate Halo app-level proxy (Settings > General > Network Proxy) to the
-  // CC subprocess. Without this, the SDK's built-in WebFetch tool (and any other
-  // network calls in the subprocess) bypass the proxy configured in Halo.
-  // Only inject when the user has an explicit Halo proxy AND the OS environment
-  // doesn't already provide the corresponding variable — OS-level vars take priority.
-  // See: https://github.com/openkursar/hello-halo/issues/69
-  const appProxy = getConfig().network?.proxy?.trim()
-  if (appProxy) {
-    const proxyKeys = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy'] as const
-    for (const key of proxyKeys) {
-      if (!env[key]) {
-        env[key] = appProxy
-      }
-    }
-    console.log(`[SDK Config] Injected app proxy into subprocess env: ${appProxy}`)
-  }
+  // The Settings proxy and the hosts that bypass it, as every route gets them
+  // (the CLI's WebFetch and the MCP servers it connects included). The loopback
+  // router is always among the bypassed hosts.
+  applyProxyEnv(env, getConfig().network)
 
   // Bundled Office runtime: make the halo-node shim resolvable on PATH. No-op
   // (one log line) when the runtime bundle is absent.
   applyOfficeRuntimeEnv(env)
-
-  // Normalize proxy env vars: add http:// if protocol is missing.
-  // Some Windows users (esp. with Clash/V2Ray) set HTTPS_PROXY=127.0.0.1:7890
-  // without protocol prefix. The Claude Code CLI's Anthropic SDK does
-  // new URL(process.env.HTTPS_PROXY) which throws ERR_INVALID_URL.
-  // NO_PROXY check happens AFTER URL parsing, so it can't prevent the crash.
-  for (const key of ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy']) {
-    const val = env[key]
-    if (typeof val === 'string' && val && !/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(val)) {
-      env[key] = `http://${val}`
-    }
-  }
 
   return env as Record<string, string | number>
 }

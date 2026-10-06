@@ -23,19 +23,21 @@ import http from 'node:http'
 import zlib from 'node:zlib'
 import type { AddressInfo } from 'node:net'
 
-const resolveProxy = vi.fn(async () => 'DIRECT')
-let networkChangeHandler: ((cfg: { proxy?: string; browserUseProxy?: boolean }) => void) | null = null
+const resolveProxy = vi.fn(async (_url: string) => 'DIRECT')
+const setProxy = vi.fn(async () => {})
+type NetworkChange = { proxy?: string; browserUseProxy?: boolean; noProxy?: string }
+let networkChangeHandler: ((cfg: NetworkChange) => void) | null = null
 
 vi.mock('electron', () => ({
   session: {
     defaultSession: { resolveProxy: (url: string) => resolveProxy(url) },
-    fromPartition: () => ({ setProxy: () => Promise.resolve() }),
+    fromPartition: () => ({ setProxy }),
   },
 }))
 
 vi.mock('../../../src/main/foundation/config.service', () => ({
   getConfig: () => ({ network: {} }),
-  onNetworkConfigChange: (h: (cfg: { proxy?: string; browserUseProxy?: boolean }) => void) => {
+  onNetworkConfigChange: (h: (cfg: NetworkChange) => void) => {
     networkChangeHandler = h
     return () => {}
   },
@@ -53,7 +55,7 @@ const originalFetchMock = vi.fn(async () => new Response('direct-body', { status
 ;(globalThis as { fetch: typeof fetch }).fetch = originalFetchMock as unknown as typeof fetch
 
 // Dynamic import after mocks + global patch are in place.
-const { proxyFetch, clearProxyCache } = await import('../../../src/main/services/proxy-fetch')
+const { proxyFetch, clearProxyCache, resolveProxyAgent } = await import('../../../src/main/services/proxy-fetch')
 
 describe('proxyFetch — DIRECT path', () => {
   beforeEach(() => {
@@ -156,5 +158,51 @@ describe('proxyFetch — body decompression on the proxy path', () => {
     expect(res.status).toBe(200)
     expect(await res.text()).toBe('decoded-payload')
     expect(res.headers.get('content-encoding')).toBeNull()
+  })
+})
+
+describe('proxyFetch — hosts listed to bypass the proxy', () => {
+  // Nothing listens here: a request routed through it would fail.
+  const deadProxy = 'http://127.0.0.1:9'
+
+  beforeEach(() => {
+    delete process.env.NO_PROXY
+    delete process.env.no_proxy
+    resolveProxy.mockClear()
+    originalFetchMock.mockClear()
+    setProxy.mockClear()
+    clearProxyCache()
+  })
+  afterEach(() => {
+    networkChangeHandler?.({ proxy: '', browserUseProxy: false, noProxy: '' })
+  })
+
+  it('sends a listed host direct while the Settings proxy is on', async () => {
+    networkChangeHandler?.({ proxy: deadProxy, browserUseProxy: false, noProxy: '.weixin.qq.com' })
+
+    const res = await proxyFetch('https://qyapi.weixin.qq.com/cgi-bin/gettoken')
+
+    expect(await res.text()).toBe('direct-body')
+    expect(originalFetchMock).toHaveBeenCalledTimes(1)
+    expect(await resolveProxyAgent('https://qyapi.weixin.qq.com/')).toBeUndefined()
+    expect(await resolveProxyAgent('https://api.anthropic.com/')).toBeDefined()
+  })
+
+  it('sends a listed host direct without asking the system proxy', async () => {
+    networkChangeHandler?.({ proxy: '', browserUseProxy: false, noProxy: 'docs.example.com' })
+
+    await proxyFetch('https://docs.example.com/page')
+
+    expect(resolveProxy).not.toHaveBeenCalled()
+    expect(originalFetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('gives the AI Browser the same list when it follows the Settings proxy', () => {
+    networkChangeHandler?.({ proxy: deadProxy, browserUseProxy: true, noProxy: '.weixin.qq.com' })
+
+    expect(setProxy).toHaveBeenLastCalledWith({
+      proxyRules: deadProxy,
+      proxyBypassRules: 'localhost,127.0.0.1,[::1],.weixin.qq.com',
+    })
   })
 })
