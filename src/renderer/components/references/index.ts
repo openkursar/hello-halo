@@ -47,4 +47,4 @@ export {
   type FileLinkOptions,
   type FileLinkTarget,
 } from './file-links'
-export { rehypeFileMentions } from './file-mentions'
+export { rehypeFileMentions, rehypeLocalFileLinks, rehypeRestoreFileLinks } from './file-mentions'

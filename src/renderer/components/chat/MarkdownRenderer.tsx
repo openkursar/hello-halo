@@ -19,7 +19,7 @@ import { useCodePlugin, useMathPlugin } from '../../lib/streamdown-plugins'
 import { createStreamingMarkdown } from '../../lib/streaming-markdown'
 import { useTranslation } from '../../i18n'
 import { OpenTableContext } from './open-table-context'
-import { fileLinkHandlers, rehypeFileMentions, useFileLinkOptions, useFileMentionLinks } from '../references'
+import { fileLinkHandlers, rehypeFileMentions, rehypeLocalFileLinks, rehypeRestoreFileLinks, useFileLinkOptions, useFileMentionLinks } from '../references'
 
 function tableToCsv(table: HTMLTableElement): string {
   return Array.from(table.rows)
@@ -157,8 +157,15 @@ const components = {
 // re-render every code block, link and table on each parent render.
 const CONTROLS = { code: true } as const
 const LINK_SAFETY = { enabled: true } as const
-// Runs after Streamdown's own sanitizing, so the marks it adds survive.
-const FILE_MENTION_REHYPE_PLUGINS = [...Object.values(defaultRehypePlugins), rehypeFileMentions]
+// File targets become inert before URL hardening; HTML still passes the unchanged sanitizer.
+const FILE_LINK_REHYPE_PLUGINS = [
+  defaultRehypePlugins.raw,
+  rehypeLocalFileLinks,
+  defaultRehypePlugins.sanitize,
+  rehypeRestoreFileLinks,
+  defaultRehypePlugins.harden,
+]
+const FILE_MENTION_REHYPE_PLUGINS = [...FILE_LINK_REHYPE_PLUGINS, rehypeFileMentions]
 
 export const MarkdownRenderer = memo(function MarkdownRenderer({
   content,
@@ -204,7 +211,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
         controls={CONTROLS}
         linkSafety={LINK_SAFETY}
         plugins={plugins}
-        rehypePlugins={fileLinks ? FILE_MENTION_REHYPE_PLUGINS : undefined}
+        rehypePlugins={providedFileLinks ? (streaming ? FILE_LINK_REHYPE_PLUGINS : FILE_MENTION_REHYPE_PLUGINS) : undefined}
       >
         {markdown}
       </Streamdown>

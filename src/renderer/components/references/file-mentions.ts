@@ -22,9 +22,14 @@ const FILE_NAME = /(^|[/\\])(?:[\w\-@+~][\w\-@+~.]*\.\w{1,12}|\.\w[\w.-]*|Makefi
 /** `:line`, `:line:column`, `:line-line`. */
 const LINE_SUFFIX = /:(\d{1,7})(?::\d{1,5})?(?:-(\d{1,7}))?$/
 const MAX_MENTION_CHARS = 400
+const LINK_PATH_CHARS = /^[\w.\-/\\@+~ ()\p{L}\p{N}\p{M}]+$/u
+const LINK_FILE_NAME = /(^|[/\\])(?:[\w\-@+~ ()\p{L}\p{N}\p{M}][\w\-@+~. ()\p{L}\p{N}\p{M}]*\.\w{1,12}|\.[\w\p{L}\p{N}][\w.\-\p{L}\p{N}\p{M}]*|Makefile|Dockerfile|Jenkinsfile|Gemfile|Rakefile|LICENSE)$/u
 
 export function detectFileMention(raw: string): FileMention | null {
-  const text = raw.trim()
+  return parseFilePath(raw.trim(), PATH_CHARS, FILE_NAME)
+}
+
+function parseFilePath(text: string, pathChars: RegExp, fileName: RegExp): FileMention | null {
   if (!text || text.length > MAX_MENTION_CHARS || text.includes('://')) return null
 
   let path = text
@@ -42,10 +47,23 @@ export function detectFileMention(raw: string): FileMention | null {
   // A Windows drive (`C:\…`) is the only colon a path may keep.
   const drive = /^[A-Za-z]:[\\/]/.test(path) ? path.slice(0, 2) : ''
   const rest = path.slice(drive.length)
-  if (!rest || rest.includes(':') || !PATH_CHARS.test(rest) || !FILE_NAME.test(rest)) return null
+  if (!rest || rest.includes(':') || !pathChars.test(rest) || !fileName.test(rest)) return null
   // A bare `name.ext` without a folder is still a mention; a dotted identifier like `obj.method` is
   // filtered out by the existence check, never by guessing here.
   return range ? { path, range } : { path }
+}
+
+/** A Markdown destination, not a URL: decoding never grants access to the resulting path. */
+export function detectFileLink(href: string): FileMention | null {
+  if (!href || href.length > MAX_MENTION_CHARS * 3 || /[?#]/.test(href)) return null
+  let decoded: string
+  try {
+    decoded = decodeURIComponent(href)
+  } catch {
+    return null
+  }
+  if (decoded.length > MAX_MENTION_CHARS || /[\u0000-\u001f\u007f?#]/.test(decoded)) return null
+  return parseFilePath(decoded, LINK_PATH_CHARS, LINK_FILE_NAME)
 }
 
 // ============================================
@@ -57,10 +75,11 @@ interface HastNode {
   tagName?: string
   value?: string
   properties?: Record<string, unknown>
+  data?: Record<string, unknown>
   children?: HastNode[]
 }
 
-/** Attribute (as a hast property) holding the mention's text on its inline `<code>`. */
+/** Original file target on an inline-code mention or an inert named-link span. */
 export const FILE_MENTION_PROPERTY = 'dataFileMention'
 
 function textOf(node: HastNode): string | null {
@@ -70,6 +89,7 @@ function textOf(node: HastNode): string | null {
 }
 
 function mark(node: HastNode, insidePre: boolean): void {
+  if (node.tagName === 'a' || node.properties?.[FILE_MENTION_PROPERTY]) return
   if (node.type === 'element' && node.tagName === 'code' && !insidePre) {
     const text = textOf(node)
     if (text && detectFileMention(text)) node.properties = { ...node.properties, [FILE_MENTION_PROPERTY]: text }
@@ -77,6 +97,37 @@ function mark(node: HastNode, insidePre: boolean): void {
   }
   const pre = insidePre || (node.type === 'element' && node.tagName === 'pre')
   for (const child of node.children ?? []) mark(child, pre)
+}
+
+const FILE_LINK_DATA = 'haloFileLink'
+
+/** Runs after raw HTML parsing, before sanitization can discard a Windows drive path. */
+export function rehypeLocalFileLinks() {
+  const convert = (node: HastNode): void => {
+    if (node.tagName === 'a' && typeof node.properties?.href === 'string') {
+      const href = node.properties.href
+      if (detectFileLink(href)) {
+        node.tagName = 'span'
+        node.properties = { title: href }
+        node.data = { [FILE_LINK_DATA]: href }
+      }
+    }
+    for (const child of node.children ?? []) convert(child)
+  }
+  return convert
+}
+
+/** Sanitization retains internal node data, never untrusted HTML data attributes. */
+export function rehypeRestoreFileLinks() {
+  const restore = (node: HastNode): void => {
+    const href = node.data?.[FILE_LINK_DATA]
+    if (node.tagName === 'span' && typeof href === 'string' && detectFileLink(href)) {
+      node.properties = { ...node.properties, [FILE_MENTION_PROPERTY]: href }
+      delete node.data?.[FILE_LINK_DATA]
+    }
+    for (const child of node.children ?? []) restore(child)
+  }
+  return restore
 }
 
 /** Rehype plugin: marks inline code that looks like a file mention. Fenced code is never marked. */

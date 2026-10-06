@@ -1,5 +1,5 @@
 /**
- * Links for the files an AI reply mentions (`path:line` in inline code).
+ * Canvas links for inline-code paths and named Markdown files in AI replies.
  *
  * Links exist only inside a `FileLinkProvider` — the main chat's replies and
  * the review report — so every other Markdown surface pays nothing. A mention
@@ -15,7 +15,7 @@ import i18n from '../../i18n'
 import { canvasLifecycle } from '../../services/canvas-lifecycle'
 import { displayPath } from '../../../shared/content-reference'
 import type { ReferenceLineRange } from '../../../shared/types/content-reference'
-import { detectFileMention, type FileMention } from './file-mentions'
+import { detectFileLink, detectFileMention, type FileMention } from './file-mentions'
 
 export interface FileLinkTarget {
   /** Absolute path of the file. */
@@ -163,11 +163,20 @@ export function useFileMentionLinks(rootRef: RefObject<HTMLElement | null>, cont
   useEffect(() => {
     const root = rootRef.current
     if (!root || !options) return
-    const codes = root.querySelectorAll<HTMLElement>('code[data-file-mention]')
+    for (const linked of root.querySelectorAll<HTMLElement>('[data-file-link]')) {
+      delete linked.dataset.fileLink
+      delete linked.dataset.fileLines
+      linked.removeAttribute('role')
+      linked.removeAttribute('tabindex')
+      linked.removeAttribute('aria-label')
+      linked.title = linked.dataset.fileMention ?? ''
+    }
+    const codes = root.querySelectorAll<HTMLElement>('code[data-file-mention], span[data-file-mention]')
     if (codes.length === 0) return
     let cancelled = false
     for (const code of codes) {
-      const mention = detectFileMention(code.dataset.fileMention ?? '')
+      const raw = code.dataset.fileMention ?? ''
+      const mention = code.tagName === 'SPAN' ? detectFileLink(raw) : detectFileMention(raw)
       if (!mention) continue
       const known = peek(cacheKey(options.spaceId, options.baseDir, mention.path))
       if (known) {
@@ -206,7 +215,7 @@ export function fileLinkHandlers(options: FileLinkOptions | null): {
 } {
   if (!options) return {}
   const activate = (event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>) => {
-    const code = (event.target as Element).closest?.('code[data-file-link]') as HTMLElement | null
+    const code = (event.target as Element).closest?.('code[data-file-link], span[data-file-link]') as HTMLElement | null
     const target = code && targetOf(code)
     if (!target) return false
     event.preventDefault()

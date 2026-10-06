@@ -10,7 +10,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { test, expect } from '../fixtures/electron-with-git-workspace'
-import { EDITS } from '../fixtures/git-workspace'
+import { EDITS, createGitWorkspace } from '../fixtures/git-workspace'
 import {
   ADD_TO_CHAT_KEY,
   commentCard,
@@ -36,6 +36,59 @@ test.describe('references', () => {
   })
   test.afterEach(() => {
     expect(pageErrors).toEqual([])
+  })
+
+  test.describe('Markdown file links', () => {
+    test.use({
+      workspace: async ({}, use) => {
+        const workspace = createGitWorkspace(1, root => [
+          '[Relative report](.halo/tmp/report.final.md)',
+          '[Absolute report](<' + path.join(root, '.halo/tmp/report.final.md') + '>)',
+          '[Unicode report](docs/%E8%AF%84%E5%AE%A1%20(1).md)',
+          '[Source line](src/app.ts:3)',
+          '[Missing](notes/missing.md)',
+          '[Outside](../outside.md)',
+          '[Website](https://example.com/)',
+          '[Unsafe](javascript:alert)',
+        ].join('\n\n'))
+        fs.mkdirSync(path.join(workspace.repoRoot, '.halo/tmp'), { recursive: true })
+        fs.writeFileSync(path.join(workspace.repoRoot, '.halo/tmp/report.final.md'), '# Final link report\n')
+        fs.writeFileSync(path.join(workspace.repoRoot, 'docs/评审 (1).md'), '# Unicode link report\n')
+        try {
+          await use(workspace)
+        } finally {
+          workspace.cleanup()
+        }
+      },
+    })
+
+    test('opens named relative and absolute files in Canvas, including keyboard and mobile activation', async ({ window, electronApp }) => {
+      const reply = window.locator('.markdown-content').filter({ hasText: 'Relative report' })
+      await expect(reply).toBeVisible()
+      await expect(reply.getByText('Relative report', { exact: true })).not.toContainText('[blocked]')
+      await expect(reply.locator('span[title^="Blocked URL:"]')).toHaveCount(1)
+      await expect(reply.getByRole('link', { name: /report\.final\.md/ })).toHaveCount(2)
+      await reply.getByText('Relative report', { exact: true }).click()
+      await expect(window.locator('[title="report.final.md"]')).toBeVisible()
+      await expect(window.getByRole('heading', { name: 'Final link report', exact: true })).toBeVisible()
+      await reply.getByText('Absolute report', { exact: true }).focus()
+      await window.keyboard.press('Enter')
+      await expect(window.locator('[title="report.final.md"]')).toHaveCount(1)
+      await reply.getByText('Source line', { exact: true }).click()
+      await expect(window.locator('[title="app.ts"]')).toBeVisible()
+      await expect(window.locator('.cm-line', { hasText: "const greeting = 'hello, world'" })).toBeVisible()
+      expect(await reply.getByText('Missing', { exact: true }).getAttribute('role')).toBeNull()
+      expect(await reply.getByText('Outside', { exact: true }).getAttribute('role')).toBeNull()
+      await expect(reply.getByText('Website', { exact: true })).toHaveAttribute('href', 'https://example.com/')
+      expect(await reply.getByText('Unsafe [blocked]', { exact: true }).getAttribute('href')).toBeNull()
+      await electronApp.evaluate(({ BrowserWindow }) => {
+        BrowserWindow.getAllWindows()[0].setSize(390, 844)
+      })
+      await expect(reply.getByText('Unicode report', { exact: true })).toBeVisible()
+      await reply.getByText('Unicode report', { exact: true }).click()
+      await expect(window.getByRole('heading', { name: 'Unicode link report', exact: true })).toBeVisible()
+      expect(await window.evaluate(() => document.documentElement.scrollWidth <= globalThis.innerWidth)).toBe(true)
+    })
   })
 
   test('returns to a comment after another file replaces its editors in a large diff', async ({ window, workspace }) => {

@@ -1265,18 +1265,18 @@ html.platform-desktop body::after {
 /* A file mention in a reply that names a file of the space. The box stays the
    inline code's own: only colour and underline change, so nothing moves when
    a mention turns into a link after the existence check answers. */
-.markdown-content code[data-file-link] {
+.markdown-content :is(code, span)[data-file-link] {
   color: hsl(var(--primary));
   text-decoration: underline dashed hsl(var(--primary) / 0.5);
   text-underline-offset: 3px;
   cursor: pointer;
 }
 
-.markdown-content code[data-file-link]:hover {
+.markdown-content :is(code, span)[data-file-link]:hover {
   text-decoration-style: solid;
 }
 
-.markdown-content code[data-file-link]:focus-visible {
+.markdown-content :is(code, span)[data-file-link]:focus-visible {
   outline: 2px solid hsl(var(--primary) / 0.5);
   outline-offset: 1px;
 }

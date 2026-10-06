@@ -10,7 +10,7 @@ import { MarkdownRenderer } from '../../../../chat/MarkdownRenderer'
 import { FileLinkProvider, useTextReferences, type FileLinkTarget } from '../../../../references'
 import { flashElement } from '../shared/flash'
 
-const MENTION_SELECTOR = 'code[data-file-mention]'
+const MENTION_SELECTOR = 'code[data-file-mention], span[data-file-mention]'
 
 interface ReviewReportProps {
   spaceId: string

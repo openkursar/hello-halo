@@ -382,7 +382,7 @@ function seedRequest(repoRoot: string, head: string, replyEditCount: number): Gi
 }
 
 /** Create the profile, the repositories and the seeded space + conversation. */
-export function createGitWorkspace(replyEditCount = 1): GitWorkspace {
+export function createGitWorkspace(replyEditCount = 1, replyText?: (repoRoot: string) => string): GitWorkspace {
   const appEntryPath = getAppEntryPath()
   const testConfigDir = createTestConfigDir(appEntryPath)
   const holder = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'halo-e2e-git-')))
@@ -395,7 +395,9 @@ export function createGitWorkspace(replyEditCount = 1): GitWorkspace {
 
   try {
     const { repoRoot, nestedRepoRoot, originRoot, head } = createRepositories(holder, emptyConfig)
-    const output = execFileSync(electronPath as unknown as string, [seedWorker(), JSON.stringify(seedRequest(repoRoot, head, replyEditCount))], {
+    const request = seedRequest(repoRoot, head, replyEditCount)
+    if (replyText) request.replyText = replyText(repoRoot)
+    const output = execFileSync(electronPath as unknown as string, [seedWorker(), JSON.stringify(request)], {
       env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', HALO_DATA_DIR: path.join(testConfigDir, '.halo') },
       encoding: 'utf-8',
     })
