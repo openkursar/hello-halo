@@ -1,7 +1,8 @@
 /**
  * email_read downloads the body parts of a message, not its attachments, and
  * returns what reading the whole message returns: the same text and HTML, the
- * same attachment names and types, sizes from the structure.
+ * same attachment names and types. Sizes come from the structure and say they
+ * are estimates.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -151,7 +152,8 @@ describe('ImapClient.readEmail', () => {
     })
     expect(detail.attachments[0].filename).toBe('周报.pdf')
     expect(detail.attachments[0].content_type).toBe('application/pdf')
-    expect(Math.abs(detail.attachments[0].size - whole.attachments[0].size)).toBeLessThanOrEqual(3)
+    expect(whole.attachments[0].size).toBe(512 * 1024)
+    expect(detail.attachments[0].size).toBe('~512 KB (estimated)')
   })
 
   it('downloads only the plain body for the text format', async () => {

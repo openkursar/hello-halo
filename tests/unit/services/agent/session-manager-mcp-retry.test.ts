@@ -57,6 +57,7 @@ import {
   getOrCreateV2Session,
   closeAllV2Sessions,
   closeV2Session,
+  evictIdleSession,
   stopSessionCleanup,
   consumePendingRebuild,
   noteSessionMcpStatus,
@@ -210,6 +211,35 @@ describe('rebuild after an MCP server failed to connect', () => {
     noteSessionMcpStatus('conv', third as never, init(['local', 'failed']))
 
     expect(third.close).toHaveBeenCalled()
+  })
+
+  it('starts over after a teardown the failure did not ask for', async () => {
+    const first = await open('conv')
+    noteSessionMcpStatus('conv', first as never, init(['local', 'failed']))
+    const second = await open('conv')
+    noteSessionMcpStatus('conv', second as never, init(['local', 'failed']))
+
+    expect(evictIdleSession('conv', 'resident limit')).toBe(true)
+    const third = await open('conv')
+    noteSessionMcpStatus('conv', third as never, init(['local', 'failed']))
+
+    expect(third.close).toHaveBeenCalled()
+  })
+
+  it('says once that a server still fails after its rebuild', async () => {
+    const log = vi.spyOn(console, 'log')
+    const first = await open('conv')
+    noteSessionMcpStatus('conv', first as never, init(['local', 'failed']))
+    const second = await open('conv')
+    log.mockClear()
+
+    noteSessionMcpStatus('conv', second as never, init(['local', 'failed']))
+    noteSessionMcpStatus('conv', second as never, init(['local', 'failed']))
+
+    const capped = log.mock.calls.filter(([line]) => String(line).includes('still failing after a rebuild'))
+    expect(capped).toHaveLength(1)
+    expect(String(capped[0][0])).toContain('local (rebuilds once more when seen connecting)')
+    log.mockRestore()
   })
 
   it.each(['connected', 'pending', 'needs-auth'])('does nothing for a %s server', async (status) => {

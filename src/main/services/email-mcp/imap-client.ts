@@ -19,7 +19,7 @@ import {
   identifySystemFolder,
   type FolderInfo,
 } from './folder-mapping'
-import { planMessageParts, type BodyStructureNode } from './message-parts'
+import { approximateSizeLabel, planMessageParts, type BodyStructureNode } from './message-parts'
 
 // Dynamic import for imapflow
 let ImapFlowModule: typeof import('imapflow') | null = null
@@ -58,7 +58,8 @@ export interface EmailDetail {
 export interface AttachmentInfo {
   filename: string
   content_type: string
-  size: number
+  /** Bytes, or a labelled estimate when the attachment was not downloaded. */
+  size: number | string
   part_id: string
 }
 
@@ -425,7 +426,7 @@ export class ImapClient {
       attachments.push({
         filename: described.filename || 'unnamed',
         content_type: described.contentType || 'application/octet-stream',
-        size: att.size,
+        size: approximateSizeLabel(att.size),
         part_id: described.contentId || att.part,
       })
     }

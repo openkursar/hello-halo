@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { decodedSize, planMessageParts, type BodyStructureNode } from '../../../../src/main/services/email-mcp/message-parts'
+import { approximateSizeLabel, decodedSize, planMessageParts, type BodyStructureNode } from '../../../../src/main/services/email-mcp/message-parts'
 
 const plain = (part: string, extra: Partial<BodyStructureNode> = {}): BodyStructureNode =>
   ({ part, type: 'text/plain', encoding: 'quoted-printable', size: 120, ...extra })
@@ -96,5 +96,19 @@ describe('decodedSize', () => {
     expect(decodedSize({ encoding: '7bit', size: 512 })).toBe(512)
     expect(decodedSize({ size: 512 })).toBe(512)
     expect(decodedSize({ encoding: 'base64' })).toBe(0)
+  })
+})
+
+describe('approximateSizeLabel', () => {
+  it.each([
+    [900, '~900 B (estimated)'],
+    [1536, '~1.5 KB (estimated)'],
+    [512 * 1024 - 1, '~512 KB (estimated)'],
+    [1.2 * 1024 * 1024, '~1.2 MB (estimated)'],
+    [1024 * 1024 - 20, '~1 MB (estimated)'],
+    [3 * 1024 ** 3, '~3 GB (estimated)'],
+    [2048 * 1024 ** 3, '~2048 GB (estimated)'],
+  ])('labels %d bytes as %s', (bytes, label) => {
+    expect(approximateSizeLabel(bytes)).toBe(label)
   })
 })

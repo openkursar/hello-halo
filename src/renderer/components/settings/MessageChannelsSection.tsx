@@ -52,6 +52,7 @@ import { ImInstancePermissionSection } from './ImInstancePermissionSection'
 import { defaultGuestPolicy } from '../../../shared/apps/capability-policy'
 import type { ImPermissionDefaults } from './ImInstancePermissionSection'
 import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
+import { effectiveSmtpPort, parseSmtpPort, smtpPortAfterSecureChange } from './smtp-port'
 
 // ============================================
 // Types
@@ -104,7 +105,7 @@ function buildNotifyChannelDefs(): NotifyChannelDef[] {
       descriptionKey: NOTIFICATION_CHANNEL_META.email.descriptionKey,
       fields: [
         { key: 'smtp.host', label: 'SMTP Host', type: 'text', placeholder: 'smtp.gmail.com', required: true, nested: 'smtp.host' },
-        { key: 'smtp.port', label: 'SMTP Port', type: 'number', placeholder: '465', required: true, nested: 'smtp.port' },
+        { key: 'smtp.port', label: 'SMTP Port', type: 'number', required: true, nested: 'smtp.port' },
         { key: 'smtp.secure', label: 'Use SSL/TLS', type: 'toggle', nested: 'smtp.secure' },
         { key: 'smtp.user', label: 'Username', type: 'text', placeholder: 'user@example.com', required: true, nested: 'smtp.user' },
         { key: 'smtp.password', label: 'Password', type: 'password', placeholder: 'App password', required: true, nested: 'smtp.password' },
@@ -322,6 +323,39 @@ function ChannelField({ field, value, onChange, docs }: ChannelFieldProps) {
           <ExternalLink className="w-3 h-3" />
         </button>
       )}
+    </div>
+  )
+}
+
+interface SmtpPortFieldProps {
+  label: string
+  value: string
+  invalid: boolean
+  onChange: (text: string) => void
+  onBlur: () => void
+}
+
+/** Shows the text being typed so the field can be cleared; only a usable port is saved. */
+function SmtpPortField({ label, value, invalid, onChange, onBlur }: SmtpPortFieldProps) {
+  const { t } = useTranslation()
+  return (
+    <div className="space-y-1">
+      <label className="text-sm text-muted-foreground">
+        {t(label)}
+        <span className="text-red-400 ml-0.5">*</span>
+      </label>
+      <input
+        type="number"
+        inputMode="numeric"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onBlur={onBlur}
+        aria-invalid={invalid}
+        className={`w-full bg-muted border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary ${
+          invalid ? 'border-red-500' : 'border-border'
+        }`}
+      />
+      {invalid && <p className="text-xs text-red-500">{t('Please enter the SMTP port')}</p>}
     </div>
   )
 }
@@ -903,6 +937,68 @@ function NotifyChannelCard({
     return getNestedValue(currentConfig || {}, path)
   }
 
+  // SMTP port: typed text that is not a usable port yet; null shows the port in use.
+  const [portText, setPortText] = useState<string | null>(null)
+  const [portTestRefused, setPortTestRefused] = useState(false)
+  const secure = Boolean(getNestedValue(currentConfig || {}, 'smtp.secure'))
+  const storedPort = getNestedValue(currentConfig || {}, 'smtp.port')
+  const portShown = portText ?? String(effectiveSmtpPort(storedPort, secure))
+  const portInvalid = def.notifyType === 'email' && parseSmtpPort(portShown) === null
+
+  const handlePortChange = (text: string) => {
+    setPortText(text)
+    setPortTestRefused(false)
+    const port = parseSmtpPort(text)
+    if (port !== null && port !== parseSmtpPort(storedPort)) {
+      handleFieldChange('smtp.port', port, 'smtp.port')
+    }
+  }
+
+  const handleSecureChange = (value: unknown) => {
+    let updated = setNestedValue({ ...currentConfig }, 'smtp.secure', value)
+    const port = smtpPortAfterSecureChange(storedPort, secure)
+    if (port !== undefined && port !== parseSmtpPort(storedPort)) {
+      updated = setNestedValue(updated, 'smtp.port', port)
+    }
+    setPortText(null)
+    setPortTestRefused(false)
+    scheduleSave(updated)
+  }
+
+  const handleTest = () => {
+    if (portInvalid) {
+      setPortTestRefused(true)
+      return
+    }
+    onTest(def.notifyType)
+  }
+
+  const renderField = (field: FieldDef, fieldDocs?: ChannelDocsLink) => {
+    if (field.key === 'smtp.port') {
+      return (
+        <SmtpPortField
+          key={field.key}
+          label={field.label}
+          value={portShown}
+          invalid={portInvalid}
+          onChange={handlePortChange}
+          onBlur={() => { if (!portInvalid) setPortText(null) }}
+        />
+      )
+    }
+    return (
+      <ChannelField
+        key={field.key}
+        field={field}
+        value={getFieldValue(field)}
+        onChange={(value) => field.key === 'smtp.secure'
+          ? handleSecureChange(value)
+          : handleFieldChange(field.key, value, field.nested)}
+        docs={fieldDocs}
+      />
+    )
+  }
+
   const statusLabel = isEnabled ? t('Configured') : t('Not configured')
   const statusColor = isEnabled ? 'bg-green-500' : 'bg-muted-foreground/30'
 
@@ -948,29 +1044,15 @@ function NotifyChannelCard({
           </div>
 
           <div className="space-y-3">
-            {def.fields.filter(f => !f.group).map((field) => (
-              <ChannelField
-                key={field.key}
-                field={field}
-                value={getFieldValue(field)}
-                onChange={(value) => handleFieldChange(field.key, value, field.nested)}
-                docs={field.key === credentialFieldKey ? docs : undefined}
-              />
-            ))}
+            {def.fields.filter(f => !f.group).map((field) =>
+              renderField(field, field.key === credentialFieldKey ? docs : undefined))}
           </div>
 
           {/* Advanced fields (collapsible) */}
           {def.fields.some(f => f.group === 'advanced') && (
             <div className="border-t border-border/60 pt-3">
               <Disclosure title={t('Advanced')} contentClassName="space-y-3">
-                {def.fields.filter(f => f.group === 'advanced').map((field) => (
-                  <ChannelField
-                    key={field.key}
-                    field={field}
-                    value={getFieldValue(field)}
-                    onChange={(value) => handleFieldChange(field.key, value, field.nested)}
-                  />
-                ))}
+                {def.fields.filter(f => f.group === 'advanced').map((field) => renderField(field))}
                 <p className="text-[11px] text-muted-foreground leading-relaxed">
                   {t('CalDAV URL enables calendar tools. Supports {host} and {email} placeholders.')}
                 </p>
@@ -981,14 +1063,19 @@ function NotifyChannelCard({
           <div className="flex items-center gap-3 pt-2 flex-wrap">
             <button
               type="button"
-              onClick={() => onTest(def.notifyType)}
+              onClick={handleTest}
               disabled={isTesting || !isEnabled}
               className="flex items-center gap-2 px-3 py-1.5 text-sm bg-primary/10 text-primary hover:bg-primary/20 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isTesting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Bell className="w-4 h-4" />}
               {isTesting ? t('Testing...') : t('Test')}
             </button>
-            {testResult && (
+            {portTestRefused && portInvalid ? (
+              <div className="flex items-center gap-1.5 text-sm text-red-500">
+                <XCircle className="w-4 h-4" />
+                <span>{t('Please enter the SMTP port')}</span>
+              </div>
+            ) : testResult && (
               <div className={`flex items-center gap-1.5 text-sm ${testResult.success ? 'text-green-500' : 'text-red-500'}`}>
                 {testResult.success ? <CheckCircle className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
                 <span>{testResult.success ? t('Test passed') : testResult.error || t('Test failed')}</span>

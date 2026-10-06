@@ -430,6 +430,38 @@ describe('CodexEventNormalizer (app-server protocol)', () => {
     })
   })
 
+  it('tags every aggregate of a turn with the id its message_start carried', () => {
+    // Usage accounting keys a call by that id, and a new id counts as a new call.
+    const n = createNormalizer()
+    const frames = [
+      ...n.handle(ServerNotifications.TurnStarted, { threadId: 't', turnId: 'r1' }),
+      ...n.handle(ServerNotifications.ItemStarted, { threadId: 't', turnId: 'r1', itemId: 'rs', item: { id: 'rs', type: 'reasoning' } }),
+      ...n.handle(ServerNotifications.ReasoningTextDelta, { threadId: 't', turnId: 'r1', itemId: 'rs', delta: 'Plan' }),
+      ...n.handle(ServerNotifications.ItemCompleted, { threadId: 't', turnId: 'r1', itemId: 'rs', item: { id: 'rs', type: 'reasoning', content: ['Plan'] } }),
+      ...n.handle(ServerNotifications.ItemStarted, { threadId: 't', turnId: 'r1', itemId: 'msg', item: { id: 'msg', type: 'agentMessage' } }),
+      ...n.handle(ServerNotifications.AgentMessageDelta, { threadId: 't', turnId: 'r1', itemId: 'msg', delta: 'Done' }),
+      ...n.handle(ServerNotifications.ItemCompleted, { threadId: 't', turnId: 'r1', itemId: 'msg', item: { id: 'msg', type: 'agentMessage', text: 'Done' } }),
+      ...n.handle(ServerNotifications.ItemStarted, { threadId: 't', turnId: 'r1', itemId: 'cmd', item: { id: 'cmd', type: 'commandExecution', command: 'ls' } }),
+      ...n.handle(ServerNotifications.ItemCompleted, { threadId: 't', turnId: 'r1', itemId: 'cmd', item: { id: 'cmd', type: 'commandExecution', command: 'ls', aggregatedOutput: '', status: 'completed' } }),
+    ]
+
+    const startId = streamEvents(frames).find((e) => e.type === 'message_start').message.id
+    const aggregateIds = frames.filter((m) => m?.type === 'assistant').map((m) => m.message.id)
+    expect(aggregateIds).toHaveLength(3)
+    expect(new Set(aggregateIds)).toEqual(new Set([startId]))
+  })
+
+  it('tags a terminal error aggregate with the id of the message it closes', () => {
+    const n = createNormalizer()
+    const frames = [
+      ...n.handle(ServerNotifications.TurnStarted, { threadId: 't', turnId: 'r1' }),
+      ...n.handle(ServerNotifications.TurnFailed, { threadId: 't', turnId: 'r1', error: { message: 'quota' } }),
+    ]
+
+    const startId = streamEvents(frames).find((e) => e.type === 'message_start').message.id
+    expect(frames.find((m) => m?.type === 'assistant').message.id).toBe(startId)
+  })
+
   it('does not emit an empty aggregate for a text block that streamed no content', () => {
     // Defensive: a placeholder text block with no deltas and no item.text
     // should not surface a degenerate `assistant` envelope.
