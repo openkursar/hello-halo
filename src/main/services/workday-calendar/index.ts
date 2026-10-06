@@ -8,7 +8,7 @@
  * uses the option.
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { getHaloDir } from '../../foundation/config.service'
 import { getWorkdayCalendarUrl } from '../../foundation/product-config'
@@ -22,6 +22,13 @@ const REFRESH_AFTER_MS = 24 * 60 * 60 * 1000
 const RETRY_AFTER_FAILURE_MS = 10 * 60 * 1000
 /** How long a run waits for the very first download before deciding without it. */
 const FIRST_DOWNLOAD_WAIT_MS = 15_000
+/**
+ * A request a proxy or middlebox leaves hanging must end: until it does no
+ * other download is attempted, so the copy would never refresh again.
+ */
+const DOWNLOAD_TIMEOUT_MS = 30_000
+/** The public calendar is under 100 KB; a mistyped address must not pull a large file into memory. */
+const MAX_CALENDAR_BYTES = 2 * 1024 * 1024
 
 interface StoredCalendar extends WorkdayCalendarData {
   url: string
@@ -38,10 +45,18 @@ function storePath(): string {
   return join(getHaloDir(), 'workday-calendar.json')
 }
 
+function isStoredCalendar(value: unknown): value is StoredCalendar {
+  const calendar = value as Partial<StoredCalendar> | null
+  return !!calendar && typeof calendar.url === 'string' && typeof calendar.fetchedAt === 'number'
+    && Array.isArray(calendar.holidays) && Array.isArray(calendar.workdays)
+}
+
 function load(): StoredCalendar | null {
   if (stored !== undefined) return stored
   try {
-    stored = existsSync(storePath()) ? JSON.parse(readFileSync(storePath(), 'utf8')) as StoredCalendar : null
+    const parsed: unknown = existsSync(storePath()) ? JSON.parse(readFileSync(storePath(), 'utf8')) : null
+    if (parsed !== null && !isStoredCalendar(parsed)) console.warn('[WorkdayCalendar] The copy on this machine has an unknown shape; downloading again')
+    stored = isStoredCalendar(parsed) ? parsed : null
   } catch (error) {
     console.warn('[WorkdayCalendar] The copy on this machine is unreadable; downloading again', error)
     stored = null
@@ -52,22 +67,33 @@ function load(): StoredCalendar | null {
 function save(calendar: StoredCalendar): void {
   stored = calendar
   try {
-    writeFileSync(storePath(), JSON.stringify(calendar))
+    const path = storePath()
+    writeFileSync(`${path}.tmp`, JSON.stringify(calendar))
+    renameSync(`${path}.tmp`, path)
   } catch (error) {
     console.warn('[WorkdayCalendar] Could not keep the calendar on this machine', error)
   }
 }
 
 async function download(url: string, etag: string | undefined): Promise<void> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS)
   try {
-    const response = await proxyFetch(url, etag ? { headers: { 'If-None-Match': etag } } : undefined)
+    const response = await proxyFetch(url, {
+      ...(etag ? { headers: { 'If-None-Match': etag } } : {}),
+      signal: controller.signal,
+    })
     const current = load()
     if (response.status === 304 && current) {
       save({ ...current, fetchedAt: Date.now() })
       return
     }
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    const data = parseHolidayCalendar(await response.text())
+    const size = Number(response.headers.get('content-length') ?? 0)
+    if (size > MAX_CALENDAR_BYTES) throw new Error(`the calendar is too large (${size} bytes)`)
+    const text = await response.text()
+    if (text.length > MAX_CALENDAR_BYTES) throw new Error(`the calendar is too large (${text.length} characters)`)
+    const data = parseHolidayCalendar(text)
     // A feed with no marked day at all has most likely changed format: keeping
     // the last good copy beats answering every day from nothing.
     if (data.holidays.length === 0 && data.workdays.length === 0) {
@@ -78,6 +104,8 @@ async function download(url: string, etag: string | undefined): Promise<void> {
   } catch (error) {
     failedAt = Date.now()
     console.warn('[WorkdayCalendar] Download failed; the copy on this machine is kept', { url, error })
+  } finally {
+    clearTimeout(timeout)
   }
 }
 

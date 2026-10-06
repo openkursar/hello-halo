@@ -5,7 +5,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
@@ -34,8 +34,9 @@ const ICS = [
   'END:VCALENDAR',
 ].join('\r\n')
 
-function calendarResponse(body: string, etag = '"v1"') {
-  return { ok: true, status: 200, headers: { get: (name: string) => name.toLowerCase() === 'etag' ? etag : null }, text: async () => body }
+function calendarResponse(body: string, etag = '"v1"', contentLength?: number) {
+  const headers: Record<string, string | undefined> = { etag, 'content-length': contentLength?.toString() }
+  return { ok: true, status: 200, headers: { get: (name: string) => headers[name.toLowerCase()] ?? null }, text: async () => body }
 }
 
 function statusResponse(status: number) {
@@ -89,7 +90,7 @@ describe('workday calendar', () => {
     expect(await calendar.workdayStatusOn(day(10, 1))).toBe('day_off')
     await calendar.refreshWorkdayCalendar()
 
-    expect(proxyFetch).toHaveBeenLastCalledWith(CALENDAR_URL, { headers: { 'If-None-Match': '"v1"' } })
+    expect(proxyFetch).toHaveBeenLastCalledWith(CALENDAR_URL, expect.objectContaining({ headers: { 'If-None-Match': '"v1"' } }))
     expect(await calendar.workdayStatusOn(day(10, 10))).toBe('workday')
     expect(proxyFetch).toHaveBeenCalledTimes(2)
   })
@@ -148,7 +149,51 @@ describe('workday calendar', () => {
     calendar = await start()
 
     expect(await calendar.workdayStatusOn(day(10, 12))).toBe('not_covered')
-    expect(proxyFetch).toHaveBeenLastCalledWith('https://intranet.example/cn.ics', undefined)
+    const [url, init] = proxyFetch.mock.calls.at(-1) as [string, { headers?: unknown }]
+    expect(url).toBe('https://intranet.example/cn.ics')
+    expect(init.headers).toBeUndefined()
+  })
+
+  it('gives up on a download that hangs, so the calendar is fetched again after the pause', async () => {
+    vi.useRealTimers()
+    vi.useFakeTimers({ now: T0, toFake: ['Date', 'setTimeout', 'clearTimeout'] })
+    // Hangs like a stalled proxy: only an abort ends it.
+    proxyFetch.mockImplementationOnce((_url: string, init?: { signal?: AbortSignal }) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new Error('aborted')))
+    }))
+    const calendar = await start()
+
+    const first = calendar.workdayStatusOn(day(10, 1))
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(await first).toBe('not_covered')
+
+    // The download's own limit ends it; within the pause nothing is retried.
+    await vi.advanceTimersByTimeAsync(15_000)
+    void calendar.refreshWorkdayCalendar()
+    expect(proxyFetch).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000)
+    proxyFetch.mockResolvedValueOnce(calendarResponse(ICS))
+    const second = calendar.workdayStatusOn(day(10, 1))
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(await second).toBe('day_off')
+    expect(proxyFetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('downloads again rather than answer from a kept copy of an unknown shape', async () => {
+    writeFileSync(join(env.dir, 'workday-calendar.json'), JSON.stringify({ url: CALENDAR_URL, fetchedAt: T0 }))
+    proxyFetch.mockResolvedValueOnce(calendarResponse(ICS))
+    const calendar = await start()
+
+    expect(await calendar.workdayStatusOn(day(10, 1))).toBe('day_off')
+    expect(proxyFetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not read a file far larger than any calendar', async () => {
+    proxyFetch.mockResolvedValueOnce(calendarResponse(ICS, '"v1"', 50 * 1024 * 1024))
+    const calendar = await start()
+
+    expect(await calendar.workdayStatusOn(day(10, 1))).toBe('not_covered')
   })
 
   it('stops waiting for a first download that hangs and leaves the day uncovered', async () => {

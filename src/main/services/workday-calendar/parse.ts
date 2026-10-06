@@ -55,10 +55,16 @@ function collect(event: Map<string, string>, holidays: Set<string>, workdays: Se
   const start = parseDate(event.get('DTSTART'))
   if (!target || !start) return
   const end = parseDate(event.get('DTEND')) ?? new Date(start.getTime() + DAY_MS)
+  if (end.getTime() - start.getTime() > MAX_EVENT_DAYS * DAY_MS) {
+    console.warn(`[WorkdayCalendar] Ignored an event longer than ${MAX_EVENT_DAYS} days: ${event.get('DTSTART')}-${event.get('DTEND')}`)
+    return
+  }
   for (let day = start; day < end; day = new Date(day.getTime() + DAY_MS)) target.add(dayKey(day))
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000
+/** No holiday arrangement runs this long; a longer range is a typo (say, a far-off DTEND). */
+const MAX_EVENT_DAYS = 60
 
 /** An all-day date (YYYYMMDD) as UTC midnight. */
 function parseDate(value: string | undefined): Date | null {
@@ -77,17 +83,22 @@ export function localDayKey(date: Date): string {
 }
 
 /**
- * A year counts as covered only once it lists a holiday or make-up workday: a
- * year whose arrangements are not published yet still carries its festivals,
- * and reading it as "no holidays" would run straight through them.
+ * Whether `year`'s arrangements are published. Reading an unpublished year as
+ * "no holidays" would run straight through its Spring Festival, so a marked
+ * day only counts between February and November: January and December can
+ * hold the edges of a neighbouring year's New Year holiday (and a feed may
+ * list January 1 ahead of the rest), while every published arrangement has
+ * days in between — Qingming alone falls in April.
  */
+function isCovered(data: WorkdayCalendarData, year: string): boolean {
+  const inYearBody = (day: string) => day.startsWith(year) && day.slice(5, 7) >= '02' && day.slice(5, 7) <= '11'
+  return data.holidays.some(inYearBody) || data.workdays.some(inYearBody)
+}
+
 export function workdayStatus(data: WorkdayCalendarData | null, date: Date): WorkdayStatus {
   if (!data) return 'not_covered'
   const key = localDayKey(date)
-  const year = key.slice(0, 4)
-  if (!data.holidays.some(day => day.startsWith(year)) && !data.workdays.some(day => day.startsWith(year))) {
-    return 'not_covered'
-  }
+  if (!isCovered(data, key.slice(0, 4))) return 'not_covered'
   if (data.holidays.includes(key)) return 'day_off'
   if (data.workdays.includes(key)) return 'workday'
   const weekday = date.getDay()

@@ -1128,10 +1128,16 @@ never fires on a make-up Saturday — and the `onJobDue('app')` handler asks
   `content.workdayCalendarGap` that the timeline renders in the user's
   language, so a silent month of skipped runs cannot happen.
 
+A year counts as published only once it has marked days between February and
+November: January and December can hold just the edges of a neighbouring New
+Year holiday, and reading such a year as covered would run through its Spring
+Festival. A failing calendar check reads as `not_covered`, never as a failing
+schedule, and a person who would not be admitted anyway gets no calendar note.
+
 The calendar is downloaded when such a person is activated or its schedule
-synced, then at most daily; only a machine that has never had it waits for the
-first download (bounded) at a due time. Team periodic checks do not take the
-option.
+synced, then at most daily, each request bounded to 30 s; only a machine that
+has never had it waits for the first download (bounded) at a due time. Team
+periodic checks do not take the option.
 
 ---
 

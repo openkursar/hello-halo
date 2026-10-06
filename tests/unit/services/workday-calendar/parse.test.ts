@@ -5,7 +5,7 @@
  * as a working year.
  */
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { parseHolidayCalendar, workdayStatus } from '../../../../src/main/services/workday-calendar/parse'
 
 const ICS = [
@@ -83,5 +83,36 @@ describe('workdayStatus', () => {
 
   it('treats a missing calendar as not covered', () => {
     expect(workdayStatus(null, day(2026, 10, 12))).toBe('not_covered')
+  })
+
+  it('does not count a year from the edges of a New Year holiday or an early January 1 alone', () => {
+    // The 2027 arrangements are not out: only the New Year holiday reaching in
+    // from December and a January 1 listed early. Spring Festival would
+    // otherwise read as working days.
+    const edges = parseHolidayCalendar([
+      'BEGIN:VEVENT', 'DTSTART;VALUE=DATE:20261231', 'DTEND;VALUE=DATE:20270103', 'X-APPLE-SPECIAL-DAY:WORK-HOLIDAY', 'END:VEVENT',
+      'BEGIN:VEVENT', 'DTSTART;VALUE=DATE:20270101', 'X-APPLE-SPECIAL-DAY:WORK-HOLIDAY', 'END:VEVENT',
+      'BEGIN:VEVENT', 'DTSTART;VALUE=DATE:20261001', 'DTEND;VALUE=DATE:20261008', 'X-APPLE-SPECIAL-DAY:WORK-HOLIDAY', 'END:VEVENT',
+    ].join('\r\n'))
+
+    expect(workdayStatus(edges, day(2027, 1, 4))).toBe('not_covered')
+    expect(workdayStatus(edges, day(2027, 2, 8))).toBe('not_covered')
+    // A December edge says nothing about its own year either.
+    const decemberOnly = parseHolidayCalendar([
+      'BEGIN:VEVENT', 'DTSTART;VALUE=DATE:20231230', 'DTEND;VALUE=DATE:20240102', 'X-APPLE-SPECIAL-DAY:WORK-HOLIDAY', 'END:VEVENT',
+    ].join('\r\n'))
+    expect(workdayStatus(decemberOnly, day(2023, 6, 5))).toBe('not_covered')
+  })
+
+  it('ignores an event that runs implausibly long instead of walking it day by day', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const typo = parseHolidayCalendar([
+      'BEGIN:VEVENT', 'DTSTART;VALUE=DATE:20261001', 'DTEND;VALUE=DATE:99991231', 'X-APPLE-SPECIAL-DAY:WORK-HOLIDAY', 'END:VEVENT',
+      'BEGIN:VEVENT', 'DTSTART;VALUE=DATE:20261010', 'X-APPLE-SPECIAL-DAY:ALTERNATE-WORKDAY', 'END:VEVENT',
+    ].join('\r\n'))
+
+    expect(typo).toEqual({ holidays: [], workdays: ['2026-10-10'] })
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
   })
 })

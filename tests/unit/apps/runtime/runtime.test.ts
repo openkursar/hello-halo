@@ -2721,6 +2721,29 @@ describe('AppRuntimeService', () => {
       expect(entries[0]).toMatchObject({ type: 'run_skipped', content: { status: 'skipped', workdayCalendarGap: true } })
     })
 
+    it('reads a calendar check that fails as an uncovered day, not as a failing schedule', async () => {
+      vi.mocked(workdayStatusOn).mockRejectedValueOnce(new Error('calendar copy is broken'))
+      const quiet = vi.spyOn(console, 'error').mockImplementation(() => {})
+      createService()
+      const onJobDue = mockScheduler.onJobDue.mock.calls[0][1]
+
+      expect(await onJobDue(job())).toBe('skipped')
+      quiet.mockRestore()
+      expect(executeRun).not.toHaveBeenCalled()
+      expect(store.getEntriesForApp(appId)).toEqual([expect.objectContaining({ content: expect.objectContaining({ workdayCalendarGap: true }) })])
+    })
+
+    it('leaves no calendar note for a digital human that would not run anyway', async () => {
+      workdayCalendar.status = 'not_covered'
+      mockAppManager.getApp.mockReturnValue({ ...mockAppManager.getApp(appId), status: 'paused' })
+      createService()
+      const onJobDue = mockScheduler.onJobDue.mock.calls[0][1]
+
+      expect(await onJobDue(job())).toBe('skipped')
+      expect(workdayStatusOn).not.toHaveBeenCalled()
+      expect(store.getEntriesForApp(appId)).toEqual([])
+    })
+
     it('leaves a schedule without the option to its own times', async () => {
       appId = randomUUID()
       install({ cron: '0 9 * * *' })

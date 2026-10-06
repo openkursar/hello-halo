@@ -450,7 +450,11 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     const app = appManager.getApp(appId)
     const found = app ? subscriptionForJob(job, app) : null
     if (!app || found?.sub.source.type !== 'schedule' || !found.sub.source.config.workday_calendar) return true
-    const status = await workdayStatusOn(new Date())
+    // A broken calendar must not read as a failing schedule, which the scheduler would back off and disable.
+    const status = await workdayStatusOn(new Date()).catch((error: unknown) => {
+      console.error(`[Runtime] Holiday calendar check failed, app=${appId}:`, error)
+      return 'not_covered' as const
+    })
     if (status === 'workday') return true
     if (status === 'day_off') {
       console.log(`[Runtime] Scheduled run not started: not a working day, app=${appId}`)
@@ -1694,7 +1698,14 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       return 'skipped'
     }
 
-    // Decided before admission: the calendar may wait for its first download.
+    // Admission is checked on both sides of the calendar: before it, so a person
+    // who would not run anyway gets no calendar note; after it, because the
+    // calendar may wait for its first download and the answer can change.
+    const precheck = admitAutomaticRun(appId)
+    if ('skipReason' in precheck) {
+      console.log(`[Runtime] Skipping scheduled run: app=${appId}, ${precheck.skipReason}`)
+      return 'skipped'
+    }
     if (!await workdayAllows(job, appId)) return 'skipped'
 
     const admission = admitAutomaticRun(appId)
