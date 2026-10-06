@@ -137,6 +137,18 @@ describe('a file group while selecting', () => {
     expect(row('c.txt')).toContain('From a watched folder')
   })
 
+  it('says in the row why a watched-folder file cannot be picked, not only in a tooltip a touch screen never shows', () => {
+    const html = render([OWN_A, WATCHED])
+    const rowText = html.replace(/<[^>]+>/g, '|')
+
+    expect(rowText).toContain('|From a watched folder — manage it in Settings|')
+    // Its own folder label returns once selecting ends.
+    const idle = renderToStaticMarkup(createElement(FileGroup, { title: 'Learned', files: [WATCHED], onRemove: vi.fn(), formatSize: () => '1 KB' }))
+      .replace(/<[^>]+>/g, '|')
+    expect(idle).toContain('|Notes|')
+    expect(idle).not.toContain('From a watched folder')
+  })
+
   it('has no group checkbox when nothing in it can be removed', () => {
     const html = render([WATCHED])
 

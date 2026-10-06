@@ -592,7 +592,7 @@ function ContactsSection({ appId }: { appId: string }) {
                       <button
                         type="button"
                         onClick={() => handleStartRename(session)}
-                        className="p-0.5 text-muted-foreground hover:text-foreground transition-colors rounded opacity-0 group-hover/contact:opacity-100"
+                        className="p-0.5 text-muted-foreground hover:text-foreground transition-colors rounded opacity-0 group-hover/contact:opacity-100 max-sm:opacity-100"
                         title={t('Rename')}
                       >
                         <Pencil className="w-3 h-3" />
@@ -617,7 +617,7 @@ function ContactsSection({ appId }: { appId: string }) {
                 <button
                   type="button"
                   onClick={() => handleCopyContact(session)}
-                  className="p-1 text-muted-foreground hover:text-foreground transition-colors rounded opacity-0 group-hover/contact:opacity-100"
+                  className="p-1 text-muted-foreground hover:text-foreground transition-colors rounded opacity-0 group-hover/contact:opacity-100 max-sm:opacity-100"
                   title={t('Copy contact info')}
                 >
                   {copiedKey === key
@@ -627,7 +627,7 @@ function ContactsSection({ appId }: { appId: string }) {
                 <button
                   type="button"
                   onClick={() => handleRemove(session)}
-                  className="p-1 text-muted-foreground hover:text-red-500 transition-colors rounded opacity-0 group-hover/contact:opacity-100"
+                  className="p-1 text-muted-foreground hover:text-red-500 transition-colors rounded opacity-0 group-hover/contact:opacity-100 max-sm:opacity-100"
                   title={t('Remove')}
                 >
                   <Trash2 className="w-3.5 h-3.5" />
@@ -696,7 +696,7 @@ function ContactsSection({ appId }: { appId: string }) {
                 <button
                   type="button"
                   onClick={() => void handleUnlink(session)}
-                  className={`p-1 text-muted-foreground hover:text-red-500 transition-colors rounded shrink-0 ${orphaned ? '' : 'opacity-0 group-hover/contact:opacity-100'}`}
+                  className={`p-1 text-muted-foreground hover:text-red-500 transition-colors rounded shrink-0 ${orphaned ? '' : 'opacity-0 group-hover/contact:opacity-100 max-sm:opacity-100'}`}
                   title={t('Stop pushing to this chat')}
                 >
                   <Trash2 className="w-3.5 h-3.5" />
