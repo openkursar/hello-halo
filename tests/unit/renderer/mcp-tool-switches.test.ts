@@ -1,7 +1,8 @@
 /**
  * The per-tool switches on an MCP server card: each switch saves the whole list
- * of turned-off tools, "all on/off" keep tools the server no longer lists as
- * they were, and a failed save puts the switches back.
+ * of turned-off tools, a tool turned off stays listed (a session reports the
+ * server's tools without it) so it can be turned back on, and a failed save
+ * puts the switches back.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -23,7 +24,7 @@ vi.mock('../../../src/renderer/i18n', () => ({
   }),
 }))
 
-import { McpToolSwitches } from '../../../src/renderer/components/apps/McpToolSwitches'
+import { McpToolSwitches, listedMcpTools } from '../../../src/renderer/components/apps/McpToolSwitches'
 import { Switch } from '../../../src/renderer/components/ui/Switch'
 
 type Node = { type?: unknown; props?: Record<string, any> }
@@ -37,9 +38,9 @@ const text = (tree: unknown): string =>
 
 let onSave = vi.fn(async (_disabledTools: string[]): Promise<boolean> => true)
 const tools = ['query', 'drop_table', 'run_sql']
-const render = (disabledTools: string[] = []) => {
+const render = (disabledTools: string[] = [], listed: string[] = tools, engineIgnoresSwitches = false) => {
   env.index = 0
-  return McpToolSwitches({ tools, disabledTools, onSave })
+  return McpToolSwitches({ tools: listed, disabledTools, onSave, engineIgnoresSwitches })
 }
 const switchFor = (tree: unknown, tool: string) => nodes(tree).find(node => node.type === Switch && node.props?.ariaLabel === tool)!
 const button = (tree: unknown, label: string) => nodes(tree).find(node => node.type === 'button' && text(node) === label)!
@@ -67,13 +68,39 @@ describe('McpToolSwitches', () => {
     expect(onSave).toHaveBeenLastCalledWith(['run_sql'])
   })
 
-  it('turns everything listed off or on, keeping a tool the server no longer lists off', async () => {
+  it('keeps a turned-off tool listed after a session reports the server without it, so it can be turned back on', async () => {
+    const tree = render(['drop_table'], ['query'])
+
+    expect(text(tree)).toContain('1 of 2 tools on')
+    expect(switchFor(tree, 'drop_table').props!.checked).toBe(false)
+    await switchFor(tree, 'drop_table').props!.onCheckedChange(true)
+    expect(onSave).toHaveBeenLastCalledWith([])
+  })
+
+  it('still lists the switches when every tool of the server is turned off', () => {
+    const tree = render(['query', 'drop_table'], [])
+
+    expect(text(tree)).toContain('0 of 2 tools on')
+    expect(switchFor(tree, 'query')).toBeDefined()
+    expect(switchFor(tree, 'drop_table')).toBeDefined()
+  })
+
+  it('turns everything listed off, or everything back on', async () => {
     await button(render(['retired_tool']), 'Turn all off').props!.onClick()
-    expect(onSave).toHaveBeenLastCalledWith(['retired_tool', 'query', 'drop_table', 'run_sql'])
+    expect(onSave).toHaveBeenLastCalledWith(['query', 'drop_table', 'run_sql', 'retired_tool'])
 
     env.states = []
     await button(render(['retired_tool', 'query']), 'Turn all on').props!.onClick()
-    expect(onSave).toHaveBeenLastCalledWith(['retired_tool'])
+    expect(onSave).toHaveBeenLastCalledWith([])
+  })
+
+  it('says when the engine in use cannot leave single tools out', () => {
+    expect(text(render([], tools, true))).toContain('The DSH engine cannot leave out single MCP tools')
+    expect(text(render([], tools, false))).not.toContain('The DSH engine')
+  })
+
+  it('lists the tools last seen and the tools turned off, each once', () => {
+    expect(listedMcpTools(['query', 'run_sql'], ['run_sql', 'drop_table'])).toEqual(['query', 'run_sql', 'drop_table'])
   })
 
   it('puts the switches back and says so when the change could not be saved', async () => {

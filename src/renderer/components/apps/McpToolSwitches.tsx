@@ -8,15 +8,26 @@ import { useTranslation } from '../../i18n'
 import { Switch } from '../ui/Switch'
 
 interface McpToolSwitchesProps {
-  /** The tools the server lists. */
+  /** The tools the server was last seen offering. */
   tools: string[]
   /** The tools turned off, as stored. */
   disabledTools: string[]
   /** Saves the whole list of turned-off tools; resolves false when it could not. */
   onSave: (disabledTools: string[]) => Promise<boolean>
+  /** The engine in use leaves single MCP tools in, so say the switches do not reach it. */
+  engineIgnoresSwitches?: boolean
 }
 
-export function McpToolSwitches({ tools, disabledTools, onSave }: McpToolSwitchesProps) {
+/**
+ * The tools to list: those last seen plus those turned off. A session reports
+ * a server's tools without the ones it was not given, so a tool turned off
+ * must stay listed from the stored list or it could never be turned back on.
+ */
+export function listedMcpTools(tools: readonly string[], disabledTools: readonly string[]): string[] {
+  return [...new Set([...tools, ...disabledTools])]
+}
+
+export function McpToolSwitches({ tools, disabledTools, onSave, engineIgnoresSwitches }: McpToolSwitchesProps) {
   const { t } = useTranslation()
   const [disabled, setDisabled] = useState(disabledTools)
   const [saving, setSaving] = useState(false)
@@ -40,20 +51,19 @@ export function McpToolSwitches({ tools, disabledTools, onSave }: McpToolSwitche
     }
   }
 
+  const listed = listedMcpTools(tools, disabled)
   const off = new Set(disabled)
-  const onCount = tools.filter(tool => !off.has(tool)).length
-  // Turned off earlier but no longer listed by the server: stays turned off.
-  const unlisted = disabled.filter(tool => !tools.includes(tool))
+  const onCount = listed.filter(tool => !off.has(tool)).length
 
   return (
     <div className="pl-5 space-y-2">
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs text-muted-foreground">
-        <span>{t('{{on}} of {{total}} tools on', { on: onCount, total: tools.length })}</span>
+        <span>{t('{{on}} of {{total}} tools on', { on: onCount, total: listed.length })}</span>
         <div className="flex items-center gap-3">
           <button
             type="button"
-            disabled={saving || onCount === tools.length}
-            onClick={() => save(unlisted)}
+            disabled={saving || onCount === listed.length}
+            onClick={() => save([])}
             className="text-primary hover:underline disabled:opacity-50 disabled:no-underline"
           >
             {t('Turn all on')}
@@ -61,7 +71,7 @@ export function McpToolSwitches({ tools, disabledTools, onSave }: McpToolSwitche
           <button
             type="button"
             disabled={saving || onCount === 0}
-            onClick={() => save([...unlisted, ...tools])}
+            onClick={() => save(listed)}
             className="text-primary hover:underline disabled:opacity-50 disabled:no-underline"
           >
             {t('Turn all off')}
@@ -69,7 +79,7 @@ export function McpToolSwitches({ tools, disabledTools, onSave }: McpToolSwitche
         </div>
       </div>
       <ul className="space-y-1">
-        {tools.map(tool => (
+        {listed.map(tool => (
           <li key={tool} className="flex items-center justify-between gap-3 min-w-0">
             <span
               className={`text-xs font-mono truncate ${off.has(tool) ? 'text-muted-foreground/50' : 'text-muted-foreground'}`}
@@ -90,6 +100,11 @@ export function McpToolSwitches({ tools, disabledTools, onSave }: McpToolSwitche
       <p className="text-[11px] text-muted-foreground">
         {t('Tools turned off are left out of every conversation and digital human run. Conversations already open use the change from their next message.')}
       </p>
+      {engineIgnoresSwitches && (
+        <p className="text-[11px] text-amber-500">
+          {t('The DSH engine cannot leave out single MCP tools: tools turned off here stay available in its conversations.')}
+        </p>
+      )}
       {error && <p className="text-[11px] text-red-500">{error}</p>}
     </div>
   )

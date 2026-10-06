@@ -86,6 +86,10 @@ export function onMcpAppsChange(handler: McpChangeHandler): () => void {
   }
 }
 
+/** Bounds on an MCP app's list of turned-off tools, which the HTTP API also writes. */
+const MAX_DISABLED_TOOLS = 1000
+const MAX_TOOL_NAME_LENGTH = 256
+
 function emitMcpChange(spaceId: string | null, change?: McpAppChange): void {
   for (const handler of mcpChangeHandlers) {
     try {
@@ -864,10 +868,13 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         } else if (key === 'chatReasoningEffort' && !isReasoningEffortLevel(value)) {
           throw new Error(`Invalid chatReasoningEffort: ${String(value)}`)
         } else if (key === 'disabledTools') {
-          if (!Array.isArray(value) || !value.every(tool => typeof tool === 'string' && tool.trim())) {
-            throw new Error('disabledTools must be a list of tool names')
+          if (
+            !Array.isArray(value) || value.length > MAX_DISABLED_TOOLS ||
+            !value.every(tool => typeof tool === 'string' && tool.trim() && tool.length <= MAX_TOOL_NAME_LENGTH)
+          ) {
+            throw new Error(`disabledTools must be a list of at most ${MAX_DISABLED_TOOLS} tool names`)
           }
-          const tools = [...new Set(value as string[])]
+          const tools = [...new Set((value as string[]).map(tool => tool.trim()))]
           if (tools.length > 0) merged[key] = tools
           else delete merged[key]
         } else {

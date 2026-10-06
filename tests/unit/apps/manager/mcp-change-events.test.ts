@@ -99,7 +99,7 @@ describe('AppManager MCP change events', () => {
     const appId = await service.install(TEST_SPACE_ID, createMcpSpec())
     events.length = 0
 
-    service.updateOverrides(appId, { disabledTools: ['drop_table', 'drop_table', 'run_sql'] })
+    service.updateOverrides(appId, { disabledTools: ['drop_table', ' drop_table', 'run_sql'] })
     expect(service.getApp(appId)?.userOverrides.disabledTools).toEqual(['drop_table', 'run_sql'])
     expect(events).toEqual([{ spaceId: TEST_SPACE_ID, change: { appId, specId: 'test-mcp', action: 'tools' } }])
 
@@ -114,8 +114,10 @@ describe('AppManager MCP change events', () => {
 
   it('refuses turned-off tools that are not a list of names, and on apps that are not MCP servers', async () => {
     const mcpId = await service.install(TEST_SPACE_ID, createMcpSpec())
-    expect(() => service.updateOverrides(mcpId, { disabledTools: 'drop_table' as never })).toThrow('disabledTools must be a list of tool names')
-    expect(() => service.updateOverrides(mcpId, { disabledTools: ['ok', ' '] })).toThrow('disabledTools must be a list of tool names')
+    expect(() => service.updateOverrides(mcpId, { disabledTools: 'drop_table' as never })).toThrow('disabledTools must be a list of at most 1000 tool names')
+    expect(() => service.updateOverrides(mcpId, { disabledTools: ['ok', ' '] })).toThrow('disabledTools must be a list')
+    expect(() => service.updateOverrides(mcpId, { disabledTools: ['x'.repeat(257)] })).toThrow('disabledTools must be a list')
+    expect(() => service.updateOverrides(mcpId, { disabledTools: Array.from({ length: 1001 }, (_, i) => `t${i}`) })).toThrow('disabledTools must be a list')
 
     const automationId = await service.install(TEST_SPACE_ID, {
       spec_version: '1', name: 'test-automation', version: '1.0.0', author: 'Test Author',
