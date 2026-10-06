@@ -1285,16 +1285,27 @@ create a digital human for a reminder.
   (`im-sender-standing.ts`), and the reply pushed to the chat. A turn that
   fails is told to the chat as a failed turn of its own is (`imErrorReply`,
   §2.12a); nobody waits on it, so a push the chat does not take is logged, not
-  retried. A one-off still waiting when Halo quits is not delivered: the
-  scheduler disabled it when it came due.
+  retried. A chat where the channel would refuse a message now — outside its
+  reply scope, or a group while permission control has no owner bound — gets
+  no turn: the same rules dispatch-inbound applies (`instanceTakesChat`). As
+  when its channel is not running, that coming-due is skipped: a one-off is not
+  delivered, a repeating one tries again when next due. A one-off still waiting
+  when Halo quits is not delivered: the scheduler disabled it when it came due.
 - **Guests do not get it.** The server is not in the capability toggle table,
   and the guest filter keeps no server an owner was never offered a switch for:
   a guest may only query, and every reminder is a future turn someone pays for.
 - **It belongs to the conversation**: it goes with a removed or evicted chat
   (the session registry cascades, as for pending relays) or an uninstalled digital human,
-  survives `/clear`, and is not stopped by "Pause automatic tasks" — the paused
-  digital human still answers its chats, and a reminder it promised must not
-  fall silent. Its page lists every reminder (Trigger group) with a cancel.
+  and is not stopped by "Pause automatic tasks" — the paused digital human
+  still answers its chats, and a reminder it promised must not fall silent.
+  Its page lists every reminder (Trigger group) with a cancel.
+- **Stopping or clearing a chat leaves its reminders.** `/stop` stops the turn
+  that is running, not a reminder: one that came due and was waiting for the
+  chat starts its turn as soon as the stopped turn has wound down — it is due,
+  and nobody cancelled it. `/clear` and "Clear all conversations" empty the
+  chat's history and keep its reminders (cancelled on the page, or by asking in
+  the chat); one coming due afterwards starts in the fresh conversation, its
+  text saying on its own what it is about.
 
 ### 2.28 Pinned Environments Follow a Space's Working Directory
 
@@ -1413,7 +1424,7 @@ src/main/apps/runtime/
   dispatch-inbound.ts        -- Route IM inbound messages into app-chat
   chat-reset.ts              -- Clear all of a digital human's chats at once (default, local, IM), each as /clear does; API sessions, team chats, memory and reminders untouched; nothing posted into chats
   im-permission-registry.ts  -- The IM chat's last sender and their standing, for a turn with no sender of its own (a message's own turn carries its sender in `AppChatRequest.imPermission`)
-  im-sender-standing.ts      -- resolveImPermission(): owner or guest under an instance's current settings; shared by inbound messages and reminders
+  im-sender-standing.ts      -- Under an instance's current settings: owner or guest (resolveImPermission), and which chats it answers (isOwnerUnbound, replyScopeCovers, instanceTakesChat); shared by inbound messages and reminders
   reminders/                 -- Reminders a digital human sets in a conversation (§2.27)
     index.ts                 -- the scheduler-backed service (set / list / cancel / sweep / cascades) and the turn text
     tool.ts                  -- halo-reminders MCP server, bound to one conversation

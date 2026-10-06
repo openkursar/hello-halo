@@ -25,7 +25,7 @@ import { getImSessionRegistry } from '../im-session-registry'
 import { getActiveImChannelManager } from '../im-channels'
 import { resolveImFileSend } from '../im-channels/file-send-resolve'
 import { setImPermissionContext } from '../im-permission-registry'
-import { resolveImPermission } from '../im-sender-standing'
+import { instanceTakesChat, resolveImPermission } from '../im-sender-standing'
 import { sanitizeRuntimeTags } from '../pending-relays'
 import { withTurnEndingNote } from '../turn-ending'
 import { imErrorReply } from '../im-error-reply'
@@ -72,6 +72,9 @@ function targetOf(reminder: ConversationReminder): Target {
   // A chat its instance no longer fronts for this digital human (rebound, or
   // turned into a team's front desk) is not this reminder's to speak in.
   if (!instance || !config || config.appId !== app.id || config.teamId) return 'unavailable'
+  // Nor one where a message would be refused now: outside the instance's reply
+  // scope, or a group while permission control has no owner bound.
+  if (!instanceTakesChat(config, parsed.chatType)) return 'unavailable'
 
   const setter = reminder.setBy
   const permission = resolveImPermission(config, setter?.id ?? '', setter?.name ?? '')

@@ -39,7 +39,7 @@ import { getActiveImChannelManager } from './im-channels'
 import { sendToRenderer } from '../../foundation/window.service'
 import { broadcastToAll } from '../../http/websocket'
 import { setImPermissionContext, clearImPermissionContext, type ImPermissionContext } from './im-permission-registry'
-import { resolveImPermission } from './im-sender-standing'
+import { isOwnerUnbound, replyScopeCovers, resolveImPermission } from './im-sender-standing'
 import { setImStreamHandle } from './im-stream-registry'
 import { analytics } from '../../services/analytics/analytics.service'
 import { AnalyticsEvents } from '../../services/analytics/types'
@@ -664,10 +664,7 @@ export async function dispatchInboundMessage(
   // initialisation, replyScope is a reply policy. A 'group'-scoped instance
   // still needs its owner bound via DM — gating DMs first would make claiming
   // impossible while the group guide keeps pointing users at DMs.
-  const ownersUnset =
-    instanceCfg?.permissionEnabled === true &&
-    (!Array.isArray(instanceCfg.owners) || instanceCfg.owners.length === 0)
-  if (ownersUnset) {
+  if (isOwnerUnbound(instanceCfg)) {
     if (msg.chatType === 'direct' && msg.from) {
       // A merged re-dispatch does not retry: each of its messages already did,
       // and awaiting here would reopen the gap between the flush's busy check
@@ -704,10 +701,12 @@ export async function dispatchInboundMessage(
 
   // ── Reply scope check ──────────────────────────────────────────
   // Not for an answer in a direct chat: questions are asked there, and every
-  // notice of one points there, whatever the scope (im-escalation).
+  // notice of one points there, whatever the scope (im-escalation). The owner
+  // gate above and this check are also what a reminder coming due in this chat
+  // meets (im-sender-standing `instanceTakesChat`).
   const answerArgs = parseAnswerCommand(msg.body, msg.chatType)
   const answersInDirectChat = msg.chatType === 'direct' && answerArgs !== null
-  if (replyScope !== 'all' && replyScope !== msg.chatType && !answersInDirectChat) {
+  if (!replyScopeCovers(instanceCfg, msg.chatType) && !answersInDirectChat) {
     const rejectionMsg = msg.chatType === 'direct' ? DM_REJECTED_MESSAGE : GROUP_REJECTED_MESSAGE
     console.log(
       `${LOG_TAG} Blocked by replyScope: scope=${replyScope}, chatType=${msg.chatType}, ` +
