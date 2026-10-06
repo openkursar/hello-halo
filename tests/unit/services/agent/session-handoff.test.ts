@@ -86,6 +86,7 @@ vi.mock('../../../../src/main/platform/memory', async (importOriginal) => ({
 vi.mock('../../../../src/main/services/agent/mcp-auth-state', () => ({ purgeStaleMcpOAuth: vi.fn(async () => {}) }))
 vi.mock('../../../../src/main/services/agent/mcp-manager', () => ({
   broadcastMcpStatus: vi.fn(), getCachedMcpStatus: vi.fn(), testMcpConnections: vi.fn(),
+  onMcpServerRecovered: vi.fn(() => () => {}),
 }))
 vi.mock('../../../../src/main/services/agent/mcp-probe', () => ({ probeMcpApp: vi.fn(), probeUnhealthyServers: vi.fn() }))
 vi.mock('../../../../src/main/services/agent/toolsets/broker', () => ({

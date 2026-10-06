@@ -38,7 +38,7 @@ import type { V2SDKSession, SessionState, Thought } from './types'
 import { processStream, type StreamResult } from './stream-processor'
 import type { TurnSink } from './turn-sink'
 import { emitAgentEvent } from './events'
-import { createSessionState, consumePendingRebuild, markTurnInitReceived, failPendingSessionTurns } from './session-manager'
+import { createSessionState, consumePendingRebuild, markTurnInitReceived, failPendingSessionTurns, noteSessionMcpStatus } from './session-manager'
 import { hasActiveTeamTasks, isTeamLifecycleThought } from './subagent-handler'
 import { endApiRetry } from './api-retry'
 
@@ -279,6 +279,7 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
           onSnapshotReady: readSnapshot => { state.readTurnSnapshot = readSnapshot },
           onRawMessage: (m) => {
             trackTaskLifecycle(state.runningTasks, m)
+            noteSessionMcpStatus(conversationId, v2Session, m)
             sink.onRawMessage?.(m)
           },
           onTurnInit: () => {

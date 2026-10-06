@@ -8,7 +8,7 @@ import type { ProcessStreamParams, StreamResult } from '../../../../src/main/ser
 import type { SessionState, V2SDKSession } from '../../../../src/main/services/agent/types'
 import type { TurnSink } from '../../../../src/main/services/agent/turn-sink'
 import { processStream } from '../../../../src/main/services/agent/stream-processor'
-import { createSessionState, consumePendingRebuild } from '../../../../src/main/services/agent/session-manager'
+import { createSessionState, consumePendingRebuild, noteSessionMcpStatus } from '../../../../src/main/services/agent/session-manager'
 import { emitAgentEvent } from '../../../../src/main/services/agent/events'
 
 vi.mock('../../../../src/main/services/agent/stream-processor', () => ({ processStream: vi.fn() }))
@@ -18,6 +18,7 @@ vi.mock('../../../../src/main/services/agent/session-manager', () => ({
   consumePendingRebuild: vi.fn(() => false),
   markTurnInitReceived: vi.fn(),
   failPendingSessionTurns: vi.fn(() => false),
+  noteSessionMcpStatus: vi.fn(),
 }))
 
 const { startConsumer, trackTaskLifecycle } = await import('../../../../src/main/services/agent/session-consumer')
@@ -60,6 +61,27 @@ describe('consumer retirement during sink callbacks', () => {
       spaceId, conversationId, abortController, thoughts: [],
     } as SessionState))
     vi.mocked(consumePendingRebuild).mockReturnValue(false)
+  })
+
+  it('hands every raw message to the session manager with the session it came from', async () => {
+    let params!: ProcessStreamParams
+    let resolve!: (result: StreamResult) => void
+    vi.mocked(processStream).mockImplementation(input => {
+      params = input
+      return new Promise<StreamResult>(done => { resolve = done })
+    })
+    const sink = { onTurnComplete: vi.fn(), onRawMessage: vi.fn() } satisfies TurnSink
+    const session = { send: vi.fn(), stream: async function* () {}, close: vi.fn() } satisfies V2SDKSession
+    const consumer = startConsumer(session, { spaceId: 'space', conversationId: 'conv', displayModel: 'model', sink })
+    await vi.waitFor(() => expect(params).toBeDefined())
+    const init = { type: 'system', subtype: 'init', mcp_servers: [{ name: 'local', status: 'failed' }] }
+
+    params.callbacks.onRawMessage!(init)
+
+    expect(noteSessionMcpStatus).toHaveBeenCalledWith('conv', session, init)
+    expect(sink.onRawMessage).toHaveBeenCalledWith(init)
+    consumer.stop()
+    resolve({} as StreamResult)
   })
 
   it('retires an idle consumer without inventing a completed turn', async () => {
