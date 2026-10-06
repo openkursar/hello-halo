@@ -23,7 +23,8 @@ import {
   streamOpenAIChatToAnthropic,
   streamOpenAIResponsesToAnthropic,
   streamAnthropicPassthrough,
-  pipeAnthropicPassthrough
+  pipeAnthropicPassthrough,
+  collectAnthropicMessage
 } from '../stream'
 import { isNativeAnthropicHost, normalizeAnthropicReasoning, normalizeClaudeCodeAttribution, normalizeSystemPrompt, resolveClaudeCodeUserAgent, safeJsonParse, pickSessionAffinityHeaders, pickSessionId, inlineToolSchemaRefs } from '../utils'
 import { proxyFetch } from '../../services/proxy-fetch'
@@ -581,19 +582,40 @@ async function handleOpenAIConversion(
 
     // Handle streaming response
     if (wantStream) {
-      res.setHeader('Content-Type', 'text/event-stream')
-      res.setHeader('Cache-Control', 'no-cache')
-      res.setHeader('Connection', 'keep-alive')
-
       // Background input-token estimate backing the usage fallback for
       // providers that omit usage from the stream; computes while the
       // model generates, so stream finish never waits on it.
       const estimateInputTokens = deferInputTokensEstimate(anthropicRequest)
-      if (apiType === 'responses') {
-        await streamOpenAIResponsesToAnthropic(upstreamResp.body, res, anthropicRequest.model, debug, estimateInputTokens)
-      } else {
-        await streamOpenAIChatToAnthropic(upstreamResp.body, res, anthropicRequest.model, debug, estimateInputTokens)
+      const streamToAnthropic = apiType === 'responses' ? streamOpenAIResponsesToAnthropic : streamOpenAIChatToAnthropic
+      const upstreamBody = upstreamResp.body
+
+      // The upstream may stream for a client that did not ask to (a source
+      // that forces streaming, a Responses upstream given no stream flag, a
+      // retry the upstream demanded); that client expects one JSON message.
+      // Claude Code sends such a request as its fallback after a failed
+      // stream and reads `usage` straight off the reply.
+      if (anthropicRequest.stream !== true) {
+        const collected = await collectAnthropicMessage((sink) =>
+          streamToAnthropic(upstreamBody, sink, anthropicRequest.model, debug, estimateInputTokens))
+        if (clientAbort.signal.aborted) {
+          console.log(`[RequestHandler] client_disconnected wire=openai api_type=${apiType} duration_ms=${Date.now() - oaiUpstreamStartTs} url=${backendUrl} — collected stream dropped`)
+          return
+        }
+        const outcome = 'error' in collected
+          ? `error=${collected.error.type}`
+          : `stop=${collected.message.stop_reason} blocks=${collected.message.content.length}`
+        console.log(`[RequestHandler] stream_collected wire=openai api_type=${apiType} status=${upstreamResp.status} duration_ms=${Date.now() - oaiUpstreamStartTs} ${outcome} url=${backendUrl}`)
+        if ('error' in collected) {
+          return sendError(res, collected.error.type, collected.error.message)
+        }
+        res.json(collected.message)
+        return
       }
+
+      res.setHeader('Content-Type', 'text/event-stream')
+      res.setHeader('Cache-Control', 'no-cache')
+      res.setHeader('Connection', 'keep-alive')
+      await streamToAnthropic(upstreamBody, res, anthropicRequest.model, debug, estimateInputTokens)
       console.log(`[RequestHandler] stream_end wire=openai api_type=${apiType} status=${upstreamResp.status} duration_ms=${Date.now() - oaiUpstreamStartTs} client_aborted=${clientAbort.signal.aborted} url=${backendUrl}`)
       return
     }
