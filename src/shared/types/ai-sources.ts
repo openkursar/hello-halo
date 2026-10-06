@@ -549,6 +549,11 @@ export function getSourceById(config: AISourcesConfig, id: string): AISource | n
   return config.sources.find(s => s.id === id) || null
 }
 
+/** The signed-in account a source shows: OAuth and Claude Code CLI sources have one. */
+export function getSourceAccountName(source: AISource): string | undefined {
+  return source.authType === 'oauth' || source.authType === 'delegated' ? source.user?.name : undefined
+}
+
 /**
  * Get current model display name
  */

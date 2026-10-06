@@ -62,6 +62,7 @@ export {
   getCurrentSource,
   getModelDisplayName,
   getSourceById,
+  getSourceAccountName,
   isSourceConfigured,
   createSource,
   addSource,

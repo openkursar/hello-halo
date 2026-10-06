@@ -7,18 +7,14 @@
 
 import { query as claudeQuery } from './resolved-sdk'
 import { getTempSpacePath } from '../../foundation/config.service'
-import { ensureOpenAICompatRouter, encodeBackendConfig } from '../../openai-compat-router'
 import type { McpProbeStatus, McpServerStatusInfo } from './types'
 import {
   getHeadlessElectronPath,
   getApiCredentials,
   getDbMcpServers,
-  inferOpenAIWireApi,
-  credentialsToBackendConfig
 } from './helpers'
 import { emitAgentBroadcast } from './events'
-import { getCleanUserEnv, resolveCredentialsForSdk } from './sdk-config'
-import { resolveModelId } from '../../../shared/types/ai-sources'
+import { buildSdkEnv, resolveCredentialsForSdk } from './sdk-config'
 import { analytics } from '../analytics/analytics.service'
 import { AnalyticsEvents } from '../analytics/types'
 
@@ -293,33 +289,18 @@ async function runMcpConnectionTest(): Promise<McpConnectionTestResult> {
     // Use the same electron path as sendMessage (prevents Dock icon on macOS)
     const electronPath = getHeadlessElectronPath()
 
-    // Route through OpenAI compat router for non-Anthropic providers
-    let anthropicBaseUrl = credentials.baseUrl
-    let anthropicApiKey = credentials.apiKey
-    let sdkModel = resolveModelId(credentials.model)
-    let delegatedRoutingHeader: string | undefined
-
-    // Delegated sources carry no key, so the shared resolver owns their env
-    // shape — duplicating it here would let the two drift.
-    if (credentials.delegatedAuth) {
-      const resolved = await resolveCredentialsForSdk(credentials)
-      anthropicBaseUrl = resolved.anthropicBaseUrl
-      sdkModel = resolved.sdkModel
-      delegatedRoutingHeader = resolved.delegatedRoutingHeader
-      console.log(`[Agent] MCP test: delegated credential via ${anthropicBaseUrl}`)
-    } else if (credentials.provider !== 'anthropic') {
-      // For non-Anthropic providers (openai or oauth), use the OpenAI compat router
-      const router = await ensureOpenAICompatRouter({ debug: false })
-      anthropicBaseUrl = router.baseUrl
-
-      // Use apiType from credentials (set by provider), fallback to inference
-      const apiType = credentials.apiType
-        || (credentials.provider === 'oauth' ? 'chat_completions' : inferOpenAIWireApi(credentials.baseUrl))
-
-      anthropicApiKey = encodeBackendConfig(credentialsToBackendConfig(credentials, { apiType }))
-      console.log(`[Agent] MCP test: ${credentials.provider} provider enabled via ${anthropicBaseUrl}, apiType=${apiType}`)
-    }
-
+    // Resolved and given an environment exactly as a conversation's engine
+    // process is: Halo's Claude config directory (which holds a Claude Code
+    // CLI login), the proxy policy, the routing a delegated source needs.
+    const resolved = await resolveCredentialsForSdk(credentials)
+    const env = buildSdkEnv({
+      anthropicApiKey: resolved.anthropicApiKey,
+      anthropicBaseUrl: resolved.anthropicBaseUrl,
+      delegatedRoutingHeader: resolved.delegatedRoutingHeader,
+      capabilities: resolved.capabilities,
+      sourceId: resolved.sourceId,
+    })
+    console.log(`[Agent] MCP test: ${credentials.provider} credential via ${resolved.anthropicBaseUrl}${resolved.delegatedRoutingHeader ? ' (delegated)' : ''}`)
     console.log('[Agent] MCP test config:', JSON.stringify(enabledMcpServers, null, 2))
 
     // Create query with proper configuration (matching sendMessage)
@@ -330,29 +311,15 @@ async function runMcpConnectionTest(): Promise<McpConnectionTestResult> {
       options: {
         // A delegated run must reach the CLI with no key at all: any value here
         // makes it authenticate as an API-key user and ignore its own credential.
-        ...(delegatedRoutingHeader ? {} : { apiKey: anthropicApiKey }),
-        model: sdkModel,
+        ...(resolved.delegatedRoutingHeader ? {} : { apiKey: resolved.anthropicApiKey }),
+        model: resolved.sdkModel,
         apiCredentials: credentials,
         credentialsGeneration: credentials.credentialsGeneration,
-        anthropicBaseUrl,
+        anthropicBaseUrl: resolved.anthropicBaseUrl,
         cwd,
         executable: electronPath,
         executableArgs: ['--no-warnings'],
-        env: {
-          ...getCleanUserEnv(),
-          ELECTRON_RUN_AS_NODE: '1',
-          ELECTRON_NO_ATTACH_CONSOLE: '1',
-          ...(delegatedRoutingHeader
-            ? { ANTHROPIC_CUSTOM_HEADERS: delegatedRoutingHeader }
-            : { ANTHROPIC_API_KEY: anthropicApiKey }),
-          ANTHROPIC_BASE_URL: anthropicBaseUrl,
-          NO_PROXY: 'localhost,127.0.0.1',
-          no_proxy: 'localhost,127.0.0.1',
-          // Disable unnecessary API requests
-          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
-          DISABLE_TELEMETRY: '1',
-          DISABLE_COST_WARNINGS: '1'
-        },
+        env,
         permissionMode: 'bypassPermissions',
         abortController,
         mcpServers: enabledMcpServers,

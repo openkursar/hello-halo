@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { resolveLocalizedText, getModelDisplayName, type AISource, type AISourcesConfig } from '../../../src/shared/types/ai-sources'
+import { resolveLocalizedText, getModelDisplayName, getSourceAccountName, type AISource, type AISourcesConfig } from '../../../src/shared/types/ai-sources'
 
 describe('strict model selection display', () => {
   const source = (id: string): AISource => ({
@@ -23,6 +23,22 @@ describe('strict model selection display', () => {
     expect(getModelDisplayName(config, 'removed', 'old-model')).toBe('')
     expect(getModelDisplayName({ version: 2, currentId: null, sources: [] }, 'a')).toBe('')
     expect(config.currentId).toBe('b')
+  })
+})
+
+describe('getSourceAccountName', () => {
+  const source = (authType: AISource['authType']): AISource => ({
+    id: authType, name: authType, provider: 'p', authType, apiUrl: '', model: 'm',
+    availableModels: [], createdAt: '', updatedAt: '', user: { name: 'me@example.com' },
+  })
+
+  it('names the signed-in account of sources that sign in, the Claude Code CLI included', () => {
+    expect(getSourceAccountName(source('oauth'))).toBe('me@example.com')
+    expect(getSourceAccountName(source('delegated'))).toBe('me@example.com')
+  })
+
+  it('names none for an API key source', () => {
+    expect(getSourceAccountName(source('api-key'))).toBeUndefined()
   })
 })
 

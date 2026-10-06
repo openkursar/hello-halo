@@ -19,6 +19,7 @@ import {
   getModelDisplayName,
   getCurrentSource,
   getSourceById,
+  getSourceAccountName,
   AVAILABLE_MODELS,
   type AISourcesConfig,
   type AISource,
@@ -190,7 +191,7 @@ function ModelList({ onDone }: { onDone: () => void }) {
         const models = getModelsForSource(source)
         const displayName = getSourceDisplayName(source)
 
-        const userName = source.authType === 'oauth' ? source.user?.name : undefined
+        const userName = getSourceAccountName(source)
 
         return (
           <div key={source.id} className="px-1.5 pb-1.5">
