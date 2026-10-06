@@ -23,6 +23,7 @@ vi.mock('../../../../src/main/services/agent', async () => {
 })
 
 import { imErrorReply } from '../../../../src/main/apps/runtime/im-error-reply'
+import { WorkingDirectoryChangedError, WorkingDirectoryUnavailableError } from '../../../../src/main/services/agent/working-dir'
 import { AppChatTurnInterrupted, withTurnEndingNote } from '../../../../src/main/apps/runtime/turn-ending'
 import { explainEngineError } from '../../../../src/main/services/agent'
 
@@ -40,6 +41,18 @@ describe('what an IM chat is told when its turn failed', () => {
       expect(told).toContain('安全软件拦截了本机连接')
       expect(told).toContain('请主人在 Halo 里查看')
       expect(told).not.toContain('/Applications')
+      expect(told).not.toContain('Error')
+    }
+  })
+
+  it('a working folder that is missing, or changed while the message was prepared: what to do, never the folder', () => {
+    const missing = imErrorReply(new WorkingDirectoryUnavailableError('/Users/lin/Private Projects/halo', 'space-1'))
+    const changed = imErrorReply(new WorkingDirectoryChangedError())
+
+    expect(missing).toBe('⚠️ 这个数字人的工作目录暂时不可用，请主人在 Halo 里处理。')
+    expect(changed).toBe('⚠️ 这个数字人的工作目录刚刚更换，请再发一次。')
+    for (const told of [missing, changed]) {
+      expect(told).not.toContain('/Users')
       expect(told).not.toContain('Error')
     }
   })

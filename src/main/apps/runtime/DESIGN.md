@@ -588,9 +588,12 @@ Consequences that matter:
 - **A failed turn is told without this computer** (`im-error-reply.ts`). Every
   IM path that runs a turn — the person's message (`dispatch-inbound`), a
   reminder (`reminders/delivery`) — tells the chat of a failure with
-  `imErrorReply`: the cut-off note for `AppChatTurnInterrupted`; for a local
-  connection security software refused (`isRefusedLocalConnection`), that it
-  happened and that the owner sees to it in Halo, without the program to allow;
+  `imErrorReply`: the cut-off note for `AppChatTurnInterrupted`; for a working
+  folder that is missing or was changed while the message was prepared (by the
+  error's name, services/agent `working-dir`), what can be done — the owner
+  sees to it in Halo, or the message is sent again — never the folder; for a
+  local connection security software refused (`isRefusedLocalConnection`), that
+  it happened and that the owner sees to it in Halo, without the program to allow;
   otherwise `⚠️ Error: …` with this computer's paths replaced by `<local path>`
   (POSIX roots, drives, network shares, file URLs — never a web address's path),
   then cut to 200 characters. An IM group may hold people from outside.
