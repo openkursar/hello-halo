@@ -28,6 +28,7 @@ import { installVerb, installedVerb } from './install-verb'
 import { StoreDocumentation } from './StoreDocumentation'
 import { SkillFileTree } from './SkillFileTree'
 import { deriveSkillCommand } from '../../utils/skill-command'
+import { resolveStoreTargetSpace } from '../../utils/store-target-space'
 import type { AppType } from '../../../shared/apps/spec-types'
 
 function formatVersionDate(iso: string): string {
@@ -191,15 +192,7 @@ export function StoreDetail() {
   const handleUse = useCallback(() => {
     if (!installedApp || !entry) return
     if (entry.type === 'skill') {
-      const target =
-        (installedApp.spaceId
-          ? (spaces.find(s => s.id === installedApp.spaceId) ??
-             (installedApp.spaceId === haloSpace?.id ? haloSpace : null))
-          : null) ??
-        currentSpace ??
-        spaces[0] ??
-        haloSpace ??
-        null
+      const target = resolveStoreTargetSpace(installedApp.spaceId, { spaces, currentSpace, haloSpace })
       if (target) {
         setCurrentSpace(target)
         void refreshCurrentSpace()
