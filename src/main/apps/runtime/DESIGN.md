@@ -1099,6 +1099,19 @@ the user's language with the way to Tools & Resources. A dependency the owner
 switched off for this person is a choice, not a gap; built-in capability ids are
 not installable connections. Chat keeps inheriting its workspace's connections.
 
+### 2.25 A Run Shows the Tokens It Used
+
+`tokens_used` on a run is each turn's `input + output`, without cache reads and
+writes — on cached runs a fraction of what the model processed, which is what a
+usage quota usually counts. `processStream` therefore also keeps each turn's
+four parts (from the same `cumulative_usage ?? usage` frame), `executeRun` sums
+them over auto-continue cycles into `AppRunResult.tokenUsage`, and at the end of
+the execution the runtime adds them to the run's latest entry as
+`content.tokenUsage` (§2.22's moment). The card shows the total beside the
+duration, View process the run's total over its entries; the split is on hover.
+`tokens_used` keeps its meaning for analytics and memory summaries. No history
+totals, trends or cost are shown.
+
 ---
 
 ## 3. SQLite Schema

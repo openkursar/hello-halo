@@ -45,7 +45,11 @@ vi.mock('react', async original => ({
 }))
 vi.mock('../../../src/renderer/api', () => ({ api: env.api }))
 vi.mock('../../../src/renderer/stores/apps.store', () => ({ useAppsStore: (select: (state: unknown) => unknown) => select(env.apps) }))
-vi.mock('../../../src/renderer/i18n', () => ({ useTranslation: () => ({ t: (text: string) => text }) }))
+vi.mock('../../../src/renderer/i18n', () => ({
+  useTranslation: () => ({
+    t: (text: string, values?: Record<string, unknown>) => text.replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(values?.[name] ?? '')),
+  }),
+}))
 vi.mock('../../../src/renderer/components/chat/MessageList', () => ({ MessageList: function MessageList() { return null } }))
 vi.mock('../../../src/renderer/components/chat/ScrollToBottomButton', () => ({ ScrollToBottomButton: () => null }))
 vi.mock('../../../src/renderer/components/chat/InputArea', () => ({ InputArea: function InputArea() { return null } }))
@@ -92,6 +96,21 @@ describe('SessionDetailView', () => {
     expect(text(tree)).toContain('The detailed process of this run was cleared under the retention rule. Its result stays on the timeline.')
     expect(text(tree)).not.toContain('Continue')
     expect(named(tree, 'InputArea')).toBe(false)
+  })
+
+  it('shows how many tokens the run used, over every execution of it', async () => {
+    env.apps.activityEntries = {
+      'app-1': [
+        { id: 'e1', runId: 'run-1', type: 'milestone', content: { summary: 'Half way', tokenUsage: { inputTokens: 100, outputTokens: 50, cacheReadTokens: 3000, cacheCreationTokens: 350 } } },
+        { id: 'e2', runId: 'run-1', type: 'run_complete', content: { summary: 'Done', tokenUsage: { inputTokens: 100, outputTokens: 100, cacheReadTokens: 800, cacheCreationTokens: 0 } } },
+        { id: 'e3', runId: 'run-2', type: 'run_complete', content: { summary: 'Other', tokenUsage: { inputTokens: 9999, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 } } },
+      ],
+    }
+    env.api.appGetSession.mockResolvedValue({ success: true, data: [{ id: 'm1', role: 'user', content: 'go', timestamp: '' }] })
+
+    const tree = await openProcess()
+
+    expect(text(tree)).toContain('Tokens used by this run: 4.5K')
   })
 
   it('still shows a kept run’s process with its reply box', async () => {

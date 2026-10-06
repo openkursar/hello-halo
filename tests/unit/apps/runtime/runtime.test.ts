@@ -2654,6 +2654,27 @@ describe('AppRuntimeService', () => {
     })
   })
 
+  describe('token usage of a run', () => {
+    it('shows what the model processed on the run’s latest entry', async () => {
+      const appId = randomUUID()
+      mockAppManager.getApp.mockReturnValue({ id: appId, status: 'active', spec: createTestSpec(), userConfig: {}, userOverrides: {}, spaceId: 'space-001' })
+      dbManager.getAppDatabase().prepare(`
+        INSERT INTO installed_apps (id, spec_id, space_id, spec_json, status, user_config_json, user_overrides_json, permissions_json, installed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(appId, 'test-app', 'space-001', JSON.stringify(createTestSpec()), 'active', '{}', '{}', '{"granted":[],"denied":[]}', Date.now())
+      const tokenUsage = { inputTokens: 120, outputTokens: 80, cacheReadTokens: 9000, cacheCreationTokens: 300 }
+      vi.mocked(executeRun).mockImplementationOnce(async () => {
+        store.insertRun({ runId: 'run-usage', appId, sessionKey: 'sk-usage', status: 'running', triggerType: 'manual', startedAt: 1 })
+        return { appId, runId: 'run-usage', sessionKey: 'sk-usage', outcome: 'useful', startedAt: 1, finishedAt: 2, durationMs: 1, tokensUsed: 200, tokenUsage }
+      })
+
+      await createService().triggerManually(appId)
+
+      const [latest] = store.getEntriesForRun('run-usage')
+      expect(latest.content.tokenUsage).toEqual(tokenUsage)
+    })
+  })
+
   describe('pausing a person after repeated failures', () => {
     it('names the latest failure in the note it leaves', async () => {
       const appId = randomUUID()

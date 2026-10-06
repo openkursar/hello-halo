@@ -254,6 +254,33 @@ export interface ActivityEntryContent {
   skippedSchedules?: number
   /** Set when the run did not start because connections it declares are unusable. */
   missingConnections?: MissingConnection[]
+  /** Tokens the model processed for the run this entry closed, cache included. */
+  tokenUsage?: RunTokenUsage
+}
+
+/** Tokens the model processed for a run, summed over its turns. */
+export interface RunTokenUsage {
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheCreationTokens: number
+}
+
+/** Everything the model processed: what a usage quota usually counts. */
+export function totalRunTokens(usage: RunTokenUsage): number {
+  return usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheCreationTokens
+}
+
+/** Two usages added together; undefined when neither exists. */
+export function addRunTokenUsage(a: RunTokenUsage | undefined, b: RunTokenUsage | undefined): RunTokenUsage | undefined {
+  if (!a) return b
+  if (!b) return a
+  return {
+    inputTokens: a.inputTokens + b.inputTokens,
+    outputTokens: a.outputTokens + b.outputTokens,
+    cacheReadTokens: a.cacheReadTokens + b.cacheReadTokens,
+    cacheCreationTokens: a.cacheCreationTokens + b.cacheCreationTokens,
+  }
 }
 
 /** A connection a digital human declares that a run could not use. */

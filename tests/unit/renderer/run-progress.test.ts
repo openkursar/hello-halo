@@ -114,6 +114,15 @@ describe('ActivityEntryCard', () => {
     expect(render(entry(1))).toContain('1 scheduled run came due during this run and was skipped.')
   })
 
+  it('shows what the model processed for the run beside its duration, with the split on hover', () => {
+    const value = entry()
+    value.content.tokenUsage = { inputTokens: 1_200, outputTokens: 800, cacheReadTokens: 42_000, cacheCreationTokens: 2_400 }
+    const html = render(value)
+
+    expect(html).toContain('46K tokens')
+    expect(html).toContain('title="Input: 1.2K\nOutput: 800\nCache read: 42K\nCache write: 2.4K"')
+  })
+
   it('says nothing about skipped runs when none were', () => {
     expect(render(entry())).not.toContain('scheduled run')
   })

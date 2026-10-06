@@ -51,7 +51,7 @@ import { executeRun } from './execute'
 import { injectIntoActiveRun, isRunActive } from './active-runs'
 import { automaticEnabled, blockedReason, deriveRuntimeStatus } from './app-state'
 import { getActiveTeamRuntime } from './team'
-import { getEscalationQuestions, formatEscalationAnswer } from '../../../shared/apps/app-types'
+import { getEscalationQuestions, formatEscalationAnswer, totalRunTokens, type RunTokenUsage } from '../../../shared/apps/app-types'
 import type { ContentReference } from '../../../shared/types/content-reference'
 import { broadcastToAll } from '../../http/websocket'
 import { destroyChatBrowserContextsForApp } from './app-chat-browser'
@@ -419,6 +419,14 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     console.log(`[Runtime][${runId.slice(0, 8)}] ${skipped} scheduled time(s) came due during the run and were skipped`)
   }
 
+  /** Show what the model processed for this execution on the run's latest entry. */
+  function noteTokenUsage(runId: string, usage: RunTokenUsage | undefined): void {
+    if (!usage || totalRunTokens(usage) === 0) return
+    const latest = store.getEntriesForRun(runId)[0]
+    const updated = latest ? store.addTokenUsage(latest.id, usage) : null
+    if (updated) publishEntry(updated)
+  }
+
   // ── Helper: Execute with concurrency control ────────
   async function executeWithConcurrency(
     app: InstalledApp,
@@ -604,6 +612,12 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         noteSkippedSchedules(app.id, result.runId, busySince)
       } catch (skipErr) {
         console.error(`[Runtime][${runTag}] Failed to note skipped scheduled times:`, skipErr)
+      }
+
+      try {
+        noteTokenUsage(result.runId, result.tokenUsage)
+      } catch (usageErr) {
+        console.error(`[Runtime][${runTag}] Failed to note token usage:`, usageErr)
       }
 
       try {

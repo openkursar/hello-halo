@@ -75,6 +75,8 @@ export interface AppRunResult {
   finishedAt: number
   durationMs: number
   tokensUsed?: number
+  /** What the model processed, cache included; `tokensUsed` counts input and output only. */
+  tokenUsage?: import('../../../shared/apps/app-types').RunTokenUsage
   errorMessage?: string
   /** Final text output from the AI (used for fallback activity entry) */
   finalText?: string
