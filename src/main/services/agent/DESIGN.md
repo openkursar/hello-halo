@@ -9,7 +9,7 @@
 | Responsibility | Primary file(s) | Notes |
 |---|---|---|
 | Session lifecycle (create / reuse / destroy / batch-invalidate on config change) | `session-manager.ts` | Largest file. V2 Session model. Registers callback on `config.service.ts` to auto-clean when API config changes. |
-| SDK stream → Thought[] translation | `stream-processor.ts` | Second largest. Incremental push, partial tool calls, interruption recovery. |
+| SDK stream → Thought[] translation | `stream-processor.ts`, `delta-coalescer.ts` | Second largest. Incremental push, partial tool calls, interruption recovery. Token deltas are published through the coalescer (see §3). |
 | SDK invocation & configuration | `sdk-config.ts`, `resolved-sdk.ts`, `codex/`, `dsh/` | Provider selection, model resolution, SDK option assembly through two named entries (`buildUserSessionSdkOptions`, `buildInternalTaskSdkOptions`; see §11). Alternate SDK engines are loaded only through `resolved-sdk.ts`; engine-specific translation is isolated under `codex/` and `dsh/`. |
 | User AI settings | `user-agent-settings.ts` | The one reader of the user's global AI settings for a session (`maxTurns`, `disabledTools`, `promptProfile`, digital-humans switch). Entries never pass them. See §11. |
 | Thinking depth → engine options | `reasoning-effort.ts` | Combines a picked level (conversation / digital human / API send), the per-request thinking flag and the per-model effort level into `effort` / `maxThinkingTokens` / Codex `model_reasoning_effort` / the router's picked level. Every SDK call site goes through `applyReasoningEffort`. See §9. |
@@ -105,6 +105,7 @@ SDK stream event
 
 Key invariants:
 - Thoughts are **append-only** during a turn. A turn ends when SDK emits `result` or `error`.
+- Streamed deltas (reply text, thinking, tool-input JSON) are merged per target and published at most once per `DELTA_INTERVAL_MS` (`delta-coalescer.ts`), whatever the provider's token rate. Ordering is kept by flushing: any frame other than a `content_block_delta` flushes before it is handled, so block starts/stops, tool calls, results and errors never overtake a delta streamed before them; the turn's end flushes before `agent:complete` / `agent:error`; a stop flushes at once; a retired stream drops what is pending instead.
 - Tool calls go through three states: `pending` → `running` → `completed`/`failed`. Each state transition is a separate thought event.
 - `requiresApproval: true` tool calls **block** the stream until permission-handler resolves.
 

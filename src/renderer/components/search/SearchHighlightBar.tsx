@@ -17,9 +17,15 @@ import { ChevronUp, ChevronDown, Search, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { conversationResults, useSearchStore, type ResultStep } from '@/stores/search.store'
 import { useChatStore, selectActiveConversationId } from '@/stores/chat.store'
+import { useTranslation } from '@/i18n'
 import { highlightBarCommand } from './highlight-bar-keys'
 
+const isMac = typeof navigator !== 'undefined' &&
+  navigator.platform.toUpperCase().indexOf('MAC') >= 0
+const EDIT_SHORTCUT = isMac ? '⌘K' : 'Ctrl+K'
+
 export function SearchHighlightBar() {
+  const { t } = useTranslation()
   const {
     isHighlightBarVisible,
     highlightQuery,
@@ -53,7 +59,6 @@ export function SearchHighlightBar() {
 
     // Set new timeout
     debounceTimerRef.current = setTimeout(() => {
-      console.log('[SearchHighlightBar] Executing debounced navigation')
       pendingNavigationRef.current?.()
       pendingNavigationRef.current = null
       debounceTimerRef.current = null
@@ -86,8 +91,6 @@ export function SearchHighlightBar() {
 
   useEffect(() => {
     if (!isHighlightBarVisible) return
-    const isMac = typeof navigator !== 'undefined' &&
-      navigator.platform.toUpperCase().indexOf('MAC') >= 0
 
     const handleKeyDown = (e: KeyboardEvent) => {
       const command = highlightBarCommand(e, isMac)
@@ -147,8 +150,8 @@ export function SearchHighlightBar() {
                   ? 'hover:bg-muted text-muted-foreground hover:text-foreground cursor-pointer'
                   : 'text-muted-foreground/40 cursor-not-allowed'
               )}
-              title="Earlier result (↑)"
-              aria-label="Earlier result"
+              title={t('Earlier result (↑)')}
+              aria-label={t('Earlier result')}
             >
               <ChevronUp size={16} />
             </button>
@@ -162,8 +165,8 @@ export function SearchHighlightBar() {
                   ? 'hover:bg-muted text-muted-foreground hover:text-foreground cursor-pointer'
                   : 'text-muted-foreground/40 cursor-not-allowed'
               )}
-              title="More recent result (↓)"
-              aria-label="More recent result"
+              title={t('More recent result (↓)')}
+              aria-label={t('More recent result')}
             >
               <ChevronDown size={16} />
             </button>
@@ -177,8 +180,8 @@ export function SearchHighlightBar() {
             <button
               onClick={handleEditSearch}
               className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-              title="Edit search (Ctrl+K)"
-              aria-label="Edit search"
+              title={t('Edit search ({{shortcut}})', { shortcut: EDIT_SHORTCUT })}
+              aria-label={t('Edit search')}
             >
               <Search size={16} />
             </button>
@@ -186,8 +189,8 @@ export function SearchHighlightBar() {
             <button
               onClick={handleClose}
               className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-              title="Close (Esc)"
-              aria-label="Close search"
+              title={t('Close (Esc)')}
+              aria-label={t('Close search')}
             >
               <X size={16} />
             </button>
@@ -198,7 +201,7 @@ export function SearchHighlightBar() {
       {/* Hint text with background to prevent overlap */}
       <div className="mt-2 text-xs text-muted-foreground text-right">
         <span className="bg-background/95 backdrop-blur-sm px-2 py-1 rounded border border-border/50">
-          ↑↓ Navigate · Ctrl+K Edit · Esc Close
+          {t('↑↓ Navigate · {{shortcut}} Edit · Esc Close', { shortcut: EDIT_SHORTCUT })}
         </span>
       </div>
     </div>
