@@ -21,6 +21,7 @@ import type { ImSessionRecord } from '../../../shared/types/im-channel'
 import { classifySessionSource, LOCAL_SESSION_CHANNEL } from '../../../shared/types/im-channel'
 import { truncateUtf16Safe } from './text-truncate'
 import { getPendingRelayStore } from './pending-relays'
+import { getConversationReminders } from './reminders'
 import { AtomicFileWriter } from './atomic-file-writer'
 
 // ============================================
@@ -380,9 +381,11 @@ export class ImSessionRegistry {
     const deleted = this.sessions.delete(key)
     if (deleted) {
       this.requestPersist(true)
-      // Cascade: undelivered relay context is keyed by session and must not
-      // outlive it, or a chat re-registered under the same id would inherit it.
+      // Cascade: undelivered relay context and reminders are keyed by session
+      // and must not outlive it, or a chat re-registered under the same id
+      // would inherit them.
       getPendingRelayStore()?.clearForChat(appId, channel, chatId)
+      getConversationReminders()?.removeForChat(appId, channel, chatId)
     }
     return deleted
   }
@@ -397,6 +400,7 @@ export class ImSessionRegistry {
       if (session.appId === appId) {
         this.sessions.delete(key)
         getPendingRelayStore()?.clearForChat(session.appId, session.channel, session.chatId)
+        getConversationReminders()?.removeForChat(session.appId, session.channel, session.chatId)
         count++
       }
     }
@@ -432,7 +436,7 @@ export class ImSessionRegistry {
     const survivors: { key: SessionKey; rec: ImSessionRecord }[] = []
     for (const entry of httpForApp) {
       if (!entry.rec.customName && now - entry.rec.lastActiveAt > HTTP_SESSION_TTL_MS) {
-        this.sessions.delete(entry.key)
+        this.evictHttpSession(entry.key, entry.rec)
         evicted++
       } else {
         survivors.push(entry)
@@ -446,7 +450,7 @@ export class ImSessionRegistry {
         .filter(e => !e.rec.customName)
         .sort((a, b) => a.rec.lastActiveAt - b.rec.lastActiveAt) // oldest first
       for (let i = 0; i < overflow && i < evictable.length; i++) {
-        this.sessions.delete(evictable[i].key)
+        this.evictHttpSession(evictable[i].key, evictable[i].rec)
         evicted++
       }
     }
@@ -457,6 +461,12 @@ export class ImSessionRegistry {
         `(cap=${MAX_HTTP_SESSIONS_PER_APP}, ttl=${HTTP_SESSION_TTL_MS}ms)`
       )
     }
+  }
+
+  /** An evicted session's reminders go with it, as they do on removal. */
+  private evictHttpSession(key: SessionKey, rec: ImSessionRecord): void {
+    this.sessions.delete(key)
+    getConversationReminders()?.removeForChat(rec.appId, rec.channel, rec.chatId)
   }
 
   // ── Persistence ──────────────────────────────────────

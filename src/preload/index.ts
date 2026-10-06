@@ -575,6 +575,8 @@ export interface HaloAPI extends BrowserHostBridge {
   appClearMemory: (appId: string) => Promise<IpcResponse<{ filesRemoved: number }>>
   appGetMemoryStatus: (appId: string) => Promise<IpcResponse<MemoryStatus>>
   appConsolidateMemory: (appId: string) => Promise<IpcResponse<{ started: boolean; reason?: string }>>
+  appListReminders: (appId: string) => Promise<IpcResponse<import('../shared/apps/conversation-reminders').ConversationReminderView[]>>
+  appCancelReminder: (input: { appId: string; reminderId: string }) => Promise<IpcResponse>
   appMoveSpace: (input: { appId: string; newSpaceId: string | null }) => Promise<IpcResponse>
 
   // App Chat

@@ -45,6 +45,7 @@ import { MemorySettingsPanel } from '../memory/MemorySettingsPanel'
 import { resolveMemorySettings, type MemoryStatus } from '../../../shared/types/memory'
 import { HttpTriggerCard } from '../common/HttpTriggerCard'
 import { SchedulePicker } from './SchedulePicker'
+import { AppRemindersSection } from './AppRemindersSection'
 import {
   extractScheduleValue,
   applyScheduleValue,
@@ -828,6 +829,8 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart, onRestartAgen
         {/* External systems triggering this digital human over HTTP is a
             trigger like any other, so it lives in this group. */}
         <HttpTriggerCard kind="app" id={appId} />
+        {/* So are the reminders it set in its conversations. */}
+        <AppRemindersSection appId={appId} />
         </SettingsGroup>
       )}
 

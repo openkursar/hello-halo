@@ -51,7 +51,7 @@ import type {
 import { resolveAppChatTarget, resolveUserInjectTarget, type AppChatTarget } from '../../controllers/app-chat-target.controller'
 import type { EscalationAnswerPayload } from '../../../shared/apps/app-types'
 import { parseTurnReferences, toAppChatRequest } from '../../controllers/chat-turn-input'
-import { getStudioSummary, listPeopleDirectory, getAppCapabilityInventory, getAppSpaceChangePreview, moveAppDefaultSpace, readAppRunMessages, RunProcessClearedError, getDigitalHumanMemoryStatus, consolidateDigitalHumanMemoryNow } from '../../apps/runtime'
+import { getStudioSummary, listPeopleDirectory, getAppCapabilityInventory, getAppSpaceChangePreview, moveAppDefaultSpace, readAppRunMessages, RunProcessClearedError, getDigitalHumanMemoryStatus, consolidateDigitalHumanMemoryNow, listAppReminders, cancelAppReminder } from '../../apps/runtime'
 
 async function respondOperation(res: Response, name: string, operation: () => unknown | Promise<unknown>): Promise<void> {
   try {
@@ -478,6 +478,26 @@ export function registerAppsRoutes(app: Express): void {
       const result = consolidateDigitalHumanMemoryNow(req.params.appId)
       console.log('[HTTP] POST /api/apps/%s/memory/consolidate: started=%s', req.params.appId, result.started)
       res.json({ success: true, data: result })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/apps/:appId/reminders — reminders the digital human set in its conversations
+  app.get('/api/apps/:appId/reminders', async (req: Request, res: Response) => {
+    try {
+      res.json({ success: true, data: listAppReminders(req.params.appId) })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // DELETE /api/apps/:appId/reminders/:reminderId — cancel one
+  app.delete('/api/apps/:appId/reminders/:reminderId', async (req: Request, res: Response) => {
+    try {
+      const cancelled = cancelAppReminder(req.params.appId, req.params.reminderId)
+      console.log('[HTTP] DELETE /api/apps/%s/reminders/%s: cancelled=%s', req.params.appId, req.params.reminderId, cancelled)
+      res.json(cancelled ? { success: true } : { success: false, error: 'Reminder not found' })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }

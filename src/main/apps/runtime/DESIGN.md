@@ -1156,6 +1156,47 @@ synced, then at most daily, each request bounded to 30 s; only a machine that
 has never had it waits for the first download (bounded) at a due time. Team
 periodic checks do not take the option.
 
+### 2.27 A Reminder Set in a Conversation Returns to It
+
+"Remind me in an hour" used to have one tool to land on — creating a resident
+digital human. Every non-team chat turn (default, local, IM and HTTP sessions)
+now mounts `halo-reminders`, bound to its conversation: `set_reminder` (once by
+`after_minutes` / local `at`, repeating by `every` / `cron`), and
+`list_reminders` / `cancel_reminder` scoped to that conversation, so a group
+never sees the owner's private reminders. `create_automation_app` says not to
+create a digital human for a reminder.
+
+- **The scheduler job is the reminder.** Kind `app_reminder`; its metadata
+  carries the app, conversation, text and who asked. No table of its own: the
+  scheduler's restart recovery brings reminders back and a one-off is disabled
+  once due. At the next start the sweep drops fired one-offs and reminders
+  whose digital human or conversation is gone (the session registry is asked;
+  the default chat always exists) — never inside their own handler, since the
+  run log follows it. Bounds: 20 per conversation, 100 per digital human,
+  repeats at least 5 minutes apart, at most a year ahead.
+- **Delivery** (`reminders/delivery.ts`) starts a turn of the same
+  conversation once it is free — an IM turn takes the chat's live reply
+  stream as it begins, so a reminder never writes into a person's reply. A
+  reminder waits at most once: coming due again meanwhile is folded into that
+  one turn and counted in its text, so a repeating reminder never piles up
+  behind a long turn; right before starting, it is checked to still be set,
+  and its conversation resolved again. The text says it is the digital
+  human's own reminder, who asked, when it was set and due, and whether it is
+  late. An IM chat gets the framing and file sending dispatch-inbound gives it,
+  the asker's `<msg-sender>` in a group (and as the subject of any push), the
+  asker's standing re-resolved under the channel's current settings
+  (`im-sender-standing.ts`), and the reply pushed to the chat. A one-off still
+  waiting when Halo quits is not delivered: the scheduler disabled it when it
+  came due.
+- **Guests do not get it.** The server is not in the capability toggle table,
+  and the guest filter keeps no server an owner was never offered a switch for:
+  a guest may only query, and every reminder is a future turn someone pays for.
+- **It belongs to the conversation**: it goes with a removed or evicted chat
+  (the session registry cascades, as for pending relays) or an uninstalled digital human,
+  survives `/clear`, and is not stopped by "Pause automatic tasks" — the paused
+  digital human still answers its chats, and a reminder it promised must not
+  fall silent. Its page lists every reminder (Trigger group) with a cancel.
+
 ---
 
 ## 3. SQLite Schema
@@ -1235,6 +1276,12 @@ src/main/apps/runtime/
   config-defaults.ts         -- Merge App config_schema defaults into userConfig
   dispatch-inbound.ts        -- Route IM inbound messages into app-chat
   im-permission-registry.ts  -- The IM chat's last sender and their standing, for a turn with no sender of its own (a message's own turn carries its sender in `AppChatRequest.imPermission`)
+  im-sender-standing.ts      -- resolveImPermission(): owner or guest under an instance's current settings; shared by inbound messages and reminders
+  reminders/                 -- Reminders a digital human sets in a conversation (§2.27)
+    index.ts                 -- the scheduler-backed service (set / list / cancel / sweep / cascades) and the turn text
+    tool.ts                  -- halo-reminders MCP server, bound to one conversation
+    delivery.ts              -- a due reminder as a turn of its conversation (IM framing, standing, reply push)
+    view.ts                  -- the page's list and cancel
   im-session-registry.ts     -- Persistent IM session list (per app + channel + chatId)
   pending-relays.ts          -- Cross-session relay spool + <relay-from> rendering (§2.14)
   progress-formatter.ts      -- Format streaming progress events for IM transports

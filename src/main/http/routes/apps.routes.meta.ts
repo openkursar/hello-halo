@@ -224,6 +224,19 @@ export const MODULE: RouteModuleMeta = {
       impact: 'reversible',
       notes: 'Returns once started; runs in the background with the digital human\'s model. Keeps a restorable snapshot.',
     },
+    'GET /api/apps/:appId/reminders': {
+      expose: 'ai',
+      group: 'digital-human',
+      summary: 'List the reminders a digital human set in its conversations',
+      returns: '{success:true,data:[{id,conversationId,conversation:{kind,name?},message,schedule,nextAt,createdAt,setBy?}]}',
+    },
+    'DELETE /api/apps/:appId/reminders/:reminderId': {
+      expose: 'ai',
+      group: 'digital-human',
+      summary: 'Cancel a reminder a digital human set in one of its conversations',
+      returns: '{success:true} | {success:false,error:"Reminder not found"}',
+      impact: 'irreversible',
+    },
     'POST /api/apps/:appId/move-space': {
       expose: 'ai',
       group: ['digital-human', 'workspace'],

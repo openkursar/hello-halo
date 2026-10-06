@@ -202,6 +202,9 @@ vi.mock('../../../../src/main/services/official-docs-mcp', () => ({
 vi.mock('../../../../src/main/apps/runtime/notify-tool', () => ({
   createNotifyToolServer: () => ({ _isMcpServer: true, name: 'halo-notify' }),
 }))
+vi.mock('../../../../src/main/apps/runtime/reminders/tool', () => ({
+  createRemindersMcpServer: () => ({ _isMcpServer: true, name: 'halo-reminders' }),
+}))
 vi.mock('../../../../src/main/apps/runtime/person-context-tool', () => ({
   createPersonContextMcpServer: () => ({ _isMcpServer: true, name: 'halo-person-context' }),
   personContextPrompt: () => 'person-context',

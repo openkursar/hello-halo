@@ -87,6 +87,8 @@ POST   /api/apps/<appId>/move-space                                [ai]       di
 POST   /api/apps/<appId>/clear-memory                              [ai]       digital-human           Delete all of a digital human's memory files
 GET    /api/apps/<appId>/memory                                    [ai]       digital-human           Read the state of a digital human's memory
 POST   /api/apps/<appId>/memory/consolidate                        [ai]       digital-human           Consolidate a digital human's memory now
+GET    /api/apps/<appId>/reminders                                 [ai]       digital-human           List the reminders a digital human set in its conversations
+DELETE /api/apps/<appId>/reminders/<reminderId>                    [ai]       digital-human           Cancel a reminder a digital human set in one of its conversations
 DELETE /api/apps/<appId>/permanent                                 [wrapped]  digital-human           Permanently delete a digital human and all its data
 POST   /api/apps/<appId>/pause                                     [ai]       digital-human           Pause a digital human (stops scheduling)
 POST   /api/apps/<appId>/resume                                    [ai]       digital-human           Resume a paused digital human

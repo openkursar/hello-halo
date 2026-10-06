@@ -84,6 +84,8 @@ import {
   deleteNativeChatSession,
   getDigitalHumanMemoryStatus,
   consolidateDigitalHumanMemoryNow,
+  listAppReminders,
+  cancelAppReminder,
 } from '../apps/runtime'
 import type { AppSpec } from '../apps/spec'
 import type { AppListFilter, UninstallOptions, UpgradeStrategy } from '../apps/manager'
@@ -1173,6 +1175,29 @@ export function registerAppHandlers(): void {
       } catch (error: unknown) {
         const err = error as Error
         console.error('[AppIPC] app:memory-consolidate error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // ── app:reminders-list / app:reminder-cancel ───────────────────────────
+    appListReminders: async (appId: string) => {
+      try {
+        return { success: true, data: listAppReminders(appId) }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:reminders-list error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    appCancelReminder: async (input: { appId: string; reminderId: string }) => {
+      try {
+        return cancelAppReminder(input.appId, input.reminderId)
+          ? { success: true }
+          : { success: false, error: 'Reminder not found' }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:reminder-cancel error:', err.message)
         return { success: false, error: err.message }
       }
     },

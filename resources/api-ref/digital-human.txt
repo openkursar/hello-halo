@@ -36,6 +36,8 @@ operations on this page:
   POST   /api/apps/<appId>/permissions/grant                         Grant a named permission to a digital human
   POST   /api/apps/<appId>/permissions/revoke                        Revoke a named permission from a digital human
   POST   /api/apps/<appId>/reinstall                                 Reinstall a previously soft-deleted (uninstalled) digital human
+  GET    /api/apps/<appId>/reminders                                 List the reminders a digital human set in its conversations
+  DELETE /api/apps/<appId>/reminders/<reminderId>                    Cancel a reminder a digital human set in one of its conversations   !! destructive
   POST   /api/apps/<appId>/resume                                    Resume a paused digital human
   POST   /api/apps/<appId>/runs/<runId>/continue                     Resume a run that stopped prematurely on an error   !! destructive
   POST   /api/apps/<appId>/runs/<runId>/inject                       Inject a text message into a currently active run   !! destructive
@@ -255,6 +257,15 @@ POST   /api/apps/<appId>/reinstall                                 Reinstall a p
      curl -sX POST "$HALO_API_URL/api/apps/<appId>/reinstall" -H "Authorization: Bearer $HALO_API_TOKEN"
      # out: {success:true,data:{activationWarning?:string}} — activationWarning is set (non-fatal) if restarting it failed
      # err: 404-equivalent: manager.reinstall throws if appId was never installed or is not currently uninstalled
+
+GET    /api/apps/<appId>/reminders                                 List the reminders a digital human set in its conversations
+     curl -s "$HALO_API_URL/api/apps/<appId>/reminders" -H "Authorization: Bearer $HALO_API_TOKEN" | head -c 4000
+     # out: {success:true,data:[{id,conversationId,conversation:{kind,name?},message,schedule,nextAt,createdAt,setBy?}]}
+
+DELETE /api/apps/<appId>/reminders/<reminderId>                    Cancel a reminder a digital human set in one of its conversations
+     !! DESTRUCTIVE: cannot be undone. Confirm with the user in plain language before running this.
+     curl -sX DELETE "$HALO_API_URL/api/apps/<appId>/reminders/<reminderId>" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true} | {success:false,error:"Reminder not found"}
 
 POST   /api/apps/<appId>/resume                                    Resume a paused digital human
      # note: reversible — can be undone or corrected afterward.

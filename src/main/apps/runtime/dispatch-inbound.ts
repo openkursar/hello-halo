@@ -39,6 +39,7 @@ import { getActiveImChannelManager } from './im-channels'
 import { sendToRenderer } from '../../foundation/window.service'
 import { broadcastToAll } from '../../http/websocket'
 import { setImPermissionContext, clearImPermissionContext, type ImPermissionContext } from './im-permission-registry'
+import { resolveImPermission } from './im-sender-standing'
 import { setImStreamHandle } from './im-stream-registry'
 import { analytics } from '../../services/analytics/analytics.service'
 import { AnalyticsEvents } from '../../services/analytics/types'
@@ -869,25 +870,11 @@ export async function dispatchInboundMessage(
   // Resolve the sender's standing. It travels with this message to app-chat,
   // which holds the turn to it; the registry keeps it as the chat's last sender
   // for turns that have none of their own (a team-fronted chat woken by a
-  // teammate).
-  //
-  // Three cases:
-  //   permissionEnabled=false            → everyone is owner (no restrictions, personal use default)
-  //   permissionEnabled=true, owners=[]  → everyone is guest, deny-all (no one has write access)
-  //   permissionEnabled=true, owners=[…] → only listed IDs are owners; others are guests
-  //
-  // A team-fronted chat is held to the same rules, on the member's team session.
-  const permissionEnabled = instanceCfg?.permissionEnabled ?? false
-  const owners = permissionEnabled ? instanceCfg?.owners : undefined
-  const hasOwnerRestriction = Array.isArray(owners) && owners.length > 0
-  const isOwner = !permissionEnabled || (hasOwnerRestriction && owners!.includes(msg.from))
-  const imPermission: ImPermissionContext = {
-    senderId: msg.from,
-    senderName,
-    isOwner,
-    guestPolicy: permissionEnabled ? instanceCfg?.guestPolicy : undefined,
-    ownerIds: hasOwnerRestriction ? owners! : undefined,
-  }
+  // teammate). A team-fronted chat is held to the same rules, on the member's
+  // team session.
+  const imPermission: ImPermissionContext = resolveImPermission(instanceCfg, msg.from, senderName)
+  const { isOwner } = imPermission
+  const hasOwnerRestriction = imPermission.ownerIds !== undefined
   setImPermissionContext(conversationId, imPermission)
 
   // Register the active round's streaming handle ONLY on the start-of-round

@@ -249,6 +249,9 @@ vi.mock('../../../../src/main/services/space.service', async () => {
 vi.mock('../../../../src/main/apps/runtime/notify-tool', () => ({
   createNotifyToolServer: () => ({ _isMcpServer: true, name: 'halo-notify' }),
 }))
+vi.mock('../../../../src/main/apps/runtime/reminders/tool', () => ({
+  createRemindersMcpServer: () => ({ _isMcpServer: true, name: 'halo-reminders' }),
+}))
 vi.mock('../../../../src/main/apps/runtime/notify-availability', () => ({
   resolveNotifyAvailability: () => ({
     channelsConfigured: false, emailChannelConfigured: false, imContactsAvailable: false,
@@ -520,9 +523,10 @@ const ROWS = Object.keys(ROW_DRIVERS) as Row[]
 const EXPECTED_SERVERS: Record<Row, readonly string[]> = {
   'space chat': ['capabilities', 'halo-apps', 'halo-conversations', 'halo-docs', 'web-search'],
   'digital human chat (owner)': [
-    'ai-browser', 'halo-apps', 'halo-docs', 'halo-notify', 'halo-person-context', 'ocr', 'web-search',
+    'ai-browser', 'halo-apps', 'halo-docs', 'halo-notify', 'halo-person-context', 'halo-reminders', 'ocr', 'web-search',
   ],
-  // Only what the strict policy classes as safe survives the guest filter.
+  // Only what the strict policy classes as safe survives the guest filter
+  // (reminders included: a guest is offered no switch for them).
   'digital human chat (IM guest)': ['web-search'],
   'team member': [
     'ai-browser', 'halo-apps', 'halo-docs', 'halo-notify', 'halo-person-context', 'halo-report',
