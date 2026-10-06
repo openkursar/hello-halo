@@ -14,7 +14,7 @@
  * The SDK (unstable_v2_createSession) is mocked -- we don't spawn real CC processes.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { randomUUID } from 'crypto'
 import path from 'path'
 
@@ -221,6 +221,8 @@ import {
   RunExecutionError,
 } from '../../../../src/main/apps/runtime/errors'
 import { createAppRuntimeService } from '../../../../src/main/apps/runtime/service'
+import { openSessionWriter } from '../../../../src/main/apps/runtime/session-store'
+import { getSpace } from '../../../../src/main/services/space.service'
 import { broadcastToAll } from '../../../../src/main/http/websocket'
 import { sendToRenderer } from '../../../../src/main/foundation/window.service'
 import { executeRun } from '../../../../src/main/apps/runtime/execute'
@@ -2494,6 +2496,81 @@ describe('AppRuntimeService', () => {
       const trigger = vi.mocked(executeRun).mock.calls[0][0].trigger
       expect(trigger.type).toBe('continue_followup')
       expect(trigger.continue?.interactive).toBeFalsy()
+    })
+  })
+
+  // A run's first message is its trigger and the digital human's own memory.
+  // Pasting excerpts of every IM chat into it cost hundreds of thousands of
+  // tokens per run for a digital human with many chats.
+  describe('IM chats stay out of a run’s first message', () => {
+    const chatText = 'What were sales yesterday?'
+    let testAppId: string
+
+    beforeEach(() => {
+      vi.mocked(executeRun).mockClear()
+      testAppId = randomUUID()
+      const spacePath = path.join(globalThis.__HALO_TEST_DIR__, 'space-im')
+      vi.mocked(getSpace).mockReturnValue({ path: spacePath } as ReturnType<typeof getSpace>)
+      const chat = openSessionWriter(spacePath, testAppId, 'chat-wecom-bot-group-g1')
+      chat.writeTrigger(chatText)
+      chat.writeEvent({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Sales were up 3%.' }] } })
+      mockAppManager.getApp.mockReturnValue({
+        id: testAppId,
+        status: 'active',
+        spec: createTestSpec(),
+        userConfig: {},
+        userOverrides: {},
+        spaceId: 'space-im',
+      })
+    })
+
+    afterEach(() => {
+      vi.mocked(getSpace).mockReturnValue(null)
+    })
+
+    /**
+     * The runtime is handed this digital human's IM sessions the way it was
+     * once wired to read them; a run must still not carry them.
+     */
+    function serviceWithImSessions() {
+      const imSessionRegistry = {
+        getAllSessions: () => [{ appId: testAppId, channel: 'wecom-bot', chatType: 'group', chatId: 'g1', displayName: 'Sales group' }],
+      }
+      return createAppRuntimeService({
+        store,
+        appManager: mockAppManager,
+        scheduler: mockScheduler,
+        eventRouter: mockEventRouter,
+        memory: mockMemory,
+        background: mockBackground,
+        getSpacePath: () => '/tmp/test-space',
+        imSessionRegistry,
+      } as unknown as Parameters<typeof createAppRuntimeService>[0])
+    }
+
+    function firstMessage(): string {
+      return vi.mocked(executeRun).mock.calls[0][0].trigger.description
+    }
+
+    it('leaves them out of a manual run', async () => {
+      await serviceWithImSessions().triggerManually(testAppId)
+
+      expect(firstMessage()).toMatch(/^Manually triggered run for "test-automation"\. Time: \S+$/)
+      expect(firstMessage()).not.toContain(chatText)
+    })
+
+    it('leaves them out of a scheduled run', async () => {
+      serviceWithImSessions()
+      const onJobDue = mockScheduler.onJobDue.mock.calls[0][1]
+
+      await onJobDue({
+        id: `${testAppId}:daily`,
+        schedule: { kind: 'every', every: '1h' },
+        metadata: { appId: testAppId, subscriptionId: 'daily' },
+      })
+
+      expect(firstMessage()).toMatch(/^Scheduled run for "test-automation" \(every 1h\)\. Time: \S+$/)
+      expect(firstMessage()).not.toContain(chatText)
     })
   })
 
