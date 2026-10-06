@@ -8,7 +8,7 @@
  * automatically reflected everywhere.
  */
 
-import { classifySessionSource, HTTP_SESSION_CHANNEL, LOCAL_SESSION_CHANNEL } from '../types/im-channel'
+import { classifySessionSource, HTTP_SESSION_CHANNEL, IM_CHANNEL_TYPES, LOCAL_SESSION_CHANNEL, type ImChannelType } from '../types/im-channel'
 
 /**
  * Build the virtual conversationId for the native Halo app-chat session.
@@ -335,9 +335,11 @@ export type HttpConversationIdResult =
  *   - a native local key      → "app-chat:{appId}:local:direct:{sessionUuid}"
  *   - a team-channel key      → "app-chat:{appId}:team:{teamId}:{epochId}"
  *
- * Rejects everything else — in particular IM-channel keys (an HTTP caller must
- * never be able to address or inject into an IM session) and segments outside
- * the filename-safe charset. The 'local' channel is permitted so the remote
+ * Rejects everything else — in particular IM-channel keys, so these routes can
+ * never send into an IM session — and segments outside the filename-safe
+ * charset. An HTTP caller still reads, stops and clears IM sessions, through
+ * the im-chat routes, which address one by its parts and check them with
+ * {@link resolveHttpImChat}. The 'local' channel is permitted so the remote
  * web client (an authenticated Halo UI that reaches the same endpoint over
  * HTTP) can drive the user's native multi-sessions; it is non-pushable and
  * carries no more capability than an 'http' session. The 'team' channel is
@@ -394,4 +396,44 @@ export function resolveHttpConversationId(
     }
   }
   return { ok: true, conversationId: raw }
+}
+
+/**
+ * An IM chat id as the platform hands it over. The platform chooses it (a
+ * WeChat one carries "@" and "."), so only what would change the address is
+ * refused: ":" ends a key segment, a slash or ".." reaches out of the
+ * transcript file's folder, whitespace and control characters belong to no id.
+ */
+const IM_CHAT_ID_PATTERN = /^[^\s:/\\\p{Cc}]{1,256}$/u
+
+export type HttpImChatResult =
+  | { ok: true; channel: ImChannelType; chatType: 'direct' | 'group'; chatId: string }
+  | { ok: false; error: string }
+
+/**
+ * Validate the parts an HTTP caller names an IM session by on the im-chat
+ * routes (read, stop, clear): a channel that is an IM channel, a chat type,
+ * and a chat id that keeps the session key and its transcript file where they
+ * belong. The same shape check {@link resolveHttpConversationId} gives the
+ * chat routes; "http" and "local" sessions are addressed there, by key.
+ *
+ * @param chatType - Defaults to "direct" when absent
+ */
+export function resolveHttpImChat(channel: unknown, chatType: unknown, chatId: unknown): HttpImChatResult {
+  if (typeof channel !== 'string' || !(IM_CHANNEL_TYPES as readonly string[]).includes(channel)) {
+    return {
+      ok: false,
+      error: `Invalid channel: expected one of ${IM_CHANNEL_TYPES.join(', ')}; address "http" and "local" sessions by conversationId on the chat routes`,
+    }
+  }
+  if (chatType !== undefined && chatType !== 'direct' && chatType !== 'group') {
+    return { ok: false, error: 'Invalid chatType: expected "direct" or "group"' }
+  }
+  if (typeof chatId !== 'string' || !IM_CHAT_ID_PATTERN.test(chatId) || chatId.includes('..')) {
+    return {
+      ok: false,
+      error: 'Invalid chatId: 1-256 characters, without whitespace, ":", "/", "\\" or ".."',
+    }
+  }
+  return { ok: true, channel: channel as ImChannelType, chatType: chatType ?? 'direct', chatId }
 }
