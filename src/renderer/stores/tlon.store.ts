@@ -147,7 +147,8 @@ interface TlonState {
   loadRawFiles: (kbId: string) => Promise<void>
   addFiles: (kbId: string, filePaths: string[]) => Promise<AddRawFilesResult | null>
   removeRawFile: (kbId: string, relativePath: string) => Promise<boolean>
-  removeRawFiles: (kbId: string, relativePaths: string[]) => Promise<number>
+  /** Resolves to the paths that could not be removed (empty when all were). */
+  removeRawFiles: (kbId: string, relativePaths: string[]) => Promise<{ failed: string[] }>
   pickAndAddFiles: (kbId: string) => Promise<void>
   pickAndImportFolder: (kbId: string) => Promise<void>
 
@@ -469,21 +470,23 @@ export const useTlonStore = create<TlonState>((set, get) => ({
   },
 
   removeRawFiles: async (kbId, relativePaths) => {
-    let removed = 0
+    const failed: string[] = []
     for (const p of relativePaths) {
       try {
         const res = await api.tlon.removeRaw(kbId, p)
-        if (res.success) removed++
+        // A file main could not delete comes back as success with data false.
+        if (!res.success || res.data === false) failed.push(p)
       } catch (err) {
         console.error('[TlonStore] removeRawFiles error:', err)
+        failed.push(p)
       }
     }
     // Refresh once after the whole batch instead of per file.
-    if (removed > 0) {
+    if (failed.length < relativePaths.length) {
       await get().loadRawFiles(kbId)
       await get().refreshKB(kbId)
     }
-    return removed
+    return { failed }
   },
 
   pickAndAddFiles: async (kbId) => {

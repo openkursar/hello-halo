@@ -4,12 +4,13 @@
  * - Drop zone + desktop file picker to add text files.
  * - Files grouped into "Not yet learned" / "Learned" with status icons.
  * - "Learn now" triggers ingest; live progress bar reflects the event stream.
+ * - "Select files" removes many of the KB's own files at once.
  *
  * Learned status comes from RawFileStatus.learned (pulled from disk), never
  * from progress events.
  */
 
-import { useState, DragEvent } from 'react'
+import { useEffect, useRef, useState, DragEvent } from 'react'
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
 import { useTlonStore } from '../../stores/tlon.store'
@@ -30,6 +31,8 @@ import {
   Loader2,
   ChevronDown,
   Eye,
+  ListChecks,
+  X,
 } from 'lucide-react'
 import type { KnowledgeBaseEntry, RawFileStatus } from '../../../shared/types/tlon'
 
@@ -44,6 +47,40 @@ function formatSize(bytes: number): string {
 }
 
 const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tif', '.tiff', '.gif']
+
+/**
+ * Only the KB's own copies can be removed here; watched-folder files live
+ * outside the KB and are managed with their folder in Settings.
+ */
+function isRemovable(file: RawFileStatus): boolean {
+  return file.source === 'raw'
+}
+
+/** How rows take part in multi-select; absent while not selecting. */
+export interface RowSelection {
+  isSelected: (file: RawFileStatus) => boolean
+  toggle: (file: RawFileStatus) => void
+  setMany: (files: RawFileStatus[], selected: boolean) => void
+}
+
+interface RemoveSelectedDeps {
+  confirm: (count: number) => Promise<boolean>
+  remove: (paths: string[]) => Promise<{ failed: string[] }>
+}
+
+/**
+ * Remove the chosen files after one confirmation. Resolves to the files that
+ * could not be removed — empty when all were — or null when nothing was tried.
+ */
+export async function removeSelectedFiles(
+  targets: RawFileStatus[],
+  deps: RemoveSelectedDeps,
+): Promise<RawFileStatus[] | null> {
+  if (targets.length === 0 || !(await deps.confirm(targets.length))) return null
+  const { failed } = await deps.remove(targets.map(f => f.path))
+  const failedPaths = new Set(failed)
+  return targets.filter(f => failedPaths.has(f.path))
+}
 
 /**
  * Human reason a file sits in a non-learned state, shown inline so it's
@@ -76,6 +113,10 @@ export function RawFilesTab({ kb }: RawFilesTabProps) {
   const triggerIngest = useTlonStore(s => s.triggerIngest)
 
   const [isDragging, setIsDragging] = useState(false)
+  const [selecting, setSelecting] = useState(false)
+  const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set())
+  const [removing, setRemoving] = useState(false)
+  const [notRemoved, setNotRemoved] = useState<RawFileStatus[]>([])
   const isElectron = !api.isRemoteMode()
   const isIngesting = progress?.phase === 'running'
 
@@ -87,6 +128,11 @@ export function RawFilesTab({ kb }: RawFilesTabProps) {
   const learned = rawFiles.filter(f => f.state === 'learned')
   const skipped = rawFiles.filter(f => f.state === 'no-text')
   const learnable = notYetLearned
+
+  const removable = rawFiles.filter(isRemovable)
+  // Counted against the current list, so files gone since they were picked drop out.
+  const selectedFiles = removable.filter(f => selected.has(f.path))
+  const selectionActive = selecting && removable.length > 0
 
   const handleDrop = async (e: DragEvent) => {
     e.preventDefault()
@@ -112,9 +158,7 @@ export function RawFilesTab({ kb }: RawFilesTabProps) {
     if (ok) await removeRawFile(kb.id, file.path)
   }
 
-  // Only 'raw' sources can be deleted here; 'linked' files live outside the KB
-  // and are managed by their watched folder in Settings.
-  const cleanableSkipped = skipped.filter(f => f.source === 'raw')
+  const cleanableSkipped = skipped.filter(isRemovable)
 
   const handleCleanSkipped = async () => {
     const ok = await showConfirm({
@@ -125,6 +169,58 @@ export function RawFilesTab({ kb }: RawFilesTabProps) {
       variant: 'danger',
     })
     if (ok) await removeRawFiles(kb.id, cleanableSkipped.map(f => f.path))
+  }
+
+  const stopSelecting = () => {
+    setSelecting(false)
+    setSelected(new Set())
+    setNotRemoved([])
+  }
+
+  const selection: RowSelection | undefined = selectionActive ? {
+    isSelected: (file) => selected.has(file.path),
+    toggle: (file) => setSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(file.path)) next.delete(file.path)
+      else next.add(file.path)
+      return next
+    }),
+    setMany: (files, on) => setSelected(prev => {
+      const next = new Set(prev)
+      for (const file of files) {
+        if (on) next.add(file.path)
+        else next.delete(file.path)
+      }
+      return next
+    }),
+  } : undefined
+
+  const handleRemoveSelected = async () => {
+    const left = await removeSelectedFiles(selectedFiles, {
+      confirm: (count) => showConfirm({
+        title: t('Remove selected files'),
+        message: t('Remove {{count}} file(s) from this knowledge base? This does not delete the original files on disk.', { count }),
+        confirmLabel: t('Remove'),
+        cancelLabel: t('Cancel'),
+        variant: 'danger',
+      }),
+      remove: async (paths) => {
+        setRemoving(true)
+        try {
+          return await removeRawFiles(kb.id, paths)
+        } finally {
+          setRemoving(false)
+        }
+      },
+    })
+    if (left === null) return
+    if (left.length === 0) {
+      stopSelecting()
+      return
+    }
+    // Left selected, so trying again is one click.
+    setSelected(new Set(left.map(f => f.path)))
+    setNotRemoved(left)
   }
 
   return (
@@ -186,6 +282,68 @@ export function RawFilesTab({ kb }: RawFilesTabProps) {
         </button>
       )}
 
+      {/* Multi-select. The bar stays in view while selecting down a long list. */}
+      {removable.length > 0 && (
+        selectionActive ? (
+          <div className="sticky top-0 z-10 -mx-2 px-2 py-2 space-y-2 bg-background/95 backdrop-blur border-b border-border">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-sm tabular-nums">
+                {t('{{count}} selected', { count: selectedFiles.length })}
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleRemoveSelected}
+                  disabled={selectedFiles.length === 0 || removing}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg bg-destructive text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {removing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                  {removing ? t('Removing…') : t('Remove selected')}
+                </button>
+                <button
+                  onClick={stopSelecting}
+                  disabled={removing}
+                  className="px-3 py-1.5 text-sm rounded-lg bg-secondary hover:bg-secondary/80 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {t('Cancel')}
+                </button>
+              </div>
+            </div>
+            {notRemoved.length > 0 && (
+              <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs">
+                <div className="flex items-start justify-between gap-2">
+                  <p className="font-medium text-destructive">
+                    {t("Couldn't remove {{count}} file(s). They stay selected so you can try again.", { count: notRemoved.length })}
+                  </p>
+                  <button
+                    onClick={() => setNotRemoved([])}
+                    className="p-0.5 rounded hover:bg-destructive/20 transition-colors flex-shrink-0"
+                    title={t('Dismiss')}
+                    aria-label={t('Dismiss')}
+                  >
+                    <X className="w-3.5 h-3.5 text-destructive" />
+                  </button>
+                </div>
+                <ul className="mt-1 max-h-32 overflow-y-auto space-y-0.5 text-muted-foreground">
+                  {notRemoved.map(file => (
+                    <li key={file.path} className="truncate">{file.name}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="flex justify-end">
+            <button
+              onClick={() => setSelecting(true)}
+              className="inline-flex items-center gap-1.5 px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded-md hover:bg-secondary transition-colors"
+            >
+              <ListChecks className="w-3.5 h-3.5" />
+              {t('Select files')}
+            </button>
+          </div>
+        )
+      )}
+
       {/* File groups */}
       {rawFiles.length === 0 ? (
         <p className="py-6 text-center text-sm text-muted-foreground">
@@ -199,6 +357,7 @@ export function RawFilesTab({ kb }: RawFilesTabProps) {
               files={notYetLearned}
               onRemove={handleRemove}
               formatSize={formatSize}
+              selection={selection}
             />
           )}
           {learned.length > 0 && (
@@ -207,6 +366,7 @@ export function RawFilesTab({ kb }: RawFilesTabProps) {
               files={learned}
               onRemove={handleRemove}
               formatSize={formatSize}
+              selection={selection}
             />
           )}
           {skipped.length > 0 && (
@@ -216,6 +376,7 @@ export function RawFilesTab({ kb }: RawFilesTabProps) {
               formatSize={formatSize}
               onCleanAll={cleanableSkipped.length > 0 ? handleCleanSkipped : undefined}
               cleanableCount={cleanableSkipped.length}
+              selection={selection}
             />
           )}
         </div>
@@ -231,6 +392,7 @@ interface FileGroupProps {
   files: RawFileStatus[]
   onRemove: (file: RawFileStatus) => void
   formatSize: (bytes: number) => string
+  selection?: RowSelection
 }
 
 /** Per-state status icon. The odd states also carry an inline reason row. */
@@ -251,17 +413,25 @@ function FileRow({
   file,
   onRemove,
   formatSize,
+  selection,
 }: {
   file: RawFileStatus
   onRemove: (file: RawFileStatus) => void
   formatSize: (bytes: number) => string
+  selection?: RowSelection
 }) {
   const { t } = useTranslation()
   const reason = stateReason(file, t)
   const { openFile } = useCanvasActions()
   const isLearned = file.state === 'learned'
+  const selectable = !!selection && isRemovable(file)
+  const isSelected = selectable && selection.isSelected(file)
 
   const handleClick = () => {
+    if (selectable) {
+      selection.toggle(file)
+      return
+    }
     if (isLearned) {
       openFile(file.openPath, file.name)
     }
@@ -270,10 +440,22 @@ function FileRow({
   return (
     <div
       onClick={handleClick}
-      className={`group flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-card ${
-        isLearned ? 'cursor-pointer hover:bg-secondary transition-colors' : ''
-      }`}
+      className={`group flex items-center gap-2 px-3 py-2 rounded-lg border ${
+        isSelected ? 'border-primary bg-primary/5' : 'border-border bg-card'
+      } ${selectable || isLearned ? 'cursor-pointer hover:bg-secondary transition-colors' : ''}`}
     >
+      {selection && (
+        <input
+          type="checkbox"
+          checked={isSelected}
+          disabled={!selectable}
+          onChange={() => selection.toggle(file)}
+          onClick={(e) => e.stopPropagation()}
+          aria-label={t('Select "{{name}}"', { name: file.name })}
+          title={selectable ? undefined : t('From a watched folder — manage it in Settings')}
+          className="w-3.5 h-3.5 rounded border-border accent-primary cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 flex-shrink-0"
+        />
+      )}
       <StatusIcon file={file} />
       <FileText className="w-4 h-4 text-muted-foreground flex-shrink-0" />
       <div className="min-w-0 flex-1">
@@ -296,7 +478,7 @@ function FileRow({
       <span className="text-[11px] text-muted-foreground tabular-nums flex-shrink-0">
         {formatSize(file.size)}
       </span>
-      {isLearned && (
+      {isLearned && !selection && (
         <Eye className="w-3.5 h-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
       )}
       {file.source === 'linked' ? (
@@ -308,7 +490,7 @@ function FileRow({
         >
           <FolderOpen className="w-3.5 h-3.5 text-muted-foreground" />
         </span>
-      ) : (
+      ) : !selection && (
         <button
           onClick={(e) => { e.stopPropagation(); onRemove(file) }}
           className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-destructive/20 transition-all flex-shrink-0"
@@ -321,16 +503,44 @@ function FileRow({
   )
 }
 
-function FileGroup({ title, files, onRemove, formatSize }: FileGroupProps) {
+/** Selects or clears every removable file of one group; partly selected shows as mixed. */
+function GroupCheckbox({ title, files, selection }: { title: string; files: RawFileStatus[]; selection: RowSelection }) {
+  const { t } = useTranslation()
+  const ref = useRef<HTMLInputElement>(null)
+  const removable = files.filter(isRemovable)
+  const count = removable.filter(selection.isSelected).length
+  const all = removable.length > 0 && count === removable.length
+
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = count > 0 && !all
+  }, [count, all])
+
+  if (removable.length === 0) return null
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      checked={all}
+      onChange={() => selection.setMany(removable, !all)}
+      aria-label={t('Select all in "{{group}}"', { group: title })}
+      className="w-3.5 h-3.5 rounded border-border accent-primary cursor-pointer flex-shrink-0"
+    />
+  )
+}
+
+export function FileGroup({ title, files, onRemove, formatSize, selection }: FileGroupProps) {
   return (
     <div>
-      <div className="flex items-center justify-between mb-1.5">
-        <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{title}</h4>
+      <div className="flex items-center justify-between mb-1.5 gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          {selection && <GroupCheckbox title={title} files={files} selection={selection} />}
+          <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wide truncate">{title}</h4>
+        </div>
         <span className="text-[11px] text-muted-foreground tabular-nums">{files.length}</span>
       </div>
       <div className="space-y-1">
         {files.map(file => (
-          <FileRow key={file.path} file={file} onRemove={onRemove} formatSize={formatSize} />
+          <FileRow key={file.path} file={file} onRemove={onRemove} formatSize={formatSize} selection={selection} />
         ))}
       </div>
     </div>
@@ -348,12 +558,14 @@ function SkippedGroup({
   formatSize,
   onCleanAll,
   cleanableCount,
+  selection,
 }: {
   files: RawFileStatus[]
   onRemove: (file: RawFileStatus) => void
   formatSize: (bytes: number) => string
   onCleanAll?: () => void
   cleanableCount: number
+  selection?: RowSelection
 }) {
   const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
@@ -372,7 +584,7 @@ function SkippedGroup({
           </h4>
           <span className="text-[11px] text-muted-foreground tabular-nums">{files.length}</span>
         </button>
-        {onCleanAll && (
+        {onCleanAll && !selection && (
           <button
             onClick={onCleanAll}
             className="inline-flex items-center gap-1 px-2 py-1 text-[11px] text-muted-foreground hover:text-destructive rounded-md hover:bg-destructive/10 transition-colors flex-shrink-0"
@@ -385,7 +597,7 @@ function SkippedGroup({
       {expanded && (
         <div className="space-y-1">
           {files.map(file => (
-            <FileRow key={file.path} file={file} onRemove={onRemove} formatSize={formatSize} />
+            <FileRow key={file.path} file={file} onRemove={onRemove} formatSize={formatSize} selection={selection} />
           ))}
         </div>
       )}

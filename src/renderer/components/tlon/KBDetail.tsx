@@ -146,7 +146,8 @@ export function KBDetail({ kb, onDeleted }: KBDetailProps) {
           <ChatTab kb={kb} />
         ) : (
           <div className="h-full overflow-y-auto">
-            {tab === 'files' && <RawFilesTab kb={kb} />}
+            {/* Keyed so a file selection never carries over to another knowledge base. */}
+            {tab === 'files' && <RawFilesTab key={kb.id} kb={kb} />}
             {tab === 'settings' && <SettingsTab kb={kb} onDeleted={onDeleted} />}
           </div>
         )}
