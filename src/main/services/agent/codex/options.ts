@@ -11,7 +11,7 @@
  *     transport/connection.ts with `resolveBundledCodexBinary`)
  *
  * What we DO produce:
- *   - process env: CODEX_HOME isolation, ANTHROPIC_* stripped, NO_PROXY
+ *   - process env: CODEX_HOME isolation, ANTHROPIC_* stripped, proxy policy
  *   - thread/start params: model, cwd, sandbox, approvalPolicy, config{...}
  *   - per-turn parameters (model override; we don't override anything else)
  *   - OpenAI-compat router config (when the user has selected a non-Anthropic
@@ -23,12 +23,13 @@ import path from 'path'
 import { mkdirSync } from 'fs'
 import { credentialsToBackendConfig } from '../helpers'
 import { pickReasoningEffort, resolveCodexReasoningEffort } from '../reasoning-effort'
-import { getHaloDir } from '../../../foundation/config.service'
+import { getConfig, getHaloDir } from '../../../foundation/config.service'
 import { getCleanUserEnv, getSdkApiCredentials } from '../sdk-config'
 import { ensureOpenAICompatRouter, encodeBackendConfig } from '../../../openai-compat-router'
 import type { ApiCredentials } from '../types'
 import type { AskForApproval, SandboxMode, ThreadStartParams } from './types/codex-protocol'
 import { prepareCodexMcpServers } from './mcp-config'
+import { applyProxyEnv } from '../../proxy-policy'
 import type { SdkMcpBridge } from '../mcp/sdk-bridge'
 
 export interface CodexResolvedOptions {
@@ -144,8 +145,7 @@ async function buildCodexEnv(
 
   env.CODEX_HOME = ensureCodexHome()
   env.DISABLE_TELEMETRY = '1'
-  env.NO_PROXY = appendNoProxy(env.NO_PROXY || env.no_proxy)
-  env.no_proxy = env.NO_PROXY
+  applyProxyEnv(env, getConfig().network)
 
   // Forward our chosen API key to the app-server. For Anthropic-direct
   // routes, this is the user's key; for routed providers we set the
@@ -173,13 +173,6 @@ function ensureCodexHome(): string {
   const codexHome = path.join(getHaloDir(), 'codex')
   mkdirSync(codexHome, { recursive: true })
   return codexHome
-}
-
-function appendNoProxy(current: string | undefined): string {
-  const values = new Set((current || '').split(',').map((entry) => entry.trim()).filter(Boolean))
-  values.add('localhost')
-  values.add('127.0.0.1')
-  return Array.from(values).join(',')
 }
 
 // ============================================================================

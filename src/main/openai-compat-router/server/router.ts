@@ -132,7 +132,11 @@ export function createApp(options: RouterOptions = {}): Express {
 
     // Collect SDK headers so the handler can restore session-affinity headers
     // onto the upstream request.
-    const HOP_BY_HOP = new Set(['host', 'connection', 'content-length', 'transfer-encoding', 'authorization'])
+    const HOP_BY_HOP = new Set([
+      'host', 'connection', 'content-length', 'transfer-encoding', 'authorization',
+      // Router-local routing identity; upstream must never see it.
+      DELEGATED_ROUTING_HEADER
+    ])
     const sdkHeaders: Record<string, string> = {}
     for (const [key, value] of Object.entries(req.headers)) {
       if (!HOP_BY_HOP.has(key) && value) {

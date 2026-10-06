@@ -21,7 +21,7 @@ import {
   withCurrentCredentials,
 } from '../../../src/main/openai-compat-router/server/request-credentials'
 import { createApp } from '../../../src/main/openai-compat-router/server/router'
-import { encodeBackendConfig } from '../../../src/main/openai-compat-router'
+import { encodeBackendConfig, DELEGATED_ROUTING_HEADER } from '../../../src/main/openai-compat-router'
 import type { BackendConfig } from '../../../src/main/openai-compat-router/types'
 
 const encoded: BackendConfig = {
@@ -106,5 +106,18 @@ describe('router endpoints', () => {
     expect(refused.statusCode).toBe(401)
     expect(refused.body).toEqual({ type: 'error', error: { type: 'authentication_error', message: 'This account was removed.' } })
     expect(handlers.messages).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the router-local routing header away from the upstream on both paths', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const table = routes()
+    const key = encodeBackendConfig(encoded)
+    const request = (headers: Record<string, string>, url: string) => ({ headers, body: {}, url, method: 'POST', socket: {} })
+
+    await table.get('/v1/messages')!(request({ 'x-api-key': key, [DELEGATED_ROUTING_HEADER]: key, 'x-client': 'cli' }, '/v1/messages'), response())
+    await table.get('/v1/responses')!(request({ authorization: `Bearer ${key}`, [DELEGATED_ROUTING_HEADER]: key, 'x-client': 'cli' }, '/v1/responses'), response())
+
+    expect(handlers.messages.mock.calls[0][3].sdkHeaders).toEqual({ 'x-client': 'cli' })
+    expect(handlers.responses.mock.calls[0][3].sdkHeaders).toEqual({ 'x-client': 'cli' })
   })
 })

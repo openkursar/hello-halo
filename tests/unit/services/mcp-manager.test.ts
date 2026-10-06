@@ -5,7 +5,7 @@
  * into per-server groups.
  */
 
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 
 // Mock heavy dependencies that mcp-manager.ts imports transitively
 vi.mock('../../../src/main/services/agent/resolved-sdk', () => ({
@@ -31,9 +31,11 @@ vi.mock('../../../src/main/services/agent/helpers', () => ({
 vi.mock('../../../src/main/services/agent/events', () => ({
   emitAgentBroadcast: vi.fn()
 }))
+const sdk = vi.hoisted(() => ({ resolveCredentialsForSdk: vi.fn(), buildSdkEnv: vi.fn() }))
 vi.mock('../../../src/main/services/agent/sdk-config', () => ({
   getCleanUserEnv: vi.fn(() => ({})),
-  resolveCredentialsForSdk: vi.fn()
+  resolveCredentialsForSdk: sdk.resolveCredentialsForSdk,
+  buildSdkEnv: sdk.buildSdkEnv,
 }))
 const { track } = vi.hoisted(() => ({ track: vi.fn().mockResolvedValue(undefined) }))
 vi.mock('../../../src/main/services/analytics/analytics.service', () => ({
@@ -258,6 +260,14 @@ describe('MCP recovery notifications', () => {
 describe('testMcpConnections telemetry', () => {
   const credentialsMock = getApiCredentials as ReturnType<typeof vi.fn>
 
+  beforeEach(() => {
+    sdk.resolveCredentialsForSdk.mockImplementation(async (credentials: ApiCredentials) => ({
+      anthropicBaseUrl: credentials.baseUrl, anthropicApiKey: credentials.apiKey, sdkModel: credentials.model,
+      capabilities: credentials.capabilities, sourceId: credentials.sourceId,
+    }))
+    sdk.buildSdkEnv.mockReturnValue({})
+  })
+
   afterEach(() => {
     vi.clearAllMocks()
   })
@@ -316,5 +326,63 @@ describe('testMcpConnections telemetry', () => {
 
     releaseFirstCall?.()
     await firstCall
+  })
+})
+
+describe('testMcpConnections environment', () => {
+  const credentials: ApiCredentials = {
+    provider: 'oauth', sourceId: 'account-a', credentialsGeneration: 'captured-a',
+    baseUrl: 'https://example.invalid/v1/messages', apiKey: 'token-a', model: 'model-a',
+    capabilities: { contextWindow: 200_000, maxOutputTokens: 32_000, maxOutputTokensConfigured: false },
+  }
+  const builtEnv = { CLAUDE_CONFIG_DIR: '/halo/claude-config', NO_PROXY: 'localhost,127.0.0.1,[::1],.weixin.qq.com' }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.mocked(getApiCredentials).mockResolvedValue(credentials)
+    vi.mocked(getDbMcpServers).mockReturnValue({ srv: { type: 'stdio', command: 'test-mcp' } })
+    vi.mocked(query).mockImplementation(async function* () {
+      yield { type: 'system', mcp_servers: [{ name: 'srv', status: 'connected' }] }
+    })
+    sdk.buildSdkEnv.mockReturnValue(builtEnv)
+  })
+
+  afterEach(() => {
+    removeServerStatus('srv')
+    vi.clearAllTimers()
+    vi.useRealTimers()
+    vi.clearAllMocks()
+  })
+
+  it('starts the test process with the environment a conversation gets', async () => {
+    sdk.resolveCredentialsForSdk.mockResolvedValue({
+      anthropicBaseUrl: 'http://127.0.0.1:3457', anthropicApiKey: 'encoded-a', sdkModel: 'model-a',
+      capabilities: credentials.capabilities, sourceId: 'account-a',
+    })
+
+    await testMcpConnections()
+
+    expect(sdk.resolveCredentialsForSdk).toHaveBeenCalledWith(credentials)
+    expect(sdk.buildSdkEnv).toHaveBeenCalledWith({
+      anthropicApiKey: 'encoded-a', anthropicBaseUrl: 'http://127.0.0.1:3457', delegatedRoutingHeader: undefined,
+      capabilities: credentials.capabilities, sourceId: 'account-a',
+    })
+    const options = vi.mocked(query).mock.calls[0][0].options
+    expect(options.env).toBe(builtEnv)
+    expect(options).toMatchObject({ apiKey: 'encoded-a', model: 'model-a', anthropicBaseUrl: 'http://127.0.0.1:3457' })
+  })
+
+  it('gives a source signed in through the Claude Code CLI no key, as its conversations get none', async () => {
+    sdk.resolveCredentialsForSdk.mockResolvedValue({
+      anthropicBaseUrl: 'http://127.0.0.1:3457', anthropicApiKey: '', sdkModel: 'claude-model',
+      delegatedRoutingHeader: 'x-halo-backend: encoded', capabilities: credentials.capabilities, sourceId: 'account-a',
+    })
+
+    await testMcpConnections()
+
+    expect(sdk.buildSdkEnv).toHaveBeenCalledWith(expect.objectContaining({ delegatedRoutingHeader: 'x-halo-backend: encoded' }))
+    const options = vi.mocked(query).mock.calls[0][0].options
+    expect(options).not.toHaveProperty('apiKey')
+    expect(options.env).toBe(builtEnv)
   })
 })
