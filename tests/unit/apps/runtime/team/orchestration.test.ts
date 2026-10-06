@@ -1244,6 +1244,95 @@ describe('TeamOrchestration', () => {
         vi.useRealTimers()
       }
     })
+
+    /**
+     * A wake waiting for a slot has been decided but not started. A message
+     * reaching the same session another way — the IM chat a member fronts —
+     * must find it busy, or it starts a turn of its own and the wake starts a
+     * second one on the same session once its slot frees.
+     */
+    function holdRecorder(deps: OrchestrationSessionDeps) {
+      const held = new Map<string, number>()
+      const holds: Array<{ readonly cancelled: boolean; end(): void }> = []
+      deps.holdTurn = (sessionKey) => {
+        let ended = false
+        held.set(sessionKey, (held.get(sessionKey) ?? 0) + 1)
+        const hold = {
+          cancelled: false,
+          end: () => {
+            if (ended) return
+            ended = true
+            held.set(sessionKey, (held.get(sessionKey) ?? 0) - 1)
+          },
+        }
+        holds.push(hold)
+        return hold
+      }
+      return { isHeld: (sessionKey: string) => (held.get(sessionKey) ?? 0) > 0, holds }
+    }
+
+    function wakeMember(orch: ReturnType<typeof build>, epochId: string, appId: string, corr: string) {
+      return orch.wakeTarget({
+        sessionKey: buildTeamSessionKey(appId, TEAM_ID, epochId),
+        appId,
+        teamId: TEAM_ID,
+        epochId,
+        envelope: { id: corr, teamId: TEAM_ID, epochId, fromAppId: LEAD_APP, toAppId: appId, body: 'go', correlationId: corr, createdAt: Date.now() },
+        trigger: { teamId: TEAM_ID, epochId, correlationId: corr, fromAppId: LEAD_APP, wait: false, kind: 'message' },
+      })
+    }
+
+    it('holds a session while its turn waits for a slot, and hands that hold to the turn', async () => {
+      seedTeam(store, { collabMode: 'free' })
+      const epoch = makeEpoch(store)
+      const { deps, pendings } = makeSession()
+      const { isHeld, holds } = holdRecorder(deps)
+      const orch = build(deps, undefined, 1)
+      const testerKey = buildTeamSessionKey(TESTER_APP, TEAM_ID, epoch.id)
+
+      await wakeMember(orch, epoch.id, RESEARCHER_APP, 'c1')
+      await wakeMember(orch, epoch.id, TESTER_APP, 'c2')
+      await flush()
+
+      expect(deps.sendAppChatMessage).toHaveBeenCalledTimes(1)
+      expect(isHeld(testerKey)).toBe(true)
+
+      pendings[0].resolve('done')
+      await flush()
+
+      const handed = vi.mocked(deps.sendAppChatMessage).mock.calls[1][0]
+      expect(handed.conversationId).toBe(testerKey)
+      expect(handed.turnStart).toBe(holds[1])
+
+      pendings[1].resolve('done')
+      await flush()
+      expect(isHeld(testerKey)).toBe(false)
+    })
+
+    it('a turn given up while queued lets go of the session once it reaches a slot', async () => {
+      vi.useFakeTimers()
+      try {
+        seedTeam(store, { collabMode: 'free' })
+        const epoch = makeEpoch(store)
+        const { deps, pendings } = makeSession()
+        const { isHeld } = holdRecorder(deps)
+        const orch = build(deps, 1000, 1)
+        const testerKey = buildTeamSessionKey(TESTER_APP, TEAM_ID, epoch.id)
+
+        await wakeMember(orch, epoch.id, RESEARCHER_APP, 'c1')
+        await wakeMember(orch, epoch.id, TESTER_APP, 'c2')
+        await vi.advanceTimersByTimeAsync(1001)
+        expect(isHeld(testerKey)).toBe(true)
+
+        pendings[0].resolve('done')
+        await vi.advanceTimersByTimeAsync(0)
+
+        expect(isHeld(testerKey)).toBe(false)
+        expect(deps.sendAppChatMessage).toHaveBeenCalledTimes(1)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
   })
 
   // ===========================================================================

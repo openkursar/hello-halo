@@ -31,6 +31,7 @@ import {
   clearImSession,
   isAppChatConversationGenerating,
   abortAppChatTurn,
+  onAppChatConversationChange,
 } from './app-chat'
 import type { ImSessionContext } from './im-channels/im-prompt'
 import { getImSessionRegistry } from './im-session-registry'
@@ -388,6 +389,27 @@ export function clearSupplementBuffersForInstance(instanceId: string): number {
   return dropped
 }
 
+/**
+ * Release a chat's buffered supplements whenever it may have gone idle: its turn
+ * ended, a start failed or was stopped before reaching the engine, a team wake
+ * gave up its hold. Deferred so the engine's own end-of-turn bookkeeping has
+ * run; the flush rechecks and waits again if the chat is still busy.
+ *
+ * @returns unsubscribe
+ */
+export function releaseSupplementsWhenIdle(): () => void {
+  return onAppChatConversationChange((conversationId) => {
+    if (!supplementBuffers.has(conversationId)) return
+    setImmediate(() => {
+      try {
+        flushSupplementBuffer(conversationId)
+      } catch (err) {
+        console.error(`${LOG_TAG} flushSupplementBuffer failed: conv=${conversationId}`, err)
+      }
+    })
+  })
+}
+
 /** Merge supplement bodies. Groups get per-entry <msg-sender> tags for attribution. */
 function buildMergedMessageText(
   entries: SupplementEntry[],
@@ -633,7 +655,10 @@ export async function dispatchInboundMessage(
     (!Array.isArray(instanceCfg.owners) || instanceCfg.owners.length === 0)
   if (ownersUnset) {
     if (msg.chatType === 'direct' && msg.from) {
-      const claimed = await maybeClaimOwner(instanceId, msg.from)
+      // A merged re-dispatch does not retry: each of its messages already did,
+      // and awaiting here would reopen the gap between the flush's busy check
+      // and the turn start. It runs as the guest a failed claim leaves.
+      const claimed = !options.skipBusyCheck && (await maybeClaimOwner(instanceId, msg.from))
       if (claimed) {
         const confirmation = replyScope === 'group' ? OWNER_CLAIMED_GROUP_ONLY_MESSAGE : OWNER_CLAIMED_MESSAGE
         try {

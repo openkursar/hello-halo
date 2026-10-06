@@ -16,7 +16,7 @@
  * on its way is absorbed into that turn, which still ends with one result.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest'
 
 // ============================================
 // Mocks (must be declared before importing the modules under test)
@@ -298,9 +298,11 @@ vi.mock('../../../../src/main/apps/runtime/im-channels/owner-claim', () => ({ ma
 // Imports (after all mocks)
 // ============================================
 
-import { dispatchInboundMessage } from '../../../../src/main/apps/runtime/dispatch-inbound'
+import { dispatchInboundMessage, releaseSupplementsWhenIdle } from '../../../../src/main/apps/runtime/dispatch-inbound'
 import { clearAllImPermissionContexts } from '../../../../src/main/apps/runtime/im-permission-registry'
 import { disposeAppChatSink } from '../../../../src/main/apps/runtime/app-chat-sink'
+import { beginAppChatTurnStart } from '../../../../src/main/apps/runtime/app-chat-live-turn'
+import { sendAppChatMessage } from '../../../../src/main/apps/runtime/app-chat'
 import type { InboundMessage, ReplyHandle } from '../../../../src/shared/types/inbound-message'
 
 // ============================================
@@ -331,6 +333,15 @@ const everythingSent = (...replies: Array<{ sent: string[] }>): string[] => [
   ...replies.flatMap((reply) => reply.sent),
   ...channel.pushed,
 ]
+
+// The runtime wires this up at start; buffered messages wait on it.
+let stopReleasingSupplements: () => void
+beforeAll(() => {
+  stopReleasingSupplements = releaseSupplementsWhenIdle()
+})
+afterAll(() => {
+  stopReleasingSupplements()
+})
 
 beforeEach(() => {
   engine.reset()
@@ -444,6 +455,25 @@ describe('a message stopped or failing on its way to the engine', () => {
     expect(engine.state.answered).toEqual([[expect.stringContaining('just say hi')]])
   })
 
+  it('a stopped message that then fails setting up sends nothing after "Generation stopped."', async () => {
+    engine.holdCredentials()
+    engine.state.failNextCredentials = true
+    const first = replyTo()
+    const stop = replyTo()
+
+    void dispatchInboundMessage(message('[file] report.docx'), first, 'app-1', 'inst-1')
+    await settle()
+    void dispatchInboundMessage(message('/stop'), stop, 'app-1', 'inst-1')
+    await settle()
+    expect(stop.sent).toContain('Generation stopped.')
+
+    engine.state.releaseCredentials()
+    await settle()
+    await new Promise((resolve) => setTimeout(resolve, 30))
+
+    expect(everythingSent(first, stop).filter((text) => text.includes('Error'))).toEqual([])
+  })
+
   it('a start that fails lets the message that waited behind it go next', async () => {
     engine.holdCredentials()
     engine.state.failNextCredentials = true
@@ -458,5 +488,28 @@ describe('a message stopped or failing on its way to the engine', () => {
 
     await vi.waitFor(() => expect(second.sent.some(isAnswer)).toBe(true))
     expect(first.sent.some((text) => text.includes('No usable credentials'))).toBe(true)
+  })
+})
+
+describe('a turn decided before it could start', () => {
+  it('keeps the chat busy from the decision; what arrived meanwhile goes right after it', async () => {
+    // A teammate's wake to the member fronting this chat waits for a free slot
+    // before it starts. An IM message arriving in that wait used to start a turn
+    // of its own, and the wake started a second one on the same session.
+    const hold = beginAppChatTurnStart(CHAT)
+    const waiting = replyTo()
+    void dispatchInboundMessage(message('are you there?'), waiting, 'app-1', 'inst-1')
+    await settle()
+    expect(engine.state.answered).toEqual([])
+
+    await sendAppChatMessage({
+      appId: 'app-1', spaceId: 'space-1', message: 'a teammate asks', conversationId: CHAT, turnStart: hold,
+    })
+
+    await vi.waitFor(() => expect(waiting.sent.some(isAnswer)).toBe(true))
+    expect(engine.state.answered).toEqual([
+      [expect.stringContaining('a teammate asks')],
+      [expect.stringContaining('are you there?')],
+    ])
   })
 })

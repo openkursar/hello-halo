@@ -55,7 +55,7 @@ import { ImChannelManager, WecomBotProvider, WeixinIlinkBotProvider, FeishuBotPr
 import { ImSessionRegistry, setImSessionRegistry } from './im-session-registry'
 import { PendingRelayStore, setPendingRelayStore, getPendingRelayStore } from './pending-relays'
 import { restoreLegacyDefaultChats } from './legacy-default-chats'
-import { dispatchInboundMessage, clearSupplementBuffersForInstance } from './dispatch-inbound'
+import { dispatchInboundMessage, clearSupplementBuffersForInstance, releaseSupplementsWhenIdle } from './dispatch-inbound'
 import { clearAllImPermissionContexts } from './im-permission-registry'
 import { clearAllImStreamHandles } from './im-stream-registry'
 import { destroyAllChatBrowserContexts } from './app-chat-browser'
@@ -187,6 +187,7 @@ let runtimeService: AppRuntimeService | null = null
 let memoryServiceRef: MemoryService | null = null
 let eventRouterInstance: EventRouter | null = null
 let imChannelManagerInstance: ImChannelManager | null = null
+let stopReleasingSupplements: (() => void) | null = null
 let imSessionRegistryInstance: ImSessionRegistry | null = null
 let activityStoreRef: ActivityStore | null = null
 
@@ -366,6 +367,9 @@ export async function initAppRuntime(
   imChannelManager.setOnInstanceStop((instanceId) => {
     clearSupplementBuffersForInstance(instanceId)
   })
+  // ...and release them once their chat is free again, however it got there.
+  stopReleasingSupplements?.()
+  stopReleasingSupplements = releaseSupplementsWhenIdle()
 
   // Apply IM channel instance configs from config.json
   const config = getConfig()
@@ -547,6 +551,8 @@ export async function shutdownAppRuntime(): Promise<void> {
     imChannelManagerInstance = null
     setActiveImChannelManager(null)
   }
+  stopReleasingSupplements?.()
+  stopReleasingSupplements = null
 
   imSessionRegistryInstance = null
   activityStoreRef = null

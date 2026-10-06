@@ -580,7 +580,7 @@ export interface HaloAPI extends BrowserHostBridge {
   appChatSend: (request: { appId: string; spaceId: string; message: string; images?: ImageAttachment[]; thinkingEnabled?: boolean; reasoningEffort?: ReasoningEffortLevel; canvasContext?: CanvasContext; references?: ContentReference[]; conversationId?: string; teamContext?: unknown }) => Promise<IpcResponse<{ conversationId: string }>>
   appChatStop: (appId: string, conversationId?: string) => Promise<IpcResponse>
   // Add a message to the running turn; delivered:false when no turn was in flight
-  appChatInject: (input: { appId: string; conversationId: string; message: string; references?: ContentReference[] }) => Promise<IpcResponse<{ delivered: boolean }>>
+  appChatInject: (input: { appId: string; conversationId: string; message: string; references?: ContentReference[] }) => Promise<IpcResponse<{ delivered: boolean; stopped?: boolean }>>
   appChatStatus: (appId: string, conversationId?: string) => Promise<IpcResponse<{ isGenerating: boolean; conversationId: string }>>
   appChatMessages: (input: { appId: string; spaceId: string; conversationId?: string }) => Promise<IpcResponse>
   // Paged read, newest page first; messages carry thoughts:null (see appChatMessageThoughts)

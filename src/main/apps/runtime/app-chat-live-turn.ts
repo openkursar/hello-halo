@@ -20,19 +20,9 @@ import { hasLiveTurn, sendIntoLiveTurn } from '../../services/agent/live-turn'
 import { formatReferencesBlock } from '../../services/agent'
 import type { TranscriptProvenance } from '../../../shared/types/transcript'
 import type { ContentReference } from '../../../shared/types/content-reference'
-import { hasActiveAppChatRound, peekAppChatSink } from './app-chat-sink'
+import { hasActiveAppChatRound, onAppChatRoundChange, peekAppChatSink } from './app-chat-sink'
 
 const LOG_TAG = '[AppChatLiveTurn]'
-
-/** How often a person's addition checks whether the turn it waits for has begun. */
-const LIVE_TURN_POLL_MS = 200
-
-/**
- * How long a person's addition waits for a starting turn. Longer than the sink
- * gives a queued message to be taken up, so a turn that will never begin has
- * been given up on by then and the conversation reads idle again.
- */
-const LIVE_TURN_WAIT_MS = 120_000
 
 /** A message on its way to the engine: accepted for a new turn, its round not queued yet. */
 interface StartEntry {
@@ -40,6 +30,53 @@ interface StartEntry {
 }
 
 const startingTurns = new Map<string, Set<StartEntry>>()
+
+/** A person's addition waiting for a turn to begin; see {@link injectIntoAppChatWhenLive}. */
+interface LiveTurnWaiter {
+  stopped: boolean
+  /** Settles the wait once the turn began, the conversation went idle, or a stop was asked for. */
+  check(): void
+}
+
+const liveTurnWaiters = new Map<string, Set<LiveTurnWaiter>>()
+
+const changeListeners = new Set<(conversationId: string) => void>()
+
+/**
+ * Be told whenever a conversation may have moved between starting, queued,
+ * running and idle: a start ended, a stop was asked for, a turn began, a round
+ * settled or was dropped. Re-read the state on the call; the call itself says
+ * only that it may have changed.
+ *
+ * @returns unsubscribe
+ */
+export function onAppChatConversationChange(listener: (conversationId: string) => void): () => void {
+  followSinkRounds()
+  changeListeners.add(listener)
+  return () => {
+    changeListeners.delete(listener)
+  }
+}
+
+function notifyConversationChange(conversationId: string): void {
+  for (const waiter of Array.from(liveTurnWaiters.get(conversationId) ?? [])) waiter.check()
+  for (const listener of Array.from(changeListeners)) {
+    try {
+      listener(conversationId)
+    } catch (err) {
+      console.error(`${LOG_TAG} Change listener failed for ${conversationId}:`, err)
+    }
+  }
+}
+
+let followingSinkRounds = false
+
+/** Relay the sink's round changes from the first moment anyone waits on one. */
+function followSinkRounds(): void {
+  if (followingSinkRounds) return
+  followingSinkRounds = true
+  onAppChatRoundChange(notifyConversationChange)
+}
 
 /** A message accepted for a new turn; see {@link beginAppChatTurnStart}. */
 export interface AppChatTurnStart {
@@ -74,23 +111,28 @@ export function beginAppChatTurnStart(conversationId: string): AppChatTurnStart 
       const current = startingTurns.get(conversationId)
       if (!current?.delete(entry)) return
       if (current.size === 0) startingTurns.delete(conversationId)
+      notifyConversationChange(conversationId)
     },
   }
 }
 
 /**
- * Stop every message still on its way to the engine for this conversation: each
- * sends nothing once it gets there. They keep holding the conversation until
- * they unwind, so whatever arrives meanwhile waits behind them instead of
- * starting a turn beside one that is still building its session.
+ * A stop was asked for this conversation. Every message still on its way to the
+ * engine sends nothing once it gets there — they keep holding the conversation
+ * until they unwind, so whatever arrives meanwhile waits behind them instead of
+ * starting a turn beside one that is still building its session — and a person's
+ * addition waiting for the turn to begin learns that it will not.
  *
  * @returns whether any message was on its way
  */
 export function cancelAppChatTurnStarts(conversationId: string): boolean {
   const entries = startingTurns.get(conversationId)
-  if (!entries) return false
-  for (const entry of entries) entry.cancelled = true
-  return true
+  if (entries) {
+    for (const entry of entries) entry.cancelled = true
+  }
+  for (const waiter of liveTurnWaiters.get(conversationId) ?? []) waiter.stopped = true
+  notifyConversationChange(conversationId)
+  return !!entries
 }
 
 /** Conversations with a message still on its way to the engine. */
@@ -174,30 +216,52 @@ export function injectIntoAppChat(
 }
 
 /**
+ * What became of a person's addition: added to the running turn, left for a
+ * turn of its own because nothing is in flight, or held back because the turn
+ * it was meant for was stopped — the person stopped it, so the text goes back
+ * to them rather than starting work they just halted.
+ */
+export type AppChatAdditionOutcome = 'delivered' | 'no_turn' | 'stopped'
+
+/**
  * {@link injectIntoAppChat} for a person adding to their own turn, which may not
  * have begun yet: the composer treats a chat as working from the moment it sent
  * the first message, while the turn is still starting. Answering "nothing to add
  * to" then would have the text sent as a second turn, which the engine folds
- * into the first — so it waits for the turn to begin, and answers false only
- * once the conversation has nothing in flight, when a new turn is the right home
- * for the text.
+ * into the first — so it waits until the turn begins, the conversation has
+ * nothing in flight, or a stop is asked for. It sets no deadline of its own:
+ * a start always ends (its sender's `finally`) and a queued round is given up
+ * on by the sink's own deadline, so the wait is bounded by theirs.
  */
 export async function injectIntoAppChatWhenLive(
   conversationId: string,
   text: string,
   provenance?: TranscriptProvenance,
   references?: ContentReference[]
-): Promise<boolean> {
-  const deadline = Date.now() + LIVE_TURN_WAIT_MS
-  let waited = false
-  while (!hasLiveTurn(conversationId) && isAppChatConversationGenerating(conversationId)) {
-    if (Date.now() >= deadline) {
-      console.warn(`${LOG_TAG} The turn of ${conversationId} has not begun after ${LIVE_TURN_WAIT_MS / 1000}s; not delivered`)
-      return false
+): Promise<AppChatAdditionOutcome> {
+  if (!hasLiveTurn(conversationId) && isAppChatConversationGenerating(conversationId)) {
+    console.log(`${LOG_TAG} Waiting for the turn of ${conversationId} to begin before adding to it`)
+    followSinkRounds()
+    const stopped = await new Promise<boolean>((resolve) => {
+      const waiters = liveTurnWaiters.get(conversationId) ?? new Set<LiveTurnWaiter>()
+      const waiter: LiveTurnWaiter = {
+        stopped: false,
+        check: () => {
+          if (!waiter.stopped && !hasLiveTurn(conversationId) && isAppChatConversationGenerating(conversationId)) return
+          waiters.delete(waiter)
+          if (waiters.size === 0 && liveTurnWaiters.get(conversationId) === waiters) liveTurnWaiters.delete(conversationId)
+          resolve(waiter.stopped)
+        },
+      }
+      waiters.add(waiter)
+      liveTurnWaiters.set(conversationId, waiters)
+    })
+    if (stopped) {
+      console.log(`${LOG_TAG} The turn of ${conversationId} was stopped; the addition goes back to its author`)
+      return 'stopped'
     }
-    waited = true
-    await new Promise((resolve) => setTimeout(resolve, LIVE_TURN_POLL_MS))
   }
-  if (waited) console.log(`${LOG_TAG} Waited for the turn of ${conversationId} to begin before adding to it`)
   return hasLiveTurn(conversationId) && injectIntoAppChat(conversationId, text, provenance, references)
+    ? 'delivered'
+    : 'no_turn'
 }

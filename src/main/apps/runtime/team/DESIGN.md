@@ -1074,6 +1074,23 @@ Underneath it sits a race that outlives this fix: ANY legitimate rebuild
 mid-start-up (a model change, an MCP toggle) can settle the starting turn the
 same way. Removing the needless rebuild removes this trigger, not the race.
 
+**A woken turn holds the chat from the moment the bus decides it.** A wake first
+waits for a team concurrency slot (`runGatedTurn`), and the bus's reservation is
+invisible to `dispatch-inbound`. Read as idle in that wait, the chat let an IM
+message start a turn of its own, and the wake started a second one on the same
+session once its slot freed. So `runGatedTurn` takes the session's hold
+(`OrchestrationSessionDeps.holdTurn` → `beginAppChatTurnStart`) before awaiting
+the slot and passes it to the turn (`turnStart`), which adopts it; a wake that
+never reaches `app-chat` gives it back. A message arriving meanwhile is buffered
+and answered right after, and a stop reaches the waiting wake like any message on
+its way. A remote member is not held here — its owner holds it when the wake
+lands. The hold, rather than teaching the busy predicate the bus's reservation:
+that predicate is the leaf `app-chat-live-turn`, and the bus asks it
+(`isBusy`), so the edge back would be both an import cycle and a recursion. One
+bound to know: a wake that times out while still queued keeps its hold until it
+reaches a slot and bails, so the chat's messages wait — buffered, not lost —
+until then.
+
 **A mid-turn delivery does not reach an IM front-desk turn today, and whether it
 should is open.** The mechanism is incidental rather than a decision: an IM turn
 is started by `dispatch-inbound` calling `sendAppChatMessage` directly, so the

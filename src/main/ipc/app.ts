@@ -707,7 +707,8 @@ export function registerAppHandlers(): void {
     // The user adding to the turn a digital human is running — or is about to
     // run: a turn still starting is waited for. `delivered: false` means no turn
     // was in flight to take it (it ended in the meantime) — the caller then
-    // sends the text as a new message.
+    // sends the text as a new message — unless `stopped`: the user stopped that
+    // turn, and the text goes back to them.
     appChatInject: async (input: { appId: string; conversationId: string; message: string; references?: ContentReference[] }) => {
       try {
         const message = typeof input?.message === 'string' ? input.message.trim() : ''
@@ -718,9 +719,9 @@ export function registerAppHandlers(): void {
         }
         const target = resolveUserInjectTarget(input.appId, input.conversationId)
         if (!target.ok) return { success: false, error: target.error }
-        const delivered = await injectIntoAppChatWhenLive(target.conversationId, message, { source: 'injection' }, references.references)
-        console.log(`[AppIPC] app:chat-inject: appId=${input.appId} conversationId=${input.conversationId} delivered=${delivered}`)
-        return { success: true, data: { delivered } }
+        const outcome = await injectIntoAppChatWhenLive(target.conversationId, message, { source: 'injection' }, references.references)
+        console.log(`[AppIPC] app:chat-inject: appId=${input.appId} conversationId=${input.conversationId} outcome=${outcome}`)
+        return { success: true, data: { delivered: outcome === 'delivered', ...(outcome === 'stopped' ? { stopped: true } : {}) } }
       } catch (error: unknown) {
         const err = error as Error
         console.error('[AppIPC] app:chat-inject error:', err.message)

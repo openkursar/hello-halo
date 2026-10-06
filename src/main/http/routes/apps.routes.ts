@@ -1055,9 +1055,9 @@ export function registerAppsRoutes(app: Express): void {
         res.status(target.status).json({ success: false, error: target.error })
         return
       }
-      const delivered = await injectIntoAppChatWhenLive(target.conversationId, message.trim(), { source: 'injection' }, references.references)
-      console.log('[HTTP] POST /api/apps/%s/chat/inject (conversationId=%s, delivered=%s)', appId, conversationId, delivered)
-      res.json({ success: true, data: { delivered } })
+      const outcome = await injectIntoAppChatWhenLive(target.conversationId, message.trim(), { source: 'injection' }, references.references)
+      console.log('[HTTP] POST /api/apps/%s/chat/inject (conversationId=%s, outcome=%s)', appId, conversationId, outcome)
+      res.json({ success: true, data: { delivered: outcome === 'delivered', ...(outcome === 'stopped' ? { stopped: true } : {}) } })
     } catch (error) {
       console.error('[HTTP] POST /api/apps/:appId/chat/inject failed:', error)
       res.json({ success: false, error: (error as Error).message })

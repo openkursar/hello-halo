@@ -81,12 +81,13 @@ import {
   cancelAppChatTurnStarts,
   isAppChatConversationGenerating,
   isAppChatTurnDispatched,
+  onAppChatConversationChange,
   type AppChatTurnStart,
 } from './app-chat-live-turn'
 // Re-exported, not defined here: the team runtime needs the same answer
 // synchronously and cannot import this module (app-chat imports the team
 // runtime accessor, so the edge back would close a cycle).
-export { isAppChatConversationGenerating }
+export { isAppChatConversationGenerating, onAppChatConversationChange }
 import { assembleAppChatPrompt } from './prompt/assembler'
 import { buildIdentityFragments } from './prompt/identity'
 import { buildDisabledCapabilitiesGuidance, buildUnconfiguredCapabilitiesGuidance } from './prompt/capabilities'
@@ -164,7 +165,7 @@ import type { ProgressEvent } from '../../../shared/types/inbound-message'
 import type { ImageAttachment } from '../../../shared/types/image-attachment'
 import { ProgressEventParser } from './progress-formatter'
 import { ReplyTextAccumulator } from './reply-accumulator'
-import { flushSupplementBuffer, clearSupplementBuffer } from './dispatch-inbound'
+import { clearSupplementBuffer } from './dispatch-inbound'
 import { getImStreamHandle, clearImStreamHandle } from './im-stream-registry'
 export { getAppChatConversationId, buildImSessionKey }
 
@@ -268,6 +269,12 @@ export interface AppChatRequest {
   imPermission?: ImPermissionContext
   /** Callers MUST set conversationId = buildTeamSessionKey(appId, teamId). */
   teamContext?: TeamTriggerContext
+  /**
+   * The conversation's hold, taken by a caller that decided this turn before it
+   * had to wait for something (a team wake queued for a concurrency slot) — so
+   * the conversation read busy through that wait. Adopted as the turn's own.
+   */
+  turnStart?: AppChatTurnStart
   /**
    * Origin facts recorded against any notify_bot push this run makes, so the
    * target session can later attribute the push and report an outcome back.
@@ -437,11 +444,12 @@ interface ChatTurnContext {
 
 export async function sendAppChatMessage(request: AppChatRequest): Promise<void> {
   const conversationId = request.conversationId ?? getAppChatConversationId(request.appId)
-  // Taken before the first await: from here the conversation reads busy.
+  // Taken before the first await, unless the caller already holds it: from
+  // here the conversation reads busy.
   const turnContext: ChatTurnContext = {
     browserHeld: false,
     failureHandled: false,
-    start: beginAppChatTurnStart(conversationId),
+    start: request.turnStart ?? beginAppChatTurnStart(conversationId),
   }
   try {
     await runAppChatTurn(request, turnContext)
@@ -452,26 +460,22 @@ export async function sendAppChatMessage(request: AppChatRequest): Promise<void>
       turnContext.browserHeld = false
       endChatBrowserTurn(conversationId)
     }
+    const message = error instanceof Error ? error.message : String(error)
+    if (turnContext.start.cancelled && !turnContext.failureHandled) {
+      // Stopped on its way, then failed setting up: the stop already answered.
+      console.warn(`[AppChat][${request.appId}] A message stopped on its way then failed (not reported): ${message}`)
+      emitAgentEvent('agent:complete', request.spaceId, conversationId, { type: 'complete', duration: 0 })
+      return
+    }
     if (!turnContext.failureHandled) {
-      const message = error instanceof Error ? error.message : String(error)
       console.error(`[AppChat][${request.appId}] Chat could not start: ${message}`)
       emitAgentEvent('agent:error', request.spaceId, conversationId, { type: 'error', error: message })
     }
     throw error
   } finally {
+    // Every exit lets go of the conversation; IM messages buffered behind this
+    // turn are released by that change (dispatch-inbound).
     turnContext.start.end()
-    // IM messages that arrived while this turn held the conversation go next,
-    // however it ended — answered, failed, or stopped before it reached the
-    // engine. Deferred so the conversation reads idle by then.
-    if (conversationId !== getAppChatConversationId(request.appId)) {
-      setImmediate(() => {
-        try {
-          flushSupplementBuffer(conversationId)
-        } catch (err) {
-          console.error(`[AppChat][${request.appId}] flushSupplementBuffer failed:`, err)
-        }
-      })
-    }
   }
 }
 
@@ -1055,6 +1059,11 @@ async function runAppChatTurn(
   let turnFailure: string | null = null
   let finalReply: string | undefined
   let stoppedOnTheWay = false
+  const endStoppedOnTheWay = (): void => {
+    stoppedOnTheWay = true
+    imStreamHandle?.dispose?.()
+    emitAgentEvent('agent:complete', spaceId, conversationId, { type: 'complete', duration: 0 })
+  }
   let dispatchAttempted = false
   let dispatchAccepted = false
   let userMessageRecorded = false
@@ -1198,10 +1207,8 @@ async function runAppChatTurn(
     // Stopped while still on its way: the last moment it can be held back. It
     // sends nothing, so nothing is owed — a stop means send nothing.
     if (turnContext.start.cancelled) {
-      stoppedOnTheWay = true
       console.log(`[AppChat][${appId}] Stopped before reaching the engine: ${conversationId}`)
-      imStreamHandle?.dispose?.()
-      emitAgentEvent('agent:complete', spaceId, conversationId, { type: 'complete', duration: 0 })
+      endStoppedOnTheWay()
       return
     }
 
@@ -1234,6 +1241,13 @@ async function runAppChatTurn(
     console.log(`[AppChat][${appId}] Chat message processed successfully`)
   } catch (error: unknown) {
     const err = error as Error
+    // A stop already answered the person; a failure of the message it held
+    // back is not news to them.
+    if (turnContext.start.cancelled && !dispatchAttempted) {
+      console.warn(`[AppChat][${appId}] A message stopped on its way then failed (not reported): ${err.message}`)
+      endStoppedOnTheWay()
+      return
+    }
     turnFailure = err.message || 'Unknown error during app chat'
 
     turnContext.failureHandled = true
