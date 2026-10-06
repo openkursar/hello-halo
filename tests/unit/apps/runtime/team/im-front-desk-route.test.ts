@@ -20,12 +20,14 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
-const { channel, appChatCalls } = vi.hoisted(() => ({
+const { channel, appChatCalls, turn } = vi.hoisted(() => ({
   channel: {
     config: undefined as Record<string, unknown> | undefined,
     instance: undefined as Record<string, unknown> | undefined,
   },
   appChatCalls: [] as Record<string, unknown>[],
+  /** How the woken turn answers: its text, and how it ended if it stopped short. */
+  turn: { reply: 'answer for the person', ending: undefined as string | undefined },
 }))
 
 vi.mock('../../../../../src/main/apps/runtime/app-chat-live-turn', () => ({
@@ -55,8 +57,14 @@ vi.mock('../../../../../src/main/apps/runtime/im-session-registry', () => ({
 vi.mock('../../../../../src/main/apps/runtime/app-chat', () => ({
   sendAppChatMessage: async (request: Record<string, unknown>) => {
     appChatCalls.push(request)
-    ;(request.onReply as ((s: string) => void) | undefined)?.('answer for the person')
+    const onReply = request.onReply as ((s: string, ending?: string) => void) | undefined
+    if (turn.ending) onReply?.(turn.reply, turn.ending)
+    else onReply?.(turn.reply)
   },
+}))
+
+vi.mock('../../../../../src/main/services/agent/user-agent-settings', () => ({
+  readUserAgentSettings: () => ({ maxTurns: 3, digitalHumansEnabled: true }),
 }))
 
 import { createDefaultSessionDeps } from '../../../../../src/main/apps/runtime/team'
@@ -96,6 +104,8 @@ function wake(store: TeamStore) {
 beforeEach(() => {
   appChatCalls.length = 0
   pushToChat.mockClear()
+  turn.reply = 'answer for the person'
+  turn.ending = undefined
   channel.config = { id: INSTANCE_ID, teamId: TEAM_ID, appId: MEMBER_APP_ID }
   channel.instance = {
     providerType: 'wecom-bot',
@@ -120,6 +130,29 @@ describe('woken front-desk turn — the IM route is resolved in full', () => {
 
     expect(result.finalMessage).toBe('answer for the person')
     expect(pushToChat).toHaveBeenCalledWith(CHAT_ID, 'answer for the person', 'direct')
+  })
+
+  it('tells the chat a woken turn stopped at the step limit, and gives the team the text as written', async () => {
+    turn.reply = 'half of the analysis'
+    turn.ending = 'max_turns'
+
+    const result = await wake(storeWithEpoch())
+
+    expect(result.finalMessage).toBe('half of the analysis')
+    expect(pushToChat).toHaveBeenCalledWith(
+      CHAT_ID,
+      'half of the analysis\n\n（已达到单次最多 3 步的上限，回复“继续”可接着做）',
+      'direct',
+    )
+  })
+
+  it('tells the chat even when the step limit came before any text', async () => {
+    turn.reply = ''
+    turn.ending = 'max_turns'
+
+    await wake(storeWithEpoch())
+
+    expect(pushToChat).toHaveBeenCalledWith(CHAT_ID, '（已达到单次最多 3 步的上限，回复“继续”可接着做）', 'direct')
   })
 
   it('leaves file send undefined for a text-only channel — the same answer the inbound route gives', async () => {

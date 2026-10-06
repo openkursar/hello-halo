@@ -53,6 +53,9 @@ import { beginApiRetry, endApiRetry, parseApiRetryMessage } from './api-retry'
 // Unified fallback error suffix - guides user to check logs
 const FALLBACK_ERROR_HINT = 'Check logs in Settings > System > Logs.'
 
+// A turn that ran out of steps, with or without a partial answer
+const MAX_TURNS_NOTICE = 'Reached the maximum turn limit. Send a message to continue.'
+
 // ============================================
 // Telemetry: tool usage aggregation
 // ============================================
@@ -1332,8 +1335,9 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
   // | Case | hasContent | isInterrupted | hasErrorThought | wasAborted | reachedMaxTurns | Send error?      |
   // |------|------------|---------------|-----------------|------------|-----------------|------------------|
   // | 1a   | yes        | -             | -               | yes        | -               | stopped by user  |
-  // | 1b   | yes        | yes           | -               | no         | -               | interrupted      |
-  // | 2    | yes        | no            | -               | no         | -               | no               |
+  // | 1c   | yes        | -             | -               | no         | yes             | max turns notice |
+  // | 1b   | yes        | yes           | -               | no         | no              | interrupted      |
+  // | 2    | yes        | no            | -               | no         | no              | no               |
   // | 3    | no         | yes           | no              | no         | -               | interrupted      |
   // | 4    | no         | no            | no              | no         | no              | empty response   |
   // | 5    | no         | -             | yes             | -          | -               | no               |
@@ -1391,12 +1395,14 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
     if (hasMeaningfulContent) {
       // Has content: user aborted shows friendly message, other interrupts show warning
       if (wasAborted) return 'Stopped by user.'
+      // What was written so far is not the whole answer — say why it stopped
+      if (hadMaxTurnsReached) return MAX_TURNS_NOTICE
       return isInterrupted ? 'Model response interrupted unexpectedly.' : null
     } else {
       // No content: skip if already has error thought or user aborted
       if (hasErrorThought || wasAborted) return null
       // Max turns is a graceful SDK limit, not a crash — show a clear actionable message
-      if (hadMaxTurnsReached) return 'Reached the maximum turn limit. Send a message to continue.'
+      if (hadMaxTurnsReached) return MAX_TURNS_NOTICE
       return isInterrupted
         ? 'Model response interrupted unexpectedly.'
         : `Unexpected empty response. ${FALLBACK_ERROR_HINT}`

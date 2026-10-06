@@ -107,6 +107,10 @@ vi.mock('../../../../src/main/services/space.service', () => ({
   getSpaceDir: vi.fn(() => '/tmp/space-dir'),
   getSpace: vi.fn(() => ({ path: '/tmp/space' })),
 }))
+// The step limit an IM note names.
+vi.mock('../../../../src/main/services/agent/user-agent-settings', () => ({
+  readUserAgentSettings: () => ({ maxTurns: 3, digitalHumansEnabled: true }),
+}))
 vi.mock('../../../../src/main/foundation/product-config', () => ({
   getImChannelsPermissionDefaults: vi.fn(() => undefined),
 }))
@@ -134,6 +138,7 @@ import {
 import { analytics } from '../../../../src/main/services/analytics/analytics.service'
 import { setImPermissionContext, clearImPermissionContext } from '../../../../src/main/apps/runtime/im-permission-registry'
 import { maybeClaimOwner } from '../../../../src/main/apps/runtime/im-channels/owner-claim'
+import { AppChatTurnInterrupted } from '../../../../src/main/apps/runtime/turn-ending'
 import type { InboundMessage, ReplyHandle } from '../../../../src/shared/types/inbound-message'
 
 const trackMock = analytics.track as ReturnType<typeof vi.fn>
@@ -310,6 +315,70 @@ describe('dispatchInboundMessage — long replies', () => {
     replyWith(LONG_ANSWER)
 
     expect(reply.streaming!.finish).toHaveBeenCalledWith(LONG_ANSWER)
+  })
+})
+
+// ============================================
+// A turn that stopped short
+//
+// An IM chat only has the text it is sent: a turn cut off at the step limit
+// must say so after what it wrote, or alone when it wrote nothing — and the
+// message it answers is finished either way.
+// ============================================
+
+describe('dispatchInboundMessage — a turn that stopped short', () => {
+  const STEP_LIMIT_NOTE = '（已达到单次最多 3 步的上限，回复“继续”可接着做）'
+  const CUT_OFF_NOTE = '（本轮意外中断，回复“继续”可接着做）'
+
+  function replyWith(content: string, ending: 'max_turns' | 'interrupted'): void {
+    const request = sendAppChatMessageMock.mock.calls[0][0] as { onReply: (text: string, ending?: string) => void }
+    request.onReply(content, ending)
+  }
+
+  it('notes the step limit after what was written', async () => {
+    const reply = makeReply(false)
+    await dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
+
+    replyWith('First half of the work.', 'max_turns')
+
+    expect(reply.send).toHaveBeenLastCalledWith(`First half of the work.\n\n${STEP_LIMIT_NOTE}`)
+  })
+
+  it('finishes the stream with the note alone when nothing was written', async () => {
+    instanceCfg = { streaming: true }
+    const reply = makeReply(true)
+    await dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
+
+    replyWith('', 'max_turns')
+
+    expect(reply.streaming!.finish).toHaveBeenCalledWith(STEP_LIMIT_NOTE)
+  })
+
+  it('notes an unexpected cut after what was written', async () => {
+    const reply = makeReply(false)
+    await dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
+
+    replyWith('Partial answer', 'interrupted')
+
+    expect(reply.send).toHaveBeenLastCalledWith(`Partial answer\n\n${CUT_OFF_NOTE}`)
+  })
+
+  it('answers a turn cut off before writing anything with the note, not an error', async () => {
+    sendAppChatMessageMock.mockRejectedValueOnce(new AppChatTurnInterrupted())
+    const reply = makeReply(false)
+
+    await dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
+
+    expect(reply.send).toHaveBeenLastCalledWith(CUT_OFF_NOTE)
+  })
+
+  it('still reports a model error as an error', async () => {
+    sendAppChatMessageMock.mockRejectedValueOnce(new Error('API Error: 529 overloaded'))
+    const reply = makeReply(false)
+
+    await dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
+
+    expect(reply.send).toHaveBeenLastCalledWith('⚠️ Error: API Error: 529 overloaded')
   })
 })
 

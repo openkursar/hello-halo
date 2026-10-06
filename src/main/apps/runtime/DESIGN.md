@@ -523,6 +523,19 @@ Consequences that matter:
   failure callback: unexpected termination checkpoints the user message and failure,
   emits error/completion synchronously, then discards delayed predecessor failures.
   An empty interrupted/errored turn rejects rather than leaving an IM stream open.
+- **A turn that stopped short says so** (`turn-ending.ts`). Reaching the step
+  limit, or being cut off other than by the person's own stop, leaves the answer
+  unfinished. The round hands its caller the ending with whatever was written
+  (`onReply(content, ending)`), and the step limit with nothing written still
+  answers the round — a silent resolve used to leave an IM chat's message
+  spinning. A cut with nothing written fails the round as
+  `AppChatTurnInterrupted`, so a team still records a failure while the IM exit
+  can tell it from a model error. Every IM exit — the person's reply
+  (`dispatch-inbound`), a teammate-woken front-desk turn (`team/index.ts`), an
+  autonomous turn's push — adds the same note (`withTurnEndingNote`: after the
+  text, or alone), naming the step limit the person can raise. Halo's chat page
+  needs nothing of this: the engine's `agent:error` (`interrupted`) notice
+  covers the step limit with or without text.
 - Those cover a session that *reports* its death. A session that simply never
   produces a turn — a resume against a transcript a crashed process left broken,
   an engine that failed to launch — reports nothing, and the caller would await a
@@ -1039,6 +1052,7 @@ src/main/apps/runtime/
   -- Interactive chat with an App (separate from automation runs):
   app-chat.ts                -- sendAppChatMessage() and chat session lifecycle
   app-chat-sink.ts           -- TurnSink for chat: run JSONL + round/autonomous delivery (§2.12a)
+  turn-ending.ts             -- A turn that stopped short (step limit, cut off): how it is recognized and the note an IM chat gets (§2.12a)
   app-chat-browser.ts        -- The AI browser context each chat drives: resident for native chats, per-turn for IM/HTTP/team, idle/cap reaping, teardown by reason (§2.19)
   conversation-source.ts     -- The digital-human `ConversationSource` registered with services/conversation-interop (default + local sessions only; §2.20)
   run-conversation-source.ts -- A scheduled run's one-way sender identity for cross-conversation messages (§2.20)

@@ -234,6 +234,41 @@ describe('processStream interruption and retirement', () => {
   })
 })
 
+describe('processStream: a turn cut off by the step limit', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  /** The result the engine ends a turn with when it ran out of steps. */
+  function maxTurnsResult(): Record<string, unknown> {
+    return { type: 'result', subtype: 'error_max_turns', is_error: false, num_turns: 4, duration_ms: 100, session_id: 'sess-1' }
+  }
+
+  function interruptionNotices(): unknown[] {
+    return emitAgentEvent.mock.calls
+      .filter(([channel]) => channel === 'agent:error')
+      .map(([, , , data]) => data)
+  }
+
+  it('says why it stopped even when it wrote part of an answer', async () => {
+    // What was written is not the whole answer; without the notice the chat page
+    // shows it as if the work were done.
+    await processStream(baseParams({
+      v2Session: fakeSession([systemInit(), assistantText('m1', 'First half of the work.'), maxTurnsResult()]),
+    }))
+
+    expect(interruptionNotices()).toEqual([
+      expect.objectContaining({ errorType: 'interrupted', error: 'Reached the maximum turn limit. Send a message to continue.' }),
+    ])
+  })
+
+  it('says the same when it wrote nothing', async () => {
+    await processStream(baseParams({ v2Session: fakeSession([systemInit(), maxTurnsResult()]) }))
+
+    expect(interruptionNotices()).toEqual([
+      expect.objectContaining({ errorType: 'interrupted', error: 'Reached the maximum turn limit. Send a message to continue.' }),
+    ])
+  })
+})
+
 describe('processStream thinking-only turns', () => {
   beforeEach(() => {
     vi.clearAllMocks()

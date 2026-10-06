@@ -43,6 +43,7 @@ import { setImStreamHandle } from './im-stream-registry'
 import { analytics } from '../../services/analytics/analytics.service'
 import { AnalyticsEvents } from '../../services/analytics/types'
 import { truncateUtf16Safe } from './text-truncate'
+import { AppChatTurnInterrupted, withTurnEndingNote, type AppChatTurnEnding } from './turn-ending'
 import { getSpace, getSpaceDir } from '../../services/space.service'
 import {
   getPendingRelayStore,
@@ -1058,7 +1059,7 @@ export async function dispatchInboundMessage(
         : undefined,
 
       // Use streaming.finish when available, else fall back to one-shot send
-      onReply: (finalContent: string) => {
+      onReply: (finalContent: string, ending?: AppChatTurnEnding) => {
         void analytics.track(AnalyticsEvents.MESSAGE_SENT, {
           source: 'im-reply',
           direction: 'outbound',
@@ -1072,9 +1073,12 @@ export async function dispatchInboundMessage(
         // A whitespace-only payload is the empty-response repair placeholder:
         // we must still finish the streaming session (the only normal-path
         // terminator), but surface a notice rather than a blank message.
+        // A turn that stopped short says so, after what it wrote or alone.
         // Handed over whole: what one message can carry is the channel's to
         // know, and it sends a longer answer in parts.
-        const replyText = finalContent.trim() ? finalContent : EMPTY_RESPONSE_NOTICE
+        const replyText = ending
+          ? withTurnEndingNote(finalContent, ending)
+          : finalContent.trim() ? finalContent : EMPTY_RESPONSE_NOTICE
         const sendFn = reply.streaming
           ? () => reply.streaming!.finish(replyText)
           : () => reply.send(replyText)
@@ -1096,7 +1100,11 @@ export async function dispatchInboundMessage(
     // separate one-shot reply — otherwise WeCom receives an unterminated stream
     // plus a duplicate message, garbling the user's chat.
     try {
-      const errorMsg = `⚠️ Error: ${(err as Error).message?.slice(0, 200) ?? 'Unknown error'}`
+      // A turn cut off before writing anything is not an error the person can
+      // act on; what they can do is tell it to carry on.
+      const errorMsg = err instanceof AppChatTurnInterrupted
+        ? withTurnEndingNote('', 'interrupted')
+        : `⚠️ Error: ${(err as Error).message?.slice(0, 200) ?? 'Unknown error'}`
       if (reply.streaming) {
         await reply.streaming.finish(errorMsg)
       } else {
