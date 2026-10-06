@@ -1,9 +1,9 @@
-# Message Channels — WeCom Bot, WeChat iLink Bot, and IM Wiring
+# Message Channels — WeCom Bot, WeChat iLink Bot, Feishu Bot, and IM Wiring
 
-Last updated: 2026-09-03
+Last updated: 2026-10-06
 
-Read this whenever the user wants a digital human reachable from an IM app (WeCom, WeChat),
-asks "why isn't my bot replying", or confuses the two available channel types. This document
+Read this whenever the user wants a digital human reachable from an IM app (WeCom, WeChat,
+Feishu), asks "why isn't my bot replying", or confuses the available channel types. This document
 covers the **channel/instance layer** — how a bot connection is created, authorized, and bound
 to a digital human. For the inbound/outbound *messaging* mechanics once a channel exists
 (triggering, `notify_bot`, what NOT to ask), read `create-digital-human/im-triggers.md` — the
@@ -13,30 +13,38 @@ two documents are complementary, not overlapping.
 |---|---|
 | `message-channels/wecom-bot.md` | Setting up, debugging, or explaining **WeCom Intelligent Bot** (企业微信智能机器人) — QR onboarding, manual setup, permission control, owner claiming, real-name resolution, group @mention removal |
 | `message-channels/weixin-ilink.md` | Setting up or debugging **WeChat iLink Bot** (微信个人号机器人) — QR login, session expiry, its narrower feature set |
+| §1b of this document | Setting up or debugging **Feishu Bot** (飞书机器人, Halo 3.0 and later) — QR onboarding, manual setup, the group @mention rule |
 | `create-digital-human/im-triggers.md` | Inbound/outbound message mechanics once a channel is connected: `@`-mention rule in groups, `notify_bot`, what fields do NOT exist in the App Spec |
 
-## 1. The #1 confusion: two completely different "WeCom/WeChat bot" products
+## 1. The #1 confusion: which IM channels exist, and two different "WeCom/WeChat bot" products
 
-Halo's Settings → Message Channels (设置 → 消息通道) page currently offers **two working**
-bidirectional IM channel types. `src/shared/types/im-channel.ts`'s `IM_CHANNEL_TYPES` tuple lists
-four (`wecom-bot`, `feishu-bot`, `dingtalk-bot`, `weixin-ilink-bot`), but only two have a real
-`ImChannelProvider` implementation, registered in `src/main/apps/runtime/index.ts`:
+Which bidirectional IM channel types Halo's Settings → Message Channels (设置 → 消息通道) page
+offers depends on the Halo version:
+
+- **Halo 3.0 and later — three:** WeCom Intelligent Bot, WeChat Bot, and Feishu Bot (飞书机器人,
+  §1b).
+- **Halo 2.1.x — two:** WeCom Intelligent Bot and WeChat Bot. There is no Feishu Bot card; Feishu
+  exists there only as a one-way notification channel (§1a).
+
+`src/shared/types/im-channel.ts`'s `IM_CHANNEL_TYPES` tuple lists four (`wecom-bot`, `feishu-bot`,
+`dingtalk-bot`, `weixin-ilink-bot`). From 3.0, three have a real `ImChannelProvider`
+implementation, registered in `src/main/apps/runtime/index.ts`:
 
 ```
 imChannelManager.registerProvider(new WecomBotProvider())
 imChannelManager.registerProvider(new WeixinIlinkBotProvider())
-// Future: imChannelManager.registerProvider(new FeishuBotProvider())
+imChannelManager.registerProvider(new FeishuBotProvider())
 // Future: imChannelManager.registerProvider(new DingTalkBotProvider())
 ```
 
-`feishu-bot` and `dingtalk-bot` exist only as a type-level tag and a UI label mapping (e.g.
-`ImSessionsSection.tsx`'s `CHANNEL_DISPLAY`) — there is no provider, no connection, no way to
-create an instance of either. **Never offer Feishu or DingTalk as a bidirectional IM channel to
-a user; only WeCom Intelligent Bot and WeChat Bot are real.** (Feishu and DingTalk *do* exist for
-one-way notifications — see §1a.)
+`dingtalk-bot` exists only as a type-level tag and a UI label mapping — there is no provider, no
+connection, no way to create an instance. **Never offer DingTalk as a bidirectional IM channel to
+a user** (DingTalk *does* exist for one-way notifications — see §1a). **Offer Feishu Bot only when
+the user's Message Channels page shows a Feishu Bot (飞书机器人) card** — ask them to look rather
+than assuming; on a 2.1.x build it is not there.
 
-The two real channels look similar in the UI but are built on unrelated platform APIs and must
-never be conflated when talking to a user:
+WeCom Intelligent Bot and WeChat Bot look similar in the UI but are built on unrelated platform
+APIs and must never be conflated when talking to a user:
 
 | | **WeCom Intelligent Bot** (企业微信智能机器人) | **WeChat Bot** (微信机器人) |
 |---|---|---|
@@ -63,18 +71,52 @@ alert**. Halo has two completely separate WeCom integrations and the phrase "配
 | | **IM channels** (this document) | **Notify channels** |
 |---|---|---|
 | Direction | Bidirectional — the bot receives messages and replies | One-way outbound only — Halo pushes a message, nothing comes back |
-| Purpose | A digital human you chat with over WeCom/WeChat | A digital human tells you something happened (a scheduled run finished, an alert fired) |
+| Purpose | A digital human you chat with over WeCom/WeChat/Feishu | A digital human tells you something happened (a scheduled run finished, an alert fired) |
 | Source | `src/shared/types/im-channel.ts`, `src/main/apps/runtime/im-channels/` | `src/main/services/notify-channels/` — `wecom.ts`, `dingtalk.ts`, `feishu.ts`, `email.ts`, `webhook.ts` (all five implemented) |
-| Configured via | Settings → Message Channels → **WeCom Intelligent Bot** / **WeChat Bot** cards (this document) | Settings → Message Channels → the **notification channel cards** further down the same page (WeCom/DingTalk/Feishu/Email/Webhook) |
+| Configured via | Settings → Message Channels → **WeCom Intelligent Bot** / **WeChat Bot** / **Feishu Bot** (3.0 and later) cards (this document) | Settings → Message Channels → the **notification channel cards** further down the same page (WeCom/DingTalk/Feishu/Email/Webhook) |
 | App Spec field | Not in the spec at all — see §2 | `output.notify.channels` (declares which channels a run may push to) |
 | Agent tool | None — replying is just normal chat output | `notify_channel` (the app decides at runtime whether to push) |
 
-Concretely: Feishu and DingTalk **do exist** in Halo, but only as one-way notify-channels — never
-offer them as a chat-back bot (§1). Conversely, WeCom has a real notify-channel *and* a real IM
-channel, both independently configurable — enabling one does not enable the other. Ask the user
-"do you want to talk to it, or just get notified by it?" when it isn't obvious which they mean.
+Concretely: DingTalk **does exist** in Halo, but only as a one-way notify-channel — never offer it
+as a chat-back bot (§1). Feishu has a notify-channel in every build and, from Halo 3.0, also the
+bidirectional Feishu Bot (§1b). WeCom likewise has a real notify-channel *and* a real IM channel.
+In each case the two are configured independently — enabling one does not enable the other. Ask
+the user "do you want to talk to it, or just get notified by it?" when it isn't obvious which they
+mean.
 
-## 2. Shared architecture — read once, applies to both channel types
+## 1b. Feishu Bot (飞书机器人) — Halo 3.0 and later
+
+A Feishu / Lark app bot on Feishu's long connection (`feishu-bot.provider.ts`, built on
+`@larksuiteoapi/node-sdk`). It uses the same instance-to-digital-human binding and the same
+inbound gates as the other channels (§2). Only describe it after the user confirms their Message
+Channels page has a **Feishu Bot** (飞书机器人) card (§1).
+
+- **Onboarding.** Expand the Feishu Bot card → **Scan to add** (扫描添加) and scan with the Feishu
+  app. On the confirmation page the user can rename the bot and change its icon; keeping the
+  availability scope to themselves or a few members usually lets the tenant publish the app
+  without admin review. Scan-to-add creates and binds a default digital human. **Manual setup**
+  (手动设置) instead takes the **App ID** and **App Secret** (应用密钥) of an existing Feishu app,
+  plus the **Deployment** (部署): Feishu (China) (飞书（中国）) or Lark (International)
+  (Lark（国际版）).
+- **Owner.** As with WeCom, setup does not tell Halo who the owner is: right after setup the user
+  sends the bot one direct message, and the first person to message it in a direct chat becomes
+  its owner. Owners and guests are managed with the same permission editor as WeCom.
+- **Groups.** **Require @mention in groups** (在群聊中需要 @ 提及) is on by default, so the bot
+  answers only group messages that @ it. Feishu delivers un-mentioned group messages at all only
+  when the tenant granted the sensitive "all group messages" permission; only then does turning
+  the toggle off make the bot answer every group message. **Quote Reply (Group)** (引用回复（群聊）)
+  decides whether group replies quote the triggering message; direct messages never quote.
+- **Replies.** **Streaming** (流式传输) shows progress live in a Feishu card that is then replaced
+  by the final answer; with it off, only the final reply is sent. The bot can also send files into
+  the chat.
+- **One machine per bot.** Feishu hands each event to exactly one connection, so the same App ID
+  connected from two machines splits the messages at random between them. Keep a given bot on one
+  Halo; Halo also refuses to bind a bot that is already bound to another digital human.
+- **"Connected · no messages received yet"** (已连接 · 尚未收到消息) means the link is up but nothing
+  has arrived — typically the Feishu app is still waiting for administrator approval, or the person
+  messaging it is outside its availability scope. A direct message from an in-scope user clears it.
+
+## 2. Shared architecture — read once, applies to every channel type
 
 - **Instance = one live connection, bound to exactly one digital human.** Each configured "Bot"
   in Settings is an `ImChannelInstanceConfig` (`src/shared/types/im-channel.ts`) with an `appId`.
@@ -83,7 +125,7 @@ channel, both independently configurable — enabling one does not enable the ot
   other routing layer.
 - **All inbound messages funnel through one place**: `src/main/apps/runtime/dispatch-inbound.ts`.
   Whatever channel-specific detail you're debugging, the gates it applies (owner-claim,
-  `replyScope`, busy-buffering, permission context) are identical for both provider types.
+  `replyScope`, busy-buffering, permission context) are identical for every provider type.
 - **Config lives in `config.json` under `imChannels.instances[]`**, edited exclusively through
   Settings → Message Channels (设置 → 消息通道). There is no per-channel config file.
 - **An instance with no `appId` or `enabled: false` never connects** — `ImChannelManager` only
@@ -92,21 +134,23 @@ channel, both independently configurable — enabling one does not enable the ot
 ## 3. Configuration — shortest path
 
 1. Open **Settings → Message Channels** (设置 → 消息通道).
-2. Expand the **WeCom Intelligent Bot** (企业微信智能机器人) or **WeChat Bot** (微信机器人)
-   provider card.
-3. Click **Scan to add** (扫描添加) for WeCom (recommended — creates and binds a default digital
-   human automatically) or **Add Bot** (添加机器人) → **Connect WeChat** (连接微信) for iLink.
+2. Expand the **WeCom Intelligent Bot** (企业微信智能机器人), **WeChat Bot** (微信机器人), or —
+   on Halo 3.0 and later — **Feishu Bot** (飞书机器人) provider card.
+3. Click **Scan to add** (扫描添加) for WeCom or Feishu (recommended — creates and binds a default
+   digital human automatically) or **Add Bot** (添加机器人) → **Connect WeChat** (连接微信) for
+   iLink.
 4. Scan the QR code with the corresponding phone app and approve.
-5. **WeCom only** — send the bot one direct message afterward. This is not optional busywork:
-   the WeCom scan-auth protocol never returns the scanning user's `userid`, so Halo cannot know
-   who the owner is until they message the bot once (`dispatch-inbound.ts`'s owner auto-claim
-   gate, detailed in `message-channels/wecom-bot.md` §3). Until that happens the bot is
-   configured but treats every sender as a deny-all guest.
+5. **WeCom and Feishu** — send the bot one direct message afterward. This is not optional
+   busywork: the scan-auth flow never tells Halo the scanning user's ID (for WeCom, its `userid`),
+   so Halo cannot know who the owner is until they message the bot once (`dispatch-inbound.ts`'s
+   owner auto-claim gate, detailed for WeCom in `message-channels/wecom-bot.md` §3). Until that
+   happens the bot is configured but treats every sender as a deny-all guest.
 6. Confirm the instance card shows a green **Connected** (已连接) dot.
 
 Full field-by-field detail, the manual (non-QR) setup path, and permission control are in the
-per-channel companion documents — read the one matching the user's platform before configuring
-anything, since the two setup flows share no steps beyond "open this settings section".
+per-channel companion documents (§1b for Feishu) — read the one matching the user's platform
+before configuring anything, since the setup flows share no steps beyond "open this settings
+section".
 
 ## 4. Verification
 
@@ -142,3 +186,7 @@ an action and report back:
 - **Do not assume a "Disconnected" WeCom instance is broken** before checking whether it's
   actually in `standby` — that state means it's working correctly, just yielded to another
   device, and is a normal condition, not a failure.
+- **Do not offer Feishu Bot on a build whose Message Channels page has no Feishu Bot card.** It
+  exists from Halo 3.0; on 2.1.x Feishu is only a one-way notification channel (§1a).
+- **Do not suggest running the same Feishu bot on two machines.** Unlike WeCom there is no standby
+  arbitration — Feishu splits the messages between the two connections (§1b).
