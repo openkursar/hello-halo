@@ -84,6 +84,12 @@ export interface SystemPromptContext {
   toolsetIndex?: string
   /** Knowledge bases bound to this session's space/app (Tlon) */
   knowledgeBases?: KBReference[]
+  /**
+   * The caller's own instructions say who the assistant is (a digital human's
+   * App Instructions): the opening line then says it runs on Halo instead of
+   * that it is Halo. Everything else stays Halo's.
+   */
+  ownIdentity?: boolean
 }
 
 // ============================================
@@ -589,6 +595,16 @@ function buildEngineNeutralTemplate(promptProfile: PromptProfile | undefined): s
   return layers.join('\n\n')
 }
 
+/** Every template states who the assistant is in one line starting like this. */
+const HALO_IDENTITY_LINE = /^You are Halo, .*$/m
+
+/**
+ * That line for an assistant whose own instructions define who it is: asked
+ * who it is, it should answer as those say, not with Halo's introduction.
+ */
+const RUNS_ON_HALO_LINE = 'You run on Halo, which gives you remote access, file management, and built-in AI browser capabilities. ' +
+  'Your identity and role are defined by the App Instructions below.'
+
 /** A system prompt in the shape the active engine accepts. */
 export type EngineSystemPrompt = string | { type: 'preset'; preset: 'default'; append: string }
 
@@ -719,6 +735,7 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
     ...ctx,
     digitalHumansEnabled: ctx.digitalHumansEnabled ?? settings?.digitalHumansEnabled,
   })
+  if (ctx.ownIdentity) prompt = prompt.replace(HALO_IDENTITY_LINE, RUNS_ON_HALO_LINE)
 
   // Toolset-broker sessions (main chat): append the usage guides of currently-
   // enabled optional toolsets. Awareness of disabled ones lives in the

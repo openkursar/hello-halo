@@ -39,6 +39,22 @@ describe('system prompt per engine', () => {
     }
   })
 
+  it('says an assistant with its own instructions runs on Halo instead of being Halo, and changes nothing else', () => {
+    const runsOnHalo = 'You run on Halo, which gives you remote access, file management, and built-in AI browser capabilities. ' +
+      'Your identity and role are defined by the App Instructions below.'
+    for (const id of ['anthropic', 'halo']) {
+      engine.id = id
+      for (const promptProfile of ['halo', 'official'] as const) {
+        const own = buildSystemPrompt({ ...ctx, promptProfile, ownIdentity: true })
+        const plain = buildSystemPrompt({ ...ctx, promptProfile })
+
+        expect(own).not.toMatch(/^You are Halo, /m)
+        expect(own).toContain(runsOnHalo)
+        expect(own).toBe(plain.replace(/^You are Halo, .*$/m, runsOnHalo))
+      }
+    }
+  })
+
   it('sends only Halo context, appended to the engine default, on the halo engine', () => {
     engine.id = 'halo'
     const prompt = buildSystemPrompt({ ...ctx, toolsetIndex: '## AI Terminal\nguide' })

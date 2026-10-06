@@ -272,6 +272,8 @@ export function buildAppSystemPrompt(options: AppPromptOptions): string {
     knowledgeBases: getKBReferencesForApp(options.appId),
     // A run mounts no digital-human management tools, so it must not be told it can.
     digitalHumansEnabled: false,
+    // Who it is comes from its App Instructions, not Halo's introduction.
+    ownIdentity: !!options.appSpec.system_prompt,
   }
   let basePrompt = options.usesAIBrowser
     ? buildSystemPromptWithAIBrowser(promptCtx, AI_BROWSER_SYSTEM_PROMPT)
