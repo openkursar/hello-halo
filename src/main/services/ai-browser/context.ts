@@ -37,6 +37,7 @@ import { emitBrowserActiveView, emitBrowserViewGone, emitBrowserConversationRele
 import { CROSS_ORIGIN_FRAME_REFUSED, FOCUS_REFUSED, READ_FILLED_VALUE, SELECT_IF_FOCUSED } from './fill-check'
 import type { AIBrowserLivePage, AIBrowserStopResult } from '../../../shared/types/ai-browser'
 import { sanitizeFilename, resolveUniquePath } from '../../foundation/file-naming'
+import { isEngineControlFileName } from '../../../shared/engine-control-files'
 import type {
   BrowserContextInterface,
   AccessibilitySnapshot,
@@ -161,6 +162,17 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label = 'Operation'): P
       error => { clearTimeout(timer); reject(error) }
     )
   })
+}
+
+/**
+ * The name a download is saved under. Never one an agent engine reads as its
+ * instructions: downloads land in the workspace the engine works in.
+ */
+function downloadFileName(suggested: string): string {
+  const name = sanitizeFilename(suggested)
+  if (!isEngineControlFileName(name)) return name
+  const ext = path.extname(name)
+  return `${name.slice(0, name.length - ext.length)} (downloaded)${ext}`
 }
 
 function waitForPolling(delayMs: number, signal?: AbortSignal): Promise<void> {
@@ -978,6 +990,7 @@ export class BrowserContext implements BrowserContextInterface {
   /**
    * Register a new download. Called by the session-level will-download handler.
    * Sanitizes the filename, resolves a unique path, and creates a tracking entry.
+   * The entry's `filename` is the name actually saved, which the model is told.
    */
   registerDownload(
     url: string,
@@ -987,9 +1000,8 @@ export class BrowserContext implements BrowserContextInterface {
   ): { id: string; resolvedPath: string } {
     this.downloadCounter++
     const id = `dl_${this.downloadCounter}`
-    const sanitized = sanitizeFilename(suggestedFilename)
     const downloadDir = this.getDownloadDir()
-    const resolvedPath = resolveUniquePath(downloadDir, sanitized)
+    const resolvedPath = resolveUniquePath(downloadDir, downloadFileName(suggestedFilename))
 
     const info: DownloadInfo = {
       id,

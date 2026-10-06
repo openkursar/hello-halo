@@ -15,6 +15,7 @@
 import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import {
+  BROWSER_GUARDED_TOOLS,
   decideFileAccess,
   fileExportRefusal,
   filterSearchOutput,
@@ -139,11 +140,15 @@ export function recordExecutedTool(
 /**
  * An MCP tool's server decided its fate before the model ever saw it — an
  * uninjected server has no tools to call — so reaching here means it was
- * granted. Built-ins are re-asked because the pool they were removed from was
- * fixed at session creation.
+ * granted; only the browser's local files and addresses are still judged.
+ * Built-ins are re-asked because the pool they were removed from was fixed at
+ * session creation.
  */
 function judge(delegation: ActiveDelegation, toolName: string, input: Record<string, unknown>): ToolDecision {
-  if (toolName.startsWith('mcp__')) return { allow: true }
+  if (toolName.startsWith('mcp__')) {
+    const decision = delegation.files ? decideFileAccess(delegation.files, toolName, input, true) : null
+    return decision && !decision.allow ? { allow: false, reason: decision.reason } : { allow: true }
+  }
 
   const { policy, mode } = delegation
   if (toolName === 'Bash') {
@@ -194,9 +199,10 @@ export function turnFileExportRefusal(conversationId: string, filePath: string):
 
 /**
  * The same file boundary, as engine hooks. Needed besides the gate: an engine
- * clears a call its own rules allow (a granted Read) without asking the gate,
- * and only a pre-tool hook sees every call. Read at call time, like the gate,
- * because the session outlives the turn that registered its terms.
+ * clears a call its own rules allow (a granted Read, a granted MCP server's
+ * tool) without asking the gate, and only a pre-tool hook sees every call.
+ * Read at call time, like the gate, because the session outlives the turn that
+ * registered its terms.
  *
  * A granted search is also rewritten to run at the path as judged, and its
  * result has closed paths removed without a trace, for engines that recurse
@@ -244,7 +250,7 @@ export function createTurnFileAccessHooks(conversationId: string): Record<string
 
   // One entry per tool: the Halo engine does not read `A|B` as alternation.
   return {
-    PreToolUse: FILE_TOOLS.map(matcher => ({ matcher, hooks: [pre] })),
+    PreToolUse: [...FILE_TOOLS, ...BROWSER_GUARDED_TOOLS].map(matcher => ({ matcher, hooks: [pre] })),
     PostToolUse: ['Grep', 'Glob'].map(matcher => ({ matcher, hooks: [post] })),
   }
 }

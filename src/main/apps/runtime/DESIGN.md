@@ -1668,14 +1668,23 @@ Remote, tool-started and scheduled runs keep their pages in the hidden host.
     configuration folder under whatever name it has (it can sit inside a
     workspace), and `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`,
     `AGENTS.override.md` and `.mcp.json` by name anywhere
-    (`ENGINE_CONTROL_FOLDERS` / `ENGINE_CONTROL_FILES` / `engineConfigDirs`,
-    each entry with what reads it). A name is read the way Windows writes it: a
+    (`ENGINE_CONTROL_FOLDERS` / `ENGINE_CONTROL_FILES` in
+    `shared/engine-control-files.ts`, each entry with what reads it, and
+    `engineConfigDirs`). A name is read the way Windows writes it: a
     `:stream` suffix and trailing dots or spaces name the same file. A write
     there would outlive the turn and act with the owner's authority — settings,
     hooks and git's config run commands (Claude Code runs git as every session
     starts), instructions speak into every later session, a skill's files are
     reloaded while a turn runs. This holds for the file tools; what else can
     write is held as the next lines say.
+  - the AI browser, when granted, is held to the same decision
+    (`BROWSER_GUARDED_TOOLS`, in the pre-tool hook and the gate): a
+    snapshot's or screenshot's `filePath` is judged as a write, an upload's
+    `filePath` and `browser_run`'s `file` as a read, each an absolute path
+    without `..` (the tools hand it to the filesystem as written).
+    `browser_navigate` and `browser_tab` `new` open `http:`, `https:` and
+    `about:blank` only. A download is never saved under an engine instruction
+    file name, in any turn (`services/ai-browser`).
   - Bash and the terminal cannot be held to paths; they follow the policy only.
   - Codex runs no restricted turn at all (it cannot enforce a policy).
 - TodoWrite is available to every caller (`ALWAYS_AVAILABLE_BUILTIN_TOOLS`).
