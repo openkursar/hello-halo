@@ -1482,9 +1482,12 @@ recognized in `dispatch-inbound.ts`: exact in a direct chat; in a group also
 when the command ends a message that starts with a mention. `/answer` carries
 its answer after it, so it starts a direct message, or in a group comes right
 after the mentions the message starts with — a WeCom mention ends with U+2005,
-one typed by hand at its first space — and nowhere later in the sentence
-(`im-escalation.parseAnswerCommand`, §2.3). There is no "bot name" setting, and
-none is needed.
+one typed by hand at its first space. Where a mention without U+2005 ends cannot
+be told when the bot's name holds ordinary spaces, so there, as `/stop` counts at
+the end of such a message, `/answer` counts further into it when the number of
+its question follows ("@Halo AI Team /answer 3 A"); a sentence about answering
+names no question (`im-escalation.parseAnswerCommand`, §2.3). There is no "bot
+name" setting, and none is needed.
 
 ### 4.4 The processing notice
 

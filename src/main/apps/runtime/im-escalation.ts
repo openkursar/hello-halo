@@ -174,15 +174,27 @@ const ANSWER_COMMAND = /^\/answer(?=\s|$)/i
  */
 const LEADING_MENTIONS = /^(?:@(?:[^@/\u2005\n]+\u2005|\S+\s)\s*)+/
 
+/** `/answer` as a word of its own, followed by the number of the question it answers. */
+const NUMBERED_ANSWER = /\s(\/answer\s+\d)/i
+
 /**
  * The text after `/answer` when this message is one, else null. A direct
  * message must start with it; in a group it may also come right after the
- * mentions the message starts with, and only there — "@bot I'll /answer it
- * later" is a message, not an answer.
+ * mentions the message starts with — "@bot I'll /answer it later" is a
+ * message, not an answer.
+ *
+ * Where a mention without WeCom's U+2005 ends cannot be told when the name
+ * holds ordinary spaces ("@Halo AI Team /answer 3 A"). `/stop` counts there
+ * when it ends the message; `/answer` counts further into it when it names
+ * its question, which a sentence about answering does not.
  */
 export function parseAnswerCommand(body: string, chatType: 'direct' | 'group'): string | null {
   let text = body.trim()
-  if (chatType === 'group') text = text.replace(LEADING_MENTIONS, '')
+  if (chatType === 'group') {
+    const afterMentions = text.replace(LEADING_MENTIONS, '')
+    const numbered = text.startsWith('@') && !text.includes('\u2005') ? NUMBERED_ANSWER.exec(text) : null
+    text = ANSWER_COMMAND.test(afterMentions) || !numbered ? afterMentions : text.slice(numbered.index + 1)
+  }
   const match = ANSWER_COMMAND.exec(text)
   return match ? text.slice(match[0].length).trim() : null
 }

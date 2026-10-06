@@ -1131,6 +1131,15 @@ describe('dispatchInboundMessage — /answer', () => {
     expect(sendAppChatMessageMock).not.toHaveBeenCalled()
   })
 
+  it('takes it in a group whose bot name holds ordinary spaces, as /stop is taken there', async () => {
+    instanceCfg = { permissionEnabled: true, owners: ['u1'] }
+
+    await dispatchInboundMessage(makeMsg({ chatType: 'group', chatId: 'g-1', body: '@Halo AI Team /answer 12 B' }), makeReply(false), 'app-1', 'inst-1')
+
+    expect(answerDeps.respond).toHaveBeenCalledWith('app-1', 'q-1', expect.objectContaining({ choice: 'No' }))
+    expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+  })
+
   it('leaves a group message that only uses the word later in the sentence to the digital human', async () => {
     instanceCfg = { permissionEnabled: true, owners: ['u1'] }
 
