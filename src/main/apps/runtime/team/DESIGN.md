@@ -1082,9 +1082,10 @@ session once its slot freed. So `runGatedTurn` takes the session's hold
 (`OrchestrationSessionDeps.holdTurn` → `beginAppChatTurnStart`) before awaiting
 the slot and passes it to the turn (`turnStart`), which adopts it; a wake that
 never reaches `app-chat` gives it back. A message arriving meanwhile is buffered
-and answered right after, and a stop reaches the waiting wake like any message on
-its way. A remote member is not held here — its owner holds it when the wake
-lands. The hold, rather than teaching the busy predicate the bus's reservation:
+and answered right after. A stop reaches the waiting wake like any message on its
+way: once it has its slot it ends as undelivered ("Stopped before it could run")
+without setting up a session, so the chat is free again at once. A remote member
+is not held here — its owner holds it when the wake lands. The hold, rather than teaching the busy predicate the bus's reservation:
 that predicate is the leaf `app-chat-live-turn`, and the bus asks it
 (`isBusy`), so the edge back would be both an import cycle and a recursion. One
 bound to know: a wake that times out while still queued keeps its hold until it

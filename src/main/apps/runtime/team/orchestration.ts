@@ -550,6 +550,8 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
         if (!canDeliverTurn(request.teamContext.teamId, request.teamContext.epochId, request.teamContext.kind)) {
           return { finalMessage: null, undelivered: { reason: 'Task ended before its notice could run' } }
         }
+        // Stopped while it waited: no session to set up, and the chat is free now.
+        if (turnStart?.cancelled) return { finalMessage: null, undelivered: { reason: 'Stopped before it could run' } }
         decisionStarts.get(request.teamContext.correlationId)?.()
         decisionStarts.delete(request.teamContext.correlationId)
         return await session.sendAppChatMessage(turnStart ? { ...request, turnStart } : request)
