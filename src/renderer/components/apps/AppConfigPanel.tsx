@@ -1177,7 +1177,7 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart, onRestartAgen
             </div>
             <p className="text-[11px] text-muted-foreground/60">
               {t('Reloads the prompt and configuration for this digital human across all chat channels. Conversation history is preserved.')}
-              {' '}{t('To start every chat afresh, use Clear all conversations below.')}
+              {' '}{t('To start every conversation afresh, use “{{action}}” below.', { action: t('Clear all conversations') })}
             </p>
           </div>
 

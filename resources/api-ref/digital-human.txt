@@ -143,8 +143,8 @@ POST   /api/apps/<appId>/chats/clear-all                           Clear the his
 
 GET    /api/apps/<appId>/chats/clearable                           Count the conversations clearing all of a digital human's chats would clear
      curl -s "$HALO_API_URL/api/apps/<appId>/chats/clearable" -H "Authorization: Bearer $HALO_API_TOKEN"
-     # out: {success:true,data:{total:number,im:number}}
-     # note: Its default and local chats and its IM chats that have history; API sessions and team chats are not counted.
+     # out: {success:true,data:{total:number,im:number,teamIm:number}}
+     # note: total: its default and local chats and its IM chats that have history (im of them in IM); API sessions and team chats are not counted. teamIm: IM chats with history that a team answers — a clear-all leaves them alone; /clear in each clears it.
 
 POST   /api/apps/<appId>/clear-memory                              Delete all of a digital human's memory files
      !! DESTRUCTIVE: cannot be undone. Confirm with the user in plain language before running this.

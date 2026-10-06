@@ -97,6 +97,11 @@ const PROCESSING_NOTICE_DELAY_MS = 5_000
  */
 const pendingProcessingNotices = new Map<string, () => void>()
 
+/** Take back the processing notice the conversation has waiting, if any; a stop or a clear makes it untrue. */
+export function withdrawProcessingNotice(conversationId: string): void {
+  pendingProcessingNotices.get(conversationId)?.()
+}
+
 /**
  * Commands that abort the current generation.
  * Slash-prefixed to avoid false triggers from normal conversation.
@@ -758,7 +763,7 @@ export async function dispatchInboundMessage(
 
   // ── Stop command: abort generation, silently drop buffered supplements ──
   if (isStopCommand(msg.body, msg.chatType)) {
-    pendingProcessingNotices.get(conversationId)?.()
+    withdrawProcessingNotice(conversationId)
     const dropped = clearSupplementBuffer(conversationId)
     const isActive = isAppChatConversationGenerating(conversationId)
     if (isActive) {
@@ -783,7 +788,7 @@ export async function dispatchInboundMessage(
 
   // ── Clear command: reset context, silently drop buffered supplements ──
   if (isClearCommand(msg.body, msg.chatType)) {
-    pendingProcessingNotices.get(conversationId)?.()
+    withdrawProcessingNotice(conversationId)
     const dropped = clearSupplementBuffer(conversationId)
     console.log(
       `${LOG_TAG} Clear command received: channel=${msg.channel}, chatId=${msg.chatId}, ` +

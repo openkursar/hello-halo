@@ -596,7 +596,7 @@ export interface HaloAPI extends BrowserHostBridge {
   appChatSessionState: (appId: string, conversationId?: string) => Promise<IpcResponse>
   appChatClear: (input: { appId: string; spaceId: string; conversationId?: string }) => Promise<IpcResponse>
   appChatRestart: (appId: string) => Promise<IpcResponse<{ sessionsClosed: number }>>
-  appChatsClearable: (appId: string) => Promise<IpcResponse<{ total: number; im: number }>>
+  appChatsClearable: (appId: string) => Promise<IpcResponse<{ total: number; im: number; teamIm: number }>>
   appChatsClearAll: (appId: string) => Promise<IpcResponse<{ cleared: number; failed: number }>>
   appImChatMessages: (input: { appId: string; spaceId: string; channel: string; chatType: 'direct' | 'group'; chatId: string }) => Promise<IpcResponse>
   appImChatClear: (input: { appId: string; spaceId: string; channel: string; chatType: 'direct' | 'group'; chatId: string }) => Promise<IpcResponse>

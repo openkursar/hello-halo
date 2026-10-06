@@ -525,7 +525,7 @@ export const appsApi = {
     return httpRequest('POST', `/api/apps/${appId}/chat/restart`)
   },
 
-  appChatsClearable: async (appId: string): Promise<ApiResponse<{ total: number; im: number }>> => {
+  appChatsClearable: async (appId: string): Promise<ApiResponse<{ total: number; im: number; teamIm: number }>> => {
     if (isElectron()) {
       return window.halo.appChatsClearable(appId)
     }

@@ -1,7 +1,8 @@
 /**
  * "Clear all conversations" in a digital human's settings: it says how many
  * conversations (and how many IM chats) will be cleared before anything is,
- * clears them only once confirmed, and reports what happened.
+ * and which it leaves out, clears them only once confirmed, and reports what
+ * happened — in wording that reads right for one conversation as for many.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -66,7 +67,7 @@ function open() {
 }
 
 beforeEach(() => {
-  env.api.appChatsClearable.mockReset().mockResolvedValue({ success: true, data: { total: 7, im: 5 } })
+  env.api.appChatsClearable.mockReset().mockResolvedValue({ success: true, data: { total: 7, im: 5, teamIm: 0 } })
   env.api.appChatsClearAll.mockReset().mockResolvedValue({ success: true, data: { cleared: 7, failed: 0 } })
 })
 
@@ -76,13 +77,23 @@ describe('AppClearChatsAction', () => {
 
     await click(tree, 'Clear all conversations')
     const confirm = runner.render(view)
-    expect(text(confirm)).toContain('Clear the history of 7 conversations (5 of them IM chats)?')
+    expect(text(confirm)).toContain('Clear the history of 7 conversation(s), 5 of them in IM?')
     expect(text(confirm)).toContain('This cannot be undone. Memory and reminders are kept.')
+    expect(text(confirm)).not.toContain('a team answers')
     expect(env.api.appChatsClearAll).not.toHaveBeenCalled()
 
     await click(confirm, 'Confirm Clear')
     expect(env.api.appChatsClearAll).toHaveBeenCalledWith('person')
-    expect(text(runner.render(view))).toContain('Cleared 7 conversations.')
+    expect(text(runner.render(view))).toContain('Cleared 7 conversation(s).')
+  })
+
+  it('says that IM conversations a team answers are left out, and how to clear one', async () => {
+    env.api.appChatsClearable.mockResolvedValueOnce({ success: true, data: { total: 7, im: 5, teamIm: 2 } })
+    const { runner, view, tree } = open()
+
+    await click(tree, 'Clear all conversations')
+
+    expect(text(runner.render(view))).toContain('IM conversations a team answers are not included (2); to clear one, send /clear in it.')
   })
 
   it('clears nothing when cancelled', async () => {
@@ -96,7 +107,7 @@ describe('AppClearChatsAction', () => {
   })
 
   it('says when there is nothing to clear, and when some could not be cleared', async () => {
-    env.api.appChatsClearable.mockResolvedValueOnce({ success: true, data: { total: 0, im: 0 } })
+    env.api.appChatsClearable.mockResolvedValueOnce({ success: true, data: { total: 0, im: 0, teamIm: 0 } })
     const first = open()
     await click(first.tree, 'Clear all conversations')
     expect(text(first.runner.render(first.view))).toContain('No conversation has history to clear.')
@@ -105,6 +116,6 @@ describe('AppClearChatsAction', () => {
     const second = open()
     await click(second.tree, 'Clear all conversations')
     await click(second.runner.render(second.view), 'Confirm Clear')
-    expect(text(second.runner.render(second.view))).toContain('Cleared 6 conversations; 1 could not be cleared. Try again.')
+    expect(text(second.runner.render(second.view))).toContain('Cleared 6 conversation(s); 1 could not be cleared. Try again.')
   })
 })

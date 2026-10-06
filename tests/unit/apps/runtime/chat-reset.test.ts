@@ -12,6 +12,7 @@ const m = vi.hoisted(() => ({
   clearAppChat: vi.fn(async (_appId: string, _spaceId: string, _conversationId?: string) => {}),
   clearImSession: vi.fn(async (..._args: unknown[]) => {}),
   clearSupplementBuffer: vi.fn(),
+  withdrawProcessingNotice: vi.fn(),
   clearImPermissionContext: vi.fn(),
   clearRelays: vi.fn(),
   app: { id: 'person', spaceId: 'space-1' } as { id: string; spaceId: string } | null,
@@ -19,7 +20,10 @@ const m = vi.hoisted(() => ({
 
 vi.mock('../../../../src/main/apps/manager', () => ({ getAppManager: () => ({ getApp: () => m.app }) }))
 vi.mock('../../../../src/main/apps/runtime/app-chat', () => ({ clearAppChat: m.clearAppChat, clearImSession: m.clearImSession }))
-vi.mock('../../../../src/main/apps/runtime/dispatch-inbound', () => ({ clearSupplementBuffer: m.clearSupplementBuffer }))
+vi.mock('../../../../src/main/apps/runtime/dispatch-inbound', () => ({
+  clearSupplementBuffer: m.clearSupplementBuffer,
+  withdrawProcessingNotice: m.withdrawProcessingNotice,
+}))
 vi.mock('../../../../src/main/apps/runtime/im-permission-registry', () => ({ clearImPermissionContext: m.clearImPermissionContext }))
 vi.mock('../../../../src/main/apps/runtime/pending-relays', () => ({ getPendingRelayStore: () => ({ clear: m.clearRelays }) }))
 vi.mock('../../../../src/main/apps/runtime/im-session-registry', () => ({
@@ -51,7 +55,16 @@ beforeEach(() => {
 
 describe('countClearableChats', () => {
   it('counts Halo and IM chats with history, not API sessions, team chats or empty chats', () => {
-    expect(countClearableChats('person')).toEqual({ total: 5, im: 3 })
+    expect(countClearableChats('person')).toMatchObject({ total: 5, im: 3 })
+  })
+
+  it('also counts the IM chats with history a team answers, which a clear-all leaves alone', () => {
+    m.sessions.push(
+      session('feishu-bot', 'team-direct', { source: 'im', teamContext: { teamId: 't', epochId: 'e2' } }),
+      session('wecom-bot', 'team-empty', { source: 'im', chatType: 'group', messageCount: 0, teamContext: { teamId: 't', epochId: 'e3' } }),
+    )
+
+    expect(countClearableChats('person')).toEqual({ total: 5, im: 3, teamIm: 2 })
   })
 })
 
@@ -69,6 +82,8 @@ describe('clearAllChats', () => {
       ['person', 'space-1', 'feishu-bot', 'direct', 'legacy-chat'],
     ])
     for (const key of ['app-chat:person:wecom-bot:group:group-1', 'app-chat:person:wecom-bot:direct:li', 'app-chat:person:feishu-bot:direct:legacy-chat']) {
+      // A processing notice still waiting would otherwise arrive after the clear.
+      expect(m.withdrawProcessingNotice).toHaveBeenCalledWith(key)
       expect(m.clearSupplementBuffer).toHaveBeenCalledWith(key)
       expect(m.clearImPermissionContext).toHaveBeenCalledWith(key)
       expect(m.clearRelays).toHaveBeenCalledWith(key)

@@ -422,8 +422,8 @@ export const MODULE: RouteModuleMeta = {
       expose: 'ai',
       group: 'digital-human',
       summary: "Count the conversations clearing all of a digital human's chats would clear",
-      returns: '{success:true,data:{total:number,im:number}}',
-      notes: 'Its default and local chats and its IM chats that have history; API sessions and team chats are not counted.',
+      returns: '{success:true,data:{total:number,im:number,teamIm:number}}',
+      notes: 'total: its default and local chats and its IM chats that have history (im of them in IM); API sessions and team chats are not counted. teamIm: IM chats with history that a team answers — a clear-all leaves them alone; /clear in each clears it.',
     },
     'POST /api/apps/:appId/chats/clear-all': {
       expose: 'ai',

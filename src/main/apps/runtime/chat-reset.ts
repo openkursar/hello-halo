@@ -12,7 +12,7 @@ import { classifySessionSource } from '../../../shared/types/im-channel'
 import { buildImSessionKey, buildLocalSessionKey } from '../../../shared/apps/im-keys'
 import { getAppManager } from '../manager'
 import { clearAppChat, clearImSession } from './app-chat'
-import { clearSupplementBuffer } from './dispatch-inbound'
+import { clearSupplementBuffer, withdrawProcessingNotice } from './dispatch-inbound'
 import { clearImPermissionContext } from './im-permission-registry'
 import { getImSessionRegistry } from './im-session-registry'
 import { getPendingRelayStore } from './pending-relays'
@@ -23,24 +23,32 @@ export interface ClearableChats {
   total: number
   /** Of those, chats in IM groups and private chats. */
   im: number
+  /** IM chats a team answers, which this leaves alone: /clear in each clears it. */
+  teamIm: number
 }
+
+const sourceOf = (session: ImSessionRecord) => session.source ?? classifySessionSource(session.channel)
+
+// A legacy record has no count; it may well have history.
+const hasHistory = (session: ImSessionRecord) => session.messageCount === undefined || session.messageCount > 0
 
 /** The conversations a clear covers: Halo and IM chats that have something to clear. */
 function clearableSessions(appId: string): ImSessionRecord[] {
   return (getImSessionRegistry()?.getAllSessions(appId) ?? []).filter(session => {
     if (session.teamContext) return false
-    const source = session.source ?? classifySessionSource(session.channel)
+    const source = sourceOf(session)
     if (source !== 'native' && source !== 'local' && source !== 'im') return false
-    // A legacy record has no count; it may well have history.
-    return session.messageCount === undefined || session.messageCount > 0
+    return hasHistory(session)
   })
 }
 
 export function countClearableChats(appId: string): ClearableChats {
+  const all = getImSessionRegistry()?.getAllSessions(appId) ?? []
   const sessions = clearableSessions(appId)
   return {
     total: sessions.length,
-    im: sessions.filter(session => (session.source ?? classifySessionSource(session.channel)) === 'im').length,
+    im: sessions.filter(session => sourceOf(session) === 'im').length,
+    teamIm: all.filter(session => session.teamContext && sourceOf(session) === 'im' && hasHistory(session)).length,
   }
 }
 
@@ -56,9 +64,10 @@ export async function clearAllChats(appId: string): Promise<{ cleared: number; f
   let failed = 0
   for (const session of clearableSessions(appId)) {
     try {
-      const source = session.source ?? classifySessionSource(session.channel)
+      const source = sourceOf(session)
       if (source === 'im') {
         const conversationId = buildImSessionKey(appId, session.channel, session.chatType, session.chatId)
+        withdrawProcessingNotice(conversationId)
         clearSupplementBuffer(conversationId)
         await clearImSession(appId, spaceId, session.channel, session.chatType, session.chatId)
         clearImPermissionContext(conversationId)

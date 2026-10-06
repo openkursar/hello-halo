@@ -2,7 +2,8 @@
  * "Clear all conversations": after a digital human's instructions or knowledge
  * changed, the history of every chat it holds — in Halo and in IM — is cleared
  * at once, as /clear clears each, so none keeps answering from what it said
- * before. It says how many conversations will go before anything does.
+ * before. It says how many conversations will go before anything does, and
+ * which it leaves alone (IM chats a team answers).
  */
 
 import { useState } from 'react'
@@ -14,7 +15,7 @@ type ClearState =
   | { step: 'idle' }
   | { step: 'counting' }
   | { step: 'nothing' }
-  | { step: 'confirm'; total: number; im: number }
+  | { step: 'confirm'; total: number; im: number; teamIm: number }
   | { step: 'clearing' }
   | { step: 'done'; cleared: number; failed: number }
   | { step: 'failed'; error: string }
@@ -30,7 +31,9 @@ export function AppClearChatsAction({ appId }: { appId: string }) {
       setState({ step: 'failed', error: res.error ?? '' })
       return
     }
-    setState(res.data.total === 0 ? { step: 'nothing' } : { step: 'confirm', total: res.data.total, im: res.data.im })
+    setState(res.data.total === 0
+      ? { step: 'nothing' }
+      : { step: 'confirm', total: res.data.total, im: res.data.im, teamIm: res.data.teamIm ?? 0 })
   }
 
   async function clearAll() {
@@ -49,8 +52,11 @@ export function AppClearChatsAction({ appId }: { appId: string }) {
           <AlertTriangle className="w-4 h-4 text-orange-400 flex-shrink-0 mt-0.5" />
           <p className="text-sm text-muted-foreground">
             {state.step === 'confirm'
-              ? t('Clear the history of {{total}} conversations ({{im}} of them IM chats)? Each starts afresh with its next message, and replies in progress stop. This cannot be undone. Memory and reminders are kept.', { total: state.total, im: state.im })
+              ? t('Clear the history of {{count}} conversation(s), {{im}} of them in IM? Each starts afresh with its next message, and replies in progress stop. This cannot be undone. Memory and reminders are kept.', { count: state.total, im: state.im })
               : t('Clearing…')}
+            {state.step === 'confirm' && state.teamIm > 0 && (
+              <>{' '}{t('IM conversations a team answers are not included ({{count}}); to clear one, send /clear in it.', { count: state.teamIm })}</>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -85,14 +91,14 @@ export function AppClearChatsAction({ appId }: { appId: string }) {
         {t('Clear all conversations')}
       </button>
       <p className="text-[11px] text-muted-foreground/60">
-        {t('Clears the history of all its chats, in Halo and in IM, as /clear does in each. Use it after changing its instructions or knowledge so no chat keeps answering from before.')}
+        {t('Clears the history of all its conversations, in Halo and in IM, as /clear does in each. Use it after changing its instructions or knowledge so no conversation keeps answering from before.')}
       </p>
       {state.step === 'nothing' && <p className="text-xs text-muted-foreground">{t('No conversation has history to clear.')}</p>}
       {state.step === 'done' && (
         <p className={`text-xs ${state.failed > 0 ? 'text-destructive' : 'text-green-500'}`}>
           {state.failed > 0
-            ? t('Cleared {{cleared}} conversations; {{failed}} could not be cleared. Try again.', { cleared: state.cleared, failed: state.failed })
-            : t('Cleared {{count}} conversations.', { count: state.cleared })}
+            ? t('Cleared {{count}} conversation(s); {{failed}} could not be cleared. Try again.', { count: state.cleared, failed: state.failed })
+            : t('Cleared {{count}} conversation(s).', { count: state.cleared })}
         </p>
       )}
       {state.step === 'failed' && (

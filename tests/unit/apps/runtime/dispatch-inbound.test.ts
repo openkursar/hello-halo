@@ -145,6 +145,7 @@ import {
   dispatchInboundMessage,
   flushSupplementBuffer,
   releaseSupplementsWhenIdle,
+  withdrawProcessingNotice,
 } from '../../../../src/main/apps/runtime/dispatch-inbound'
 import {
   PendingRelayStore,
@@ -380,6 +381,21 @@ describe('dispatchInboundMessage — the processing notice', () => {
 
       expect(reply.send, command).not.toHaveBeenCalledWith(NOTICE)
     }
+  })
+
+  it('takes back a notice still waiting when its conversation is cleared from Halo', async () => {
+    const reply = makeReply(false)
+    const turn = slowTurn()
+    const dispatched = dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
+    await vi.advanceTimersByTimeAsync(2_000)
+
+    // "Clear all conversations" in the digital human's settings, as /clear would.
+    withdrawProcessingNotice('app-chat:app-1:wecom-bot:direct:chat-1')
+    await vi.advanceTimersByTimeAsync(10_000)
+    turn.end()
+    await dispatched
+
+    expect(reply.send).not.toHaveBeenCalledWith(NOTICE)
   })
 
   it('leaves a stream showing its status at once, as before', async () => {
