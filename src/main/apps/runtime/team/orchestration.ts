@@ -41,6 +41,8 @@ import type {
 import type { TeamPromptContext } from './team-prompt'
 import type { TeamFolders } from './team-folder'
 import type { NoteTurnEndedInput } from './turn-report'
+import { peekTurnOrigin } from './external-origin'
+import type { AppChatTurnStart } from '../app-chat-live-turn'
 
 const LOG_TAG = '[TeamOrch]'
 
@@ -55,6 +57,8 @@ export interface OrchestrationSessionDeps {
     message: string
     conversationId: string
     teamContext: TeamTriggerContext
+    /** The hold `holdTurn` gave this turn; the turn takes it over as its own. */
+    turnStart?: AppChatTurnStart
   }): Promise<{
     finalMessage: string | null
     /**
@@ -66,6 +70,13 @@ export interface OrchestrationSessionDeps {
     undelivered?: { reason: string }
   }>
   isSessionActive(sessionKey: string): boolean
+  /**
+   * Hold this session for a turn decided now but started later: a wake first
+   * waits for a concurrency slot, and while it does, a message reaching the same
+   * session another way (an IM chat the member fronts) must read it as busy
+   * rather than start a turn beside it. Optional: without it the wait is unheld.
+   */
+  holdTurn?(sessionKey: string): AppChatTurnStart | undefined
   /**
    * Add `message` to the turn already running on this session, rather than
    * starting one. False — never a throw — when there is no live session to add
@@ -528,17 +539,29 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     request: Parameters<OrchestrationSessionDeps['sendAppChatMessage']>[0],
     abandoned: () => boolean
   ): ReturnType<OrchestrationSessionDeps['sendAppChatMessage']> {
-    await turnSemaphore.acquire()
+    // Held while the turn waits for its slot, so a message reaching the same
+    // session another way (an IM chat the member fronts) finds it busy rather
+    // than starting a turn beside it.
+    const turnStart = session.holdTurn?.(request.conversationId)
     try {
-      if (abandoned()) return { finalMessage: null, undelivered: { reason: 'Timed out waiting for a concurrency slot' } }
-      if (!canDeliverTurn(request.teamContext.teamId, request.teamContext.epochId, request.teamContext.kind)) {
-        return { finalMessage: null, undelivered: { reason: 'Task ended before its notice could run' } }
+      await turnSemaphore.acquire()
+      try {
+        if (abandoned()) return { finalMessage: null, undelivered: { reason: 'Timed out waiting for a concurrency slot' } }
+        if (!canDeliverTurn(request.teamContext.teamId, request.teamContext.epochId, request.teamContext.kind)) {
+          return { finalMessage: null, undelivered: { reason: 'Task ended before its notice could run' } }
+        }
+        // Stopped while it waited: no session to set up, and the chat is free now.
+        if (turnStart?.cancelled) return { finalMessage: null, undelivered: { reason: 'Stopped before it could run' } }
+        decisionStarts.get(request.teamContext.correlationId)?.()
+        decisionStarts.delete(request.teamContext.correlationId)
+        return await session.sendAppChatMessage(turnStart ? { ...request, turnStart } : request)
+      } finally {
+        turnSemaphore.release()
       }
-      decisionStarts.get(request.teamContext.correlationId)?.()
-      decisionStarts.delete(request.teamContext.correlationId)
-      return await session.sendAppChatMessage(request)
     } finally {
-      turnSemaphore.release()
+      // A turn that never started gives the hold back; one that did took it
+      // over, and ending it twice is harmless.
+      turnStart?.end()
     }
   }
 
@@ -573,6 +596,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
         triggerKind: trigger.kind ?? 'human_message',
         requestSummary: envelope.body,
         requestFromAppId: envelope.fromAppId,
+        external: peekTurnOrigin(sessionKey, trigger),
       })
       settleDecision(trigger.correlationId, { kind: 'error', message: 'Member has no space' })
       bus.completeTurn({ sessionKey, trigger, outcome: { kind: 'error', message: 'Member has no space' } })
@@ -634,6 +658,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
               triggerKind: trigger.kind ?? 'human_message',
               requestSummary: envelope.body,
               requestFromAppId: envelope.fromAppId,
+              external: peekTurnOrigin(sessionKey, trigger),
             })
             // Actually tear down the still-running turn instead of merely
             // abandoning the promise — otherwise the member's session stays
@@ -690,6 +715,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
               triggerKind: trigger.kind ?? 'human_message',
               requestSummary: envelope.body,
               requestFromAppId: envelope.fromAppId,
+              external: peekTurnOrigin(sessionKey, trigger),
             })
           }
           const pending = pendingSeals.get(epochId)

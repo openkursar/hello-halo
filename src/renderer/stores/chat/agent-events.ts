@@ -220,20 +220,23 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
   // Handle thought delta - incremental update to a streaming thought
   handleAgentThoughtDelta: (data) => {
     const { conversationId, thoughtId, delta, content, toolInput, isComplete, isReady, isToolInput, toolResult, isToolResult, taskProgress } = data
+    // Partial tool input only signals progress the step already shows as streaming.
+    if (isToolInput && !(isComplete && toolInput) && !taskProgress && !(isToolResult && toolResult)) return
 
     set((state) => {
-      const newSessions = new Map(state.sessions)
-      const session = newSessions.get(conversationId)
+      const session = state.sessions.get(conversationId)
       if (!session) return state
 
-      // Find the thought to update
-      const thoughtIndex = session.thoughts.findIndex(t => t.id === thoughtId)
+      // The step a delta updates is almost always the newest one.
+      let thoughtIndex = session.thoughts.length - 1
+      while (thoughtIndex >= 0 && session.thoughts[thoughtIndex].id !== thoughtId) thoughtIndex--
       if (thoughtIndex === -1) {
         console.warn(`[ChatStore] Thought not found for delta: ${thoughtId}`)
         return state
       }
 
-      // Create updated thoughts array
+      // Only the updated step gets a new object; every other step keeps its identity.
+      const newSessions = new Map(state.sessions)
       const newThoughts = [...session.thoughts]
       const thought = { ...newThoughts[thoughtIndex] }
 

@@ -27,6 +27,51 @@ import {
   validateFilePath,
 } from './_shared'
 import { retainArtifactSpace, releaseArtifactSpace, queryFiles, resolveArtifactPaths } from '../../services/artifact.service'
+import { issueDownloadTicket, redeemDownloadTicket } from '../auth/download-ticket'
+
+const DOWNLOAD_TYPES: Record<string, string> = {
+  html: 'text/html',
+  htm: 'text/html',
+  css: 'text/css',
+  js: 'application/javascript',
+  json: 'application/json',
+  txt: 'text/plain',
+  md: 'text/markdown',
+  py: 'text/x-python',
+  ts: 'text/typescript',
+  tsx: 'text/typescript',
+  jsx: 'text/javascript',
+  svg: 'image/svg+xml',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  pdf: 'application/pdf',
+}
+
+// RFC 6266: an ASCII stand-in for old clients, then the exact UTF-8 name
+// that browsers and phones save the file under.
+function attachment(fileName: string): string {
+  const asciiName = fileName.replace(/[^\x20-\x7e]|["\\]/g, '_')
+  const utf8Name = encodeURIComponent(fileName).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)
+  return `attachment; filename="${asciiName}"; filename*=UTF-8''${utf8Name}`
+}
+
+/** Sends one file as a download; a read that fails midway drops the connection. */
+function sendFileAttachment(res: Response, filePath: string, size: number): void {
+  const fileName = basename(filePath)
+  const ext = fileName.split('.').pop()?.toLowerCase() || ''
+  res.setHeader('Content-Type', DOWNLOAD_TYPES[ext] || 'application/octet-stream')
+  res.setHeader('Content-Disposition', attachment(fileName))
+  res.setHeader('Content-Length', size)
+  createReadStream(filePath)
+    .on('error', (error) => {
+      console.error('[Download] Could not read the file:', error.message)
+      res.destroy(error)
+    })
+    .pipe(res)
+}
 
 export function registerArtifactRoutes(app: Express): void {
   // ===== Artifact Routes =====
@@ -128,7 +173,7 @@ export function registerArtifactRoutes(app: Express): void {
 
         // Set headers for tar.gz download
         res.setHeader('Content-Type', 'application/gzip')
-        res.setHeader('Content-Disposition', `attachment; filename="${fileName}.tar.gz"`)
+        res.setHeader('Content-Disposition', attachment(`${fileName}.tar.gz`))
 
         // Create a simple concatenated file stream with headers
         // For a proper implementation, use archiver or tar package
@@ -139,37 +184,7 @@ export function registerArtifactRoutes(app: Express): void {
 
         readStream.pipe(gzip).pipe(res)
       } else {
-        // Single file download
-        const mimeTypes: Record<string, string> = {
-          html: 'text/html',
-          htm: 'text/html',
-          css: 'text/css',
-          js: 'application/javascript',
-          json: 'application/json',
-          txt: 'text/plain',
-          md: 'text/markdown',
-          py: 'text/x-python',
-          ts: 'text/typescript',
-          tsx: 'text/typescript',
-          jsx: 'text/javascript',
-          svg: 'image/svg+xml',
-          png: 'image/png',
-          jpg: 'image/jpeg',
-          jpeg: 'image/jpeg',
-          gif: 'image/gif',
-          webp: 'image/webp',
-          pdf: 'application/pdf',
-        }
-
-        const ext = fileName.split('.').pop()?.toLowerCase() || ''
-        const contentType = mimeTypes[ext] || 'application/octet-stream'
-
-        res.setHeader('Content-Type', contentType)
-        res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName)}"`)
-        res.setHeader('Content-Length', stats.size)
-
-        const readStream = createReadStream(validatedPath)
-        readStream.pipe(res)
+        sendFileAttachment(res, validatedPath, stats.size)
       }
     } catch (error) {
       const err = error as NodeJS.ErrnoException
@@ -178,6 +193,47 @@ export function registerArtifactRoutes(app: Express): void {
       // That is a missing resource, not a server fault.
       const status = err.code === 'ENOENT' ? 404 : 500
       res.status(status).json({ success: false, error: err.message })
+    }
+  })
+
+  // A link for one file that carries a two-minute ticket instead of the access
+  // token, so it can be handed to the phone's browser or kept in a download list.
+  app.post('/api/artifacts/download-ticket', async (req: Request, res: Response) => {
+    try {
+      const validatedPath = validateFilePath(res, typeof req.body?.path === 'string' ? req.body.path : undefined, 'read')
+      if (!validatedPath) {
+        return
+      }
+      if (!existsSync(validatedPath) || !statSync(validatedPath).isFile()) {
+        res.status(404).json({ success: false, error: 'File not found' })
+        return
+      }
+      res.json({ success: true, data: { ticket: issueDownloadTicket(validatedPath) } })
+    } catch (error) {
+      res.status(500).json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // Reached without a token: the ticket is the credential (auth/download-ticket.ts).
+  app.get('/api/artifacts/file/:ticket', async (req: Request, res: Response) => {
+    const ticketPath = redeemDownloadTicket(req.params.ticket)
+    if (!ticketPath) {
+      res.status(401).json({ success: false, error: 'This download link has expired' })
+      return
+    }
+    try {
+      const validatedPath = validateFilePath(res, ticketPath, 'read')
+      if (!validatedPath) {
+        return
+      }
+      const stats = existsSync(validatedPath) ? statSync(validatedPath) : null
+      if (!stats?.isFile()) {
+        res.status(404).json({ success: false, error: 'File not found' })
+        return
+      }
+      sendFileAttachment(res, validatedPath, stats.size)
+    } catch (error) {
+      res.status(500).json({ success: false, error: (error as Error).message })
     }
   })
 
@@ -202,7 +258,7 @@ export function registerArtifactRoutes(app: Express): void {
       // A proper implementation would use archiver to create a zip
       const fileName = spaceId === 'halo-temp' ? 'halo-artifacts' : basename(workDir)
       res.setHeader('Content-Type', 'application/gzip')
-      res.setHeader('Content-Disposition', `attachment; filename="${fileName}.tar.gz"`)
+      res.setHeader('Content-Disposition', attachment(`${fileName}.tar.gz`))
 
       // Stream the first file with gzip as a demo
       // TODO: Use archiver for proper zip support

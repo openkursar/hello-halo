@@ -1,21 +1,73 @@
-name: CI Runner Test
-on: workflow_dispatch
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, 'release_v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  test:
-    strategy:
-      matrix:
-        os: [macos-latest, windows-latest, ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+  gate:
+    name: Precommit gate (typecheck + unit tests of changed files)
+    # The same platform the precommit gate is run on locally.
+    runs-on: macos-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Environment Info
-        shell: bash
+          cache: npm
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/electron
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      # Lifecycle scripts are skipped so `prepare` does not download the
+      # packaging-only binaries; postinstall then sets up what the tests need
+      # (patches, the Electron runtime, native modules rebuilt for it). The
+      # private agent SDK is an optional path dependency on src/sdk/halo-sdk,
+      # which is not in this repository, so its link dangles and is removed
+      # before the native rebuild walks the dependency tree.
+      - name: Install dependencies
         run: |
-          echo "Runner: ${{ matrix.os }}"
-          echo "Arch: $(uname -m)"
-          echo "Node: $(node -v)"
-          echo "npm: $(npm -v)"
+          npm ci --ignore-scripts
+          if [ ! -e node_modules/@hello-halo/agent-sdk ]; then rm -f node_modules/@hello-halo/agent-sdk; fi
+          node scripts/postinstall.mjs
+
+      # Pull requests are checked against their base, pushes against the commit
+      # they replaced; deleted files are left out because there is nothing left
+      # to typecheck or test.
+      - name: Precommit gate on the changed files
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            base="$PR_BASE"
+          else
+            base="$PUSH_BEFORE"
+          fi
+          if [ -z "$base" ] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            base="HEAD~1"
+          fi
+          changed="$RUNNER_TEMP/changed-files.txt"
+          git diff --name-only --diff-filter=d "$base" HEAD > "$changed"
+          if [ ! -s "$changed" ]; then
+            echo "No added or modified files to check."
+            exit 0
+          fi
+          echo "Checking $(wc -l < "$changed" | tr -d ' ') changed file(s) against $base"
+          tr '\n' '\0' < "$changed" | xargs -0 node scripts/precommit-gate.mjs

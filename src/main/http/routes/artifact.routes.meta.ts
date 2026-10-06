@@ -50,6 +50,10 @@ export const MODULE: RouteModuleMeta = {
     // hands back a .env verbatim too — its own note says so, because nothing in
     // the transport can.
     'GET /api/artifacts/download': { expose: 'internal' },
+    // Download links for the remote page and the phone carry a two-minute ticket
+    // for one file instead of the access token; only the renderer asks for one.
+    'POST /api/artifacts/download-ticket': { expose: 'internal' },
+    'GET /api/artifacts/file/:ticket': { expose: 'internal' },
     'GET /api/spaces/:spaceId/artifacts/download-all': { expose: 'internal' },
 
     'GET /api/artifacts/content': {

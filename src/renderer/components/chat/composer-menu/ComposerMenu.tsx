@@ -46,6 +46,12 @@ interface ComposerMenuProps {
   onClose: (reason: 'select' | 'escape' | 'outside') => void
   /** Matches the card's corner radius. */
   radiusClassName: string
+  /**
+   * Whether opening moves the keyboard into the panel, onto the highlighted
+   * row. Off when the panel opens without the user asking (an AI request): the
+   * user may be typing, and a space or Enter must never flip a switch for them.
+   */
+  takeFocus?: boolean
 }
 
 const EDGE_GAP = 8
@@ -64,7 +70,7 @@ function measure(anchor: HTMLElement): Placement {
   return { side, maxHeight: Math.max(160, Math.min(PREFERRED_HEIGHT, side === 'above' ? above : below)) }
 }
 
-export function ComposerMenu({ sections, anchorRef, triggerRef, onClose, radiusClassName }: ComposerMenuProps) {
+export function ComposerMenu({ sections, anchorRef, triggerRef, onClose, radiusClassName, takeFocus = true }: ComposerMenuProps) {
   const panelRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const [placement, setPlacement] = useState<Placement | null>(null)
@@ -74,7 +80,7 @@ export function ComposerMenu({ sections, anchorRef, triggerRef, onClose, radiusC
     () => items.map((item, index) => (item.disabledReason ? -1 : index)).filter((index) => index >= 0),
     [items]
   )
-  const [activeIndex, setActiveIndex] = useState(() => items.findIndex((item) => item.attention))
+  const [activeIndex, setActiveIndex] = useState(() => (takeFocus ? items.findIndex((item) => item.attention) : -1))
 
   // A parent's ref attaches after its children's layout effects on first
   // mount, so the panel's own parent (the card) stands in until then.
@@ -91,8 +97,8 @@ export function ComposerMenu({ sections, anchorRef, triggerRef, onClose, radiusC
   // arrow keys work straight away.
   const placed = placement !== null
   useEffect(() => {
-    if (placed) panelRef.current?.focus({ preventScroll: true })
-  }, [placed])
+    if (placed && takeFocus) panelRef.current?.focus({ preventScroll: true })
+  }, [placed, takeFocus])
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {

@@ -22,6 +22,7 @@ import { AppAlreadyInstalledError } from '../apps/manager/errors'
 import { getAppRuntime } from '../apps/runtime'
 import type { AppSpec, SkillSpec } from '../apps/spec/schema'
 import { resolveInstallSpaceId } from '../../shared/apps/install-scope'
+import type { SpecUpgradeOutcome } from '../../shared/apps/app-types'
 import type {
   RegistryEntry,
   RegistrySource,
@@ -869,8 +870,9 @@ function computeSeverity(current: string, latest: string): UpdateSeverity {
  * Apply an upgrade to an installed App.
  *
  * Fetches the latest spec from the registry, validates it against the
- * mode-permitted severity, then delegates to AppManager.updateSpec()
- * which preserves userConfig/userOverrides/permissions.
+ * mode-permitted severity, then hands it to AppManager.upgradeSpec(), which
+ * keeps the user's edits to the digital human's definition (and, outside the
+ * spec, userConfig/userOverrides/permissions are never touched).
  *
  * Modes:
  *   - 'patch_minor': only allowed when severity is patch or minor
@@ -880,7 +882,7 @@ function computeSeverity(current: string, latest: string): UpdateSeverity {
 export async function applyUpgrade(
   appId: string,
   mode: 'patch_minor' | 'major' | 'force' = 'force',
-): Promise<{ appId: string; from: string; to: string; severity: UpdateSeverity }> {
+): Promise<{ appId: string; from: string; to: string; severity: UpdateSeverity; kept: string[]; editsKnown: boolean }> {
   ensureInitialized()
 
   if (!queryService) {
@@ -919,21 +921,92 @@ export async function applyUpgrade(
   const newSpec = await acquireSpec(registry, found.entry)
   const newSpecWithStore = withInstallStoreMetadata(newSpec, found.entry.slug, found.registryId)
 
-  // updateSpec preserves userConfig / userOverrides / permissions automatically
-  manager.updateSpec(appId, newSpecWithStore as unknown as Record<string, unknown>)
+  // The runtime reschedules the app and notes what was kept on its own: it
+  // reacts to every upgradeSpec, whichever path made it.
+  const outcome = manager.upgradeSpec(appId, newSpecWithStore)
 
   console.log(
     `[RegistryService] applyUpgrade: ${slug} ${fromVersion} -> ${toVersion} ` +
-    `(severity=${severity}, mode=${mode})`
+    `(severity=${severity}, mode=${mode}, kept=${outcome.kept.length})`
   )
 
-  // Refresh runtime activation for automation apps so subscriptions reflect any spec changes
-  const runtime = getAppRuntime()
-  if (runtime && newSpecWithStore.type === 'automation') {
-    runtime.syncAppSubscriptions(appId)
-  }
+  return { appId, from: fromVersion, to: toVersion, severity, kept: outcome.kept, editsKnown: outcome.editsKnown }
+}
 
-  return { appId, from: fromVersion, to: toVersion, severity }
+/**
+ * What applying the available upgrade would keep at the user's version, for
+ * the update dialog. A browse fetch, like the detail view: no install order is
+ * opened, and the spec cache is reused.
+ */
+export async function previewUpgrade(appId: string): Promise<SpecUpgradeOutcome> {
+  ensureInitialized()
+  const manager = getAppManager()
+  if (!queryService || !manager) throw new Error('Store is not ready')
+
+  const app = manager.getApp(appId)
+  const slug = app?.spec.store?.slug
+  if (!app || !slug) throw new Error(`App ${appId} was not installed from the store`)
+  const found = queryService.findEntry(slug, app.spec.store?.registry_id)
+  if (!found || !isNewerVersion(found.entry.version, app.spec.version)) {
+    throw new Error(`No newer version of ${slug} is available`)
+  }
+  const spec = await queryService.fetchSpec(found.entry, found.registryId, config.registries)
+  return manager.previewUpgradeSpec(appId, withInstallStoreMetadata(spec, found.entry.slug, found.registryId))
+}
+
+/**
+ * Record the store's spec as the author's original for store-installed digital
+ * humans that predate recorded originals, while the store still serves the
+ * very version that is installed — the only moment the original exists: once
+ * a newer version is published the store no longer offers the installed one.
+ *
+ * A browse fetch, not an install: no order is opened and nothing is counted.
+ *
+ * @returns how many originals were recorded
+ */
+export async function recordStoreOriginals(): Promise<number> {
+  ensureInitialized()
+  const manager = getAppManager()
+  if (!queryService || !manager) return 0
+
+  const pending = manager.listStoreInstallsWithoutAuthorSpec()
+  if (pending.length === 0) return 0
+
+  let recorded = 0
+  let unavailable = 0
+  let ambiguous = 0
+  for (const appId of pending) {
+    const app = manager.getApp(appId)
+    const slug = app?.spec.store?.slug
+    if (!app || !slug) continue
+    const registryId = app.spec.store?.registry_id
+    // Another source's app under the same slug would be recorded as this one's
+    // original: without a recorded source, only a slug one source lists is safe.
+    if (!registryId && queryService.countSourcesListing(slug) !== 1) {
+      ambiguous++
+      continue
+    }
+    const found = queryService.findEntry(slug, registryId)
+    if (!found || (registryId && found.registryId !== registryId)
+      || isNewerVersion(found.entry.version, app.spec.version) || isNewerVersion(app.spec.version, found.entry.version)) {
+      unavailable++
+      continue
+    }
+    try {
+      const spec = await queryService.fetchSpec(found.entry, found.registryId, config.registries)
+      if (manager.recordAuthorSpec(appId, withInstallStoreMetadata(spec, found.entry.slug, found.registryId))) recorded++
+    } catch (err) {
+      console.warn(`[RegistryService] Could not record the original of ${slug}@${app.spec.version} for ${appId}: ${(err as Error).message}`)
+    }
+  }
+  // Those whose installed version the store no longer serves, or whose source
+  // is not known, can only be upgraded with every difference presumed to be
+  // the user's.
+  console.log(
+    `[RegistryService] recordStoreOriginals: recorded=${recorded} unavailable=${unavailable} ` +
+    `ambiguous=${ambiguous} of ${pending.length}`
+  )
+  return recorded
 }
 
 // ============================================

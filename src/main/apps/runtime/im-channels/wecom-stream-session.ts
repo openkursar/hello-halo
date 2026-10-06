@@ -13,7 +13,9 @@
  *   - Push-mode progress throttling
  *   - UTF-8 cleansing of every content payload (per WeCom protocol
  *     requirement that markdown content "必须是 utf8 编码")
- *   - 20 KB byte-limit enforcement on stream content (WeCom limit: 20480)
+ *   - The one-message byte limit (WECOM_MESSAGE_LIMIT): progress lines give
+ *     way first; an answer that outgrows one message closes the stream on its
+ *     beginning and goes out whole as `(i/n)` pushes
  *
  * What this module does NOT do (delegated to the SDK):
  *   - WebSocket connection management, heartbeat, reconnect
@@ -31,10 +33,20 @@ import type {
   StreamingHandle,
 } from '../../../../shared/types/inbound-message'
 import { ensureUtf8WithReport } from './wecom-content-utf8'
+import { messageHead, sendAsMessages, type MessageLimit } from './message-parts'
 
 // ============================================
 // Public constants (kept aligned with WeCom protocol limits)
 // ============================================
+
+/**
+ * Bytes one WeCom message may carry, kept under the official 20480 (UTF-8)
+ * that applies alike to a stream frame, a markdown reply and a markdown push.
+ */
+const WECOM_MESSAGE_MAX_BYTES = 20000
+
+/** One WeCom message's capacity; longer content is sent in parts. */
+export const WECOM_MESSAGE_LIMIT: MessageLimit = { maxBytes: WECOM_MESSAGE_MAX_BYTES }
 
 /** 10-min stream lifetime per official docs (server auto-ends after). */
 const STREAM_LIFETIME_MS = 10 * 60 * 1000
@@ -45,13 +57,11 @@ const STREAM_PROGRESS_PUSH_INTERVAL_MS = 2 * 60 * 1000
 /** Chinese user-facing notice appended when we transition to push mode. */
 const STREAM_TRANSITION_NOTICE =
   '\n\n---\n_任务仍在进行中，后续进度会以新消息推送（企微协议限制单条流式消息最长 10 分钟）_'
-/** Soft byte budget for stream content (WeCom server hard cap = 20480). */
-const STREAM_MAX_CONTENT_BYTES = 20000
-/** Soft byte budget for push messages; overflow keeps the tail, not the head. */
-const PUSH_MAX_CONTENT_BYTES = 20000
-/** Bytes set aside for the `(i/n)` label so a labeled segment never exceeds
- * the push budget (label worst case ~10B; 16 covers any realistic count). */
-const PUSH_SEGMENT_LABEL_RESERVE = 16
+/**
+ * Chinese user-facing notice closing a stream whose answer outgrew one
+ * message: the stream shows its beginning, the whole answer follows in parts.
+ */
+const STREAM_LONG_ANSWER_NOTICE = '\n\n---\n_内容较长，完整回答将以新消息分条发送_'
 /** Chinese user-facing marker replacing the truncated head of a push. */
 const PUSH_TRUNCATION_HEAD =
   '_(回答过长已截断，仅保留末尾部分)_\n\n'
@@ -330,19 +340,21 @@ export class WecomStreamSession implements StreamingHandle {
       }
     }
 
-    // Proactively transition to push mode just before the server-side cutoff.
-    if (
-      this.mode === 'stream' &&
-      !this.streamChannelBroken &&
-      this.isApproachingLifetimeCutoff()
-    ) {
-      await this.transitionToPushMode('approaching 10-minute server cutoff')
-      // Fall through — push-mode progress logic below
-    }
-
     if (this.mode === 'stream' && !this.streamChannelBroken) {
-      await this.sendStreamFrame(false)
-      return
+      if (this.isApproachingLifetimeCutoff()) {
+        // Proactively transition to push mode just before the server-side cutoff.
+        await this.transitionToPushMode('approaching 10-minute server cutoff', STREAM_TRANSITION_NOTICE)
+      } else {
+        const frame = this.buildContent()
+        if (frame.complete) {
+          await this.sendStreamFrame(false, frame.content)
+          return
+        }
+        // A frame past one message is rejected and leaves the stream stuck
+        // mid-answer; close it on what fits instead.
+        await this.transitionToPushMode('answer longer than one message', STREAM_LONG_ANSWER_NOTICE)
+      }
+      // Fall through — push-mode progress logic below
     }
 
     // Push mode (or stream broken): throttled progress as discrete pushes
@@ -381,12 +393,16 @@ export class WecomStreamSession implements StreamingHandle {
       !this.isStreamExpired() &&
       this.init.transport.isAuthenticated()
     ) {
-      const result = await this.sendStreamFrame(true)
-      if (result === 'sent') {
+      const frame = this.buildContent()
+      // An answer longer than one message closes the stream on its beginning.
+      const closing = frame.complete ? frame : this.buildContent(STREAM_LONG_ANSWER_NOTICE)
+      const result = await this.sendStreamFrame(true, closing.content)
+      if (result === 'sent' && frame.complete) {
         deliveredVia = 'stream'
       } else {
-        // Server-side rejected or transport-level failure — fall back to push.
-        this.markStreamBroken(`finish frame failed (result=${result})`)
+        // Server-side rejected, transport-level failure, or more than one
+        // message's worth — the whole answer goes out as pushes.
+        if (result !== 'sent') this.markStreamBroken(`finish frame failed (result=${result})`)
         const ok = await this.pushFinalAnswer()
         this.finalPushSent = ok
         deliveredVia = ok ? 'push' : 'push_failed'
@@ -441,7 +457,7 @@ export class WecomStreamSession implements StreamingHandle {
     return Date.now() - this.startedAt >= STREAM_LIFETIME_MS
   }
 
-  private async transitionToPushMode(reason: string): Promise<void> {
+  private async transitionToPushMode(reason: string, notice: string): Promise<void> {
     if (this.mode === 'push') return
     this.mode = 'push'
     this.logger('info', 'stream_transition_to_push', {
@@ -454,16 +470,21 @@ export class WecomStreamSession implements StreamingHandle {
     if (!this.streamChannelBroken) {
       // Best-effort: finish the existing stream with the transition notice so
       // the WeCom UI doesn't dangle on an unfinished stream.
-      const content = this.buildContent({ withTransitionNotice: true })
-      const result = await this.callFinishFrame(content)
-      if (result !== 'sent') {
+      const result = await this.callFinishFrame(this.buildContent(notice).content)
+      if (result === 'sent') {
+        // The closed stream carries the answer so far; progress pushes resume
+        // a full interval later with what comes next, and finish() delivers
+        // the whole answer either way.
+        this.lastPushedAnswerLength = this.sanitizeAnswerForOutput().length
+        this.lastProgressPushAt = Date.now()
+      } else {
         this.markStreamBroken(`transition finish frame result=${result}`)
         // Stream UI dangled — push the transition notice as a discrete
         // message so the user knows updates will continue in push form
         // instead of seeing a stalled stream with no explanation.
         const ok = await this.init.transport.queuePush(
           this.init.chatId,
-          STREAM_TRANSITION_NOTICE.trim(),
+          notice.trim(),
           this.init.chatType,
           `stream-transition:${this.init.streamId}`,
           this.init.trace,
@@ -494,25 +515,27 @@ export class WecomStreamSession implements StreamingHandle {
   }
 
   /**
-   * Build the WeCom-formatted content: `<think>...</think>` + answer text,
-   * enforcing the 20 KB byte budget by evicting oldest progress lines first.
+   * Build the WeCom-formatted content — `<think>...</think>` + answer text +
+   * an optional closing `notice` — within one message: the oldest progress
+   * lines give way first, and only an answer too long on its own is cut to
+   * its beginning. `complete` says whether the whole answer is in.
    */
-  private buildContent(opts?: { withTransitionNotice?: boolean }): string {
+  private buildContent(notice = ''): { content: string; complete: boolean } {
     const answer = this.sanitizeAnswerForOutput()
     let think = this.progressLines.length > 0
       ? `<think>\n${this.progressLines.join('\n')}\n</think>\n\n`
       : ''
-    let content = think + answer
+    let content = think + answer + notice
     let evicted = 0
 
     while (
       this.progressLines.length > 1 &&
-      Buffer.byteLength(content, 'utf8') > STREAM_MAX_CONTENT_BYTES
+      Buffer.byteLength(content, 'utf8') > WECOM_MESSAGE_MAX_BYTES
     ) {
       this.progressLines.shift()
       evicted++
       think = `<think>\n...\n${this.progressLines.join('\n')}\n</think>\n\n`
-      content = think + answer
+      content = think + answer + notice
     }
     if (evicted > 0) {
       this.logger('warn', 'stream_content_truncated', {
@@ -522,16 +545,20 @@ export class WecomStreamSession implements StreamingHandle {
         finalBytes: Buffer.byteLength(content, 'utf8'),
       })
     }
+    if (Buffer.byteLength(content, 'utf8') <= WECOM_MESSAGE_MAX_BYTES) {
+      return { content, complete: true }
+    }
 
-    if (opts?.withTransitionNotice) content = content + STREAM_TRANSITION_NOTICE
-    return content
+    if (Buffer.byteLength(think + notice, 'utf8') >= WECOM_MESSAGE_MAX_BYTES) think = ''
+    const room = WECOM_MESSAGE_MAX_BYTES - Buffer.byteLength(think + notice, 'utf8')
+    return { content: think + messageHead(answer, { maxBytes: room }) + notice, complete: false }
   }
 
-  /** Send a non-finish stream frame via the SDK non-blocking path. */
+  /** Send a stream frame: non-blocking for progress, blocking for the finish frame. */
   private async sendStreamFrame(
     finish: boolean,
+    content: string,
   ): Promise<'sent' | 'skipped' | 'failed'> {
-    const content = this.buildContent()
     const bytes = Buffer.byteLength(content, 'utf8')
 
     if (!this.started) {
@@ -678,8 +705,8 @@ export class WecomStreamSession implements StreamingHandle {
    * boundaries, so walking to a char boundary keeps the slice valid.
    */
   private truncatePushText(text: string): string {
-    if (Buffer.byteLength(text, 'utf8') <= PUSH_MAX_CONTENT_BYTES) return text
-    const headBudget = PUSH_MAX_CONTENT_BYTES - Buffer.byteLength(PUSH_TRUNCATION_HEAD, 'utf8')
+    if (Buffer.byteLength(text, 'utf8') <= WECOM_MESSAGE_MAX_BYTES) return text
+    const headBudget = WECOM_MESSAGE_MAX_BYTES - Buffer.byteLength(PUSH_TRUNCATION_HEAD, 'utf8')
     const bytes = Buffer.from(text, 'utf8')
     let start = bytes.length - headBudget
     while (start > 0 && (bytes[start] & 0xc0) === 0x80) {
@@ -689,50 +716,20 @@ export class WecomStreamSession implements StreamingHandle {
   }
 
   /**
-   * Push the final answer under the server's 20480B per-message cap. Short
-   * answers go out as one message; longer ones are split into ordered
-   * segments labeled `(1/n) … (n/n)`, each within the budget and cut only on
-   * UTF-8 character boundaries, so the complete answer is delivered instead
-   * of being rejected as oversized (#225).
+   * Push the whole final answer: one message when it fits, otherwise ordered
+   * `(1/n) … (n/n)` parts within the per-message cap, so the complete answer
+   * is delivered instead of being rejected as oversized (#225).
    */
   private async pushFinalAnswer(): Promise<boolean> {
-    const text = this.sanitizeAnswerForOutput()
-    if (Buffer.byteLength(text, 'utf8') <= PUSH_MAX_CONTENT_BYTES) {
-      return this.init.transport.queuePush(
+    return sendAsMessages(this.sanitizeAnswerForOutput(), WECOM_MESSAGE_LIMIT, (part) =>
+      this.init.transport.queuePush(
         this.init.chatId,
-        text,
+        part,
         this.init.chatType,
         `stream:${this.init.streamId}`,
         this.init.trace,
-      )
-    }
-
-    const bytes = Buffer.from(text, 'utf8')
-    const segBudget = PUSH_MAX_CONTENT_BYTES - PUSH_SEGMENT_LABEL_RESERVE
-    const segments: string[] = []
-    let cursor = 0
-    while (cursor < bytes.length) {
-      let end = Math.min(cursor + segBudget, bytes.length)
-      while (end < bytes.length && (bytes[end] & 0xc0) === 0x80) {
-        end++
-      }
-      segments.push(bytes.subarray(cursor, end).toString('utf8'))
-      cursor = end
-    }
-
-    let allOk = true
-    for (let i = 0; i < segments.length; i++) {
-      const label = `(${i + 1}/${segments.length})`
-      const ok = await this.init.transport.queuePush(
-        this.init.chatId,
-        `${label}\n\n${segments[i]}`,
-        this.init.chatType,
-        `stream:${this.init.streamId}`,
-        this.init.trace,
-      )
-      if (!ok) allOk = false
-    }
-    return allOk
+      ),
+    )
   }
 
   private logTerminalSummary(
@@ -774,6 +771,4 @@ export const STREAM_TIMING_CONSTANTS = {
   STREAM_LIFETIME_MS,
   STREAM_SAFETY_MARGIN_MS,
   STREAM_PROGRESS_PUSH_INTERVAL_MS,
-  STREAM_MAX_CONTENT_BYTES,
-  PUSH_MAX_CONTENT_BYTES,
 } as const

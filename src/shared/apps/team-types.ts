@@ -539,14 +539,17 @@ export interface TeamTriggerContext {
    */
   forwardDepth?: number
   /**
-   * This turn was set in motion from a machine that is not this one, so it runs
-   * under what the owner granted teammates rather than under the owner's own
-   * reach (`shared/apps/capability-policy`).
+   * This turn was set in motion by someone nobody here vouched for — from a
+   * machine that is not this one, or by a guest of an IM chat a member fronts —
+   * so it runs under what the owner granted others (teammates, or that chat's
+   * guests) rather than under the owner's own reach
+   * (`shared/apps/capability-policy`).
    *
-   * Stamped ONLY where a request crosses into this node — an inbound office wake
-   * and the office-credential 1:1 endpoint — and then carried along every hop it
-   * causes here, because a stranger's request does not become the owner's by
-   * passing through one of the owner's own digital humans on the way.
+   * Stamped ONLY where a request crosses into this node — an inbound office
+   * wake, the office-credential 1:1 endpoint, and a guest's IM message — and
+   * then carried along every hop it causes here, because a stranger's request
+   * does not become the owner's by passing through one of the owner's own
+   * digital humans on the way.
    *
    * A value arriving on the wire is authored by the sender and is therefore
    * overwritten on arrival, never trusted.

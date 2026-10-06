@@ -9,21 +9,29 @@
  * - Previous/next result navigation (limited to current conversation)
  * - Return to search panel to edit query
  * - Close and clear highlights
+ * - Keys: ↑/↓ step like the buttons, Esc closes, Ctrl/⌘+K edits (highlight-bar-keys)
  */
 
-import { useRef, useMemo } from 'react'
+import { useEffect, useRef, useMemo } from 'react'
 import { ChevronUp, ChevronDown, Search, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { useSearchStore } from '@/stores/search.store'
+import { conversationResults, useSearchStore, type ResultStep } from '@/stores/search.store'
 import { useChatStore, selectActiveConversationId } from '@/stores/chat.store'
+import { useTranslation } from '@/i18n'
+import { highlightBarCommand } from './highlight-bar-keys'
+
+const isMac = typeof navigator !== 'undefined' &&
+  navigator.platform.toUpperCase().indexOf('MAC') >= 0
+const EDIT_SHORTCUT = isMac ? '⌘K' : 'Ctrl+K'
 
 export function SearchHighlightBar() {
+  const { t } = useTranslation()
   const {
     isHighlightBarVisible,
     highlightQuery,
     highlightResults,
     currentResultIndex,
-    navigateToResultIndex,
+    stepResult,
     hideHighlightBar,
     openSearch
   } = useSearchStore()
@@ -51,25 +59,16 @@ export function SearchHighlightBar() {
 
     // Set new timeout
     debounceTimerRef.current = setTimeout(() => {
-      console.log('[SearchHighlightBar] Executing debounced navigation')
       pendingNavigationRef.current?.()
       pendingNavigationRef.current = null
       debounceTimerRef.current = null
     }, 300) // 300ms debounce window
   }
 
-  // Filter results to current conversation only (if we have a current conversation)
-  // Falls back to showing all results if no conversation is selected
-  const currentConversationResults = useMemo(() => {
-    const mapped = highlightResults.map((result, originalIndex) => ({ result, originalIndex }))
-    if (!currentConversationId) {
-      // No conversation selected, show all results
-      return mapped
-    }
-    const filtered = mapped.filter(({ result }) => result.conversationId === currentConversationId)
-    // If no results in current conversation, show all results as fallback
-    return filtered.length > 0 ? filtered : mapped
-  }, [highlightResults, currentConversationId])
+  const currentConversationResults = useMemo(
+    () => conversationResults(highlightResults, currentConversationId),
+    [highlightResults, currentConversationId]
+  )
 
   // Find current position within filtered results
   const currentFilteredIndex = useMemo(() => {
@@ -78,15 +77,39 @@ export function SearchHighlightBar() {
     )
   }, [currentConversationResults, currentResultIndex])
 
+  const totalResults = currentConversationResults.length
+
+  // Determine if navigation buttons should be disabled
+  const canNavigate = totalResults > 1
+
+  // ↑ goes to earlier results, ↓ to more recent ones
+  const step = (direction: ResultStep) => {
+    if (canNavigate) debouncedNavigate(() => stepResult(direction, currentConversationId))
+  }
+  const latestStep = useRef(step)
+  latestStep.current = step
+
+  useEffect(() => {
+    if (!isHighlightBarVisible) return
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const command = highlightBarCommand(e, isMac)
+      if (!command) return
+      e.preventDefault()
+      if (command === 'close') hideHighlightBar()
+      else if (command === 'edit') openSearch('global', 'shortcut')
+      else latestStep.current(command)
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [isHighlightBarVisible, hideHighlightBar, openSearch])
+
   if (!isHighlightBarVisible || currentConversationResults.length === 0) {
     return null
   }
 
-  const totalResults = currentConversationResults.length
   const displayIndex = Math.max(1, currentFilteredIndex + 1) // 1-based display
-
-  // Determine if navigation buttons should be disabled
-  const canNavigate = totalResults > 1
 
   const handleEditSearch = () => {
     openSearch('global', 'highlight_bar')
@@ -94,32 +117,6 @@ export function SearchHighlightBar() {
 
   const handleClose = () => {
     hideHighlightBar()
-  }
-
-  // Navigate to earlier result (higher index in time-sorted results)
-  // ↑ button goes to earlier/older results
-  const handlePrevious = () => {
-    if (canNavigate) {
-      debouncedNavigate(() => {
-        const nextFilteredIndex = currentFilteredIndex + 1 >= totalResults ? 0 : currentFilteredIndex + 1
-        const { originalIndex } = currentConversationResults[nextFilteredIndex]
-        console.log(`[SearchHighlightBar] Navigate to earlier result: ${nextFilteredIndex + 1}/${totalResults}`)
-        navigateToResultIndex(originalIndex)
-      })
-    }
-  }
-
-  // Navigate to more recent result (lower index in time-sorted results)
-  // ↓ button goes to newer/more recent results
-  const handleNext = () => {
-    if (canNavigate) {
-      debouncedNavigate(() => {
-        const nextFilteredIndex = currentFilteredIndex - 1 < 0 ? totalResults - 1 : currentFilteredIndex - 1
-        const { originalIndex } = currentConversationResults[nextFilteredIndex]
-        console.log(`[SearchHighlightBar] Navigate to more recent result: ${nextFilteredIndex + 1}/${totalResults}`)
-        navigateToResultIndex(originalIndex)
-      })
-    }
   }
 
   return (
@@ -145,7 +142,7 @@ export function SearchHighlightBar() {
           {/* Navigation buttons */}
           <div className="flex items-center gap-1">
             <button
-              onClick={handlePrevious}
+              onClick={() => step('earlier')}
               disabled={!canNavigate}
               className={cn(
                 'p-1.5 rounded transition-colors',
@@ -153,14 +150,14 @@ export function SearchHighlightBar() {
                   ? 'hover:bg-muted text-muted-foreground hover:text-foreground cursor-pointer'
                   : 'text-muted-foreground/40 cursor-not-allowed'
               )}
-              title="Earlier result (↑)"
-              aria-label="Earlier result"
+              title={t('Earlier result (↑)')}
+              aria-label={t('Earlier result')}
             >
               <ChevronUp size={16} />
             </button>
 
             <button
-              onClick={handleNext}
+              onClick={() => step('more-recent')}
               disabled={!canNavigate}
               className={cn(
                 'p-1.5 rounded transition-colors',
@@ -168,8 +165,8 @@ export function SearchHighlightBar() {
                   ? 'hover:bg-muted text-muted-foreground hover:text-foreground cursor-pointer'
                   : 'text-muted-foreground/40 cursor-not-allowed'
               )}
-              title="More recent result (↓)"
-              aria-label="More recent result"
+              title={t('More recent result (↓)')}
+              aria-label={t('More recent result')}
             >
               <ChevronDown size={16} />
             </button>
@@ -183,8 +180,8 @@ export function SearchHighlightBar() {
             <button
               onClick={handleEditSearch}
               className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-              title="Edit search (Ctrl+K)"
-              aria-label="Edit search"
+              title={t('Edit search ({{shortcut}})', { shortcut: EDIT_SHORTCUT })}
+              aria-label={t('Edit search')}
             >
               <Search size={16} />
             </button>
@@ -192,8 +189,8 @@ export function SearchHighlightBar() {
             <button
               onClick={handleClose}
               className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-              title="Close (Esc)"
-              aria-label="Close search"
+              title={t('Close (Esc)')}
+              aria-label={t('Close search')}
             >
               <X size={16} />
             </button>
@@ -204,7 +201,7 @@ export function SearchHighlightBar() {
       {/* Hint text with background to prevent overlap */}
       <div className="mt-2 text-xs text-muted-foreground text-right">
         <span className="bg-background/95 backdrop-blur-sm px-2 py-1 rounded border border-border/50">
-          ↑↓ Navigate · Ctrl+K Edit · Esc Close
+          {t('↑↓ Navigate · {{shortcut}} Edit · Esc Close', { shortcut: EDIT_SHORTCUT })}
         </span>
       </div>
     </div>

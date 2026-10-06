@@ -59,6 +59,105 @@ export function groupChildThoughts(
 }
 
 // ============================================
+// Live panel model
+// ============================================
+
+/** What the live thought panel draws, derived from a turn's steps. */
+export interface ThoughtPanelModel {
+  /** The steps it was derived from. */
+  readonly thoughts: readonly Thought[]
+  /** Timeline steps: no results, no sub-agent steps (nested under their Task), no TodoWrite (one card below). */
+  readonly display: readonly Thought[]
+  /** Sub-agent steps by parent step id (see `groupChildThoughts`). */
+  readonly childGroups: ReadonlyMap<string, Thought[]>
+  /** The latest TodoWrite call that carries its input. */
+  readonly latestTodo: Thought | null
+  /** System errors; tool failures are part of normal investigation and not counted. */
+  readonly errorCount: number
+}
+
+function isTimelineStep(thought: Thought): boolean {
+  return thought.type !== 'result' && thought.type !== 'tool_result' && !thought.parentToolUseId && thought.toolName !== 'TodoWrite'
+}
+
+function isTodoCall(thought: Thought): boolean {
+  return thought.type === 'tool_use' && thought.toolName === 'TodoWrite' && !!thought.toolInput
+}
+
+/** Whether `next` can replace `prev` without entering or leaving any derived list. */
+function samePlace(prev: Thought, next: Thought): boolean {
+  return prev.id === next.id && prev.type === next.type && prev.toolName === next.toolName
+    && prev.parentToolUseId === next.parentToolUseId && isTodoCall(prev) === isTodoCall(next)
+}
+
+function buildThoughtPanelModel(thoughts: readonly Thought[], previousGroups?: ReadonlyMap<string, Thought[]>): ThoughtPanelModel {
+  let latestTodo: Thought | null = null
+  let errorCount = 0
+  for (const thought of thoughts) {
+    if (isTodoCall(thought)) latestTodo = thought
+    if (thought.type === 'error') errorCount++
+  }
+  return {
+    thoughts,
+    display: thoughts.filter(isTimelineStep),
+    childGroups: groupChildThoughts(thoughts, previousGroups),
+    latestTodo,
+    errorCount,
+  }
+}
+
+/**
+ * The panel model for `thoughts`, re-deriving only the steps that changed
+ * since `prev`. Steps are appended or replaced in place by a new object (a
+ * streamed delta, a tool result), so a step that kept its identity needs no
+ * work. A step that changed kind, or a shorter list, rebuilds the model. `prev`
+ * is never modified, and unchanged lists keep their identity.
+ */
+export function nextThoughtPanelModel(prev: ThoughtPanelModel | null, thoughts: readonly Thought[]): ThoughtPanelModel {
+  if (prev?.thoughts === thoughts) return prev
+  if (!prev || thoughts.length < prev.thoughts.length) return buildThoughtPanelModel(thoughts, prev?.childGroups)
+
+  let display: Thought[] | null = null
+  let groups: Map<string, Thought[]> | null = null
+  let latestTodo = prev.latestTodo
+  let errorCount = prev.errorCount
+  const editDisplay = (): Thought[] => (display ??= [...prev.display])
+  const editGroup = (parentId: string): Thought[] => {
+    groups ??= new Map(prev.childGroups)
+    const group = groups.get(parentId)
+    if (group && group !== prev.childGroups.get(parentId)) return group
+    const copy = group ? [...group] : []
+    groups.set(parentId, copy)
+    return copy
+  }
+
+  for (let i = 0; i < prev.thoughts.length; i++) {
+    const before = prev.thoughts[i]
+    const after = thoughts[i]
+    if (after === before) continue
+    if (!samePlace(before, after)) return buildThoughtPanelModel(thoughts, prev.childGroups)
+    if (isTimelineStep(after)) {
+      const list = editDisplay()
+      list[list.lastIndexOf(before)] = after
+    } else if (after.parentToolUseId) {
+      const group = editGroup(after.parentToolUseId)
+      group[group.lastIndexOf(before)] = after
+    }
+    if (latestTodo === before) latestTodo = after
+  }
+
+  for (let i = prev.thoughts.length; i < thoughts.length; i++) {
+    const thought = thoughts[i]
+    if (isTimelineStep(thought)) editDisplay().push(thought)
+    else if (thought.parentToolUseId) editGroup(thought.parentToolUseId).push(thought)
+    if (isTodoCall(thought)) latestTodo = thought
+    if (thought.type === 'error') errorCount++
+  }
+
+  return { thoughts, display: display ?? prev.display, childGroups: groups ?? prev.childGroups, latestTodo, errorCount }
+}
+
+// ============================================
 // Text Utilities
 // ============================================
 

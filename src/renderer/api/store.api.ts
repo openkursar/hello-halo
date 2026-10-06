@@ -12,6 +12,7 @@ import type {
 } from './_shared'
 import type { StoreSignInStatus } from '../../shared/store/store-types'
 import type { AppType, AppSpec } from '../../shared/apps/spec-types'
+import type { SpecUpgradeOutcome } from '../../shared/apps/app-types'
 
 export const storeApi = {
   // ===== Store (App Registry) =====
@@ -128,6 +129,12 @@ export const storeApi = {
       return window.halo.storeApplyUpgrade({ appId, mode })
     }
     return httpRequest('POST', `/api/store/updates/${appId}/apply`, { mode })
+  },
+
+  /** What the available upgrade would keep at the user's version, without applying it. */
+  storePreviewUpgrade: async (appId: string): Promise<ApiResponse<SpecUpgradeOutcome>> => {
+    if (isElectron()) return window.halo.storePreviewUpgrade({ appId })
+    return httpRequest('GET', `/api/store/updates/${encodeURIComponent(appId)}/preview`)
   },
 
   storePublish: async (

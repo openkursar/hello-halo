@@ -69,8 +69,10 @@ describe('thinking deltas', () => {
       .filter(([channel]) => channel === 'agent:thought-delta')
       .map(([, , , data]) => data as { delta?: string; content?: string; isComplete?: boolean })
     const streaming = deltas.filter(d => !d.isComplete)
-    expect(streaming.map(d => d.delta)).toEqual(pieces)
+    // Pieces arriving within one publishing interval go out merged, ahead of the completion.
+    expect(streaming.map(d => d.delta)).toEqual([pieces.join('')])
     for (const d of streaming) expect(d).not.toHaveProperty('content')
     expect(deltas.filter(d => d.isComplete)).toEqual([expect.objectContaining({ content: pieces.join(''), isComplete: true })])
+    expect(deltas.findIndex(d => d.isComplete)).toBeGreaterThan(deltas.findIndex(d => !d.isComplete))
   })
 })

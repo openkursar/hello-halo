@@ -2,7 +2,9 @@
  * The current conversation's toolsets, as the composer's "+" panel shows them.
  *
  * Mounted with the composer rather than the panel, so an AI request to enable
- * a toolset (request_toolset) can open the panel even while it is closed.
+ * a toolset (request_toolset) opens the panel at once, even while it is closed
+ * and while the turn that asked is still running. A switch flipped then takes
+ * effect from the next message: the session rebuild waits for the turn to end.
  */
 
 import { useEffect } from 'react'
@@ -17,8 +19,6 @@ const HIGHLIGHT_MS = 2400
 interface Options {
   /** False on surfaces whose tools are not governed by the broker (digital-human chat). */
   enabled: boolean
-  /** A request waits for the running turn to end, when the "+" button is back. */
-  canOpen: boolean
   /** Whether the panel is showing, so a highlight is consumed only once seen. */
   panelOpen: boolean
   onRequested: () => void
@@ -32,7 +32,7 @@ export interface ComposerToolsets {
   toggle: (toolset: ToolsetStatus) => void
 }
 
-export function useComposerToolsets({ enabled, canOpen, panelOpen, onRequested }: Options): ComposerToolsets {
+export function useComposerToolsets({ enabled, panelOpen, onRequested }: Options): ComposerToolsets {
   const spaceId = useSpaceStore((s) => s.currentSpace?.id ?? null)
   const conversationId = useChatStore(selectActiveConversationId)
   const active = enabled && !!spaceId && !!conversationId
@@ -52,10 +52,10 @@ export function useComposerToolsets({ enabled, canOpen, panelOpen, onRequested }
 
   // Consumed at once so a later remount never re-opens the panel.
   useEffect(() => {
-    if (!active || !requestSignal || !canOpen) return
+    if (!active || !requestSignal) return
     consumeRequestSignal(conversationId!)
     onRequested()
-  }, [active, requestSignal, canOpen, conversationId, consumeRequestSignal, onRequested])
+  }, [active, requestSignal, conversationId, consumeRequestSignal, onRequested])
 
   useEffect(() => {
     if (!active || !panelOpen || !aiRequested || aiRequested.size === 0) return

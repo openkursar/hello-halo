@@ -44,6 +44,8 @@ export const appRpc = {
   appUpdateFrequency: rawRpcMethod('app:update-frequency'),
   appUpdateOverrides: rawRpcMethod('app:update-overrides'),
   appUpdateSpec: rawRpcMethod('app:update-spec'),
+  appGetAuthorSpec: rawRpcMethod('app:get-author-spec'),
+  appAdoptAuthorVersion: rawRpcMethod('app:adopt-author-version'),
   appGrantPermission: rawRpcMethod('app:grant-permission'),
   appRevokePermission: rawRpcMethod('app:revoke-permission'),
   appSetUpgradeStrategy: rawRpcMethod('app:set-upgrade-strategy'),

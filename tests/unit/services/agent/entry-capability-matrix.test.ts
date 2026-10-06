@@ -428,6 +428,9 @@ async function lastSession(run: () => Promise<unknown>): Promise<Observed> {
 const SPACE_ID = 'space-1'
 const GUEST_KEY = () => buildImSessionKey(app.id, 'wecom-bot', 'direct', 'stranger')
 const TEAM_KEY = () => buildTeamSessionKey(app.id, 'team-1', 'epoch-1')
+// Its own epoch: a guest's turn marks its thread as coming from outside, which
+// must not reach the plain team-member row.
+const FRONTED_KEY = () => buildTeamSessionKey(app.id, 'team-1', 'epoch-im')
 
 const chatTurn = (over: Record<string, unknown> = {}) => ({
   appId: app.id, spaceId: SPACE_ID, message: 'hello', ...over,
@@ -468,6 +471,18 @@ const ROW_DRIVERS = {
   'team member (disposable)': () => lastSession(() => {
     state.teamContext = teamPromptContext(true)
     return sendAppChatMessage(teamTurn())
+  }),
+  'team-fronted IM chat (guest)': () => lastSession(() => {
+    state.teamContext = teamPromptContext(false)
+    setImPermissionContext(FRONTED_KEY(), { senderId: 'stranger', senderName: 'Stranger', isOwner: false, guestPolicy: {} })
+    return sendAppChatMessage(chatTurn({
+      conversationId: FRONTED_KEY(),
+      imSession: { channel: 'wecom-bot', chatType: 'group', displayName: 'Ops', sessionId: 'inst:ops' },
+      teamContext: {
+        teamId: 'team-1', epochId: 'epoch-im', kind: 'human_message', fromAppId: null, wait: false,
+        correlationId: 'c-im', external: true,
+      },
+    })).finally(() => clearImPermissionContext(FRONTED_KEY()))
   }),
   'automation run': async () => {
     const store = {
@@ -514,6 +529,8 @@ const EXPECTED_SERVERS: Record<Row, readonly string[]> = {
   'team member (disposable)': [
     'ai-browser', 'halo-docs', 'halo-notify', 'halo-person-context', 'halo-report', 'halo-team', 'ocr', 'web-search',
   ],
+  // The same guest filter, plus the team channel the member is reached on.
+  'team-fronted IM chat (guest)': ['halo-report', 'halo-team', 'web-search'],
   'automation run': [
     'ai-browser', 'halo-docs', 'halo-notify', 'halo-person-context', 'halo-report', 'ocr', 'web-search',
   ],
@@ -615,7 +632,7 @@ describe('entry x global setting: every entry follows the user\'s AI settings', 
     // A policy adds to the session's disallowedTools and never replaces them,
     // so the user's list reaches guests and borrowed turns too. A guest is also
     // held to a whitelist, which may deny the default tools for its own reasons.
-    const policyAddsToDisallowed = row === 'digital human chat (IM guest)'
+    const policyAddsToDisallowed = row === 'digital human chat (IM guest)' || row === 'team-fronted IM chat (guest)'
 
     it('disabledTools replaces the built-in default list', async () => {
       state.config.agent = { disabledTools: ['UserDisabledTool'] }
@@ -670,7 +687,9 @@ describe('entry x conversation collaboration: halo-conversations', () => {
   // and follows the global setting only.
   const SWITCHED: readonly Row[] = ['digital human chat (owner)', 'automation run']
   // Someone else acting through the digital human, or a team channel: never, switch or not.
-  const NEVER: readonly Row[] = ['digital human chat (IM guest)', 'team member', 'team member (disposable)']
+  const NEVER: readonly Row[] = [
+    'digital human chat (IM guest)', 'team member', 'team member (disposable)', 'team-fronted IM chat (guest)',
+  ]
 
   it('a scheduled run acts under its own sender key, never its digital human\'s default chat', async () => {
     grant()

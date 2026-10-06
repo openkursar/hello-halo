@@ -6,7 +6,7 @@
 import { api } from '../internal'
 import type { Conversation, ConversationMeta, Message, Thought } from '../internal'
 import i18n from '../../../i18n'
-import { previewFromMessage, titleFromFirstMessage } from '../../../../shared/conversation-title'
+import { previewFromMessages, titleFromFirstMessage } from '../../../../shared/conversation-title'
 import { messageSummaryText } from '../../../../shared/content-reference'
 import type { ContentReference } from '../../../../shared/types/content-reference'
 import { buildCanvasContext } from './canvas-context'
@@ -18,7 +18,6 @@ import type { ChatBackend, SendRequest, BackendContext, OpenOptions } from './ty
 import { noteTurnEnded } from '../../../services/home-telemetry'
 
 function metaFromConversation(conversation: Conversation): ConversationMeta {
-  const last = conversation.messages?.[conversation.messages.length - 1]
   return {
     id: conversation.id,
     spaceId: conversation.spaceId,
@@ -27,7 +26,7 @@ function metaFromConversation(conversation: Conversation): ConversationMeta {
     updatedAt: conversation.updatedAt,
     messageCount: conversation.messages?.length || 0,
     // Same rule as main's index, so a reload does not change the line.
-    preview: last ? previewFromMessage(last.content, last.metadata?.references) ?? '' : undefined,
+    preview: previewFromMessages(conversation.messages ?? []),
     starred: conversation.starred,
     // Carried through reloads so the engine badge does not blink off between turns.
     engineId: conversation.engineId,

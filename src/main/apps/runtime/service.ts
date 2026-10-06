@@ -49,20 +49,16 @@ import { AppNotRunnableError, EscalationNotFoundError, ConcurrencyLimitError } f
 import { Semaphore } from './concurrency'
 import { executeRun } from './execute'
 import { injectIntoActiveRun, isRunActive } from './active-runs'
-import { readSessionMessages } from './session-store'
-import { legacySessionEnvironmentKey } from './execution-environment'
 import { automaticEnabled, blockedReason, deriveRuntimeStatus } from './app-state'
 import { getActiveTeamRuntime } from './team'
-import { truncateUtf16Safe } from './text-truncate'
-import { getSpace } from '../../services/space.service'
 import { getEscalationQuestions, formatEscalationAnswer } from '../../../shared/apps/app-types'
-import type { ImSessionRecord } from '../../../shared/types/im-channel'
 import type { ContentReference } from '../../../shared/types/content-reference'
 import { broadcastToAll } from '../../http/websocket'
 import { destroyChatBrowserContextsForApp } from './app-chat-browser'
 import { sendToRenderer } from '../../foundation/window.service'
 import { notifyAppEvent } from '../../services/notification.service'
 import { RunningRuns } from './running-runs'
+import { clearOldRunTranscripts } from './run-retention'
 
 // ============================================
 // Constants
@@ -92,6 +88,9 @@ const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000
 /** Recorded on runs whose process died before they could finish. */
 const INTERRUPTED_RUN_MESSAGE = 'Interrupted — Halo stopped while this run was in progress.'
 
+/** Refusal to continue a run whose transcript and engine session the retention rule deleted. */
+const RUN_PROCESS_CLEARED_MESSAGE = 'This execution can no longer be continued: its process was cleared under the retention rule'
+
 // ============================================
 // Service Factory
 // ============================================
@@ -108,13 +107,14 @@ const INTERRUPTED_RUN_MESSAGE = 'Interrupted — Halo stopped while this run was
 export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService {
   const queuedAutomatic = new Map<string, Set<AbortController>>()
   const intentionallyStoppedRuns = new Set<string>()
-  const activeRunControllers = new Map<string, AbortController>()
+  // By run id. `startedAt` is this execution's own start: a continued run keeps
+  // its first start in the database.
+  const activeExecutions = new Map<string, { controller: AbortController; startedAt: number }>()
   const continuationDispatches = new Set<string>()
   let continuationInterval: ReturnType<typeof setInterval> | null = null
   let shuttingDown = false
   let drainingContinuations = false
   const { store, appManager, scheduler, eventRouter, memory, background } = deps
-  const imSessionRegistry = deps.imSessionRegistry ?? null
 
   // ── Internal State ──────────────────────────────────
   const activations = new Map<string, ActivationState>()
@@ -179,8 +179,23 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
   let lastPruneAtMs = 0
 
   // ── Helper: Build trigger context ───────────────────
+  /**
+   * How the trigger names the subscription that started a run: the author's id,
+   * else its place in the list (from 1). A person with several schedules or
+   * event subscriptions can then be told in its prompt what each one is for.
+   */
+  function describeSubscription(sub: SubscriptionDef, index: number): string {
+    return sub.id ? `subscription "${sub.id}"` : `subscription #${index + 1}`
+  }
+
   function buildScheduleTriggerContext(job: SchedulerJob, app: InstalledApp): TriggerContext {
-    const subId = (job.metadata as any)?.subscriptionId || 'unknown'
+    const subId: unknown = (job.metadata as { subscriptionId?: unknown } | undefined)?.subscriptionId
+    const subscriptions = app.spec.type === 'automation' ? app.spec.subscriptions ?? [] : []
+    // Jobs carry the author's id, or the index for an unnamed subscription.
+    const index = subscriptions.findIndex((sub, i) => (sub.id ?? String(i)) === subId)
+    const subscription = index >= 0
+      ? ` — ${describeSubscription(subscriptions[index], index)}`
+      : typeof subId === 'string' && subId ? ` — subscription "${subId}"` : ''
     const schedule = job.schedule
     let scheduleDesc: string
 
@@ -194,7 +209,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
 
     return {
       type: 'schedule',
-      description: `Scheduled run for "${app.spec.name}" (${scheduleDesc}). ` +
+      description: `Scheduled run for "${app.spec.name}"${subscription} (${scheduleDesc}). ` +
         `Time: ${new Date().toISOString()}`,
       jobId: job.id,
     }
@@ -203,11 +218,12 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
   function buildEventTriggerContext(
     eventType: string,
     eventPayload: Record<string, unknown>,
-    app: InstalledApp
+    app: InstalledApp,
+    subscription: string
   ): TriggerContext {
     return {
       type: 'event',
-      description: `Triggered by event "${eventType}" for "${app.spec.name}". ` +
+      description: `Triggered by event "${eventType}" for "${app.spec.name}" — ${subscription}. ` +
         `Time: ${new Date().toISOString()}`,
       eventPayload,
     }
@@ -219,122 +235,6 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       description: `Manually triggered run for "${app.spec.name}". ` +
         `Time: ${new Date().toISOString()}`,
     }
-  }
-
-  /** Max recent conversation turns (user + bot reply) to include per IM session */
-  const IM_HISTORY_TURN_LIMIT = 15
-
-  /** Max total characters for the IM context section (keeps trigger concise) */
-  const IM_HISTORY_MAX_CHARS = 3000
-
-  /** Max characters per individual message line (truncate long bot responses) */
-  const IM_MESSAGE_TRUNCATE = 500
-
-  /**
-   * Prefixes written by the old proactive push path (buildTriggerMessage).
-   * These are internal trigger signals, not real user messages — skip them.
-   */
-  const IM_TRIGGER_PREFIXES = ['[schedule]', '[event]', '[manual]']
-
-  /**
-   * Build an IM conversation history section for injection into trigger context.
-   *
-   * Groups raw JSONL messages into clean conversation turns: each turn is one
-   * user message paired with the bot's FINAL reply (intermediate tool-call
-   * narration is collapsed away, matching what IM users actually see).
-   *
-   * Internal trigger messages ([schedule]/[event]/[manual]) are filtered out.
-   * Returns null if no usable history exists.
-   */
-  function buildImContextForTrigger(
-    app: InstalledApp,
-    sessions: ImSessionRecord[]
-  ): string | null {
-    const space = app.spaceId ? getSpace(app.spaceId) : null
-    const sections: string[] = []
-
-    for (const session of sessions) {
-      // Derive JSONL runId — mirrors deriveRunId() in app-chat.ts
-      const chatRunId = `chat-${session.channel}-${session.chatType}-${session.chatId}`
-      const sessionKey = `app-chat:${app.id}:${session.channel}:${session.chatType}:${session.chatId}`
-      const environment = store.getSessionEnvironment(sessionKey)
-        ?? store.getSessionEnvironment(legacySessionEnvironmentKey(app.id, chatRunId))
-      const spacePath = environment?.spacePath ?? space?.path
-      if (!spacePath) {
-        console.warn('[Runtime] IM trigger history unavailable: missing session environment', { appId: app.id, sessionKey })
-        continue
-      }
-      // Only recent turns are used; several messages per turn (tool narration) leave headroom.
-      const messages = readSessionMessages(spacePath, app.id, chatRunId, { limit: IM_HISTORY_TURN_LIMIT * 8 })
-      if (messages.length === 0) continue
-
-      // ── Group into turns ──────────────────────────────────────────────────
-      // Each turn = one real user message + the bot's last reply for that turn.
-      // Multiple consecutive bot messages (tool-call narration) are collapsed
-      // to the final one — that's what the IM user actually received.
-      const turns: Array<{ user: string; botFinal: string }> = []
-      let pendingUser: string | null = null
-      let pendingBotFinal: string | null = null
-
-      for (const m of messages) {
-        if (m.role === 'user') {
-          // Flush completed turn before starting a new one
-          if (pendingUser !== null && pendingBotFinal !== null) {
-            turns.push({ user: pendingUser, botFinal: pendingBotFinal })
-          }
-          // Skip internal trigger signals — not real user messages
-          if (IM_TRIGGER_PREFIXES.some(p => m.content.startsWith(p))) {
-            pendingUser = null
-            pendingBotFinal = null
-            continue
-          }
-          pendingUser = m.content
-          pendingBotFinal = null
-        } else {
-          // Bot message — keep overwriting so we always have the last one
-          if (pendingUser !== null) {
-            pendingBotFinal = m.content
-          }
-        }
-      }
-      // Flush the last turn
-      if (pendingUser !== null && pendingBotFinal !== null) {
-        turns.push({ user: pendingUser, botFinal: pendingBotFinal })
-      }
-
-      if (turns.length === 0) continue
-
-      // ── Format recent turns ───────────────────────────────────────────────
-      const recentTurns = turns.slice(-IM_HISTORY_TURN_LIMIT)
-      let totalChars = 0
-      const lines: string[] = []
-
-      for (const turn of recentTurns) {
-        const userLine = truncateUtf16Safe(turn.user, IM_MESSAGE_TRUNCATE)
-        const botLine = `[bot] ${truncateUtf16Safe(turn.botFinal, IM_MESSAGE_TRUNCATE)}`
-        const turnText = `${userLine}\n${botLine}`
-        totalChars += turnText.length
-        if (totalChars > IM_HISTORY_MAX_CHARS) break
-        lines.push(turnText)
-      }
-
-      if (lines.length > 0) {
-        const header = session.displayName || session.chatId
-        sections.push(
-          `#### ${header} (recent ${lines.length} exchanges)\n\n${lines.join('\n\n')}`
-        )
-      }
-    }
-
-    if (sections.length === 0) return null
-
-    return (
-      `### IM Conversation History\n\n` +
-      `Recent exchanges from IM channels where this App is active.\n` +
-      `Each entry: a user message followed by the bot's final reply.\n` +
-      `Use this to understand what users have been asking about and tailor your output accordingly.\n\n` +
-      sections.join('\n\n')
-    )
   }
 
   function buildEscalationTriggerContext(
@@ -416,10 +316,15 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
   }
 
   // ── Helper: Insert + broadcast activity entry ──────
-  function emitActivityEntry(entry: ActivityEntry): void {
-    store.insertEntry(entry)
+  /** Clients upsert by id, so this both announces a new entry and replaces a changed one. */
+  function publishEntry(entry: ActivityEntry): void {
     sendToRenderer('app:activity_entry:new', { appId: entry.appId, entry })
     broadcastToAll('app:activity_entry:new', { appId: entry.appId, entry: entry as unknown as Record<string, unknown> })
+  }
+
+  function emitActivityEntry(entry: ActivityEntry): void {
+    store.insertEntry(entry)
+    publishEntry(entry)
   }
 
   /**
@@ -482,17 +387,6 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
 
     const trigger = buildManualTriggerContext(app)
 
-    // ── Inject IM conversation history into trigger ─────
-    // Use getAllSessions (not the deprecated getProactiveSessions which
-    // filters by the removed `proactive` flag and always returns empty).
-    const imSessions = imSessionRegistry?.getAllSessions(appId)
-    if (imSessions && imSessions.length > 0) {
-      const imContext = buildImContextForTrigger(app, imSessions)
-      if (imContext) {
-        trigger.description += '\n\n' + imContext
-      }
-    }
-
     return { app, trigger }
   }
 
@@ -505,6 +399,24 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     emitActivityEntry({ id: randomUUID(), appId: app.id, runId, sessionKey, type: 'run_skipped', ts: now, content: { summary: reason, status: 'skipped' } })
     console.log('[Runtime] Queued automatic execution skipped', { appId: app.id, runId, reason })
     return { appId: app.id, runId, sessionKey, outcome: 'noop', startedAt: now, finishedAt: now, durationMs: 0 }
+  }
+
+  /**
+   * Say on the run's latest entry how many of the person's scheduled times came
+   * due while this execution kept it busy. Each was skipped (one run per
+   * person) and left no other trace on the timeline.
+   */
+  function noteSkippedSchedules(appId: string, runId: string, busySince: number): void {
+    const until = Date.now()
+    let skipped = 0
+    for (const jobId of activations.get(appId)?.schedulerJobIds ?? []) {
+      skipped += scheduler.countDueTimes(jobId, busySince, until)
+    }
+    if (skipped === 0) return
+    const latest = store.getEntriesForRun(runId)[0]
+    const updated = latest ? store.addSkippedSchedules(latest.id, skipped) : null
+    if (updated) publishEntry(updated)
+    console.log(`[Runtime][${runId.slice(0, 8)}] ${skipped} scheduled time(s) came due during the run and were skipped`)
   }
 
   // ── Helper: Execute with concurrency control ────────
@@ -520,6 +432,8 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       onStarted?: (info: { runId: string; sessionKey: string; startedAt: number }) => void
     }
   ): Promise<AppRunResult> {
+    // From here the person is busy (queued or running): its scheduled times are skipped.
+    const busySince = Date.now()
     // Try to acquire a slot immediately without blocking.
     // If no slot is available, transition to 'queued' state and block.
     const immediateSlot = semaphore.tryAcquire()
@@ -619,7 +533,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         // before their first broadcast.
         onRunStarted: ({ runId, sessionKey, startedAt }) => {
           executingRunId = runId
-          activeRunControllers.set(runId, abortController)
+          activeExecutions.set(runId, { controller: abortController, startedAt })
           emitRunStarted({
             appId: app.id,
             runId,
@@ -686,6 +600,18 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         }
       }
 
+      try {
+        noteSkippedSchedules(app.id, result.runId, busySince)
+      } catch (skipErr) {
+        console.error(`[Runtime][${runTag}] Failed to note skipped scheduled times:`, skipErr)
+      }
+
+      try {
+        clearOldRunTranscripts(store, app.id, app.spaceId ? deps.getSpacePath(app.spaceId) : null)
+      } catch (retentionErr) {
+        console.error(`[Runtime][${runTag}] Failed to clear old run transcripts:`, retentionErr)
+      }
+
       // Update manager with run outcome
       const outcome = result.outcome as RunOutcome
       appManager.updateLastRun(app.id, outcome, result.errorMessage)
@@ -700,7 +626,8 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
           )
           try {
             appManager.updateStatus(app.id, 'error', {
-              errorMessage: `Auto-disabled after ${consecutiveErrors} consecutive errors`,
+              errorMessage: `Auto-disabled after ${consecutiveErrors} consecutive failed runs. ` +
+                `Latest: ${result.errorMessage ?? 'no reason was recorded'}`,
             })
             // Deactivate to stop scheduling
             await service.deactivate(app.id)
@@ -749,7 +676,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       throw error
     } finally {
       if (executingRunId) {
-        activeRunControllers.delete(executingRunId)
+        activeExecutions.delete(executingRunId)
         intentionallyStoppedRuns.delete(executingRunId)
       }
       runningRuns.remove(app.id, executionKey)
@@ -776,8 +703,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
 
   function publishDecision(entry: ActivityEntry): void {
     try {
-      sendToRenderer('app:activity_entry:new', { appId: entry.appId, entry })
-      broadcastToAll('app:activity_entry:new', { appId: entry.appId, entry: entry as unknown as Record<string, unknown> })
+      publishEntry(entry)
       if (entry.userResponse) {
         const payload = { appId: entry.appId, entryId: entry.id, response: entry.userResponse, ...entry.content.teamContext }
         sendToRenderer('app:escalation:resolved', payload)
@@ -1078,7 +1004,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
             const currentApp = admission.app
 
             console.log(`[Runtime] Event triggered: type=${event.type}, app=${appId}`)
-            const trigger = buildEventTriggerContext(event.type, event.payload, currentApp)
+            const trigger = buildEventTriggerContext(event.type, event.payload, currentApp, describeSubscription(sub, i))
 
             try {
               await executeWithConcurrency(currentApp, trigger)
@@ -1218,7 +1144,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
             const currentApp = admission.app
 
             console.log(`[Runtime] Event triggered: type=${event.type}, app=${appId}`)
-            const trigger = buildEventTriggerContext(event.type, event.payload, currentApp)
+            const trigger = buildEventTriggerContext(event.type, event.payload, currentApp, describeSubscription(sub, i))
 
             try {
               await executeWithConcurrency(currentApp, trigger)
@@ -1351,7 +1277,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         else if (latestRun.status === 'skipped') state.lastStatus = 'skipped'
 
         if (latestRun.status === 'running') {
-          state.runningAtMs = latestRun.startedAt
+          state.runningAtMs = activeExecutions.get(latestRun.runId)?.startedAt ?? latestRun.startedAt
           state.runningRunId = latestRun.runId
           state.runningSessionKey = latestRun.sessionKey
         }
@@ -1430,10 +1356,26 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       publishDecision(store.confirmDeadline(appId, entryId, deadlineAt))
     },
 
+    adoptAuthorVersion(appId: string, entryId: string, fields: string[]): ActivityEntry {
+      const entry = store.getEntry(entryId)
+      const note = entry?.appId === appId ? entry.content.upgrade : undefined
+      if (!entry || !note) throw new Error('This upgrade note no longer exists')
+      if (!Array.isArray(fields) || fields.some(field => typeof field !== 'string')) {
+        throw new Error('fields must be a list of field names')
+      }
+      // Only what the note kept: it is what the user is looking at.
+      const requested = fields.filter(field => note.kept.includes(field))
+      const changed = appManager.adoptAuthorVersion(appId, requested)
+      if (changed.includes('subscriptions')) service.syncAppSubscriptions(appId)
+      const updated = store.markUpgradeAdopted(entryId, requested) ?? entry
+      publishEntry(updated)
+      return updated
+    },
+
     async stopRun(appId: string, runId: string): Promise<void> {
       const run = store.getRun(runId)
       if (!run || run.appId !== appId) throw new Error('Task not found')
-      const controller = activeRunControllers.get(runId)
+      const controller = activeExecutions.get(runId)?.controller
       if (!controller) throw new Error('This execution is no longer running')
       intentionallyStoppedRuns.add(runId)
       store.markRunStopped(runId)
@@ -1445,8 +1387,8 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       const run = store.getRun(runId)
       if (!run || run.appId !== appId) throw new Error('Task not found')
       for (const entry of store.closeRun(runId)) publishDecision(entry)
-      if (activeRunControllers.has(runId)) intentionallyStoppedRuns.add(runId)
-      activeRunControllers.get(runId)?.abort()
+      if (activeExecutions.has(runId)) intentionallyStoppedRuns.add(runId)
+      activeExecutions.get(runId)?.controller.abort()
       console.log('[Runtime] Task closed', { appId, runId })
       broadcastAppStatus(appId)
     },
@@ -1472,6 +1414,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         throw new Error(`Run not found: ${runId}`)
       }
       if (store.isRunClosed(runId)) throw new Error('This task is closed')
+      if (run.transcriptClearedAt) throw new Error(RUN_PROCESS_CLEARED_MESSAGE)
       if (run.status !== 'error') {
         throw new Error(`Run ${runId} is not in error state (status: ${run.status})`)
       }
@@ -1526,6 +1469,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         throw new Error(`Run not found: ${runId}`)
       }
       if (store.isRunClosed(runId)) throw new Error('This task is closed')
+      if (run.transcriptClearedAt) throw new Error(RUN_PROCESS_CLEARED_MESSAGE)
       const appIsRunning = isAppBusy(appId) || store.hasQueuedSoloContinuation(appId)
       if (appIsRunning) {
         throw new Error(`App ${appId} is busy with another run — try again once it finishes`)
@@ -1681,8 +1625,6 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
 
   // ── Register scheduler handler ──────────────────────
   // This connects the scheduler's onJobDue to our execution logic.
-  // IM conversation history from proactive sessions is injected into the
-  // trigger context, and the run result is forwarded to IM after completion.
   scheduler.onJobDue('app', async (job: SchedulerJob): Promise<RunOutcome> => {
     const appId = (job.metadata as any)?.appId
     if (!appId) {
@@ -1699,20 +1641,16 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
 
     const trigger = buildScheduleTriggerContext(job, app)
 
-    // ── Inject IM conversation history into trigger ─────
-    const imSessions = imSessionRegistry?.getAllSessions(appId)
-    if (imSessions && imSessions.length > 0) {
-      const imContext = buildImContextForTrigger(app, imSessions)
-      if (imContext) {
-        trigger.description += '\n\n' + imContext
-      }
-    }
-
     try {
       const result = await executeWithConcurrency(app, trigger)
 
       // IM forwarding is now AI-driven via notify_bot tool (no more system auto-push)
 
+      // Stopping or closing a run is not its schedule failing: the scheduler
+      // must neither back the next time off nor disable the job after repeats.
+      if (result.outcome === 'error' && (store.wasRunStopped(result.runId) || store.isRunClosed(result.runId))) {
+        return 'noop'
+      }
       return result.outcome as RunOutcome
     } catch (err) {
       console.error(`[Runtime] Scheduled run failed: app=${appId}, job=${job.id}:`, err)
@@ -1772,5 +1710,39 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     announceListChange(app.id, 'uninstalled')
   })
 
+  // ── React to an author's upgrade ────────────────────
+  // Every upgrade path (store, automatic or manual, and the bundle) ends in the
+  // manager's upgradeSpec, so this is where an upgrade reaches the running
+  // digital human: its triggers are rescheduled, and fields kept at the user's
+  // version are written up where the user looks.
+  appManager.onAppSpecUpgraded((appId, outcome) => {
+    try {
+      service.syncAppSubscriptions(appId)
+    } catch (err) {
+      console.error('[Runtime] Rescheduling after an upgrade failed; it applies on next activation', { appId, error: err })
+    }
+    if (outcome.kept.length === 0) return
+    try {
+      emitActivityEntry({
+        id: randomUUID(),
+        appId,
+        runId: UPGRADE_NOTE_RUN_ID,
+        type: 'milestone',
+        ts: Date.now(),
+        content: {
+          summary: `Upgraded from v${outcome.fromVersion} to v${outcome.toVersion}. ` +
+            `Kept the current version of what differs from the author's: ${outcome.kept.join(', ')}`,
+          upgrade: { ...outcome },
+          source: { kind: 'upgrade', appId },
+        },
+      })
+    } catch (err) {
+      console.error('[Runtime] Upgrade note could not be recorded', { appId, kept: outcome.kept, error: err })
+    }
+  })
+
   return service
 }
+
+/** Upgrade notes belong to no run; like chat reports, they carry a sentinel run id. */
+const UPGRADE_NOTE_RUN_ID = 'upgrade'

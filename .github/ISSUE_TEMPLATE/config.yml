@@ -1,1 +1,5 @@
 blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability / 报告安全漏洞
+    url: https://github.com/openkursar/hello-halo/security/advisories/new
+    about: Report security issues privately, not in a public issue. / 请私下报告安全问题，不要发公开 Issue。

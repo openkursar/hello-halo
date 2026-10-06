@@ -27,6 +27,7 @@ import {
   onSyncStatusChanged,
   onUpgradeAvailable,
   applyUpgrade,
+  previewUpgrade,
   checkUpgradesNow,
   publish,
   getPublishPreview,
@@ -118,6 +119,17 @@ export function registerStoreHandlers(): void {
       } catch (error: unknown) {
         const err = error as Error
         console.error('[StoreIPC] store:apply-upgrade error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // ── store:preview-upgrade ──────────────────────────────────────────────
+    storePreviewUpgrade: async (input: { appId: string }) => {
+      try {
+        return { success: true, data: await previewUpgrade(input.appId) }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.warn('[StoreIPC] store:preview-upgrade error:', err.message)
         return { success: false, error: err.message }
       }
     },

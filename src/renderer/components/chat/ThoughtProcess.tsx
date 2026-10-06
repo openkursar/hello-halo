@@ -25,8 +25,9 @@ import {
   getThoughtColor,
   getThoughtLabelKey,
   getToolFriendlyFormat,
-  groupChildThoughts,
+  nextThoughtPanelModel,
   NO_CHILD_THOUGHTS,
+  type ThoughtPanelModel,
 } from './thought-utils'
 import { useSmartScroll } from '../../hooks/useSmartScroll'
 import { useLazyVisible } from '../../hooks/useLazyVisible'
@@ -258,7 +259,8 @@ const ThoughtItem = memo(function ThoughtItem({ thought, isLast, allThoughts, is
 // Estimated height placeholder prevents layout jumps.
 const THOUGHT_ITEM_ESTIMATED_HEIGHT = 60
 
-function LazyThoughtItem({
+// Memoized so a streamed delta re-renders only the step it changed.
+const LazyThoughtItem = memo(function LazyThoughtItem({
   thought,
   isLast,
   scrollContainerRef,
@@ -282,7 +284,7 @@ function LazyThoughtItem({
   return (
     <div ref={ref} style={{ minHeight: THOUGHT_ITEM_ESTIMATED_HEIGHT }} />
   )
-}
+})
 
 // Memoized: a text delta changes neither prop, and this panel can hold hundreds of steps.
 export const ThoughtProcess = memo(function ThoughtProcess({ thoughts, isThinking }: ThoughtProcessProps) {
@@ -319,43 +321,18 @@ export const ThoughtProcess = memo(function ThoughtProcess({ thoughts, isThinkin
 
   const elapsed = useMemo(() => elapsedSeconds(thoughts), [thoughts])
 
-  // Get latest todo data (only render one TodoCard at bottom)
-  const latestTodos = useMemo(() => {
-    // Find all TodoWrite tool calls and get the latest one
-    const todoThoughts = thoughts.filter(
-      t => t.type === 'tool_use' && t.toolName === 'TodoWrite' && t.toolInput
-    )
-    if (todoThoughts.length === 0) return null
-
-    const latest = todoThoughts[todoThoughts.length - 1]
-    return parseTodoInput(latest.toolInput!)
+  // Timeline steps, sub-agent groups, the latest todo list and the error count,
+  // re-derived only for the steps that changed since the previous render.
+  const modelRef = useRef<ThoughtPanelModel | null>(null)
+  const { display: displayThoughts, childGroups, latestTodo, errorCount } = useMemo(() => {
+    const model = nextThoughtPanelModel(modelRef.current, thoughts)
+    modelRef.current = model
+    return model
   }, [thoughts])
 
-  // Filter thoughts for display (exclude TodoWrite, tool_result, result, and sub-agent thoughts)
-  // tool_result is now merged into tool_use, no need to show separately
-  // Sub-agent thoughts (parentToolUseId set) are rendered nested inside their parent Task thought
-  const displayThoughts = useMemo(() => {
-    return thoughts.filter(t => {
-      if (t.type === 'result') return false
-      if (t.type === 'tool_result') return false  // Merged into tool_use
-      if (t.parentToolUseId) return false  // Sub-agent thoughts rendered via SubAgentTimeline
-      // Exclude TodoWrite tool_use (shown separately at bottom)
-      if (t.toolName === 'TodoWrite') return false
-      return true
-    })
-  }, [thoughts])
-
-  // Task/Agent steps get only their own sub-agent steps, with a stable identity.
-  const childGroupsRef = useRef<Map<string, Thought[]>>()
-  const childGroups = useMemo(() => {
-    const groups = groupChildThoughts(thoughts, childGroupsRef.current)
-    childGroupsRef.current = groups
-    return groups
-  }, [thoughts])
-
-  // Only count system-level errors (type: 'error'), not tool execution failures (tool_result with isError)
-  // Tool failures are normal during agent investigation and should not affect overall status
-  const errorCount = useMemo(() => thoughts.filter(t => t.type === 'error').length, [thoughts])
+  // Only one TodoCard, at the bottom, for the latest TodoWrite call.
+  const latestTodoInput = latestTodo?.toolInput
+  const latestTodos = useMemo(() => (latestTodoInput ? parseTodoInput(latestTodoInput) : null), [latestTodoInput])
 
   // Smart auto-scroll: only scrolls when user is at bottom
   // Stops auto-scroll when user scrolls up to read history.

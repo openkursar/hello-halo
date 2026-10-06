@@ -1,6 +1,7 @@
 /** Execution identity for History attribution, and local activity for memory consolidation. */
 
 import { getConversationsWithActiveRound } from './app-chat-sink'
+import { getStartingAppChatConversations } from './app-chat-live-turn'
 import { getRunningConsumerIds, isSessionBusy } from '../../services/agent/session-manager'
 import { listActiveRuns } from './active-runs'
 import { getImPermissionContext } from './im-permission-registry'
@@ -13,14 +14,14 @@ export interface InstanceIdentity {
   origin: string
 }
 
-/** Includes idle resident consumers: stop/clear/restart must still be able to close them. */
+/**
+ * Includes idle resident consumers, and messages still on their way to the
+ * engine: stop/clear/restart must still be able to reach them.
+ */
 export function collectAppConversationIds(appId: string): string[] {
   const prefix = getAppChatConversationId(appId)
   const ids = new Set<string>()
-  for (const id of getConversationsWithActiveRound()) {
-    if (id === prefix || id.startsWith(prefix + ':')) ids.add(id)
-  }
-  for (const id of getRunningConsumerIds()) {
+  for (const id of [...getStartingAppChatConversations(), ...getConversationsWithActiveRound(), ...getRunningConsumerIds()]) {
     if (id === prefix || id.startsWith(prefix + ':')) ids.add(id)
   }
   return Array.from(ids)
@@ -35,9 +36,14 @@ export function hasOtherAppExecution(appId: string, selfId?: string): boolean {
   )
 }
 
-/** Stable across session rebuilds; IM guest/owner changes deliberately change the origin. */
+/**
+ * Stable across session rebuilds; IM guest/owner changes deliberately change the origin.
+ *
+ * @param source.guest - Whether the turn answers to an IM guest, as the turn
+ *   itself resolved it. Absent, the chat's last sender on record stands in.
+ */
 export function describeSelfInstance(
-  source: { runId: string; triggerType: TriggerType } | { conversationId: string }
+  source: { runId: string; triggerType: TriggerType } | { conversationId: string; guest?: boolean }
 ): InstanceIdentity {
   if ('runId' in source) {
     return { id: shortRunId(source.runId), origin: runOrigin(source.triggerType) }
@@ -49,7 +55,8 @@ export function describeSelfInstance(
   } else {
     const parsed = parseAppChatKey(conversationId)
     if (parsed && classifySessionSource(parsed.channel) === 'im') {
-      origin = getImPermissionContext(conversationId)?.isOwner === false ? 'im-guest' : 'im'
+      const guest = source.guest ?? getImPermissionContext(conversationId)?.isOwner === false
+      origin = guest ? 'im-guest' : 'im'
     }
   }
   return { id: shortConversationId(conversationId), origin }

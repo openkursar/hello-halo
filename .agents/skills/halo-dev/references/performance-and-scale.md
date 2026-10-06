@@ -32,6 +32,9 @@
   from detail events for a conversation nobody retains. `ipc/*.ts` forwards, never orchestrates.
 - ⚙ Delta events carry the increment only; accumulated content may travel once, on the
   completing event (`agent:thought-delta` carries `delta`, never `content`).
+- Token deltas are merged where they are produced (`services/agent/delta-coalescer.ts`) and
+  published at most once per 30 ms, so update rate does not follow the provider's token rate.
+  Every other event of the turn flushes them first; clients do not merge a second time.
 - ⚙ File-system events leave main only as `artifact:changed-batch` (per flush, per space,
   ≤1,000 changes) and `artifact:tree-update`. A consumer with per-file state treats
   `resync: true` as "every file may have changed". Bursts over the limit still reach per-path

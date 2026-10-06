@@ -1,21 +1,32 @@
 /**
  * Store Update Dialog
  *
- * Confirmation shown before receiving an update, so an overwrite never happens
- * silently. Offers three paths: overwrite in place, install the new version as
- * a separate copy, or skip this version.
+ * Confirmation shown before receiving an update. Offers three paths: update in
+ * place, install the new version as a separate copy, or skip this version. A
+ * digital human updated in place keeps every field that differs from the
+ * author's new version, and the dialog names those fields before it happens;
+ * other app types are replaced by the new version.
  */
 
 import { createPortal } from 'react-dom'
-import { Copy, RefreshCw, BellOff, ChevronRight, X } from 'lucide-react'
+import { Copy, RefreshCw, BellOff, ChevronRight, Loader2, X } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { useTranslation } from '../../i18n'
+import { specFieldList } from '../apps/spec-field-label'
+
+/** What updating in place would keep at the user's version. */
+export type UpgradePreview =
+  | { status: 'loading' }
+  | { status: 'ready'; kept: string[]; editsKnown: boolean }
+  | { status: 'unavailable' }
 
 interface StoreUpdateDialogProps {
   fromVersion: string
   toVersion: string
   changelog?: string
   busy?: boolean
+  /** Set for a digital human, whose in-place update keeps what differs from the author's version. */
+  preview?: UpgradePreview
   onInstallCopy: () => void
   onOverwrite: () => void
   onIgnore: () => void
@@ -67,18 +78,21 @@ export function StoreUpdateDialog({
   toVersion,
   changelog,
   busy,
+  preview,
   onInstallCopy,
   onOverwrite,
   onIgnore,
   onClose,
 }: StoreUpdateDialogProps) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
 
   const options: UpdateOption[] = [
     {
       Icon: RefreshCw,
-      title: t('Overwrite upgrade'),
-      description: t('Upgrades in place and keeps your settings and data. Local edits to the app content are replaced.'),
+      title: preview ? t('Update in place') : t('Overwrite upgrade'),
+      description: preview
+        ? t('Keeps your settings and data. Items that differ from the author’s new version keep your current version.')
+        : t('Upgrades in place and keeps your settings and data. Local edits to the app content are replaced.'),
       onClick: onOverwrite,
       recommended: true,
       accent: 'primary',
@@ -122,6 +136,24 @@ export function StoreUpdateDialog({
         {changelog && (
           <div className="mb-4 max-h-32 overflow-y-auto rounded-lg bg-muted/40 border border-border/60 p-3">
             <p className="text-xs text-muted-foreground whitespace-pre-line">{changelog}</p>
+          </div>
+        )}
+
+        {preview?.status === 'loading' && (
+          <p role="status" className="mb-4 flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Loader2 className="w-3 h-3 animate-spin" />
+            {t('Checking which items keep your current version…')}
+          </p>
+        )}
+        {preview?.status === 'ready' && preview.kept.length > 0 && (
+          <div className="mb-4 space-y-1 rounded-lg border border-border/60 p-3 text-xs text-muted-foreground">
+            <p className="text-foreground">
+              {t('These differ from the author’s new version and will keep your current version: {{items}}', {
+                items: specFieldList(preview.kept, t, i18n.language),
+              })}
+            </p>
+            {!preview.editsKnown && <p>{t('Halo cannot tell which of them you changed.')}</p>}
+            <p>{t('You can switch any of them to the author’s version later in Work activity.')}</p>
           </div>
         )}
 

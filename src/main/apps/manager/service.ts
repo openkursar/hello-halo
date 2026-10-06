@@ -27,6 +27,7 @@ import type {
   StatusChangeHandler,
   AppInstalledHandler,
   AppUninstalledHandler,
+  SpecUpgradedHandler,
   AppUninstallReason,
   Unsubscribe,
   UninstallOptions,
@@ -51,6 +52,9 @@ import { syncSkillToFilesystem, removeSkillFromFilesystem } from './skill-sync'
 import { withSkillMdName } from '../../../shared/skill-frontmatter'
 import { isBuiltinApp } from './types'
 import { sanitizeMemorySettings } from '../../../shared/types/memory'
+import { compareDotVersions } from '../../../shared/store/version-compare'
+import type { SpecUpgradeOutcome } from '../../../shared/apps/app-types'
+import { authorVersionPatch, mergeAuthorUpgrade } from './spec-upgrade'
 
 // ============================================
 // MCP Apps Change Event
@@ -118,6 +122,15 @@ function isValidTransition(from: AppStatus, to: AppStatus): boolean {
   return VALID_TRANSITIONS[from]?.has(to) ?? false
 }
 
+/**
+ * A digital human shipped by an author — through a store or the Halo bundle —
+ * receives upgrades over the user's edits, so its original is kept to tell the
+ * two apart. Digital humans created locally are never upgraded.
+ */
+function hasUpgradeSource(spec: AppSpec): boolean {
+  return spec.type === 'automation' && (!!spec.store?.slug || spec.store?.install_source === 'builtin')
+}
+
 // ============================================
 // Service Implementation
 // ============================================
@@ -166,6 +179,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
   // status-change listeners.
   const appInstalledHandlers: AppInstalledHandler[] = []
   const appUninstalledHandlers: AppUninstalledHandler[] = []
+  const specUpgradedHandlers: SpecUpgradedHandler[] = []
 
   /**
    * Notify all registered status change handlers.
@@ -201,6 +215,55 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         console.error('[AppManager] Uninstall handler error:', error)
       }
     }
+  }
+
+  /** Fire spec-upgraded handlers. Errors are isolated per subscriber. */
+  function notifySpecUpgraded(appId: string, outcome: SpecUpgradeOutcome): void {
+    for (const handler of specUpgradedHandlers) {
+      try {
+        handler(appId, outcome)
+      } catch (error) {
+        console.error('[AppManager] Spec upgrade handler error:', error)
+      }
+    }
+  }
+
+  /**
+   * What an author's new version makes of an App, without writing anything.
+   * A digital human is merged over the user's edits (spec-upgrade.ts); any
+   * other App simply becomes the new version.
+   */
+  function planUpgrade(app: InstalledApp, authorSpec: AppSpec): {
+    next: AppSpec
+    merged: AppSpec | null
+    outcome: SpecUpgradeOutcome
+  } {
+    const next = validateAppSpec(authorSpec)
+    const fromVersion = app.spec.version
+    if (next.type !== 'automation' || app.spec.type !== 'automation') {
+      return { next, merged: null, outcome: { fromVersion, toVersion: next.version, kept: [], editsKnown: true } }
+    }
+
+    const recorded = store.getAuthorSpec(app.id)
+    const original = recorded?.type === 'automation' ? recorded : null
+    let merge = mergeAuthorUpgrade(app.spec, original, next)
+    let editsKnown = original !== null
+    let merged: AppSpec
+    try {
+      merged = validateAppSpec(merge.spec)
+    } catch (err) {
+      // Fields from two versions can break a rule spanning fields, such as a
+      // kept config_schema lacking a key that a new trigger refers to.
+      // Keeping every differing field is the current spec at the new version.
+      console.warn('[AppManager] Upgrade merge produced an invalid spec; keeping every differing field', {
+        appId: app.id,
+        error: err instanceof Error ? err.message : String(err),
+      })
+      merge = mergeAuthorUpgrade(app.spec, null, next)
+      editsKnown = false
+      merged = validateAppSpec(merge.spec)
+    }
+    return { next, merged, outcome: { fromVersion, toVersion: next.version, kept: merge.kept, editsKnown } }
   }
 
   /**
@@ -375,6 +438,8 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         }
       }
 
+      const authorSpec = hasUpgradeSource(installSpec) ? installSpec : null
+
       // Check for duplicate installation
       const specId = installSpec.name // Use spec name as the canonical spec identifier
       const existing = store.getBySpecAndSpace(specId, spaceId)
@@ -382,7 +447,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         // If the existing record is uninstalled, reinstall it with the new spec
         if (existing.status === 'uninstalled') {
           // Update spec in case it changed
-          store.updateSpec(existing.id, installSpec)
+          store.updateSpecAndAuthorSpec(existing.id, installSpec, authorSpec)
           // Update config if provided
           if (userConfig) {
             store.updateConfig(existing.id, userConfig)
@@ -454,7 +519,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
 
       // Persist to SQLite first (atomic: if this fails, no filesystem side effects).
       try {
-        store.insert(app)
+        store.insert(app, authorSpec)
       } catch (dbError: unknown) {
         const sqliteCode = (dbError as { code?: string })?.code
         if (sqliteCode === 'SQLITE_CONSTRAINT_UNIQUE' || sqliteCode === 'SQLITE_CONSTRAINT') {
@@ -893,6 +958,59 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       console.log(`[AppManager] Updated spec for app ${appId}`)
     },
 
+    upgradeSpec(appId: string, authorSpec: AppSpec): SpecUpgradeOutcome {
+      const { next, merged, outcome } = planUpgrade(requireApp(appId), authorSpec)
+      if (merged) {
+        store.updateSpecAndAuthorSpec(appId, merged, next)
+        const keptNote = outcome.kept.length > 0
+          ? ` keeping ${outcome.editsKnown ? 'edited' : 'undetermined'} fields: ${outcome.kept.join(', ')}`
+          : ''
+        console.log(`[AppManager] Upgraded app ${appId} ${outcome.fromVersion} -> ${outcome.toVersion}${keptNote}`)
+      } else {
+        service.updateSpec(appId, next as unknown as Record<string, unknown>)
+      }
+      notifySpecUpgraded(appId, outcome)
+      return outcome
+    },
+
+    previewUpgradeSpec(appId: string, authorSpec: AppSpec): SpecUpgradeOutcome {
+      return planUpgrade(requireApp(appId), authorSpec).outcome
+    },
+
+    adoptAuthorVersion(appId: string, fields: readonly string[]): string[] {
+      const app = requireApp(appId)
+      const original = store.getAuthorSpec(appId)
+      if (app.spec.type !== 'automation' || original?.type !== 'automation') {
+        throw new Error('No author’s version is recorded for this digital human')
+      }
+      const patch = authorVersionPatch(app.spec, original, fields)
+      const changed = Object.keys(patch)
+      if (changed.length === 0) return []
+      service.updateSpec(appId, patch)
+      console.log(`[AppManager] App ${appId} switched to the author's version of: ${changed.join(', ')}`)
+      return changed
+    },
+
+    recordAuthorSpec(appId: string, authorSpec: AppSpec): boolean {
+      const app = requireApp(appId)
+      const spec = validateAppSpec(authorSpec)
+      if (app.spec.type !== 'automation' || spec.type !== 'automation') return false
+      // Another version's spec would attribute the differences between the two
+      // versions to the user.
+      if (compareDotVersions(spec.version, app.spec.version) !== 0) return false
+      const recorded = store.recordAuthorSpec(appId, spec)
+      if (recorded) console.log(`[AppManager] Recorded the author's original of app ${appId} at ${spec.version}`)
+      return recorded
+    },
+
+    getAuthorSpec(appId: string): AppSpec | null {
+      return store.getAuthorSpec(appId)
+    },
+
+    listStoreInstallsWithoutAuthorSpec(): string[] {
+      return store.listStoreInstallsWithoutAuthorSpec()
+    },
+
     async moveToSpace(appId: string, newSpaceId: string | null): Promise<void> {
       const app = requireApp(appId)
 
@@ -1134,6 +1252,16 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         const index = appUninstalledHandlers.indexOf(handler)
         if (index > -1) {
           appUninstalledHandlers.splice(index, 1)
+        }
+      }
+    },
+
+    onAppSpecUpgraded(handler: SpecUpgradedHandler): Unsubscribe {
+      specUpgradedHandlers.push(handler)
+      return () => {
+        const index = specUpgradedHandlers.indexOf(handler)
+        if (index > -1) {
+          specUpgradedHandlers.splice(index, 1)
         }
       }
     },

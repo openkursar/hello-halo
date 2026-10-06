@@ -178,6 +178,7 @@ class AppChatSink implements TurnSink {
         if (this.current === round) this.current = null
         resolve()
         this.armTurnStartDeadline()
+        emitRoundChange(this.conversationId)
       },
     }
   }
@@ -228,6 +229,7 @@ class AppChatSink implements TurnSink {
     // The engine is producing again; whatever is still queued is waiting on
     // this turn rather than on a session that will never answer.
     this.clearTurnStartDeadline()
+    emitRoundChange(this.conversationId)
   }
 
   onRawMessage(sdkMessage: unknown): void {
@@ -286,6 +288,7 @@ class AppChatSink implements TurnSink {
       this.turnRunning = false
       // Anything still queued is owed a turn of its own from here.
       this.armTurnStartDeadline()
+      emitRoundChange(this.conversationId)
     }
   }
 
@@ -297,6 +300,7 @@ class AppChatSink implements TurnSink {
       round?.reject(error)
       this.turnRunning = false
       this.armTurnStartDeadline()
+      emitRoundChange(this.conversationId)
     }
   }
 
@@ -359,6 +363,7 @@ class AppChatSink implements TurnSink {
         round.settled = true
         round.reject(new Error('Chat session ended before the message was processed.'))
       }
+      emitRoundChange(this.conversationId)
     }
   }
 
@@ -395,6 +400,7 @@ class AppChatSink implements TurnSink {
       round.reject(new Error(NO_RESPONSE_MESSAGE))
       // Whatever is behind it is owed a turn on the same terms.
       this.armTurnStartDeadline()
+      emitRoundChange(this.conversationId)
     }, TURN_START_TIMEOUT_MS)
 
     // Never a reason to hold the process open.
@@ -577,6 +583,31 @@ export function peekAppChatSink(conversationId: string): AppChatSink | undefined
 /** Whether a conversation has a message awaiting its answer. */
 export function hasActiveAppChatRound(conversationId: string): boolean {
   return sinks.get(conversationId)?.hasActiveRound() ?? false
+}
+
+const roundChangeListeners = new Set<(conversationId: string) => void>()
+
+/**
+ * Be told whenever a conversation's turn starts, or one of its rounds settles or
+ * is dropped — the moments its "awaiting an answer" state can change.
+ *
+ * @returns unsubscribe
+ */
+export function onAppChatRoundChange(listener: (conversationId: string) => void): () => void {
+  roundChangeListeners.add(listener)
+  return () => {
+    roundChangeListeners.delete(listener)
+  }
+}
+
+function emitRoundChange(conversationId: string): void {
+  for (const listener of Array.from(roundChangeListeners)) {
+    try {
+      listener(conversationId)
+    } catch (err) {
+      console.error(`[AppChat] Round change listener failed for ${conversationId}:`, err)
+    }
+  }
 }
 
 /** Conversations that currently have a round in flight. */
