@@ -101,10 +101,12 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
     fetchProviders()
   }, [])
 
+  // A snapshot read: it replaces the app's settings. The store is updated even
+  // if this view has closed, so the recorded stamp matches what the store holds.
   const reloadConfig = async () => {
-    const result = await api.getConfig()
+    const result = await api.getConfig({ snapshot: true })
     if (!result.success || !result.data) throw new Error(result.error || t('Failed to load config'))
-    if (mountedRef.current) setConfig(result.data as HaloConfig)
+    setConfig(result.data as HaloConfig)
   }
 
   const oauth = useOAuthLogin({ onSignedIn: reloadConfig, onError: setError })

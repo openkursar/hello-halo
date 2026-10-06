@@ -44,12 +44,11 @@ import { isCapacitor, isElectron, onEvent } from './api/transport'
 import { useTelemetry } from './hooks/useTelemetry'
 import type { WsConnectionState } from './api/transport'
 import { useTranslation } from './i18n'
-import type { AgentEventBase, Thought, ToolCall, HaloConfig, AgentErrorType, Question, McpServerStatus, AppView } from './types'
+import type { AgentEventBase, Thought, ToolCall, AgentErrorType, Question, McpServerStatus, AppView } from './types'
 import type { SessionInitInfo } from './types/slash-command'
 import type { IngestProgressEvent } from '../shared/types/tlon'
 import type { ToastPayload } from '../shared/types/notification'
 import type { ApiRetryState } from '../shared/types/api-retry'
-import { hasAnyAISource } from './types'
 import { openWorkNotification, type WorkNavigationTarget } from './utils/people-navigation'
 import { openSearchResultConversation } from './utils/conversation-navigation'
 import { useTeamStore } from './stores/team.store'
@@ -145,7 +144,7 @@ export default function App() {
   }, [])
 
   const { t } = useTranslation()
-  const { view, config, initialize, setMcpStatus, navigate, enterApp, setConfig, completeDeferredGitBashCheck } = useAppStore()
+  const { view, config, initialize, setMcpStatus, navigate, completeDeferredGitBashCheck, completeGitBashSetup } = useAppStore()
   const isTaskPanelOpen = useTaskPanelStore(s => s.isOpen)
   const platform = usePlatform()
   const isMacElectron = isElectron() && platform.isMac
@@ -1041,32 +1040,6 @@ export default function App() {
     return () => window.removeEventListener('search:navigate-to-result', handleNavigateToResult)
   }, [currentSpaceId, spaces, haloSpace, setSpaceStoreCurrentSpace, refreshCurrentSpace, setChatCurrentSpace])
 
-  // Handle Git Bash setup completion
-  const handleGitBashSetupComplete = async (installed: boolean) => {
-    console.log('[App] Git Bash setup completed, installed:', installed)
-
-    // Save skip preference if not installed
-    if (!installed) {
-      await api.setConfig({ gitBash: { skipped: true, installed: false, path: null } })
-    }
-
-    // Continue with normal initialization - sync config to store
-    const response = await api.getConfig()
-    if (response.success && response.data) {
-      const loadedConfig = response.data as HaloConfig
-      setConfig(loadedConfig)  // Sync config to store (was missing, causing empty apiKey in settings)
-      // Show setup if first launch or no AI source configured
-      // (modelConfigSkipped honors an explicit deferral from the first-run wizard)
-      if (loadedConfig.isFirstLaunch || (!hasAnyAISource(loadedConfig.aiSources) && !loadedConfig.modelConfigSkipped)) {
-        navigate('setup')
-      } else {
-        await enterApp()
-      }
-    } else {
-      navigate('setup')
-    }
-  }
-
   // Show reconnection banner for remote/Capacitor modes
   const showReconnectBanner = (api.isRemoteMode() || api.isCapacitorMode())
     && wsState !== 'connected'
@@ -1081,7 +1054,7 @@ export default function App() {
       case 'splash':
         return <SplashPage />
       case 'gitBashSetup':
-        return <GitBashSetupPage onComplete={handleGitBashSetupComplete} />
+        return <GitBashSetupPage onComplete={completeGitBashSetup} />
       case 'setup':
         return <SetupPage />
       case 'serverConnect':

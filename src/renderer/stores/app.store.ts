@@ -73,6 +73,8 @@ interface AppState {
   startGitBashInstall: () => Promise<void>
   refreshGitBashStatus: () => Promise<void>
   completeDeferredGitBashCheck: () => Promise<void>
+  /** The Git Bash setup page finished: go on with initialization from where it stopped. */
+  completeGitBashSetup: (installed: boolean) => Promise<void>
 
   // Initialization
   initialize: () => Promise<void>
@@ -259,6 +261,31 @@ export const useAppStore = create<AppState>((set, get) => ({
       console.warn('[Store] Deferred Git Bash check failed:', e)
     } finally {
       set({ gitBashCheckPending: false })
+    }
+  },
+
+  // Initialization stops at the Git Bash page before loading the settings, so
+  // they are loaded here — as the settings snapshot, like initialize does, or
+  // saves made later in the session would not be checked against failed reads.
+  completeGitBashSetup: async (installed) => {
+    console.log('[App] Git Bash setup completed, installed:', installed)
+    if (!installed) {
+      await api.setConfig({ gitBash: { skipped: true, installed: false, path: null } })
+    }
+
+    const response = await api.getConfig({ snapshot: true })
+    if (!response.success || !response.data) {
+      get().navigate('setup')
+      return
+    }
+    const config = response.data as HaloConfig
+    set({ config })
+    // Show setup if first launch or no AI source configured
+    // (modelConfigSkipped honors an explicit deferral from the first-run wizard)
+    if (config.isFirstLaunch || (!hasAnyAISource(config.aiSources) && !config.modelConfigSkipped)) {
+      get().navigate('setup')
+    } else {
+      await get().enterApp()
     }
   },
 
