@@ -8,7 +8,11 @@
 
 import { describe, expect, it, vi } from 'vitest'
 
-vi.mock('../../../src/renderer/i18n', () => ({ useTranslation: () => ({ t: (text: string) => text }) }))
+vi.mock('../../../src/renderer/i18n', () => ({
+  useTranslation: () => ({
+    t: (text: string, values?: Record<string, string>) => text.replace(/\{\{(\w+)\}\}/g, (_, key: string) => values?.[key] ?? ''),
+  }),
+}))
 vi.mock('../../../src/renderer/components/chat/MessageItem', () => ({ MessageItem: function MessageItem() { return null } }))
 vi.mock('../../../src/renderer/components/chat/CollapsedThoughtProcess', () => ({
   CollapsedThoughtProcess: () => null,
@@ -60,6 +64,18 @@ describe('a message pushed to the chat', () => {
     expect(text(PushedMessageLabel({ via: 'result' }))).toEqual(['Sent proactively · result of a run'])
     expect(text(PushedMessageLabel({ via: 'question' }))).toEqual(['Sent proactively · question for the owner'])
     expect(text(PushedMessageLabel({}))).toEqual(['Sent proactively'])
+  })
+
+  it('names the digital human that sent it when that is not the chat\'s own one', () => {
+    const tree = row({
+      id: 'session-msg-5', role: 'assistant', source: 'push', content: 'Deploy finished', timestamp: at,
+      metadata: { pushVia: 'result', pushedByAppId: 'ops-dh', pushedByName: 'Ops Bot' },
+    })
+
+    const labels = nodes(tree).filter(node => node.type === PushedMessageLabel)
+    expect(labels.map(node => [node.props?.via, node.props?.by])).toEqual([['result', 'Ops Bot']])
+    expect(text(PushedMessageLabel({ via: 'result', by: 'Ops Bot' }))).toEqual(['Sent proactively by Ops Bot · result of a run'])
+    expect(text(PushedMessageLabel({ via: 'message', by: 'Ops Bot' }))).toEqual(['Sent proactively by Ops Bot'])
   })
 
   it('leaves the chat\'s own replies unlabeled', () => {

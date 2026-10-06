@@ -164,6 +164,12 @@ export interface TranscriptMessageMetadata extends TranscriptProvenanceMetadata 
   task?: MessageTask
   /** What sent a pushed message (source `push` only). */
   pushVia?: ChatPushVia
+  /**
+   * The digital human that pushed the message when it is not the chat's own (one
+   * linked to the chat), and its name when it was sent (source `push` only).
+   */
+  pushedByAppId?: string
+  pushedByName?: string
 }
 
 export interface TranscriptMessage {

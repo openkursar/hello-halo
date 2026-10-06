@@ -12,7 +12,11 @@ import { mkdtempSync, rmSync, readFileSync, existsSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
-const { registry, sessionEnvironments, sentToRenderer } = vi.hoisted(() => ({
+const { registry, sessionEnvironments, sentToRenderer, installedApps } = vi.hoisted(() => ({
+  installedApps: {
+    dh: { id: 'dh', spaceId: 'space-1', spec: { name: 'Release Bot' } },
+    'ops-dh': { id: 'ops-dh', spaceId: 'space-1', spec: { name: 'Ops Bot' } },
+  } as Record<string, { id: string; spaceId: string; spec: { name: string } }>,
   registry: {
     sessions: new Map<string, Record<string, unknown>>(),
     notePush: vi.fn(),
@@ -31,7 +35,7 @@ vi.mock('../../../../src/main/apps/runtime/index', () => ({
   getActivityStore: () => ({ getSessionEnvironment: (key: string) => sessionEnvironments.get(key) }),
 }))
 vi.mock('../../../../src/main/apps/manager', () => ({
-  getAppManager: () => ({ getApp: () => ({ id: 'dh', spaceId: 'space-1', spec: { name: 'Release Bot' } }) }),
+  getAppManager: () => ({ getApp: (id: string) => installedApps[id] }),
 }))
 vi.mock('../../../../src/main/services/space.service', () => ({
   getSpace: () => ({ path: spaceDir() }),
@@ -85,7 +89,7 @@ describe('a push in the record of the chat it went to', () => {
     writer.writeEvent({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Yes.' }] } })
     writer.writeEvent({ type: 'result', subtype: 'success' })
 
-    writeChatPush({ appId: 'dh', channel: 'wecom-bot', chatType: 'group', chatId: 'ops-group', text: 'Nightly report: 3 failures', via: 'result' })
+    writeChatPush({ appId: 'dh', channel: 'wecom-bot', chatType: 'group', chatId: 'ops-group', text: 'Nightly report: 3 failures', via: 'result', pushedBy: 'dh' })
 
     const messages = readChat(spaceDir(), conversationId)
     expect(messages.map(m => [m.role, m.content, m.source])).toEqual([
@@ -99,12 +103,26 @@ describe('a push in the record of the chat it went to', () => {
   it('moves the chat to the top of the session list, and tells the screens', () => {
     registry.sessions.set('dh:wecom-bot:ops-group', { appId: 'dh', channel: 'wecom-bot', chatId: 'ops-group', instanceId: 'inst-1' })
 
-    writeChatPush({ appId: 'dh', channel: 'wecom-bot', chatType: 'group', chatId: 'ops-group', text: 'Reminder: standup at 10', via: 'message' })
+    writeChatPush({ appId: 'dh', channel: 'wecom-bot', chatType: 'group', chatId: 'ops-group', text: 'Reminder: standup at 10', via: 'message', pushedBy: 'dh' })
 
     expect(registry.notePush).toHaveBeenCalledWith('dh', 'wecom-bot', 'ops-group', { lastSender: 'Release Bot', lastMessage: 'Reminder: standup at 10' })
     expect(sentToRenderer).toHaveBeenCalledWith('app:im-session-updated', expect.objectContaining({
       appId: 'dh', channel: 'wecom-bot', chatId: 'ops-group', instanceId: 'inst-1', lastMessage: 'Reminder: standup at 10',
     }))
+  })
+
+  it('names the digital human that pushed it when that is not the chat\'s own one', () => {
+    // Another digital human reaches this chat through a push link (#135); the
+    // record and the reply stay with the chat's own one.
+    const conversationId = buildImSessionKey('dh', 'wecom-bot', 'group', 'ops-group')
+    registry.sessions.set('dh:wecom-bot:ops-group', { appId: 'dh', channel: 'wecom-bot', chatId: 'ops-group', instanceId: 'inst-1' })
+
+    writeChatPush({ appId: 'dh', channel: 'wecom-bot', chatType: 'group', chatId: 'ops-group', text: 'Deploy finished', via: 'result', pushedBy: 'ops-dh' })
+
+    const [message] = readChat(spaceDir(), conversationId)
+    expect(message.metadata).toEqual({ pushVia: 'result', pushedByAppId: 'ops-dh', pushedByName: 'Ops Bot' })
+    expect(registry.notePush).toHaveBeenCalledWith('dh', 'wecom-bot', 'ops-group', { lastSender: 'Ops Bot', lastMessage: 'Deploy finished' })
+    expect(sentToRenderer).toHaveBeenCalledWith('app:im-session-updated', expect.objectContaining({ appId: 'dh', lastSender: 'Ops Bot' }))
   })
 
   it('goes where the chat\'s record is kept: the space its session was pinned to', () => {
@@ -113,7 +131,7 @@ describe('a push in the record of the chat it went to', () => {
     const pinned = join(root, 'old-space')
     sessionEnvironments.set(conversationId, { spacePath: pinned })
 
-    writeChatPush({ appId: 'dh', channel: 'wecom-bot', chatType: 'group', chatId: 'ops-group', text: 'Moved but still here', via: 'message' })
+    writeChatPush({ appId: 'dh', channel: 'wecom-bot', chatType: 'group', chatId: 'ops-group', text: 'Moved but still here', via: 'message', pushedBy: 'dh' })
 
     expect(readChat(pinned, conversationId).map(m => m.content)).toEqual(['Moved but still here'])
     expect(existsSync(join(spaceDir(), '.halo'))).toBe(false)
@@ -124,7 +142,7 @@ describe('a push in the record of the chat it went to', () => {
       appId: 'dh', channel: 'wecom-bot', chatId: 'ops-group', instanceId: 'inst-1', teamContext: { teamId: 'team-1', epochId: 'epoch-1' },
     })
 
-    writeChatPush({ appId: 'dh', channel: 'wecom-bot', chatType: 'group', chatId: 'ops-group', text: 'A question waits for the owner', via: 'question' })
+    writeChatPush({ appId: 'dh', channel: 'wecom-bot', chatType: 'group', chatId: 'ops-group', text: 'A question waits for the owner', via: 'question', pushedBy: 'dh' })
 
     const team = readChat(spaceDir(), buildTeamSessionKey('dh', 'team-1', 'epoch-1'))
     expect(team.map(m => [m.content, m.metadata?.pushVia])).toEqual([['A question waits for the owner', 'question']])
@@ -136,7 +154,7 @@ describe('a push in the record of the chat it went to', () => {
 
 describe('a push that comes while a turn of the chat is running', () => {
   const conversationId = buildImSessionKey('dh', 'wecom-bot', 'group', 'ops-group')
-  const push = { appId: 'dh', channel: 'wecom-bot', chatType: 'group' as const, chatId: 'ops-group', text: 'FYI: deploy started', via: 'message' as const }
+  const push = { appId: 'dh', channel: 'wecom-bot', chatType: 'group' as const, chatId: 'ops-group', text: 'FYI: deploy started', via: 'message' as const, pushedBy: 'ops-dh' }
   const turnResult = {
     finalContent: 'Two errors, both fixed.', hasMeaningfulContent: true, thoughts: [], tokenUsage: null,
     isInterrupted: false, wasAborted: false, hasErrorThought: false, reachedMaxTurns: false, firstEventReceived: true, drainTimedOut: false,
@@ -179,6 +197,7 @@ describe('a push that comes while a turn of the chat is running', () => {
     // The turn kept its tool call: the push did not cut it in two.
     expect(messages[1].thoughts?.map(t => t.type)).toEqual(['tool_use'])
     expect(messages[2].timestamp).toBe('2026-10-07T10:00:04.000Z')
+    expect(messages[2].metadata?.pushedByName).toBe('Ops Bot')
   })
 
   it('is not written into a chat whose history was cleared before the turn ended', () => {
@@ -200,15 +219,18 @@ describe('a push read back from the record', () => {
     const events: StoredEvent[] = [
       { _ts: at(1), type: 'user', _isTrigger: true, message: { role: 'user', content: [{ type: 'text', text: 'Go' }] } },
       { _ts: at(2), type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Working…' }] } },
-      { _ts: at(3), type: 'push', _pushVia: 'question', message: { role: 'assistant', content: [{ type: 'text', text: 'Ship tonight? /answer 7' }] } },
+      // A pusher without a name is not one the reader can show.
+      { _ts: at(3), type: 'push', _pushVia: 'question', _pushedBy: { appId: 'ops-dh' }, message: { role: 'assistant', content: [{ type: 'text', text: 'Ship tonight? /answer 7' }] } } as StoredEvent,
       { _ts: at(4), type: 'user', _isTrigger: true, message: { role: 'user', content: [{ type: 'text', text: 'Status?' }] } },
     ]
 
-    expect(convertEventsToMessages(events).map(m => [m.id, m.content, m.source, m.metadata?.pushVia])).toEqual([
+    const messages = convertEventsToMessages(events)
+    expect(messages.map(m => [m.id, m.content, m.source, m.metadata?.pushVia])).toEqual([
       ['session-msg-1', 'Go', undefined, undefined],
       ['session-msg-2', 'Working…', undefined, undefined],
       ['session-msg-3', 'Ship tonight? /answer 7', 'push', 'question'],
       ['session-msg-4', 'Status?', undefined, undefined],
     ])
+    expect(messages[2].metadata).toEqual({ pushVia: 'question' })
   })
 })

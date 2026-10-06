@@ -125,8 +125,8 @@ describe('asking over IM', () => {
     deliverEscalationToIm(question({ teamContext: { teamId: 't1', epochId: 'e1' } }, 'researcher'), 'Researcher')
 
     expect(push.mock.calls.map(([chatId, , type]) => [chatId, type])).toEqual([['boss', 'direct'], ['project-group', 'group']])
-    // Kept where the bot's chats are kept: under the digital human it serves.
-    expect(recordChatPush.mock.calls.map(([sent]) => [sent.appId, sent.chatId])).toEqual([['lead', 'boss'], ['lead', 'project-group']])
+    // Kept where the bot's chats are kept, and sent by: the digital human it serves.
+    expect(recordChatPush.mock.calls.map(([sent]) => [sent.appId, sent.pushedBy, sent.chatId])).toEqual([['lead', 'lead', 'boss'], ['lead', 'lead', 'project-group']])
   })
 
   it('reaches no bot of another digital human, and none that is offline', () => {
@@ -188,8 +188,8 @@ describe('asking over IM', () => {
     deliverEscalationToIm(question({}), 'Release Bot')
 
     expect(recordChatPush.mock.calls.map(([sent]) => sent)).toEqual([
-      { appId: 'dh', channel: 'wecom-bot', chatType: 'direct', chatId: 'boss', text: push.mock.calls[0][1], via: 'question' },
-      { appId: 'dh', channel: 'wecom-bot', chatType: 'group', chatId: 'ops-group', text: push.mock.calls[1][1], via: 'question' },
+      { appId: 'dh', channel: 'wecom-bot', chatType: 'direct', chatId: 'boss', text: push.mock.calls[0][1], via: 'question', pushedBy: 'dh' },
+      { appId: 'dh', channel: 'wecom-bot', chatType: 'group', chatId: 'ops-group', text: push.mock.calls[1][1], via: 'question', pushedBy: 'dh' },
     ])
   })
 

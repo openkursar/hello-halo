@@ -31,7 +31,7 @@ import type { StreamResult } from '../../services/agent/stream-processor'
 import type { TurnSink } from '../../services/agent/turn-sink'
 import type { ImageAttachment } from '../../services/agent/types'
 import type { ProgressEvent } from '../../../shared/types/inbound-message'
-import type { ChatPushVia, TranscriptProvenance } from '../../../shared/types/transcript'
+import type { TranscriptProvenance } from '../../../shared/types/transcript'
 import type { ContentReference } from '../../../shared/types/content-reference'
 import { parseAppChatKey } from '../../../shared/apps/im-keys'
 import { classifySessionSource, LOCAL_SESSION_CHANNEL } from '../../../shared/types/im-channel'
@@ -40,7 +40,7 @@ import { getActiveImChannelManager } from './im-channels'
 import { ReplyTextAccumulator } from './reply-accumulator'
 import { ProgressEventParser } from './progress-formatter'
 import { TurnCutPoint } from './escalation-cut'
-import { openSessionWriter, saveChatSessionId, type SessionWriter } from './session-store'
+import { openSessionWriter, saveChatSessionId, type RecordedPush, type SessionWriter } from './session-store'
 import { AppChatTurnInterrupted, turnEndingOf, withTurnEndingNote, type AppChatTurnEnding } from './turn-ending'
 import { stopGeneration } from '../../services/agent/control'
 import { listResidentSessions } from '../../services/agent'
@@ -149,7 +149,7 @@ class AppChatSink implements TurnSink {
    * Pushes that came while a turn was running, written when it ends: the
    * record keeps a turn's lines together, and reading it back relies on that.
    */
-  private heldPushes: Array<{ text: string; via: ChatPushVia; at: string }> = []
+  private heldPushes: RecordedPush[] = []
 
   constructor(
     private readonly appId: string,
@@ -216,12 +216,12 @@ class AppChatSink implements TurnSink {
   }
 
   /** Record a message the digital human pushed to this chat outside its turns (chat-record). */
-  writePush(text: string, via: ChatPushVia): void {
+  writePush(push: RecordedPush): void {
     if (this.turnRunning) {
-      this.heldPushes.push({ text, via, at: new Date().toISOString() })
+      this.heldPushes.push({ ...push, at: push.at ?? new Date().toISOString() })
       return
     }
-    this.getWriter()?.writePush(text, via)
+    this.getWriter()?.writePush(push)
   }
 
   /** A message failed before the engine created a turn to checkpoint. */
@@ -481,7 +481,7 @@ class AppChatSink implements TurnSink {
   }
 
   private writeHeldPushes(): void {
-    for (const push of this.heldPushes.splice(0)) this.getWriter()?.writePush(push.text, push.via, push.at)
+    for (const push of this.heldPushes.splice(0)) this.getWriter()?.writePush(push)
   }
 
   private getWriter(): SessionWriter | undefined {

@@ -217,21 +217,24 @@ describe('autoSyncRunResult', () => {
       const sent = makeSession({ chatId: 'chat-a', instanceId: 'inst-a', chatType: 'direct' })
       const offline = makeSession({ chatId: 'chat-b', instanceId: 'inst-b' })
       const rejected = makeSession({ chatId: 'chat-c', instanceId: 'inst-c' })
-      mockGetProactiveSessions.mockReturnValue([sent, offline, rejected])
+      // Another digital human's chat, reached through a push link (#135).
+      const linked = makeSession({ appId: 'app-2', chatId: 'chat-d', instanceId: 'inst-d' })
+      mockGetProactiveSessions.mockReturnValue([sent, offline, rejected, linked])
       const instances: Record<string, ReturnType<typeof makeInstance>> = {
         'inst-a': makeInstance(),
         'inst-b': makeInstance({ connected: false }),
         'inst-c': makeInstance({ pushReturns: false }),
+        'inst-d': makeInstance(),
       }
       mockGetInstance.mockImplementation((id: string) => instances[id])
 
       const result = 'Nightly report\n\n' + '每一行都要留下。'.repeat(600)
       await autoSyncRunResult({ ...baseInput, finalText: result })
 
-      expect(mockRecordChatPush).toHaveBeenCalledOnce()
-      expect(mockRecordChatPush).toHaveBeenCalledWith({
-        appId: 'app-1', channel: 'wecom-bot', chatType: 'direct', chatId: 'chat-a', text: result, via: 'result',
-      })
+      expect(mockRecordChatPush.mock.calls.map(([push]) => push)).toEqual([
+        { appId: 'app-1', channel: 'wecom-bot', chatType: 'direct', chatId: 'chat-a', text: result, via: 'result', pushedBy: 'app-1' },
+        { appId: 'app-2', channel: 'wecom-bot', chatType: 'group', chatId: 'chat-d', text: result, via: 'result', pushedBy: 'app-1' },
+      ])
     })
   })
 

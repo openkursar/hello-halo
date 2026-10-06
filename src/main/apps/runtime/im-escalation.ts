@@ -76,9 +76,9 @@ export function deliverEscalationToIm(entry: ActivityEntry, appName: string): vo
       if (origin?.instanceId === cfg.id && origin.chatType === 'group') groups.add(origin.chatId)
       counts.ownerChats += owners.length
       counts.groups += groups.size
-      // The chats are the bot's, kept under the digital human it serves.
+      // The chats are the bot's, kept under — and asked from — the digital human it serves.
       const pushed = (chatId: string, chatType: 'direct' | 'group', text: string) =>
-        recordChatPush({ appId: cfg.appId, channel: instance.providerType, chatType, chatId, text, via: 'question' })
+        recordChatPush({ appId: cfg.appId, channel: instance.providerType, chatType, chatId, text, via: 'question', pushedBy: cfg.appId })
 
       for (const session of owners) {
         if (instance.pushToChat(session.chatId, question, 'direct')) {

@@ -326,6 +326,7 @@ function buildNotifyBotTool(context: NotifyToolContext) {
           chatId: session.chatId,
           text: [sentMessage ? input.message : '', sentFile ? `📎 ${sentFile.name}` : ''].filter(Boolean).join('\n\n'),
           via: 'message',
+          pushedBy: context.appId,
         })
         try {
           const targetKey = buildImSessionKey(

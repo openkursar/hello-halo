@@ -785,6 +785,12 @@ moves to the top of the session list (`ImSessionRegistry.notePush`, then
   (`getAppChatSink`), the record's one writer, in the space the chat's session was
   pinned to (`chat-record.chatRecordPath`, which `app-chat` reads from as well). A
   chat a team fronts is recorded in the team's conversation with it.
+- **Who sent it**: a digital human linked to another one's chat (`pushLinks`)
+  pushes into that chat's record, since the chat's replies go to the chat's own
+  digital human. The line then names the sender (`_pushedBy`: its id and its name
+  at the time, read as `metadata.pushedByAppId` / `pushedByName`), the label says
+  "Sent proactively by …", and the session list shows it as the last sender. A
+  push by the chat's own digital human carries no `_pushedBy`.
 - **Seen while open**: no turn starts, so an open view reads the record again on
   the announcement instead — the chat's view (`ImChatView`) on
   `app:im-session-updated` for that chat while no turn of it runs, the team's
@@ -937,7 +943,8 @@ JSONL storage is unchanged (append-only, written by `session-store`).
   / `TurnSink.writeUserMessage(...)`, and write the text to *show*, not the
   framed text the model received.
 - **Pushes.** A `push` line (§2.14a) reads as an assistant message with
-  `source: 'push'` and `metadata.pushVia`. Its writer never puts one among a
+  `source: 'push'`, `metadata.pushVia`, and the sender when it is not the chat's
+  own digital human (`pushedByAppId` / `pushedByName`). Its writer never puts one among a
   turn's lines, so like a user event it ends any turn left open before it (one
   cut off without its end), and messages stay in the order of their lines.
 - **Surface**: `app:chat-transcript` / `app:chat-message-thoughts` (IPC, contract in
