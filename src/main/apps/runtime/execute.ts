@@ -15,9 +15,9 @@
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { randomUUID } from 'crypto'
-import { createSession } from '../../services/agent/resolved-sdk'
+import { createSession, getEngineCapabilities } from '../../services/agent/resolved-sdk'
 import { getAppManager, type InstalledApp } from '../manager'
-import { resolveExecutionEnvironment, validateExecutionEnvironment, validateEnvironmentConnections } from './execution-environment'
+import { missingConnections, resolveExecutionEnvironment, validateExecutionEnvironment, validateEnvironmentConnections } from './execution-environment'
 import { createPersonContextMcpServer, personContextPrompt } from './person-context-tool'
 import { resolvePermission } from '../../../shared/apps/app-types'
 import { resolveMemoryLayout, type MemoryService, type MemoryCallerScope } from '../../platform/memory'
@@ -28,7 +28,7 @@ import type {
   RunStatus,
   ActivityEntry,
 } from './types'
-import { RunExecutionError } from './errors'
+import { MissingConnectionsError, RunExecutionError } from './errors'
 import { buildAppSystemPrompt, buildInitialMessage, buildEscalationResumeMessage } from './prompt'
 import { buildDisabledCapabilitiesGuidance, buildUnconfiguredCapabilitiesGuidance } from './prompt/capabilities'
 import { resolveNotifyAvailability } from './notify-availability'
@@ -75,6 +75,7 @@ import {
 import { appConsolidationInputs } from './memory-control'
 import { registerActiveRun, unregisterActiveRun } from './active-runs'
 import { describeSelfInstance, formatInstanceTag } from './live-instances'
+import { stopEngineOnAbort } from './engine-stop'
 
 // ============================================
 // Types
@@ -268,6 +269,16 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
   let session: any = null
   let sessionLease: V2SessionLease | undefined
   let managedSessionActive = false
+  let releaseEngineStop: (() => void) | undefined
+  // Closed once, through its lease when it has one: by a stop the engine did
+  // not answer in time, or when the run ends.
+  let sessionClosed = false
+  const closeSession = (): void => {
+    if (sessionClosed) return
+    sessionClosed = true
+    if (sessionLease) sessionLease.close()
+    else session.close()
+  }
 
   // Sender key while the run can message other conversations (opened in try, closed in finally)
   let runSenderKey: string | undefined
@@ -293,6 +304,10 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     }
     validateExecutionEnvironment(environment)
     validateEnvironmentConnections(environment, app, manager)
+    // Checked before anything reaches a model: a run short of a connection it
+    // declares does not start, and the timeline says what to install or enable.
+    const unusable = missingConnections(app, manager, app.spaceId!)
+    if (unusable.length > 0) throw new MissingConnectionsError(unusable)
     // ── 1. Resolve credentials and working directory ─────
     //    (needed early: workDir feeds into system prompt,
     //     modelInfo feeds into base prompt's model display)
@@ -588,6 +603,15 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       session = await createSession(sdkOptions)
     }
     if (sessionLease) session = sessionLease.session
+    // A stop from outside the run (stop, task closed, person removed, quit)
+    // must reach the engine, or a silent run never notices it.
+    if (abortSignal) {
+      releaseEngineStop = stopEngineOnAbort(
+        abortSignal,
+        { interrupt: session.interrupt?.bind(session), close: closeSession },
+        { canInterrupt: getEngineCapabilities()?.features.interrupt ?? false, runTag },
+      )
+    }
     if (isResuming) {
       registerActiveSession(sessionKey, createSessionState(app.spaceId!, sessionKey, abortController))
       managedSessionActive = true
@@ -685,6 +709,8 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
         `error=${streamResult.aiReportedError}`
       )
     }
+    // The engine's part is over: a stop arriving from here on has nothing to end.
+    releaseEngineStop?.()
 
     // ── 7. Record completion ───────────────────────────────
     const finishedAt = Date.now()
@@ -693,6 +719,8 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     let finalStatus: RunStatus
     let outcome: AppRunResult['outcome']
     let finalErrorMessage: string | undefined
+    // Stopped from outside: the stop, not the model, is why nothing was reported.
+    const stopped = abortSignal?.aborted === true
 
     // Escalation is detected via the onEscalation callback closure,
     // which sets escalationEntryId when report_to_user(type="escalation") is called.
@@ -710,11 +738,15 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       // a conversational reply has nothing to report, so it completes normally.
       finalStatus = 'error'
       outcome = 'error'
-      finalErrorMessage = `AI ended without reporting results after ${autoContinueCount} auto-continue attempt(s)`
-      console.warn(
-        `[Runtime][${runTag}] AI never called report_to_user after ` +
-        `${autoContinueCount} auto-continue attempt(s) — marking as error`
-      )
+      if (stopped) {
+        finalErrorMessage = 'Stopped before reporting results'
+      } else {
+        finalErrorMessage = `AI ended without reporting results after ${autoContinueCount} auto-continue attempt(s)`
+        console.warn(
+          `[Runtime][${runTag}] AI never called report_to_user after ` +
+          `${autoContinueCount} auto-continue attempt(s) — marking as error`
+        )
+      }
     } else {
       finalStatus = 'ok'
       outcome = streamResult.finalText.length > 0 ? 'useful' : 'noop'
@@ -739,28 +771,40 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       )
     }
 
-    // Insert an error activity entry when AI never called report_to_user,
-    // so the failure is visible in the Activity Thread.
-    if (outcome === 'error' && !streamResult.reportToolCalled && !escalationEntryId) {
-      const noReportEntry: ActivityEntry = {
+    // Every run recorded as failed gets a failure entry that says why — also one
+    // that reported before the engine failed, whose report alone reads as success.
+    if (outcome === 'error' && !escalationEntryId) {
+      const reason = finalErrorMessage ?? 'No reason was given'
+      const failureEntry: ActivityEntry = {
         id: randomUUID(),
         appId: app.id,
         runId,
         type: 'run_error',
         ts: finishedAt,
         sessionKey,
-        content: {
-          summary: `AI ended without reporting results after ${autoContinueCount} auto-continue attempt(s). ` +
-            'The model may have encountered an issue or exhausted its context.',
-          status: 'error',
-          durationMs,
-          error: 'report_to_user not called',
-        },
+        content: streamResult.aiReportedError
+          ? {
+            summary: streamResult.reportToolCalled
+              ? `This run finally ended with an error: ${reason}`
+              : `Run failed: ${reason}`,
+            status: 'error',
+            durationMs,
+            error: reason,
+          }
+          : stopped
+            ? { summary: 'Stopped before it reported results.', status: 'error', durationMs }
+            : {
+              summary: `AI ended without reporting results after ${autoContinueCount} auto-continue attempt(s). ` +
+                'The model may have encountered an issue or exhausted its context.',
+              status: 'error',
+              durationMs,
+              error: 'report_to_user not called',
+            },
       }
       try {
-        emitEntry ? emitEntry(noReportEntry) : store.insertEntry(noReportEntry)
+        emitEntry ? emitEntry(failureEntry) : store.insertEntry(failureEntry)
       } catch (insertErr) {
-        console.error('[Runtime] Failed to insert no-report error entry:', insertErr)
+        console.error('[Runtime] Failed to insert run failure entry:', insertErr)
       }
     }
 
@@ -816,7 +860,9 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     const durationMs = finishedAt - startedAt
     const errorMessage = err instanceof Error ? err.message : String(err)
 
-    console.error(`[Runtime][${runTag}] ✗ Run failed: app=${app.id}, duration=${durationMs}ms:`, err)
+    const missing = err instanceof MissingConnectionsError ? err.missing : undefined
+    if (missing) console.warn(`[Runtime][${runTag}] ✗ Run not started: app=${app.id}: ${errorMessage}`)
+    else console.error(`[Runtime][${runTag}] ✗ Run failed: app=${app.id}, duration=${durationMs}ms:`, err)
 
     // Record failure
     store.completeRun(runId, {
@@ -834,12 +880,14 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       type: 'run_error',
       ts: finishedAt,
       sessionKey,
-      content: {
-        summary: `Run failed: ${errorMessage}`,
-        status: 'error',
-        durationMs,
-        error: errorMessage,
-      },
+      content: missing
+        ? { summary: errorMessage, status: 'error', durationMs, missingConnections: missing }
+        : {
+          summary: `Run failed: ${errorMessage}`,
+          status: 'error',
+          durationMs,
+          error: errorMessage,
+        },
     }
 
     try {
@@ -878,6 +926,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     //    The run-detail view detects completion from the app runtime status
     //    (broadcast separately by the service) and reloads the JSONL transcript.
     unregisterActiveRun(runId)
+    releaseEngineStop?.()
     if (runSenderKey) closeRunSender(runSenderKey)
 
     // ── 9. Close session ────────────────────────────────────
@@ -885,11 +934,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     // via CC's disk-based resume (sessionId), not process reuse.
     if (session) {
       try {
-        if (sessionLease) {
-          sessionLease.close()
-        } else {
-          session.close()
-        }
+        closeSession()
         console.log(`[Runtime][${runTag}] Session closed`)
       } catch (closeErr) {
         console.error(`[Runtime] Failed to close session: run=${runId}:`, closeErr)
@@ -942,6 +987,12 @@ async function processStream(
     totalTokens: 0,
     aiReportedError: false,
     reportToolCalled: false,
+  }
+
+  // Stopped before this turn was sent (e.g. while the engine was starting): do not start it.
+  if (abortController.signal.aborted) {
+    console.log(`[Runtime][${runTag}] Run stopped before its turn was sent`)
+    return result
   }
 
   session.send(message)

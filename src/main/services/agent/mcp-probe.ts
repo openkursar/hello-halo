@@ -14,9 +14,10 @@
  * - SDK session init reports of `failed` servers, to attach the failure
  *   reason the SDK itself never provides.
  *
- * Probes never touch live agent sessions: MCP connections are per-session
- * and rebuilt on the next message. A probe only answers "will the next
- * session be able to connect, and if not, why".
+ * Probes never touch live agent sessions: MCP connections are per-session.
+ * A probe only answers "will the next session be able to connect, and if not,
+ * why". When it sees a server connect again, the status cache tells the
+ * session manager, which rebuilds the sessions that reported that server failed.
  */
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'

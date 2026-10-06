@@ -14,9 +14,10 @@
  * The SDK (unstable_v2_createSession) is mocked -- we don't spawn real CC processes.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { randomUUID } from 'crypto'
 import path from 'path'
+import fs from 'fs'
 
 // ============================================
 // Mocks for transitive dependencies
@@ -71,6 +72,7 @@ vi.mock('../../../../src/main/foundation/config.service', () => ({
   getConfig: vi.fn().mockReturnValue({}),
   getTempSpacePath: vi.fn().mockReturnValue('/tmp/halo-test/temp'),
   getHaloDir: vi.fn(() => path.join(globalThis.__HALO_TEST_DIR__, '.halo')),
+  resolveClaudeConfigDir: vi.fn(() => path.join(globalThis.__HALO_TEST_DIR__, 'claude-config')),
   onNetworkConfigChange: vi.fn(),
   onAgentConfigChange: vi.fn(),
 }))
@@ -221,6 +223,9 @@ import {
   RunExecutionError,
 } from '../../../../src/main/apps/runtime/errors'
 import { createAppRuntimeService } from '../../../../src/main/apps/runtime/service'
+import { initScheduler, resetSchedulerForTest } from '../../../../src/main/platform/scheduler'
+import { openSessionWriter } from '../../../../src/main/apps/runtime/session-store'
+import { getSpace } from '../../../../src/main/services/space.service'
 import { broadcastToAll } from '../../../../src/main/http/websocket'
 import { sendToRenderer } from '../../../../src/main/foundation/window.service'
 import { executeRun } from '../../../../src/main/apps/runtime/execute'
@@ -1636,6 +1641,7 @@ describe('AppRuntimeService', () => {
       onAppStatusChange: vi.fn().mockReturnValue(() => {}),
       onAppInstalled: vi.fn().mockReturnValue(() => {}),
       onAppUninstalled: vi.fn().mockReturnValue(() => {}),
+      onAppSpecUpgraded: vi.fn().mockReturnValue(() => {}),
     }
 
     // Mock Scheduler
@@ -1650,6 +1656,7 @@ describe('AppRuntimeService', () => {
       onJobDue: vi.fn(),
       start: vi.fn(),
       stop: vi.fn(),
+      countDueTimes: vi.fn().mockReturnValue(0),
     }
 
     // Mock EventRouter
@@ -2496,6 +2503,282 @@ describe('AppRuntimeService', () => {
     })
   })
 
+  // A run's first message is its trigger and the digital human's own memory.
+  // Pasting excerpts of every IM chat into it cost hundreds of thousands of
+  // tokens per run for a digital human with many chats.
+  describe('IM chats stay out of a run’s first message', () => {
+    const chatText = 'What were sales yesterday?'
+    let testAppId: string
+
+    beforeEach(() => {
+      vi.mocked(executeRun).mockClear()
+      testAppId = randomUUID()
+      const spacePath = path.join(globalThis.__HALO_TEST_DIR__, 'space-im')
+      vi.mocked(getSpace).mockReturnValue({ path: spacePath } as ReturnType<typeof getSpace>)
+      const chat = openSessionWriter(spacePath, testAppId, 'chat-wecom-bot-group-g1')
+      chat.writeTrigger(chatText)
+      chat.writeEvent({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Sales were up 3%.' }] } })
+      mockAppManager.getApp.mockReturnValue({
+        id: testAppId,
+        status: 'active',
+        spec: createTestSpec(),
+        userConfig: {},
+        userOverrides: {},
+        spaceId: 'space-im',
+      })
+    })
+
+    afterEach(() => {
+      vi.mocked(getSpace).mockReturnValue(null)
+    })
+
+    /**
+     * The runtime is handed this digital human's IM sessions the way it was
+     * once wired to read them; a run must still not carry them.
+     */
+    function serviceWithImSessions() {
+      const imSessionRegistry = {
+        getAllSessions: () => [{ appId: testAppId, channel: 'wecom-bot', chatType: 'group', chatId: 'g1', displayName: 'Sales group' }],
+      }
+      return createAppRuntimeService({
+        store,
+        appManager: mockAppManager,
+        scheduler: mockScheduler,
+        eventRouter: mockEventRouter,
+        memory: mockMemory,
+        background: mockBackground,
+        getSpacePath: () => '/tmp/test-space',
+        imSessionRegistry,
+      } as unknown as Parameters<typeof createAppRuntimeService>[0])
+    }
+
+    function firstMessage(): string {
+      return vi.mocked(executeRun).mock.calls[0][0].trigger.description
+    }
+
+    it('leaves them out of a manual run', async () => {
+      await serviceWithImSessions().triggerManually(testAppId)
+
+      expect(firstMessage()).toMatch(/^Manually triggered run for "test-automation"\. Time: \S+$/)
+      expect(firstMessage()).not.toContain(chatText)
+    })
+
+    it('leaves them out of a scheduled run', async () => {
+      serviceWithImSessions()
+      const onJobDue = mockScheduler.onJobDue.mock.calls[0][1]
+
+      await onJobDue({
+        id: `${testAppId}:daily`,
+        schedule: { kind: 'every', every: '1h' },
+        metadata: { appId: testAppId, subscriptionId: 'daily' },
+      })
+
+      expect(firstMessage()).toMatch(/^Scheduled run for "test-automation" \(every 1h\)\. Time: \S+$/)
+      expect(firstMessage()).not.toContain(chatText)
+    })
+  })
+
+  describe('pausing a person after repeated failures', () => {
+    it('names the latest failure in the note it leaves', async () => {
+      const appId = randomUUID()
+      mockAppManager.getApp.mockReturnValue({ id: appId, status: 'active', spec: createTestSpec(), userConfig: {}, userOverrides: {}, spaceId: 'space-001' })
+      dbManager.getAppDatabase().prepare(`
+        INSERT INTO installed_apps (id, spec_id, space_id, spec_json, status, user_config_json, user_overrides_json, permissions_json, installed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(appId, 'test-app', 'space-001', JSON.stringify(createTestSpec()), 'active', '{}', '{}', '{"granted":[],"denied":[]}', Date.now())
+      for (let n = 0; n < 4; n++) {
+        store.insertRun({ runId: `failed-${n}`, appId, sessionKey: `sk-${n}`, status: 'running', triggerType: 'schedule', startedAt: 1000 + n })
+        store.completeRun(`failed-${n}`, { status: 'error', finishedAt: 1000 + n, durationMs: 1, errorMessage: 'earlier failure' })
+      }
+      vi.mocked(executeRun).mockImplementationOnce(async () => {
+        store.insertRun({ runId: 'failed-latest', appId, sessionKey: 'sk-latest', status: 'running', triggerType: 'manual', startedAt: 2000 })
+        store.completeRun('failed-latest', { status: 'error', finishedAt: 2001, durationMs: 1, errorMessage: 'API Error: 529 overloaded' })
+        return { appId, runId: 'failed-latest', sessionKey: 'sk-latest', outcome: 'error', startedAt: 2000, finishedAt: 2001, durationMs: 1, errorMessage: 'API Error: 529 overloaded' }
+      })
+
+      await createService().triggerManually(appId)
+
+      expect(mockAppManager.updateStatus).toHaveBeenCalledWith(appId, 'error', {
+        errorMessage: 'Auto-disabled after 5 consecutive failed runs. Latest: API Error: 529 overloaded',
+      })
+    })
+  })
+
+  describe('runs past the transcript retention', () => {
+    let testAppId: string
+    let spacePath: string
+
+    beforeEach(() => {
+      vi.mocked(executeRun).mockClear()
+      testAppId = randomUUID()
+      spacePath = path.join(globalThis.__HALO_TEST_DIR__, `space-retention-${testAppId}`)
+      mockAppManager.getApp.mockReturnValue({
+        id: testAppId, status: 'active', spec: createTestSpec(), userConfig: {}, userOverrides: {}, spaceId: 'space-001',
+      })
+      dbManager.getAppDatabase().prepare(`
+        INSERT INTO installed_apps (id, spec_id, space_id, spec_json, status, user_config_json, user_overrides_json, permissions_json, installed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(testAppId, 'test-app', 'space-001', JSON.stringify(createTestSpec()), 'active', '{}', '{}', '{"granted":[],"denied":[]}', Date.now())
+    })
+
+    /** `count` finished runs, oldest first, each with a transcript written through the session store. */
+    function seedFinishedRuns(count: number): string[] {
+      const ids: string[] = []
+      for (let n = 0; n < count; n++) {
+        const runId = `old-run-${n}`
+        store.insertRun({
+          runId, appId: testAppId, sessionKey: `sk-${n}`, status: 'running', triggerType: 'schedule', startedAt: 1_000_000 + n,
+          environment: { spaceId: 'space-001', spacePath, workDir: spacePath, memoryDir: spacePath },
+        })
+        store.completeRun(runId, { status: 'error', finishedAt: 1_000_000 + n, durationMs: 1 })
+        store.updateRunSessionId(runId, `engine-${n}`)
+        openSessionWriter(spacePath, testAppId, runId).writeTrigger('go')
+        ids.push(runId)
+      }
+      return ids
+    }
+
+    const transcriptOf = (runId: string) => path.join(spacePath, '.halo', 'apps', testAppId, 'runs', `${runId}.jsonl`)
+
+    it('clears the oldest run’s process and engine session when one of the person’s runs ends', async () => {
+      const [oldest, next] = seedFinishedRuns(201)
+      const engineSession = path.join(globalThis.__HALO_TEST_DIR__, 'claude-config', 'projects', spacePath.replace(/[^a-zA-Z0-9]/g, '-'), 'engine-0.jsonl')
+      fs.mkdirSync(path.dirname(engineSession), { recursive: true })
+      fs.writeFileSync(engineSession, '{}\n')
+      const service = createService()
+
+      await service.triggerManually(testAppId)
+
+      expect(fs.existsSync(transcriptOf(oldest))).toBe(false)
+      expect(fs.existsSync(engineSession)).toBe(false)
+      expect(store.getRun(oldest)?.transcriptClearedAt).toEqual(expect.any(Number))
+      expect(fs.existsSync(transcriptOf(next))).toBe(true)
+    })
+
+    it('refuses to continue a run whose process was cleared, by Continue or by a follow-up', async () => {
+      const [oldest] = seedFinishedRuns(1)
+      store.markTranscriptCleared(oldest)
+      const service = createService()
+
+      await expect(service.continueFailedRun(testAppId, oldest)).rejects.toThrow('cleared under the retention rule')
+      await expect(service.injectIntoRun(testAppId, oldest, 'try again')).rejects.toThrow('cleared under the retention rule')
+      expect(executeRun).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('a run that outlasts its scheduled times', () => {
+    const T0 = Date.UTC(2026, 9, 6, 9, 0, 0)
+    const MIN = 60_000
+    let testAppId: string
+
+    beforeEach(() => {
+      vi.mocked(executeRun).mockClear()
+      testAppId = randomUUID()
+      const spec = createTestSpec({
+        subscriptions: [{ id: 'quarter-hour', source: { type: 'schedule', config: { every: '15m' } } }],
+      })
+      mockAppManager.getApp.mockReturnValue({
+        id: testAppId, status: 'active', spec, userConfig: {}, userOverrides: {}, spaceId: 'space-001',
+      })
+      dbManager.getAppDatabase().prepare(`
+        INSERT INTO installed_apps (id, spec_id, space_id, spec_json, status, user_config_json, user_overrides_json, permissions_json, installed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(testAppId, 'test-app', 'space-001', JSON.stringify(spec), 'active', '{}', '{}', '{"granted":[],"denied":[]}', T0)
+      vi.useFakeTimers({ now: T0, toFake: ['Date'] })
+    })
+
+    afterEach(async () => {
+      await resetSchedulerForTest()
+      vi.useRealTimers()
+    })
+
+    async function activatedOnRealScheduler() {
+      const scheduler = await initScheduler({ db: dbManager })
+      const service = createAppRuntimeService({
+        store,
+        appManager: mockAppManager,
+        scheduler,
+        eventRouter: mockEventRouter,
+        memory: mockMemory,
+        background: mockBackground,
+        getSpacePath: () => '/tmp/test-space',
+      })
+      await service.activate(testAppId)
+      return service
+    }
+
+    /** The next run records its row the way executeRun does, and lasts `minutes`. */
+    function nextRunLasts(minutes: number, runId = 'run-long') {
+      vi.mocked(executeRun).mockImplementationOnce(async (opts: any) => {
+        const startedAt = Date.now()
+        store.insertRun({ runId, appId: testAppId, sessionKey: `sk-${runId}`, status: 'running', triggerType: opts.trigger.type, startedAt })
+        opts.onRunStarted?.({ runId, sessionKey: `sk-${runId}`, startedAt })
+        vi.setSystemTime(startedAt + minutes * MIN)
+        return { appId: testAppId, runId, sessionKey: `sk-${runId}`, outcome: 'useful', startedAt, finishedAt: Date.now(), durationMs: minutes * MIN }
+      })
+    }
+
+    it('says on the run’s entry how many scheduled times it ran past: 09:00–09:50 skips 09:15, 09:30 and 09:45', async () => {
+      const service = await activatedOnRealScheduler()
+      nextRunLasts(50)
+
+      await service.triggerManually(testAppId)
+
+      const [latest] = store.getEntriesForRun('run-long')
+      expect(latest.content.skippedSchedules).toBe(3)
+    })
+
+    it('says nothing when no scheduled time came due during the run', async () => {
+      const service = await activatedOnRealScheduler()
+      nextRunLasts(10)
+
+      await service.triggerManually(testAppId)
+
+      const [latest] = store.getEntriesForRun('run-long')
+      expect(latest.content.skippedSchedules).toBeUndefined()
+    })
+
+    it('tells the scheduler a stopped run did not fail, so its next time is neither backed off nor counted toward disabling it', async () => {
+      const service = createService()
+      const onJobDue = mockScheduler.onJobDue.mock.calls[0][1]
+      const job = { id: `${testAppId}:quarter-hour`, schedule: { kind: 'every', every: '15m' }, metadata: { appId: testAppId, subscriptionId: 'quarter-hour' } }
+      vi.mocked(executeRun).mockImplementationOnce(async (opts: any) => {
+        const startedAt = Date.now()
+        store.insertRun({ runId: 'run-stopped', appId: testAppId, sessionKey: 'sk-stopped', status: 'running', triggerType: 'schedule', startedAt })
+        opts.onRunStarted?.({ runId: 'run-stopped', sessionKey: 'sk-stopped', startedAt })
+        await service.stopRun(testAppId, 'run-stopped')
+        return { appId: testAppId, runId: 'run-stopped', sessionKey: 'sk-stopped', outcome: 'error', startedAt, finishedAt: startedAt, durationMs: 0, errorMessage: 'Stopped before reporting results' }
+      })
+
+      expect(await onJobDue(job)).toBe('noop')
+
+      // A run that failed on its own is still an error to the scheduler.
+      vi.mocked(executeRun).mockImplementationOnce(async () => ({
+        appId: testAppId, runId: 'run-failed', sessionKey: 'sk-failed', outcome: 'error', startedAt: T0, finishedAt: T0, durationMs: 0, errorMessage: 'model unavailable',
+      }))
+      expect(await onJobDue(job)).toBe('error')
+    })
+
+    it('counts a continued run’s running time from the continuation, not from the run’s first start', async () => {
+      const service = createService()
+      const yesterday = T0 - 24 * 60 * MIN
+      store.insertRun({ runId: 'run-old', appId: testAppId, sessionKey: 'sk-old', status: 'running', triggerType: 'schedule', startedAt: yesterday })
+      store.completeRun('run-old', { status: 'error', finishedAt: yesterday + MIN, durationMs: MIN, errorMessage: 'Stopped before reporting results' })
+      store.updateRunSessionId('run-old', 'cc-session-old')
+      let runningAtMs: number | undefined
+      vi.mocked(executeRun).mockImplementationOnce(async (opts: any) => {
+        opts.onRunStarted?.({ runId: 'run-old', sessionKey: 'sk-old', startedAt: Date.now() })
+        runningAtMs = service.getAppState(testAppId)?.runningAtMs
+        return { appId: testAppId, runId: 'run-old', sessionKey: 'sk-old', outcome: 'useful', startedAt: Date.now(), finishedAt: Date.now(), durationMs: 0 }
+      })
+
+      await service.continueFailedRun(testAppId, 'run-old')
+      await vi.waitFor(() => expect(runningAtMs).toBeDefined())
+
+      expect(runningAtMs).toBe(T0)
+    })
+  })
+
   describe('desktop notification on run completion (notificationLevel)', () => {
     let testAppId: string
 
@@ -2832,6 +3115,94 @@ describe('AppRuntimeService', () => {
       await new Promise(resolve => setImmediate(resolve))
 
       expect(mockScheduler.removeJob).toHaveBeenCalled()
+    })
+  })
+
+  // Every upgrade path ends in the manager's upgradeSpec; the runtime's part is
+  // to reschedule the app and to tell the user what kept their version.
+  describe('author upgrades', () => {
+    const outcome = (kept: string[], editsKnown = true) => ({ fromVersion: '1.2.0', toVersion: '1.3.0', kept, editsKnown })
+
+    function installedApp(): string {
+      const appId = randomUUID()
+      dbManager.getAppDatabase().prepare(`
+        INSERT INTO installed_apps (id, spec_id, space_id, spec_json, status, user_config_json, user_overrides_json, permissions_json, installed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(appId, `spec-${appId}`, 'space-001', JSON.stringify(createTestSpec()), 'active', '{}', '{}', '{"granted":[],"denied":[]}', Date.now())
+      return appId
+    }
+
+    function upgraded(appId: string, kept: string[], editsKnown = true): void {
+      mockAppManager.onAppSpecUpgraded.mock.calls[0][0](appId, outcome(kept, editsKnown))
+    }
+
+    it('reschedules the app and leaves a note naming what kept the user’s version', () => {
+      const appId = installedApp()
+      const service = createService()
+      const sync = vi.spyOn(service, 'syncAppSubscriptions')
+      vi.mocked(sendToRenderer).mockClear()
+
+      upgraded(appId, ['system_prompt', 'subscriptions'], false)
+
+      expect(sync).toHaveBeenCalledWith(appId)
+      const [note] = store.getEntriesForApp(appId)
+      expect(note).toMatchObject({
+        type: 'milestone',
+        content: { upgrade: outcome(['system_prompt', 'subscriptions'], false), source: { kind: 'upgrade', appId } },
+      })
+      expect(sendToRenderer).toHaveBeenCalledWith('app:activity_entry:new', expect.objectContaining({ appId }))
+    })
+
+    it('leaves no note when the upgrade applied in full', () => {
+      const appId = installedApp()
+      createService()
+
+      upgraded(appId, [])
+
+      expect(store.getEntriesForApp(appId)).toEqual([])
+    })
+
+    describe('adoptAuthorVersion', () => {
+      it('switches only fields the note kept, records them on the note and publishes it again', () => {
+        const appId = installedApp()
+        const service = createService()
+        upgraded(appId, ['system_prompt', 'subscriptions'])
+        const [note] = store.getEntriesForApp(appId)
+        mockAppManager.adoptAuthorVersion = vi.fn(() => ['system_prompt'])
+        const sync = vi.spyOn(service, 'syncAppSubscriptions')
+        vi.mocked(sendToRenderer).mockClear()
+
+        const updated = service.adoptAuthorVersion(appId, note.id, ['system_prompt', 'icon'])
+
+        expect(mockAppManager.adoptAuthorVersion).toHaveBeenCalledWith(appId, ['system_prompt'])
+        expect(updated.content.upgrade?.adopted).toEqual(['system_prompt'])
+        expect(store.getEntry(note.id)?.content.upgrade?.adopted).toEqual(['system_prompt'])
+        expect(sync).not.toHaveBeenCalled()
+        expect(sendToRenderer).toHaveBeenCalledWith('app:activity_entry:new', expect.objectContaining({ appId }))
+      })
+
+      it('reschedules the app when its run times switched', () => {
+        const appId = installedApp()
+        const service = createService()
+        upgraded(appId, ['subscriptions'])
+        const [note] = store.getEntriesForApp(appId)
+        mockAppManager.adoptAuthorVersion = vi.fn(() => ['subscriptions'])
+        const sync = vi.spyOn(service, 'syncAppSubscriptions')
+
+        service.adoptAuthorVersion(appId, note.id, ['subscriptions'])
+
+        expect(sync).toHaveBeenCalledWith(appId)
+      })
+
+      it('refuses a note that is not this app’s upgrade note', () => {
+        const appId = installedApp()
+        const service = createService()
+        upgraded(appId, ['system_prompt'])
+        const [note] = store.getEntriesForApp(appId)
+
+        expect(() => service.adoptAuthorVersion(randomUUID(), note.id, ['system_prompt'])).toThrow()
+        expect(() => service.adoptAuthorVersion(appId, 'missing', ['system_prompt'])).toThrow()
+      })
     })
   })
 

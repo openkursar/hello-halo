@@ -75,6 +75,7 @@ import type {
 } from '../../../../shared/types/inbound-message'
 import type { ImageAttachment, ImageMediaType } from '../../../../shared/types/image-attachment'
 import { pruneMediaTempDir, stageMediaFile } from './media-temp-files'
+import { sendAsMessages, sendAsMessagesOrThrow, type MessageLimit } from './message-parts'
 import {
   FeishuStreamSession,
   type FeishuStreamTransport,
@@ -104,6 +105,14 @@ const TEMP_DIR = join(tmpdir(), 'halo-feishu')
 const TEMP_FILE_MAX_AGE_MS = 24 * 60 * 60 * 1000
 /** Feishu App IDs are `cli_` + 16 hex chars; the SDK refuses anything else. */
 const APP_ID_PATTERN = /^cli_[0-9a-fA-F]{16}$/
+/**
+ * One Feishu message's capacity, in the SDK's own unit: it splits markdown
+ * into messages of this many characters, well inside Feishu's 30 KB limit on a
+ * rich-text request for any content. The SDK is held to the same number, so
+ * the labeled parts sent here are never split again.
+ */
+const FEISHU_MESSAGE_MAX_CHARS = 3500
+const FEISHU_MESSAGE_LIMIT: MessageLimit = { maxChars: FEISHU_MESSAGE_MAX_CHARS }
 /** Extensions sent as Feishu images rather than generic files. */
 const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'])
 /** Extension → multimodal media type for inbound images. */
@@ -571,6 +580,7 @@ class FeishuBotInstance implements ImChannelInstance {
    * ImChannelInstance contract is a synchronous boolean, so the ack is awaited
    * out of band: the return value reports that the send was accepted for
    * delivery, and a later failure is logged rather than retro-actively reported.
+   * Text longer than one message goes out as ordered parts.
    */
   pushToChat(
     chatId: string,
@@ -590,14 +600,18 @@ class FeishuBotInstance implements ImChannelInstance {
       return false
     }
 
-    const bytes = Buffer.byteLength(text, 'utf8')
-    void channel
-      .send(chatId, { markdown: text })
-      .then(() => {
+    void sendAsMessages(text, FEISHU_MESSAGE_LIMIT, async (message) => {
+      try {
+        await channel.send(chatId, { markdown: message })
         this.counters.totalPush++
-        logEvent(this.instanceId, 'info', 'push_sent', { trace, chatId, chatType, bytes })
-      })
-      .catch((err: unknown) => {
+        logEvent(this.instanceId, 'info', 'push_sent', {
+          trace,
+          chatId,
+          chatType,
+          bytes: Buffer.byteLength(message, 'utf8'),
+        })
+        return true
+      } catch (err) {
         this.counters.totalError++
         logEvent(this.instanceId, 'error', 'push_send_error', {
           trace,
@@ -606,7 +620,9 @@ class FeishuBotInstance implements ImChannelInstance {
           cat: 'network',
           err: describeError(err),
         })
-      })
+        return false
+      }
+    })
     return true
   }
 
@@ -723,6 +739,7 @@ class FeishuBotInstance implements ImChannelInstance {
         // interval or a decent chunk of text, whichever comes first.
         streamThrottleMs: 500,
         streamThrottleChars: 60,
+        textChunkLimit: FEISHU_MESSAGE_MAX_CHARS,
       },
     })
 
@@ -1183,13 +1200,11 @@ class FeishuBotInstance implements ImChannelInstance {
   }
 
   /**
-   * Send one message, honoring the quote preference.
-   *
-   * A quoted reply can fail on its own (the quoted message was recalled, or a
-   * thread it belonged to is gone) while a plain send to the same chat still
-   * works, so a failed quote is retried without the quote before the error is
-   * propagated. Throwing matters: dispatch-inbound reports a failed reply, and
-   * swallowing it here would look like an answer the user never received.
+   * Send a reply of any length, honoring the quote preference: its first
+   * message quotes the question, and a reply longer than one message continues
+   * as ordered parts. Throwing matters: dispatch-inbound reports a failed
+   * reply, and swallowing it here would look like an answer the user never
+   * received — so every part is tried and the first failure is rethrown.
    */
   private async deliverText(
     chatId: string,
@@ -1202,6 +1217,24 @@ class FeishuBotInstance implements ImChannelInstance {
       this.counters.totalError++
       throw new Error(`[FeishuBot:${this.instanceId}] channel not initialized (trace=${trace})`)
     }
+    await sendAsMessagesOrThrow(text, FEISHU_MESSAGE_LIMIT, (message, index) =>
+      this.deliverMessage(channel, chatId, message, trace, index === 0 ? replyTo : undefined),
+    )
+  }
+
+  /**
+   * Send one message. A quoted reply can fail on its own (the quoted message
+   * was recalled, or a thread it belonged to is gone) while a plain send to the
+   * same chat still works, so a failed quote is retried without the quote
+   * before the error is propagated.
+   */
+  private async deliverMessage(
+    channel: LarkChannel,
+    chatId: string,
+    text: string,
+    trace: string,
+    replyTo: string | undefined,
+  ): Promise<void> {
     const bytes = Buffer.byteLength(text, 'utf8')
 
     if (replyTo) {

@@ -19,6 +19,7 @@ import {
   identifySystemFolder,
   type FolderInfo,
 } from './folder-mapping'
+import { approximateSizeLabel, planMessageParts, type BodyStructureNode } from './message-parts'
 
 // Dynamic import for imapflow
 let ImapFlowModule: typeof import('imapflow') | null = null
@@ -57,7 +58,8 @@ export interface EmailDetail {
 export interface AttachmentInfo {
   filename: string
   content_type: string
-  size: number
+  /** Bytes, or a labelled estimate when the attachment was not downloaded. */
+  size: number | string
   part_id: string
 }
 
@@ -67,6 +69,13 @@ export interface FolderStatus {
   type: 'system' | 'custom'
   message_count?: number
   unread_count?: number
+}
+
+/** Body text and attachment list of a message, before truncation. */
+interface MessageContent {
+  text: string
+  html: string
+  attachments: AttachmentInfo[]
 }
 
 // ============================================
@@ -173,7 +182,7 @@ export class ImapClient {
 
     for (const mailbox of mailboxes) {
       const displayName = getFolderDisplayName(mailbox.path)
-      const flags = new Set(Array.from(mailbox.flags ?? []))
+      const flags = new Set<string>(Array.from(mailbox.flags ?? []))
       const sysType = identifySystemFolder(mailbox.path, flags)
 
       const info: FolderInfo = {
@@ -285,13 +294,11 @@ export class ImapClient {
 
     const lock = await this.client.getMailboxLock(imapFolder)
     try {
-      // Fetch the full message
       const msg = await this.client.fetchOne(
         uid,
         {
           uid: true,
           envelope: true,
-          source: true,
           bodyStructure: true,
         },
         { uid: true }
@@ -315,33 +322,35 @@ export class ImapClient {
         a.name ? `${a.name} <${a.address}>` : a.address
       ).join(', ') || ''
 
-      // Parse the message source to extract body and attachments
-      const { simpleParser } = await import('mailparser')
-      const parsed = await simpleParser(msg.source)
+      const wantsText = format === 'text' || format === 'full'
+      const wantsHtml = format === 'html' || format === 'full'
+      let content: MessageContent | null = null
+      try {
+        content = await this.readBodyParts(uid, msg.bodyStructure, wantsText, wantsHtml)
+      } catch (err) {
+        console.warn(
+          `[EmailMCP][IMAP] Reading the body parts of email ${emailId} failed, downloading the whole message: ` +
+          `${err instanceof Error ? err.message : String(err)}`
+        )
+      }
+      content ??= await this.readWholeMessage(uid, emailId)
 
       let body = ''
       let htmlBody = ''
 
-      if (format === 'text' || format === 'full') {
-        body = parsed.text || ''
+      if (wantsText) {
+        body = content.text
         if (maxBodyLength > 0 && body.length > maxBodyLength) {
           body = body.slice(0, maxBodyLength) + '\n... (truncated)'
         }
       }
 
-      if (format === 'html' || format === 'full') {
-        htmlBody = parsed.html || ''
+      if (wantsHtml) {
+        htmlBody = content.html
         if (maxBodyLength > 0 && htmlBody.length > maxBodyLength) {
           htmlBody = htmlBody.slice(0, maxBodyLength) + '\n... (truncated)'
         }
       }
-
-      const attachments: AttachmentInfo[] = (parsed.attachments || []).map((att: any) => ({
-        filename: att.filename || 'unnamed',
-        content_type: att.contentType || 'application/octet-stream',
-        size: att.size || 0,
-        part_id: att.contentId || att.checksum || '',
-      }))
 
       return {
         id: emailId,
@@ -352,10 +361,97 @@ export class ImapClient {
         date: formatDate(envelope?.date),
         body,
         html_body: htmlBody,
-        attachments,
+        attachments: content.attachments,
       }
     } finally {
       lock.release()
+    }
+  }
+
+  /**
+   * Read only the body parts the format needs, plus each attachment's MIME
+   * header for its name and type, in one FETCH. Each part is parsed by
+   * mailparser on its own headers, the same decoding (transfer encoding,
+   * charset, format=flowed) a whole-message parse applies. Returns null when
+   * the structure needs the whole message (see planMessageParts).
+   */
+  private async readBodyParts(
+    uid: number,
+    bodyStructure: BodyStructureNode | undefined,
+    wantsText: boolean,
+    wantsHtml: boolean
+  ): Promise<MessageContent | null> {
+    const plan = planMessageParts(bodyStructure)
+    if (!plan) return null
+    // A whole-message parse inlines the images an HTML body references as
+    // data: URLs; only it can produce that HTML.
+    if (wantsHtml && plan.attachments.some(att => att.related)) return null
+
+    // Without a plain-text part the text body stays empty, as mailparser
+    // derives text from HTML only for a single-part message.
+    const plainPart = wantsText ? plan.plainPart : undefined
+    const htmlPart = wantsHtml ? plan.htmlPart : undefined
+    const keys = [
+      ...[plainPart, htmlPart].flatMap(part => (part ? [`${part}.mime`, part] : [])),
+      ...plan.attachments.map(att => `${att.part}.mime`),
+    ]
+    const fetched: Map<string, Buffer> | undefined = keys.length > 0
+      ? (await this.client.fetchOne(uid, { uid: true, bodyParts: keys }, { uid: true }))?.bodyParts
+      : undefined
+
+    const { simpleParser } = await import('mailparser')
+    const parsePart = async (part: string, withBody: boolean, options: Record<string, unknown> = {}) => {
+      const header = fetched?.get(`${part}.mime`)
+      const body = withBody ? fetched?.get(part) : Buffer.alloc(0)
+      // Without its header block a part cannot be decoded as the whole message decodes it.
+      if (!header?.toString('latin1').trim() || !body) throw new Error(`the server returned no content for part ${part}`)
+      return simpleParser(Buffer.concat([terminateHeader(header), body]), options)
+    }
+
+    let text = ''
+    if (plainPart) {
+      text = (await parsePart(plainPart, true, { skipTextToHtml: true })).text || ''
+    }
+
+    let html = ''
+    if (htmlPart) {
+      html = (await parsePart(htmlPart, true, { skipHtmlToText: true })).html || ''
+    }
+
+    const attachments: AttachmentInfo[] = []
+    for (const att of plan.attachments) {
+      const parsed = await parsePart(att.part, false)
+      const described = parsed.attachments.length === 1 ? parsed.attachments[0] : null
+      if (!described) throw new Error(`part ${att.part} does not describe an attachment by its own headers`)
+      attachments.push({
+        filename: described.filename || 'unnamed',
+        content_type: described.contentType || 'application/octet-stream',
+        size: approximateSizeLabel(att.size),
+        part_id: described.contentId || att.part,
+      })
+    }
+
+    return { text, html, attachments }
+  }
+
+  /** Download and parse the whole message, attachments included. */
+  private async readWholeMessage(uid: number, emailId: string): Promise<MessageContent> {
+    const msg = await this.client.fetchOne(uid, { uid: true, source: true }, { uid: true })
+    if (!msg?.source) {
+      throw new Error(`Email with ID ${emailId} could not be downloaded`)
+    }
+
+    const { simpleParser } = await import('mailparser')
+    const parsed = await simpleParser(msg.source)
+    return {
+      text: parsed.text || '',
+      html: parsed.html || '',
+      attachments: (parsed.attachments || []).map(att => ({
+        filename: att.filename || 'unnamed',
+        content_type: att.contentType || 'application/octet-stream',
+        size: att.size || 0,
+        part_id: att.contentId || att.checksum || '',
+      })),
     }
   }
 
@@ -635,6 +731,13 @@ function formatDate(date: Date | undefined | null): string {
   const h = d.getHours().toString().padStart(2, '0')
   const min = d.getMinutes().toString().padStart(2, '0')
   return `${y}-${m}-${day} ${h}:${min}`
+}
+
+/** A MIME header block followed by the blank line that ends it. */
+function terminateHeader(header: Buffer): Buffer {
+  const tail = header.subarray(-4).toString('latin1')
+  if (tail.endsWith('\r\n\r\n') || tail.endsWith('\n\n')) return header
+  return Buffer.concat([header, Buffer.from(tail.endsWith('\n') ? '\r\n' : '\r\n\r\n')])
 }
 
 /**

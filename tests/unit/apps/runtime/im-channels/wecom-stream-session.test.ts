@@ -349,6 +349,84 @@ describe('WecomStreamSession 10-minute cutoff fallback', () => {
   })
 })
 
+describe('WecomStreamSession: an answer longer than one message', () => {
+  const MESSAGE_BYTES = 20000
+  const bytes = (text: string): number => Buffer.byteLength(text, 'utf8')
+  /** About 26 KB of Chinese: more than one WeCom message carries. */
+  const LONG_ANSWER = Array.from({ length: 40 }, (_, i) => `第${i + 1}段：${'这是一段很长的回答内容。'.repeat(18)}`).join('\n\n')
+
+  /** The bodies of `(i/n)` parts, in order. */
+  function partBodies(pushes: RecordedCall[]): string[] {
+    return pushes.map((push, i) => {
+      const text = push.args[1] as string
+      const label = `(${i + 1}/${pushes.length})\n\n`
+      expect(text.startsWith(label)).toBe(true)
+      expect(bytes(text)).toBeLessThanOrEqual(MESSAGE_BYTES)
+      return text.slice(label.length)
+    })
+  }
+
+  it('closes the stream on its beginning instead of sending a frame the server rejects', async () => {
+    // A frame past the cap is rejected, and the stream then stays stuck
+    // mid-answer in the chat until the server gives up on it.
+    const transport = makeTransport()
+    const { logger, events } = makeLogger()
+    const session = makeSession(transport, logger)
+
+    for (const paragraph of LONG_ANSWER.split(/(?<=\n\n)/)) {
+      await session.update({ type: 'text_delta', text: paragraph })
+    }
+
+    for (const call of transport.calls) {
+      if (call.method !== 'queuePush') expect(bytes(call.args[2] as string)).toBeLessThanOrEqual(MESSAGE_BYTES)
+    }
+    const closing = transport.calls.filter((c) => c.method === 'replyStreamFinish')
+    expect(closing).toHaveLength(1)
+    const shown = closing[0].args[2] as string
+    expect(shown).toContain('完整回答将以新消息分条发送')
+    expect(LONG_ANSWER.startsWith(shown.slice(0, shown.indexOf('\n\n---\n')))).toBe(true)
+    // Nothing else goes out mid-turn: the stream already shows the answer so far.
+    expect(transport.calls.filter((c) => c.method === 'queuePush')).toHaveLength(0)
+
+    await session.finish(LONG_ANSWER)
+
+    const parts = transport.calls.filter((c) => c.method === 'queuePush')
+    expect(parts.length).toBeGreaterThan(1)
+    expect(partBodies(parts).join('')).toBe(LONG_ANSWER)
+    expect(events).toContain('info:stream_close')
+  })
+
+  it('closes the stream within the limit when the final answer is the long one, then sends it whole in parts', async () => {
+    const transport = makeTransport()
+    const { logger, events } = makeLogger()
+    const session = makeSession(transport, logger)
+    await session.update({ type: 'text_delta', text: '先给个开头。' })
+
+    await session.finish(LONG_ANSWER)
+
+    const closing = transport.calls.filter((c) => c.method === 'replyStreamFinish')
+    expect(closing).toHaveLength(1)
+    expect(bytes(closing[0].args[2] as string)).toBeLessThanOrEqual(MESSAGE_BYTES)
+    expect(closing[0].args[2] as string).toContain('完整回答将以新消息分条发送')
+    expect(partBodies(transport.calls.filter((c) => c.method === 'queuePush')).join('')).toBe(LONG_ANSWER)
+    expect(events).not.toContain('error:stream_close')
+  })
+
+  it('keeps an answer that fits in the stream itself, with no parts', async () => {
+    const transport = makeTransport()
+    const { logger } = makeLogger()
+    const session = makeSession(transport, logger)
+    await session.update({ type: 'text_delta', text: '短回答' })
+
+    await session.finish('短回答')
+
+    expect(transport.calls.filter((c) => c.method === 'queuePush')).toHaveLength(0)
+    const closing = transport.calls.filter((c) => c.method === 'replyStreamFinish')
+    expect(closing).toHaveLength(1)
+    expect(closing[0].args[2]).toBe('短回答')
+  })
+})
+
 describe('WecomStreamSession.maybePushProgress', () => {
   it('does not push when progressLines is empty', async () => {
     const transport = makeTransport()

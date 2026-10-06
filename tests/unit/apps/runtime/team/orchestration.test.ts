@@ -35,6 +35,7 @@ import { createMessageBus } from '../../../../../src/main/apps/runtime/team/mess
 import type { MessageBus, TurnCompletion } from '../../../../../src/main/apps/runtime/team/message-bus'
 import { createOrchestration } from '../../../../../src/main/apps/runtime/team/orchestration'
 import type { OrchestrationSessionDeps } from '../../../../../src/main/apps/runtime/team/orchestration'
+import type { NoteTurnEndedInput } from '../../../../../src/main/apps/runtime/team/turn-report'
 import { buildTeamEntry } from '../../../../../src/main/apps/runtime/team/team-prompt'
 import { buildTeamSessionKey } from '../../../../../src/shared/apps/team-types'
 import type { Team, TeamMember, TeamEpoch, TeamEdge } from '../../../../../src/main/apps/team/types'
@@ -186,7 +187,8 @@ describe('TeamOrchestration', () => {
     session: OrchestrationSessionDeps,
     turnTimeoutMs?: number,
     maxConcurrentTurns?: number,
-    renderDigest?: (teamId: string, epochId: string, viewerAppId: string) => string | null
+    renderDigest?: (teamId: string, epochId: string, viewerAppId: string) => string | null,
+    noteTurnEnded?: (input: NoteTurnEndedInput) => void
   ) {
     bus = createMessageBus({
       store,
@@ -200,6 +202,7 @@ describe('TeamOrchestration', () => {
       store, bus, session, turnTimeoutMs, maxConcurrentTurns,
       hasPendingEscalation: () => false,
       ...(renderDigest ? { renderDigest } : {}),
+      ...(noteTurnEnded ? { noteTurnEnded } : {}),
     })
     return orchestration
   }
@@ -1121,6 +1124,27 @@ describe('TeamOrchestration', () => {
         vi.useRealTimers()
       }
     })
+
+    it.each([true, false])('a turn cut off at the time limit is reported with its origin (external=%s)', async (external) => {
+      vi.useFakeTimers()
+      try {
+        seedTeam(store, { collabMode: 'free' })
+        const epoch = makeEpoch(store)
+        const { deps } = makeSession()
+        const noteTurnEnded = vi.fn()
+        build(deps, 1000, undefined, undefined, noteTurnEnded)
+
+        await bus.send({
+          teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, to: 'researcher', message: 'go', wait: false,
+          ...(external ? { external: true } : {}),
+        })
+        await vi.advanceTimersByTimeAsync(1001)
+
+        expect(noteTurnEnded).toHaveBeenCalledWith(expect.objectContaining({ fate: { kind: 'timeout' }, external }))
+      } finally {
+        vi.useRealTimers()
+      }
+    })
   })
 
   // ===========================================================================
@@ -1219,6 +1243,120 @@ describe('TeamOrchestration', () => {
       } finally {
         vi.useRealTimers()
       }
+    })
+
+    /**
+     * A wake waiting for a slot has been decided but not started. A message
+     * reaching the same session another way — the IM chat a member fronts —
+     * must find it busy, or it starts a turn of its own and the wake starts a
+     * second one on the same session once its slot frees.
+     */
+    function holdRecorder(deps: OrchestrationSessionDeps) {
+      const held = new Map<string, number>()
+      const holds: Array<{ cancelled: boolean; end(): void }> = []
+      deps.holdTurn = (sessionKey) => {
+        let ended = false
+        held.set(sessionKey, (held.get(sessionKey) ?? 0) + 1)
+        const hold = {
+          cancelled: false,
+          end: () => {
+            if (ended) return
+            ended = true
+            held.set(sessionKey, (held.get(sessionKey) ?? 0) - 1)
+          },
+        }
+        holds.push(hold)
+        return hold
+      }
+      return { isHeld: (sessionKey: string) => (held.get(sessionKey) ?? 0) > 0, holds }
+    }
+
+    function wakeMember(orch: ReturnType<typeof build>, epochId: string, appId: string, corr: string) {
+      return orch.wakeTarget({
+        sessionKey: buildTeamSessionKey(appId, TEAM_ID, epochId),
+        appId,
+        teamId: TEAM_ID,
+        epochId,
+        envelope: { id: corr, teamId: TEAM_ID, epochId, fromAppId: LEAD_APP, toAppId: appId, body: 'go', correlationId: corr, createdAt: Date.now() },
+        trigger: { teamId: TEAM_ID, epochId, correlationId: corr, fromAppId: LEAD_APP, wait: false, kind: 'message' },
+      })
+    }
+
+    it('holds a session while its turn waits for a slot, and hands that hold to the turn', async () => {
+      seedTeam(store, { collabMode: 'free' })
+      const epoch = makeEpoch(store)
+      const { deps, pendings } = makeSession()
+      const { isHeld, holds } = holdRecorder(deps)
+      const orch = build(deps, undefined, 1)
+      const testerKey = buildTeamSessionKey(TESTER_APP, TEAM_ID, epoch.id)
+
+      await wakeMember(orch, epoch.id, RESEARCHER_APP, 'c1')
+      await wakeMember(orch, epoch.id, TESTER_APP, 'c2')
+      await flush()
+
+      expect(deps.sendAppChatMessage).toHaveBeenCalledTimes(1)
+      expect(isHeld(testerKey)).toBe(true)
+
+      pendings[0].resolve('done')
+      await flush()
+
+      const handed = vi.mocked(deps.sendAppChatMessage).mock.calls[1][0]
+      expect(handed.conversationId).toBe(testerKey)
+      expect(handed.turnStart).toBe(holds[1])
+
+      pendings[1].resolve('done')
+      await flush()
+      expect(isHeld(testerKey)).toBe(false)
+    })
+
+    it('a turn given up while queued lets go of the session once it reaches a slot', async () => {
+      vi.useFakeTimers()
+      try {
+        seedTeam(store, { collabMode: 'free' })
+        const epoch = makeEpoch(store)
+        const { deps, pendings } = makeSession()
+        const { isHeld } = holdRecorder(deps)
+        const orch = build(deps, 1000, 1)
+        const testerKey = buildTeamSessionKey(TESTER_APP, TEAM_ID, epoch.id)
+
+        await wakeMember(orch, epoch.id, RESEARCHER_APP, 'c1')
+        await wakeMember(orch, epoch.id, TESTER_APP, 'c2')
+        await vi.advanceTimersByTimeAsync(1001)
+        expect(isHeld(testerKey)).toBe(true)
+
+        pendings[0].resolve('done')
+        await vi.advanceTimersByTimeAsync(0)
+
+        expect(isHeld(testerKey)).toBe(false)
+        expect(deps.sendAppChatMessage).toHaveBeenCalledTimes(1)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('a turn stopped while queued gives the session back on reaching a slot, without setting up', async () => {
+      // A person's stop reaches a wake still waiting for its slot. Running it
+      // anyway only to halt it at the last step would keep the chat busy — and
+      // the person's next message waiting — through a whole session setup.
+      seedTeam(store, { collabMode: 'free' })
+      const epoch = makeEpoch(store)
+      const { deps, pendings } = makeSession()
+      const { isHeld, holds } = holdRecorder(deps)
+      const orch = build(deps, undefined, 1)
+      const testerKey = buildTeamSessionKey(TESTER_APP, TEAM_ID, epoch.id)
+      const completeTurn = spyCompleteTurn(bus)
+
+      await wakeMember(orch, epoch.id, RESEARCHER_APP, 'c1')
+      await wakeMember(orch, epoch.id, TESTER_APP, 'c2')
+      await flush()
+      holds[1].cancelled = true
+
+      pendings[0].resolve('done')
+      await flush()
+
+      expect(deps.sendAppChatMessage).toHaveBeenCalledTimes(1)
+      expect(isHeld(testerKey)).toBe(false)
+      expect(lastOutcome(completeTurn, testerKey)).toEqual({ kind: 'undelivered', reason: 'Stopped before it could run' })
     })
   })
 

@@ -135,6 +135,28 @@ export interface InstalledApp {
 /** User-controlled per-app upgrade strategy. */
 export type UpgradeStrategy = 'auto' | 'notify' | 'manual'
 
+/**
+ * What an author's upgrade left on the user's version. `kept` names top-level
+ * spec fields; `subscriptions` stands for the run schedule as a whole.
+ */
+export interface SpecUpgradeOutcome {
+  fromVersion: string
+  toVersion: string
+  /** Fields that keep the user's value and therefore differ from the author's new version. */
+  kept: string[]
+  /**
+   * False when there was no author's original to compare with, so every
+   * difference was presumed to be the user's rather than known to be.
+   */
+  editsKnown: boolean
+}
+
+/** The activity note of an upgrade that kept fields at the user's version. */
+export interface SpecUpgradeNote extends SpecUpgradeOutcome {
+  /** Kept fields the user has since switched to the author's version from this note. */
+  adopted?: string[]
+}
+
 /** Filter criteria for listing Apps */
 export interface AppListFilter {
   /** Filter by space: string = specific space, null = global only, undefined = all */
@@ -166,7 +188,8 @@ export interface ExecutionEnvironment {
 }
 
 export interface ActivitySource {
-  kind: 'automation' | 'team' | 'chat' | 'unknown'
+  /** `upgrade`: written when an author's new version was applied, outside any run. */
+  kind: 'automation' | 'team' | 'chat' | 'upgrade' | 'unknown'
   appId: string
   runId?: string
   sessionKey?: string
@@ -225,6 +248,21 @@ export interface ActivityEntryContent {
   questions?: EscalationQuestion[]
   /** File URL for output type */
   outputUrl?: string
+  /** Set on the note an author's upgrade leaves when it kept fields at the user's version. */
+  upgrade?: SpecUpgradeNote
+  /** Scheduled times that came due while this run kept the person busy, and so were skipped. */
+  skippedSchedules?: number
+  /** Set when the run did not start because connections it declares are unusable. */
+  missingConnections?: MissingConnection[]
+}
+
+/** A connection a digital human declares that a run could not use. */
+export interface MissingConnection {
+  /** The id its spec declares. */
+  id: string
+  /** The installed connection's name; the id when nothing is installed. */
+  name: string
+  state: 'not_installed' | 'disabled' | 'needs_login' | 'error'
 }
 
 /** One decision an escalation asks the user to make. */
@@ -289,6 +327,8 @@ export interface AutomationRun {
   tokensUsed?: number
   errorMessage?: string
   sessionId?: string
+  /** When the retention rule deleted its process transcript and engine session; it can no longer be continued. */
+  transcriptClearedAt?: number
 }
 
 /**
@@ -343,6 +383,7 @@ export interface AutomationAppState {
    */
   status: 'running' | 'queued' | 'idle' | 'paused' | 'waiting_user' | 'needs_login' | 'error'
   nextRunAtMs?: number
+  /** When the execution in progress started; a continued run counts from its continuation. */
   runningAtMs?: number
   /** Run ID of the currently executing run (only set when status === 'running') */
   runningRunId?: string

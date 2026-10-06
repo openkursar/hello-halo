@@ -1,6 +1,6 @@
 # Getting Started — Install, First Run, Updates, and Where Files Live
 
-Last updated: 2026-09-03
+Last updated: 2026-10-06
 
 Read this whenever the user is installing Halo, stuck on first launch, asking whether Halo
 auto-updates, or asking where its config/logs/database files are on disk. This topic has no
@@ -94,6 +94,33 @@ Halo keep showing onboarding," check both flags, not just one.
 `{haloDir}` is `~/.halo-dev` (dev) or `~/.{dataFolderName}` (production, §1) — not the same as
 `{userData}`, which is Electron's own per-app-name directory and is what `claude-config` sits
 under by default.
+
+### Moving Halo to another computer
+
+There is no export/import of a whole install; moving means copying folders. Point the user to the
+docs page "换电脑迁移 Halo" / "Move Halo to a New Computer" and keep to these facts:
+
+1. Quit Halo on the old computer first (tray icon → **Quit Halo**).
+2. Copy **both** `{haloDir}` (config, spaces and conversations, `halo.db`, knowledge bases) and
+   `{userData}` (`claude-config`, the browser profile). Without `{userData}`, old conversations still
+   display, but continuing one starts a fresh engine session: resume looks up
+   `{userData}/claude-config/projects/<working-dir>/<session-id>.jsonl` and starts fresh when it is
+   missing (`session-manager.ts`, `migrateSessionIfNeeded`). Also copy any project folders used as
+   space working directories.
+3. **Same OS, same user name, same project paths.** `spaces-index.json` and each space's
+   `meta.json` store absolute paths, so a space whose path does not exist on the new machine shows
+   as missing (`isMissing`, `space.service.ts`). Do not suggest hand-editing those files.
+4. API keys, email and IM credentials travel in `config.json` (plaintext on the open-source build),
+   so warn the user to keep the copy private. Sign-ins that do **not** travel: websites logged in to
+   in the built-in browser (cookies are bound to the machine) and the Claude Code CLI-delegated
+   source on macOS (its credentials live in the system keychain).
+5. Do not run both computers with the same setup: one WeCom bot is active on one device at a time,
+   a Feishu bot splits messages between both connections, and the permanent remote-access address
+   follows `deviceIdentity` in `config.json` to the new machine.
+6. To move a single digital human instead: digital human → **More** (更多) → **Share** (分享) →
+   **Export** (导出) a `.dhpkg`, then on the new computer **My Digital Humans** (我的数字人) →
+   **Create Digital Human** (创建数字人) → **Import** (导入). The package carries the spec and its
+   bundled skills — not conversations, memory, knowledge base contents or IM channel bindings.
 
 **Config writes are atomic and crash-safe**: `saveConfig()` writes to `config.json.tmp` then
 renames over the real file — never a "half-written config" state. If `config.json` is corrupt at

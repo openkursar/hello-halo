@@ -38,10 +38,18 @@ const clearImSessionMock = vi.fn(async (..._args: unknown[]) => undefined)
 // real generating session; defaults to false so every other test's message
 // takes the start-of-round path rather than being buffered.
 let conversationGenerating = false
+// What app-chat tells about a conversation that may have gone idle.
+let conversationChanged: ((conversationId: string) => void) | null = null
 vi.mock('../../../../src/main/apps/runtime/app-chat', () => ({
   sendAppChatMessage: (request: Record<string, unknown>) => sendAppChatMessageMock(request),
   clearImSession: (...a: unknown[]) => clearImSessionMock(...a),
   isAppChatConversationGenerating: () => conversationGenerating,
+  onAppChatConversationChange: (listener: (conversationId: string) => void) => {
+    conversationChanged = listener
+    return () => {
+      conversationChanged = null
+    }
+  },
   // Mirror the real deterministic joiner so we can assert derivation order.
   buildImSessionKey: (appId: string, channel: string, chatType: string, chatId: string) =>
     `app-chat:${appId}:${channel}:${chatType}:${chatId}`,
@@ -114,12 +122,18 @@ vi.mock('../../../../src/main/apps/runtime/team', () => ({
   getActiveTeamRuntime: () => teamRuntime,
 }))
 
-import { dispatchInboundMessage, flushSupplementBuffer } from '../../../../src/main/apps/runtime/dispatch-inbound'
+import {
+  dispatchInboundMessage,
+  flushSupplementBuffer,
+  releaseSupplementsWhenIdle,
+} from '../../../../src/main/apps/runtime/dispatch-inbound'
 import {
   PendingRelayStore,
   setPendingRelayStore,
 } from '../../../../src/main/apps/runtime/pending-relays'
 import { analytics } from '../../../../src/main/services/analytics/analytics.service'
+import { setImPermissionContext, clearImPermissionContext } from '../../../../src/main/apps/runtime/im-permission-registry'
+import { maybeClaimOwner } from '../../../../src/main/apps/runtime/im-channels/owner-claim'
 import type { InboundMessage, ReplyHandle } from '../../../../src/shared/types/inbound-message'
 
 const trackMock = analytics.track as ReturnType<typeof vi.fn>
@@ -265,6 +279,41 @@ describe('dispatchInboundMessage — streaming selection', () => {
 })
 
 // ============================================
+// Reply length
+//
+// How much one message can carry is each channel's to know and handle (it
+// sends a long reply in parts); this path must hand over the whole answer.
+// ============================================
+
+describe('dispatchInboundMessage — long replies', () => {
+  const LONG_ANSWER = '长回答的每一段都要送达。'.repeat(600)
+
+  function replyWith(content: string): void {
+    const request = sendAppChatMessageMock.mock.calls[0][0] as { onReply: (text: string) => void }
+    request.onReply(content)
+  }
+
+  it('hands a long answer to the channel whole, not cut at a fixed length', async () => {
+    const reply = makeReply(false)
+    await dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
+
+    replyWith(LONG_ANSWER)
+
+    expect(reply.send).toHaveBeenLastCalledWith(LONG_ANSWER)
+  })
+
+  it('finishes a stream with the whole answer too', async () => {
+    instanceCfg = { streaming: true }
+    const reply = makeReply(true)
+    await dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
+
+    replyWith(LONG_ANSWER)
+
+    expect(reply.streaming!.finish).toHaveBeenCalledWith(LONG_ANSWER)
+  })
+})
+
+// ============================================
 // Session-key derivation
 // ============================================
 
@@ -388,6 +437,90 @@ describe('dispatchInboundMessage — team-backed binding', () => {
     const arg = sendAppChatMessageMock.mock.calls[0][0] as { conversationId: string; teamContext?: unknown }
     expect(arg.conversationId).toBe('app-chat:app-1:wecom-bot:direct:chat-1')
     expect(arg.teamContext).toBeUndefined()
+  })
+})
+
+// ============================================
+// Owner / guest rules of a team-fronted chat
+//
+// The member fronting a chat answers to the same rules as a digital human's own
+// IM chat: the channel's permission control decides who is an owner, and its
+// guest policy holds everyone else. A guest's message is also stamped as coming
+// from outside, which is what carries the restriction on to teammates.
+// ============================================
+
+const TEAM_SESSION = 'app-chat:member-1:team:team-1:epoch-1'
+
+describe('dispatchInboundMessage — owner/guest rules of a team-fronted chat', () => {
+  const GUEST_POLICY = { allowedTools: ['Read'] }
+
+  function sentTeamContext(): { external?: boolean } | undefined {
+    return (sendAppChatMessageMock.mock.calls[0][0] as { teamContext?: { external?: boolean } }).teamContext
+  }
+
+  beforeEach(() => {
+    getAppMock.mockReturnValue(MEMBER_APP)
+    withTeam([LOCAL_MEMBER])
+  })
+
+  it('holds a non-owner to the guest policy on the member team session', async () => {
+    instanceCfg = { teamId: 'team-1', permissionEnabled: true, owners: ['boss'], guestPolicy: GUEST_POLICY }
+
+    await dispatchInboundMessage(makeMsg({ chatType: 'group', from: 'u1' }), makeReply(false), 'member-1', 'inst-1')
+
+    expect(setImPermissionContext).toHaveBeenCalledWith(TEAM_SESSION, expect.objectContaining({
+      senderId: 'u1', isOwner: false, guestPolicy: GUEST_POLICY, ownerIds: ['boss'],
+    }))
+    expect(sentTeamContext()).toMatchObject({ kind: 'human_message', external: true })
+  })
+
+  it('gives a listed owner full access, unstamped', async () => {
+    instanceCfg = { teamId: 'team-1', permissionEnabled: true, owners: ['boss'], guestPolicy: GUEST_POLICY }
+
+    await dispatchInboundMessage(makeMsg({ chatType: 'group', from: 'boss' }), makeReply(false), 'member-1', 'inst-1')
+
+    expect(setImPermissionContext).toHaveBeenCalledWith(TEAM_SESSION, expect.objectContaining({
+      senderId: 'boss', isOwner: true, ownerIds: ['boss'],
+    }))
+    expect(sentTeamContext()?.external).toBeUndefined()
+  })
+
+  it('treats everyone as an owner when permission control is off, as a digital human chat does', async () => {
+    instanceCfg = { teamId: 'team-1', permissionEnabled: false, owners: ['boss'], guestPolicy: GUEST_POLICY }
+
+    await dispatchInboundMessage(makeMsg({ chatType: 'group', from: 'u1' }), makeReply(false), 'member-1', 'inst-1')
+
+    expect(setImPermissionContext).toHaveBeenCalledWith(TEAM_SESSION, expect.objectContaining({
+      isOwner: true, guestPolicy: undefined, ownerIds: undefined,
+    }))
+    expect(sentTeamContext()?.external).toBeUndefined()
+  })
+
+  it('asks for an owner before serving a group when none is bound', async () => {
+    instanceCfg = { teamId: 'team-1', permissionEnabled: true, owners: [] }
+    const reply = makeReply(false)
+
+    await dispatchInboundMessage(makeMsg({ chatType: 'group', chatId: 'g-owner-guide' }), reply, 'member-1', 'inst-1')
+
+    expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+    expect((reply.send as ReturnType<typeof vi.fn>).mock.calls[0][0]).toContain('no owner yet')
+  })
+
+  it('binds the first direct-message sender as owner when none is bound', async () => {
+    instanceCfg = { teamId: 'team-1', permissionEnabled: true, owners: [] }
+
+    await dispatchInboundMessage(makeMsg({ chatType: 'direct', from: 'u1' }), makeReply(false), 'member-1', 'inst-1')
+
+    expect(maybeClaimOwner).toHaveBeenCalledWith('inst-1', 'u1')
+  })
+
+  it('forgets the last sender standing when the chat is cleared', async () => {
+    instanceCfg = { teamId: 'team-1', permissionEnabled: true, owners: ['boss'] }
+    teamRuntime = { ...teamRuntime, sealConversationEpoch: vi.fn(async () => undefined) }
+
+    await dispatchInboundMessage(makeMsg({ body: '/clear' }), makeReply(false), 'member-1', 'inst-1')
+
+    expect(clearImPermissionContext).toHaveBeenCalledWith(TEAM_SESSION)
   })
 })
 
@@ -691,5 +824,65 @@ describe('dispatchInboundMessage — message.received arrival telemetry', () => 
 
     expect(sendAppChatMessageMock).toHaveBeenCalledTimes(1)
     expect(receivedCalls()).toHaveLength(1)
+  })
+})
+
+// ============================================
+// Messages buffered behind a busy chat
+//
+// They go next however the chat got free again — the turn answered, failed, or
+// was stopped before it reached the engine — and the merged turn they become
+// starts in the same tick as the check that found the chat free, so a message
+// arriving meanwhile waits behind it instead of starting beside it.
+// ============================================
+
+describe('dispatchInboundMessage — buffered messages', () => {
+  const CONV = 'app-chat:app-1:wecom-bot:direct:chat-1'
+  let stopReleasing: () => void
+
+  beforeEach(() => {
+    stopReleasing = releaseSupplementsWhenIdle()
+  })
+
+  afterEach(() => {
+    stopReleasing()
+  })
+
+  it('are released once the chat reads idle, and not while it is still busy', async () => {
+    conversationGenerating = true
+    await dispatchInboundMessage(makeMsg({ body: 'part one' }), makeReply(false), 'app-1', 'inst-1')
+    expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+
+    conversationChanged?.(CONV)
+    await flushSetImmediate()
+    expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+
+    conversationGenerating = false
+    conversationChanged?.('app-chat:app-1:wecom-bot:direct:someone-else')
+    await flushSetImmediate()
+    expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+
+    conversationChanged?.(CONV)
+    await flushSetImmediate()
+    expect(sendAppChatMessageMock).toHaveBeenCalledTimes(1)
+    expect(sendAppChatMessageMock.mock.calls[0][0]).toMatchObject({ conversationId: CONV, message: 'part one' })
+  })
+
+  it('start their merged turn in the same tick, without retrying an owner claim', async () => {
+    // Each message already tried to claim on arrival. Retrying would await
+    // between the busy check and the turn start, the gap a later message used
+    // to start a turn of its own through.
+    instanceCfg = { permissionEnabled: true, owners: [] }
+    conversationGenerating = true
+    await dispatchInboundMessage(makeMsg({ body: 'part one' }), makeReply(false), 'app-1', 'inst-1')
+    expect(maybeClaimOwner).toHaveBeenCalledTimes(1)
+
+    conversationGenerating = false
+    flushSupplementBuffer(CONV)
+
+    expect(sendAppChatMessageMock).toHaveBeenCalledTimes(1)
+    expect(maybeClaimOwner).toHaveBeenCalledTimes(1)
+    // It runs as the guest a failed claim leaves behind.
+    expect(setImPermissionContext).toHaveBeenLastCalledWith(CONV, expect.objectContaining({ isOwner: false }))
   })
 })

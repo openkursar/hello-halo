@@ -372,7 +372,9 @@ export interface ImChannelInstance {
   getConnectionState?(): ImConnectionState
 
   /**
-   * Push a message proactively to a specific chat.
+   * Push a message proactively to a specific chat. `text` may be of any
+   * length: a provider whose platform caps one message sends a longer text as
+   * ordered parts.
    * @returns true if sent successfully, false otherwise
    */
   pushToChat(chatId: string, text: string, chatType: 'direct' | 'group'): boolean
@@ -527,7 +529,7 @@ export interface ImChannelAdapter {
    * in the current request cycle.
    *
    * @param chatId - Platform-side conversation ID
-   * @param text - Message content (Markdown format)
+   * @param text - Message content (Markdown format), of any length
    * @param chatType - Conversation type
    * @returns true if sent successfully, false otherwise
    */

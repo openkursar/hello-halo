@@ -18,6 +18,7 @@
  * - send-message.ts    - Main conversation message sending (send-only, consumer handles response)
  * - live-turn.ts       - Turn-in-flight probe + persistence-free mid-turn send
  * - control.ts         - Generation control (stop, status)
+ * - stored-session.ts  - Deleting a stored session that will never be resumed
  */
 
 // ============================================
@@ -94,6 +95,9 @@ export {
   invalidateAllSessions
 } from './session-manager'
 
+// Delete a stored session that will never be resumed (CC-protocol engines)
+export { deleteStoredSession } from './stored-session'
+
 // Conversation goal (engines with features.goal)
 export { getConversationGoal, setConversationGoal } from './goal'
 
@@ -130,6 +134,11 @@ export { getWorkingDir, getApiCredentials, getApiCredentialsForConversation } fr
  * a file boundary) can drop another's by assigning `hooks`.
  */
 export { addSdkHooks } from './sdk-config'
+/**
+ * For an in-process MCP server that keeps the settings it was built from: a
+ * live session built with other settings is then rebuilt on its next send.
+ */
+export { markMcpServerSettings } from './sdk-config'
 export { parseSDKMessage, buildMessageContent, formatCanvasContext } from './message-utils'
 /**
  * What a user turn carries besides its text, as the model reads it (references

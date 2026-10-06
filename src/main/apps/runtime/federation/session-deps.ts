@@ -20,6 +20,7 @@
  */
 
 import { SELF_NODE_ID } from '../../../../shared/apps/team-types'
+import { parseTeamSessionKey } from '../../../../shared/apps/im-keys'
 import type { OrchestrationSessionDeps } from '../team'
 import type { TurnCompletion } from '../team/message-bus'
 import type { SerializedWakeRequest } from './types'
@@ -224,6 +225,13 @@ export function makeLocationAwareSessionDeps(
           finishUndelivered('owner-unreachable')
         }
       })
+    },
+
+    holdTurn(sessionKey) {
+      // Only a session this machine runs can be raced here; a remote member's
+      // owner holds its own when the wake lands.
+      const parsed = parseTeamSessionKey(sessionKey)
+      return parsed && isLocal(parsed.appId, parsed.teamId) ? local.holdTurn?.(sessionKey) : undefined
     },
 
     isSessionActive(sessionKey) {

@@ -13,6 +13,7 @@ import {
 } from './_shared'
 import {
   applyUpgrade,
+  previewUpgrade,
   checkUpgradesNow,
   publish,
   getPublishPreview,
@@ -322,6 +323,15 @@ export function registerStoreRoutes(app: Express): void {
       }
       const result = await applyUpgrade(appId, mode ?? 'force')
       res.json({ success: true, data: result })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/store/updates/:appId/preview — what the available update would keep at the user's version
+  app.get('/api/store/updates/:appId/preview', async (req: Request, res: Response) => {
+    try {
+      res.json({ success: true, data: await previewUpgrade(req.params.appId) })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }

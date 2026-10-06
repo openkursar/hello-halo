@@ -32,22 +32,32 @@ const origins = new Map<string, boolean>()
  * @param sessionKey the member's team session (see `buildTeamSessionKey`)
  */
 export function resolveTurnOrigin(sessionKey: string, trigger: TeamTriggerContext): boolean {
-  if (trigger.external) {
-    remember(sessionKey, true)
-    return true
-  }
+  const external = peekTurnOrigin(sessionKey, trigger)
+  if (trigger.external || isOwnPersonTurn(trigger)) remember(sessionKey, external)
+  return external
+}
 
-  // A person typed this, here. A person on ANOTHER machine reaches the member
-  // through the office endpoint, which stamps the message before it gets this
-  // far — so an unstamped one is the owner at their own keyboard, and that is
-  // the one act that ends a borrowed thread of work.
-  if (!trigger.kind || trigger.kind === 'human_message') {
-    remember(sessionKey, false)
-    return false
-  }
-
+/**
+ * The origin a turn on this session runs — or would have run — under, without
+ * remembering it. For describing a turn from outside it (one that timed out, or
+ * never ran), so the description and the turn itself cannot disagree.
+ */
+export function peekTurnOrigin(sessionKey: string, trigger: TeamTriggerContext): boolean {
+  if (trigger.external) return true
+  if (isOwnPersonTurn(trigger)) return false
   // Runtime-authored, or a teammate's message that started here: inherit.
   return origins.get(sessionKey) ?? false
+}
+
+/**
+ * A person typed this, here. A person on ANOTHER machine reaches the member
+ * through the office endpoint, and a guest through an IM chat, both stamped
+ * before it gets this far — so an unstamped one is the owner (at their own
+ * keyboard, or in a chat that counts them as one), and that is the one act
+ * that ends a borrowed thread of work.
+ */
+function isOwnPersonTurn(trigger: TeamTriggerContext): boolean {
+  return !trigger.external && (!trigger.kind || trigger.kind === 'human_message')
 }
 
 /** Forget a thread of work that no longer exists. */

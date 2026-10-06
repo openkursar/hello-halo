@@ -215,5 +215,18 @@ export const migrations: Migration[] = [
       console.log('[Runtime] Decision migration completed', { entries: migrated, auditTable: 'runtime_decision_migration_backup' })
     },
   },
-
+  {
+    version: 8,
+    description: 'Runs whose process transcript the retention rule cleared',
+    up(db) {
+      // The partial index holds only the runs that still have a transcript, so
+      // finding those past the kept number reads about that many rows however
+      // long the person's history is.
+      db.exec(`
+        ALTER TABLE automation_runs ADD COLUMN transcript_cleared_at INTEGER;
+        CREATE INDEX idx_runs_transcript_kept ON automation_runs(app_id, started_at DESC)
+          WHERE transcript_cleared_at IS NULL AND status != 'skipped';
+      `)
+    },
+  },
 ]

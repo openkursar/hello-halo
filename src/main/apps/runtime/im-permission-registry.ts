@@ -1,22 +1,27 @@
 /**
  * apps/runtime -- IM Permission Registry
  *
- * Session-scoped registry that maps conversationId → sender permission context.
+ * Session-scoped registry that maps conversationId → the chat's last sender
+ * and their standing.
+ *
+ * A message's own turn does not read it: dispatch-inbound hands the standing to
+ * app-chat with the message (`AppChatRequest.imPermission`), so a message that
+ * arrives in between can never change who a turn answers to. What reads it is a
+ * turn with no sender of its own — a team-fronted chat woken by a teammate —
+ * which takes the chat's last sender as it begins.
  *
  * Architecture:
- *   dispatch-inbound.ts  → set()   (writes sender identity + resolved policy)
- *   permission-handler.ts → get()  (reads context for canUseTool interception)
- *   app-chat.ts (clear)   → clear() (cleans up on session reset)
+ *   dispatch-inbound.ts → set()   (the sender of each message it starts a turn for)
+ *   app-chat.ts         → get()   (a turn without a sender, as it begins)
+ *   dispatch-inbound.ts → clear() (on /clear)
  *
- * This registry decouples the IM identity/permission context from the generic
- * AppChatRequest and CanUseToolDeps interfaces. Only IM-originated sessions
- * have entries here; native Halo chat and automation runs are unaffected.
+ * Only IM-originated sessions have entries here; native Halo chat and
+ * automation runs are unaffected.
  *
  * Lifecycle:
- *   - Entry is set (or overwritten) on every inbound IM message dispatch.
- *     This ensures the context always reflects the LATEST message sender
- *     (critical for group chats where multiple users share a session).
- *   - Entry is cleared when the session is explicitly reset (/halo-clear).
+ *   - Entry is set (or overwritten) for every inbound IM message that starts a
+ *     turn — the LATEST sender (group chats share a session).
+ *   - Entry is cleared when the session is explicitly reset (/clear).
  *   - Entries are NOT persisted — they exist only while the process is alive.
  *     On restart, the next inbound message re-creates the entry.
  */

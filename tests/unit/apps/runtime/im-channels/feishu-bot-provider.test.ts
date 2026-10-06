@@ -852,3 +852,66 @@ describe('FeishuBotProvider — proactive push', () => {
     expect(started.instance.fileCapability).toBe(started.instance.fileCapability)
   })
 })
+
+describe('FeishuBotProvider — text longer than one message', () => {
+  const MAX_CHARS = 3500
+  /** About 9000 characters: three Feishu messages. */
+  const LONG_ANSWER = Array.from({ length: 30 }, (_, i) => `第${i + 1}点：${'细节说明。'.repeat(58)}`).join('\n\n')
+
+  function sentMarkdown(started: Started): string[] {
+    return started.channel.sends.map(s => (s.input as { markdown: string }).markdown)
+  }
+
+  /** Bodies of `(i/n)` parts, in order, each within one message. */
+  function partBodies(messages: string[]): string[] {
+    return messages.map((text, i) => {
+      const label = `(${i + 1}/${messages.length})\n\n`
+      expect(text.startsWith(label)).toBe(true)
+      expect(text.length).toBeLessThanOrEqual(MAX_CHARS)
+      return text.slice(label.length)
+    })
+  }
+
+  it('holds the SDK to the same per-message size, so it never splits a part again', async () => {
+    const started = await startInstance()
+    expect((started.channel.createOptions?.outbound as { textChunkLimit?: number }).textChunkLimit).toBe(MAX_CHARS)
+  })
+
+  it('replies in labeled parts, quoting the question only with the first', async () => {
+    const started = await startInstance()
+    await emitMessage(started, message({ chatType: 'group' }))
+
+    await started.inbound[0].reply.send(LONG_ANSWER)
+
+    expect(started.channel.sends.length).toBeGreaterThan(1)
+    expect(started.channel.sends.map(s => s.opts?.replyTo)).toEqual(
+      started.channel.sends.map((_, i) => (i === 0 ? 'om_1' : undefined)),
+    )
+    expect(partBodies(sentMarkdown(started)).join('')).toBe(LONG_ANSWER)
+  })
+
+  it('pushes a long message in labeled parts, in order', async () => {
+    const started = await startInstance()
+
+    expect(started.instance.pushToChat('oc_chat', LONG_ANSWER, 'group')).toBe(true)
+    await vi.waitFor(() => expect(started.channel.sends.length).toBeGreaterThan(2))
+
+    expect(partBodies(sentMarkdown(started)).join('')).toBe(LONG_ANSWER)
+  })
+
+  it('still sends the rest when one part fails, then reports the reply as failed', async () => {
+    const started = await startInstance()
+    await emitMessage(started, message())
+    const send = started.channel.send.bind(started.channel)
+    let attempts = 0
+    started.channel.send = async (to, input, opts) => {
+      attempts++
+      if (attempts === 2) throw new Error('rate limited')
+      return send(to, input, opts)
+    }
+
+    await expect(started.inbound[0].reply.send(LONG_ANSWER)).rejects.toThrow(/rate limited/)
+    expect(started.channel.sends.length).toBe(2)
+    expect(attempts).toBe(3)
+  })
+})

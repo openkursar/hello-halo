@@ -18,7 +18,7 @@ vi.mock('../../../../src/main/http/routes/_shared', () => ({
   broadcastToAll: vi.fn(),
   getAppRuntime: () => ({}),
   getAppChatConversationId: (appId: string) => `app-chat:${appId}`,
-  injectIntoAppChat: (...args: unknown[]) => injectIntoAppChat(...args),
+  injectIntoAppChatWhenLive: async (...args: unknown[]) => injectIntoAppChat(...args),
   sendAppChatMessage: (...args: unknown[]) => sendAppChatMessage(...args),
 }))
 vi.mock('../../../../src/main/apps/team', () => ({ getTeamStore: () => null }))
@@ -43,7 +43,7 @@ async function withServer(fn: (post: (path: string, body: unknown) => Promise<{ 
 
 beforeEach(() => {
   vi.clearAllMocks()
-  injectIntoAppChat.mockReturnValue(true)
+  injectIntoAppChat.mockReturnValue('delivered')
   sendAppChatMessage.mockResolvedValue(undefined)
   vi.spyOn(console, 'log').mockImplementation(() => {})
   vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -62,10 +62,18 @@ describe('POST chat/inject', () => {
   })
 
   it('reports that nothing took it when no turn was running', async () => {
-    injectIntoAppChat.mockReturnValue(false)
+    injectIntoAppChat.mockReturnValue('no_turn')
     await withServer(async (post) => {
       const res = await post('/api/apps/app-1/chat/inject', { conversationId: 'app-chat:app-1', message: 'late' })
       expect(res.body).toEqual({ success: true, data: { delivered: false } })
+    })
+  })
+
+  it('says so when the turn it was meant for was stopped', async () => {
+    injectIntoAppChat.mockReturnValue('stopped')
+    await withServer(async (post) => {
+      const res = await post('/api/apps/app-1/chat/inject', { conversationId: 'app-chat:app-1', message: 'too late' })
+      expect(res.body).toEqual({ success: true, data: { delivered: false, stopped: true } })
     })
   })
 

@@ -187,25 +187,34 @@ describe('who a delegated policy holds', () => {
   // is who started the turn — not whether a person or a model typed it.
   it('does not restrict the owner talking to their own digital human', () => {
     // The owner's chat is delivered straight to the session and carries no kind.
-    expect(isBorrowedTeamTurn(undefined, false)).toBe(false)
+    expect(isBorrowedTeamTurn(undefined, false, false)).toBe(false)
   })
 
   it('restricts another PERSON reaching it from a different machine', () => {
-    expect(isBorrowedTeamTurn('human_message', false)).toBe(true)
+    expect(isBorrowedTeamTurn('human_message', false, true)).toBe(true)
   })
 
   it('restricts a teammate’s digital human', () => {
-    expect(isBorrowedTeamTurn('message', false)).toBe(true)
+    expect(isBorrowedTeamTurn('message', false, false)).toBe(true)
   })
 
   it('restricts the turns the runtime starts on the team’s behalf', () => {
-    expect(isBorrowedTeamTurn('run_start', false)).toBe(true)
-    expect(isBorrowedTeamTurn('periodic_check', false)).toBe(true)
+    expect(isBorrowedTeamTurn('run_start', false, false)).toBe(true)
+    expect(isBorrowedTeamTurn('periodic_check', false, false)).toBe(true)
   })
 
-  it('leaves an IM-backed turn to the IM hardening decision', () => {
-    expect(isBorrowedTeamTurn('human_message', true)).toBe(false)
-    expect(isBorrowedTeamTurn('message', true)).toBe(false)
+  it('leaves the person in an IM chat a member fronts to that chat’s owner/guest rules', () => {
+    expect(isBorrowedTeamTurn('human_message', true, false)).toBe(false)
+    expect(isBorrowedTeamTurn('human_message', true, true)).toBe(false)
+  })
+
+  it('leaves a front-desk turn woken by work started here as it was', () => {
+    expect(isBorrowedTeamTurn('message', true, false)).toBe(false)
+  })
+
+  it('restricts a front-desk turn woken to continue work that entered from outside', () => {
+    expect(isBorrowedTeamTurn('message', true, true)).toBe(true)
+    expect(isBorrowedTeamTurn('periodic_check', true, true)).toBe(true)
   })
 })
 

@@ -188,5 +188,15 @@ export const migrations: Migration[] = [
     up(db) {
       db.exec("CREATE INDEX idx_apps_directory ON installed_apps(json_extract(spec_json, '$.type'), installed_at DESC, id ASC)")
     }
+  },
+  {
+    version: 10,
+    description: "Record the author's original spec so upgrades can tell the user's edits apart",
+    up(db) {
+      // Existing rows stay NULL: their original cannot be recovered from the
+      // row, and copying the current spec would pass the user's edits off as
+      // the author's, to be overwritten by the next upgrade.
+      db.exec('ALTER TABLE installed_apps ADD COLUMN author_spec_json TEXT')
+    }
   }
 ]

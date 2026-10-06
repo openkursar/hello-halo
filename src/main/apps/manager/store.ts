@@ -39,6 +39,16 @@ interface AppRow {
   data_path: string | null
 }
 
+/**
+ * The columns an InstalledApp is built from. The author's original spec is
+ * left out on purpose: only an upgrade reads it, and every list call would
+ * otherwise copy a second spec per row.
+ */
+const APP_COLUMNS = `id, spec_id, space_id, spec_json, status, pending_escalation_id,
+  user_config_json, user_overrides_json, permissions_json, installed_at, last_run_at,
+  last_run_outcome, error_message, uninstalled_at, upgrade_strategy, ignored_versions,
+  knowledge_seeded, data_path`
+
 // ============================================
 // Row <-> Domain Mapping
 // ============================================
@@ -176,30 +186,30 @@ export class AppManagerStore {
         id, spec_id, space_id, spec_json, status,
         pending_escalation_id, user_config_json, user_overrides_json,
         permissions_json, installed_at, last_run_at, last_run_outcome, error_message,
-        upgrade_strategy, ignored_versions, knowledge_seeded
+        upgrade_strategy, ignored_versions, knowledge_seeded, author_spec_json
       ) VALUES (
         @id, @spec_id, @space_id, @spec_json, @status,
         @pending_escalation_id, @user_config_json, @user_overrides_json,
         @permissions_json, @installed_at, @last_run_at, @last_run_outcome, @error_message,
-        @upgrade_strategy, @ignored_versions, @knowledge_seeded
+        @upgrade_strategy, @ignored_versions, @knowledge_seeded, @author_spec_json
       )
     `)
 
     // ── SELECT ────────────────────────────────────
     this.stmtGetById = db.prepare(`
-      SELECT * FROM installed_apps WHERE id = ?
+      SELECT ${APP_COLUMNS} FROM installed_apps WHERE id = ?
     `)
 
     this.stmtGetBySpecAndSpace = db.prepare(`
-      SELECT * FROM installed_apps WHERE spec_id = ? AND space_id = ?
+      SELECT ${APP_COLUMNS} FROM installed_apps WHERE spec_id = ? AND space_id = ?
     `)
 
     this.stmtGetBySpecGlobal = db.prepare(`
-      SELECT * FROM installed_apps WHERE spec_id = ? AND space_id IS NULL
+      SELECT ${APP_COLUMNS} FROM installed_apps WHERE spec_id = ? AND space_id IS NULL
     `)
 
     this.stmtListAll = db.prepare(`
-      SELECT * FROM installed_apps ORDER BY installed_at DESC
+      SELECT ${APP_COLUMNS} FROM installed_apps ORDER BY installed_at DESC
     `)
 
     // ── DELETE ────────────────────────────────────
@@ -283,11 +293,12 @@ export class AppManagerStore {
   // ── Create ─────────────────────────────────────
 
   /**
-   * Insert a new installed App record.
+   * Insert a new installed App record, with the author's original spec when
+   * the App came from one.
    *
    * @throws If the UNIQUE(spec_id, space_id) constraint is violated.
    */
-  insert(app: InstalledApp): void {
+  insert(app: InstalledApp, authorSpec: AppSpec | null = null): void {
     this.stmtInsert.run({
       id: app.id,
       spec_id: app.specId,
@@ -305,6 +316,7 @@ export class AppManagerStore {
       upgrade_strategy: app.upgradeStrategy ?? 'auto',
       ignored_versions: JSON.stringify(app.ignoredVersions ?? []),
       knowledge_seeded: app.knowledgeSeeded ? 1 : 0,
+      author_spec_json: authorSpec ? JSON.stringify(authorSpec) : null,
     })
   }
 
@@ -451,6 +463,39 @@ export class AppManagerStore {
       spec_json: JSON.stringify(spec),
       spec_id: spec.name,
     })
+  }
+
+  // ── Author's original spec ─────────────────────
+
+  /** The author's spec as last installed or upgraded, or null when none was recorded. */
+  getAuthorSpec(appId: string): AppSpec | null {
+    const row = this.db.prepare('SELECT author_spec_json FROM installed_apps WHERE id = ?')
+      .get(appId) as { author_spec_json: string | null } | undefined
+    return row?.author_spec_json ? JSON.parse(row.author_spec_json) as AppSpec : null
+  }
+
+  /**
+   * Replace the spec and the author's original together, in one statement, so
+   * an upgrade can never leave one without the other.
+   */
+  updateSpecAndAuthorSpec(appId: string, spec: AppSpec, authorSpec: AppSpec | null): void {
+    this.db.prepare('UPDATE installed_apps SET spec_json = ?, spec_id = ?, author_spec_json = ? WHERE id = ?')
+      .run(JSON.stringify(spec), spec.name, authorSpec ? JSON.stringify(authorSpec) : null, appId)
+  }
+
+  /** Record the author's original only where none exists. Returns whether it was written. */
+  recordAuthorSpec(appId: string, authorSpec: AppSpec): boolean {
+    return this.db.prepare('UPDATE installed_apps SET author_spec_json = ? WHERE id = ? AND author_spec_json IS NULL')
+      .run(JSON.stringify(authorSpec), appId).changes > 0
+  }
+
+  /** Digital humans installed from a store that have no author's original recorded. */
+  listStoreInstallsWithoutAuthorSpec(): string[] {
+    const rows = this.db.prepare(`SELECT id FROM installed_apps
+      WHERE author_spec_json IS NULL AND status != 'uninstalled'
+        AND json_extract(spec_json, '$.type') = 'automation'
+        AND json_extract(spec_json, '$.store.slug') IS NOT NULL`).all() as Array<{ id: string }>
+    return rows.map(row => row.id)
   }
 
   /**

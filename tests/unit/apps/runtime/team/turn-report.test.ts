@@ -38,7 +38,7 @@ function makeStore(members: FakeMember[], opts?: { sealed?: boolean }) {
 }
 
 function makeBus() {
-  const wakes: { toAppId: string; body: string; kind?: string }[] = []
+  const wakes: { toAppId: string; body: string; kind?: string; external?: boolean }[] = []
   const tripExternal = vi.fn()
   const bus = {
     deliverRuntimeWake: vi.fn(async (params: any) => {
@@ -46,6 +46,7 @@ function makeBus() {
         toAppId: params.envelope.toAppId,
         body: params.envelope.body,
         kind: params.trigger.kind,
+        external: params.trigger.external,
       })
       return 'dispatched'
     }),
@@ -117,7 +118,7 @@ const LOCAL_TEAM: FakeMember[] = [
 
 describe('turn-end report', () => {
   let bus: MessageBus
-  let wakes: { toAppId: string; body: string; kind?: string }[]
+  let wakes: { toAppId: string; body: string; kind?: string; external?: boolean }[]
   let tripExternal: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
@@ -231,6 +232,40 @@ describe('turn-end report', () => {
     expect(wakes[0].body).toContain('writer — stopped with no error reported')
     expect(wakes[0].body).toContain('messaged Lead')
     expect(wakes[0].body).toContain('moved "draft outline"')
+  })
+
+  it('a notice about work that entered from outside wakes the lead as outside work', async () => {
+    const report = makeReport(LOCAL_TEAM, bus)
+    runTurn(report, 'app-writer', [], {
+      appId: 'app-writer', teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' }, external: true,
+    })
+    await vi.waitFor(() => expect(wakes).toHaveLength(1))
+    expect(wakes[0].kind).toBe('member_stopped')
+    expect(wakes[0].external).toBe(true)
+  })
+
+  it('a notice about work started here carries no outside origin', async () => {
+    const report = makeReport(LOCAL_TEAM, bus)
+    runTurn(report, 'app-writer', [])
+    await vi.waitFor(() => expect(wakes).toHaveLength(1))
+    expect(wakes[0].external).toBeUndefined()
+  })
+
+  it('one outside ending makes the whole notice it rides in outside work', async () => {
+    let leadBusy = true
+    const report = makeReport(LOCAL_TEAM, bus, { isLeadGenerating: () => leadBusy })
+    runTurn(report, 'app-writer', [])
+    runTurn(report, 'app-editor', [], {
+      appId: 'app-editor', teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' }, external: true,
+    })
+    expect(wakes).toHaveLength(0)
+    leadBusy = false
+    endCollaboration(report, { appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
+    await vi.waitFor(() => expect(wakes).toHaveLength(1))
+    expect(wakes[0].body).toContain('writer —')
+    expect(wakes[0].body).toContain('editor —')
+    expect(wakes[0].external).toBe(true)
+    report.clearEpoch(EPOCH)
   })
 
   it('never says the work is done — "no error" is stated as exactly that', async () => {

@@ -187,10 +187,14 @@ export const MODULE: RouteModuleMeta = {
       group: 'store',
       summary: 'Apply an available update to an installed app',
       body: '{"mode":"force"}',
-      returns: '{success:true,data:{appId,from,to,severity}} or {success:false,error}',
+      returns: '{success:true,data:{appId,from,to,severity,kept,editsKnown}} or {success:false,error}',
       impact: 'reversible',
-      notes: 'mode is optional: "patch_minor"|"major"|"force", defaults to "force". No built-in downgrade path — reinstalling the old version is the way back.',
+      notes: [
+        'mode is optional: "patch_minor"|"major"|"force", defaults to "force". No built-in downgrade path — reinstalling the old version is the way back.',
+        'A digital human keeps the user\'s version of every field that differs from the author\'s new version (prompt, run schedule, name, ...); kept lists those fields, empty when the update applied in full. editsKnown false means there was no earlier author version to compare with, so every difference was kept. The user can switch kept fields to the author\'s version in the app.',
+      ].join('\n'),
     },
+    'GET /api/store/updates/:appId/preview': { expose: 'internal' },
     'POST /api/store/publish/preview': {
       expose: 'ai',
       group: 'store',

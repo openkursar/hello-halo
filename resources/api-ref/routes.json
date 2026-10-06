@@ -591,6 +591,14 @@
   },
   {
     "method": "POST",
+    "path": "/api/apps/:appId/activity/:entryId/adopt-author-version"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/:appId/author-spec"
+  },
+  {
+    "method": "POST",
     "path": "/api/apps/:appId/space-preview"
   },
   {
@@ -1111,6 +1119,10 @@
     "method": "POST",
     "path": "/api/store/updates/:appId/apply",
     "group": "store"
+  },
+  {
+    "method": "GET",
+    "path": "/api/store/updates/:appId/preview"
   },
   {
     "method": "POST",

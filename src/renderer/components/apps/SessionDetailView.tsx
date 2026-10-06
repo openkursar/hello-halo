@@ -19,6 +19,8 @@
  *   absorbs it at the next tool boundary, so a user can steer a run mid-flight.
  * - When not live the view is read-only over the final transcript; a Continue
  *   button is offered for runs that ended prematurely (report_to_user never called).
+ * - A run whose process the retention rule cleared says so, with nothing to
+ *   continue; its result is still on the timeline.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react'
@@ -40,7 +42,7 @@ interface SessionDetailViewProps {
   runId: string
 }
 
-type LoadState = 'loading' | 'loaded' | 'error' | 'empty'
+type LoadState = 'loading' | 'loaded' | 'error' | 'empty' | 'cleared'
 
 /** Transcript refresh interval while a run is live (ms). */
 const LIVE_POLL_INTERVAL = 2000
@@ -98,6 +100,8 @@ export function SessionDetailView({ appId, runId }: SessionDetailViewProps) {
         const msgs = (res.data as Message[]) ?? []
         setMessages(msgs)
         setLoadState(prev => (msgs.length > 0 ? 'loaded' : (prev === 'loading' ? 'empty' : prev)))
+      } else if (res.code === 'RUN_PROCESS_CLEARED') {
+        setLoadState('cleared')
       } else if (showSpinner) {
         setLoadState('empty')
       }
@@ -199,6 +203,17 @@ export function SessionDetailView({ appId, runId }: SessionDetailViewProps) {
           <p className="text-sm">{t('Failed to load session')}</p>
           {errorMsg && <p className="text-xs text-muted-foreground/60">{errorMsg}</p>}
         </div>
+      </div>
+    )
+  }
+
+  // ── Cleared by the retention rule: nothing left to show or continue ──
+  if (loadState === 'cleared') {
+    return (
+      <div className="h-full flex items-center justify-center p-8">
+        <p className="max-w-sm text-center text-sm text-muted-foreground">
+          {t('The detailed process of this run was cleared under the retention rule. Its result stays on the timeline.')}
+        </p>
       </div>
     )
   }
