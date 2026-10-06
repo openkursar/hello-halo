@@ -225,4 +225,24 @@ export const imApi = {
     return httpRequest('POST', '/api/im-sessions/set-custom-name', input)
   },
 
+  /** Other digital humans' IM sessions this app was added to as push targets. */
+  imSessionsListLinked: async (appId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.imSessionsListLinked(appId)
+    }
+    return httpRequest('GET', `/api/im-sessions/linked?appId=${encodeURIComponent(appId)}`)
+  },
+
+  /** Add or update (link) or remove (null) the app's push link on another digital human's IM session. */
+  imSessionsSetPushLink: async (input: {
+    appId: string
+    session: { appId: string; channel: string; chatId: string }
+    link: { autoSync: boolean } | null
+  }): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.imSessionsSetPushLink(input)
+    }
+    return httpRequest('POST', '/api/im-sessions/set-push-link', input)
+  },
+
 }

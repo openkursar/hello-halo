@@ -127,7 +127,7 @@ export const MODULE: RouteModuleMeta = {
       group: ['channels', 'digital-human'],
       summary: 'List every chat thread a digital human has, its own and IM ones',
       returns:
-        '{success:true,data:[{appId,channel,source:"local"|"im"|"http",chatType:"direct"|"group",chatId,displayName,customName?,proactive,instanceId}]}',
+        '{success:true,data:[{appId,channel,source:"local"|"im"|"http",chatType:"direct"|"group",chatId,displayName,customName?,proactive,instanceId,pushLinks?:[{appId,autoSync}]}]}',
       notes: [
         'Optional ?appId= narrows it to one digital human. This is the only listing of its threads — there is no sessions/list beside sessions/create.',
         'source says what a thread is: "local" = a named thread the user created in Halo, "im" = a real chat with a person on an IM platform, "http" = created through this API.',
@@ -151,7 +151,7 @@ export const MODULE: RouteModuleMeta = {
       body: '{"appId":"<appId — a uuid from GET /api/apps>","channel":"wecom-bot","chatId":"<chatId — from GET /api/im-sessions>"}',
       returns: '{success:true,data:{removed:boolean}}',
       impact: 'reversible',
-      notes: 'removed:false means no matching session was found — not an error. Only removes display metadata (custom name, proactive flag); the chat re-registers itself on its next inbound message, message history is not stored here.',
+      notes: 'removed:false means no matching session was found — not an error. Only removes display metadata (custom name, proactive flag, other digital humans\' push links to it); the chat re-registers itself on its next inbound message, message history is not stored here.',
     },
     'POST /api/im-sessions/set-custom-name': {
       expose: 'ai',
@@ -161,6 +161,26 @@ export const MODULE: RouteModuleMeta = {
       returns: '{success:true} or {success:false,error}',
       impact: 'reversible',
       notes: '404 if no matching session exists yet.',
+    },
+    'GET /api/im-sessions/linked': {
+      expose: 'ai',
+      group: ['channels', 'digital-human'],
+      summary: "List the IM chats a digital human pushes to through another digital human's bot",
+      query: '?appId=<appId — a uuid from GET /api/apps>',
+      returns: '{success:true,data:[{appId,channel,chatType,chatId,displayName,instanceId,pushLinks:[{appId,autoSync}]}]}',
+      notes: 'Each record is the session as the bot\'s own digital human holds it (its appId is that one). The asking digital human\'s entry in pushLinks says whether its run results are auto-pushed there.',
+    },
+    'POST /api/im-sessions/set-push-link': {
+      expose: 'ai',
+      group: ['channels', 'digital-human'],
+      summary: "Let a digital human push to an IM chat another digital human's bot knows, or stop it",
+      body: '{"appId":"<appId of the digital human that pushes>","session":{"appId":"<the session\'s own appId>","channel":"wecom-bot","chatId":"<chatId — from GET /api/im-sessions>"},"link":{"autoSync":false}}',
+      returns: '{success:true} or {success:false,error}',
+      impact: 'reversible',
+      notes: [
+        'link:{autoSync} adds the chat to the digital human\'s push targets or updates it; autoSync:true also pushes its run results there. link:null removes it.',
+        'Replies in that chat still go to the digital human the bot answers for. 404 when the session does not exist, is not an IM chat, or is the digital human\'s own.',
+      ].join('\n'),
     },
     'POST /api/im-channels/set-instance-app': { expose: 'internal' },
     'POST /api/im-channels/create-instance': { expose: 'internal' },

@@ -52,9 +52,11 @@ operations on this page:
   POST   /api/apps/import-spec                                       Install a digital human (or other app type) from a YAML definition (spec) string
   POST   /api/apps/install                                           Install a digital human (or other app type) from its full definition (spec) object
   GET    /api/im-sessions                                            List every chat thread a digital human has, its own and IM ones
+  GET    /api/im-sessions/linked                                     List the IM chats a digital human pushes to through another digital human's bot
   POST   /api/im-sessions/remove                                     Remove a chat binding from the IM session registry
   POST   /api/im-sessions/set-custom-name                            Set a custom display name for a chat binding
   POST   /api/im-sessions/set-proactive                              Toggle whether a run's result is auto-pushed to this chat when it finishes
+  POST   /api/im-sessions/set-push-link                              Let a digital human push to an IM chat another digital human's bot knows, or stop it
   POST   /api/tlon/<kbId>/bind-app                                   Bind a knowledge collection so a digital human can read it
   POST   /api/tlon/<kbId>/unbind-app                                 Unbind a knowledge collection from a digital human
 
@@ -361,11 +363,16 @@ POST   /api/apps/install                                           Install a dig
 
 GET    /api/im-sessions                                            List every chat thread a digital human has, its own and IM ones
      curl -s "$HALO_API_URL/api/im-sessions" -H "Authorization: Bearer $HALO_API_TOKEN" | head -c 4000
-     # out: {success:true,data:[{appId,channel,source:"local"|"im"|"http",chatType:"direct"|"group",chatId,displayName,customName?,proactive,instanceId}]}
+     # out: {success:true,data:[{appId,channel,source:"local"|"im"|"http",chatType:"direct"|"group",chatId,displayName,customName?,proactive,instanceId,pushLinks?:[{appId,autoSync}]}]}
      # note: Optional ?appId= narrows it to one digital human. This is the only listing of its threads — there is no sessions/list beside sessions/create.
      # note: source says what a thread is: "local" = a named thread the user created in Halo, "im" = a real chat with a person on an IM platform, "http" = created through this API.
      # note: Reading or writing one thread needs a conversationId, which is not a field here — build it from four fields of the record: app-chat:<appId>:<channel>:<chatType>:<chatId>.
      # note: Only "local" and "http" threads accept a message from this API. An "im" thread is refused on send — this API must not put words into a real conversation with a person.
+
+GET    /api/im-sessions/linked                                     List the IM chats a digital human pushes to through another digital human's bot
+     curl -s "$HALO_API_URL/api/im-sessions/linked?appId=<appId — a uuid from GET /api/apps>" -H "Authorization: Bearer $HALO_API_TOKEN" | head -c 4000
+     # out: {success:true,data:[{appId,channel,chatType,chatId,displayName,instanceId,pushLinks:[{appId,autoSync}]}]}
+     # note: Each record is the session as the bot's own digital human holds it (its appId is that one). The asking digital human's entry in pushLinks says whether its run results are auto-pushed there.
 
 POST   /api/im-sessions/remove                                     Remove a chat binding from the IM session registry
      # note: reversible — can be undone or corrected afterward.
@@ -375,7 +382,7 @@ POST   /api/im-sessions/remove                                     Remove a chat
           -d '{"appId":"<appId — a uuid from GET /api/apps>","channel":"wecom-bot","chatId":"<chatId — from GET /api/im-sessions>"}'
      # body: {"appId":"<appId — a uuid from GET /api/apps>","channel":"wecom-bot","chatId":"<chatId — from GET /api/im-sessions>"}
      # out: {success:true,data:{removed:boolean}}
-     # note: removed:false means no matching session was found — not an error. Only removes display metadata (custom name, proactive flag); the chat re-registers itself on its next inbound message, message history is not stored here.
+     # note: removed:false means no matching session was found — not an error. Only removes display metadata (custom name, proactive flag, other digital humans' push links to it); the chat re-registers itself on its next inbound message, message history is not stored here.
 
 POST   /api/im-sessions/set-custom-name                            Set a custom display name for a chat binding
      # note: reversible — can be undone or corrected afterward.
@@ -396,6 +403,17 @@ POST   /api/im-sessions/set-proactive                              Toggle whethe
      # body: {"appId":"<appId — a uuid from GET /api/apps>","channel":"wecom-bot","chatId":"<chatId — from GET /api/im-sessions>","proactive":true}
      # out: {success:true} or {success:false,error}
      # err: 404 if no matching session exists yet — the chat must have messaged the digital human at least once.
+
+POST   /api/im-sessions/set-push-link                              Let a digital human push to an IM chat another digital human's bot knows, or stop it
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/im-sessions/set-push-link" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"appId":"<appId of the digital human that pushes>","session":{"appId":"<the session's own appId>","channel":"wecom-bot","chatId":"<chatId — from GET /api/im-sessions>"},"link":{"autoSync":false}}'
+     # body: {"appId":"<appId of the digital human that pushes>","session":{"appId":"<the session's own appId>","channel":"wecom-bot","chatId":"<chatId — from GET /api/im-sessions>"},"link":{"autoSync":false}}
+     # out: {success:true} or {success:false,error}
+     # note: link:{autoSync} adds the chat to the digital human's push targets or updates it; autoSync:true also pushes its run results there. link:null removes it.
+     # note: Replies in that chat still go to the digital human the bot answers for. 404 when the session does not exist, is not an IM chat, or is the digital human's own.
 
 POST   /api/tlon/<kbId>/bind-app                                   Bind a knowledge collection so a digital human can read it
      # note: reversible — can be undone or corrected afterward.

@@ -533,6 +533,16 @@
   },
   {
     "method": "GET",
+    "path": "/api/im-sessions/linked",
+    "group": "channels"
+  },
+  {
+    "method": "POST",
+    "path": "/api/im-sessions/set-push-link",
+    "group": "channels"
+  },
+  {
+    "method": "GET",
     "path": "/api/auth/providers",
     "group": "settings"
   },

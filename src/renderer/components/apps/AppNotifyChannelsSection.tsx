@@ -15,14 +15,17 @@
  *      assistant's final text to that contact at run completion.
  *    - These contacts also appear in the AI's notify_bot tool directory
  *      for mid-run AI-driven notifications.
- *    Contacts are auto-discovered when users message via Bot.
+ *    Contacts are auto-discovered when users message via Bot. Chats another
+ *    digital human's bot knows can be added too (ImPushTargetPicker); those
+ *    carry their own auto-sync choice and are removed without touching the
+ *    other digital human's contact.
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Mail, MessageSquare, Bell, Webhook,
   ExternalLink, Users, User, Pencil, Trash2, Copy, Check, Search,
-  AlertTriangle, Info,
+  AlertTriangle, Info, Plus,
 } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { useAppStore } from '../../stores/app.store'
@@ -34,6 +37,8 @@ import type {
 import { NOTIFICATION_CHANNEL_META } from '../../../shared/types/notification-channels'
 import type { ImSessionRecord, ImChannelInstanceStatus } from '../../../shared/types/im-channel'
 import { getImSessionDisplayName } from '../../../shared/types/im-channel'
+import { getImChannelDisplay } from './im-channel-display'
+import { ImPushTargetPicker } from './ImPushTargetPicker'
 
 // ============================================
 // Types
@@ -62,17 +67,6 @@ const NOTIFICATION_CHANNELS: ChannelDisplayInfo[] = [
   { id: 'feishu', icon: MessageSquare, labelKey: NOTIFICATION_CHANNEL_META.feishu.labelKey },
   { id: 'webhook', icon: Webhook, labelKey: NOTIFICATION_CHANNEL_META.webhook.labelKey },
 ]
-
-const IM_CHANNEL_DISPLAY: Record<string, { label: string; color: string }> = {
-  'wecom-bot': { label: 'WeCom', color: 'text-green-500' },
-  'feishu-bot': { label: 'Feishu', color: 'text-blue-500' },
-  'dingtalk-bot': { label: 'DingTalk', color: 'text-indigo-500' },
-  'weixin-ilink-bot': { label: 'WeChat iLink', color: 'text-green-600' },
-}
-
-function getImChannelDisplay(channel: string) {
-  return IM_CHANNEL_DISPLAY[channel] ?? { label: channel, color: 'text-muted-foreground' }
-}
 
 /**
  * WeCom's own documentation for the "message" permission capability — the
@@ -188,10 +182,20 @@ function ChannelOverview() {
 // Contacts Section (when im-push enabled)
 // ============================================
 
+/** Whether two records name the same session (its own app, channel and chat). */
+function sameSession(a: ImSessionRecord, b: ImSessionRecord): boolean {
+  return a.appId === b.appId && a.channel === b.channel && a.chatId === b.chatId
+}
+
 function ContactsSection({ appId }: { appId: string }) {
   const { t } = useTranslation()
   const [sessions, setSessions] = useState<ImSessionRecord[]>([])
+  // Other digital humans' chats added as push targets (see ImPushTargetPicker)
+  const [linked, setLinked] = useState<ImSessionRecord[]>([])
+  const [pickerOpen, setPickerOpen] = useState(false)
   const [instanceStatuses, setInstanceStatuses] = useState<ImChannelInstanceStatus[]>([])
+  // The bot list arrived at least once: until then no linked chat reads as orphaned.
+  const [botsKnown, setBotsKnown] = useState(false)
   const [loading, setLoading] = useState(true)
   const [editingKey, setEditingKey] = useState<string | null>(null)
   const [editingName, setEditingName] = useState('')
@@ -210,16 +214,21 @@ function ContactsSection({ appId }: { appId: string }) {
 
   const fetchSessions = useCallback(async () => {
     try {
-      const [sessionsRes, statusRes] = await Promise.all([
+      const [sessionsRes, linkedRes, statusRes] = await Promise.all([
         api.imSessionsList(appId) as Promise<{ success: boolean; data?: ImSessionRecord[] }>,
+        api.imSessionsListLinked(appId) as Promise<{ success: boolean; data?: ImSessionRecord[] }>,
         api.imChannelsStatus() as Promise<{ success: boolean; data?: ImChannelInstanceStatus[] }>,
       ])
       if (sessionsRes.success && sessionsRes.data) {
         // Only IM sessions are pushable; HTTP sessions have no channel adapter.
         setSessions(sessionsRes.data.filter(s => s.source === 'im'))
       }
+      if (linkedRes.success && linkedRes.data) {
+        setLinked(linkedRes.data)
+      }
       if (statusRes.success && statusRes.data) {
         setInstanceStatuses(statusRes.data)
+        setBotsKnown(true)
       }
     } catch {
       // Ignore
@@ -407,14 +416,51 @@ function ContactsSection({ appId }: { appId: string }) {
     }
   }, [])
 
+  // A linked chat belongs to another digital human: only this app's link to it
+  // changes here, never that digital human's contact.
+  const autoSyncOf = (session: ImSessionRecord) =>
+    session.pushLinks?.find(link => link.appId === appId)?.autoSync === true
+
+  const handleToggleLinkedAutoSync = useCallback(async (session: ImSessionRecord, next: boolean) => {
+    const withAutoSync = (autoSync: boolean) => (s: ImSessionRecord) => sameSession(s, session)
+      ? { ...s, pushLinks: (s.pushLinks ?? []).map(link => (link.appId === appId ? { ...link, autoSync } : link)) }
+      : s
+    setLinked(prev => prev.map(withAutoSync(next)))
+    try {
+      const result = await api.imSessionsSetPushLink({
+        appId,
+        session: { appId: session.appId, channel: session.channel, chatId: session.chatId },
+        link: { autoSync: next },
+      })
+      if (!result.success) setLinked(prev => prev.map(withAutoSync(!next)))
+    } catch {
+      setLinked(prev => prev.map(withAutoSync(!next)))
+    }
+  }, [appId])
+
+  const handleUnlink = useCallback(async (session: ImSessionRecord) => {
+    try {
+      const result = await api.imSessionsSetPushLink({
+        appId,
+        session: { appId: session.appId, channel: session.channel, chatId: session.chatId },
+        link: null,
+      })
+      if (result.success) setLinked(prev => prev.filter(s => !sameSession(s, session)))
+    } catch (error) {
+      console.warn('[AppNotifyChannels] Could not remove a linked chat', { appId, error })
+    }
+  }, [appId])
+
+  const contactCount = sessions.length + linked.length
+
   // Contact header (icon + label + live count) — owned here so the count stays
   // in sync with the fetched sessions without threading state up to the parent.
   const header = (
     <div className="flex items-center gap-1.5">
       <Users className="w-3.5 h-3.5 text-muted-foreground" />
       <span className="text-sm font-medium text-foreground">{t('Reachable Contacts')}</span>
-      {sessions.length > 0 && (
-        <span className="text-xs text-muted-foreground/60">({sessions.length})</span>
+      {contactCount > 0 && (
+        <span className="text-xs text-muted-foreground/60">({contactCount})</span>
       )}
     </div>
   )
@@ -423,6 +469,22 @@ function ContactsSection({ appId }: { appId: string }) {
     <p className="text-xs text-muted-foreground">
       {t('Toggle auto-sync to push the AI final reply to a contact after each run. The AI may also message any contact proactively when your prompt instructs it.')}
     </p>
+  )
+
+  const addFromExisting = (
+    <>
+      <button
+        type="button"
+        onClick={() => setPickerOpen(true)}
+        className="text-xs text-primary hover:text-primary/80 transition-colors inline-flex items-center gap-1"
+      >
+        <Plus className="w-3.5 h-3.5" />
+        {t('Add from existing chats')}
+      </button>
+      {pickerOpen && (
+        <ImPushTargetPicker appId={appId} onClose={() => setPickerOpen(false)} onAdded={() => { void fetchSessions() }} />
+      )}
+    </>
   )
 
   if (loading) {
@@ -436,7 +498,7 @@ function ContactsSection({ appId }: { appId: string }) {
     )
   }
 
-  if (sessions.length === 0) {
+  if (contactCount === 0) {
     return (
       <div className="space-y-2">
         {header}
@@ -446,26 +508,27 @@ function ContactsSection({ appId }: { appId: string }) {
           <p>{t('No contacts yet')}</p>
           <p className="text-xs">{t('Contacts appear automatically when someone messages via Bot')}</p>
         </div>
+        {addFromExisting}
       </div>
     )
   }
 
   const q = query.trim().toLowerCase()
-  const filtered = q
-    ? sessions.filter((s) => {
-        const name = getImSessionDisplayName(s).toLowerCase()
-        return name.includes(q) || s.chatId.toLowerCase().includes(q)
-      })
-    : sessions
+  const matches = (s: ImSessionRecord) =>
+    !q || getImSessionDisplayName(s).toLowerCase().includes(q) || s.chatId.toLowerCase().includes(q)
+  const filtered = sessions.filter(matches)
+  const filteredLinked = linked.filter(matches)
+  const botsById = new Map(instanceStatuses.map(status => [status.id, status]))
 
   return (
     <div className="space-y-2">
       {header}
       {nameResolutionBanner}
       {hint}
+      {addFromExisting}
 
       {/* Search — only when the list is long enough to warrant filtering */}
-      {sessions.length > SEARCH_THRESHOLD && (
+      {contactCount > SEARCH_THRESHOLD && (
         <div className="relative">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground/60 pointer-events-none" />
           <input
@@ -481,7 +544,7 @@ function ContactsSection({ appId }: { appId: string }) {
       {/* Height-bounded scroll region so a large contact list never pushes the
           rest of the settings page far down. */}
       <div className="space-y-1.5 max-h-[320px] overflow-y-auto -mr-1 pr-1">
-        {filtered.length === 0 && (
+        {filtered.length === 0 && filteredLinked.length === 0 && (
           <p className="text-xs text-muted-foreground text-center py-3">
             {t('No contacts match "{{query}}"', { query })}
           </p>
@@ -591,6 +654,72 @@ function ContactsSection({ appId }: { appId: string }) {
             </label>
           </div>
         )
+        })}
+
+        {filteredLinked.length > 0 && (
+          <p className="text-xs font-medium text-muted-foreground pt-2">{t('Added from other bots')}</p>
+        )}
+        {filteredLinked.map((session) => {
+          const channelInfo = getImChannelDisplay(session.channel)
+          const key = `linked:${session.appId}:${session.channel}:${session.chatId}`
+          const bot = botsById.get(session.instanceId)
+          const orphaned = botsKnown && !bot
+          return (
+            <div
+              key={key}
+              className="flex flex-col gap-2 p-2.5 rounded-lg bg-muted/50 hover:bg-muted/70 transition-colors group/contact"
+            >
+              <div className="flex items-center gap-2.5">
+                {session.chatType === 'group' ? (
+                  <Users className="w-4 h-4 text-muted-foreground shrink-0" />
+                ) : (
+                  <User className="w-4 h-4 text-muted-foreground shrink-0" />
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium truncate">{getImSessionDisplayName(session)}</span>
+                    <span className={`text-xs shrink-0 ${channelInfo.color}`}>{channelInfo.label}</span>
+                  </div>
+                  {!orphaned ? (
+                    <div className="text-xs text-muted-foreground/60 mt-0.5">
+                      {bot?.appName
+                        ? t('Pushed through the bot of {{name}}, which also gets the replies', { name: bot.appName })
+                        : t('Pushed through the bot of another digital human')}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-amber-600 dark:text-amber-400 mt-0.5 flex items-center gap-1">
+                      <AlertTriangle className="w-3 h-3 shrink-0" />
+                      {t('The bot this chat belongs to was removed, so nothing reaches it. Remove it from this list.')}
+                    </div>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void handleUnlink(session)}
+                  className={`p-1 text-muted-foreground hover:text-red-500 transition-colors rounded shrink-0 ${orphaned ? '' : 'opacity-0 group-hover/contact:opacity-100'}`}
+                  title={t('Stop pushing to this chat')}
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              {!orphaned && (
+                <label className="flex items-start gap-2 pl-6 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={autoSyncOf(session)}
+                    onChange={(e) => void handleToggleLinkedAutoSync(session, e.target.checked)}
+                    className="mt-0.5 w-3.5 h-3.5 rounded border-border accent-primary cursor-pointer"
+                  />
+                  <span className="flex-1 min-w-0">
+                    <span className="text-xs text-foreground">{t('Auto-sync run result')}</span>
+                    <span className="block text-xs text-muted-foreground/70 mt-0.5">
+                      {t('Send the AI final reply to this contact after each successful run')}
+                    </span>
+                  </span>
+                </label>
+              )}
+            </div>
+          )
         })}
       </div>
     </div>

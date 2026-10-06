@@ -673,6 +673,14 @@ export interface ImSessionRecord {
    * does not duplicate via notify_bot.
    */
   proactive: boolean
+  /**
+   * Other digital humans the user added this chat to as a push target, from
+   * their own settings — so they can push here through this session's bot
+   * without the chat ever messaging them. Each carries its own auto-sync
+   * choice; replies still go to the digital human the bot answers for. Never
+   * lists the session's own app. IM sessions only.
+   */
+  pushLinks?: ImPushLink[]
   /** Last activity timestamp (epoch ms) */
   lastActiveAt: number
 
@@ -693,6 +701,13 @@ export interface ImSessionRecord {
    * first message captures the new forked session id. Absent thereafter.
    */
   pendingResumeSessionId?: string
+}
+
+/** A digital human that may push to a chat another digital human's bot knows (see {@link ImSessionRecord.pushLinks}). */
+export interface ImPushLink {
+  appId: string
+  /** Push the digital human's final reply here after each successful run, like {@link ImSessionRecord.proactive} */
+  autoSync: boolean
 }
 
 /**
