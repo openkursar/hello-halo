@@ -215,6 +215,7 @@ import {
 } from '../../../../src/main/apps/manager/migrations'
 import { Semaphore } from '../../../../src/main/apps/runtime/concurrency'
 import { buildAppSystemPrompt, buildInitialMessage, buildMemorySection, buildEscalationResumeMessage } from '../../../../src/main/apps/runtime/prompt'
+import { buildIdentityFragments } from '../../../../src/main/apps/runtime/prompt/identity'
 import { _resetTlonRegistry, createKB, bindToApp } from '../../../../src/main/services/tlon/service'
 import {
   AppNotRunnableError,
@@ -1263,6 +1264,35 @@ describe('Prompt Builder', () => {
 
       expect(prompt).toContain('Monitor AirPods prices')
       expect(prompt).toContain('App Instructions')
+    })
+
+    it('lets a digital human answer as its App Instructions say: it runs on Halo, it is not Halo', () => {
+      const prompt = buildAppSystemPrompt({
+        appId: 'test-app-id',
+        appSpec: createTestSpec({ system_prompt: 'You are Mia, the after-sales assistant of Acme.' }),
+        memoryInstructions: '',
+        triggerContext: 'Scheduled',
+        workDir: '/tmp/test',
+      })
+
+      expect(prompt).not.toMatch(/^You are Halo, /m)
+      expect(prompt).toContain('You run on Halo, which gives you remote access, file management, and built-in AI browser capabilities.')
+      expect(prompt).toContain('You are Mia, the after-sales assistant of Acme.')
+      // Tools, environment and safety still come from Halo.
+      expect(prompt).toContain('Platform:')
+      expect(prompt).toContain('IMPORTANT: You must NEVER generate or guess URLs')
+    })
+
+    it('gives a digital human chat the same opening', () => {
+      const [base] = buildIdentityFragments({
+        appId: 'test-app-id',
+        appSpec: createTestSpec({ system_prompt: 'You are Mia, the after-sales assistant of Acme.' }),
+        memoryInstructions: '',
+        workDir: '/tmp/test',
+      })
+
+      expect(base).not.toMatch(/^You are Halo, /m)
+      expect(base).toContain('You run on Halo, which gives you remote access, file management, and built-in AI browser capabilities.')
     })
 
     it('should include memory instructions when provided', () => {
@@ -2573,8 +2603,54 @@ describe('AppRuntimeService', () => {
         metadata: { appId: testAppId, subscriptionId: 'daily' },
       })
 
-      expect(firstMessage()).toMatch(/^Scheduled run for "test-automation" \(every 1h\)\. Time: \S+$/)
+      expect(firstMessage()).toMatch(/^Scheduled run for "test-automation" — subscription "daily" \(every 1h\)\. Time: \S+$/)
       expect(firstMessage()).not.toContain(chatText)
+    })
+  })
+
+  describe('which subscription started a run', () => {
+    let testAppId: string
+
+    beforeEach(() => {
+      vi.mocked(executeRun).mockClear()
+      testAppId = randomUUID()
+      mockAppManager.getApp.mockReturnValue({
+        id: testAppId,
+        status: 'active',
+        spec: createTestSpec({
+          subscriptions: [
+            { id: 'morning-report', source: { type: 'schedule', config: { cron: '0 9 * * *' } } },
+            { source: { type: 'schedule', config: { cron: '0 18 * * *' } } },
+            { id: 'inbox-files', source: { type: 'file', config: { pattern: '*.md' } } },
+          ],
+        }),
+        userConfig: {},
+        userOverrides: {},
+        spaceId: 'space-001',
+      })
+    })
+
+    const description = () => vi.mocked(executeRun).mock.calls.at(-1)?.[0].trigger.description
+
+    it('names each schedule by its id, or by its place when it has none', async () => {
+      createService()
+      const onJobDue = mockScheduler.onJobDue.mock.calls[0][1]
+
+      await onJobDue({ id: `${testAppId}:morning-report`, schedule: { kind: 'cron', cron: '0 9 * * *' }, metadata: { appId: testAppId, subscriptionId: 'morning-report' } })
+      expect(description()).toMatch(/^Scheduled run for "test-automation" — subscription "morning-report" \(cron: 0 9 \* \* \*\)\. Time: \S+$/)
+
+      await onJobDue({ id: `${testAppId}:1`, schedule: { kind: 'cron', cron: '0 18 * * *' }, metadata: { appId: testAppId, subscriptionId: '1' } })
+      expect(description()).toMatch(/^Scheduled run for "test-automation" — subscription #2 \(cron: 0 18 \* \* \*\)\. Time: \S+$/)
+    })
+
+    it('names the event subscription that fired', async () => {
+      const service = createService()
+      await service.activate(testAppId)
+      const [, handler] = mockEventRouter.on.mock.calls[0]
+
+      await handler({ type: 'file.changed', payload: { path: 'notes.md' } })
+
+      expect(description()).toMatch(/^Triggered by event "file\.changed" for "test-automation" — subscription "inbox-files"\. Time: \S+$/)
     })
   })
 
