@@ -105,7 +105,7 @@ export function TlonPage() {
           <div className="px-6 sm:px-10 pt-5 sm:pt-7 flex-shrink-0">
             <h1 className="text-xl font-semibold mb-1">{t('Knowledge Base')}</h1>
             <p className="text-[13px] text-muted-foreground mb-5">
-              {t('Maintain knowledge bases; reference with @ in conversations or attach to a digital human.')}
+              {t('Maintain knowledge bases; load them into a conversation with the Knowledge button in the message box, or attach them to a digital human.')}
             </p>
           </div>
         )}
