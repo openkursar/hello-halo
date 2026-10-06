@@ -256,6 +256,13 @@ export interface ProductConfig {
    */
   announcementsUrl?: string
   /**
+   * Holiday calendar (iCalendar) behind "mainland China working days only"
+   * schedules. Omitted: the public calendar. A build whose machines cannot
+   * reach it sets its own copy; an empty string provides none, and such
+   * schedules then skip their runs and say why.
+   */
+  workdayCalendarUrl?: string
+  /**
    * Official AI-guide host (optional; falls back to the public docs host).
    */
   officialContent?: OfficialContentProductConfig
@@ -583,6 +590,16 @@ export function getUpdateManifestPublicKey(): string | undefined {
  */
 export function getAnnouncementsUrl(): string | undefined {
   return loadProductConfig().announcementsUrl?.trim() || undefined
+}
+
+/** Public mainland China holiday calendar used when product.json declares no `workdayCalendarUrl`. */
+const DEFAULT_WORKDAY_CALENDAR_URL = 'https://calendars.icloud.com/holidays/cn_zh.ics'
+
+/** Where the holiday calendar is downloaded from; undefined when this build provides none. */
+export function getWorkdayCalendarUrl(): string | undefined {
+  const configured = loadProductConfig().workdayCalendarUrl
+  if (configured === undefined) return DEFAULT_WORKDAY_CALENDAR_URL
+  return configured.trim() || undefined
 }
 
 /**

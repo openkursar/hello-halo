@@ -172,6 +172,11 @@
       "description": "URL of a static JSON announcement feed (see src/shared/types/announcement.ts). Polled every 6h; new entries are shown as in-app toasts. Omit or leave empty to disable. Independent of updateConfig — release notes only reach users on older versions, this reaches everyone.",
       "examples": ["https://example.com/announcements.json"]
     },
+    "workdayCalendarUrl": {
+      "type": "string",
+      "description": "iCalendar holiday calendar behind digital-human schedules set to run on mainland China working days only (holidays and make-up workdays included). Omit to use the built-in public calendar; builds whose machines cannot reach it point this at their own copy, which must carry the same special-day markers. An empty string provides no calendar: such schedules then skip their runs and tell the user why.",
+      "examples": ["https://intranet.example.com/holidays/cn.ics"]
+    },
     "officialContent": {
       "type": "object",
       "description": "Where the official AI guides (agent-facing raw markdown, read by the read_halo_doc tool) are published. Omit to use the built-in public docs host; enterprise builds point this at their own mirror.",

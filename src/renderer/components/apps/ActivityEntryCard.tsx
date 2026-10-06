@@ -198,7 +198,12 @@ export function ActivityEntryCard({ entry, appId, isLast, animationDelay }: Acti
           <MissingConnectionsNote appId={appId} missing={content.missingConnections} />
         ) : (
           <div className="space-y-1.5">
-            <MarkdownRenderer content={content.summary} className="text-sm" />
+            <MarkdownRenderer
+              content={content.workdayCalendarGap
+                ? t('The holiday calendar does not cover today, so this scheduled run was skipped. Run it manually if needed.')
+                : content.summary}
+              className="text-sm"
+            />
 
             {/* Detailed data: file-sourced (dataPath) or inline */}
             {content.dataPath ? (

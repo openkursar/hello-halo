@@ -172,6 +172,10 @@ src/
 │       ├── remote/                     # Remote Access: HTTP-server + Cloudflare tunnel coordination (service + tunnel + issuer-client)
 │       ├── stealth/                   # Anti-detection evasions
 │       ├── web-search/                # Web search MCP server
+│       ├── workday-calendar/          # Mainland China holiday calendar for "working days only"
+│       │                              #   schedules: downloaded (product.json `workdayCalendarUrl`)
+│       │                              #   at most daily via proxy-fetch, kept in the Halo dir,
+│       │                              #   each day decided locally; apps/runtime consults it
 │       ├── updater/                   # Auto-update. Two paths behind one surface:
 │       │                              #   electron-updater (mac/linux/win installer) and
 │       │                              #   the Windows staged path (background unpack +

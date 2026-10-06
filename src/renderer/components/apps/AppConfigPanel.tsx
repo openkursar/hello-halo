@@ -48,6 +48,8 @@ import { SchedulePicker } from './SchedulePicker'
 import {
   extractScheduleValue,
   applyScheduleValue,
+  applyWorkdayCalendar,
+  usesWorkdayCalendar,
   type ScheduleValue,
 } from './schedule-utils'
 
@@ -588,6 +590,12 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart, onRestartAgen
     await updateAppSpec(appId, { subscriptions: newSubs })
   }
 
+  async function handleWorkdayCalendarToggle(enabled: boolean) {
+    if (!scheduleSubscription) return
+    const updated = applyWorkdayCalendar(scheduleSubscription, enabled)
+    await updateAppSpec(appId, { subscriptions: subscriptions.map(s => s === scheduleSubscription ? updated : s) })
+  }
+
   async function handleOpenDataFolder() {
     const res = await api.appOpenDataFolder(appId)
     if (!res.success) {
@@ -792,10 +800,25 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart, onRestartAgen
             />
           </div>
           {hasSchedule && currentScheduleValue ? (
-            <SchedulePicker
-              value={currentScheduleValue}
-              onChange={handleScheduleValueChange}
-            />
+            <>
+              <SchedulePicker
+                value={currentScheduleValue}
+                onChange={handleScheduleValueChange}
+              />
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm text-foreground">{t('Only on mainland China working days')}</div>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {t('Skips public holidays and runs on make-up working days. Set the schedule to run every day; the holiday calendar decides which days count.')}
+                  </p>
+                </div>
+                <Switch
+                  checked={usesWorkdayCalendar(scheduleSubscription)}
+                  onCheckedChange={handleWorkdayCalendarToggle}
+                  size="sm"
+                />
+              </div>
+            </>
           ) : !hasSchedule && (
             <p className="text-xs text-muted-foreground">
               {t('No scheduled trigger. This app can be triggered manually or via IM bot.')}

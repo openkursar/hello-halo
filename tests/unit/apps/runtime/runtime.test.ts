@@ -202,6 +202,13 @@ vi.mock('../../../../src/main/apps/runtime/execute', () => ({
   })),
 }))
 
+// The holiday calendar is downloaded in real use; tests say what kind of day it is.
+const workdayCalendar = vi.hoisted(() => ({ status: 'workday' as 'workday' | 'day_off' | 'not_covered' }))
+vi.mock('../../../../src/main/services/workday-calendar', () => ({
+  refreshWorkdayCalendar: vi.fn(async () => {}),
+  workdayStatusOn: vi.fn(async () => workdayCalendar.status),
+}))
+
 import { createDatabaseManager } from '../../../../src/main/platform/store/database-manager'
 import type { DatabaseManager } from '../../../../src/main/platform/store/types'
 import { ActivityStore } from '../../../../src/main/apps/runtime/store'
@@ -231,6 +238,7 @@ import { broadcastToAll } from '../../../../src/main/http/websocket'
 import { sendToRenderer } from '../../../../src/main/foundation/window.service'
 import { executeRun } from '../../../../src/main/apps/runtime/execute'
 import { notifyAppEvent } from '../../../../src/main/services/notification.service'
+import { refreshWorkdayCalendar, workdayStatusOn } from '../../../../src/main/services/workday-calendar'
 import { createReportToolServer } from '../../../../src/main/apps/runtime/report-tool'
 import type {
   AutomationRun,
@@ -2651,6 +2659,85 @@ describe('AppRuntimeService', () => {
       await handler({ type: 'file.changed', payload: { path: 'notes.md' } })
 
       expect(description()).toMatch(/^Triggered by event "file\.changed" for "test-automation" — subscription "inbox-files"\. Time: \S+$/)
+    })
+  })
+
+  describe('a schedule limited to mainland China working days', () => {
+    let appId: string
+    const job = () => ({ id: `${appId}:daily`, schedule: { kind: 'cron', cron: '0 9 * * *' }, metadata: { appId, subscriptionId: 'daily' } })
+
+    function install(config: Record<string, unknown>): void {
+      const spec = createTestSpec({ subscriptions: [{ id: 'daily', source: { type: 'schedule', config } }] } as Partial<AppSpec>)
+      mockAppManager.getApp.mockReturnValue({ id: appId, status: 'active', spec, userConfig: {}, userOverrides: {}, spaceId: 'space-001' })
+      dbManager.getAppDatabase().prepare(`
+        INSERT INTO installed_apps (id, spec_id, space_id, spec_json, status, user_config_json, user_overrides_json, permissions_json, installed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(appId, `spec-${appId}`, 'space-001', JSON.stringify(spec), 'active', '{}', '{}', '{"granted":[],"denied":[]}', Date.now())
+    }
+
+    beforeEach(() => {
+      vi.mocked(executeRun).mockClear()
+      vi.mocked(workdayStatusOn).mockClear()
+      vi.mocked(refreshWorkdayCalendar).mockClear()
+      appId = randomUUID()
+      install({ cron: '0 9 * * *', workday_calendar: true })
+    })
+
+    afterEach(() => {
+      workdayCalendar.status = 'workday'
+    })
+
+    it('does not start on a day off, and leaves nothing on the timeline', async () => {
+      workdayCalendar.status = 'day_off'
+      createService()
+      const onJobDue = mockScheduler.onJobDue.mock.calls[0][1]
+
+      expect(await onJobDue(job())).toBe('skipped')
+      expect(executeRun).not.toHaveBeenCalled()
+      expect(store.getEntriesForApp(appId)).toEqual([])
+    })
+
+    it('runs on a day the calendar counts as a working day', async () => {
+      workdayCalendar.status = 'workday'
+      createService()
+      const onJobDue = mockScheduler.onJobDue.mock.calls[0][1]
+
+      await onJobDue(job())
+
+      expect(executeRun).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not start on a day the calendar does not cover, and says so once that day', async () => {
+      workdayCalendar.status = 'not_covered'
+      createService()
+      const onJobDue = mockScheduler.onJobDue.mock.calls[0][1]
+
+      expect(await onJobDue(job())).toBe('skipped')
+      expect(await onJobDue(job())).toBe('skipped')
+
+      expect(executeRun).not.toHaveBeenCalled()
+      const entries = store.getEntriesForApp(appId)
+      expect(entries).toHaveLength(1)
+      expect(entries[0]).toMatchObject({ type: 'run_skipped', content: { status: 'skipped', workdayCalendarGap: true } })
+    })
+
+    it('leaves a schedule without the option to its own times', async () => {
+      appId = randomUUID()
+      install({ cron: '0 9 * * *' })
+      workdayCalendar.status = 'not_covered'
+      createService()
+      const onJobDue = mockScheduler.onJobDue.mock.calls[0][1]
+
+      await onJobDue(job())
+
+      expect(workdayStatusOn).not.toHaveBeenCalled()
+      expect(executeRun).toHaveBeenCalledTimes(1)
+    })
+
+    it('fetches the calendar when such a digital human is switched on', async () => {
+      await createService().activate(appId)
+
+      expect(refreshWorkdayCalendar).toHaveBeenCalled()
     })
   })
 

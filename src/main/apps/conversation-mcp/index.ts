@@ -144,7 +144,8 @@ function buildTools(spaceId: string, guideConsulted: () => boolean) {
     'agent can execute end to end without improvising; it receives no other context), subscriptions?, ' +
     'config_schema?, requires?, filters?, memory_schema?, output?, escalation?, permissions?, ' +
     'browser_login?, version? (default "1.0"), author? (default "Halo").\n' +
-    'Working subscription sources: { source: { type: "schedule", config: { every: "30m" | cron: "0 8 * * *" } } }, ' +
+    'Working subscription sources: { source: { type: "schedule", config: { every: "30m" | cron: "0 8 * * *", workday_calendar?: true } } } ' +
+    '(workday_calendar: only on mainland China working days, holidays and make-up workdays included; the schedule must then fire every day, not 1-5), ' +
     '{ source: { type: "file", config: { pattern?, path? } } }, ' +
     '{ source: { type: "webhook", config: { path?, secret? } } }.',
     {

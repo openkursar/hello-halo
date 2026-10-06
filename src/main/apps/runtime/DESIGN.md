@@ -1112,6 +1112,27 @@ duration, View process the run's total over its entries; the split is on hover.
 `tokens_used` keeps its meaning for analytics and memory summaries. No history
 totals, trends or cost are shown.
 
+### 2.26 Working-Days-Only Schedules Are Decided at the Due Time
+
+A schedule subscription with `workday_calendar: true` runs only on mainland China
+working days, holidays and make-up workdays included. The scheduler keeps
+firing on the schedule's own times — written for every day, since a `1-5` cron
+never fires on a make-up Saturday — and the `onJobDue('app')` handler asks
+`services/workday-calendar` about today before admission:
+
+- `workday` → admitted as usual;
+- `day_off` → `'skipped'`: no run row, no entry, no model;
+- `not_covered` (the calendar has not published the year, could never be
+  downloaded, or the build provides none) → `'skipped'` too, never read as a
+  workday, and once per person per day a `run_skipped` entry with
+  `content.workdayCalendarGap` that the timeline renders in the user's
+  language, so a silent month of skipped runs cannot happen.
+
+The calendar is downloaded when such a person is activated or its schedule
+synced, then at most daily; only a machine that has never had it waits for the
+first download (bounded) at a due time. Team periodic checks do not take the
+option.
+
 ---
 
 ## 3. SQLite Schema
@@ -1301,6 +1322,7 @@ apps/runtime depends on:
 │                         buildUserSessionSdkOptions, getHeadlessElectronPath (sdk-config),
 │                         buildBaseToolset (toolsets/base)
 ├── services/conversation-interop   ConversationSource type (registered from bootstrap), createConversationInteropMcpServer (lazy, when collaboration is on)
+├── services/workday-calendar       workdayStatusOn(), refreshWorkdayCalendar() for working-days-only schedules (§2.26)
 ├── services/config       getConfig()
 └── services/space        getSpace()
 ```
