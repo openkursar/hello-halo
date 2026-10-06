@@ -144,7 +144,7 @@ export function collectFiles(dir: string, baseDir: string, files: { path: string
 }
 
 // ---- Re-exported dependencies for the per-domain route modules ----
-export { isPathAllowed, isPathInside, isReadPathAllowed, validateFilePath } from './_path-guard'
+export { isPathInside, validateFilePath } from './_path-guard'
 export {
   AppAlreadyInstalledError,
   ILINK_BASE_URL,

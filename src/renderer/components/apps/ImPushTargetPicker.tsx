@@ -14,7 +14,7 @@ import { api } from '../../api'
 import type { ImChannelInstanceStatus, ImSessionRecord } from '../../../shared/types/im-channel'
 import { getImSessionDisplayName } from '../../../shared/types/im-channel'
 import { pushTargetCandidates } from './im-push-targets'
-import { getImChannelDisplay } from './im-channel-display'
+import { getImChannelDisplay } from './im-channel-labels'
 
 interface ImPushTargetPickerProps {
   appId: string

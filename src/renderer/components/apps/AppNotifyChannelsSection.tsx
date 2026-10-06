@@ -37,7 +37,7 @@ import type {
 import { NOTIFICATION_CHANNEL_META } from '../../../shared/types/notification-channels'
 import type { ImSessionRecord, ImChannelInstanceStatus } from '../../../shared/types/im-channel'
 import { getImSessionDisplayName } from '../../../shared/types/im-channel'
-import { getImChannelDisplay } from './im-channel-display'
+import { getImChannelDisplay } from './im-channel-labels'
 import { ImPushTargetPicker } from './ImPushTargetPicker'
 
 // ============================================

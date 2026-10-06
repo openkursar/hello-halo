@@ -16,13 +16,7 @@ import { useTranslation } from '../../i18n'
 import { api } from '../../api'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
 import { getImSessionDisplayName } from '../../../shared/types/im-channel'
-
-const IM_CHANNEL_LABEL: Record<string, string> = {
-  'wecom-bot': 'WeCom',
-  'feishu-bot': 'Feishu',
-  'dingtalk-bot': 'DingTalk',
-  'weixin-ilink-bot': 'WeChat iLink',
-}
+import { CHANNEL_LABELS } from './im-channel-labels'
 
 function formatTime(ts: number): string {
   if (!ts) return '-'
@@ -230,7 +224,7 @@ export function AppContactsList({ appId, instanceId, selectedKey, onSelect, onSe
                     <p className="text-sm font-medium text-foreground truncate">{displayName}</p>
                   )}
                   <p className="text-[11px] text-muted-foreground truncate">
-                    {IM_CHANNEL_LABEL[session.channel] ?? session.channel} · {session.chatType === 'group' ? t('Group') : t('Direct')} · {formatTime(session.lastActiveAt)}
+                    {CHANNEL_LABELS[session.channel] ?? session.channel} · {session.chatType === 'group' ? t('Group') : t('Direct')} · {formatTime(session.lastActiveAt)}
                   </p>
                 </div>
 
