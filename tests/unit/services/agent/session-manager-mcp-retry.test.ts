@@ -4,6 +4,7 @@
  * takes, deferred past a running turn — once when the failure is reported and
  * once more when the server is seen connecting again. A server that keeps
  * failing in the engine cannot rebuild a conversation's session any further.
+ * A tool call that finds its server gone mid-session counts as such a failure.
  */
 
 import { describe, it, expect, vi, afterEach, afterAll } from 'vitest'
@@ -268,5 +269,111 @@ describe('rebuild after an MCP server failed to connect', () => {
 
     expect(current.close).not.toHaveBeenCalled()
     expect(v2Sessions.get('conv')?.failedMcpServers).toBeUndefined()
+  })
+})
+
+/** A tool result frame as the engine emits it; the text is Claude Code CLI 2.1.89's. */
+const toolResults = (...blocks: Array<{ is_error?: boolean; content: unknown }>) => ({
+  type: 'user',
+  message: { role: 'user', content: blocks.map((block, i) => ({ type: 'tool_result', tool_use_id: `toolu_${i}`, ...block })) },
+  parent_tool_use_id: null,
+})
+const notConnected = (name: string) => ({ is_error: true, content: `MCP server "${name}" is not connected` })
+
+describe('rebuild after a tool call found an MCP server gone mid-session', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('rebuilds the session before the next message once the turn that hit it ends', async () => {
+    const consumer = { isRunning: true, turn: { thoughts: [] } as unknown }
+    const first = await open('conv', consumer)
+    noteSessionMcpStatus('conv', first as never, init(['local', 'connected']))
+
+    noteSessionMcpStatus('conv', first as never, toolResults(notConnected('local'), notConnected('local')))
+
+    expect(first.close).not.toHaveBeenCalled()
+    expect(consumePendingRebuild('conv')).toBe(true)
+    consumer.isRunning = false
+    const second = await open('conv')
+    expect(first.close).toHaveBeenCalled()
+    expect(v2Sessions.get('conv')?.session).toBe(second)
+  })
+
+  it('recognizes the halo engine wording and text-block content', async () => {
+    const session = await open('conv')
+    noteSessionMcpStatus('conv', session as never, init(['local', 'connected']))
+
+    noteSessionMcpStatus('conv', session as never,
+      toolResults({ is_error: true, content: [{ type: 'text', text: 'MCP server "local" is not connected.' }] }))
+
+    expect(session.close).toHaveBeenCalled()
+  })
+
+  it('does not rebuild again when the rebuilt session connects the server but its calls fail again soon', async () => {
+    const first = await open('conv')
+    noteSessionMcpStatus('conv', first as never, init(['local', 'connected']))
+    noteSessionMcpStatus('conv', first as never, toolResults(notConnected('local')))
+    expect(first.close).toHaveBeenCalled()
+
+    const second = await open('conv')
+    noteSessionMcpStatus('conv', second as never, init(['local', 'connected']))
+    noteSessionMcpStatus('conv', second as never, toolResults(notConnected('local')))
+
+    expect(second.close).not.toHaveBeenCalled()
+    expect(v2Sessions.get('conv')?.session).toBe(second)
+  })
+
+  it('treats the server going away again later as a new outage', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
+    const first = await open('conv')
+    noteSessionMcpStatus('conv', first as never, init(['local', 'connected']))
+    noteSessionMcpStatus('conv', first as never, toolResults(notConnected('local')))
+    const second = await open('conv')
+    noteSessionMcpStatus('conv', second as never, init(['local', 'connected']))
+
+    now.mockReturnValue(1_000_000 + 5 * 60_000)
+    noteSessionMcpStatus('conv', second as never, toolResults(notConnected('local')))
+
+    expect(second.close).toHaveBeenCalled()
+  })
+
+  it('leaves a server still down at the rebuilt session to the existing retry: one more rebuild when seen connecting', async () => {
+    const first = await open('conv')
+    noteSessionMcpStatus('conv', first as never, init(['local', 'connected']))
+    noteSessionMcpStatus('conv', first as never, toolResults(notConnected('local')))
+    const second = await open('conv')
+
+    noteSessionMcpStatus('conv', second as never, init(['local', 'failed']))
+    expect(second.close).not.toHaveBeenCalled()
+
+    recovered('local')
+    expect(second.close).toHaveBeenCalled()
+    const third = await open('conv')
+    noteSessionMcpStatus('conv', third as never, init(['local', 'connected']))
+    noteSessionMcpStatus('conv', third as never, toolResults(notConnected('local')))
+    expect(third.close).toHaveBeenCalled()
+  })
+
+  it.each([
+    ['another tool error', { is_error: true, content: 'MCP error -32000: Connection closed' }],
+    ['the text in a successful result', { content: 'MCP server "local" is not connected' }],
+    ['the text inside a longer error', { is_error: true, content: 'Error: MCP server "local" is not connected; retry later' }],
+  ])('ignores %s', async (_label, block) => {
+    const session = await open('conv')
+    noteSessionMcpStatus('conv', session as never, init(['local', 'connected']))
+
+    noteSessionMcpStatus('conv', session as never, toolResults(block))
+    noteSessionMcpStatus('conv', session as never, { type: 'user', message: { role: 'user', content: 'MCP server "local" is not connected' } })
+
+    expect(session.close).not.toHaveBeenCalled()
+  })
+
+  it('ignores a tool result from a session that is no longer current', async () => {
+    const current = await open('conv')
+
+    noteSessionMcpStatus('conv', fakeSession() as never, toolResults(notConnected('local')))
+
+    expect(current.close).not.toHaveBeenCalled()
   })
 })

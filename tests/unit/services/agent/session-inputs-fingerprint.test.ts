@@ -21,7 +21,7 @@ vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
   analytics: { track: vi.fn(), trackErrorSurface: vi.fn() }
 }))
 
-import { computeSessionInputsFingerprint } from '../../../../src/main/services/agent/sdk-config'
+import { computeSessionInputsFingerprint, markMcpServerSettings } from '../../../../src/main/services/agent/sdk-config'
 import { generatePromptInstructions } from '../../../../src/main/platform/memory/prompt'
 
 describe('computeSessionInputsFingerprint', () => {
@@ -76,6 +76,17 @@ describe('computeSessionInputsFingerprint', () => {
     const a = { systemPrompt: 'p', mcpServers: { 'ai-browser': { instance: {} } } }
     const b = { systemPrompt: 'p', mcpServers: { 'ai-browser': { instance: {}, other: 1 } } }
     expect(computeSessionInputsFingerprint(a)).toBe(computeSessionInputsFingerprint(b))
+  })
+
+  it('changes when a server keeping the settings it was built from was built from other settings', () => {
+    const opts = (settings: unknown) => ({
+      systemPrompt: 'p',
+      mcpServers: { 'halo-email': markMcpServerSettings({ instance: {} }, settings), 'web-search': {} },
+    })
+    expect(computeSessionInputsFingerprint(opts({ host: 'a', password: 'x' })))
+      .toBe(computeSessionInputsFingerprint(opts({ host: 'a', password: 'x' })))
+    expect(computeSessionInputsFingerprint(opts({ host: 'a', password: 'x' })))
+      .not.toBe(computeSessionInputsFingerprint(opts({ host: 'a', password: 'y' })))
   })
 
   it('handles missing mcpServers / systemPrompt without throwing', () => {
