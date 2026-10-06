@@ -179,8 +179,23 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
   let lastPruneAtMs = 0
 
   // ── Helper: Build trigger context ───────────────────
+  /**
+   * How the trigger names the subscription that started a run: the author's id,
+   * else its place in the list (from 1). A person with several schedules or
+   * event subscriptions can then be told in its prompt what each one is for.
+   */
+  function describeSubscription(sub: SubscriptionDef, index: number): string {
+    return sub.id ? `subscription "${sub.id}"` : `subscription #${index + 1}`
+  }
+
   function buildScheduleTriggerContext(job: SchedulerJob, app: InstalledApp): TriggerContext {
-    const subId = (job.metadata as any)?.subscriptionId || 'unknown'
+    const subId: unknown = (job.metadata as { subscriptionId?: unknown } | undefined)?.subscriptionId
+    const subscriptions = app.spec.type === 'automation' ? app.spec.subscriptions ?? [] : []
+    // Jobs carry the author's id, or the index for an unnamed subscription.
+    const index = subscriptions.findIndex((sub, i) => (sub.id ?? String(i)) === subId)
+    const subscription = index >= 0
+      ? ` — ${describeSubscription(subscriptions[index], index)}`
+      : typeof subId === 'string' && subId ? ` — subscription "${subId}"` : ''
     const schedule = job.schedule
     let scheduleDesc: string
 
@@ -194,7 +209,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
 
     return {
       type: 'schedule',
-      description: `Scheduled run for "${app.spec.name}" (${scheduleDesc}). ` +
+      description: `Scheduled run for "${app.spec.name}"${subscription} (${scheduleDesc}). ` +
         `Time: ${new Date().toISOString()}`,
       jobId: job.id,
     }
@@ -203,11 +218,12 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
   function buildEventTriggerContext(
     eventType: string,
     eventPayload: Record<string, unknown>,
-    app: InstalledApp
+    app: InstalledApp,
+    subscription: string
   ): TriggerContext {
     return {
       type: 'event',
-      description: `Triggered by event "${eventType}" for "${app.spec.name}". ` +
+      description: `Triggered by event "${eventType}" for "${app.spec.name}" — ${subscription}. ` +
         `Time: ${new Date().toISOString()}`,
       eventPayload,
     }
@@ -988,7 +1004,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
             const currentApp = admission.app
 
             console.log(`[Runtime] Event triggered: type=${event.type}, app=${appId}`)
-            const trigger = buildEventTriggerContext(event.type, event.payload, currentApp)
+            const trigger = buildEventTriggerContext(event.type, event.payload, currentApp, describeSubscription(sub, i))
 
             try {
               await executeWithConcurrency(currentApp, trigger)
@@ -1128,7 +1144,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
             const currentApp = admission.app
 
             console.log(`[Runtime] Event triggered: type=${event.type}, app=${appId}`)
-            const trigger = buildEventTriggerContext(event.type, event.payload, currentApp)
+            const trigger = buildEventTriggerContext(event.type, event.payload, currentApp, describeSubscription(sub, i))
 
             try {
               await executeWithConcurrency(currentApp, trigger)

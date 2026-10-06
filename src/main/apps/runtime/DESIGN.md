@@ -247,10 +247,16 @@ context (what triggered this run, when, user config values).
 
 **Rationale**:
 - The AI needs to know WHY it was triggered to decide what to do.
-- For schedule triggers: "Scheduled run at 2026-02-21 14:30 (every 30m)"
-- For event triggers: "Triggered by file change: /path/to/file"
+- For schedule triggers: `Scheduled run for "<name>" — subscription "morning-report" (cron: 0 9 * * *). Time: <ISO time>`
+- For event triggers: `Triggered by event "<type>" for "<name>" — subscription "inbox-files". Time: <ISO time>`
 - For escalation follow-ups: includes the original question + user's response
 - User config values are included so the AI can use them (e.g., product URLs).
+
+**Which subscription.** A person may have several schedules or event
+subscriptions doing different work. The trigger names the one that fired: its
+`subscriptions[].id`, or `subscription #N` (its place in the list, from 1) when
+it has none, so a prompt can say what each one is for instead of guessing from
+the time. There is no per-subscription prompt field.
 
 **Not included: IM chats.** A scheduled or manual run starts from its trigger
 and the digital human's own memory. Excerpts of every IM chat used to be pasted

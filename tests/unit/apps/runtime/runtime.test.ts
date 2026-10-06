@@ -2573,8 +2573,54 @@ describe('AppRuntimeService', () => {
         metadata: { appId: testAppId, subscriptionId: 'daily' },
       })
 
-      expect(firstMessage()).toMatch(/^Scheduled run for "test-automation" \(every 1h\)\. Time: \S+$/)
+      expect(firstMessage()).toMatch(/^Scheduled run for "test-automation" — subscription "daily" \(every 1h\)\. Time: \S+$/)
       expect(firstMessage()).not.toContain(chatText)
+    })
+  })
+
+  describe('which subscription started a run', () => {
+    let testAppId: string
+
+    beforeEach(() => {
+      vi.mocked(executeRun).mockClear()
+      testAppId = randomUUID()
+      mockAppManager.getApp.mockReturnValue({
+        id: testAppId,
+        status: 'active',
+        spec: createTestSpec({
+          subscriptions: [
+            { id: 'morning-report', source: { type: 'schedule', config: { cron: '0 9 * * *' } } },
+            { source: { type: 'schedule', config: { cron: '0 18 * * *' } } },
+            { id: 'inbox-files', source: { type: 'file', config: { pattern: '*.md' } } },
+          ],
+        }),
+        userConfig: {},
+        userOverrides: {},
+        spaceId: 'space-001',
+      })
+    })
+
+    const description = () => vi.mocked(executeRun).mock.calls.at(-1)?.[0].trigger.description
+
+    it('names each schedule by its id, or by its place when it has none', async () => {
+      createService()
+      const onJobDue = mockScheduler.onJobDue.mock.calls[0][1]
+
+      await onJobDue({ id: `${testAppId}:morning-report`, schedule: { kind: 'cron', cron: '0 9 * * *' }, metadata: { appId: testAppId, subscriptionId: 'morning-report' } })
+      expect(description()).toMatch(/^Scheduled run for "test-automation" — subscription "morning-report" \(cron: 0 9 \* \* \*\)\. Time: \S+$/)
+
+      await onJobDue({ id: `${testAppId}:1`, schedule: { kind: 'cron', cron: '0 18 * * *' }, metadata: { appId: testAppId, subscriptionId: '1' } })
+      expect(description()).toMatch(/^Scheduled run for "test-automation" — subscription #2 \(cron: 0 18 \* \* \*\)\. Time: \S+$/)
+    })
+
+    it('names the event subscription that fired', async () => {
+      const service = createService()
+      await service.activate(testAppId)
+      const [, handler] = mockEventRouter.on.mock.calls[0]
+
+      await handler({ type: 'file.changed', payload: { path: 'notes.md' } })
+
+      expect(description()).toMatch(/^Triggered by event "file\.changed" for "test-automation" — subscription "inbox-files"\. Time: \S+$/)
     })
   })
 
