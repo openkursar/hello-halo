@@ -23,6 +23,7 @@ import type {
 
 import {
   anthropicBlockToOpenAIChatPart,
+  anthropicImageToOpenAIChatImage,
   anthropicToolUseToOpenAIChatToolCall,
   anthropicBlockToResponsesInputPart,
   anthropicToolUseToResponsesFunctionCall,
@@ -149,6 +150,7 @@ export function convertAnthropicMessagesToOpenAIChat(
     if (msg.role === 'user') {
       // Extract tool_result blocks -> convert to tool messages
       const toolResults = extractToolResultBlocks(blocks)
+      const toolImages: OpenAIChatContentPart[] = []
       for (const toolResult of toolResults) {
         // Detect images in tool_result.content array before any stripping
         // so `hasImages` reflects the original input regardless of stripImages.
@@ -156,9 +158,14 @@ export function convertAnthropicMessagesToOpenAIChat(
         if (Array.isArray(toolResultContent)) {
           if (toolResultContent.some((b) => b.type === 'image')) {
             hasImages = true
-            if (stripImages) {
-              toolResultContent = stripImagesFromToolResultContent(toolResultContent)
+            if (!stripImages) {
+              for (const block of toolResultContent) {
+                if (block.type === 'image') {
+                  toolImages.push(anthropicImageToOpenAIChatImage(block))
+                }
+              }
             }
+            toolResultContent = stripImagesFromToolResultContent(toolResultContent)
           }
         }
 
@@ -173,6 +180,11 @@ export function convertAnthropicMessagesToOpenAIChat(
         }
 
         result.push(toolMessage)
+      }
+
+      // All tool calls must be answered before auxiliary user image content.
+      if (toolImages.length > 0) {
+        result.push({ role: 'user', content: toolImages })
       }
 
       // Convert remaining content blocks (text, image)
