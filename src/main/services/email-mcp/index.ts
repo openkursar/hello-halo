@@ -18,7 +18,7 @@
  */
 
 import { createSdkMcpServer } from '../agent/resolved-sdk'
-import { markMcpServerSettings } from '../agent/sdk-config'
+import { markMcpServerSettings } from '../agent'
 import type { EmailChannelConfig } from '../../../shared/types/notification-channels'
 import { getServiceDefaults } from '../../foundation/product-config'
 import { ImapClient } from './imap-client'
