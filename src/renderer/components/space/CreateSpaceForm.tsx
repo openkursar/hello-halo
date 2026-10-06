@@ -26,19 +26,26 @@ export interface CreateSpaceFormProps {
   onCancel: () => void
   /** Tighter spacing and smaller controls for inline / accordion contexts */
   compact?: boolean
+  /** A folder to start from (one dropped on "New Workspace"): chosen as the custom location, its name as the space name. */
+  initialFolder?: string
 }
 
-export function CreateSpaceForm({ onCreated, onCancel, compact = false }: CreateSpaceFormProps) {
+/** Last segment of a folder path, which the form offers as the space name. */
+function folderName(path: string): string {
+  return path.split(/[/\\]/).pop() || ''
+}
+
+export function CreateSpaceForm({ onCreated, onCancel, compact = false, initialFolder }: CreateSpaceFormProps) {
   const { t } = useTranslation()
   const createSpace = useSpaceStore(state => state.createSpace)
 
-  const [name, setName] = useState('')
+  const [name, setName] = useState(() => (initialFolder ? folderName(initialFolder) : ''))
   // Icon glyph picking is gone from this form (replaced by the color swatch
   // below) — DEFAULT_SPACE_ICON is still sent silently since the backend's
   // `icon` field remains required; nothing renders it anymore.
   const [color, setColor] = useState<SpaceColorId>('primary')
-  const [useCustomPath, setUseCustomPath] = useState(false)
-  const [customPath, setCustomPath] = useState<string | null>(null)
+  const [useCustomPath, setUseCustomPath] = useState(Boolean(initialFolder))
+  const [customPath, setCustomPath] = useState<string | null>(initialFolder ?? null)
   const [defaultPath, setDefaultPath] = useState<string>('~/.halo/spaces')
 
   // Unique radio group name so multiple form instances on the same page don't conflict
@@ -49,8 +56,12 @@ export function CreateSpaceForm({ onCreated, onCancel, compact = false }: Create
     api.getDefaultSpacePath().then((res) => {
       if (res.success && res.data) setDefaultPath(res.data as string)
     })
-    setTimeout(() => nameInputRef.current?.focus(), 120)
-  }, [])
+    setTimeout(() => {
+      nameInputRef.current?.focus()
+      // A name taken from the folder is a suggestion: selected, so typing replaces it.
+      if (initialFolder) nameInputRef.current?.select()
+    }, 120)
+  }, [initialFolder])
 
   const shortenPath = (path: string) =>
     path.includes('/Users/') ? path.replace(/\/Users\/[^/]+/, '~') : path
@@ -62,7 +73,7 @@ export function CreateSpaceForm({ onCreated, onCancel, compact = false }: Create
       const path = res.data as string
       setCustomPath(path)
       setUseCustomPath(true)
-      const dirName = path.split(/[/\\]/).pop() || ''
+      const dirName = folderName(path)
       if (dirName && !name.trim()) setName(dirName)
       setTimeout(() => {
         nameInputRef.current?.focus()

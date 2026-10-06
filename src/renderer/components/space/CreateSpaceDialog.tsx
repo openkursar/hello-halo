@@ -16,9 +16,11 @@ import type { Space } from '../../types'
 interface CreateSpaceDialogProps {
   onClose: () => void
   onCreated: (space: Space) => void
+  /** Prefills the form from this folder (see CreateSpaceForm). */
+  initialFolder?: string
 }
 
-export function CreateSpaceDialog({ onClose, onCreated }: CreateSpaceDialogProps) {
+export function CreateSpaceDialog({ onClose, onCreated, initialFolder }: CreateSpaceDialogProps) {
   const { t } = useTranslation()
 
   return (
@@ -38,7 +40,7 @@ export function CreateSpaceDialog({ onClose, onCreated }: CreateSpaceDialogProps
             {t('brings together a project\'s folder, conversations, knowledge base, digital humans, and installed skills — each kept isolated. Recommended: create one per project, client, or goal to avoid mixed context, and make reuse and collaboration easier.')}
           </span>
         </div>
-        <CreateSpaceForm onCreated={onCreated} onCancel={onClose} />
+        <CreateSpaceForm onCreated={onCreated} onCancel={onClose} initialFolder={initialFolder} />
       </div>
     </div>
   )
