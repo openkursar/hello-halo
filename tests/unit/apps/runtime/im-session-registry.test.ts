@@ -340,3 +340,32 @@ describe('ImSessionRegistry — persistence', () => {
     expect(reg.findSession('app1', 'native', 'default')?.lastActiveAt).toBe(1000)
   })
 })
+
+describe('ImSessionRegistry — a push to a chat', () => {
+  let dir: string
+
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'im-reg-push-')) })
+  afterEach(async () => {
+    await new Promise(resolve => setTimeout(resolve, 50))
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('makes the push the chat\'s latest message and moves the chat to the top', async () => {
+    const reg = new ImSessionRegistry(join(dir, 'sessions.json'))
+    reg.register('app1', 'wecom-bot', 'ops-group', 'group', 'inst-1', { lastMessage: 'old question', lastSender: 'Alice' })
+    await new Promise(resolve => setTimeout(resolve, 5))
+    reg.register('app1', 'wecom-bot', 'boss', 'direct', 'inst-1', { lastMessage: 'hi', lastSender: 'Boss' })
+
+    reg.notePush('app1', 'wecom-bot', 'ops-group', { lastSender: 'Release Bot', lastMessage: 'Nightly report: 3 failures' })
+
+    const sessions = reg.getAllSessions('app1')
+    expect(sessions[0]).toMatchObject({ chatId: 'ops-group', lastSender: 'Release Bot', lastMessage: 'Nightly report: 3 failures', messageCount: 2 })
+    expect(sessions[1].chatId).toBe('boss')
+  })
+
+  it('leaves an unknown chat alone', () => {
+    const reg = new ImSessionRegistry(join(dir, 'sessions.json'))
+    reg.notePush('app1', 'wecom-bot', 'nobody', { lastMessage: 'x' })
+    expect(reg.getAllSessions('app1')).toEqual([])
+  })
+})

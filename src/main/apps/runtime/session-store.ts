@@ -20,6 +20,7 @@ import type { TeamTriggerContext } from '../../../shared/apps/team-types'
 import type { ImageAttachment } from '../../../shared/types/image-attachment'
 import type { ContentReference } from '../../../shared/types/content-reference'
 import type {
+  ChatPushVia,
   Thought,
   TranscriptMessage,
   TranscriptPage,
@@ -56,6 +57,12 @@ export interface SessionWriter {
     provenance?: TranscriptProvenance,
     references?: ContentReference[]
   ): void
+  /**
+   * Record a message the digital human sent to this chat outside its turns
+   * (see `ChatPushVia`), sent at `at` (default now). Never among a turn's lines:
+   * reading the file back takes it as the end of any turn before it.
+   */
+  writePush(text: string, via: ChatPushVia, at?: string): void
 }
 
 /** Get the directory for run session files */
@@ -114,6 +121,15 @@ export function openSessionWriter(spacePath: string, appId: string, runId: strin
         ...(provenance?.metadata ? { _metadata: provenance.metadata } : {}),
         ...(references && references.length > 0 ? { _references: references } : {}),
         message: { role: 'user', content: blocks },
+      })
+    },
+
+    writePush(text, via, at): void {
+      appendLine({
+        _ts: at ?? new Date().toISOString(),
+        type: 'push',
+        _pushVia: via,
+        message: { role: 'assistant', content: [{ type: 'text', text }] },
       })
     },
   }

@@ -28,6 +28,7 @@ import { getConfig } from '../../foundation/config.service'
 import { getActiveImChannelManager } from './im-channels'
 import { FileExportGate, FileExportDeniedError } from './file-export-gate'
 import { getPendingRelayStore, type RelaySubject } from './pending-relays'
+import { recordChatPush } from './chat-push'
 import { buildImSessionKey } from '../../../shared/apps/im-keys'
 import type { NotificationChannelType } from '../../../shared/types/notification-channels'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
@@ -310,13 +311,22 @@ function buildNotifyBotTool(context: NotifyToolContext) {
       let sentMessage = false
       let sentFile: { name: string } | undefined
 
-      // Record delivered content into the pending-relay spool so the target
-      // session's AI learns about this push on its next inbound message.
-      // Skipped when pushing to the invoking session itself — there the push
-      // already lives in this run's tool history. Must never fail the tool:
-      // the push succeeded regardless of spool state.
-      const recordRelay = () => {
+      // What was delivered is kept twice: in the chat's record, which its owner
+      // reads in Halo (chat-push), and in the pending-relay spool, so the target
+      // session's AI learns about this push on its next inbound message. The
+      // spool skips the invoking session itself — there the push already lives
+      // in this run's tool history. Neither may fail the tool: the push
+      // succeeded regardless.
+      const recordDelivery = () => {
         if (!sentMessage && !sentFile) return
+        recordChatPush({
+          appId: session.appId,
+          channel: session.channel,
+          chatType: session.chatType,
+          chatId: session.chatId,
+          text: [sentMessage ? input.message : '', sentFile ? `📎 ${sentFile.name}` : ''].filter(Boolean).join('\n\n'),
+          via: 'message',
+        })
         try {
           const targetKey = buildImSessionKey(
             session.appId, session.channel, session.chatType, session.chatId
@@ -348,7 +358,7 @@ function buildNotifyBotTool(context: NotifyToolContext) {
       // When message was already sent but file fails, the AI must know
       // the message went through to avoid duplicate sends on retry.
       const errorWithContext = (errorMsg: string) => {
-        recordRelay()
+        recordDelivery()
         if (results.length > 0) {
           return textResult(`${results.join(' ')} However, ${errorMsg}`, true)
         }
@@ -426,7 +436,7 @@ function buildNotifyBotTool(context: NotifyToolContext) {
         }
       }
 
-      recordRelay()
+      recordDelivery()
       return textResult(results.join(' '))
     }
   )

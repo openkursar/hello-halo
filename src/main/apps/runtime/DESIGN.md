@@ -765,6 +765,36 @@ acceptable because AI context is only ever consumed by a run, and runs are
 inbound-triggered. Deep history beyond the quote requires the AI to Read/Grep
 the source transcript, reusing existing tools instead of a new query API.
 
+### 2.14a A Push Is in the Record of the Chat It Went To
+
+**Problem**: a message a digital human sends to an IM chat outside that chat's
+turns — a `notify_bot` message, a run's result for the chats that receive results
+(`im-auto-sync`), a question for the owner (`im-escalation`) — went out on the
+platform and nowhere else. Its owner, reading the chat in Halo, saw the person's
+reply to it with nothing before it.
+
+**Decision**: each successful send is noted with `chat-push.recordChatPush`
+(loaded on use, never throws) and written by `chat-record.writeChatPush` into the
+chat's record as a `push` line (`SessionWriter.writePush`) saying what sent it
+(`message` | `result` | `question`). It reads as an assistant message with
+`source: 'push'` (§2.18), labelled in the chat as sent proactively, and the chat
+moves to the top of the session list (`ImSessionRegistry.notePush`, then
+`app:im-session-updated`).
+
+- **One writer, one place**: the line goes through the chat's sink
+  (`getAppChatSink`), the record's one writer, in the space the chat's session was
+  pinned to (`chat-record.chatRecordPath`, which `app-chat` reads from as well). A
+  chat a team fronts is recorded in the team's conversation with it.
+- **A turn stays whole**: a push that comes while a turn of that chat is running is
+  held by the sink and written when the turn ends, with the time it was sent. A
+  large file is paged by the line a message starts on (§2.18), which a line in the
+  middle of a turn would cut. Halo exiting mid-turn loses the held line, not the
+  push; clearing the chat drops it.
+- **The AI is not told here**: the relay spool (§2.14) still carries the push into
+  the chat's next turn, and the AI's own history is unchanged.
+- **What a record means**: the platform accepted the message for sending. A file
+  `notify_bot` sent is named (`📎 name`), not stored.
+
 ### 2.15 Knowledge Base Injection Mirrored Across Both Prompt Builders
 
 **Decision**: `prompt.ts`'s `buildAppSystemPrompt()` (automation/headless
@@ -902,6 +932,10 @@ JSONL storage is unchanged (append-only, written by `session-store`).
   Writers use `SessionWriter.writeTrigger(content, images, teamOrigin, provenance)`
   / `TurnSink.writeUserMessage(...)`, and write the text to *show*, not the
   framed text the model received.
+- **Pushes.** A `push` line (§2.14a) reads as an assistant message with
+  `source: 'push'` and `metadata.pushVia`. Its writer never puts one among a
+  turn's lines, so like a user event it ends any turn left open before it (one
+  cut off without its end), and messages stay in the order of their lines.
 - **Surface**: `app:chat-transcript` / `app:chat-message-thoughts` (IPC, contract in
   `shared/rpc/contracts/app.contract.ts`) and
   `GET /api/apps/:appId/chat/transcript`, `GET /api/apps/:appId/chat/messages/:messageId/thoughts`
@@ -1222,7 +1256,7 @@ src/main/apps/runtime/
 
   -- Interactive chat with an App (separate from automation runs):
   app-chat.ts                -- sendAppChatMessage() and chat session lifecycle
-  app-chat-sink.ts           -- TurnSink for chat: run JSONL + round/autonomous delivery (§2.12a)
+  app-chat-sink.ts           -- TurnSink for chat: run JSONL + round/autonomous delivery (§2.12a); the record's one writer, holding a push that comes mid-turn until the turn ends (§2.14a)
   turn-ending.ts             -- A turn that stopped short (step limit, cut off): how it is recognized and the note an IM chat gets (§2.12a)
   turn-skills.ts             -- Which skills a borrowed turn may load, what a granted skill may not bring with it, and why its message never runs as a command ("Skills on a borrowed turn")
   app-chat-browser.ts        -- The AI browser context each chat drives: resident for native chats, per-turn for IM/HTTP/team, idle/cap reaping, teardown by reason (§2.19)
@@ -1235,6 +1269,8 @@ src/main/apps/runtime/
   im-permission-registry.ts  -- The IM chat's last sender and their standing, for a turn with no sender of its own (a message's own turn carries its sender in `AppChatRequest.imPermission`)
   im-session-registry.ts     -- Persistent IM session list (per app + channel + chatId)
   pending-relays.ts          -- Cross-session relay spool + <relay-from> rendering (§2.14)
+  chat-push.ts               -- How a sender notes a push it sent to an IM chat; loads chat-record on use (§2.14a)
+  chat-record.ts             -- Where a chat's record is kept (`chatRecordPath`), and a push written into it and the session list (§2.14a)
   progress-formatter.ts      -- Format streaming progress events for IM transports
   session-store.ts           -- JSONL persistence for chat history + SDK session IDs; transcript reads, paging and the parse cache (§2.18)
   session-transcript.ts      -- Pure codec: stored SDK events → `TranscriptMessage` (ids, thoughts, provenance; §2.18)
