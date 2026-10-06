@@ -74,14 +74,6 @@ const LOG_TAG = '[Dispatch]'
 const EMPTY_RESPONSE_NOTICE = 'The model returned an empty response. Please send your message again.'
 
 /**
- * Said in the chat when the digital human's working folder is missing. The
- * error itself names the folder for the owner's Halo window and the log; a chat
- * — possibly with outsiders — gets neither the owner's local path nor a step
- * only the owner can take.
- */
-const WORKING_DIR_UNAVAILABLE_NOTICE = '⚠️ 这个数字人的工作目录暂时不可用，请主人在 Halo 里处理。'
-
-/**
  * Immediate ack for non-streaming IM channels — the final reply arrives as a
  * separate message later. Hardcoded Chinese like buildSupplementAck because
  * the backend does not have renderer i18n loaded.
@@ -1147,9 +1139,7 @@ export async function dispatchInboundMessage(
     // separate one-shot reply — otherwise WeCom receives an unterminated stream
     // plus a duplicate message, garbling the user's chat.
     try {
-      const errorMsg = (err as Error)?.name === 'WorkingDirectoryUnavailableError'
-        ? WORKING_DIR_UNAVAILABLE_NOTICE
-        : imErrorReply(err)
+      const errorMsg = imErrorReply(err)
       if (reply.streaming) {
         await reply.streaming.finish(errorMsg)
       } else {

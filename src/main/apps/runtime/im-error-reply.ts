@@ -17,6 +17,15 @@ const MAX_ERROR_CHARS = 200
 const REFUSED_LOCAL_CONNECTION_NOTE =
   '⚠️ Halo 所在电脑的安全软件拦截了本机连接，这次没能处理。请主人在 Halo 里查看并处理。'
 
+/**
+ * A turn's working folder (services/agent working-dir), told by the error's
+ * name: what can be done about it, never the folder.
+ */
+const WORKING_FOLDER_NOTES = new Map([
+  ['WorkingDirectoryUnavailableError', '⚠️ 这个数字人的工作目录暂时不可用，请主人在 Halo 里处理。'],
+  ['WorkingDirectoryChangedError', '⚠️ 这个数字人的工作目录刚刚更换，请再发一次。'],
+])
+
 /** Where a path of this computer starts: a POSIX root, a drive, a network share, or a file URL. */
 const PATH_START =
   String.raw`(?:\/(?:Users|home|Volumes|private|var|tmp|opt|root|mnt|media|srv|Applications|Library|System|usr|etc|run|snap|nix)\/` +
@@ -41,6 +50,8 @@ export function imErrorReply(error: unknown): string {
   // A turn cut off before writing anything is not an error the person can act
   // on; what they can do is tell it to carry on.
   if (error instanceof AppChatTurnInterrupted) return withTurnEndingNote('', { kind: 'interrupted' })
+  const folderNote = error instanceof Error ? WORKING_FOLDER_NOTES.get(error.name) : undefined
+  if (folderNote) return folderNote
   const message = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
   // Its explanation names the program to allow, which is for the owner, in Halo.
   if (isRefusedLocalConnection(message)) return REFUSED_LOCAL_CONNECTION_NOTE
