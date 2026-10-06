@@ -32,7 +32,7 @@ import zlib from 'node:zlib'
 import { ProxyAgent } from 'proxy-agent'
 import { getConfig, onNetworkConfigChange } from '../foundation/config.service'
 import { isHttpLoggingEnabled, logHttpRequest, logHttpResponse, logHttpResponseBody } from '../foundation/logging'
-import { bypassesProxy, proxyBypassList, type ProxySettings } from './proxy-policy'
+import { chromiumBypassRules, compileBypassList, proxyBypassList, type ProxySettings } from './proxy-policy'
 
 // ============================================================================
 // Baseline transports
@@ -169,6 +169,7 @@ function getOrCreateAgent(proxyUrl: string): ProxyAgent {
 interface ProxyState {
   proxy: string | null
   bypass: string[]
+  goesDirect: (url: string) => boolean
 }
 
 /**
@@ -178,10 +179,8 @@ interface ProxyState {
 let _proxyState: ProxyState | undefined
 
 function proxyStateFrom(network: ProxySettings | undefined): ProxyState {
-  return {
-    proxy: network?.proxy?.trim() || null,
-    bypass: proxyBypassList(network, [process.env.NO_PROXY, process.env.no_proxy]),
-  }
+  const bypass = proxyBypassList(network, [process.env.NO_PROXY, process.env.no_proxy])
+  return { proxy: network?.proxy?.trim() || null, bypass, goesDirect: compileBypassList(bypass) }
 }
 
 // ============================================================================
@@ -215,7 +214,7 @@ function applyProxyToBrowserSession(proxy: string | null, bypass: string[]): voi
   try {
     const sess = session.fromPartition(BROWSER_PARTITION)
     const config = proxy
-      ? { proxyRules: proxy, proxyBypassRules: bypass.join(',') }
+      ? { proxyRules: proxy, proxyBypassRules: chromiumBypassRules(bypass) }
       : { mode: 'system' as const }
 
     sess.setProxy(config)
@@ -258,8 +257,8 @@ function getProxyState(): ProxyState {
 
 /** The proxy a request takes: none for a bypassed host, else the Settings proxy, else the system's. */
 async function resolveProxyUrl(url: string): Promise<string | null> {
-  const { proxy, bypass } = getProxyState()
-  if (bypassesProxy(url, bypass)) return null
+  const { proxy, goesDirect } = getProxyState()
+  if (goesDirect(url)) return null
   return proxy ?? await resolveSystemProxy(url)
 }
 

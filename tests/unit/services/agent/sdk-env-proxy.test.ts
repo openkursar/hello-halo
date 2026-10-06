@@ -47,6 +47,12 @@ describe('proxy environment of the engine process', () => {
     expect(built.HTTPS_PROXY).toBe('http://127.0.0.1:7890')
   })
 
+  it('hands an inherited IP range to the engine as written', () => {
+    process.env.NO_PROXY = '10.0.0.0/8,192.168.0.0/16'
+
+    expect(env().NO_PROXY).toBe('localhost,127.0.0.1,[::1],10.0.0.0/8,192.168.0.0/16')
+  })
+
   it('sends only the local addresses direct when nothing is listed', () => {
     network.value = { proxy: 'http://127.0.0.1:7890' }
 

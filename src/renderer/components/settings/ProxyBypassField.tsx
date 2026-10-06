@@ -1,6 +1,6 @@
 /**
  * Settings field for the hosts that skip the proxy (`network.noProxy`).
- * The main process reads the list as NO_PROXY does (proxy-policy).
+ * How each route reads the entries is decided in the main process (proxy-policy).
  */
 
 import { useState } from 'react'
@@ -38,7 +38,10 @@ export function ProxyBypassField({ config, setConfig }: ProxyBypassFieldProps) {
     <div className="mt-3 pt-3 border-t border-border/50">
       <p className="text-sm font-medium">{t("Don't use the proxy for")}</p>
       <p className="text-xs text-muted-foreground">
-        {t('Separate hosts with commas. A leading dot includes subdomains (.example.com). Local addresses never use the proxy.')}
+        {t('Separate entries with commas. .example.com covers its subdomains only; add example.com for the domain itself. IP ranges such as 10.0.0.0/8 work too.')}
+      </p>
+      <p className="text-xs text-muted-foreground">
+        {t('Local addresses never use the proxy. A changed list applies to conversations started afterwards.')}
       </p>
       <div className="flex flex-col sm:flex-row gap-2 mt-2">
         <input

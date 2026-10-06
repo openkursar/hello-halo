@@ -7,9 +7,17 @@
  * processes Halo starts — agent engines and the MCP servers they connect.
  *
  * The bypass list joins the local addresses, the NO_PROXY the app inherited
- * and the hosts the user listed in Settings, read the way Node's proxy agents
- * read NO_PROXY so every route agrees on it.
+ * and the hosts the user listed in Settings. Its entries mean what Chromium's
+ * bypass rules mean: "*" every host; ".example.com" and "*.example.com" the
+ * subdomains, not example.com itself; any other host only itself; "host:port"
+ * that port only; "10.0.0.0/8" an IP range. The main process matches requests
+ * that way and the AI Browser gets the same rules. A child process gets the
+ * entries as written and reads them by its own rules, some of which also count
+ * example.com for ".example.com" — so ".example.com" plus "example.com" means
+ * the same everywhere.
  */
+
+import { BlockList, isIP } from 'node:net'
 
 /** Reached directly by every route: the loopback router and other local services. */
 const LOCAL_HOSTS = ['localhost', '127.0.0.1', '[::1]']
@@ -27,17 +35,30 @@ export interface ProxySettings {
   noProxy?: string
 }
 
+const SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i
+
+const DEFAULT_PORTS: Record<string, string> = { 'http:': '80', 'https:': '443', 'ws:': '80', 'wss:': '443' }
+
 /**
  * Entries of a NO_PROXY-style list, separated by commas, semicolons or
- * whitespace. A pasted URL keeps only its host and port.
+ * whitespace. A pasted URL keeps only its host and port; every other entry,
+ * an IP range included, is kept as written.
  */
 export function parseBypassList(value: string | undefined): string[] {
   const entries: string[] = []
   for (const raw of (value ?? '').split(/[\s,;]+/)) {
-    const entry = raw.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/\/.*$/, '').toLowerCase()
+    const entry = (SCHEME.test(raw) ? urlHost(raw) : raw).toLowerCase()
     if (entry && !entries.includes(entry)) entries.push(entry)
   }
   return entries
+}
+
+function urlHost(url: string): string {
+  try {
+    return new URL(url).host
+  } catch {
+    return ''
+  }
 }
 
 /** Local addresses, then the inherited NO_PROXY, then the hosts listed in Settings. */
@@ -48,29 +69,73 @@ export function proxyBypassList(
   return parseBypassList([...LOCAL_HOSTS, ...inherited, settings?.noProxy].filter(Boolean).join(','))
 }
 
+type BypassRule =
+  | { kind: 'all' }
+  | { kind: 'range'; addresses: BlockList }
+  | { kind: 'host'; host: string; port?: string }
+
 /**
- * Whether a request to `url` goes direct. "*" matches every host, ".host" and
- * "*.host" the host's subdomains, any other entry exactly that host;
- * "host:port" only that port.
+ * Whether a request goes direct under the list, read as described above.
+ * Built once per list; an entry it cannot read (Chromium's "<local>", a range
+ * that is not one) is left out.
  */
-export function bypassesProxy(url: string | URL, list: readonly string[]): boolean {
-  let parsed: URL
-  try {
-    parsed = typeof url === 'string' ? new URL(url) : url
-  } catch {
-    return false
+export function compileBypassList(list: readonly string[]): (url: string | URL) => boolean {
+  const rules = list.map(readRule).filter((rule): rule is BypassRule => rule !== null)
+  return (url) => {
+    let parsed: URL
+    try {
+      parsed = typeof url === 'string' ? new URL(url) : url
+    } catch {
+      return false
+    }
+    const hostname = parsed.hostname.toLowerCase()
+    const port = parsed.port || DEFAULT_PORTS[parsed.protocol] || ''
+    const address = hostname.replace(/^\[(.*)\]$/, '$1')
+    const family = isIP(address)
+    return rules.some(rule => {
+      if (rule.kind === 'all') return true
+      if (rule.kind === 'range') return family !== 0 && rule.addresses.check(address, family === 4 ? 'ipv4' : 'ipv6')
+      if (rule.port && rule.port !== port) return false
+      if (rule.host.startsWith('*')) return hostname.endsWith(rule.host.slice(1))
+      if (rule.host.startsWith('.')) return hostname.endsWith(rule.host)
+      return hostname === rule.host
+    })
   }
-  const hostname = parsed.hostname.toLowerCase()
-  const port = parsed.port || (parsed.protocol === 'https:' ? '443' : parsed.protocol === 'http:' ? '80' : '')
-  return list.some(entry => {
-    if (entry === '*') return true
-    const withPort = /^(.+):(\d+)$/.exec(entry)
-    if (withPort && withPort[2] !== port) return false
-    const host = withPort ? withPort[1] : entry
-    if (host.startsWith('*')) return hostname.endsWith(host.slice(1))
-    if (host.startsWith('.')) return hostname.endsWith(host)
-    return hostname === host
-  })
+}
+
+function readRule(entry: string): BypassRule | null {
+  if (entry === '*') return { kind: 'all' }
+  const range = /^\[?([^\]/]+)\]?\/(\d{1,3})$/.exec(entry)
+  if (range) {
+    const family = isIP(range[1])
+    const bits = Number(range[2])
+    if (!family || bits > (family === 4 ? 32 : 128)) return null
+    const addresses = new BlockList()
+    addresses.addSubnet(range[1], bits, family === 4 ? 'ipv4' : 'ipv6')
+    return { kind: 'range', addresses }
+  }
+  if (entry.includes('/') || entry.startsWith('<')) return null
+  const bracketed = /^\[([^\]]+)\](?::(\d+))?$/.exec(entry)
+  if (bracketed) {
+    return isIP(bracketed[1]) === 6 ? { kind: 'host', host: ipv6Hostname(bracketed[1]), port: bracketed[2] } : null
+  }
+  if (isIP(entry) === 6) return { kind: 'host', host: ipv6Hostname(entry) }
+  const withPort = /^(.+):(\d+)$/.exec(entry)
+  return withPort ? { kind: 'host', host: withPort[1], port: withPort[2] } : { kind: 'host', host: entry }
+}
+
+/** An IPv6 address the way a URL's hostname spells it: bracketed and compressed. */
+function ipv6Hostname(address: string): string {
+  try {
+    return new URL(`http://[${address}]/`).hostname
+  } catch {
+    return `[${address}]`
+  }
+}
+
+/** The list in the syntax of Chromium's bypass rules, which needs IPv6 addresses bracketed. */
+export function chromiumBypassRules(list: readonly string[]): string {
+  return list.map(entry => (isIP(entry) === 6 ? `[${entry}]` : entry)).join(',')
 }
 
 /**

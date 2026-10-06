@@ -110,9 +110,9 @@ describe('Codex proxy environment', () => {
   it('keeps the inherited NO_PROXY and adds the local addresses and the hosts listed in Settings', async () => {
     state.network = { proxy: 'http://127.0.0.1:7890', noProxy: '.weixin.qq.com' }
 
-    const resolved = await resolveCodexOptions({ cwd: '/work', env: { NO_PROXY: 'corp.example.com' }, apiCredentials: credentials() })
+    const resolved = await resolveCodexOptions({ cwd: '/work', env: { NO_PROXY: 'corp.example.com,10.0.0.0/8' }, apiCredentials: credentials() })
 
-    expect(resolved.env.NO_PROXY).toBe('localhost,127.0.0.1,[::1],corp.example.com,.weixin.qq.com')
+    expect(resolved.env.NO_PROXY).toBe('localhost,127.0.0.1,[::1],corp.example.com,10.0.0.0/8,.weixin.qq.com')
     expect(resolved.env.no_proxy).toBe(resolved.env.NO_PROXY)
     state.network = {}
   })

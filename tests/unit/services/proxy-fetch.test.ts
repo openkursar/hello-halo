@@ -205,4 +205,17 @@ describe('proxyFetch — hosts listed to bypass the proxy', () => {
       proxyBypassRules: 'localhost,127.0.0.1,[::1],.weixin.qq.com',
     })
   })
+
+  it('keeps an inherited IP range for requests and for the AI Browser', async () => {
+    process.env.NO_PROXY = '10.0.0.0/8'
+    networkChangeHandler?.({ proxy: deadProxy, browserUseProxy: true, noProxy: '' })
+
+    const res = await proxyFetch('http://10.1.2.3:8080/status')
+
+    expect(await res.text()).toBe('direct-body')
+    expect(setProxy).toHaveBeenLastCalledWith({
+      proxyRules: deadProxy,
+      proxyBypassRules: 'localhost,127.0.0.1,[::1],10.0.0.0/8',
+    })
+  })
 })
