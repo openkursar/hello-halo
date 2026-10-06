@@ -18,6 +18,7 @@ const { tlon } = vi.hoisted(() => ({
 
 vi.mock('../../../src/renderer/api', () => ({ api: { tlon } }))
 vi.mock('../../../src/renderer/i18n', () => ({ default: { t: (text: string) => text } }))
+vi.mock('../../../src/renderer/stores/chat.store', () => ({ useChatStore: { getState: () => ({}) } }))
 
 import { useTlonStore } from '../../../src/renderer/stores/tlon.store'
 
