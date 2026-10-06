@@ -264,7 +264,13 @@ import { registerBrowserHostHandlers } from './ipc/browser-host'
 import { checkAndArmSessionIntegrity, markSessionCleanExit } from './foundation/session-integrity'
 import { announceRendererHalted, decideAllWindowsClosed, remindRendererHalted, showUncaughtErrorNotice } from './services/lifecycle'
 import { getBackgroundService } from './platform/background'
-import { classifyRendererGone, RendererRecoveryPolicy, type RendererRecoveryDecision } from './services/renderer-recovery'
+import {
+  classifyRendererGone,
+  RENDERER_HANG_GRACE_MS,
+  RendererHangWatch,
+  RendererRecoveryPolicy,
+  type RendererRecoveryDecision,
+} from './services/renderer-recovery'
 import { recordProcessGone, recordRendererHang, startPerfTelemetry, writePreCrashSnapshot } from './services/perf'
 import { initInstanceId, shutdownHealthSystem, onRendererCrash, onRendererUnresponsive, sampleResourcesNow } from './services/health'
 import { initSdk } from './services/agent/resolved-sdk'
@@ -329,8 +335,10 @@ function recoverRenderer(reason: string, kind: 'crash' | 'hang'): RendererRecove
 
   if (mainWindow && !mainWindow.isDestroyed()) {
     try {
+      // In place: the window keeps its size, position and place behind other
+      // apps, so a renderer that failed while the user worked elsewhere does
+      // not pull the window over their work.
       mainWindow.webContents.reloadIgnoringCache()
-      mainWindow.show()
       return decision
     } catch (error) {
       console.error('[Main] Failed to reload renderer, recreating window:', error)
@@ -575,15 +583,25 @@ function createWindow(): void {
     }
   })
 
+  const hangWatch = new RendererHangWatch(() => {
+    if (!isAppQuitting) recoverRenderer('unresponsive', 'hang')
+  })
   mainWindow.on('unresponsive', () => {
     if (isAppQuitting) return
     onRendererUnresponsive()
     recordRendererHang()
-    recoverRenderer('unresponsive', 'hang')
+    if (hangWatch.unresponsive()) {
+      console.warn(`[Main] Renderer unresponsive; reloading in ${RENDERER_HANG_GRACE_MS / 1000}s unless it recovers`)
+    }
   })
+  mainWindow.on('responsive', () => {
+    if (hangWatch.cancel()) console.log('[Main] Renderer recovered by itself; no reload')
+  })
+  mainWindow.on('closed', () => hangWatch.cancel())
 
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     if (isAppQuitting) return
+    hangWatch.cancel()
     onRendererCrash({ reason: details.reason, exitCode: details.exitCode })
     // Refresh memory pressure before the reloaded window asks for it.
     if (classifyRendererGone(details.reason) === 'memory') void sampleResourcesNow()
