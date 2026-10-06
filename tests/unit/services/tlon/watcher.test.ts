@@ -161,6 +161,71 @@ describe('Tlon Watcher', () => {
     })
   })
 
+  describe('Keep learning off and on', () => {
+    it('turning it off stops watching the knowledge base, on again watches it and learns what changed meanwhile', async () => {
+      const linked = makeScratchDir()
+      const kb = await createKbAndSettle('Toggle', [{ path: linked, label: 'docs' }])
+
+      updateKB(kb.id, { status: 'paused' })
+      await vi.dynamicImportSettled()
+      await vi.waitFor(() => expect(subscriptions.size).toBe(0))
+
+      // Changed while paused: nothing is watching, so nothing hears it.
+      fs.writeFileSync(path.join(linked, 'while-paused.md'), 'written while paused')
+      fs.writeFileSync(path.join(getKBRawDir(kb.id), 'added-while-paused.md'), 'added while paused')
+
+      vi.useFakeTimers()
+      updateKB(kb.id, { status: 'active' })
+      await vi.dynamicImportSettled()
+      await vi.waitFor(() => expect(subscriptions.has(linked)).toBe(true))
+      expect(subscriptions.has(getKBRawDir(kb.id))).toBe(true)
+
+      await vi.advanceTimersByTimeAsync(500)
+      expect(enqueueFiles).toHaveBeenCalledWith(kb.id, expect.arrayContaining([
+        expect.objectContaining({ sourcePath: path.join(linked, 'while-paused.md'), sourceType: 'linked' }),
+        expect.objectContaining({ sourcePath: 'added-while-paused.md', sourceType: 'raw' }),
+      ]))
+      expect(processQueue).toHaveBeenCalledWith(kb.id)
+    })
+
+    it('learns what changed while paused even when the knowledge base watches no folder', async () => {
+      const kb = await createKbAndSettle('ToggleRawOnly')
+      updateKB(kb.id, { status: 'paused' })
+      await vi.dynamicImportSettled()
+      fs.writeFileSync(path.join(getKBRawDir(kb.id), 'doc.md'), 'added while paused')
+
+      vi.useFakeTimers()
+      updateKB(kb.id, { status: 'active' })
+      await vi.dynamicImportSettled()
+      await vi.waitFor(() => expect(subscriptions.has(getKBRawDir(kb.id))).toBe(true))
+      await vi.advanceTimersByTimeAsync(500)
+      expect(enqueueFiles).toHaveBeenCalledWith(kb.id, [expect.objectContaining({ sourcePath: 'doc.md' })])
+    })
+
+    it('off and straight back on leaves the knowledge base watched', async () => {
+      const linked = makeScratchDir()
+      const kb = await createKbAndSettle('Flip', [{ path: linked, label: 'docs' }])
+
+      updateKB(kb.id, { status: 'paused' })
+      updateKB(kb.id, { status: 'active' })
+      await vi.dynamicImportSettled()
+      await vi.waitFor(() => expect(subscriptions.has(linked)).toBe(true))
+      expect(subscriptions.has(getKBRawDir(kb.id))).toBe(true)
+    })
+
+    it('a change that is not to the status leaves the watchers alone', async () => {
+      const kb = await createKbAndSettle('Rename')
+      const calls = subscribeMock.mock.calls.length
+      const raw = subscriptions.get(getKBRawDir(kb.id))!
+
+      updateKB(kb.id, { name: 'Renamed' })
+      updateKB(kb.id, { status: 'active' })
+      await vi.dynamicImportSettled()
+      expect(raw.unsubscribe).not.toHaveBeenCalled()
+      expect(subscribeMock.mock.calls.length).toBe(calls)
+    })
+  })
+
   describe('stopWatchersForKB', () => {
     it('unsubscribes raw and linked handles for that KB only', async () => {
       const linked = makeScratchDir()
