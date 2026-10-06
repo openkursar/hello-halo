@@ -151,6 +151,12 @@ export interface SpecUpgradeOutcome {
   editsKnown: boolean
 }
 
+/** The activity note of an upgrade that kept fields at the user's version. */
+export interface SpecUpgradeNote extends SpecUpgradeOutcome {
+  /** Kept fields the user has since switched to the author's version from this note. */
+  adopted?: string[]
+}
+
 /** Filter criteria for listing Apps */
 export interface AppListFilter {
   /** Filter by space: string = specific space, null = global only, undefined = all */
@@ -182,7 +188,8 @@ export interface ExecutionEnvironment {
 }
 
 export interface ActivitySource {
-  kind: 'automation' | 'team' | 'chat' | 'unknown'
+  /** `upgrade`: written when an author's new version was applied, outside any run. */
+  kind: 'automation' | 'team' | 'chat' | 'upgrade' | 'unknown'
   appId: string
   runId?: string
   sessionKey?: string
@@ -241,6 +248,8 @@ export interface ActivityEntryContent {
   questions?: EscalationQuestion[]
   /** File URL for output type */
   outputUrl?: string
+  /** Set on the note an author's upgrade leaves when it kept fields at the user's version. */
+  upgrade?: SpecUpgradeNote
 }
 
 /** One decision an escalation asks the user to make. */

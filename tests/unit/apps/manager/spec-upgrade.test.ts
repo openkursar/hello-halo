@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { mergeAuthorUpgrade } from '../../../../src/main/apps/manager/spec-upgrade'
+import { authorVersionPatch, mergeAuthorUpgrade } from '../../../../src/main/apps/manager/spec-upgrade'
 import { validateAppSpec } from '../../../../src/main/apps/spec'
 import type { AutomationSpec, SubscriptionDef } from '../../../../src/main/apps/spec'
 
@@ -297,5 +297,23 @@ describe('mergeAuthorUpgrade', () => {
       expect(spec).toEqual(v13())
       expect(kept).toEqual([])
     })
+  })
+})
+
+describe('authorVersionPatch', () => {
+  it('sets each field to the author’s value and removes one the author does not have', () => {
+    const current = v13({ system_prompt: 'Mine.', recommended_model: 'model-b', subscriptions: [DAILY_9] })
+
+    expect(authorVersionPatch(current, v13(), ['system_prompt', 'recommended_model', 'subscriptions'])).toEqual({
+      system_prompt: v13().system_prompt,
+      recommended_model: null,
+      subscriptions: v13().subscriptions,
+    })
+  })
+
+  it('leaves out release fields and fields already equal to the author’s', () => {
+    const current = v13({ author: 'someone else' })
+
+    expect(authorVersionPatch(current, v13(), ['author', 'version', 'store', 'description'])).toEqual({})
   })
 })

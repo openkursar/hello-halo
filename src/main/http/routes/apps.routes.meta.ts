@@ -6,6 +6,10 @@ export const MODULE: RouteModuleMeta = {
     'GET /api/apps/states': { expose: 'internal' },
     'GET /api/apps/pending-inbox': { expose: 'internal' },
     'GET /api/apps/:appId/activity/:entryId': { expose: 'internal' },
+    // Whether an upgrade overrides the user's own edit is the user's call, the
+    // same way answering their decision is.
+    'POST /api/apps/:appId/activity/:entryId/adopt-author-version': { expose: 'internal' },
+    'GET /api/apps/:appId/author-spec': { expose: 'internal' },
     'GET /api/apps/studio-summary': { expose: 'internal' },
     'GET /api/apps/people': { expose: 'internal' },
     'GET /api/apps/capability-inventory': { expose: 'internal' },

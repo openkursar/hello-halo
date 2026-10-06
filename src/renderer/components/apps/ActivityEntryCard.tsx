@@ -14,6 +14,7 @@ import { CheckCircle2, SkipForward, XCircle, Bell, FileOutput, Clock, ChevronRig
 import type { ActivityEntry } from '../../../shared/apps/app-types'
 import { ActivitySource } from './ActivitySource'
 import { EscalationCard } from './EscalationCard'
+import { UpgradeNote } from './UpgradeNote'
 import { MarkdownRenderer } from '../chat/MarkdownRenderer'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useAppsStore } from '../../stores/apps.store'
@@ -164,7 +165,7 @@ export function ActivityEntryCard({ entry, appId, isLast, animationDelay }: Acti
         <div className="flex flex-wrap items-center gap-2 mb-1">
           <span className="font-mono text-[11px] text-muted-foreground/80 tabular-nums">{formatTs(entry.ts)}</span>
           <EntryIcon type={entry.type} />
-          <span className="text-xs font-medium text-muted-foreground">{entry.type === 'escalation' && entry.content.resolution ? t(entry.content.resolution.reason === 'expired' ? 'Expired' : 'Closed') : entry.type === 'escalation' && entry.userResponse ? t('Answered') : content.stopped ? t('Execution stopped') : t(entryLabel(entry.type))}</span>
+          <span className="text-xs font-medium text-muted-foreground">{entry.type === 'escalation' && entry.content.resolution ? t(entry.content.resolution.reason === 'expired' ? 'Expired' : 'Closed') : entry.type === 'escalation' && entry.userResponse ? t('Answered') : content.stopped ? t('Execution stopped') : content.upgrade ? t('Updated') : t(entryLabel(entry.type))}</span>
           {durationMs != null && (
             <span className="font-mono text-[11px] text-muted-foreground/60">{formatDuration(durationMs)}</span>
           )}
@@ -183,6 +184,8 @@ export function ActivityEntryCard({ entry, appId, isLast, animationDelay }: Acti
         {/* Content */}
         {entry.type === 'escalation' ? (
           <EscalationCard entry={entry} appId={appId} />
+        ) : content.upgrade ? (
+          <UpgradeNote appId={appId} entryId={entry.id} note={content.upgrade} />
         ) : (
           <div className="space-y-1.5">
             <MarkdownRenderer content={content.summary} className="text-sm" />

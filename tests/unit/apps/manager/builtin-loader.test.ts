@@ -4,13 +4,9 @@
  * edits either.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
-
-const { getAppRuntimeMock } = vi.hoisted(() => ({ getAppRuntimeMock: vi.fn() }))
-
-vi.mock('../../../../src/main/apps/runtime', () => ({ getAppRuntime: getAppRuntimeMock }))
 
 import { loadBuiltinApps } from '../../../../src/main/apps/manager/builtin-loader'
 import type { AppManagerService, InstalledApp } from '../../../../src/main/apps/manager/types'
@@ -78,13 +74,9 @@ function managerWith(app: InstalledApp, original: InstalledApp['spec'] | null = 
 }
 
 describe('loadBuiltinApps upgrades', () => {
-  const syncAppSubscriptions = vi.fn()
-
-  beforeEach(() => {
-    getAppRuntimeMock.mockReturnValue({ syncAppSubscriptions })
-  })
-
-  it('upgrades through the manager’s merge and reschedules the digital human', async () => {
+  // Rescheduling and the activity note are the runtime's reaction to the
+  // manager's upgrade event, the same for every path.
+  it('upgrades through the manager’s merge', async () => {
     writeBundle('1.1.0')
     const manager = managerWith(installedBuiltin('1.0.0'))
 
@@ -95,7 +87,6 @@ describe('loadBuiltinApps upgrades', () => {
       store: expect.objectContaining({ install_source: 'builtin' }),
     }))
     expect(manager.updateSpec).not.toHaveBeenCalled()
-    expect(syncAppSubscriptions).toHaveBeenCalledWith('app-1')
   })
 
   it('records the bundled spec as the original while it is still the installed version', async () => {

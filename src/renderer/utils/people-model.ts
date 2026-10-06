@@ -28,7 +28,7 @@ export function visibleDigitalHumans(apps: InstalledApp[], teams: TeamListItem[]
   return apps.filter(app => app.spec.type === 'automation' && !hidden.has(app.id))
 }
 
-export function activitySourceKind(entry: ActivityEntry): 'team' | 'automation' | 'chat' | 'unknown' {
+export function activitySourceKind(entry: ActivityEntry): 'team' | 'automation' | 'chat' | 'upgrade' | 'unknown' {
   return entry.content.teamContext ? 'team' : entry.content.source?.kind ?? 'unknown'
 }
 

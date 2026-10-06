@@ -923,6 +923,29 @@ the engine session layer at load. Toggling the switch changes the session's
 server set, which its inputs fingerprint already covers, so it takes effect on
 the next message. `entry-capability-matrix.test.ts` pins every row.
 
+### 2.21 An Author's Upgrade Reaches the Running Digital Human Here
+
+An author's new version is merged over the user's edits by the manager
+(`apps/manager/DESIGN.md` §2.13). Every upgrade path — the store's automatic
+and manual updates, the bundled loader — ends in `upgradeSpec`, and the runtime
+subscribes to its `onAppSpecUpgraded`, so an upgrade's effect on the running
+digital human is decided once:
+
+- **Reschedule**: `syncAppSubscriptions`. The paths themselves do not.
+- **Note**: when fields kept the user's version, a `milestone` entry carrying
+  `content.upgrade` (the outcome) and `source.kind: 'upgrade'`. It belongs to no
+  run (sentinel run id `upgrade`, like chat reports), so run pruning never
+  removes it; the app's deletion does. The renderer draws it from
+  `content.upgrade` in the user's language; `summary` is an English fallback.
+  The wording says the fields differ from the author's new version, never that
+  the user changed them, since an upgrade with no earlier original cannot know.
+- **Switching back**: `adoptAuthorVersion(appId, entryId, fields)` (IPC
+  `app:adopt-author-version`, HTTP `POST /api/apps/:appId/activity/:entryId/adopt-author-version`)
+  switches only fields the note kept, through the manager; reschedules when the
+  run times switched; records them as `content.upgrade.adopted`; and publishes
+  the note again. Both transports are user-only: whether an upgrade overrides
+  the user's own edit is the user's call.
+
 ---
 
 ## 3. SQLite Schema

@@ -329,6 +329,16 @@ export interface AppRuntimeService {
    */
   retryEscalationContinuation(appId: string, entryId: string): Promise<void>
   confirmEscalationDeadline(appId: string, entryId: string, deadlineAt: number | null): void
+
+  /**
+   * Switch fields an author's upgrade kept at the user's version to the
+   * author's version, from that upgrade's activity note. Only fields the note
+   * lists are switched; it records them and is published again.
+   *
+   * @returns the updated note
+   * @throws Error if the note does not exist, or the result is invalid
+   */
+  adoptAuthorVersion(appId: string, entryId: string, fields: string[]): ActivityEntry
   /** Decline ONE unanswered request; the run it belongs to keeps going. */
   dismissEscalation(appId: string, entryId: string): Promise<void>
   closeRun(appId: string, runId: string): Promise<void>

@@ -1894,6 +1894,57 @@ describe('AppManager', () => {
       expect(store.getAuthorSpec(appId)?.version).toBe('1.3.0')
     })
 
+    it('previews what an upgrade would keep without changing anything', async () => {
+      const appId = await service.install(TEST_SPACE_ID, storeSpec())
+      service.updateSpec(appId, { system_prompt: 'Mine.' })
+      const before = service.getApp(appId)!.spec
+
+      const outcome = service.previewUpgradeSpec(appId, nextVersion())
+
+      expect(outcome).toEqual({ fromVersion: '1.2.0', toVersion: '1.3.0', kept: ['system_prompt'], editsKnown: true })
+      expect(service.getApp(appId)!.spec).toEqual(before)
+      expect(store.getAuthorSpec(appId)?.version).toBe('1.2.0')
+    })
+
+    it('announces every upgrade with what it kept', async () => {
+      const appId = await service.install(TEST_SPACE_ID, storeSpec())
+      service.updateSpec(appId, { system_prompt: 'Mine.' })
+      const handler = vi.fn()
+      service.onAppSpecUpgraded(handler)
+
+      const outcome = service.upgradeSpec(appId, nextVersion())
+
+      expect(handler).toHaveBeenCalledWith(appId, outcome)
+      expect(outcome.kept).toEqual(['system_prompt'])
+    })
+
+    describe('adoptAuthorVersion', () => {
+      it('switches a kept field to the author’s version, after which upgrades update it again', async () => {
+        const appId = await service.install(TEST_SPACE_ID, storeSpec())
+        service.updateSpec(appId, { system_prompt: 'Mine.', subscriptions: [DAILY_9] })
+        service.upgradeSpec(appId, nextVersion())
+
+        expect(service.adoptAuthorVersion(appId, ['system_prompt'])).toEqual(['system_prompt'])
+        expect(automationSpec(appId).system_prompt).toBe('Summarize sales and flag anomalies.')
+        expect(automationSpec(appId).subscriptions).toEqual([DAILY_9, WEEKLY])
+
+        service.upgradeSpec(appId, nextVersion({ version: '1.4.0', system_prompt: 'Even better.' }))
+        expect(automationSpec(appId).system_prompt).toBe('Even better.')
+      })
+
+      it('changes nothing for release fields or fields already equal to the author’s', async () => {
+        const appId = await service.install(TEST_SPACE_ID, storeSpec())
+
+        expect(service.adoptAuthorVersion(appId, ['version', 'description'])).toEqual([])
+      })
+
+      it('refuses when no author’s version is recorded', async () => {
+        const appId = await service.install(TEST_SPACE_ID, createTestSpec({ name: 'local-dh' }))
+
+        expect(() => service.adoptAuthorVersion(appId, ['system_prompt'])).toThrow()
+      })
+    })
+
     describe('recordAuthorSpec', () => {
       async function legacyInstall(): Promise<string> {
         const appId = await service.install(TEST_SPACE_ID, storeSpec())
