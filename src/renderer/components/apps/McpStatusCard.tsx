@@ -19,6 +19,7 @@ import { CapabilityImpact, CapabilityChangeDialog } from './CapabilityImpact'
 import { useAppsStore } from '../../stores/apps.store'
 import { useAppStore } from '../../stores/app.store'
 import { AppStatusDot } from './AppStatusDot'
+import { McpToolSwitches } from './McpToolSwitches'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { resolveSpecI18n } from '../../utils/spec-i18n'
 import { isSessionOnlyFailure } from '../../utils/mcpStatus'
@@ -130,7 +131,7 @@ function ArgList({
 
 export function McpStatusCard({ appId }: McpStatusCardProps) {
   const { t } = useTranslation()
-  const { apps, pauseApp, resumeApp, uninstallApp, updateAppSpec } = useAppsStore()
+  const { apps, pauseApp, resumeApp, uninstallApp, updateAppSpec, updateAppOverrides } = useAppsStore()
   const { mcpStatus } = useAppStore()
   const app = apps.find(a => a.id === appId)
   const [pendingChange, setPendingChange] = useState<{ title: string; apply: () => Promise<void> } | null>(null)
@@ -693,13 +694,11 @@ export function McpStatusCard({ appId }: McpStatusCardProps) {
         </button>
         {toolsExpanded && (
           sdkEntry?.tools && sdkEntry.tools.length > 0 ? (
-            <ul className="pl-5 space-y-0.5">
-              {sdkEntry.tools.map(tool => (
-                <li key={tool} className="text-xs text-muted-foreground font-mono truncate" title={tool}>
-                  {tool}
-                </li>
-              ))}
-            </ul>
+            <McpToolSwitches
+              tools={sdkEntry.tools}
+              disabledTools={app.userOverrides?.disabledTools ?? []}
+              onSave={next => updateAppOverrides(appId, { disabledTools: next.length > 0 ? next : null })}
+            />
           ) : (
             <p className="text-xs text-muted-foreground italic pl-5">
               {isPaused

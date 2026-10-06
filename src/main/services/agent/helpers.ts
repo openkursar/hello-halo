@@ -451,6 +451,22 @@ export function getDbMcpServers(spaceId: string): Record<string, unknown> | null
 }
 
 /**
+ * The tools turned off on the cards of the space's MCP servers, keyed like
+ * `getDbMcpServers` (the server id their tools are namespaced under).
+ */
+export function getDisabledMcpTools(spaceId: string): Record<string, string[]> | null {
+  const manager = getAppManager()
+  if (!manager) return null
+
+  const disabled: Record<string, string[]> = {}
+  for (const app of manager.listEffectiveMcpApps(spaceId)) {
+    const tools = app.userOverrides?.disabledTools
+    if (tools?.length) disabled[app.specId] = [...tools]
+  }
+  return Object.keys(disabled).length > 0 ? disabled : null
+}
+
+/**
  * Build MCP servers config for a specific set of MCP dependency declarations.
  *
  * Used by automation runtime (execute.ts) to inject only the MCPs that

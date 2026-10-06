@@ -96,6 +96,11 @@ export interface InstalledApp {
     spaceMemoryAccess?: boolean
     /** This digital human's memory: on/off, auto-consolidation, cadence. */
     memory?: import('../types/memory').MemorySettings
+    /**
+     * MCP servers only: the tools turned off on the server's card, by the name
+     * the card lists. No session is given them, whoever it runs for.
+     */
+    disabledTools?: string[]
   }
 
   /** Permission grants and denials */

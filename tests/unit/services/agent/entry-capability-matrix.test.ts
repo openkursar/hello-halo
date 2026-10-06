@@ -40,6 +40,7 @@ const state = vi.hoisted(() => ({
   teamContext: null as unknown,
   memoryEnabled: true,
   sent: [] as string[],
+  disabledMcpTools: null as Record<string, string[]> | null,
 }))
 
 const { createHaloAppsMcpServer } = vi.hoisted(() => ({
@@ -144,6 +145,7 @@ vi.mock('../../../../src/main/services/agent/helpers', () => ({
   getHeadlessElectronPath: vi.fn(() => '/electron'),
   getDbMcpServers: vi.fn(() => null),
   getMcpServersForRequires: vi.fn(() => ({})),
+  getDisabledMcpTools: vi.fn(() => state.disabledMcpTools),
 }))
 vi.mock('../../../../src/main/services/agent/permission-handler', () => ({
   createCanUseTool: vi.fn(() => vi.fn()),
@@ -570,6 +572,7 @@ beforeEach(() => {
   state.engine = { features: { permissionRules: true, hooks: true } }
   state.memoryEnabled = true
   state.sent.length = 0
+  state.disabledMcpTools = null
 })
 
 // ============================================
@@ -583,6 +586,16 @@ describe('entry x capability: servers each entry starts with', () => {
       expect(observed.servers).toEqual([...EXPECTED_SERVERS[row]].sort())
     })
   }
+})
+
+describe('entry x MCP tools turned off on a server card', () => {
+  it.each(ROWS)('%s: leaves them out by the names the engine gives them', async row => {
+    state.disabledMcpTools = { 'data-gateway': ['drop_table', 'run.sql'] }
+
+    const { disallowedTools } = await ROW_DRIVERS[row]()
+
+    expect(disallowedTools).toEqual(expect.arrayContaining(['mcp__data-gateway__drop_table', 'mcp__data-gateway__run_sql']))
+  })
 })
 
 describe('entry x memory harness', () => {

@@ -60,7 +60,9 @@ import {
   getApiCredentialsForSource,
   getApiCredentialsForConversation,
   credentialsToBackendConfig,
+  getDisabledMcpTools,
 } from '../../../../src/main/services/agent/helpers'
+import { getAppManager } from '../../../../src/main/services/app-bridge'
 import { getConfig } from '../../../../src/main/foundation/config.service'
 
 const ENV_KEYS = ['HALO_OPENAI_API_TYPE', 'HALO_OPENAI_WIRE_API'] as const
@@ -245,5 +247,26 @@ describe('account-specific credential resolution', () => {
     refresh.resolve({ success: true })
     await expect(pending).rejects.toThrow('unavailable')
     expect(manager.getBackendConfigForSource).not.toHaveBeenCalled()
+  })
+})
+
+describe('getDisabledMcpTools', () => {
+  it('lists the tools turned off on each MCP server of the space, by server id', () => {
+    const listEffectiveMcpApps = vi.fn(() => [
+      { specId: 'gateway', userOverrides: { disabledTools: ['drop_table', 'run_sql'] } },
+      { specId: 'filesystem', userOverrides: {} },
+    ])
+    vi.mocked(getAppManager).mockReturnValue({ listEffectiveMcpApps } as never)
+
+    expect(getDisabledMcpTools('space-1')).toEqual({ gateway: ['drop_table', 'run_sql'] })
+    expect(listEffectiveMcpApps).toHaveBeenCalledWith('space-1')
+  })
+
+  it('is null when no tool is turned off or the apps layer is not up', () => {
+    vi.mocked(getAppManager).mockReturnValue({ listEffectiveMcpApps: () => [{ specId: 'filesystem', userOverrides: {} }] } as never)
+    expect(getDisabledMcpTools('space-1')).toBeNull()
+
+    vi.mocked(getAppManager).mockReturnValue(null as never)
+    expect(getDisabledMcpTools('space-1')).toBeNull()
   })
 })

@@ -117,3 +117,12 @@ describe('Codex proxy environment', () => {
     state.network = {}
   })
 })
+
+describe('Codex MCP tools turned off', () => {
+  it('hands the server cards\' turned-off tools to the MCP renderer', async () => {
+    const mcpServers = { gateway: { command: 'gateway' } }
+    await resolveCodexOptions({ cwd: '/work', apiCredentials: credentials(), mcpServers, disabledMcpTools: { gateway: ['drop_table'] } })
+
+    expect(state.prepareMcp).toHaveBeenCalledWith(mcpServers, { gateway: ['drop_table'] })
+  })
+})

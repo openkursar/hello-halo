@@ -96,6 +96,12 @@ export async function resolveDshOptions(
   if (disallowedTools?.length) {
     console.log(`[Dsh][options] restricted session: ${disallowedTools.length} tools denied`)
   }
+  // dsh's MCP client takes no tool list per server, so a tool turned off on a
+  // server's card is still offered here.
+  const disabledMcpTools = sdkOptions.disabledMcpTools as Record<string, string[]> | undefined
+  if (disabledMcpTools && Object.keys(disabledMcpTools).length > 0) {
+    console.warn(`[Dsh][options] MCP tools turned off on ${Object.keys(disabledMcpTools).join(', ')} stay available: this engine cannot leave out single MCP tools`)
+  }
 
   const { mcpServers, bridge } = await resolveMcpServers(sdkOptions.mcpServers)
 

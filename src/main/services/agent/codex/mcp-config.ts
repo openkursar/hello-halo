@@ -19,6 +19,8 @@ export interface CodexMcpServerConfig {
   url?: string
   headers?: Record<string, string>
   bearer_token_env_var?: string
+  /** Tools of the server codex leaves out, by the server's own tool names. */
+  disabled_tools?: string[]
 }
 
 export interface PreparedCodexMcpServers {
@@ -31,6 +33,7 @@ export interface PreparedCodexMcpServers {
 
 export async function prepareCodexMcpServers(
   servers: Record<string, unknown> | undefined,
+  disabledTools: Record<string, string[]> | undefined = undefined,
 ): Promise<PreparedCodexMcpServers> {
   const { sdk, external, unusable } = partitionMcpServers(servers)
 
@@ -48,6 +51,10 @@ export async function prepareCodexMcpServers(
     for (const [name, url] of Object.entries(await bridge.start())) {
       mcpServers[name] = { url }
     }
+  }
+
+  for (const [name, tools] of Object.entries(disabledTools ?? {})) {
+    if (mcpServers[name] && tools.length > 0) mcpServers[name].disabled_tools = tools
   }
 
   if (skippedServerNames.length > 0) {
