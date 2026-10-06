@@ -27,7 +27,9 @@
  *         bundled skills (matches the existing fetchBundledSkills contract).
  *      b. Stamp `spec.store.install_source = 'builtin'` on the parent and on
  *         every bundled skill — this is the marker every other layer uses.
- *      c. Look up `(specId, spaceId)` in the App Manager.
+ *      c. Look up `(specId, spaceId)` in the App Manager — or, for a built-in
+ *         the user renamed, by the bundle's slug or the name in its author's
+ *         original (`findRenamedBuiltin`).
  *         - Not present: install fresh, install every `requires.skills` entry
  *           (bundled from disk, non-bundled from the store — delegated to
  *           registry.service.ts:installRequiredSkills), runtime.activate(),

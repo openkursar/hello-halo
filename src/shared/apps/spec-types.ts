@@ -145,6 +145,11 @@ export interface SubscriptionDef {
   config_key?: string
 }
 
+/** Whether a subscription is a schedule limited to mainland China working days. */
+export function usesWorkdayCalendar(sub: SubscriptionDef): boolean {
+  return sub.source.type === 'schedule' && sub.source.config.workday_calendar === true
+}
+
 // ============================================
 // MCP Dependency Declaration
 // ============================================

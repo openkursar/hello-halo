@@ -9,12 +9,12 @@ import { z } from 'zod'
 import { tool, createSdkMcpServer } from '../../../services/agent/resolved-sdk'
 import {
   describeReminderSchedule,
-  formatLocalTime,
   getConversationReminders,
   ReminderError,
   type ConversationReminder,
   type ReminderSetter,
 } from './index'
+import { formatLocalTime } from '../local-time'
 
 export const REMINDERS_MCP_SERVER_NAME = 'halo-reminders'
 

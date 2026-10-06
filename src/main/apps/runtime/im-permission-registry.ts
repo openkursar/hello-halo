@@ -8,12 +8,15 @@
  * app-chat with the message (`AppChatRequest.imPermission`), so a message that
  * arrives in between can never change who a turn answers to. What reads it is a
  * turn with no sender of its own — a team-fronted chat woken by a teammate —
- * which takes the chat's last sender as it begins.
+ * which takes the chat's last sender as it begins. Nothing reads it in the
+ * middle of a turn: a tool that needs the turn's sender (the reminder tool,
+ * for who set a reminder) asks app-chat for the sender of the turn it runs in.
  *
  * Architecture:
  *   dispatch-inbound.ts → set()   (the sender of each message it starts a turn for)
+ *   reminders/delivery  → set()   (the person who asked, for a reminder's turn)
  *   app-chat.ts         → get()   (a turn without a sender, as it begins)
- *   dispatch-inbound.ts → clear() (on /clear)
+ *   dispatch-inbound.ts, chat-reset.ts → clear() (on /clear, and clearing all chats)
  *
  * Only IM-originated sessions have entries here; native Halo chat and
  * automation runs are unaffected.

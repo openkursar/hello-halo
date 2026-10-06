@@ -16,17 +16,11 @@ import { api } from '../../api'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useAppsStore } from '../../stores/apps.store'
 import { runStatusDotClass } from '../../utils/automation-status'
+import { formatRunStart } from '../../utils/format-time'
 import type { AutomationRunWithSummary } from '../../../shared/apps/app-types'
 
 /** Runs fetched for the glance; the paginated history is the activity thread's job. */
 const SAMPLE_SIZE = 7
-
-function formatRunTimestamp(ts: number): string {
-  const date = new Date(ts)
-  const time = date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
-  if (new Date().toDateString() === date.toDateString()) return time
-  return `${date.toLocaleDateString(undefined, { month: '2-digit', day: '2-digit' })} ${time}`
-}
 
 export function RunsSummaryBand({ appId }: { appId: string }) {
   const { t } = useTranslation()
@@ -69,7 +63,7 @@ export function RunsSummaryBand({ appId }: { appId: string }) {
               <span
                 key={run.runId}
                 className={`w-2 h-2 rounded-full flex-shrink-0 ${runStatusDotClass(run.status)}`}
-                title={formatRunTimestamp(run.startedAt)}
+                title={formatRunStart(run.startedAt)}
               />
             ))}
           </span>
@@ -90,7 +84,7 @@ export function RunsSummaryBand({ appId }: { appId: string }) {
               {latest.status === 'error' ? (latest.errorMessage ?? latest.summary ?? '') : (latest.summary ?? '')}
             </span>
             <span className="text-[11px] text-muted-foreground font-mono tabular-nums flex-shrink-0">
-              {formatRunTimestamp(latest.startedAt)}
+              {formatRunStart(latest.startedAt)}
             </span>
             {latest.sessionKey && <ChevronRight className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />}
           </button>

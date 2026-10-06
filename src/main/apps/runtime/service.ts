@@ -14,6 +14,7 @@ import { randomUUID } from 'crypto'
 import type { InstalledApp, AppManagerService, RunOutcome, AppStatus } from '../manager'
 import { AppNotFoundError } from '../manager'
 import type { AutomationSpec, SubscriptionDef } from '../spec'
+import { usesWorkdayCalendar } from '../../../shared/apps/spec-types'
 import type { SchedulerService, SchedulerJob, SchedulerJobCreate } from '../../platform/scheduler'
 import type { EventRouter } from './event-router'
 import type { EventFilter } from './event-types'
@@ -965,10 +966,6 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     return null
   }
 
-  function usesWorkdayCalendar(subscriptions: SubscriptionDef[]): boolean {
-    return subscriptions.some(sub => sub.source.type === 'schedule' && sub.source.config.workday_calendar)
-  }
-
   // ── Helper: Map subscription to event filter ────────
   // Delegates to the shared source→filter mapping so the app runtime and the
   // team trigger scheduler derive identical filters from the same semantics.
@@ -1053,7 +1050,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         }
       }
 
-      if (usesWorkdayCalendar(subscriptions)) void refreshWorkdayCalendar()
+      if (subscriptions.some(usesWorkdayCalendar)) void refreshWorkdayCalendar()
 
       // Register event router subscriptions for event-type subscriptions
       for (let i = 0; i < subscriptions.length; i++) {
@@ -1174,7 +1171,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         }
       }
 
-      if (usesWorkdayCalendar(subscriptions)) void refreshWorkdayCalendar()
+      if (subscriptions.some(usesWorkdayCalendar)) void refreshWorkdayCalendar()
 
       // Remove stale jobs that are no longer in the subscription list
       for (const jobId of [...state.schedulerJobIds]) {

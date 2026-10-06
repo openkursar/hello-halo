@@ -74,10 +74,6 @@ export function applyScheduleValue(sub: SubscriptionDef, value: ScheduleValue): 
   }
 }
 
-export function usesWorkdayCalendar(sub: SubscriptionDef): boolean {
-  return sub.source.type === 'schedule' && sub.source.config.workday_calendar === true
-}
-
 /** Limit a schedule to mainland China working days, or lift the limit (returns a new copy). */
 export function applyWorkdayCalendar(sub: SubscriptionDef, enabled: boolean): SubscriptionDef {
   if (sub.source.type !== 'schedule') return sub

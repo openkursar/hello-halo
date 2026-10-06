@@ -48,6 +48,7 @@ vi.mock('../../../src/renderer/components/apps/RunsSummaryBand', () => ({ RunsSu
 vi.mock('../../../src/renderer/components/apps/PersonTeamWork', () => ({ PersonTeamWork: () => null }))
 
 import { RunningSince } from '../../../src/renderer/components/apps/RunningSince'
+import { formatRunStart } from '../../../src/renderer/utils/format-time'
 import { ActivityEntryCard } from '../../../src/renderer/components/apps/ActivityEntryCard'
 import { ActivityThread } from '../../../src/renderer/components/apps/ActivityThread'
 
@@ -71,6 +72,16 @@ describe('RunningSince', () => {
 
     expect(html).toContain('Started at ')
     expect(html).toContain('running for 1:10:00')
+  })
+
+  it('writes a start on an earlier day as the runs band does, with its month and day', () => {
+    const startedAt = new Date(2026, 9, 4, 9, 5).getTime()
+    const time = new Date(startedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+    const day = new Date(startedAt).toLocaleDateString(undefined, { month: '2-digit', day: '2-digit' })
+
+    expect(formatRunStart(startedAt)).toBe(`${day} ${time}`)
+    expect(formatRunStart(NOW - 70 * MIN)).toBe(new Date(NOW - 70 * MIN).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }))
+    expect(renderToStaticMarkup(createElement(RunningSince, { startedAt }))).toContain(`Started at ${day} ${time}`)
   })
 })
 

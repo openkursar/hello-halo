@@ -6,14 +6,7 @@
 
 import { useEffect, useState } from 'react'
 import { useTranslation } from '../../i18n'
-import { formatElapsed } from '../../utils/format-time'
-
-function formatStart(startedAt: number, now: number): string {
-  const start = new Date(startedAt)
-  return start.toDateString() === new Date(now).toDateString()
-    ? start.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
-    : start.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-}
+import { formatElapsed, formatRunStart } from '../../utils/format-time'
 
 export function RunningSince({ startedAt }: { startedAt: number }) {
   const { t } = useTranslation()
@@ -25,7 +18,7 @@ export function RunningSince({ startedAt }: { startedAt: number }) {
   return (
     <p className="mt-2 text-xs text-muted-foreground tabular-nums">
       {t('Started at {{time}} · running for {{elapsed}}', {
-        time: formatStart(startedAt, now),
+        time: formatRunStart(startedAt, now),
         elapsed: formatElapsed(now - startedAt),
       })}
     </p>
