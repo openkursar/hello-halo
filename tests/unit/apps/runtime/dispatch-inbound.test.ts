@@ -107,10 +107,6 @@ vi.mock('../../../../src/main/services/space.service', () => ({
   getSpaceDir: vi.fn(() => '/tmp/space-dir'),
   getSpace: vi.fn(() => ({ path: '/tmp/space' })),
 }))
-// The step limit an IM note names.
-vi.mock('../../../../src/main/services/agent/user-agent-settings', () => ({
-  readUserAgentSettings: () => ({ maxTurns: 3, digitalHumansEnabled: true }),
-}))
 vi.mock('../../../../src/main/foundation/product-config', () => ({
   getImChannelsPermissionDefaults: vi.fn(() => undefined),
 }))
@@ -138,7 +134,7 @@ import {
 import { analytics } from '../../../../src/main/services/analytics/analytics.service'
 import { setImPermissionContext, clearImPermissionContext } from '../../../../src/main/apps/runtime/im-permission-registry'
 import { maybeClaimOwner } from '../../../../src/main/apps/runtime/im-channels/owner-claim'
-import { AppChatTurnInterrupted } from '../../../../src/main/apps/runtime/turn-ending'
+import { AppChatTurnInterrupted, type AppChatTurnEnding } from '../../../../src/main/apps/runtime/turn-ending'
 import type { InboundMessage, ReplyHandle } from '../../../../src/shared/types/inbound-message'
 
 const trackMock = analytics.track as ReturnType<typeof vi.fn>
@@ -330,8 +326,10 @@ describe('dispatchInboundMessage — a turn that stopped short', () => {
   const STEP_LIMIT_NOTE = '（已达到单次最多 3 步的上限，回复“继续”可接着做）'
   const CUT_OFF_NOTE = '（本轮意外中断，回复“继续”可接着做）'
 
-  function replyWith(content: string, ending: 'max_turns' | 'interrupted'): void {
-    const request = sendAppChatMessageMock.mock.calls[0][0] as { onReply: (text: string, ending?: string) => void }
+  function replyWith(content: string, ending: AppChatTurnEnding): void {
+    const request = sendAppChatMessageMock.mock.calls[0][0] as {
+      onReply: (text: string, ending?: AppChatTurnEnding) => void
+    }
     request.onReply(content, ending)
   }
 
@@ -339,7 +337,7 @@ describe('dispatchInboundMessage — a turn that stopped short', () => {
     const reply = makeReply(false)
     await dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
 
-    replyWith('First half of the work.', 'max_turns')
+    replyWith('First half of the work.', { kind: 'max_turns', limit: 3 })
 
     expect(reply.send).toHaveBeenLastCalledWith(`First half of the work.\n\n${STEP_LIMIT_NOTE}`)
   })
@@ -349,7 +347,7 @@ describe('dispatchInboundMessage — a turn that stopped short', () => {
     const reply = makeReply(true)
     await dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
 
-    replyWith('', 'max_turns')
+    replyWith('', { kind: 'max_turns', limit: 3 })
 
     expect(reply.streaming!.finish).toHaveBeenCalledWith(STEP_LIMIT_NOTE)
   })
@@ -358,7 +356,7 @@ describe('dispatchInboundMessage — a turn that stopped short', () => {
     const reply = makeReply(false)
     await dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
 
-    replyWith('Partial answer', 'interrupted')
+    replyWith('Partial answer', { kind: 'interrupted' })
 
     expect(reply.send).toHaveBeenLastCalledWith(`Partial answer\n\n${CUT_OFF_NOTE}`)
   })

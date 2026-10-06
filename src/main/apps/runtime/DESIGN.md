@@ -546,9 +546,13 @@ Consequences that matter:
   can tell it from a model error. Every IM exit — the person's reply
   (`dispatch-inbound`), a teammate-woken front-desk turn (`team/index.ts`), an
   autonomous turn's push — adds the same note (`withTurnEndingNote`: after the
-  text, or alone), naming the step limit the person can raise. Halo's chat page
-  needs nothing of this: the engine's `agent:error` (`interrupted`) notice
-  covers the step limit with or without text.
+  text, or alone), naming the step limit the person can raise. The number is
+  the one the engine reported (`StreamResult.maxTurnsLimit`): the session was
+  built with it, and the setting may have changed since; an engine that names
+  none gets the note without a number. Halo's chat page needs nothing of this:
+  the stream processor's `agent:error` (`interrupted`) notice covers the step
+  limit with or without text. A reply cut at the output-token ceiling is not
+  the step limit and gets no note on any engine (services/agent DESIGN §3).
 - Those cover a session that *reports* its death. A session that simply never
   produces a turn — a resume against a transcript a crashed process left broken,
   an engine that failed to launch — reports nothing, and the caller would await a

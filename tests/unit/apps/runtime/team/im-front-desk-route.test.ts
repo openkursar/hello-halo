@@ -27,7 +27,7 @@ const { channel, appChatCalls, turn } = vi.hoisted(() => ({
   },
   appChatCalls: [] as Record<string, unknown>[],
   /** How the woken turn answers: its text, and how it ended if it stopped short. */
-  turn: { reply: 'answer for the person', ending: undefined as string | undefined },
+  turn: { reply: 'answer for the person', ending: undefined as AppChatTurnEnding | undefined },
 }))
 
 vi.mock('../../../../../src/main/apps/runtime/app-chat-live-turn', () => ({
@@ -57,18 +57,15 @@ vi.mock('../../../../../src/main/apps/runtime/im-session-registry', () => ({
 vi.mock('../../../../../src/main/apps/runtime/app-chat', () => ({
   sendAppChatMessage: async (request: Record<string, unknown>) => {
     appChatCalls.push(request)
-    const onReply = request.onReply as ((s: string, ending?: string) => void) | undefined
+    const onReply = request.onReply as ((s: string, ending?: AppChatTurnEnding) => void) | undefined
     if (turn.ending) onReply?.(turn.reply, turn.ending)
     else onReply?.(turn.reply)
   },
 }))
 
-vi.mock('../../../../../src/main/services/agent/user-agent-settings', () => ({
-  readUserAgentSettings: () => ({ maxTurns: 3, digitalHumansEnabled: true }),
-}))
-
 import { createDefaultSessionDeps } from '../../../../../src/main/apps/runtime/team'
 import type { TeamStore } from '../../../../../src/main/apps/team'
+import type { AppChatTurnEnding } from '../../../../../src/main/apps/runtime/turn-ending'
 
 const TEAM_ID = 'team-1'
 const EPOCH_ID = 'epoch-1'
@@ -134,7 +131,7 @@ describe('woken front-desk turn — the IM route is resolved in full', () => {
 
   it('tells the chat a woken turn stopped at the step limit, and gives the team the text as written', async () => {
     turn.reply = 'half of the analysis'
-    turn.ending = 'max_turns'
+    turn.ending = { kind: 'max_turns', limit: 3 }
 
     const result = await wake(storeWithEpoch())
 
@@ -148,7 +145,7 @@ describe('woken front-desk turn — the IM route is resolved in full', () => {
 
   it('tells the chat even when the step limit came before any text', async () => {
     turn.reply = ''
-    turn.ending = 'max_turns'
+    turn.ending = { kind: 'max_turns', limit: 3 }
 
     await wake(storeWithEpoch())
 

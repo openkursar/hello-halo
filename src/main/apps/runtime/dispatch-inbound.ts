@@ -1096,7 +1096,7 @@ export async function dispatchInboundMessage(
       // A turn cut off before writing anything is not an error the person can
       // act on; what they can do is tell it to carry on.
       const errorMsg = err instanceof AppChatTurnInterrupted
-        ? withTurnEndingNote('', 'interrupted')
+        ? withTurnEndingNote('', { kind: 'interrupted' })
         : `⚠️ Error: ${(err as Error).message?.slice(0, 200) ?? 'Unknown error'}`
       if (reply.streaming) {
         await reply.streaming.finish(errorMsg)

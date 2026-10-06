@@ -1037,11 +1037,16 @@ function stopReasonFrom(finishKind: string | null, hasToolUse: boolean): string 
 }
 
 /**
- * Map the harness turn-end vocabulary onto the three `result` shapes Halo's
- * stream-processor distinguishes: success, a graceful token-ceiling stop, and
- * an interrupted run. Only a genuine failure sets `is_error` — an aborted or
- * blocked turn is an interruption, and flagging it as an error would surface a
- * provider-error banner the user never hit.
+ * Map the harness turn-end vocabulary onto the `result` shapes Halo's
+ * stream-processor distinguishes: success, an interrupted run, and a failure.
+ * Only a genuine failure sets `is_error` — an aborted or blocked turn is an
+ * interruption, and flagging it as an error would surface a provider-error
+ * banner the user never hit.
+ *
+ * Running into the output-token ceiling ends the turn as a success that says
+ * so in `stop_reason`, the shape the other engines give it once their own
+ * recovery runs out. It is not the step limit (`error_max_turns`), which the
+ * harness never reaches: Halo hands it no step limit.
  */
 function resultOutcome(
   turnEndKind: string | undefined,
@@ -1051,7 +1056,7 @@ function resultOutcome(
     return { subtype: 'error_during_execution', isError: true, stopReason: 'error' }
   }
   if (turnEndKind === 'max-tokens') {
-    return { subtype: 'error_max_turns', isError: false, stopReason: 'max_tokens' }
+    return { subtype: 'success', isError: false, stopReason: 'max_tokens' }
   }
   if (turnEndKind === 'aborted' || turnEndKind === 'blocked' || turnEndKind === 'interrupted') {
     return { subtype: 'error_during_execution', isError: false, stopReason: 'interrupted' }

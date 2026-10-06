@@ -323,7 +323,7 @@ class AppChatSink implements TurnSink {
       `content=${replyContent.length} chars` +
       `${accumulated ? ' (from SDK message)' : ' (from streamResult)'}, ` +
       `thoughts=${result.thoughts.length}, tokens=${result.tokenUsage ? 'yes' : 'no'}` +
-      `${ending ? `, ended=${ending}` : ''}`
+      `${ending ? `, ended=${ending.kind}` : ''}`
     )
 
     if (!round) {

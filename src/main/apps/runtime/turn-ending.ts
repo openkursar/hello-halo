@@ -8,12 +8,16 @@
  * the message it answers is still finished.
  */
 
-import type { StreamResult } from '../../services/agent/stream-processor'
-import { readUserAgentSettings } from '../../services/agent/user-agent-settings'
-import { DEFAULT_MAX_TURNS } from '../../../shared/constants/agent-limits'
+import type { StreamResult } from '../../services/agent'
 
-/** How a turn left its answer unfinished, other than by the person's own stop. */
-export type AppChatTurnEnding = 'max_turns' | 'interrupted'
+/**
+ * How a turn left its answer unfinished, other than by the person's own stop.
+ * The step limit is the one the engine reported: the session was built with
+ * it, and the setting may have changed since.
+ */
+export type AppChatTurnEnding =
+  | { kind: 'max_turns'; limit?: number }
+  | { kind: 'interrupted' }
 
 /** A round whose turn was cut off before it wrote anything. */
 export class AppChatTurnInterrupted extends Error {
@@ -26,8 +30,10 @@ export class AppChatTurnInterrupted extends Error {
 /** How `result`'s turn ended short, if it did. A stop the person asked for is not one. */
 export function turnEndingOf(result: StreamResult): AppChatTurnEnding | undefined {
   if (result.wasAborted) return undefined
-  if (result.reachedMaxTurns) return 'max_turns'
-  return result.isInterrupted ? 'interrupted' : undefined
+  if (result.reachedMaxTurns) {
+    return result.maxTurnsLimit === undefined ? { kind: 'max_turns' } : { kind: 'max_turns', limit: result.maxTurnsLimit }
+  }
+  return result.isInterrupted ? { kind: 'interrupted' } : undefined
 }
 
 /**
@@ -36,9 +42,11 @@ export function turnEndingOf(result: StreamResult): AppChatTurnEnding | undefine
  * Chinese like the other IM-facing notices: the backend has no renderer i18n.
  */
 export function withTurnEndingNote(content: string, ending: AppChatTurnEnding): string {
-  const note = ending === 'max_turns'
-    ? `（已达到单次最多 ${readUserAgentSettings().maxTurns ?? DEFAULT_MAX_TURNS} 步的上限，回复“继续”可接着做）`
-    : '（本轮意外中断，回复“继续”可接着做）'
+  const note = ending.kind === 'interrupted'
+    ? '（本轮意外中断，回复“继续”可接着做）'
+    : ending.limit === undefined
+      ? '（已达到单次最多步数的上限，回复“继续”可接着做）'
+      : `（已达到单次最多 ${ending.limit} 步的上限，回复“继续”可接着做）`
   const written = content.trimEnd()
   return written.trim() ? `${written}\n\n${note}` : note
 }

@@ -343,10 +343,10 @@ describe('app-chat sink: a turn that stopped short', () => {
 
     sink.onTurnStart()
     feedText(sink, 'first half of the work')
-    sink.onTurnComplete(makeResult({ reachedMaxTurns: true }))
+    sink.onTurnComplete(makeResult({ reachedMaxTurns: true, maxTurnsLimit: 3 }))
 
     await expect(round.done).resolves.toBeUndefined()
-    expect(onReply).toHaveBeenCalledWith('first half of the work', 'max_turns')
+    expect(onReply).toHaveBeenCalledWith('first half of the work', { kind: 'max_turns', limit: 3 })
   })
 
   it('still answers the round when the step limit came before any text', async () => {
@@ -355,10 +355,10 @@ describe('app-chat sink: a turn that stopped short', () => {
     const round = sink.beginRound({ onReply })
 
     sink.onTurnStart()
-    sink.onTurnComplete(makeResult({ reachedMaxTurns: true, hasMeaningfulContent: false }))
+    sink.onTurnComplete(makeResult({ reachedMaxTurns: true, maxTurnsLimit: 3, hasMeaningfulContent: false }))
 
     await expect(round.done).resolves.toBeUndefined()
-    expect(onReply).toHaveBeenCalledWith('', 'max_turns')
+    expect(onReply).toHaveBeenCalledWith('', { kind: 'max_turns', limit: 3 })
   })
 
   it('marks a turn cut off after writing something as interrupted', async () => {
@@ -370,7 +370,7 @@ describe('app-chat sink: a turn that stopped short', () => {
     feedText(sink, 'partial')
     sink.onTurnComplete(makeResult({ isInterrupted: true }))
 
-    expect(onReply).toHaveBeenCalledWith('partial', 'interrupted')
+    expect(onReply).toHaveBeenCalledWith('partial', { kind: 'interrupted' })
   })
 
   it('fails a turn cut off before writing anything in a way its caller can tell apart', async () => {
@@ -403,12 +403,11 @@ describe('app-chat sink: a turn that stopped short', () => {
     const sink = makeSink()
     sink.onTurnStart()
     feedText(sink, 'background follow-up')
-    sink.onTurnComplete(makeResult({ reachedMaxTurns: true }))
+    sink.onTurnComplete(makeResult({ reachedMaxTurns: true, maxTurnsLimit: 3 }))
 
     expect(pushToChat).toHaveBeenCalledTimes(1)
     const pushed = (pushToChat.mock.calls[0] as unknown[])[1] as string
-    expect(pushed.startsWith('background follow-up\n\n')).toBe(true)
-    expect(pushed).toContain('步的上限')
+    expect(pushed).toBe('background follow-up\n\n（已达到单次最多 3 步的上限，回复“继续”可接着做）')
   })
 })
 

@@ -237,35 +237,86 @@ describe('processStream interruption and retirement', () => {
 describe('processStream: a turn cut off by the step limit', () => {
   beforeEach(() => { vi.clearAllMocks() })
 
-  /** The result the engine ends a turn with when it ran out of steps. */
-  function maxTurnsResult(): Record<string, unknown> {
-    return { type: 'result', subtype: 'error_max_turns', is_error: false, num_turns: 4, duration_ms: 100, session_id: 'sess-1' }
+  const STEP_LIMIT_NOTICE = 'Reached the maximum turn limit. Send a message to continue.'
+
+  /**
+   * The default engine's frame (Claude Code 2.1.89 cli.js, `max_turns_reached`
+   * attachment): flagged is_error, the limit only in `errors`, no `result`.
+   */
+  function claudeCodeStepLimit(limit: number): Record<string, unknown>[] {
+    return [{
+      type: 'result', subtype: 'error_max_turns', duration_ms: 1200, duration_api_ms: 900, is_error: true,
+      num_turns: limit + 1, stop_reason: 'tool_use', session_id: 'sess-1', total_cost_usd: 0.01,
+      usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      modelUsage: {}, permission_denials: [], uuid: 'u-1',
+      errors: [`Reached maximum number of turns (${limit})`],
+    }]
   }
 
-  function interruptionNotices(): unknown[] {
+  /**
+   * Halo SDK's frames (halo-sdk query-loop): a system notice naming the limit,
+   * then a result flagged is_error whose `result` is the error text.
+   */
+  function haloSdkStepLimit(limit: number): Record<string, unknown>[] {
+    const text = `Max turns exceeded: ${limit} turns completed, limit is ${limit}`
+    return [
+      { type: 'system', subtype: 'max_turns_reached', max_turns: limit, turn_count: limit, session_id: 'sess-1', uuid: 'u-1' },
+      {
+        type: 'result', subtype: 'error_max_turns', errors: [text], result: text, is_error: true, num_turns: limit,
+        total_cost_usd: 0, usage: {}, modelUsage: {}, session_id: 'sess-1', stop_reason: 'max_turns',
+        duration_ms: 1200, duration_api_ms: 900, permission_denials: [], uuid: 'u-2',
+      },
+    ]
+  }
+
+  function errorEvents(): unknown[] {
     return emitAgentEvent.mock.calls
       .filter(([channel]) => channel === 'agent:error')
       .map(([, , , data]) => data)
   }
 
-  it('says why it stopped even when it wrote part of an answer', async () => {
+  it.each([
+    ['the default engine', claudeCodeStepLimit],
+    ['Halo SDK', haloSdkStepLimit],
+  ])('%s: says why it stopped after part of an answer, which stands as written', async (_engine, frames) => {
     // What was written is not the whole answer; without the notice the chat page
-    // shows it as if the work were done.
-    await processStream(baseParams({
-      v2Session: fakeSession([systemInit(), assistantText('m1', 'First half of the work.'), maxTurnsResult()]),
+    // shows it as if the work were done, and an IM chat gets no word of it.
+    const result = await processStream(baseParams({
+      v2Session: fakeSession([systemInit(), assistantText('m1', 'First half of the work.'), ...frames(3)]),
     }))
 
-    expect(interruptionNotices()).toEqual([
-      expect.objectContaining({ errorType: 'interrupted', error: 'Reached the maximum turn limit. Send a message to continue.' }),
-    ])
+    expect(result).toMatchObject({
+      reachedMaxTurns: true, maxTurnsLimit: 3, hasErrorThought: false, isInterrupted: false,
+      finalContent: 'First half of the work.',
+    })
+    expect(errorEvents()).toEqual([expect.objectContaining({ errorType: 'interrupted', error: STEP_LIMIT_NOTICE })])
   })
 
-  it('says the same when it wrote nothing', async () => {
-    await processStream(baseParams({ v2Session: fakeSession([systemInit(), maxTurnsResult()]) }))
+  it.each([
+    ['the default engine', claudeCodeStepLimit],
+    ['Halo SDK', haloSdkStepLimit],
+  ])('%s: says the same when it wrote nothing, and nothing else', async (_engine, frames) => {
+    // Was: an error with no text (nothing shown) on the default engine, the
+    // engine's own "Max turns exceeded…" on Halo SDK.
+    const result = await processStream(baseParams({ v2Session: fakeSession([systemInit(), ...frames(3)]) }))
 
-    expect(interruptionNotices()).toEqual([
-      expect.objectContaining({ errorType: 'interrupted', error: 'Reached the maximum turn limit. Send a message to continue.' }),
-    ])
+    expect(result).toMatchObject({ reachedMaxTurns: true, maxTurnsLimit: 3, hasErrorThought: false, finalContent: '' })
+    expect(errorEvents()).toEqual([expect.objectContaining({ errorType: 'interrupted', error: STEP_LIMIT_NOTICE })])
+  })
+
+  it('does not read a reply cut at the output-token ceiling as the step limit', async () => {
+    // The shape every engine ends that with once its own recovery runs out.
+    const result = await processStream(baseParams({
+      v2Session: fakeSession([
+        systemInit(),
+        assistantText('m1', 'A long answer that ran out of'),
+        { type: 'result', subtype: 'success', is_error: false, stop_reason: 'max_tokens', result: '', duration_ms: 100, session_id: 'sess-1' },
+      ]),
+    }))
+
+    expect(result).toMatchObject({ reachedMaxTurns: false, hasErrorThought: false, isInterrupted: false })
+    expect(result.maxTurnsLimit).toBeUndefined()
+    expect(errorEvents()).toEqual([])
   })
 })
 
