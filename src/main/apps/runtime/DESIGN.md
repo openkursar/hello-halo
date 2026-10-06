@@ -708,7 +708,8 @@ inbound message; rides into whatever history the engine keeps).
   answers anyway, so `notify_bot` refuses that chat (`relay.contact`) and tells
   the model to write the message as its reply; a push there was a second copy.
   The IM entry says which text is the reply — what follows the turn's last tool
-  call — so finishing work comes before the answer, not after it.
+  call — so finishing work comes before the answer, not after it; so does the
+  bridge a team member serving an IM chat reads (`team/team-prompt.buildTeamImBridge`).
 - **Sender side needs nothing**: the notify_bot call + result already live in
   the calling session's history.
 - **Peek/commit, not drain**: events are removed only when the engine accepts

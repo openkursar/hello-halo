@@ -83,6 +83,14 @@ describe('buildTeamImBridge', () => {
     expect(out).toContain('reach no')
   })
 
+  it.each([true, false])('says only the text after the last tool call is sent, so finishing work comes first (isLead=%s)', (isLead) => {
+    // An answer followed by bookkeeping reached the chat as the bookkeeping's
+    // closing line, the same way it does in a digital human's own IM chat.
+    const out = buildTeamImBridge(im, isLead)
+    expect(out).toContain('Only the text you write after your last tool call is sent')
+    expect(out).toContain('before you write the reply')
+  })
+
   it.each([true, false])('warns that a teammate answer cannot land inside this turn (isLead=%s)', (isLead) => {
     const out = buildTeamImBridge(im, isLead)
     expect(out).toContain('team_send')
