@@ -1,10 +1,13 @@
 /**
  * Renderer recovery policy: a few failures in a window reload, the next one
- * halts for good, and a quiet window resets the count.
+ * halts for good, and a quiet window resets the count. A hang is reloaded only
+ * if it outlasts the grace period; one that clears first changes nothing.
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
+  RENDERER_HANG_GRACE_MS,
+  RendererHangWatch,
   RendererRecoveryPolicy,
   classifyRendererGone,
 } from '../../../src/main/services/renderer-recovery'
@@ -67,5 +70,43 @@ describe('classifyRendererGone', () => {
     ['clean-exit', 'exit'],
   ])('%s → %s', (reason, expected) => {
     expect(classifyRendererGone(reason)).toBe(expected)
+  })
+})
+
+describe('RendererHangWatch', () => {
+  afterEach(() => { vi.useRealTimers() })
+
+  it('reloads nothing when the renderer recovers within the grace period', () => {
+    vi.useFakeTimers()
+    const reload = vi.fn()
+    const watch = new RendererHangWatch(reload)
+    expect(watch.unresponsive()).toBe(true)
+    vi.advanceTimersByTime(RENDERER_HANG_GRACE_MS - 1)
+    expect(watch.cancel()).toBe(true)
+    vi.advanceTimersByTime(RENDERER_HANG_GRACE_MS)
+    expect(reload).not.toHaveBeenCalled()
+  })
+
+  it('reloads once a hang outlasts the grace period, however often it is reported', () => {
+    vi.useFakeTimers()
+    const reload = vi.fn()
+    const watch = new RendererHangWatch(reload)
+    watch.unresponsive()
+    vi.advanceTimersByTime(10_000)
+    expect(watch.unresponsive()).toBe(false)
+    vi.advanceTimersByTime(RENDERER_HANG_GRACE_MS - 10_000)
+    expect(reload).toHaveBeenCalledTimes(1)
+    expect(watch.cancel()).toBe(false)
+  })
+
+  it('starts a fresh wait for the next hang', () => {
+    vi.useFakeTimers()
+    const reload = vi.fn()
+    const watch = new RendererHangWatch(reload, 1_000)
+    watch.unresponsive()
+    vi.advanceTimersByTime(1_000)
+    expect(watch.unresponsive()).toBe(true)
+    vi.advanceTimersByTime(1_000)
+    expect(reload).toHaveBeenCalledTimes(2)
   })
 })

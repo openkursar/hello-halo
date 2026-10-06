@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { buildBrowserLiveSessions } from '../../../src/renderer/hooks/browser-live-sessions'
+import { buildBrowserLiveSessions, pageOwnerAppId } from '../../../src/renderer/hooks/browser-live-sessions'
 import type { AIBrowserPage } from '../../../src/renderer/stores/ai-browser.store'
 
 const page = (viewId: string, conversationId: string, spaceId: string | null, extra: Partial<AIBrowserPage> = {}): AIBrowserPage =>
@@ -72,5 +72,13 @@ describe('browser rows in the live-session tray', () => {
 
   it('carries the URL so the attached tab opens on the right page', () => {
     expect(build([page('a', 'conv-1', 's1')], 's1')[0].url).toBe('https://a.test/x')
+  })
+})
+
+describe('who holds a page', () => {
+  it('is the digital human for its chats and for a run started from the desktop, and no one for a space conversation', () => {
+    expect(pageOwnerAppId('app-chat:dh1')).toBe('dh1')
+    expect(pageOwnerAppId('app-run:dh1:run-7')).toBe('dh1')
+    expect(pageOwnerAppId('conv-1')).toBeNull()
   })
 })

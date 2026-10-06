@@ -2,9 +2,10 @@
  * Remote browsers get the built renderer by whole-file reads only. Opening a
  * file inside app.asar as a stream makes Electron extract it to a temp file
  * that macOS later deletes, after which every page and asset failed until a
- * restart; a whole-file read goes to the archive itself. Each file is read once
- * and shared by every response sending it, so slow or simultaneous downloads
- * cannot pile up copies. The validators the browser caches against stay those
+ * restart; a whole-file read goes to the archive itself. Responses sending the
+ * same file at the same time share one copy, which is dropped once the last of
+ * them is done, so slow downloads cannot pile up copies and nothing stays in
+ * memory afterwards. The validators the browser caches against stay those
  * `express.static` sent.
  */
 
@@ -13,9 +14,9 @@ import { mkdtempSync, mkdirSync, rmSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import express from 'express'
-import { get, type Server } from 'http'
+import { get, type IncomingMessage, type Server } from 'http'
 
-const io = vi.hoisted(() => ({ readFile: 0, stat: 0, streamed: 0, failNextRead: false }))
+const io = vi.hoisted(() => ({ readFile: 0, stat: 0, streamed: 0, failNextRead: false, holdStat: null as Promise<void> | null }))
 vi.mock('fs', async (original) => {
   const real = await original<typeof import('fs')>()
   return {
@@ -30,13 +31,18 @@ vi.mock('fs', async (original) => {
       }
       return (real.readFile as (...a: unknown[]) => void)(...args)
     }) as typeof real.readFile,
-    stat: ((...args: Parameters<typeof real.stat>) => { io.stat++; return (real.stat as (...a: unknown[]) => void)(...args) }) as typeof real.stat,
+    stat: ((...args: Parameters<typeof real.stat>) => {
+      io.stat++
+      const run = () => (real.stat as (...a: unknown[]) => void)(...args)
+      if (io.holdStat) void io.holdStat.then(run)
+      else run()
+    }) as typeof real.stat,
     open: ((...args: Parameters<typeof real.open>) => { io.streamed++; return (real.open as (...a: unknown[]) => void)(...args) }) as typeof real.open,
     createReadStream: ((...args: Parameters<typeof real.createReadStream>) => { io.streamed++; return real.createReadStream(...args) }) as typeof real.createReadStream,
   }
 })
 
-import { resolveAssetPath, serveRendererAssets } from '../../../src/main/http/renderer-assets'
+import { rendererAssetCopies, resolveAssetPath, serveRendererAssets } from '../../../src/main/http/renderer-assets'
 
 let root: string
 let server: Server
@@ -121,12 +127,40 @@ describe('remote renderer assets', () => {
 })
 
 describe('one copy per file', () => {
-  it('reads a file once for every response sending it, at the same time or later', async () => {
-    writeFileSync(join(root, 'assets', 'shared-1.js'), 'shared one')
-    const bodies = await Promise.all([1, 2, 3].map(async () => (await fetch(`${base}/assets/shared-1.js`)).text()))
-    expect(bodies).toEqual(['shared one', 'shared one', 'shared one'])
-    expect(await (await fetch(`${base}/assets/shared-1.js`)).text()).toBe('shared one')
+  it('shares one copy with every response still sending it, and drops it once all are done', async () => {
+    const size = 8 * 1024 * 1024
+    writeFileSync(join(root, 'assets', 'big.wasm'), Buffer.alloc(size, 7))
+    // A slow client: it takes the headers, then stops reading, so its response stays open.
+    const slow = await new Promise<IncomingMessage>((resolve, reject) => {
+      get(`${base}/assets/big.wasm`, resolve).on('error', reject)
+    })
+    slow.pause()
+    expect((await (await fetch(`${base}/assets/big.wasm`)).arrayBuffer()).byteLength).toBe(size)
     expect(io.readFile).toBe(1)
+
+    let received = 0
+    slow.on('data', (chunk: Buffer) => { received += chunk.length })
+    await new Promise<void>((resolve) => { slow.on('end', resolve); slow.resume() })
+    expect(received).toBe(size)
+    await new Promise((resolve) => setImmediate(resolve))
+    expect((await (await fetch(`${base}/assets/big.wasm`)).arrayBuffer()).byteLength).toBe(size)
+    expect(io.readFile).toBe(2)
+  })
+
+  it('holds nothing for a client that left while the file was still being checked', async () => {
+    writeFileSync(join(root, 'assets', 'left-early.js'), 'never sent')
+    let releaseStat!: () => void
+    io.holdStat = new Promise<void>((resolve) => { releaseStat = resolve })
+    const request = get(`${base}/assets/left-early.js`)
+    request.on('error', () => {})
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    request.destroy()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    io.holdStat = null
+    releaseStat()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(rendererAssetCopies()).toBe(0)
+    expect(io.readFile).toBe(0)
   })
 
   it('reads a file again once it changed', async () => {

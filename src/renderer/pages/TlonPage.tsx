@@ -21,7 +21,7 @@ import { KBList } from '../components/tlon/KBList'
 import { KBDetail } from '../components/tlon/KBDetail'
 import { CreateKBDialog } from '../components/tlon/CreateKBDialog'
 import { EmptyState } from '../components/tlon/EmptyState'
-import { CanvasTableOpener, ContentCanvas, TerminalCloseGuard } from '../components/canvas'
+import { CanvasTableOpener, CanvasToggleButton, ContentCanvas, TerminalCloseGuard } from '../components/canvas'
 import { useCanvasIsOpen } from '../stores/canvas.store'
 import { takeEntry, trackHome } from '../services/home-telemetry'
 
@@ -150,6 +150,9 @@ export function TlonPage() {
                     title={t('Drag to resize')}
                   />
                 )}
+
+                {/* A collapsed canvas keeps its tabs; this edge handle brings it back */}
+                {!isMobile && <CanvasToggleButton placement="edge" />}
               </div>
 
               {/* Content Canvas (desktop: side-by-side; mobile: fullscreen overlay) */}

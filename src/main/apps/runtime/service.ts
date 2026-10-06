@@ -229,11 +229,12 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     }
   }
 
-  function buildManualTriggerContext(app: InstalledApp): TriggerContext {
+  function buildManualTriggerContext(app: InstalledApp, watchable: boolean): TriggerContext {
     return {
       type: 'manual',
       description: `Manually triggered run for "${app.spec.name}". ` +
         `Time: ${new Date().toISOString()}`,
+      ...(watchable ? { watchable } : {}),
     }
   }
 
@@ -372,7 +373,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
    *
    * @throws AppNotFoundError | AppNotRunnableError | ConcurrencyLimitError
    */
-  function admitManualRun(appId: string): { app: InstalledApp; trigger: TriggerContext } {
+  function admitManualRun(appId: string, watchable = false): { app: InstalledApp; trigger: TriggerContext } {
     const app = appManager.getApp(appId)
     if (!app) {
       throw new AppNotFoundError(appId)
@@ -385,7 +386,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       throw new ConcurrencyLimitError(DEFAULT_MAX_CONCURRENT, appId)
     }
 
-    const trigger = buildManualTriggerContext(app)
+    const trigger = buildManualTriggerContext(app, watchable)
 
     return { app, trigger }
   }
@@ -1183,8 +1184,8 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       return result
     },
 
-    async startManually(appId: string): Promise<AppRunStartInfo> {
-      const { app, trigger } = admitManualRun(appId)
+    async startManually(appId: string, options?: { watchable?: boolean }): Promise<AppRunStartInfo> {
+      const { app, trigger } = admitManualRun(appId, options?.watchable === true)
 
       let settled = false
       let resolveAdmission!: (info: AppRunStartInfo) => void

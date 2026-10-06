@@ -153,6 +153,12 @@ export interface DownloadInfo {
   consumed?: boolean
 }
 
+/** What a filled element holds afterwards, read back from the page. */
+export type FieldReadBack =
+  | { kind: 'field'; value: string; secret: boolean }
+  | { kind: 'editable'; value: string }
+  | { kind: 'unreadable' }
+
 // ============================================
 // Context Interface
 // ============================================
@@ -207,7 +213,7 @@ export interface BrowserContextInterface {
   // Element operations
   clickElement(uid: string, options?: { dblClick?: boolean }): Promise<void>
   hoverElement(uid: string): Promise<void>
-  fillElement(uid: string, value: string): Promise<void>
+  fillElement(uid: string, value: string): Promise<FieldReadBack>
   selectOption(uid: string, value: string): Promise<void>
   dragElement(fromUid: string, toUid: string): Promise<void>
 

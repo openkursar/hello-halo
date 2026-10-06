@@ -140,9 +140,10 @@ async function appOperation(name: string, operation: () => unknown | Promise<unk
 
 export function registerAppHandlers(): void {
   registerRawRpcHandlers(appRpc, {
+    // The desktop's Run once: the user is at the screen, so the run's pages open where they can watch them.
     appStartRun: (appId: string) => appOperation('start-run', async () => {
       const r = requireRuntime()
-      return r.success ? { success: true, data: await r.runtime.startManually(appId) } : r
+      return r.success ? { success: true, data: await r.runtime.startManually(appId, { watchable: true }) } : r
     }),
     appGetStudioSummary: (language?: string) => appOperation('studio-summary', () => ({ success: true, data: getStudioSummary(language) })),
     appListPeople: (query?: import('../../shared/apps/people-directory').PeopleDirectoryQuery) => appOperation('list-people', () => ({ success: true, data: listPeopleDirectory(query) })),

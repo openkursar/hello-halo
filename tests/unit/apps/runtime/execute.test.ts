@@ -258,6 +258,7 @@ import {
 } from '../../../../src/main/services/agent/session-manager'
 import { missingConnections, resolveExecutionEnvironment } from '../../../../src/main/apps/runtime/execution-environment'
 import { openSessionWriter } from '../../../../src/main/apps/runtime/session-store'
+import { createScopedBrowserContext } from '../../../../src/main/services/ai-browser'
 
 // ============================================
 // Fakes
@@ -401,6 +402,27 @@ describe('executeRun — guards', () => {
     await expect(
       executeRun({ app, trigger: baseTrigger, store: makeStore(), memory: makeMemory() }),
     ).rejects.toBeInstanceOf(RunExecutionError)
+  })
+})
+
+describe('executeRun — browser pages', () => {
+  it('opens the pages of a run started from the desktop where the user can watch them, under its run key', async () => {
+    nextSession = new FakeSession({ script: [systemInit(), assistantReport()] })
+    vi.mocked(createScopedBrowserContext).mockClear()
+    const result = await executeRun({
+      app: makeApp(),
+      trigger: { type: 'manual', description: 'run now', watchable: true },
+      store: makeStore(),
+      memory: makeMemory(),
+    })
+    expect(createScopedBrowserContext).toHaveBeenCalledWith({ conversationId: `app-run:app-1:${result.runId}`, spaceId: 'space-1' })
+  })
+
+  it('keeps the pages of every other run in the hidden host', async () => {
+    nextSession = new FakeSession({ script: [systemInit(), assistantReport()] })
+    vi.mocked(createScopedBrowserContext).mockClear()
+    await executeRun({ app: makeApp(), trigger: baseTrigger, store: makeStore(), memory: makeMemory() })
+    expect(createScopedBrowserContext).toHaveBeenCalledWith(undefined)
   })
 })
 

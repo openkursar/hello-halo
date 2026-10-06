@@ -15,6 +15,7 @@ attachment); React renders what it says.
 | React bindings | `hooks/useCanvasLifecycle.ts` | `useTabList`, `useActiveTab`, `useActiveTabId`, `useCanvasIsOpen`, `useTabCount`, `useBrowserState`, `useCanvasActions` |
 | Legacy store proxy | `stores/canvas.store.ts` | open/maximized state for pages outside the canvas; budget-eviction toast |
 | Host | `ContentCanvas.tsx` | tab bar, keyboard shortcuts, `TabContent` (loading/error states + `ViewerHost` boundary) |
+| Collapse / restore | `CanvasToggleButton.tsx` | the tab bar's collapse action (tabs stay) and the page-edge handle that brings a collapsed canvas back, showing its tab count |
 | Registry | `viewer-registry.tsx` | `VIEWERS: Record<ContentType, ViewerSpec>`, `viewerFor(type)`, `viewerBringsFileList(type)` (exported for the page layout) |
 | Viewer resources | `viewer-resources.ts` | `DisposableStore`, `useViewerResources()` |
 | Viewers | `viewers/*` | rendering one tab |

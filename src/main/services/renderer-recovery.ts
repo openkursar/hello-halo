@@ -8,11 +8,12 @@
  * main process and every background digital human keep running, and the user
  * decides when to restart. Halting is sticky for the life of the process.
  *
- * A hung renderer is not a crash: it is reloaded without spending the crash
- * budget, and ignored like everything else once recovery has halted.
+ * A hung renderer is not a crash: it first gets time to recover by itself (see
+ * RendererHangWatch), is reloaded only if it stays hung, never spends the crash
+ * budget, and is ignored like everything else once recovery has halted.
  *
- * Pure state machine (no Electron) so the policy is testable on its own; the
- * side effects live in the main entry and services/lifecycle.
+ * No Electron here, so the policy is testable on its own; the side effects live
+ * in the main entry and services/lifecycle.
  */
 
 /** Why the renderer went away, grouped by what recovery should assume. */
@@ -81,5 +82,41 @@ export class RendererRecoveryPolicy {
 
   isHalted(): boolean {
     return this.halted
+  }
+}
+
+/** How long a hung renderer gets to recover by itself before it is reloaded. */
+export const RENDERER_HANG_GRACE_MS = 30_000
+
+/**
+ * Waits out a hang. A renderer often comes back on its own, and a reload drops
+ * what the window holds (the live AI browser pages among it), so only a hang
+ * that outlasts the grace period triggers `onSustained`. Recovering first, a
+ * crash (handled on its own) or the window closing cancels the wait.
+ */
+export class RendererHangWatch {
+  private timer: ReturnType<typeof setTimeout> | undefined
+
+  constructor(
+    private readonly onSustained: () => void,
+    private readonly graceMs: number = RENDERER_HANG_GRACE_MS,
+  ) {}
+
+  /** The renderer stopped responding. Returns false while a wait is already running. */
+  unresponsive(): boolean {
+    if (this.timer) return false
+    this.timer = setTimeout(() => {
+      this.timer = undefined
+      this.onSustained()
+    }, this.graceMs)
+    return true
+  }
+
+  /** Ends a running wait without a reload; returns whether one was running. */
+  cancel(): boolean {
+    if (!this.timer) return false
+    clearTimeout(this.timer)
+    this.timer = undefined
+    return true
   }
 }

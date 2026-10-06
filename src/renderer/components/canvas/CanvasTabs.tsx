@@ -23,7 +23,7 @@
  * - Middle-click: Close tab
  */
 
-import { useState, useRef, useCallback, useEffect, forwardRef } from 'react'
+import { useState, useRef, useCallback, useEffect, forwardRef, type ReactNode } from 'react'
 import { X, Loader2, AlertCircle, Plus, XCircle, Maximize2, Minimize2, RefreshCw, Target, GitCompareArrows } from 'lucide-react'
 import { type TabState } from '../../services/canvas-lifecycle'
 import { useActiveTabId, useCanvasActions, useTabList } from '../../hooks/useCanvasLifecycle'
@@ -34,6 +34,7 @@ import { api } from '../../api'
 import { useTranslation } from '../../i18n'
 import { getBrowserHomepage } from '../../utils/browser-homepage'
 import { trackToolOpen } from '../../services/tool-session-telemetry'
+import { CanvasToggleButton } from './CanvasToggleButton'
 
 interface CanvasTabsProps {
   tabs: readonly TabState[]
@@ -45,6 +46,8 @@ interface CanvasTabsProps {
   onCloseAll?: () => void
   isMaximized?: boolean
   onToggleMaximize?: () => void
+  /** Hides the canvas while keeping its tabs; placed before "close all". */
+  collapseControl?: ReactNode
 }
 
 export function CanvasTabs({
@@ -57,6 +60,7 @@ export function CanvasTabs({
   onCloseAll,
   isMaximized = false,
   onToggleMaximize,
+  collapseControl,
 }: CanvasTabsProps) {
   const { t } = useTranslation()
   const { reorderTabs } = useCanvasActions()
@@ -333,6 +337,8 @@ export function CanvasTabs({
           </button>
         )}
 
+        {collapseControl}
+
         {/* Close all tabs button */}
         {onCloseAll && tabs.length > 0 && (
           <button
@@ -520,6 +526,7 @@ export function CanvasTabBar() {
       onCloseAll={closeAllTabs}
       isMaximized={isFullyMaximized}
       onToggleMaximize={handleToggleMaximize}
+      collapseControl={<CanvasToggleButton placement="tab-bar" />}
     />
   )
 }

@@ -33,15 +33,16 @@ function patternToRegex(pattern: string): RegExp {
  * enforces who may dispatch to whom (canContact + canCoordinationWrite) —
  * stopping a member is gated as dispatching to it, never more loosely.
  * Exported so downstream slices and tests can introspect the security boundary.
+ *
+ * Deliberately absent: the team itself, its detail, a run's board and the
+ * artifact listings. Their responses carry what only the host's own client may
+ * see (members' delegated policies, every member's open questions and checks,
+ * the host's local space ids and file paths) and are not filtered for office
+ * members. Do not add them back until they are.
  */
 export const OFFICE_READ_ROUTES: ScopeRoute[] = [
-  { method: 'GET', regex: patternToRegex('/api/teams/:teamId') },
-  { method: 'GET', regex: patternToRegex('/api/teams/:teamId/detail') },
   { method: 'GET', regex: patternToRegex('/api/teams/:teamId/chat-messages') },
-  { method: 'GET', regex: patternToRegex('/api/teams/:teamId/artifacts') },
   { method: 'GET', regex: patternToRegex('/api/teams/:teamId/epochs') },
-  { method: 'GET', regex: patternToRegex('/api/teams/:teamId/epochs/:epochId/board') },
-  { method: 'GET', regex: patternToRegex('/api/teams/:teamId/epochs/:epochId/artifacts') },
   { method: 'POST', regex: patternToRegex('/api/teams/:teamId/members/:appId/send') },
   { method: 'POST', regex: patternToRegex('/api/teams/:teamId/members/:appId/stop') },
 ]

@@ -6,6 +6,7 @@
 
 import { nativeImage } from 'electron'
 import type { BrowserContext } from '../context'
+import { checkFill, type FillCheck } from '../fill-check'
 
 // ============================================
 // Constants
@@ -97,8 +98,13 @@ export function imageResult(text: string, data: string, mimeType: string) {
 
 /**
  * Determine how to fill a form element, handling combobox disambiguation.
+ * Typed text is read back; an option chosen from a list is not.
  */
-export async function fillFormElement(ctx: BrowserContext, uid: string, value: string): Promise<void> {
+export async function fillFormElement(
+  ctx: BrowserContext,
+  uid: string,
+  value: string
+): Promise<FillCheck | { status: 'selected' }> {
   const element = ctx.getElementByUid(uid)
 
   if (element && element.role === 'combobox') {
@@ -106,7 +112,7 @@ export async function fillFormElement(ctx: BrowserContext, uid: string, value: s
     if (hasOptions) {
       try {
         await ctx.selectOption(uid, value)
-        return
+        return { status: 'selected' }
       } catch (e) {
         // Only fall back for "option not found" — rethrow infrastructure errors (CDP failures, etc.)
         if (!(e instanceof Error) || !e.message.includes('Could not find option')) {
@@ -116,9 +122,8 @@ export async function fillFormElement(ctx: BrowserContext, uid: string, value: s
       }
     }
     // Editable combobox (no options, or no matching option) — fill as text
-    await ctx.fillElement(uid, value)
-    return
+    return checkFill(value, await ctx.fillElement(uid, value))
   }
 
-  await ctx.fillElement(uid, value)
+  return checkFill(value, await ctx.fillElement(uid, value))
 }

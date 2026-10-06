@@ -7,6 +7,7 @@
  */
 
 import { isPageInUseByOthers, type AIBrowserPage, type AIBrowserView } from '../stores/ai-browser.store'
+import { parseNativeChatKey, parseRunSenderKey } from '../../shared/apps/im-keys'
 
 export interface BrowserLiveSession {
   id: string
@@ -42,6 +43,11 @@ export function buildBrowserLiveSessions(input: BrowserLiveSessionInput): Browse
       busy: !!input.operating[page.conversationId],
       lastActivityAt: page.lastActivityAt,
     }))
+}
+
+/** The digital human whose chat, or whose run started from the desktop, holds a page; null for a space conversation. */
+export function pageOwnerAppId(conversationId: string): string | null {
+  return parseNativeChatKey(conversationId)?.appId ?? parseRunSenderKey(conversationId)?.appId ?? null
 }
 
 /** Best-effort hostname for a display label; null when the URL is unusable. */

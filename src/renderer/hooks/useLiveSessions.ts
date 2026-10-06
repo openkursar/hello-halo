@@ -20,8 +20,7 @@ import { useTerminalStore } from '../stores/terminal.store'
 import { useAIBrowserStore, isPageInUseByOthers } from '../stores/ai-browser.store'
 import { useChatStore } from '../stores/chat.store'
 import { useAppsStore } from '../stores/apps.store'
-import { parseNativeChatKey } from '../../shared/apps/im-keys'
-import { buildBrowserLiveSessions } from './browser-live-sessions'
+import { buildBrowserLiveSessions, pageOwnerAppId } from './browser-live-sessions'
 import { useSpaceStore } from '../stores/space.store'
 import { useAppStore } from '../stores/app.store'
 import { canvasLifecycle } from '../services/canvas-lifecycle'
@@ -109,8 +108,8 @@ export function useLiveSessions(): LiveSessionsApi {
 
   const browserSessions = useMemo((): LiveSession[] => {
     const ownerLabel = (conversationId: string): string => {
-      const native = parseNativeChatKey(conversationId)
-      if (native) return apps.find(a => a.id === native.appId)?.spec.name || t('Digital human')
+      const appId = pageOwnerAppId(conversationId)
+      if (appId) return apps.find(a => a.id === appId)?.spec.name || t('Digital human')
       return spaceConversations?.find(c => c.id === conversationId)?.title || t('Conversation')
     }
     return buildBrowserLiveSessions({

@@ -34,6 +34,7 @@ import {
   unregisterWebContentsForDownload
 } from './download-handler'
 import { emitBrowserActiveView, emitBrowserViewGone, emitBrowserConversationReleased } from './events'
+import { CROSS_ORIGIN_FRAME_REFUSED, FOCUS_REFUSED, READ_FILLED_VALUE, SELECT_IF_FOCUSED } from './fill-check'
 import type { AIBrowserLivePage, AIBrowserStopResult } from '../../../shared/types/ai-browser'
 import { sanitizeFilename, resolveUniquePath } from '../../foundation/file-naming'
 import type {
@@ -44,7 +45,8 @@ import type {
   ConsoleMessage,
   DialogInfo,
   DownloadInfo,
-  DownloadState
+  DownloadState,
+  FieldReadBack
 } from './types'
 
 /**
@@ -1218,13 +1220,13 @@ export class BrowserContext implements BrowserContextInterface {
   }
 
   /**
-   * Fill an input element with text
+   * Fill an input element with text, then read back what it holds
    */
-  async fillElement(uid: string, value: string): Promise<void> {
+  async fillElement(uid: string, value: string): Promise<FieldReadBack> {
     return this.withPageFrames(() => this.fillElementWithFrames(uid, value))
   }
 
-  private async fillElementWithFrames(uid: string, value: string): Promise<void> {
+  private async fillElementWithFrames(uid: string, value: string): Promise<FieldReadBack> {
     const element = this.getElementByUid(uid)
     if (!element) {
       throw new Error(`Element not found: ${uid}`)
@@ -1241,12 +1243,22 @@ export class BrowserContext implements BrowserContextInterface {
     const resolved = await this.sendCDPCommand<{ object?: { objectId?: string } }>('DOM.resolveNode', { backendNodeId: element.backendNodeId })
     if (!resolved.object?.objectId) throw new Error(`Input element is unavailable: ${uid}`)
     try {
-      await this.sendCDPCommand('Runtime.callFunctionOn', {
+      const focused = await this.sendCDPCommand<{ result?: { value?: string } }>('Runtime.callFunctionOn', {
         objectId: resolved.object.objectId,
-        functionDeclaration: "function() { this.ownerDocument.execCommand('selectAll'); }",
+        functionDeclaration: SELECT_IF_FOCUSED,
         returnByValue: true,
       })
+      if (focused.result?.value !== 'ok') {
+        throw new Error(focused.result?.value === 'cross-origin-frame' ? CROSS_ORIGIN_FRAME_REFUSED : FOCUS_REFUSED)
+      }
       await this.sendCDPCommand('Input.insertText', { text: value })
+      const filled = await this.sendCDPCommand<{ result?: { value?: FieldReadBack } }>('Runtime.callFunctionOn', {
+        objectId: resolved.object.objectId,
+        functionDeclaration: READ_FILLED_VALUE,
+        awaitPromise: true,
+        returnByValue: true,
+      })
+      return filled.result?.value ?? { kind: 'unreadable' }
     } finally {
       if (!webContents.isDestroyed()) void webContents.debugger.sendCommand('Runtime.releaseObject', { objectId: resolved.object.objectId }).catch(error => {
         console.warn('[BrowserContext] Could not release an input node handle', { viewId: this.activeViewId }, error)

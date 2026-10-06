@@ -99,7 +99,8 @@ of which caller path is used.
 BrowserContext (singleton)            — the user's own browsing (Content Canvas / IPC)
 BrowserContext (interactive, per-conv) — used by main chat, one per conversation
 BrowserContext (scoped, per-chat)      — digital-human chat: hidden pages, announced under its conversationId
-BrowserContext (scoped, per-run)       — automation: hidden pages, no conversation, silent
+BrowserContext (scoped, per-run)       — automation: hidden pages, no conversation, silent;
+                                         a run started with the desktop's Run once is announced under its run key
 ```
 
 Scoped contexts are created via `createScopedBrowserContext()` and passed to
@@ -141,8 +142,10 @@ The context holds **no BrowserWindow reference**. UI notifications go through a
 process-global event bus (see "View Lifecycle Events"), so delivery is owned by
 the transport layer, not the context. A context emits iff it has a UI
 (`ctx.hasUi`): the singleton, every interactive per-conversation context, and
-every scoped context created with a `conversationId` (digital-human chat).
-Automation runs (scoped, no conversation) stay silent.
+every scoped context created with a `conversationId` (digital-human chat, and a
+run started with the desktop's Run once, under its run key
+`app-run:{appId}:{runId}`). Every other automation run (scoped, no
+conversation) stays silent.
 
 ## View Lifecycle Events
 
@@ -166,7 +169,8 @@ UI context, `active` marking the one it acts on).
 
 **Live-session tray.** Lists every live AI page of the CURRENT space that a
 conversation OPENED ITSELF (`owned` in the event/snapshot), one row each,
-labelled "owner · page" (digital human name, or the space conversation's title)
+labelled "owner · page" (digital human name — for its chats and for a run
+started from the desktop — or the space conversation's title)
 with its own stop — not only the on-screen conversation's page. Never listed: a
 page the conversation only selected (the user's own tab, another conversation's
 page), and a page another conversation is currently on (`isPageInUseByOthers`,
@@ -209,7 +213,8 @@ the AI drives (shared `persist:browser` session across all views).
 ## Live View and Guest Ownership
 
 Pages that a user can watch are created in a permanent main-renderer webview
-host, including digital-human chat pages. Pure unattended runs and temporary
+host, including digital-human chat pages and the pages of a run the user
+started with the desktop's Run once. Pure unattended runs and temporary
 search pages use the lazy hidden renderer host (`offscreen: !ctx.hasUi`).
 In explicit server mode every page uses that hidden host, including remote
 conversations, because a chat UI does not imply a local main renderer exists.
@@ -239,6 +244,17 @@ Element helpers in `snapshot.ts` (scroll, box, focus) tolerate only a
 `PageCommandRejectedError`: the operation's still-current page refused that one
 command, as before, so a hidden element degrades to a full screenshot. Any other
 error (cancellation, deadline, page loss) propagates unchanged.
+
+`browser_fill` clears a field with the page's own select-all and types the
+text, then reads back what the element holds one task later (`fill-check.ts`).
+It types only while focus is on the element, inside it, or on the editing host
+or shadow host around it: focus that stayed elsewhere would put the text into
+another field, so that fill fails with nothing typed. Only a match is reported
+as filled. A field holding anything else (reformatted, cut short, refused, or
+appended to old text) is reported with what it holds, a password field by
+length only; an element with nothing to read back is reported as unconfirmed.
+An option chosen from a list is not read back.
+
 On macOS the editing adapter respects the guest's trusted Meta-key handler and
 its `preventDefault`. Its paste fallback delivers a synthetic clipboard event
 and guest-local DOM insertion, including rich HTML; it does not provide a
@@ -253,6 +269,7 @@ trusted native paste event. The browser-host design records this distinction.
 | `events.ts` | Process-global view-lifecycle bus (active-view / gone); transport subscribes here. Payload types: `shared/types/ai-browser.ts` |
 | `context.ts` | BrowserContext class (state, CDP, element ops, downloads); emits view lifecycle |
 | `snapshot.ts` | Accessibility tree snapshot creation |
+| `fill-check.ts` | Reads back what a fill left in the field and compares it with the requested text |
 | `download-handler.ts` | Session-level `will-download` handler for silent AI downloads |
 | `download-utils.ts` | Shared filename sanitization / unique path resolution |
 | `types.ts` | Type definitions |
