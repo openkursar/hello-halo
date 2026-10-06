@@ -355,6 +355,10 @@
   },
   {
     "method": "POST",
+    "path": "/api/spaces/:spaceId/artifacts/upload"
+  },
+  {
+    "method": "POST",
     "path": "/api/spaces/:spaceId/artifacts/folder",
     "group": "workspace"
   },
