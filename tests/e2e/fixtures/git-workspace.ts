@@ -337,7 +337,7 @@ function seedWorker(): string {
   return outfile
 }
 
-function seedRequest(repoRoot: string, head: string): GitWorkspaceSeedRequest {
+function seedRequest(repoRoot: string, head: string, replyEditCount: number): GitWorkspaceSeedRequest {
   const at = (...segments: string[]) => path.join(repoRoot, ...segments)
   return {
     repoRoot,
@@ -346,7 +346,11 @@ function seedRequest(repoRoot: string, head: string): GitWorkspaceSeedRequest {
     userMessage: 'Greet the whole world and keep a to-do list of what is left.',
     replyText: 'Updated the greeting in `src/app.ts:3` and added `notes/todo.md` with the remaining work.',
     edits: [
-      { tool: 'Edit', filePath: at('src', 'app.ts'), oldString: EDITS.appBefore, newString: EDITS.appAfter },
+      ...Array.from({ length: replyEditCount }, (_, index): GitWorkspaceSeedRequest['edits'][number] => ({
+        tool: 'Edit', filePath: at('src', 'app.ts'),
+        oldString: index === 0 ? EDITS.appBefore : `export const item${index} = ${index}`,
+        newString: index === 0 ? EDITS.appAfter : `export const item${index} = ${index + 1}`,
+      })),
       { tool: 'Write', filePath: at('notes', 'todo.md'), content: EDITS.todo },
     ],
     followUp: {
@@ -377,7 +381,7 @@ function seedRequest(repoRoot: string, head: string): GitWorkspaceSeedRequest {
 }
 
 /** Create the profile, the repositories and the seeded space + conversation. */
-export function createGitWorkspace(): GitWorkspace {
+export function createGitWorkspace(replyEditCount = 1): GitWorkspace {
   const appEntryPath = getAppEntryPath()
   const testConfigDir = createTestConfigDir(appEntryPath)
   const holder = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'halo-e2e-git-')))
@@ -390,7 +394,7 @@ export function createGitWorkspace(): GitWorkspace {
 
   try {
     const { repoRoot, nestedRepoRoot, originRoot, head } = createRepositories(holder, emptyConfig)
-    const output = execFileSync(electronPath as unknown as string, [seedWorker(), JSON.stringify(seedRequest(repoRoot, head))], {
+    const output = execFileSync(electronPath as unknown as string, [seedWorker(), JSON.stringify(seedRequest(repoRoot, head, replyEditCount))], {
       env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', HALO_DATA_DIR: path.join(testConfigDir, '.halo') },
       encoding: 'utf-8',
     })

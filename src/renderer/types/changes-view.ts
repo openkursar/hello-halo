@@ -50,6 +50,8 @@ export interface ChangesViewMemory {
   forced: string[]
   /** Card at the top of the stack, and how far into it the view was scrolled. */
   stackAnchor?: { key: string; offset: number }
+  /** Fragment page last read in each reply file. */
+  editPages?: Record<string, number>
   overviewScroll: number
   detail: DetailState | null
   commitMessage: string

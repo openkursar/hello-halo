@@ -26,7 +26,7 @@ const { RequestQueue, isAbortError } = await import('../../../../../src/renderer
 const { ChangedSinceCounter } = await import('../../../../../src/renderer/components/canvas/viewers/changes/review/changed-since')
 const { createGitChangesController } = await import('../../../../../src/renderer/components/canvas/viewers/changes/state/git-changes-store')
 const { createViewMemory } = await import('../../../../../src/renderer/components/canvas/viewers/changes/state/view-memory')
-const { layoutStep } = await import('../../../../../src/renderer/components/canvas/viewers/changes/shared/use-container-width')
+const { changesLayout, clampPanelWidth, panelWidthBounds, mainWidth, layoutStep } = await import('../../../../../src/renderer/components/canvas/viewers/changes/shared/use-container-width')
 const { deepestRootOf } = await import('../../../../../src/renderer/components/canvas/viewers/changes/model/paths')
 
 function deferred<T = void>() {
@@ -290,6 +290,65 @@ describe('layout steps', () => {
 
   it('move with the docked file list', () => {
     expect(layoutStep(920, true)).not.toBe(layoutStep(920, false))
+  })
+
+  it('keeps the original 260/300 defaults when no width preference exists', () => {
+    expect(changesLayout(0).panelWidth).toBe(300)
+    expect(changesLayout(740).panelWidth).toBe(260)
+    expect(changesLayout(979).panelWidth).toBe(260)
+    expect(changesLayout(980).panelWidth).toBe(300)
+    expect(changesLayout(1000, undefined)).toEqual(changesLayout(1000))
+    expect(mainWidth(1000, true)).toBe(700)
+  })
+
+  it('clamps the sidebar to 220–480 while reserving at least 480 for the main area', () => {
+    expect(panelWidthBounds(1200)).toEqual({ min: 220, max: 480 })
+    expect(panelWidthBounds(740)).toEqual({ min: 220, max: 260 })
+    expect(changesLayout(1200, 100).panelWidth).toBe(220)
+    expect(changesLayout(1200, 900).panelWidth).toBe(480)
+    expect(changesLayout(850, 480).panelWidth).toBe(370)
+    expect(mainWidth(850, true, 480)).toBe(480)
+    for (const width of [740, 760, 850, 980, 1200]) {
+      for (const preference of [undefined, 100, 220, 300, 480, 900]) {
+        const layout = changesLayout(width, preference)
+        expect(layout.panelWidth).toBeGreaterThanOrEqual(220)
+        expect(layout.panelWidth).toBeLessThanOrEqual(480)
+        expect(mainWidth(width, true, preference)).toBeGreaterThanOrEqual(480)
+      }
+    }
+  })
+
+  it('uses current bounds within a layout step, and restores the preferred width on growth', () => {
+    const preference = 480
+    expect(layoutStep(960, true, preference)).toBe(layoutStep(800, true, preference))
+    expect(clampPanelWidth(960, preference)).toBe(480)
+    expect(clampPanelWidth(800, preference)).toBe(320)
+    expect(clampPanelWidth(750, preference)).toBe(270)
+    expect(clampPanelWidth(1200, preference)).toBe(480)
+    expect(mainWidth(800, true, preference)).toBe(480)
+  })
+
+  it('leaves narrow viewers in drawer mode without reserving sidebar width', () => {
+    expect(changesLayout(739, 480).dockedPanel).toBe(false)
+    expect(mainWidth(739, true, 480)).toBe(739)
+    expect(mainWidth(390, true, 480)).toBe(390)
+    expect(mainWidth(1000, false, 480)).toBe(1000)
+    expect(changesLayout(390, 480).stacked).toBe(true)
+  })
+
+  it('moves split and overview steps with the preferred width, not each clamped pixel', () => {
+    expect(layoutStep(1000, true, 300)).not.toBe(layoutStep(1000, true, 400))
+    expect(layoutStep(1000, true, 480)).toBe(layoutStep(1100, true, 480))
+    expect(layoutStep(1000, true, 480)).not.toBe(layoutStep(1120, true, 480))
+    expect(layoutStep(1200, true, 300)).not.toBe(layoutStep(1200, true, 480))
+    expect(layoutStep(1000, false, 220)).toBe(layoutStep(1000, false, 480))
+  })
+
+  it('falls back for invalid stored widths and keeps unmeasured bounds finite', () => {
+    expect(changesLayout(1000, NaN).panelWidth).toBe(300)
+    expect(changesLayout(800, Infinity).panelWidth).toBe(260)
+    expect(panelWidthBounds(0)).toEqual({ min: 220, max: 480 })
+    expect(clampPanelWidth(0, 400)).toBe(400)
   })
 })
 

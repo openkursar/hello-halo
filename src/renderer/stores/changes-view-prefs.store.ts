@@ -13,6 +13,8 @@ interface ChangesViewPrefsState {
   collapseUnchanged: boolean
   /** File list shown beside the diffs on wide canvases (narrow ones open it as a drawer). */
   panelOpen: boolean
+  /** Unset keeps the width-dependent default; a narrow canvas only clamps the display. */
+  panelWidth?: number
   /** File list grouped by folder rather than flat. */
   tree: boolean
   hideGenerated: boolean
@@ -20,6 +22,7 @@ interface ChangesViewPrefsState {
   setSideBySide: (on: boolean) => void
   setCollapseUnchanged: (on: boolean) => void
   setPanelOpen: (open: boolean) => void
+  setPanelWidth: (width: number | undefined) => void
   setTree: (tree: boolean) => void
   setHideGenerated: (hide: boolean) => void
 }
@@ -35,6 +38,7 @@ export const useChangesViewPrefs = create<ChangesViewPrefsState>()(
       setSideBySide: (sideBySide) => set({ sideBySide }),
       setCollapseUnchanged: (collapseUnchanged) => set({ collapseUnchanged }),
       setPanelOpen: (panelOpen) => set({ panelOpen }),
+      setPanelWidth: (panelWidth) => set({ panelWidth }),
       setTree: (tree) => set({ tree }),
       setHideGenerated: (hideGenerated) => set({ hideGenerated }),
     }),

@@ -1,18 +1,14 @@
-/**
- * One file in the diff stack: a sticky header, then the diff once the card
- * is near the viewport and holds one of the stack's editor slots. Without a
- * slot it keeps the height it last measured, so the stack does not jump.
- */
+/** A mounted file keeps its read-only editors until it is folded or replaced. */
 
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
 import type { Extension } from '@codemirror/state'
-import type { EditorView } from '@codemirror/view'
 import { useTranslation } from '../../../../../i18n'
 import { useViewerResources } from '../../../viewer-resources'
 import { createDiffEditor, type DiffEditorHandle, type DiffLayout, type DiffSide } from './diff-editor'
-import { estimateBodyHeight, type DiffPart, type LoadedDiff } from './diff-content'
+import type { DiffPart, LoadedDiff } from './diff-content'
 import { useStackContext } from './stack-context'
+import { MAX_STACK_PARTS } from './stack-policy'
 import { DiffStat, FileGlyph, IconButton, PathTail, StateLetter } from '../shared/parts'
 import { baseName, dirName } from '../model/paths'
 import { formatBytes, formatCount } from '../shared/format'
@@ -21,21 +17,9 @@ import type { ViewFile } from '../model/view-files'
 
 export type CardGate = 'generated' | 'large' | null
 
-/** At most this many frames a new editor's body is held at its old height (see FileDiffCard). */
-const HOLD_MAX_FRAMES = 12
-/** A note in place of the diff (generated, large, binary): its minimum height. */
 const NOTE_HEIGHT = 44
-/** The card's sticky header at its tallest (`h-10` on touch screens): it covers the top of the stack while its card scrolls under it. */
+/** The sticky header covers the top of the stack on touch screens. */
 export const CARD_HEADER_HEIGHT = 40
-/** A card's header and frame around its body, with the space around the card in the stack. */
-const CARD_CHROME = 51
-
-/** A card's height before it is measured: the stack lays out cards it has not shown by it. */
-export function estimateCardHeight(file: ViewFile, folded: boolean, gate: CardGate, collapseUnchanged: boolean): number {
-  if (folded) return CARD_CHROME - 1
-  if (gate || file.binary) return CARD_CHROME + NOTE_HEIGHT
-  return CARD_CHROME + estimateBodyHeight(file, collapseUnchanged)
-}
 
 interface FileDiffCardProps {
   file: ViewFile
@@ -44,7 +28,7 @@ interface FileDiffCardProps {
   /** Why the diff waits for a click; null to show it. */
   gate: CardGate
   onLoad: (key: string) => void
-  /** Reads the diff; `signal` aborts when the card no longer wants it (scrolled away). */
+  /** Reads the diff; selection changes and folding cancel work no longer needed. */
   load: (file: ViewFile, signal: AbortSignal) => Promise<LoadedDiff>
   /** Changes when the contents may have changed; the card reads its diff again. */
   version: number
@@ -82,52 +66,11 @@ export const FileDiffCard = memo(function FileDiffCard({
 }: FileDiffCardProps) {
   const { t, i18n } = useTranslation()
   const stack = useStackContext()
-  const cardRef = useRef<HTMLElement>(null)
-  const bodyRef = useRef<HTMLDivElement>(null)
-  const [hasSlot, setHasSlot] = useState(false)
   const [body, setBody] = useState<BodyState>({ status: 'idle' })
   const [attempt, setAttempt] = useState(0)
-  const wantsEditor = !folded && !gate && !file.binary
-  // A binary file is read for its sizes once it is actually on screen; it never needs an editor.
-  const wantsSizes = !folded && !gate && file.binary
-  const [seen, setSeen] = useState(false)
-  const heightKey = `${file.key}|${layout}|${collapseUnchanged ? 1 : 0}`
-
-  useEffect(() => {
-    const element = cardRef.current
-    if (!wantsSizes || seen || !element) return
-    return stack.observe(element, (visible) => {
-      if (visible) setSeen(true)
-    })
-  }, [wantsSizes, seen, stack])
-
-  // A slot while near the viewport; given up to other cards past the cap.
-  useEffect(() => {
-    const element = cardRef.current
-    if (!wantsEditor || !element) return
-    const acquire = (visible: boolean) => {
-      if (stack.slots.has(file.key)) {
-        stack.slots.setVisible(file.key, visible)
-        return
-      }
-      if (!visible) return
-      stack.slots.acquire(file.key, () => setHasSlot(false), true)
-      setHasSlot(true)
-    }
-    stack.slots.acquire(file.key, () => setHasSlot(false))
-    setHasSlot(true)
-    const stopObserving = stack.observe(element, acquire)
-    return () => {
-      stopObserving()
-      stack.slots.release(file.key)
-      setHasSlot(false)
-    }
-  }, [wantsEditor, file.key, stack])
-
-  // Read the diff when there is a slot for it, and again when the contents may have changed.
   const fileRef = useRef(file)
   fileRef.current = file
-  const reads = (wantsSizes && seen) || (wantsEditor && hasSlot)
+  const reads = !folded && !gate
   useEffect(() => {
     if (!reads) return
     if (body.status === 'ready' && body.version === version) return
@@ -135,7 +78,7 @@ export const FileDiffCard = memo(function FileDiffCard({
     if (body.status !== 'ready') setBody({ status: 'loading' })
     load(fileRef.current, reading.signal).then(
       (diff) => {
-        if (reading.signal.aborted) return
+        if (reading.signal.aborted || !stack.admitContent(fileRef.current.key, diff)) return
         setBody((current) => (current.status === 'ready' && sameDiff(current.diff, diff)
           ? { ...current, version }
           : { status: 'ready', version, diff }))
@@ -151,58 +94,11 @@ export const FileDiffCard = memo(function FileDiffCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reads, version, file.key, load, attempt])
 
-  // Settled without an editor: tell the stack, so navigation waiting for this card moves on.
-  const showsEditors = wantsEditor && hasSlot && body.status === 'ready' && body.diff.kind === 'text'
   useEffect(() => {
-    if (!wantsEditor) return
-    if (body.status === 'error' || (body.status === 'ready' && body.diff.kind !== 'text')) stack.registerEditors(file.key, null)
-  }, [wantsEditor, body, file.key, stack])
-
-  // Remember the measured height for when the editor is gone.
-  useEffect(() => {
-    const element = bodyRef.current
-    if (!showsEditors || !element) return
-    return stack.measure(element, heightKey)
-  }, [showsEditors, heightKey, stack])
-
-  const placeholderHeight = stack.heights.get(heightKey) ?? estimateBodyHeight(file, collapseUnchanged)
-
-  // A new editor sizes the lines it has not drawn by a guess, corrected a frame or two later
-  // (by thousands of pixels for long wrapped lines). Meanwhile the body keeps the height it had,
-  // so the cards below — and a jump aimed at this one — do not move with the guess.
-  const placeholderHeightRef = useRef(placeholderHeight)
-  placeholderHeightRef.current = placeholderHeight
-  const held = useRef(false)
-  const releaseHold = useCallback(() => {
-    const element = bodyRef.current
-    held.current = false
-    if (!element) return
-    element.style.height = ''
-    element.style.overflow = ''
-  }, [])
-  useLayoutEffect(() => {
-    const element = bodyRef.current
-    if (!showsEditors || !element) return
-    element.style.height = `${placeholderHeightRef.current}px`
-    element.style.overflow = 'clip'
-    held.current = true
-    return releaseHold
-  }, [showsEditors, releaseHold])
-  const onEditorsReady = useCallback((handles: readonly DiffEditorHandle[]) => {
-    if (!held.current) return
-    const views = [...new Set(handles.flatMap((handle) => [handle.nav, handle.editorFor('before'), handle.editorFor('after')]))]
-      .filter((view): view is EditorView => view !== null)
-    let last = -1
-    let frames = 0
-    const check = () => {
-      if (!held.current) return
-      const height = views.reduce((sum, view) => sum + view.contentHeight, 0)
-      if (height === last || ++frames >= HOLD_MAX_FRAMES) return releaseHold()
-      last = height
-      requestAnimationFrame(check)
-    }
-    requestAnimationFrame(check)
-  }, [releaseHold])
+    if (body.status !== 'error' && !(body.status === 'ready' && body.diff.kind !== 'text')) return
+    stack.registerEditors(file.key, null)
+    return () => stack.registerEditors(file.key, undefined)
+  }, [body, file.key, stack])
   const dir = dirName(file.path)
   const oldName = file.oldPath ? baseName(file.oldPath) : null
   const lines = (file.additions ?? 0) + (file.deletions ?? 0)
@@ -213,7 +109,7 @@ export const FileDiffCard = memo(function FileDiffCard({
   } else if (file.binary) {
     // Sizes once they are read; the plain note meanwhile, or if they cannot be read.
     content = body.status === 'ready' && body.diff.kind !== 'text'
-      ? <LoadedBody file={file} diff={body.diff} layout={layout} collapseUnchanged={collapseUnchanged} sideExtensions={sideExtensions} onEditorsReady={onEditorsReady} />
+      ? <LoadedBody file={file} diff={body.diff} layout={layout} collapseUnchanged={collapseUnchanged} sideExtensions={sideExtensions} />
       : <Note>{t('Binary file')}</Note>
   } else if (gate) {
     content = (
@@ -230,10 +126,11 @@ export const FileDiffCard = memo(function FileDiffCard({
         </button>
       </Note>
     )
-  } else if (!hasSlot || body.status === 'idle' || body.status === 'loading') {
+  } else if (body.status === 'idle' || body.status === 'loading') {
     content = (
-      <div style={{ height: placeholderHeight }} className="diff-skeleton flex items-start justify-center pt-6" aria-busy={body.status === 'loading'}>
-        {body.status === 'loading' && <Loader2 size={16} className="animate-spin text-subtle-foreground" aria-label={t('Loading…')} />}
+      <div className="flex h-16 items-center justify-center gap-2 text-xs text-muted-foreground" aria-busy="true">
+        <Loader2 size={15} className="animate-spin" aria-hidden />
+        {t('Loading…')}
       </div>
     )
   } else if (body.status === 'error') {
@@ -253,12 +150,11 @@ export const FileDiffCard = memo(function FileDiffCard({
       </Note>
     )
   } else {
-    content = <LoadedBody file={file} diff={body.diff} layout={layout} collapseUnchanged={collapseUnchanged} sideExtensions={sideExtensions} onEditorsReady={onEditorsReady} />
+    content = <LoadedBody file={file} diff={body.diff} layout={layout} collapseUnchanged={collapseUnchanged} sideExtensions={sideExtensions} />
   }
 
   return (
     <section
-      ref={cardRef}
       data-file-key={file.key}
       className="overflow-clip rounded-lg border border-border bg-background"
     >
@@ -294,7 +190,7 @@ export const FileDiffCard = memo(function FileDiffCard({
         <span className="flex-1" />
         {actionsFor?.(file)}
       </header>
-      {!folded && <div ref={bodyRef}>{content}</div>}
+      {!folded && <div>{content}</div>}
     </section>
   )
 })
@@ -303,26 +199,40 @@ function Note({ children }: { children: ReactNode }) {
   return <div className="flex flex-wrap items-center gap-3 px-4 py-2.5 text-[12.5px] text-subtle-foreground" style={{ minHeight: NOTE_HEIGHT }}>{children}</div>
 }
 
-function LoadedBody({ file, diff, layout, collapseUnchanged, sideExtensions, onEditorsReady }: {
+function LoadedBody({ file, diff, layout, collapseUnchanged, sideExtensions }: {
   file: ViewFile
   diff: LoadedDiff
   layout: DiffLayout
   collapseUnchanged: boolean
   sideExtensions?: FileDiffCardProps['sideExtensions']
-  onEditorsReady: (handles: readonly DiffEditorHandle[]) => void
 }) {
   const { t, i18n } = useTranslation()
   const stack = useStackContext()
   const handles = useRef(new Map<number, DiffEditorHandle>())
+  const [partPage, setPartPage] = useState(() => stack.partPage(file.key))
   const parts = diff.kind === 'text' ? diff.parts : []
+  const paged = parts.length > MAX_STACK_PARTS
+  const pageCount = Math.max(1, Math.ceil(parts.length / MAX_STACK_PARTS))
+  const page = Math.min(partPage, pageCount - 1)
+  const visibleParts = paged ? parts.slice(page * MAX_STACK_PARTS, (page + 1) * MAX_STACK_PARTS) : parts
+
+  const setPage = (next: number) => {
+    if (next === page) return false
+    stack.registerEditors(file.key, undefined)
+    stack.onPartPageChange(file.key, next)
+    setPartPage(next)
+    return true
+  }
+  const navigatePage = (direction: 1 | -1, fromEdge: boolean) => {
+    const next = fromEdge ? (direction > 0 ? 0 : pageCount - 1) : page + direction
+    return next >= 0 && next < pageCount && setPage(next)
+  }
 
   const onReady = (index: number, handle: DiffEditorHandle | null) => {
     if (handle) handles.current.set(index, handle)
     else handles.current.delete(index)
-    if (handles.current.size === parts.length) {
-      const ready = [...handles.current.entries()].sort((a, b) => a[0] - b[0]).map(([, h]) => h)
-      stack.registerEditors(file.key, ready)
-      if (handle) onEditorsReady(ready)
+    if (handles.current.size === visibleParts.length) {
+      stack.registerEditors(file.key, [...handles.current.entries()].sort((a, b) => a[0] - b[0]).map(([, h]) => h), paged ? navigatePage : undefined)
     } else if (!handle) {
       stack.registerEditors(file.key, undefined)
     }
@@ -343,11 +253,18 @@ function LoadedBody({ file, diff, layout, collapseUnchanged, sideExtensions, onE
 
   return (
     <div>
-      {parts.map((part, index) => (
+      {paged && (
+        <Note>
+          <span className="flex-1">{t('Edits {{from}}–{{to}} of {{total}}', { from: page * MAX_STACK_PARTS + 1, to: Math.min((page + 1) * MAX_STACK_PARTS, parts.length), total: parts.length })}</span>
+          <button type="button" disabled={page === 0} onClick={() => setPage(page - 1)} className="rounded border border-border px-2 py-1 hover:bg-secondary disabled:opacity-40">{t('Previous edits')}</button>
+          <button type="button" disabled={page >= pageCount - 1} onClick={() => setPage(page + 1)} className="rounded border border-border px-2 py-1 hover:bg-secondary disabled:opacity-40">{t('Next edits')}</button>
+        </Note>
+      )}
+      {visibleParts.map((part, index) => (
         <div key={part.id} className={index > 0 ? 'border-t border-border' : ''}>
           {parts.length > 1 && (
             <div className="bg-card/60 px-3 py-1 text-[11.5px] text-subtle-foreground">
-              {t('Edit {{n}} of {{total}}', { n: index + 1, total: parts.length })}
+              {t('Edit {{n}} of {{total}}', { n: page * MAX_STACK_PARTS + index + 1, total: parts.length })}
             </div>
           )}
           <DiffEditorHost

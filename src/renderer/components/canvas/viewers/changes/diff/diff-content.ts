@@ -48,14 +48,3 @@ export function diffFromMessage(file: ViewFile): LoadedDiff {
   }))
   return parts.length ? { kind: 'text', parts } : { kind: 'unchanged' }
 }
-
-/** Estimated height of a card body that has not been measured yet. */
-export function estimateBodyHeight(file: ViewFile, collapseUnchanged: boolean): number {
-  if (file.binary) return 44
-  const lines = (file.additions ?? 0) + (file.deletions ?? 0)
-  const shown = collapseUnchanged ? Math.min(lines + 8, 2_000) : Math.min(lines + 40, 4_000)
-  return Math.max(64, shown * LINE_HEIGHT + 8)
-}
-
-/** 12.5px text at 1.6 line height, as the diff theme sets it. */
-export const LINE_HEIGHT = 20

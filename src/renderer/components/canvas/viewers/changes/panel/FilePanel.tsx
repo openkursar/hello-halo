@@ -9,7 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { Virtuoso } from 'react-virtuoso'
 import { ChevronDown, ChevronRight, Folder, RefreshCw, Search, X } from 'lucide-react'
 import { useTranslation } from '../../../../../i18n'
-import { buildPanelRows, dirRowKey, type PanelGroup, type PanelGroupId, type PanelRow } from './panel-rows'
+import { buildPanelTopology, flattenPanelRows, dirRowKey, type PanelGroup, type PanelGroupId, type PanelRow, type PathOrder } from './panel-rows'
 import { DiffStat, FileGlyph, IconButton, PathTail, StateLetter } from '../shared/parts'
 import { formatCount } from '../shared/format'
 import { baseName, dirName } from '../model/paths'
@@ -22,7 +22,8 @@ interface FilePanelProps {
   onShowGenerated: () => void
   filter: string
   onFilterChange: (filter: string) => void
-  tree: boolean
+  /** Tree or List, and where each path goes; built once per change list. */
+  order: PathOrder
   onTreeChange: (tree: boolean) => void
   hideGenerated: boolean
   onHideGeneratedChange: (hide: boolean) => void
@@ -52,9 +53,11 @@ const PANEL_COMPONENTS = {
 
 export function FilePanel(props: FilePanelProps) {
   const { t } = useTranslation()
-  const { groups, filter, onFilterChange, tree, onTreeChange, hideGenerated, onHideGeneratedChange, onRefresh, refreshing } = props
+  const { groups, filter, onFilterChange, order, onTreeChange, hideGenerated, onHideGeneratedChange, onRefresh, refreshing } = props
+  const { tree } = order
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set())
-  const rows = useMemo(() => buildPanelRows(groups, { tree, collapsed }), [groups, tree, collapsed])
+  const topology = useMemo(() => buildPanelTopology(groups, order), [groups, order])
+  const rows = useMemo(() => flattenPanelRows(topology, collapsed), [topology, collapsed])
   const total = groups.reduce((sum, group) => sum + group.files.length, 0)
   const filterRef = useRef<HTMLInputElement>(null)
 
@@ -78,8 +81,8 @@ export function FilePanel(props: FilePanelProps) {
   // Rows re-render when what they show changes, not whenever the view does.
   const { currentKey, touch, rowActions, groupActions, onOpenFile } = props
   const rowView = useMemo<RowView>(
-    () => ({ groups, collapsed, onToggle: toggle, currentKey, tree, touch, rowActions, groupActions, onOpenFile }),
-    [groups, collapsed, toggle, currentKey, tree, touch, rowActions, groupActions, onOpenFile]
+    () => ({ groups, onToggle: toggle, currentKey, tree, touch, rowActions, groupActions, onOpenFile }),
+    [groups, toggle, currentKey, tree, touch, rowActions, groupActions, onOpenFile]
   )
   const renderRow = useCallback((_index: number, row: PanelRow) => <PanelRowView row={row} view={rowView} />, [rowView])
 
@@ -162,7 +165,7 @@ export function FilePanel(props: FilePanelProps) {
 
 function rowKey(row: PanelRow): string {
   if (row.kind === 'group') return `g:${row.group}`
-  if (row.kind === 'dir') return `d:${row.group}:${row.dir}`
+  if (row.kind === 'dir') return `d:${row.group}:${row.startDir}`
   return `f:${row.group}:${row.file.key}`
 }
 
@@ -194,10 +197,21 @@ function groupTitle(group: PanelGroupId, t: (key: string) => string): string {
   }
 }
 
+const INDENT_STEP = 16
+/** Row width kept for a file's name and figures beyond its indent; deeper rows stop indenting instead. */
+const ROW_ROOM = 200
+/** Touch rows show their actions all the time, as larger buttons on phones. */
+const TOUCH_ROW_ROOM = 300
+
+/** Same cap on folder and file rows, so a file stays under its folder's icon at any depth. */
+function indent(base: number, depth: number, touch: boolean): string | number {
+  const room = touch ? TOUCH_ROW_ROOM : ROW_ROOM
+  return depth === 0 ? base : `calc(${base}px + min(${depth * INDENT_STEP}px, max(0px, 100% - ${room}px)))`
+}
+
 /** What every row is rendered with besides itself. */
 interface RowView {
   groups: PanelGroup[]
-  collapsed: ReadonlySet<string>
   onToggle: (key: string) => void
   currentKey: string | null
   tree: boolean
@@ -209,7 +223,7 @@ interface RowView {
 
 function PanelRowView({ row, view }: { row: PanelRow; view: RowView }) {
   const { t } = useTranslation()
-  const { collapsed, onToggle } = view
+  const { onToggle } = view
 
   if (row.kind === 'group') {
     const group = view.groups.find((g) => g.id === row.group)!
@@ -245,13 +259,14 @@ function PanelRowView({ row, view }: { row: PanelRow; view: RowView }) {
       <button
         type="button"
         onClick={() => onToggle(key)}
-        aria-expanded={!collapsed.has(key)}
+        aria-expanded={!row.collapsed}
         title={row.dir}
-        className={`flex w-full items-center gap-1 px-2.5 text-left text-subtle-foreground hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 ${view.touch ? 'h-10' : 'h-6'}`}
+        style={{ paddingLeft: indent(10, row.depth, view.touch) }}
+        className={`flex w-full items-center gap-1 pr-2.5 text-left text-subtle-foreground hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 ${view.touch ? 'h-10' : 'h-6'}`}
       >
         {row.collapsed ? <ChevronRight size={12} className="shrink-0" /> : <ChevronDown size={12} className="shrink-0" />}
         <Folder size={13} className="shrink-0 text-faint-foreground" aria-hidden />
-        <PathTail path={row.dir} className="text-[11.5px]" />
+        <PathTail path={row.label} className="text-[11.5px]" />
       </button>
     )
   }
@@ -261,7 +276,8 @@ function PanelRowView({ row, view }: { row: PanelRow; view: RowView }) {
   const actions = view.rowActions?.(file, row.group)
   return (
     <div
-      className={`group/row relative flex items-center gap-1.5 pr-1.5 ${view.touch ? 'h-10' : 'h-[26px]'} ${row.nested ? 'pl-7' : 'pl-2.5'} ${
+      style={{ paddingLeft: indent(view.tree ? 26 : 10, row.depth, view.touch) }}
+      className={`group/row relative flex items-center gap-1.5 pr-1.5 ${view.touch ? 'h-10' : 'h-[26px]'} ${
         current ? 'bg-primary/15' : 'hover:bg-secondary'
       }`}
     >
@@ -273,7 +289,7 @@ function PanelRowView({ row, view }: { row: PanelRow; view: RowView }) {
         className="flex min-w-0 flex-1 items-center gap-1.5 self-stretch text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
       >
         <FileGlyph path={file.path} size={14} />
-        <span className="shrink-0 truncate text-[13px] text-foreground [max-width:70%]">{baseName(file.path)}</span>
+        <span className={`truncate text-[13px] text-foreground ${view.tree ? 'min-w-0' : 'shrink-0 [max-width:70%]'}`}>{baseName(file.path)}</span>
         {!view.tree && dirName(file.path) && (
           <PathTail path={dirName(file.path)} className="flex-1 text-[11px] text-subtle-foreground" />
         )}

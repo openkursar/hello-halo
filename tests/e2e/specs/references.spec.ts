@@ -4,9 +4,11 @@
  * a selection added from a code file with ⌘L / Ctrl+L shows up as a
  * "selections" pill. A pill's popover lists its references, removes one, and
  * goes back to a comment for editing; removing a whole group can be undone.
- * Nothing is sent: no network and no model.
+ * Test actions never send a model request.
  */
 
+import fs from 'node:fs'
+import path from 'node:path'
 import { test, expect } from '../fixtures/electron-with-git-workspace'
 import { EDITS } from '../fixtures/git-workspace'
 import {
@@ -27,6 +29,40 @@ const GREETING_NOTE = 'Keep the greeting in one shared constant'
 const IMPORT_NOTE = 'Import formatTotal once'
 
 test.describe('references', () => {
+  let pageErrors: string[]
+  test.beforeEach(async ({ window }) => {
+    pageErrors = []
+    window.on('pageerror', (error) => pageErrors.push(error.message))
+  })
+  test.afterEach(() => {
+    expect(pageErrors).toEqual([])
+  })
+
+  test('returns to a comment after another file replaces its editors in a large diff', async ({ window, workspace }) => {
+    const folder = path.join(workspace.repoRoot, 'src', 'bulk')
+    fs.mkdirSync(folder, { recursive: true })
+    for (let i = 0; i < 12; i++) fs.writeFileSync(path.join(folder, `item-${i}.ts`), `export const item${i} = ${i}\n`)
+    await openChangesWithShortcut(window)
+    await ensureFilePanel(window)
+    await expect(window.getByText('Large diff · Showing one file at a time')).toBeVisible()
+    await filePanel(window).getByLabel('Filter files (e.g. src/**)').fill('src/app.ts')
+    await filePanel(window).locator('button[title="src/app.ts"]').click()
+    await filePanel(window).getByLabel('Filter files (e.g. src/**)').fill('')
+    await expect(window.locator('section[data-file-key="src/app.ts"]')).toHaveCount(1)
+    const after = diffCard(window, 'src/app.ts').locator('.cm-merge-b')
+    await commentOnWord(window, after.locator('.cm-line', { hasText: EDITS.appAfter }).first(), 'world', GREETING_NOTE)
+    // src/app.ts is the last file the list shows (folders come first), so step back.
+    await window.getByRole('button', { name: 'Previous file', exact: true }).click()
+    await expect(diffCard(window, 'src/app.ts')).toHaveCount(0)
+    await composerPill(window, 'comments').click()
+    await referencePopover(window, 'comments').getByRole('listitem').filter({ hasText: GREETING_NOTE }).getByRole('button').first().click()
+    const comment = commentCard(window, 'Comment · line 3 · After')
+    await expect(comment.getByRole('button', { name: 'Edit' })).toBeFocused()
+    await expect(comment).toContainText(GREETING_NOTE)
+    await expect(window.locator('section[data-file-key]')).toHaveCount(1)
+    await expect(comment).toBeInViewport()
+  })
+
   test('comments and a selection become pills; the popover lists, removes and goes back; removing a group can be undone', async ({ window }) => {
     await openChangesWithShortcut(window)
     await ensureFilePanel(window)

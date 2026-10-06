@@ -14,6 +14,7 @@ import { waitForHomePage } from './helpers'
 import { createGitWorkspace, type GitWorkspace } from './git-workspace'
 
 interface Fixtures {
+  replyEditCount: number
   workspace: GitWorkspace
   electronApp: ElectronApplication
   window: Page
@@ -22,8 +23,9 @@ interface Fixtures {
 export const WINDOW_SIZE = { width: 1600, height: 1000 }
 
 export const test = base.extend<Fixtures>({
-  workspace: async ({}, use) => {
-    const workspace = createGitWorkspace()
+  replyEditCount: [1, { option: true }],
+  workspace: async ({ replyEditCount }, use) => {
+    const workspace = createGitWorkspace(replyEditCount)
     await use(workspace)
     workspace.cleanup()
   },
