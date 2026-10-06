@@ -1163,6 +1163,18 @@ A WeCom stream that outgrows one message is closed on what fits plus a notice,
 rather than sending a frame the server rejects — which left the stream stuck
 mid-answer — and the whole answer follows as `(i/n)` pushes.
 
+### 4.3 Mentions and commands in group chats
+
+A group delivers the bot only messages that mention it, so a group message
+arrives as "@Halo AI Team @Alice please follow up" and a command as "@Halo AI
+Team /stop". The text reaches the digital human as written: who else a message
+addresses is part of it. (Feishu's SDK already removes the bot's own mention from the
+structured mention list; WeCom names nobody, and where a bot name ends cannot
+be told from the text, since names may contain spaces.) Commands are
+recognized in `dispatch-inbound.ts`: exact in a direct chat; in a group also
+when the command ends a message that starts with a mention. There is no "bot
+name" setting, and none is needed.
+
 Tests live in `tests/unit/apps/runtime/` mirroring the source layout.
 
 ---
