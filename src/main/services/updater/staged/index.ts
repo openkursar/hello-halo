@@ -30,7 +30,7 @@ import {
 } from './helper'
 import { hasFailedBefore } from './failed-versions'
 import { confirmFileFor, hasRoomToStage, HELPER_RUN_PREFIX, resolveLayout, type StagedLayout } from './layout'
-import { readStagedManifest, type StagedUpdateManifest } from './manifest'
+import { NotNewerError, readStagedManifest, type StagedUpdateManifest } from './manifest'
 
 /**
  * Raised when the only update on offer is one that already failed here.
@@ -50,6 +50,15 @@ export class VersionKnownBadError extends Error {
 
 /** How long the helper waits for the new version to report that it started. */
 const CONFIRM_TIMEOUT_SECONDS = 60
+
+/**
+ * Longest the description request may take.
+ *
+ * Electron's network stack has no default timeout. A stalled request would
+ * hold the check before it reaches the installer fallback, leave a manual
+ * check on "checking", and stack up behind every later check.
+ */
+const DESCRIPTION_TIMEOUT_MS = 30_000
 
 /** Shape the helper writes; only the fields this side must reason about. */
 interface HelperState {
@@ -170,7 +179,7 @@ export async function checkForStagedUpdate(feed: StagedFeed): Promise<StagedUpda
     // Electron's network stack, like the package download and electron-updater:
     // Node's fetch ignores the system proxy, and on a network that needs one
     // every check would quietly fall back to the installer.
-    const response = await net.fetch(url)
+    const response = await net.fetch(url, { signal: AbortSignal.timeout(DESCRIPTION_TIMEOUT_MS) })
     if (response.status === 404) {
       console.log(`[Updater] No staged update published for this target (${url})`)
       return null
@@ -210,6 +219,10 @@ export async function checkForStagedUpdate(feed: StagedFeed): Promise<StagedUpda
     return manifest
   } catch (error) {
     if (error instanceof VersionKnownBadError) throw error
+    if (error instanceof NotNewerError) {
+      console.log(`[Updater] No newer staged update: ${error.message}`)
+      return null
+    }
     // A description that fails verification is the case this whole mechanism
     // exists to catch, so it is logged loudly even though it is not fatal.
     console.error(`[Updater] Rejected staged update description: ${String(error)}`)

@@ -38,15 +38,22 @@ vi.mock('../../../../src/main/services/updater/staged/layout', () => ({
   HELPER_RUN_PREFIX: 'halo-update-helper-',
 }))
 
-const readStagedManifest = vi.fn((_body: string) => ({ version: '3.0.1', package: { size: 1 } }))
+const { NotNewerError } = vi.hoisted(() => ({ NotNewerError: class NotNewerError extends Error {} }))
+const readStagedManifest = vi.fn((_body: string): unknown => ({ version: '3.0.1', package: { size: 1 } }))
 vi.mock('../../../../src/main/services/updater/staged/manifest', () => ({
+  NotNewerError,
   readStagedManifest: (body: string) => readStagedManifest(body),
 }))
 
 const ENVELOPE = '{"payload":"e30=","signature":"c2ln","keyId":"default"}'
+const GITHUB = { kind: 'github' as const, owner: 'openkursar', repo: 'hello-halo' }
 
 function respond(contentType: string, status = 200): Response {
   return new Response(ENVELOPE, { status, headers: { 'content-type': contentType } })
+}
+
+function requestedUrl(): unknown {
+  return netFetch.mock.calls[0]?.[0]
 }
 
 const realArch = process.arch
@@ -59,19 +66,20 @@ describe('staged description feed', () => {
   })
   afterEach(() => {
     Object.defineProperty(process, 'arch', { value: realArch, configurable: true })
+    vi.restoreAllMocks()
   })
 
   it('reads the flat asset of the latest GitHub release, served as octet-stream', async () => {
     netFetch.mockResolvedValue(respond('application/octet-stream'))
     const { checkForStagedUpdate } = await import('../../../../src/main/services/updater/staged')
 
-    const manifest = await checkForStagedUpdate({ kind: 'github', owner: 'openkursar', repo: 'hello-halo' })
+    const manifest = await checkForStagedUpdate(GITHUB)
 
-    expect(netFetch).toHaveBeenCalledWith(
+    expect(requestedUrl()).toBe(
       'https://github.com/openkursar/hello-halo/releases/latest/download/staged-win-x64.json'
     )
     expect(readStagedManifest).toHaveBeenCalledWith(ENVELOPE)
-    expect(manifest?.version).toBe('3.0.1')
+    expect((manifest as { version: string } | null)?.version).toBe('3.0.1')
   })
 
   it('reads /staged/ on a release server', async () => {
@@ -80,7 +88,7 @@ describe('staged description feed', () => {
 
     await checkForStagedUpdate({ kind: 'generic', url: 'http://updates.example:18080/' })
 
-    expect(netFetch).toHaveBeenCalledWith('http://updates.example:18080/staged/win-x64.json')
+    expect(requestedUrl()).toBe('http://updates.example:18080/staged/win-x64.json')
     expect(readStagedManifest).toHaveBeenCalled()
   })
 
@@ -100,9 +108,52 @@ describe('staged description feed', () => {
     netFetch.mockResolvedValue(respond('text/plain', 404))
     const { checkForStagedUpdate } = await import('../../../../src/main/services/updater/staged')
 
-    const manifest = await checkForStagedUpdate({ kind: 'github', owner: 'openkursar', repo: 'hello-halo' })
+    const manifest = await checkForStagedUpdate(GITHUB)
 
     expect(manifest).toBeNull()
     expect(readStagedManifest).not.toHaveBeenCalled()
+  })
+
+  it('bounds the request, and declines when it times out so the installer path still runs', async () => {
+    netFetch.mockRejectedValue(new DOMException('The operation was aborted due to timeout', 'TimeoutError'))
+    const { checkForStagedUpdate } = await import('../../../../src/main/services/updater/staged')
+
+    const manifest = await checkForStagedUpdate(GITHUB)
+
+    // Electron's network stack has no default timeout; without a signal a
+    // stalled connection would never settle.
+    const init = netFetch.mock.calls[0]?.[1] as { signal?: unknown } | undefined
+    expect(init?.signal).toBeInstanceOf(AbortSignal)
+    expect(manifest).toBeNull()
+    expect(readStagedManifest).not.toHaveBeenCalled()
+  })
+
+  it('treats a genuine description that is not newer as up to date, not as a rejection', async () => {
+    netFetch.mockResolvedValue(respond('application/octet-stream'))
+    readStagedManifest.mockImplementationOnce(() => {
+      throw new NotNewerError('update description version 3.0.0 is not newer than 3.0.0')
+    })
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const { checkForStagedUpdate } = await import('../../../../src/main/services/updater/staged')
+
+    const manifest = await checkForStagedUpdate(GITHUB)
+
+    expect(manifest).toBeNull()
+    // Every up-to-date install sees this on every check.
+    expect(errors).not.toHaveBeenCalled()
+  })
+
+  it('still reports a description that fails verification as an error', async () => {
+    netFetch.mockResolvedValue(respond('application/octet-stream'))
+    readStagedManifest.mockImplementationOnce(() => {
+      throw new Error('update description signature does not verify')
+    })
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const { checkForStagedUpdate } = await import('../../../../src/main/services/updater/staged')
+
+    const manifest = await checkForStagedUpdate(GITHUB)
+
+    expect(manifest).toBeNull()
+    expect(errors).toHaveBeenCalledWith(expect.stringContaining('Rejected staged update description'))
   })
 })

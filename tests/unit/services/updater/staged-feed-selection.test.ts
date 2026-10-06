@@ -25,10 +25,11 @@ vi.mock('../../../../src/main/foundation/window.service', () => ({
 
 let updateConfig: Record<string, unknown> = {}
 let channel = 'stable'
+let windowsMode = 'staged'
 vi.mock('../../../../src/main/foundation/product-config', () => ({
   loadProductConfig: () => ({ updateConfig }),
   getUpdateChannel: () => channel,
-  getWindowsUpdateMode: () => 'staged',
+  getWindowsUpdateMode: () => windowsMode,
   getUpdateManifestPublicKey: () => 'a-key',
 }))
 
@@ -58,9 +59,21 @@ describe('staged feed selection', () => {
     autoUpdater.checkForUpdates.mockClear()
     updateConfig = GITHUB
     channel = 'stable'
+    windowsMode = 'staged'
   })
   afterEach(() => {
     Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true })
+  })
+
+  it('leaves a Windows build without staged updates exactly on the installer path', async () => {
+    // What every build gets unless product.json opts in (an unset mode, or
+    // staged without a public key, both resolve to legacy).
+    windowsMode = 'legacy'
+    await checkOnce()
+
+    expect(checkForStagedUpdate).not.toHaveBeenCalled()
+    expect(autoUpdater.checkForUpdates).toHaveBeenCalled()
+    expect(autoUpdater.autoInstallOnAppQuit).toBe(true)
   })
 
   it('reads a GitHub stable build from its repository', async () => {

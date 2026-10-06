@@ -8,7 +8,7 @@
 
 import { describe, it, expect, beforeAll } from 'vitest'
 import { generateKeyPairSync, sign, type KeyObject } from 'crypto'
-import { readStagedManifest } from '../../../../src/main/services/updater/staged/manifest'
+import { NotNewerError, readStagedManifest } from '../../../../src/main/services/updater/staged/manifest'
 
 const EXPECTED = {
   channel: 'experience' as const,
@@ -103,6 +103,23 @@ describe('readStagedManifest', () => {
       .toThrow(/not newer/)
     expect(() => readStagedManifest(envelope(basePayload({ version: '2.1.16' })), publicKeyB64, EXPECTED))
       .toThrow(/not newer/)
+    // Its own type: the caller logs it as "up to date", not as a rejection.
+    expect(() => readStagedManifest(envelope(basePayload({ version: '2.1.16' })), publicKeyB64, EXPECTED))
+      .toThrow(NotNewerError)
+  })
+
+  it('reports a forged description that is not newer as a forgery', () => {
+    // The signature is checked first, so an old version number cannot turn a
+    // forgery into a quiet "up to date".
+    let thrown: unknown
+    try {
+      readStagedManifest(envelope(basePayload({ version: '2.1.15' }), otherPrivateKey), publicKeyB64, EXPECTED)
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).toBeInstanceOf(Error)
+    expect(thrown).not.toBeInstanceOf(NotNewerError)
+    expect(String(thrown)).toMatch(/signature does not verify/)
   })
 
   it('refuses a package this build has no helper for', () => {
