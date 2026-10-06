@@ -28,6 +28,7 @@ import {
 } from './helpers'
 import { isImSessionKey } from '../../../shared/apps/im-keys'
 import { purgeStaleMcpOAuth } from './mcp-auth-state'
+import { onMcpServerRecovered } from './mcp-manager'
 import { emitAgentEvent } from './events'
 import { registerProcess, unregisterProcess, getCurrentInstanceId } from '../health'
 import { resolveCredentialsForSdk, buildUserSessionSdkOptions, computeCredentialsFingerprint, computeSessionInputsFingerprint, getSdkSourceId } from './sdk-config'
@@ -1513,6 +1514,7 @@ export async function ensureSessionWarm(
  * Close V2 session for a conversation
  */
 export function closeV2Session(conversationId: string): void {
+  mcpRebuildsSpent.delete(conversationId)
   cleanupSession(conversationId, 'explicit close')
 }
 
@@ -1778,6 +1780,77 @@ export function getActiveSession(conversationId: string): SessionState | undefin
 }
 
 // ============================================
+// MCP Connection Retries
+// ============================================
+
+type McpRebuildSpent = 'retried' | 'recovered'
+
+/**
+ * Rebuilds already spent on a failing MCP server, per conversation: 'retried'
+ * once its session reported the server failed, 'recovered' once the server was
+ * seen connecting again after that. Cleared when the conversation's session
+ * connects the server, when its session is closed on purpose, and on any MCP
+ * configuration change. The cap matters for a server that passes Halo's probe
+ * but never connects in the engine (a proxy or PATH only the engine sees): it
+ * would otherwise rebuild the session at every recovery report.
+ */
+const mcpRebuildsSpent = new Map<string, Map<string, McpRebuildSpent>>()
+
+/**
+ * Engines connect MCP servers when a session starts and do not retry one that
+ * failed; the session goes on without its tools. Called with every SDK message
+ * a chat consumer reads, it acts only on the per-turn status report
+ * (`mcp_servers`): it records the failed servers and rebuilds the session the
+ * way an MCP toggle does — deferred past a running turn — so the next message
+ * starts with a fresh connection attempt.
+ */
+export function noteSessionMcpStatus(conversationId: string, session: V2SDKSession, sdkMessage: unknown): void {
+  const msg = sdkMessage as { type?: unknown; mcp_servers?: unknown } | null
+  if (msg?.type !== 'system' || !Array.isArray(msg.mcp_servers)) return
+  const info = v2Sessions.get(conversationId)
+  if (info?.session !== session) return
+
+  const spent = mcpRebuildsSpent.get(conversationId) ?? new Map<string, McpRebuildSpent>()
+  const failed: string[] = []
+  for (const server of msg.mcp_servers as Array<{ name?: unknown; status?: unknown }>) {
+    if (typeof server?.name !== 'string') continue
+    if (server.status === 'failed') failed.push(server.name)
+    else if (server.status === 'connected') spent.delete(server.name)
+  }
+  info.failedMcpServers = failed.length > 0 ? failed : undefined
+
+  const retry = failed.filter(name => !spent.has(name))
+  for (const name of retry) spent.set(name, 'retried')
+  if (spent.size > 0) mcpRebuildsSpent.set(conversationId, spent)
+  else mcpRebuildsSpent.delete(conversationId)
+  if (retry.length === 0) return
+
+  console.log(`[Agent][${conversationId}] MCP server(s) failed to connect: ${retry.join(', ')} — rebuilding the session for the next message`)
+  requestSessionRebuild(conversationId, `MCP server failed to connect: ${retry.join(', ')}`)
+}
+
+/** A rebuild is already flagged for this session, or its consumer stopped for one. */
+function isRebuildPending(conversationId: string): boolean {
+  return pendingConsumerRebuilds.has(conversationId) ||
+    pendingInvalidations.has(conversationId) ||
+    consumers.get(conversationId)?.isRunning === false
+}
+
+// A server that some sessions could not use connects again (probe, connection
+// test, another session): rebuild each of them once more.
+onMcpServerRecovered((name) => {
+  for (const [conversationId, info] of Array.from(v2Sessions)) {
+    if (!info.failedMcpServers?.includes(name) || isRebuildPending(conversationId)) continue
+    const spent = mcpRebuildsSpent.get(conversationId) ?? new Map<string, McpRebuildSpent>()
+    if (spent.get(name) === 'recovered') continue
+    spent.set(name, 'recovered')
+    mcpRebuildsSpent.set(conversationId, spent)
+    console.log(`[Agent][${conversationId}] MCP server ${name} is reachable again — rebuilding the session that could not use it`)
+    requestSessionRebuild(conversationId, `MCP server reachable again: ${name}`)
+  }
+})
+
+// ============================================
 // Config Change Handler Registration
 // ============================================
 
@@ -1819,6 +1892,7 @@ onApiConfigChange((change?: ApiConfigChange) => {
  * direction inverted.
  */
 export function handleMcpAppsChange(spaceId: string | null): void {
+  mcpRebuildsSpent.clear()
   if (spaceId === null) {
     invalidateAllSessions()
   } else {
