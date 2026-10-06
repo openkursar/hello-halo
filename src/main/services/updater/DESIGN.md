@@ -28,13 +28,32 @@ Public surface is `index.ts`. Nothing outside the module imports `staged/*` or
 | | legacy | staged |
 |---|---|---|
 | platforms | macOS, Linux, Windows | Windows only |
-| feed | `latest.yml` via electron-updater | signed description at `/staged/<platform>-<arch>.json` |
+| feed | `latest.yml` via electron-updater | signed description: `/staged/<platform>-<arch>.json` on a release server, or the `staged-<platform>-<arch>.json` asset of the latest GitHub release |
 | cost at click | full NSIS install (~30 s) | directory rename + relaunch |
 | applies by | `autoUpdater.quitAndInstall` | native helper swaps directories |
 
 Selection happens once at init from `updateConfig.windowsMode` and is cached.
 Re-deriving it per event would let one update start on one path and finish on
 the other.
+
+Two kinds of feed carry descriptions. A generic release server serves them
+under `/staged/`. A GitHub repository carries them as flat release assets —
+asset names cannot contain a path — read through `releases/latest/download/`.
+That URL never resolves to a prerelease, so on GitHub the staged path covers
+the stable channel only and preview builds keep the installer path. GitHub
+serves every asset as `application/octet-stream`; the content-type gate accepts
+that next to JSON, because it exists to turn away a server's HTML page, not to
+require a particular label. Descriptions are fetched through Electron's network
+stack, like the package, so the system proxy applies to both.
+
+The release build produces both files: `scripts/release/staged-artifacts.cjs`
+runs the signer after electron-builder has packed Windows and hands the archive
+and description back to be published with the installer. A release that
+enables staged updates without a signing key, or with a key that does not
+belong to `manifestPublicKey`, fails before anything is built
+(`verify-inputs --mode release`, or the hook itself when electron-builder
+publishes) instead of shipping a release whose clients would quietly keep the
+installer path.
 
 On a staged build electron-updater never installs on quit
 (`autoInstallOnAppQuit` off). It is only a fallback there, and a quit that

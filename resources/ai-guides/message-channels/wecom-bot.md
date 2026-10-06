@@ -143,28 +143,33 @@ This grant **expires 7 days after authorization** and must be re-copied — the 
 an `expired` status (amber, "re-copy the link from WeCom and paste it here"). Absence of this
 field simply means chat IDs display as-is; it is fully optional and never blocks messaging.
 
-## 5. Bot Name — removing the bot's own @mention from group text (optional)
+## 5. Group mentions and commands
 
 WeCom delivers a group message only when the bot is mentioned, and the mention arrives as
 **plain text at the start of the body**: `@Halo AI 团队 这个群的 ID 是什么`. The callback carries
-no structured mention data and no separator marking where the name ends, so a bot name containing
-spaces cannot be recognized unless Halo is told what the name is.
+no structured mention data, and a bot name may contain spaces, so where the name ends cannot be
+told from the text. Halo 3.0 and later does not try (`isCommand` in
+`src/main/apps/runtime/dispatch-inbound.ts`):
 
-The **Bot Name** field (`botNames`, optional, one name per line) supplies it. When the leading
-`@name` matches in full, it is removed before the digital human reads the message; nothing else in
-the text is touched (`im-channels/mention-prefix.ts`). Leave it empty and the body passes through
-exactly as typed — which is always safe, just noisier for the model.
+- **The digital human reads the message as typed, every `@` included** — its own and anyone
+  else's. `@小助手 @张三 帮忙跟进一下` tells it that 张三 was addressed. There is no "Bot Name" or
+  mention-removal setting, and none is needed.
+- **Commands** (`/stop`, `/clear` and their aliases, listed in
+  `create-digital-human/im-triggers.md`) count in a group when the message starts with `@` and
+  its **last word** is the command: `@Halo AI 团队 /stop`, `@HaloBot /stop` and
+  `@Halo @助手 /clear` all work, and so does a message that is only `/stop`. Case does not
+  matter, and the special space WeCom inserts after a mention counts as a space.
+- **Not commands**: text after the command (`@Halo /stop doing that`), a message that does not
+  start with `@` (`please /stop`), or a word without the slash (`stop`, `停止`). These reach the
+  digital human as ordinary messages.
+- **Direct messages**: the command must be the whole message.
+- By the same rule, any group message that starts with `@` and ends with `/stop` stops the
+  current answer.
 
-- Matching is **exact**: a wrong or outdated name simply does not match, and the message is
-  delivered unchanged. It never truncates or garbles text.
-- Several lines are allowed, for a bot that has been renamed. The longest match wins.
-- Takes effect on the next inbound message — editing it never drops the WebSocket connection
-  (`hotUpdatableConfigKeys` in `wecom-bot.provider.ts`).
-- Direct messages carry no mention prefix and are never touched.
-
-Practical consequence: without this field, `@bot /clear` is not a command — the body is
-`@bot /clear`, which does not equal `/clear`. Commands are matched against the whole message, so
-in groups they only work once the mention has been removed.
+Before 3.0, Halo removed the leading `@word` tokens from group messages and matched commands
+against what was left. `@HaloBot /stop` worked, but a bot name with spaces did not
+(`@Halo AI 团队 /stop` became `AI 团队 /stop`, which is not a command), and a leading `@colleague`
+was removed as well.
 
 ## 6. Multi-device standby (informational, not a failure)
 
@@ -190,7 +195,7 @@ bug — do not diagnose it as a connection failure.
 | Group replies show as plain text, no quote bubble | Quote Reply toggled off for that instance | `quoteReply: false` in config — expected, not a bug |
 | Streaming toggle greyed out / won't turn on | Quote Reply is off | Turn Quote Reply on first — Streaming requires it (§2) |
 | Sender shows an opaque ID instead of a real name | No Name Resolution URL configured, or it expired | §4 — check `identityResolution.status` in instance status; `expired` needs a fresh 7-day grant |
-| In groups the bot answers as if the question included its own name, or a `/clear`-style command is ignored | Bot Name not configured, so the `@name` prefix is still part of the body | §5 — fill in Bot Name exactly as WeCom shows it; the `inbound_parsed` log line carries `mentionStripped=true` once it matches |
+| A `/stop` or `/clear` sent in a group is answered as an ordinary message | Something follows the command, the message does not start with `@`, or — before 3.0 — the bot's name contains spaces | §5 — end the message with the command: `@Halo AI 团队 /stop` |
 | "This Bot ID is already in use" warning | Same `botId` configured on two enabled instances | Only one instance can hold the WebSocket slot per real bot — delete or disable the duplicate |
 | Owner claimed the wrong user | First DM sender ≠ intended owner | Manually edit **Owner User IDs** in the Permission Control section; replaces the auto-claimed value |
 | `notify_bot` / scheduled push to a chat never delivers | That chat has never messaged the bot before | A chat only becomes a known, pushable session after at least one real inbound message (`ImSessionRegistry`, registered in `dispatch-inbound.ts`) — have the target person or group `@`-mention the bot once first; see `create-digital-human/im-triggers.md` §B |
@@ -201,8 +206,7 @@ bug — do not diagnose it as a connection failure.
   available at scan time; the first-DM auto-claim (§3) obtains it without ever having to ask.
 - **Do not offer to configure per-message @-mention filtering.** WeCom's platform itself only
   forwards `@`-mentioned messages to the bot in groups — Halo never even receives the rest. See
-  `create-digital-human/im-triggers.md`. The Bot Name field (§5) is not a filter: it decides
-  whether the mention is removed from text the bot already received.
+  `create-digital-human/im-triggers.md`.
 - **Do not treat `standby` as an error requiring troubleshooting** — see §6.
-- **Do not guess the bot's display name into the Bot Name field.** A wrong value is harmless but
-  useless; the user has to read the real name off the bot in WeCom.
+- **Do not send the user looking for a "Bot Name" or mention-removal setting.** None exists:
+  the digital human reads group messages with their mentions, and commands work without it (§5).
