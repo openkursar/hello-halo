@@ -35,14 +35,13 @@ describe('delta coalescer', () => {
     const deltas = createDeltaCoalescer('space-1', 'conv-1')
     deltas.thought('t1', 'think ')
     deltas.thought('t1', 'more')
-    deltas.thought('tool-1', '{"a":', true)
-    deltas.thought('tool-1', '1}', true)
+    deltas.thought('t2', 'other')
     deltas.text('Answer')
     deltas.thought('t1', ' again')
     deltas.flush()
     expect(published()).toEqual([
       { channel: 'agent:thought-delta', thoughtId: 't1', delta: 'think more' },
-      { channel: 'agent:thought-delta', thoughtId: 'tool-1', delta: '{"a":1}', isToolInput: true },
+      { channel: 'agent:thought-delta', thoughtId: 't2', delta: 'other' },
       { channel: 'agent:message', type: 'message', delta: 'Answer', isComplete: false, isStreaming: true },
       { channel: 'agent:thought-delta', thoughtId: 't1', delta: ' again' },
     ])
