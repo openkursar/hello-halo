@@ -86,6 +86,10 @@ export function onMcpAppsChange(handler: McpChangeHandler): () => void {
   }
 }
 
+/** Bounds on an MCP app's list of turned-off tools, which the HTTP API also writes. */
+const MAX_DISABLED_TOOLS = 1000
+const MAX_TOOL_NAME_LENGTH = 256
+
 function emitMcpChange(spaceId: string | null, change?: McpAppChange): void {
   for (const handler of mcpChangeHandlers) {
     try {
@@ -856,10 +860,23 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       // HTTP path (null via JSON serialization) correctly clear optional fields.
       const merged: Record<string, unknown> = { ...app.userOverrides }
       for (const [key, value] of Object.entries(partial as Record<string, unknown>)) {
+        if (key === 'disabledTools' && app.spec.type !== 'mcp') {
+          throw new Error('disabledTools applies to MCP servers only')
+        }
         if (value == null) {
           delete merged[key]
         } else if (key === 'chatReasoningEffort' && !isReasoningEffortLevel(value)) {
           throw new Error(`Invalid chatReasoningEffort: ${String(value)}`)
+        } else if (key === 'disabledTools') {
+          if (
+            !Array.isArray(value) || value.length > MAX_DISABLED_TOOLS ||
+            !value.every(tool => typeof tool === 'string' && tool.trim() && tool.length <= MAX_TOOL_NAME_LENGTH)
+          ) {
+            throw new Error(`disabledTools must be a list of at most ${MAX_DISABLED_TOOLS} tool names`)
+          }
+          const tools = [...new Set((value as string[]).map(tool => tool.trim()))]
+          if (tools.length > 0) merged[key] = tools
+          else delete merged[key]
         } else {
           // Memory settings merge field by field, so a change to one never
           // resets another that a concurrent change just saved.
@@ -869,6 +886,14 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         }
       }
       store.updateOverrides(appId, merged as InstalledApp['userOverrides'])
+
+      // Sessions were given the server's tools when they were built.
+      const before = JSON.stringify([...(app.userOverrides.disabledTools ?? [])].sort())
+      const after = JSON.stringify([...((merged.disabledTools as string[] | undefined) ?? [])].sort())
+      if (before !== after) {
+        console.log(`[AppManager] App ${appId}: ${(merged.disabledTools as string[] | undefined)?.length ?? 0} MCP tool(s) turned off`)
+        emitMcpChange(app.spaceId, { appId, specId: app.specId, action: 'tools' })
+      }
     },
 
     setUpgradeStrategy(appId: string, strategy: UpgradeStrategy): void {

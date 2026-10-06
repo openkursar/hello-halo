@@ -14,6 +14,8 @@ interface SwitchProps {
   disabled?: boolean
   size?: 'sm' | 'md'
   className?: string
+  /** What the switch turns on or off, for a switch with no visible label of its own. */
+  ariaLabel?: string
 }
 
 const sizeConfig = {
@@ -39,6 +41,7 @@ export function Switch({
   disabled = false,
   size = 'sm',
   className,
+  ariaLabel,
 }: SwitchProps) {
   const cfg = sizeConfig[size]
 
@@ -47,6 +50,7 @@ export function Switch({
       type="button"
       role="switch"
       aria-checked={checked}
+      aria-label={ariaLabel}
       disabled={disabled}
       onClick={() => !disabled && onCheckedChange(!checked)}
       className={cn(

@@ -94,6 +94,18 @@ describe('prepareCodexMcpServers', () => {
     expect(prepared.bridge).toBeUndefined()
   })
 
+  it('leaves out the tools turned off on a server card, for that server only', async () => {
+    const prepared = await prepareCodexMcpServers(
+      { gateway: { command: 'gateway' }, filesystem: { command: 'server' } },
+      { gateway: ['drop_table'], uninstalled: ['x'] },
+    )
+
+    expect(prepared.mcpServers).toEqual({
+      gateway: { command: 'gateway', disabled_tools: ['drop_table'] },
+      filesystem: { command: 'server' },
+    })
+  })
+
   it('names the servers it could not inject', async () => {
     const prepared = await prepareCodexMcpServers({
       legacy: { type: 'sse', url: 'https://example.com/sse' },

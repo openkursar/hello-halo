@@ -95,6 +95,37 @@ describe('AppManager MCP change events', () => {
     expect(events.at(-1)?.change).toEqual({ appId, specId: 'test-mcp', action: 'reinstalled' })
   })
 
+  it('tells sessions when a server\'s tools are turned on or off, and only then', async () => {
+    const appId = await service.install(TEST_SPACE_ID, createMcpSpec())
+    events.length = 0
+
+    service.updateOverrides(appId, { disabledTools: ['drop_table', ' drop_table', 'run_sql'] })
+    expect(service.getApp(appId)?.userOverrides.disabledTools).toEqual(['drop_table', 'run_sql'])
+    expect(events).toEqual([{ spaceId: TEST_SPACE_ID, change: { appId, specId: 'test-mcp', action: 'tools' } }])
+
+    service.updateOverrides(appId, { disabledTools: ['run_sql', 'drop_table'] })
+    service.updateOverrides(appId, { notificationLevel: 'all' })
+    expect(events).toHaveLength(1)
+
+    service.updateOverrides(appId, { disabledTools: undefined })
+    expect(service.getApp(appId)?.userOverrides.disabledTools).toBeUndefined()
+    expect(events.at(-1)?.change).toEqual({ appId, specId: 'test-mcp', action: 'tools' })
+  })
+
+  it('refuses turned-off tools that are not a list of names, and on apps that are not MCP servers', async () => {
+    const mcpId = await service.install(TEST_SPACE_ID, createMcpSpec())
+    expect(() => service.updateOverrides(mcpId, { disabledTools: 'drop_table' as never })).toThrow('disabledTools must be a list of at most 1000 tool names')
+    expect(() => service.updateOverrides(mcpId, { disabledTools: ['ok', ' '] })).toThrow('disabledTools must be a list')
+    expect(() => service.updateOverrides(mcpId, { disabledTools: ['x'.repeat(257)] })).toThrow('disabledTools must be a list')
+    expect(() => service.updateOverrides(mcpId, { disabledTools: Array.from({ length: 1001 }, (_, i) => `t${i}`) })).toThrow('disabledTools must be a list')
+
+    const automationId = await service.install(TEST_SPACE_ID, {
+      spec_version: '1', name: 'test-automation', version: '1.0.0', author: 'Test Author',
+      description: 'Not an MCP app', type: 'automation', system_prompt: 'You are a test bot.',
+    } as unknown as AppSpec)
+    expect(() => service.updateOverrides(automationId, { disabledTools: ['x'] })).toThrow('disabledTools applies to MCP servers only')
+  })
+
   it('does not emit MCP change events for non-MCP apps', async () => {
     const spec = {
       spec_version: '1',

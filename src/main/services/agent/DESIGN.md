@@ -452,6 +452,7 @@ Now the layers that assemble a session read the settings themselves, through
 | Setting | Read by | Notes |
 |---|---|---|
 | `maxTurns`, `disabledTools` | `sdk-config.ts` | Engine-independent. Unset `disabledTools` means the built-in default list; the native team tools are always withheld. |
+| Tools turned off on an MCP server's card (`userOverrides.disabledTools` of the MCP app) | `sdk-config.ts` via `helpers.ts getDisabledMcpTools` | Every user session of the space, whoever it runs for: appended to `disallowedTools` as `mcp__<server>__<tool>` (`mcp/tool-name.ts`, the naming Claude Code and the halo engine share) and handed per server as `disabledMcpTools` to engines that filter there — Codex renders it as `disabled_tools`. dsh's MCP client has no such filter, so dsh still offers them (logged). |
 | `promptProfile`, `enableDigitalHumans` (prompt line) | `system-prompt.ts` `buildSystemPrompt` | An explicit value in the context wins over the setting. `promptProfile` only picks a template on engines that take Halo's prompt; the halo engine appends product context to its own default and ignores it. So every prompt built on `buildSystemPrompt` — digital humans' too — follows both. |
 | `enableDigitalHumans` (tool) | `toolsets/base.ts` | Gates `halo-apps` in the base toolset. |
 | `configDirMode`, `customConfigDir` | `sdk-config.ts` `buildSdkEnv` via `resolveClaudeConfigDir()` | Not per-entry: `CLAUDE_CONFIG_DIR` also holds the CLI credential slot, so internal tasks follow it too. |

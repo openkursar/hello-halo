@@ -117,7 +117,9 @@ There is no migration for rows written before this rule.
 
 **Signature**: `onMcpAppsChange((spaceId: string | null, change?: McpAppChange) => void)`
 where `McpAppChange = { appId, specId, action }` and `action` is one of
-`installed | uninstalled | reinstalled | paused | resumed | updated | moved | status`.
+`installed | uninstalled | reinstalled | paused | resumed | updated | moved | status | tools`.
+`tools` means only the server's tools were turned on or off (`userOverrides.disabledTools`,
+set from its card): sessions are rebuilt, the connection is not probed again.
 The `McpAppChange` type lives in `services/app-bridge.ts` (type-only import here,
 erased at runtime) because its consumers are on the services tier.
 
