@@ -4,6 +4,8 @@
  * Core type definitions for the System Health Management (SHM) module.
  */
 
+import type { ChildLocalConnectionInfo } from '../../../shared/types/health'
+
 // ============================================
 // Process Registry Types
 // ============================================
@@ -424,6 +426,12 @@ export interface ServiceCheckStatus {
   error?: string
 }
 
+/** Checks the caller supplies to runImmediateCheck. */
+export interface ImmediateCheckOptions {
+  /** Connect to the router from a child process started like the engine's. */
+  checkChildLocalConnection?: (port: number) => Promise<ChildLocalConnectionInfo>
+}
+
 /**
  * Result of immediate health check (runImmediateCheck)
  */
@@ -441,6 +449,8 @@ export interface ImmediateCheckResult {
   services: {
     openaiRouter: ServiceCheckStatus
     httpServer: ServiceCheckStatus
+    /** The router reached from a child process; absent when not checked. */
+    childLocalConnection?: ChildLocalConnectionInfo
   }
 
   /** List of issues found */

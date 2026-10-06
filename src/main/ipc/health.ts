@@ -14,6 +14,7 @@ import {
   exportReport,
   runImmediateCheck
 } from '../services/health'
+import { checkChildLocalConnection } from '../services/agent'
 import { getMemoryPressure, onMemoryPressure } from '../platform/background'
 import { sendToRenderer } from '../foundation/window.service'
 import { broadcastToAll } from '../http/websocket'
@@ -128,7 +129,7 @@ export function registerHealthHandlers(): void {
     runHealthCheck: async () => {
       console.log('[Settings] health:run-check - Running immediate health check')
       try {
-        const result = await runImmediateCheck()
+        const result = await runImmediateCheck({ checkChildLocalConnection })
         console.log('[Settings] health:run-check - Result:', result.healthy ? 'healthy' : 'unhealthy')
         return { success: true, data: result }
       } catch (error) {

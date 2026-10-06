@@ -4,6 +4,7 @@
  */
 
 import type { LucideIcon } from 'lucide-react'
+import type { ChildLocalConnectionInfo } from '../../../shared/types/health'
 
 /**
  * Navigation item for settings sidebar
@@ -63,6 +64,7 @@ export interface HealthCheckResult {
   services: {
     openaiRouter: { port: number | null; responsive: boolean; responseTime?: number; error?: string }
     httpServer: { port: number | null; responsive: boolean; responseTime?: number; error?: string }
+    childLocalConnection?: ChildLocalConnectionInfo
   }
   issues: string[]
   healthy: boolean
