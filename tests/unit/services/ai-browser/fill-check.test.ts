@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest'
-import { READ_FILLED_VALUE, SELECT_IF_FOCUSED, checkFill } from '../../../../src/main/services/ai-browser/fill-check'
+import { FOCUS_REFUSED, READ_FILLED_VALUE, SELECT_IF_FOCUSED, checkFill } from '../../../../src/main/services/ai-browser/fill-check'
 import type { FieldReadBack } from '../../../../src/main/services/ai-browser/types'
 import type { BrowserContext } from '../../../../src/main/services/ai-browser/context'
 
@@ -68,6 +68,32 @@ describe('typing only where focus is', () => {
     const field = element(doc, closedRoot, { getRootNode: () => closedRoot })
     doc.activeElement = host
     expect(selectIfFocused.call(field)).toBe(true)
+  })
+
+  it('types into a rich-text editor in a frame only while the page has focus on that frame', () => {
+    // The page: a password field and an editor frame (rich-text editors often live in an iframe).
+    const { doc: topDoc, body: topBody } = page()
+    const password = element(topDoc, topBody, { type: 'password' })
+    const frame = element(topDoc, topBody)
+    const topWindow = { frameElement: null }
+    // Inside the frame nothing is focused, so its editable body reports itself as active.
+    const execCommand = vi.fn()
+    const frameDoc: Record<string, unknown> = { execCommand, parentNode: null, defaultView: { frameElement: frame, parent: topWindow } }
+    const editorBody = element(frameDoc, frameDoc, { isContentEditable: true })
+    const paragraph = element(frameDoc, editorBody, { isContentEditable: true })
+    frameDoc.activeElement = editorBody
+
+    topDoc.activeElement = password
+    expect(selectIfFocused.call(paragraph)).toBe(false)
+    expect(execCommand).not.toHaveBeenCalled()
+
+    topDoc.activeElement = frame
+    expect(selectIfFocused.call(paragraph)).toBe(true)
+    expect(execCommand).toHaveBeenCalledWith('selectAll')
+  })
+
+  it('points to a snapshot when it types nothing, so a field that hands focus to a popup is not retried in a loop', () => {
+    expect(FOCUS_REFUSED).toMatch(/^focus stayed on another element, so nothing was typed\. Take a browser_snapshot/)
   })
 
   it('types nothing while focus stays on another field, or on nothing at all', () => {

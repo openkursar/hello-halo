@@ -34,7 +34,7 @@ import {
   unregisterWebContentsForDownload
 } from './download-handler'
 import { emitBrowserActiveView, emitBrowserViewGone, emitBrowserConversationReleased } from './events'
-import { READ_FILLED_VALUE, SELECT_IF_FOCUSED } from './fill-check'
+import { FOCUS_REFUSED, READ_FILLED_VALUE, SELECT_IF_FOCUSED } from './fill-check'
 import type { AIBrowserLivePage, AIBrowserStopResult } from '../../../shared/types/ai-browser'
 import { sanitizeFilename, resolveUniquePath } from '../../foundation/file-naming'
 import type {
@@ -1249,7 +1249,7 @@ export class BrowserContext implements BrowserContextInterface {
         returnByValue: true,
       })
       if (focused.result?.value !== true) {
-        throw new Error('it did not take focus, so nothing was typed. Click it, then fill it again.')
+        throw new Error(FOCUS_REFUSED)
       }
       await this.sendCDPCommand('Input.insertText', { text: value })
       const filled = await this.sendCDPCommand<{ result?: { value?: FieldReadBack } }>('Runtime.callFunctionOn', {
