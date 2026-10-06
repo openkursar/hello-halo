@@ -58,6 +58,8 @@ export function buildIdentityFragments(input: IdentityFragmentsInput): string[] 
     modelInfo: input.modelInfo,
     knowledgeBases: getKBReferencesForApp(input.appId),
     ...(input.withholdDigitalHumans ? { digitalHumansEnabled: false } : {}),
+    // Who it is comes from its App Instructions, not Halo's introduction.
+    ownIdentity: input.appSpec.type === 'automation' && !!input.appSpec.system_prompt,
   }
   let base = input.usesAIBrowser
     ? buildSystemPromptWithAIBrowser(promptCtx, AI_BROWSER_SYSTEM_PROMPT)

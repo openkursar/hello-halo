@@ -403,7 +403,7 @@ src/main/apps/runtime/
 
 | Layer | Answers | Examples |
 |---|---|---|
-| Identity | Who am I, what do I do | Base Agent prompt, App spec, memory access, user config, capability awareness (disabled + awaiting-setup) |
+| Identity | Who am I, what do I do | Base Agent prompt, App spec, memory access, user config, capability awareness (disabled + awaiting-setup). The base prompt opens with "You run on Halo" rather than "You are Halo" (`ownIdentity`), so the App Instructions decide who it is — in chat and in runs alike |
 | Entry | Where am I, how do I reply | IM group/direct session context, native UI reply orientation |
 | Constraint | What I must not do | IM anti-impersonation rules when owners are configured |
 

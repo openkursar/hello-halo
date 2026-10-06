@@ -215,6 +215,7 @@ import {
 } from '../../../../src/main/apps/manager/migrations'
 import { Semaphore } from '../../../../src/main/apps/runtime/concurrency'
 import { buildAppSystemPrompt, buildInitialMessage, buildMemorySection, buildEscalationResumeMessage } from '../../../../src/main/apps/runtime/prompt'
+import { buildIdentityFragments } from '../../../../src/main/apps/runtime/prompt/identity'
 import { _resetTlonRegistry, createKB, bindToApp } from '../../../../src/main/services/tlon/service'
 import {
   AppNotRunnableError,
@@ -1263,6 +1264,35 @@ describe('Prompt Builder', () => {
 
       expect(prompt).toContain('Monitor AirPods prices')
       expect(prompt).toContain('App Instructions')
+    })
+
+    it('lets a digital human answer as its App Instructions say: it runs on Halo, it is not Halo', () => {
+      const prompt = buildAppSystemPrompt({
+        appId: 'test-app-id',
+        appSpec: createTestSpec({ system_prompt: 'You are Mia, the after-sales assistant of Acme.' }),
+        memoryInstructions: '',
+        triggerContext: 'Scheduled',
+        workDir: '/tmp/test',
+      })
+
+      expect(prompt).not.toMatch(/^You are Halo, /m)
+      expect(prompt).toContain('You run on Halo, which gives you remote access, file management, and built-in AI browser capabilities.')
+      expect(prompt).toContain('You are Mia, the after-sales assistant of Acme.')
+      // Tools, environment and safety still come from Halo.
+      expect(prompt).toContain('Platform:')
+      expect(prompt).toContain('IMPORTANT: You must NEVER generate or guess URLs')
+    })
+
+    it('gives a digital human chat the same opening', () => {
+      const [base] = buildIdentityFragments({
+        appId: 'test-app-id',
+        appSpec: createTestSpec({ system_prompt: 'You are Mia, the after-sales assistant of Acme.' }),
+        memoryInstructions: '',
+        workDir: '/tmp/test',
+      })
+
+      expect(base).not.toMatch(/^You are Halo, /m)
+      expect(base).toContain('You run on Halo, which gives you remote access, file management, and built-in AI browser capabilities.')
     })
 
     it('should include memory instructions when provided', () => {
