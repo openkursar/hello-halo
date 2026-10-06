@@ -9,13 +9,15 @@
  * - Previous/next result navigation (limited to current conversation)
  * - Return to search panel to edit query
  * - Close and clear highlights
+ * - Keys: ↑/↓ step like the buttons, Esc closes, Ctrl/⌘+K edits (highlight-bar-keys)
  */
 
-import { useRef, useMemo } from 'react'
+import { useEffect, useRef, useMemo } from 'react'
 import { ChevronUp, ChevronDown, Search, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { useSearchStore } from '@/stores/search.store'
+import { conversationResults, useSearchStore, type ResultStep } from '@/stores/search.store'
 import { useChatStore, selectActiveConversationId } from '@/stores/chat.store'
+import { highlightBarCommand } from './highlight-bar-keys'
 
 export function SearchHighlightBar() {
   const {
@@ -23,7 +25,7 @@ export function SearchHighlightBar() {
     highlightQuery,
     highlightResults,
     currentResultIndex,
-    navigateToResultIndex,
+    stepResult,
     hideHighlightBar,
     openSearch
   } = useSearchStore()
@@ -58,18 +60,10 @@ export function SearchHighlightBar() {
     }, 300) // 300ms debounce window
   }
 
-  // Filter results to current conversation only (if we have a current conversation)
-  // Falls back to showing all results if no conversation is selected
-  const currentConversationResults = useMemo(() => {
-    const mapped = highlightResults.map((result, originalIndex) => ({ result, originalIndex }))
-    if (!currentConversationId) {
-      // No conversation selected, show all results
-      return mapped
-    }
-    const filtered = mapped.filter(({ result }) => result.conversationId === currentConversationId)
-    // If no results in current conversation, show all results as fallback
-    return filtered.length > 0 ? filtered : mapped
-  }, [highlightResults, currentConversationId])
+  const currentConversationResults = useMemo(
+    () => conversationResults(highlightResults, currentConversationId),
+    [highlightResults, currentConversationId]
+  )
 
   // Find current position within filtered results
   const currentFilteredIndex = useMemo(() => {
@@ -78,15 +72,41 @@ export function SearchHighlightBar() {
     )
   }, [currentConversationResults, currentResultIndex])
 
+  const totalResults = currentConversationResults.length
+
+  // Determine if navigation buttons should be disabled
+  const canNavigate = totalResults > 1
+
+  // ↑ goes to earlier results, ↓ to more recent ones
+  const step = (direction: ResultStep) => {
+    if (canNavigate) debouncedNavigate(() => stepResult(direction, currentConversationId))
+  }
+  const latestStep = useRef(step)
+  latestStep.current = step
+
+  useEffect(() => {
+    if (!isHighlightBarVisible) return
+    const isMac = typeof navigator !== 'undefined' &&
+      navigator.platform.toUpperCase().indexOf('MAC') >= 0
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const command = highlightBarCommand(e, isMac)
+      if (!command) return
+      e.preventDefault()
+      if (command === 'close') hideHighlightBar()
+      else if (command === 'edit') openSearch('global', 'shortcut')
+      else latestStep.current(command)
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [isHighlightBarVisible, hideHighlightBar, openSearch])
+
   if (!isHighlightBarVisible || currentConversationResults.length === 0) {
     return null
   }
 
-  const totalResults = currentConversationResults.length
   const displayIndex = Math.max(1, currentFilteredIndex + 1) // 1-based display
-
-  // Determine if navigation buttons should be disabled
-  const canNavigate = totalResults > 1
 
   const handleEditSearch = () => {
     openSearch('global', 'highlight_bar')
@@ -94,32 +114,6 @@ export function SearchHighlightBar() {
 
   const handleClose = () => {
     hideHighlightBar()
-  }
-
-  // Navigate to earlier result (higher index in time-sorted results)
-  // ↑ button goes to earlier/older results
-  const handlePrevious = () => {
-    if (canNavigate) {
-      debouncedNavigate(() => {
-        const nextFilteredIndex = currentFilteredIndex + 1 >= totalResults ? 0 : currentFilteredIndex + 1
-        const { originalIndex } = currentConversationResults[nextFilteredIndex]
-        console.log(`[SearchHighlightBar] Navigate to earlier result: ${nextFilteredIndex + 1}/${totalResults}`)
-        navigateToResultIndex(originalIndex)
-      })
-    }
-  }
-
-  // Navigate to more recent result (lower index in time-sorted results)
-  // ↓ button goes to newer/more recent results
-  const handleNext = () => {
-    if (canNavigate) {
-      debouncedNavigate(() => {
-        const nextFilteredIndex = currentFilteredIndex - 1 < 0 ? totalResults - 1 : currentFilteredIndex - 1
-        const { originalIndex } = currentConversationResults[nextFilteredIndex]
-        console.log(`[SearchHighlightBar] Navigate to more recent result: ${nextFilteredIndex + 1}/${totalResults}`)
-        navigateToResultIndex(originalIndex)
-      })
-    }
   }
 
   return (
@@ -145,7 +139,7 @@ export function SearchHighlightBar() {
           {/* Navigation buttons */}
           <div className="flex items-center gap-1">
             <button
-              onClick={handlePrevious}
+              onClick={() => step('earlier')}
               disabled={!canNavigate}
               className={cn(
                 'p-1.5 rounded transition-colors',
@@ -160,7 +154,7 @@ export function SearchHighlightBar() {
             </button>
 
             <button
-              onClick={handleNext}
+              onClick={() => step('more-recent')}
               disabled={!canNavigate}
               className={cn(
                 'p-1.5 rounded transition-colors',

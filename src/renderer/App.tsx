@@ -167,7 +167,7 @@ export default function App() {
   const currentSpaceId = useChatStore(s => s.currentSpaceId)
   const setChatCurrentSpace = useChatStore(s => s.setCurrentSpace)
   const { initialize: initializeOnboarding } = useOnboardingStore()
-  const { isSearchOpen, closeSearch, isHighlightBarVisible, hideHighlightBar, goToPreviousResult, goToNextResult, openSearch } = useSearchStore()
+  const { isSearchOpen, closeSearch } = useSearchStore()
 
   // Telemetry: session lifecycle + page views (fire-and-forget)
   useTelemetry(view)
@@ -889,79 +889,6 @@ export default function App() {
     })
     return () => { unsub() }
   }, [showToast, setInitialAppId, navigate, t])
-
-  // Handle search keyboard shortcuts with debouncing for navigation
-  // Use ref to maintain debounce timer across renders
-  const navigationDebounceTimerRef = useRef<NodeJS.Timeout | null>(null)
-  const pendingNavigationRef = useRef<(() => void) | null>(null)
-
-  const debouncedNavigate = (callback: () => void) => {
-    // Clear previous timeout
-    if (navigationDebounceTimerRef.current) {
-      clearTimeout(navigationDebounceTimerRef.current)
-    }
-
-    // Store the pending navigation
-    pendingNavigationRef.current = callback
-
-    // Set new timeout - debounce for 300ms
-    navigationDebounceTimerRef.current = setTimeout(() => {
-      console.log('[App] Executing debounced keyboard navigation')
-      pendingNavigationRef.current?.()
-      pendingNavigationRef.current = null
-      navigationDebounceTimerRef.current = null
-    }, 300)
-  }
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Only handle when highlight bar is visible
-      if (!isHighlightBarVisible) return
-
-      const isMac = typeof navigator !== 'undefined' &&
-        navigator.platform.toUpperCase().indexOf('MAC') >= 0
-
-      // Esc - Close highlight bar (no debounce needed)
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        hideHighlightBar()
-        return
-      }
-
-      // Arrow up - Navigate to earlier result (with debounce)
-      // Note: In time-sorted results (newest first), earlier = higher index
-      if (e.key === 'ArrowUp') {
-        e.preventDefault()
-        debouncedNavigate(() => {
-          console.log('[App] Keyboard: navigating to earlier result')
-          goToNextResult() // goToNextResult increases index = earlier in time
-        })
-        return
-      }
-
-      // Arrow down - Navigate to more recent result (with debounce)
-      // Note: In time-sorted results (newest first), more recent = lower index
-      if (e.key === 'ArrowDown') {
-        e.preventDefault()
-        debouncedNavigate(() => {
-          console.log('[App] Keyboard: navigating to more recent result')
-          goToPreviousResult() // goToPreviousResult decreases index = more recent in time
-        })
-        return
-      }
-
-      // Ctrl+K / Cmd+K - Open search to edit (no debounce needed)
-      const metaKey = isMac ? e.metaKey : e.ctrlKey
-      if (metaKey && e.key === 'k' && !e.shiftKey) {
-        e.preventDefault()
-        openSearch('global', 'shortcut')
-        return
-      }
-    }
-
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isHighlightBarVisible, hideHighlightBar, goToPreviousResult, goToNextResult, openSearch])
 
   // Handle search result navigation from highlight bar
   // This handles the complete navigation flow when user clicks [↑][↓] or uses arrow keys
