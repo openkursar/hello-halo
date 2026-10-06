@@ -11,9 +11,9 @@
 
 import { beforeEach, expect, it, vi } from 'vitest'
 
-const env = vi.hoisted(() => ({ runner: null as any, electron: true, pathFor: new Map<object, string>() }))
+const env = vi.hoisted(() => ({ runner: null as any, electron: true, pathFor: new Map<object, string>(), upload: null as any }))
 vi.mock('react', async original => ({ ...await original<typeof import('react')>(), useState: (value: any) => env.runner.state(value), useRef: (value: any) => env.runner.ref(value), useMemo: (compute: any) => compute(), useCallback: (fn: any) => fn, useEffect: () => {}, useLayoutEffect: () => {} }))
-vi.mock('../../../src/renderer/api', () => ({ api: { getPathForFile: (file: object) => env.pathFor.get(file) ?? '', pickLocalEntries: vi.fn() } }))
+vi.mock('../../../src/renderer/api', () => ({ api: { getPathForFile: (file: object) => env.pathFor.get(file) ?? '', pickLocalEntries: vi.fn(), uploadArtifactFile: (...args: unknown[]) => env.upload(...args) } }))
 vi.mock('../../../src/renderer/api/transport', () => ({ isElectron: () => env.electron }))
 vi.mock('../../../src/renderer/i18n', () => ({ useTranslation: () => ({ t: (text: string) => text }), default: { t: (text: string) => text } }))
 vi.mock('../../../src/renderer/stores/app.store', () => ({ useAppStore: (select: any) => select({ config: null }) }))
@@ -72,8 +72,8 @@ const paths = (references: readonly ContentReference[] | undefined) =>
   (references ?? []).map(ref => (ref.source.kind === 'path' ? { path: ref.source.path, isDirectory: ref.source.isDirectory } : ref.source.kind))
 
 /** A dropped entry: a File-like object, whether it is a folder, and the path Electron would report. */
-function drop(tree: any, entries: Array<{ name: string; type?: string; path: string; dir?: boolean }>) {
-  const files = entries.map(e => { const file = { name: e.name, type: e.type ?? '', size: 10 }; env.pathFor.set(file, e.path); return file })
+function drop(tree: any, entries: Array<{ name: string; type?: string; path: string; dir?: boolean; size?: number }>) {
+  const files = entries.map(e => { const file = { name: e.name, type: e.type ?? '', size: e.size ?? 10 }; env.pathFor.set(file, e.path); return file })
   const items = entries.map(e => ({ kind: 'file', webkitGetAsEntry: () => ({ isDirectory: !!e.dir }) }))
   return dropZone(tree).props.onDrop({ preventDefault: vi.fn(), dataTransfer: { getData: () => '', files, items } })
 }
@@ -83,6 +83,7 @@ let goal: any
 beforeEach(() => {
   env.electron = true
   env.pathFor.clear()
+  env.upload = vi.fn(async (_spaceId: string, file: { name: string }) => ({ success: true, data: { path: `/srv/space/${file.name}`, name: file.name, size: 10 } }))
   useComposerReferencesStore.setState({ drafts: new Map(), target: null, signal: null })
   useCommentEdits.setState({ texts: new Map(), newComments: new Map() })
   vi.stubGlobal('window', { innerWidth: 1280 })
@@ -311,12 +312,47 @@ it('with a second composer on screen, cards from the page still go to the chat b
   expect(paths(cards(chat.render()))).toEqual(['terminal'])
 })
 
-it('on a remote client nothing is attached by path, and the user is told why', async () => {
+it('on a remote client a file is uploaded into the space and attached by the path it got there; a folder is refused', async () => {
   vi.spyOn(console, 'warn').mockImplementation(() => {})
   env.electron = false
   const { render } = mount()
   await drop(render(), [PDF, DIR])
   const tree = render()
+  expect(env.upload).toHaveBeenCalledTimes(1)
+  expect(env.upload.mock.calls[0][0]).toBe('s')
+  expect(env.upload.mock.calls[0][1].name).toBe('q3 report.pdf')
+  expect(paths(cards(tree))).toEqual([{ path: '/srv/space/q3 report.pdf', isDirectory: false }])
+  expect(errorText(tree)).toBe('{{count}} folder(s) could not be attached: only files can be uploaded from this device')
+})
+
+it.each([
+  ['a new message', false],
+  ['a message added mid-reply', true],
+])('on a remote client %s waits for its uploads before it can be sent', async (_case, isGenerating) => {
+  env.electron = false
+  let finish!: (result: unknown) => void
+  env.upload = vi.fn(() => new Promise(resolve => { finish = resolve }))
+  const { render, type } = mount({ ...props, isGenerating })
+  const dropping = drop(render(), [PDF])
+  expect(toolbar(type('Read this')).props.canSend).toBe(false)
+  finish({ success: true, data: { path: '/srv/space/q3 report.pdf', name: 'q3 report.pdf', size: 10 } })
+  await dropping
+  const tree = render()
+  expect(toolbar(tree).props.canSend).toBe(true)
+  expect(paths(cards(tree))).toEqual([{ path: '/srv/space/q3 report.pdf', isDirectory: false }])
+})
+
+it('on a remote client a file over the upload limit, or one the server refuses, is not attached and the user is told', async () => {
+  vi.spyOn(console, 'warn').mockImplementation(() => {})
+  env.electron = false
+  const { render } = mount()
+  await drop(render(), [{ ...PDF, size: 300 * 1024 * 1024 }])
+  expect(env.upload).not.toHaveBeenCalled()
+  expect(errorText(render())).toBe('{{name}} is larger than {{limit}} and was not uploaded')
+
+  env.upload = vi.fn(async () => ({ success: false, error: 'Access denied' }))
+  await drop(render(), [PDF])
+  const tree = render()
   expect(cards(tree)).toEqual([])
-  expect(errorText(tree)).toBe('Only images can be attached from this device')
+  expect(errorText(tree)).toBe('Could not upload {{name}}')
 })

@@ -3,6 +3,8 @@
  * Split from the monolithic routes/index.ts; mirrors the IPC API for this domain.
  */
 import type { Express, Request, Response } from 'express'
+import { randomUUID } from 'crypto'
+import { createWriteStream, renameSync, unlink } from 'fs'
 import {
   basename,
   collectFiles,
@@ -14,6 +16,7 @@ import {
   existsSync,
   getWorkingDir,
   isPathInside,
+  join,
   listArtifacts,
   listArtifactsTree,
   loadTreeChildren,
@@ -28,6 +31,8 @@ import {
 } from './_shared'
 import { retainArtifactSpace, releaseArtifactSpace, queryFiles, resolveArtifactPaths } from '../../services/artifact.service'
 import { issueDownloadTicket, redeemDownloadTicket } from '../auth/download-ticket'
+import { resolveUniquePath, sanitizeFilename } from '../../foundation/file-naming'
+import { MAX_UPLOAD_FILE_SIZE } from '../../../shared/constants/artifact-upload'
 
 const DOWNLOAD_TYPES: Record<string, string> = {
   html: 'text/html',
@@ -355,6 +360,77 @@ export function registerArtifactRoutes(app: Express): void {
     } catch (error) {
       res.status(500).json({ success: false, error: (error as Error).message })
     }
+  })
+
+  // One file from a remote client's device into the space's working directory.
+  // The body is the file itself, streamed into a temp dotfile beside its target
+  // and renamed once whole, so the file's own name never holds half an upload.
+  app.post('/api/spaces/:spaceId/artifacts/upload', (req: Request, res: Response) => {
+    const requested = typeof req.query.name === 'string' ? req.query.name.split(/[\\/]/).pop()?.trim() ?? '' : ''
+    if (!requested) {
+      res.status(400).json({ success: false, error: 'Missing file name' })
+      return
+    }
+    const declared = Number(req.headers['content-length'])
+    if (Number.isFinite(declared) && declared > MAX_UPLOAD_FILE_SIZE) {
+      res.status(413).json({ success: false, error: 'File too large', code: 'TOO_LARGE' })
+      return
+    }
+    const workDir = getWorkingDir(req.params.spaceId)
+    if (!existsSync(workDir)) {
+      res.status(404).json({ success: false, error: 'Space not found' })
+      return
+    }
+    const name = sanitizeFilename(requested)
+    if (!validateFilePath(res, join(workDir, name), 'write')) {
+      return
+    }
+
+    const partial = join(workDir, `.${randomUUID()}.upload`)
+    const out = createWriteStream(partial, { flags: 'wx' })
+    let received = 0
+    let failed = false
+    const fail = (status: number, error: string, code?: string) => {
+      if (failed) return
+      failed = true
+      req.unpipe(out)
+      out.destroy()
+      unlink(partial, () => {})
+      if (res.headersSent) return
+      // Stop receiving the rest once the answer is out.
+      res.setHeader('Connection', 'close')
+      res.on('finish', () => req.destroy())
+      res.status(status).json({ success: false, error, ...(code ? { code } : {}) })
+    }
+    req.on('data', (chunk: Buffer) => {
+      received += chunk.length
+      if (received > MAX_UPLOAD_FILE_SIZE) fail(413, 'File too large', 'TOO_LARGE')
+    })
+    req.on('close', () => {
+      if (!req.complete) fail(400, 'Upload interrupted')
+    })
+    out.on('error', (error) => {
+      console.error('[Upload] Could not write the file:', error.message)
+      fail(500, 'Could not save the file')
+    })
+    out.on('finish', () => {
+      if (failed) return
+      let target: string
+      try {
+        // A free name is picked and taken in one step, so two uploads of one
+        // name finishing together never land on the same file.
+        target = resolveUniquePath(workDir, name)
+        renameSync(partial, target)
+      } catch (error) {
+        console.error('[Upload] Could not move the file into place:', (error as Error).message)
+        unlink(partial, () => {})
+        res.status(500).json({ success: false, error: 'Could not save the file' })
+        return
+      }
+      console.log('[Upload] Saved a file from a remote client', { spaceId: req.params.spaceId, name: basename(target), bytes: received })
+      res.json({ success: true, data: { path: target, name: basename(target), size: received } })
+    })
+    req.pipe(out)
   })
 
   // Create folder — frontend sends (parentPath, name), backend constructs full path
