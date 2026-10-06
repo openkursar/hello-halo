@@ -250,8 +250,11 @@ bundled-and-managed approach mirrors VSCode's built-in extension model:
   has nothing to do. Within a run, installed rows are read once, since
   `listApps()` parses every row's spec including bundled skill files.
 - **User state preservation**: `userConfig`, `userOverrides`, and `status`
-  live in DB columns that the loader never touches when refreshing — only
-  `spec_json` and `spec_id` are updated via `service.updateSpec`.
+  live in DB columns that the loader never touches when refreshing. A newer
+  bundled version goes through `service.upgradeSpec` (2.13), so the user's
+  edits to the definition survive it as they survive a store upgrade; the
+  loader then resyncs the app's subscriptions, which the runtime activated from
+  the previous spec earlier in startup.
 - **Disable semantics**: a "uninstall" on a built-in is a soft uninstall
   (status=`uninstalled`); the loader respects it across launches. Standard
   `reinstall` flow re-enables. This matches VSCode's per-user disable flag.
@@ -309,6 +312,59 @@ that transition is reversible and, per the one-shot seed flag above, a
 reinstalled app never gets re-seeded, so unbinding there would strand a
 reinstalled app without its knowledge bases.
 
+### 2.13 Upgrades Keep the User's Edits (the Author's Original)
+
+**Decision**: an author's new version — a store upgrade (automatic, manual, or
+"check for upgrades") or a bundled one — is applied with `upgradeSpec`, never
+`updateSpec`. For a digital human it is merged against the **author's
+original**: the spec as the author last shipped it, kept in `author_spec_json`,
+written at install and replaced at every upgrade (`spec-upgrade.ts`).
+
+- A top-level field still equal to the original was never edited and takes the
+  new version (including its removal); any other field keeps the user's value.
+- Release fields — `type`, `spec_version`, `version`, `author`, `store` — always
+  follow the author.
+- Run triggers are compared one by one, identified as the scheduler keys their
+  jobs (`id`, else position): an edited trigger stays, a deleted one stays
+  deleted, an untouched one takes the new version, the author's new ones are
+  added and the ones the author dropped go unless the user edited them.
+- Nothing is merged inside a field: a prompt is the user's or the author's.
+
+The outcome (`SpecUpgradeOutcome`, shared) names the fields left different from
+the author's new version (`kept`) and whether they are known edits. A digital
+human the user never edited is upgraded exactly as before, and applying the
+same upgrade twice changes nothing.
+
+**Why an original rather than a record of edited fields**: every way to edit a
+definition — the settings panel, the YAML editor, an AI changing it, the
+frequency API — already ends in `updateSpec`, and none of them has to take part:
+a comparison against the original catches an edit wherever it came from. The
+original is a comparison basis only; the runtime never reads it, so the spec
+remains the one definition (a competing second copy is how a schedule override
+once silently outranked the schedule the settings showed — migration 7).
+
+**Who has one**: digital humans with an upgrade source — `store.slug` (store)
+or `install_source: 'builtin'` (bundle). Locally created ones are never
+upgraded; MCP servers and skills are upgraded as before (`upgradeSpec`
+delegates to `updateSpec`). It is not part of `InstalledApp`: `listApps()`
+parses every row, so the row reads name their columns and leave it out, and
+only an upgrade reads it (`getAuthorSpec`).
+
+**Installs from before originals were recorded** stay NULL after migration 10 —
+copying the current spec would pass the user's edits off as the author's. The
+original exists only while its source still serves the installed version, so it
+is recorded then: by the store's update check (`recordStoreOriginals`) and by
+the built-in loader when the bundled version equals the installed one
+(`recordAuthorSpec`, which accepts no other version and never replaces one). An
+upgrade that finds none presumes every difference to be the user's: nothing is
+overwritten, and the outcome says the kept fields are undetermined
+(`editsKnown: false`). From then on the new version is the original.
+
+**When the merge is invalid**: fields from two versions can break a rule that
+spans fields (a kept `config_schema` lacking a key the author's new trigger
+refers to). The upgrade then keeps every differing field — the current spec at
+the new version, which is valid — instead of failing, and logs why.
+
 ---
 
 ## 3. SQLite Schema
@@ -317,22 +373,29 @@ reinstalled app without its knowledge bases.
 CREATE TABLE installed_apps (
   id TEXT PRIMARY KEY,                    -- UUID
   spec_id TEXT NOT NULL,                  -- App spec identifier
-  space_id TEXT NOT NULL,                 -- Space this app belongs to
+  space_id TEXT,                          -- Space this app belongs to (NULL = global MCP/skill)
   spec_json TEXT NOT NULL,                -- Full AppSpec as JSON
-  status TEXT NOT NULL DEFAULT 'active',  -- active|paused|error|needs_login|waiting_user
+  status TEXT NOT NULL DEFAULT 'active',  -- active|paused|error|needs_login|waiting_user|uninstalled
   pending_escalation_id TEXT,             -- Opaque ID (no FK, managed by runtime)
   user_config_json TEXT DEFAULT '{}',     -- User config values
-  user_overrides_json TEXT DEFAULT '{}',  -- User overrides (frequency etc.)
+  user_overrides_json TEXT DEFAULT '{}',  -- User overrides (notification level, model, memory)
   permissions_json TEXT DEFAULT '{"granted":[],"denied":[]}',
   installed_at INTEGER NOT NULL,
   last_run_at INTEGER,
   last_run_outcome TEXT,                  -- 'useful'|'noop'|'error'|'skipped'|null
   error_message TEXT,
+  uninstalled_at INTEGER,                 -- soft-delete time
+  upgrade_strategy TEXT NOT NULL DEFAULT 'auto', -- auto|notify|manual
+  ignored_versions TEXT NOT NULL DEFAULT '[]',   -- versions the user chose to skip
   knowledge_seeded INTEGER NOT NULL DEFAULT 0, -- 1 once install() has seeded KB bindings (see 2.12)
-  UNIQUE(spec_id, space_id)
+  data_path TEXT,                         -- pinned work directory (see 2.8)
+  author_spec_json TEXT                   -- the author's original, NULL when none is recorded (see 2.13)
 );
+-- One app per spec_id per scope: partial unique indexes on (spec_id) WHERE
+-- space_id IS NULL and on (spec_id, space_id) WHERE space_id IS NOT NULL.
 CREATE INDEX idx_installed_apps_space ON installed_apps(space_id);
 CREATE INDEX idx_installed_apps_status ON installed_apps(status);
+CREATE INDEX idx_apps_directory ON installed_apps(json_extract(spec_json, '$.type'), installed_at DESC, id ASC);
 ```
 
 ---
@@ -346,6 +409,7 @@ src/main/apps/manager/
   migrations.ts       -- Migration[] for the installed_apps table
   store.ts            -- SQLite CRUD operations (AppManagerStore class)
   service.ts          -- AppManagerService implementation (state machine, builtin guard)
+  spec-upgrade.ts     -- Merging an author's new version over the user's edits (pure; see 2.13)
   errors.ts           -- Custom error types (incl. BuiltinAppProtectedError)
   skill-sync.ts       -- Filesystem sync for skill apps (SDK-discoverable .md files)
   seed.ts             -- One-shot "Halo 助手" placeholder when no apps exist
@@ -367,6 +431,10 @@ interface AppManagerService {
   resume(appId: string): void
   updateConfig(appId: string, config: Record<string, unknown>): void
   updateFrequency(appId: string, subscriptionId: string, frequency: string): void
+  updateSpec(appId: string, specPatch: Record<string, unknown>): void          // user and AI edits
+  upgradeSpec(appId: string, authorSpec: AppSpec): SpecUpgradeOutcome          // author's new version (2.13)
+  recordAuthorSpec(appId: string, authorSpec: AppSpec): boolean                // original for an earlier install
+  listStoreInstallsWithoutAuthorSpec(): string[]
   updateStatus(appId: string, status: AppStatus, extra?: { errorMessage?: string; pendingEscalationId?: string }): void
   updateLastRun(appId: string, outcome: RunOutcome, errorMessage?: string): void
   getApp(appId: string): InstalledApp | null

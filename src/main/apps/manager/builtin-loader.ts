@@ -34,13 +34,15 @@
  *           apply default status (active or paused) per manifest.
  *         - Present, status='uninstalled': respect user choice; skip refresh.
  *           User can re-enable via the standard reinstall flow at any time.
- *         - Present, version unchanged: no-op (cheap by-spec lookup, no I/O).
- *         - Present, bundled version newer: in-place spec refresh via updateSpec()
- *           (never a downgrade — a newer row from the store is left alone).
- *           userConfig / status / overrides are preserved automatically because
- *           updateSpec only touches the spec_json column. Bundled skills are
- *           refreshed the same way regardless of parent version; non-bundled
- *           skills are (re)installed from the store if missing.
+ *         - Present, version unchanged: record the bundled spec as the author's
+ *           original if the row predates recorded originals; nothing else.
+ *         - Present, bundled version newer: in-place upgrade via upgradeSpec()
+ *           (never a downgrade — a newer row from the store is left alone),
+ *           which keeps the user's edits to the definition, then a subscription
+ *           resync. userConfig / status / overrides live outside the spec and
+ *           are never touched. Bundled skills are refreshed via updateSpec
+ *           regardless of parent version; non-bundled skills are (re)installed
+ *           from the store if missing.
  *   3. Garbage-collect: any installed app marked install_source='builtin' that
  *      is no longer in the current manifest (renamed, removed, swapped to a
  *      different product variant) is hard-deleted along with its bundled skills.
@@ -291,6 +293,20 @@ async function installRequiredSkillsForBuiltin(
   }
 }
 
+/**
+ * Reschedule a digital human whose spec an upgrade just changed. The runtime
+ * activated it from the previous spec earlier in startup, so a trigger the
+ * upgrade added or moved would otherwise wait for the next launch.
+ */
+async function syncSubscriptions(appId: string): Promise<void> {
+  try {
+    const { getAppRuntime } = await import('../runtime')
+    getAppRuntime()?.syncAppSubscriptions(appId)
+  } catch (err) {
+    console.warn(`[BuiltinLoader] Failed to reschedule ${appId} after its upgrade; it applies on next launch:`, err)
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Installed rows
 // ---------------------------------------------------------------------------
@@ -481,16 +497,26 @@ async function processEntry(
 
   // Upgrade only: a row the store already moved past the bundle keeps its
   // newer version.
-  if (compareDotVersions(stampedSpec.version, existing.spec.version) > 0) {
+  const versionOrder = compareDotVersions(stampedSpec.version, existing.spec.version)
+  if (versionOrder > 0) {
     try {
-      appManager.updateSpec(existing.id, stampedSpec as unknown as Record<string, unknown>)
+      const outcome = appManager.upgradeSpec(existing.id, stampedSpec)
       console.log(
         `[BuiltinLoader] Upgraded builtin "${stampedSpec.name}": ` +
-        `${existing.spec.version} → ${stampedSpec.version}`
+        `${existing.spec.version} → ${stampedSpec.version} (kept=${outcome.kept.length})`
       )
+      await syncSubscriptions(existing.id)
     } catch (err) {
       processed.failures++
       console.warn(`[BuiltinLoader] Failed to upgrade "${stampedSpec.name}":`, err)
+    }
+  } else if (versionOrder === 0) {
+    // The bundle still carries the installed version, so it is that version's
+    // original: record it for a row installed before originals were kept.
+    try {
+      appManager.recordAuthorSpec(existing.id, stampedSpec)
+    } catch (err) {
+      console.warn(`[BuiltinLoader] Failed to record the original of "${stampedSpec.name}":`, err)
     }
   }
 

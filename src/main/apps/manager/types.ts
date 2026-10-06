@@ -7,6 +7,7 @@
 
 import type { AppSpec, AppType } from '../spec'
 import { isBuiltinApp } from '../../../shared/apps/app-types'
+import type { SpecUpgradeOutcome } from '../../../shared/apps/app-types'
 
 // ============================================
 // App Status
@@ -391,6 +392,34 @@ export interface AppManagerService {
    * @throws AppSpecValidationError if the merged spec is invalid
    */
   updateSpec(appId: string, specPatch: Record<string, unknown>): void
+
+  /**
+   * Apply an author's new version — a store or bundled upgrade — without
+   * overwriting the user's edits. For a digital human, a field the user changed
+   * since the author's original keeps the user's value, every other field takes
+   * the new version, and the new version becomes the recorded original. Other
+   * App types are replaced as `updateSpec` would.
+   *
+   * The single entry for every upgrade path; user and AI edits keep using
+   * `updateSpec`, which never touches the original.
+   *
+   * @throws AppNotFoundError if the App does not exist
+   * @throws AppSpecValidationError if the author's spec is invalid
+   */
+  upgradeSpec(appId: string, authorSpec: AppSpec): SpecUpgradeOutcome
+
+  /**
+   * Record the author's original for a digital human installed before
+   * originals were kept. Only the spec of the installed version qualifies, and
+   * an original already recorded is never replaced.
+   *
+   * @returns whether it was recorded
+   * @throws AppNotFoundError if the App does not exist
+   */
+  recordAuthorSpec(appId: string, authorSpec: AppSpec): boolean
+
+  /** Store-installed digital humans that have no author's original recorded yet. */
+  listStoreInstallsWithoutAuthorSpec(): string[]
 
   /**
    * Move an App to a different space (or to/from global scope).
