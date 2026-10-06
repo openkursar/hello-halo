@@ -149,7 +149,6 @@ vi.mock('../../../../src/main/apps/runtime/index', () => ({
 }))
 
 vi.mock('../../../../src/main/apps/runtime/dispatch-inbound', () => ({
-  flushSupplementBuffer: vi.fn(),
   clearSupplementBuffer,
 }))
 

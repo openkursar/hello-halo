@@ -66,6 +66,20 @@ interface ImRoute {
 }
 
 /**
+ * Push to the chat a front desk answers. Nobody waits on a woken turn, so a
+ * push the chat does not take is only logged.
+ */
+function pushToFrontDesk(route: ImRoute, text: string, what: string): void {
+  try {
+    if (!route.instance.pushToChat(route.chatId, text, route.chatType)) {
+      console.warn(`${LOG_TAG} The ${what} was not taken by the IM chat: ${route.chatId}`)
+    }
+  } catch (err) {
+    console.error(`${LOG_TAG} failed to push the ${what} to the IM chat:`, err)
+  }
+}
+
+/**
  * If `conversationId` is the session of the member that FRONTS a team-backed IM
  * chat, resolve how to frame + push that turn's reply to that chat. Returns null
  * for every other member's turns, non-conversation epochs, or when the IM
@@ -612,33 +626,38 @@ export function createDefaultSessionDeps(store: TeamStore): OrchestrationSession
       // TypeScript's flow analysis does not see, so a plain local reads as `null`
       // below and silently types the IM push away.
       const captured: { reply: string | null; ending?: AppChatTurnEnding } = { reply: null }
-      await sendAppChatMessage({
-        appId: request.appId,
-        spaceId: request.spaceId,
-        message: request.message,
-        conversationId: request.conversationId,
-        teamContext: request.teamContext,
-        ...(request.turnStart ? { turnStart: request.turnStart } : {}),
-        // Both halves of the IM route, or neither: the framing and the tool set
-        // must match what dispatch-inbound gives this same session.
-        ...(imRoute ? { imSession: imRoute.imSession, imFileSend: imRoute.imFileSend } : {}),
-        onReply: (finalContent, ending) => {
-          captured.reply = finalContent
-          captured.ending = ending
-        },
-      })
+      try {
+        await sendAppChatMessage({
+          appId: request.appId,
+          spaceId: request.spaceId,
+          message: request.message,
+          conversationId: request.conversationId,
+          teamContext: request.teamContext,
+          ...(request.turnStart ? { turnStart: request.turnStart } : {}),
+          // Both halves of the IM route, or neither: the framing and the tool set
+          // must match what dispatch-inbound gives this same session.
+          ...(imRoute ? { imSession: imRoute.imSession, imFileSend: imRoute.imFileSend } : {}),
+          onReply: (finalContent, ending) => {
+            captured.reply = finalContent
+            captured.ending = ending
+          },
+        })
+      } catch (err) {
+        // The chat is told as of a failed turn of its own; the team still gets
+        // the failure. Loaded on use, as the turn itself is.
+        if (imRoute) {
+          await import('../im-error-reply')
+            .then(({ imErrorReply }) => pushToFrontDesk(imRoute, imErrorReply(err), 'note that the turn failed'))
+            .catch(loadError => console.error(`${LOG_TAG} could not tell the IM chat its turn failed:`, loadError))
+        }
+        throw err
+      }
 
       const finalMessage = captured.reply
       // The chat reads a turn that stopped short the way a person's own turn
       // reads in dispatch-inbound; the team gets the text as written.
       const pushed = captured.ending ? withTurnEndingNote(finalMessage ?? '', captured.ending) : finalMessage
-      if (imRoute && pushed && pushed.trim()) {
-        try {
-          await imRoute.instance.pushToChat(imRoute.chatId, pushed, imRoute.chatType)
-        } catch (err) {
-          console.error(`${LOG_TAG} failed to push front-desk reply to IM chat:`, err)
-        }
-      }
+      if (imRoute && pushed && pushed.trim()) pushToFrontDesk(imRoute, pushed, 'front-desk reply')
       return { finalMessage }
     },
     holdTurn(sessionKey) {

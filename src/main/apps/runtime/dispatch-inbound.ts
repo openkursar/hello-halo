@@ -452,7 +452,7 @@ function buildMergedMessageText(
  * round queued, a turn begun): while it is busy the supplements stay queued,
  * and the change that frees it calls again.
  */
-export function flushSupplementBuffer(conversationId: string): void {
+function flushSupplementBuffer(conversationId: string): void {
   const entries = supplementBuffers.get(conversationId)
   if (!entries || entries.length === 0) {
     supplementBuffers.delete(conversationId)

@@ -163,7 +163,6 @@ vi.mock('../../../../src/main/apps/runtime/index', () => ({
   getActivityStore: () => activityStore,
 }))
 vi.mock('../../../../src/main/apps/runtime/dispatch-inbound', () => ({
-  flushSupplementBuffer: vi.fn(),
 }))
 vi.mock('../../../../src/main/services/memory-consolidation', () => ({
   requestConsolidation: vi.fn(),

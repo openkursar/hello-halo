@@ -1,10 +1,12 @@
 /**
  * apps/runtime -- What an IM chat is told when its turn failed
  *
- * Said in place of the answer by every IM path that runs a turn
- * (dispatch-inbound, reminder delivery). An IM group may hold people from
- * outside, so nothing about the computer Halo runs on goes out: no path, no
- * program. Hardcoded Chinese like the other IM-facing notices.
+ * Said in place of the answer by every IM path where somebody waits on one: the
+ * person's message (dispatch-inbound), a front-desk turn woken by a teammate
+ * (team), a reminder (reminder delivery). An autonomous turn answers no one and
+ * pushes nothing it did not write. An IM group may hold people from outside, so
+ * nothing about the computer Halo runs on goes out: no path, no program.
+ * Hardcoded Chinese like the other IM-facing notices.
  */
 
 import { isRefusedLocalConnection } from '../../services/agent'

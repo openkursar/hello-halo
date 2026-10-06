@@ -156,7 +156,6 @@ vi.mock('../../../../src/main/apps/runtime/index', () => ({
 
 // dispatch-inbound pulls in analytics → electron-CJS at module load.
 vi.mock('../../../../src/main/apps/runtime/dispatch-inbound', () => ({
-  flushSupplementBuffer: vi.fn(),
 }))
 
 vi.mock('../../../../src/main/services/memory-consolidation', () => ({
