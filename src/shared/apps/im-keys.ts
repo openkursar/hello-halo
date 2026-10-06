@@ -177,6 +177,8 @@ export function nativeChatAppId(conversationId: string): string | null {
  * The sender identity of one scheduled run of a digital human when it messages
  * other conversations. Distinct from every chat key: nothing sent to it can
  * reach the digital human's chats, so a run's messages are one-way notices.
+ * A run started from the desktop also holds its browser pages under this key,
+ * which is how the live-session tray names them after the digital human.
  *
  * Format: "app-run:{appId}:{runId}"
  */

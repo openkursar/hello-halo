@@ -217,6 +217,8 @@ export interface WecomStreamSessionInit {
   frame: WsFrameHeaders
   streamId: string
   chatId: string
+  /** The chat across this bot's sends, so an answer sent in parts never interleaves with another. */
+  chatKey?: string
   chatType: 'direct' | 'group'
   trace: string
   transport: StreamingTransport
@@ -729,7 +731,7 @@ export class WecomStreamSession implements StreamingHandle {
         `stream:${this.init.streamId}`,
         this.init.trace,
       ),
-    )
+    { chat: this.init.chatKey })
   }
 
   private logTerminalSummary(

@@ -10,13 +10,8 @@ import { matchOfficeScope, OFFICE_READ_ROUTES } from '../../../../src/main/http/
 describe('matchOfficeScope', () => {
   describe('allowed team read-only family', () => {
     const allowed: Array<[string, string]> = [
-      ['GET', '/api/teams/abc123'],
-      ['GET', '/api/teams/abc123/detail'],
       ['GET', '/api/teams/abc123/chat-messages'],
-      ['GET', '/api/teams/abc123/artifacts'],
       ['GET', '/api/teams/abc123/epochs'],
-      ['GET', '/api/teams/abc123/epochs/ep1/board'],
-      ['GET', '/api/teams/abc123/epochs/ep1/artifacts'],
       ['POST', '/api/teams/abc123/members/m1/send'],
       ['POST', '/api/teams/abc123/members/m1/stop'],
     ]
@@ -53,6 +48,12 @@ describe('matchOfficeScope', () => {
       ['GET', '/api/remote/status'],
       ['GET', '/api/teams/abc123/epochs/ep1'],
       ['GET', '/api/teams/abc123/members'],
+      // Their responses are not filtered for office members (see OFFICE_READ_ROUTES).
+      ['GET', '/api/teams/abc123'],
+      ['GET', '/api/teams/abc123/detail'],
+      ['GET', '/api/teams/abc123/artifacts'],
+      ['GET', '/api/teams/abc123/epochs/ep1/board'],
+      ['GET', '/api/teams/abc123/epochs/ep1/artifacts'],
     ]
     for (const [method, path] of denied) {
       it(`denies ${method} ${path}`, () => {
@@ -67,10 +68,10 @@ describe('matchOfficeScope', () => {
   })
 
   it('exposes the raw allowlist for introspection', () => {
-    expect(OFFICE_READ_ROUTES.length).toBe(9)
+    expect(OFFICE_READ_ROUTES.length).toBe(4)
     // The read family is GET; the writes are the member-dispatch POSTs (send,
     // and the stop that interrupts it — gated identically at the route).
-    expect(OFFICE_READ_ROUTES.filter((r) => r.method === 'GET')).toHaveLength(7)
+    expect(OFFICE_READ_ROUTES.filter((r) => r.method === 'GET')).toHaveLength(2)
     expect(OFFICE_READ_ROUTES.filter((r) => r.method === 'POST')).toHaveLength(2)
   })
 })

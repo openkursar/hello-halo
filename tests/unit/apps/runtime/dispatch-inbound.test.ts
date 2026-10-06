@@ -134,6 +134,7 @@ import {
 import { analytics } from '../../../../src/main/services/analytics/analytics.service'
 import { setImPermissionContext, clearImPermissionContext } from '../../../../src/main/apps/runtime/im-permission-registry'
 import { maybeClaimOwner } from '../../../../src/main/apps/runtime/im-channels/owner-claim'
+import { AppChatTurnInterrupted, type AppChatTurnEnding } from '../../../../src/main/apps/runtime/turn-ending'
 import type { InboundMessage, ReplyHandle } from '../../../../src/shared/types/inbound-message'
 
 const trackMock = analytics.track as ReturnType<typeof vi.fn>
@@ -310,6 +311,72 @@ describe('dispatchInboundMessage — long replies', () => {
     replyWith(LONG_ANSWER)
 
     expect(reply.streaming!.finish).toHaveBeenCalledWith(LONG_ANSWER)
+  })
+})
+
+// ============================================
+// A turn that stopped short
+//
+// An IM chat only has the text it is sent: a turn cut off at the step limit
+// must say so after what it wrote, or alone when it wrote nothing — and the
+// message it answers is finished either way.
+// ============================================
+
+describe('dispatchInboundMessage — a turn that stopped short', () => {
+  const STEP_LIMIT_NOTE = '（已达到单次最多 3 步的上限，回复“继续”可接着做）'
+  const CUT_OFF_NOTE = '（本轮意外中断，回复“继续”可接着做）'
+
+  function replyWith(content: string, ending: AppChatTurnEnding): void {
+    const request = sendAppChatMessageMock.mock.calls[0][0] as {
+      onReply: (text: string, ending?: AppChatTurnEnding) => void
+    }
+    request.onReply(content, ending)
+  }
+
+  it('notes the step limit after what was written', async () => {
+    const reply = makeReply(false)
+    await dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
+
+    replyWith('First half of the work.', { kind: 'max_turns', limit: 3 })
+
+    expect(reply.send).toHaveBeenLastCalledWith(`First half of the work.\n\n${STEP_LIMIT_NOTE}`)
+  })
+
+  it('finishes the stream with the note alone when nothing was written', async () => {
+    instanceCfg = { streaming: true }
+    const reply = makeReply(true)
+    await dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
+
+    replyWith('', { kind: 'max_turns', limit: 3 })
+
+    expect(reply.streaming!.finish).toHaveBeenCalledWith(STEP_LIMIT_NOTE)
+  })
+
+  it('notes an unexpected cut after what was written', async () => {
+    const reply = makeReply(false)
+    await dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
+
+    replyWith('Partial answer', { kind: 'interrupted' })
+
+    expect(reply.send).toHaveBeenLastCalledWith(`Partial answer\n\n${CUT_OFF_NOTE}`)
+  })
+
+  it('answers a turn cut off before writing anything with the note, not an error', async () => {
+    sendAppChatMessageMock.mockRejectedValueOnce(new AppChatTurnInterrupted())
+    const reply = makeReply(false)
+
+    await dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
+
+    expect(reply.send).toHaveBeenLastCalledWith(CUT_OFF_NOTE)
+  })
+
+  it('still reports a model error as an error', async () => {
+    sendAppChatMessageMock.mockRejectedValueOnce(new Error('API Error: 529 overloaded'))
+    const reply = makeReply(false)
+
+    await dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
+
+    expect(reply.send).toHaveBeenLastCalledWith('⚠️ Error: API Error: 529 overloaded')
   })
 })
 
@@ -525,20 +592,21 @@ describe('dispatchInboundMessage — owner/guest rules of a team-fronted chat', 
 })
 
 // ============================================
-// Group-body normalization (leading @mention strip)
+// Group @mentions and commands
 //
 // WeCom delivers a group message to the bot only when the bot is mentioned,
-// so the body arrives as "@Halo /stop". The funnel strips the leading
-// mention(s) once, restoring exact command matching, while mentions that
-// carry meaning mid-body are preserved for the model.
+// so the body arrives as "@Halo /stop" — and a bot name may contain spaces.
+// Mentions stay in the text the digital human reads (who else was addressed is
+// part of the message); a group command is a message that starts with a
+// mention and ends with the command.
 // ============================================
 
-describe('dispatchInboundMessage — group @mention normalization', () => {
+describe('dispatchInboundMessage — group @mentions and commands', () => {
   function sentMessage(): string {
     return (sendAppChatMessageMock.mock.calls[0][0] as { message: string }).message
   }
 
-  it('strips the leading mention so a stop command after it is recognized', async () => {
+  it('recognizes a stop command after the bot is mentioned', async () => {
     const reply = makeReply(false)
     await dispatchInboundMessage(
       makeMsg({ chatType: 'group', body: '@Halo /stop' }), reply, 'app-1', 'inst-1',
@@ -547,7 +615,19 @@ describe('dispatchInboundMessage — group @mention normalization', () => {
     expect(reply.send).toHaveBeenCalledWith('No active generation to stop.')
   })
 
-  it('strips stacked mentions before a clear command', async () => {
+  it('recognizes it when the bot name has spaces, however the platform spaces the mention', async () => {
+    // Where a name ends cannot be told from the text, so a group command is a
+    // message that starts with a mention and ends with the command.
+    for (const body of ['@Halo AI 团队 /stop', '@Halo AI 团队\u2005/STOP']) {
+      sendAppChatMessageMock.mockClear()
+      const reply = makeReply(false)
+      await dispatchInboundMessage(makeMsg({ chatType: 'group', body }), reply, 'app-1', 'inst-1')
+      expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+      expect(reply.send).toHaveBeenCalledWith('No active generation to stop.')
+    }
+  })
+
+  it('recognizes a clear command after stacked mentions', async () => {
     const reply = makeReply(false)
     await dispatchInboundMessage(
       makeMsg({ chatType: 'group', body: '@Halo @assistant /clear' }), reply, 'app-1', 'inst-1',
@@ -555,6 +635,21 @@ describe('dispatchInboundMessage — group @mention normalization', () => {
     expect(clearImSessionMock).toHaveBeenCalledWith('app-1', 'space-1', 'wecom-bot', 'group', 'chat-1')
     expect(reply.send).toHaveBeenCalledWith('Context cleared. Starting a fresh conversation.')
     expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+  })
+
+  it('hands the digital human the people a message mentions, leading ones included', async () => {
+    await dispatchInboundMessage(
+      makeMsg({ chatType: 'group', body: '@小助手 @张三 帮忙跟进一下' }), makeReply(false), 'app-1', 'inst-1',
+    )
+    expect(sentMessage()).toContain('@小助手 @张三 帮忙跟进一下')
+  })
+
+  it('takes nothing for a command unless it ends a message that starts with a mention', async () => {
+    for (const body of ['@Halo /stop doing that', 'please /stop', '@Halo stop', '@Halo 停止']) {
+      sendAppChatMessageMock.mockClear()
+      await dispatchInboundMessage(makeMsg({ chatType: 'group', body }), makeReply(false), 'app-1', 'inst-1')
+      expect(sendAppChatMessageMock).toHaveBeenCalledTimes(1)
+    }
   })
 
   it('preserves mentions that appear mid-body', async () => {
@@ -565,7 +660,7 @@ describe('dispatchInboundMessage — group @mention normalization', () => {
     expect(sentMessage()).toContain('please ask @zhangsan for the report')
   })
 
-  it('leaves mention-like text untouched when nothing follows the leading token', async () => {
+  it('leaves mention-like text untouched', async () => {
     await dispatchInboundMessage(
       makeMsg({ chatType: 'group', body: 'email me at someone@company.com' }),
       makeReply(false), 'app-1', 'inst-1',
@@ -573,7 +668,7 @@ describe('dispatchInboundMessage — group @mention normalization', () => {
     expect(sentMessage()).toContain('someone@company.com')
   })
 
-  it('does not strip mentions in direct chats', async () => {
+  it('needs the exact command in a direct chat', async () => {
     await dispatchInboundMessage(
       makeMsg({ chatType: 'direct', body: '@Halo /stop' }), makeReply(false), 'app-1', 'inst-1',
     )
@@ -581,14 +676,14 @@ describe('dispatchInboundMessage — group @mention normalization', () => {
     expect(sentMessage()).toContain('@Halo /stop')
   })
 
-  it('quotes the stripped body in the relay origin of group messages', async () => {
+  it('quotes the message as sent in the relay origin of group messages', async () => {
     await dispatchInboundMessage(
       makeMsg({ chatType: 'group', body: '@Halo please refund' }), makeReply(false), 'app-1', 'inst-1',
     )
     const arg = sendAppChatMessageMock.mock.calls[0][0] as {
       relayOrigin: { quote?: string }
     }
-    expect(arg.relayOrigin.quote).toBe('User One: please refund')
+    expect(arg.relayOrigin.quote).toBe('User One: @Halo please refund')
   })
 })
 

@@ -157,7 +157,7 @@ export function KBListItem({ kb, onOpen }: KBListItemProps) {
         <div className="flex items-center gap-0.5 flex-shrink-0 opacity-0 group-hover:opacity-100 max-sm:opacity-100 transition-opacity">
           <button
             onClick={handleTogglePause}
-            title={isPaused ? t('Resume learning') : t('Pause learning')}
+            title={isPaused ? t('Resume this knowledge base') : t('Pause this knowledge base')}
             className={`p-1.5 rounded-md transition-colors ${isPaused ? 'text-muted-foreground hover:text-foreground hover:bg-secondary' : 'text-primary hover:bg-primary/10'}`}
           >
             {isPaused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}

@@ -140,6 +140,37 @@ prompt they cannot close.
 Self-hosted (`generic`) feeds generate their yml server-side; there the field
 belongs in that generator, not in this repo.
 
+## Staged Windows updates
+
+A variant enables the Windows background-unpack update path in product.json
+(`updateConfig.windowsMode: "staged"` plus `manifestPublicKey`; see
+`src/main/services/updater/DESIGN.md`). Its releases then carry two more files
+next to the installer:
+
+| File | What it is |
+|---|---|
+| `halo-<version>-win-x64.tar.zst` | the packed `win-unpacked` tree |
+| `staged-win-x64.json` | its signed description, which clients fetch |
+
+`electron-builder.cjs` produces both after packing Windows
+(`staged-artifacts.cjs` → `sign-staged-update.mjs`), signing with the Ed25519
+private key in `HALO_UPDATE_SIGNING_KEY`. That key is a secret: environment
+only, never committed. Generate a pair with
+`node scripts/release/sign-staged-update.mjs --keygen`; the public half goes
+into product.json.
+
+The signer packs with the host build of the update helper's packer, so the
+build machine needs Go: `node scripts/build-update-helper.mjs --host` builds
+the Windows helper the package ships and `win-update-helper/bin/halo-update-packer`.
+
+`verify-inputs --mode release` blocks a release that enables staged updates
+when the key is missing or does not belong to `manifestPublicKey`, before
+anything is built; a dev build only warns and produces no staged files. A
+GitHub feed covers the stable channel only — clients read descriptions from
+the latest release, which is never a prerelease — so a preview build needs no
+key. Upload both files with the installer; a release without them is not an
+error anywhere, clients just keep using the installer.
+
 ## Telemetry / analytics configuration
 
 Telemetry and analytics identifiers ship inside the package and are readable

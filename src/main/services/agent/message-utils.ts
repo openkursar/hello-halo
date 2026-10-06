@@ -210,8 +210,12 @@ export function parseSDKMessage(message: any, displayModel?: string): Thought | 
   // Simple approach: always use message.result regardless of is_error
   // The result field contains the actual content (success message or error details)
   if (message.type === 'result') {
-    const resultContent = message.message?.result || message.result || ''
-    const isError = message.is_error || false
+    // Except at the step limit: the engines flag it is_error, but it is a limit
+    // the turn ran into. What it wrote stands, the stream processor says why it
+    // stopped, and the engine's error text is neither an answer nor an error.
+    const reachedStepLimit = message.subtype === 'error_max_turns'
+    const resultContent = reachedStepLimit ? '' : message.message?.result || message.result || ''
+    const isError = !reachedStepLimit && (message.is_error || false)
 
     if (isError) {
       console.log(`[parseSDKMessage] SDK result error: subtype=${message.subtype}, result=${resultContent.substring(0, 200)}`)

@@ -50,13 +50,30 @@ several sibling topics — read across it, don't duplicate it:
 A digital human can have a schedule *and* be reachable over IM at the same time — those are
 two independent mechanisms, not alternatives.
 
+**Several subscriptions doing different jobs.** Give each one an `id` (`subscriptions[].id`,
+optional, unique within the app — validation rejects a repeat) and write each job into
+`system_prompt` under that name. From Halo 3.0 the Trigger section of a run's first message
+names the subscription that fired (`src/main/apps/runtime/service.ts`):
+
+```
+Scheduled run for "Daily Brief" — subscription "morning-report" (cron: 0 9 * * *). Time: …
+Triggered by event "file.created" for "Inbox Sorter" — subscription "inbox-files". Time: …
+```
+
+So the prompt can say: *when the trigger names subscription "morning-report", send the daily
+report; when it names subscription "evening-report", send the evening summary.* An unnamed
+subscription appears as `subscription #2` — its position in the list, counting from 1 — which
+changes when the list is reordered, so name them instead. There is no per-subscription prompt
+field. Before 3.0 the trigger carried only the schedule (`(cron: 0 9 * * *)`), so a prompt had
+to tell runs apart by time.
+
 ## 2. The #1 mistake: don't invent trigger-matching questions for IM/WeCom
 
 Do **not** ask the user things like "should the bot respond to every message, or only when
 mentioned / only messages with a certain prefix?" for a WeCom digital human. In WeCom **group
 chats**, the WeCom platform itself only forwards a message to the bot when the bot is
 `@`-mentioned — Halo never receives the other messages, so there is nothing to filter and
-nothing to configure (`src/main/apps/runtime/dispatch-inbound.ts`, `LEADING_GROUP_MENTION`).
+nothing to configure (`src/main/apps/runtime/dispatch-inbound.ts`).
 Direct 1:1 chats deliver every message, also not configurable per app.
 
 Full detail — including what *is* configurable and where — in `create-digital-human/im-triggers.md`.
@@ -125,6 +142,11 @@ This prompts the user to log in before the automation runs and stores no secret
   documentation** — a user-installed MCP server not listed there is silently unavailable to this
   app's autonomous runs even if it's active in the space and the user can see it working when
   they chat with the digital human directly. It has no effect on built-in capabilities
-  (`ai-browser`, `ai-terminal`, etc. — those follow `permissions[]` only). See
+  (`ai-browser`, `ai-terminal`, etc. — those follow `permissions[]` only). From Halo 3.0 a listed
+  connection that is unusable stops the run instead: when one the owner has not switched off for
+  this digital human is not installed, turned off, waiting for sign-in or failing in the space,
+  its runs (scheduled, event-triggered, started by hand or continued) do not start and call no
+  model. The timeline shows a **Not started** entry naming each connection and why, with **Open
+  Tools & Resources**; it counts as a failed run toward the usual pause after five in a row. See
   `create-digital-human/spec-reference.md`'s `requires` section before assuming an MCP-dependent
   automation will "just work" on its schedule.

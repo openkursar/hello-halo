@@ -11,7 +11,7 @@
  * new version has proven it can start.
  */
 
-import { app } from 'electron'
+import { app, net } from 'electron'
 import { mkdir, readFile, readdir, rm, writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
 import { join } from 'path'
@@ -30,7 +30,7 @@ import {
 } from './helper'
 import { hasFailedBefore } from './failed-versions'
 import { confirmFileFor, hasRoomToStage, HELPER_RUN_PREFIX, resolveLayout, type StagedLayout } from './layout'
-import { readStagedManifest, type StagedUpdateManifest } from './manifest'
+import { NotNewerError, readStagedManifest, type StagedUpdateManifest } from './manifest'
 
 /**
  * Raised when the only update on offer is one that already failed here.
@@ -50,6 +50,15 @@ export class VersionKnownBadError extends Error {
 
 /** How long the helper waits for the new version to report that it started. */
 const CONFIRM_TIMEOUT_SECONDS = 60
+
+/**
+ * Longest the description request may take.
+ *
+ * Electron's network stack has no default timeout. A stalled request would
+ * hold the check before it reaches the installer fallback, leave a manual
+ * check on "checking", and stack up behind every later check.
+ */
+const DESCRIPTION_TIMEOUT_MS = 30_000
 
 /** Shape the helper writes; only the fields this side must reason about. */
 interface HelperState {
@@ -116,10 +125,26 @@ function expectedIdentity() {
   }
 }
 
-/** URL of the signed description for this build's platform. */
-function manifestUrl(feedUrl: string): string {
-  const identity = expectedIdentity()
-  return `${feedUrl.replace(/\/+$/, '')}/staged/${identity.platform}-${identity.arch}.json`
+/**
+ * Where signed descriptions are published: a release server that serves them
+ * under `/staged/`, or a GitHub repository's releases.
+ */
+export type StagedFeed =
+  | { kind: 'generic'; url: string }
+  | { kind: 'github'; owner: string; repo: string }
+
+/**
+ * URL of the signed description for this build's platform.
+ *
+ * GitHub release assets cannot carry a path, so there the description is the
+ * flat asset the signer writes, read from the latest published release.
+ */
+function manifestUrl(feed: StagedFeed): string {
+  const { platform, arch } = expectedIdentity()
+  if (feed.kind === 'github') {
+    return `https://github.com/${feed.owner}/${feed.repo}/releases/latest/download/staged-${platform}-${arch}.json`
+  }
+  return `${feed.url.replace(/\/+$/, '')}/staged/${platform}-${arch}.json`
 }
 
 /**
@@ -129,7 +154,7 @@ function manifestUrl(feedUrl: string): string {
  * update that cannot be verified is not an error the user needs to see; it is
  * a reason to leave this build exactly as it is.
  */
-export async function checkForStagedUpdate(feedUrl: string): Promise<StagedUpdateManifest | null> {
+export async function checkForStagedUpdate(feed: StagedFeed): Promise<StagedUpdateManifest | null> {
   const publicKey = getUpdateManifestPublicKey()
   if (!publicKey) {
     console.error('[Updater] No manifest signing key in product.json — staged updates unavailable')
@@ -148,10 +173,13 @@ export async function checkForStagedUpdate(feedUrl: string): Promise<StagedUpdat
     return null
   }
 
-  const url = manifestUrl(feedUrl)
+  const url = manifestUrl(feed)
   let body: string
   try {
-    const response = await fetch(url)
+    // Electron's network stack, like the package download and electron-updater:
+    // Node's fetch ignores the system proxy, and on a network that needs one
+    // every check would quietly fall back to the installer.
+    const response = await net.fetch(url, { signal: AbortSignal.timeout(DESCRIPTION_TIMEOUT_MS) })
     if (response.status === 404) {
       console.log(`[Updater] No staged update published for this target (${url})`)
       return null
@@ -164,9 +192,10 @@ export async function checkForStagedUpdate(feedUrl: string): Promise<StagedUpdat
     // with its HTML download page, at HTTP 200. Without this check that page
     // reaches the verifier and is reported as a failed signature — a security
     // alarm on every check, raised by a server that is merely older than the
-    // client. Absence of the feature is not tampering.
-    const contentType = response.headers.get('content-type') ?? ''
-    if (!contentType.toLowerCase().includes('json')) {
+    // client. Absence of the feature is not tampering. GitHub serves release
+    // assets as application/octet-stream, which is not that page either.
+    const contentType = (response.headers.get('content-type') ?? '').toLowerCase()
+    if (!contentType.includes('json') && !contentType.includes('application/octet-stream')) {
       console.log('[Updater] Update server does not serve staged descriptions yet')
       return null
     }
@@ -190,6 +219,10 @@ export async function checkForStagedUpdate(feedUrl: string): Promise<StagedUpdat
     return manifest
   } catch (error) {
     if (error instanceof VersionKnownBadError) throw error
+    if (error instanceof NotNewerError) {
+      console.log(`[Updater] No newer staged update: ${error.message}`)
+      return null
+    }
     // A description that fails verification is the case this whole mechanism
     // exists to catch, so it is logged loudly even though it is not fatal.
     console.error(`[Updater] Rejected staged update description: ${String(error)}`)

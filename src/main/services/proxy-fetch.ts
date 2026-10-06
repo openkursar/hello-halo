@@ -32,6 +32,7 @@ import zlib from 'node:zlib'
 import { ProxyAgent } from 'proxy-agent'
 import { getConfig, onNetworkConfigChange } from '../foundation/config.service'
 import { isHttpLoggingEnabled, logHttpRequest, logHttpResponse, logHttpResponseBody } from '../foundation/logging'
+import { chromiumBypassRules, compileBypassList, proxyBypassList, type ProxySettings } from './proxy-policy'
 
 // ============================================================================
 // Baseline transports
@@ -60,9 +61,6 @@ interface ProxyCacheEntry {
 }
 
 const proxyCache = new Map<string, ProxyCacheEntry>()
-
-/** Hosts that always bypass proxy */
-const BYPASS_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]'])
 
 /**
  * Convert Chromium PAC result string to a proxy URL.
@@ -112,10 +110,6 @@ async function resolveSystemProxy(url: string): Promise<string | null> {
   try {
     parsed = new URL(url)
   } catch {
-    return null
-  }
-
-  if (BYPASS_HOSTS.has(parsed.hostname)) {
     return null
   }
 
@@ -171,15 +165,23 @@ function getOrCreateAgent(proxyUrl: string): ProxyAgent {
 // App-level proxy cache (in-memory, updated via onNetworkConfigChange)
 // ============================================================================
 
+/** The Settings proxy (null = use the system proxy) and the hosts that bypass any proxy. */
+interface ProxyState {
+  proxy: string | null
+  bypass: string[]
+  goesDirect: (url: string) => boolean
+}
+
 /**
- * Cached app proxy URL from config.
- * - undefined  = not yet initialized (will read config once on first use)
- * - null       = initialized, no proxy configured (use system proxy)
- * - string     = initialized, explicit proxy URL
- *
+ * Cached proxy state; undefined until first use, which reads config once.
  * Updated synchronously by onNetworkConfigChange — zero disk reads after init.
  */
-let _appProxy: string | null | undefined = undefined
+let _proxyState: ProxyState | undefined
+
+function proxyStateFrom(network: ProxySettings | undefined): ProxyState {
+  const bypass = proxyBypassList(network, [process.env.NO_PROXY, process.env.no_proxy])
+  return { proxy: network?.proxy?.trim() || null, bypass, goesDirect: compileBypassList(bypass) }
+}
 
 // ============================================================================
 // AI Browser session proxy sync
@@ -196,24 +198,23 @@ let _appProxy: string | null | undefined = undefined
 // ============================================================================
 
 const BROWSER_PARTITION = 'persist:browser'
-const PROXY_BYPASS_RULES = 'localhost,127.0.0.1,[::1]'
 
 /**
  * Apply the app-level proxy setting to the AI Browser's Electron session.
  *
- * - When a proxy URL is provided, sets `proxyRules` on the session.
+ * - When a proxy URL is provided, sets `proxyRules` on the session, with the
+ *   bypass list as `proxyBypassRules`.
  * - When null/empty, resets the session to follow system proxy (`mode: 'system'`).
- * - localhost/loopback always bypasses proxy via `proxyBypassRules`.
  *
  * This is fire-and-forget: session.setProxy() returns a Promise but
  * Chromium queues the config change internally, so subsequent requests
  * pick it up without awaiting.
  */
-function applyProxyToBrowserSession(proxy: string | null): void {
+function applyProxyToBrowserSession(proxy: string | null, bypass: string[]): void {
   try {
     const sess = session.fromPartition(BROWSER_PARTITION)
     const config = proxy
-      ? { proxyRules: proxy, proxyBypassRules: PROXY_BYPASS_RULES }
+      ? { proxyRules: proxy, proxyBypassRules: chromiumBypassRules(bypass) }
       : { mode: 'system' as const }
 
     sess.setProxy(config)
@@ -232,26 +233,33 @@ function applyProxyToBrowserSession(proxy: string | null): void {
   }
 }
 
-onNetworkConfigChange(({ proxy, browserUseProxy }) => {
-  _appProxy = proxy?.trim() || null
+onNetworkConfigChange(({ proxy, browserUseProxy, noProxy }) => {
+  _proxyState = proxyStateFrom({ proxy, noProxy })
   // AI Browser only follows Settings proxy when explicitly opted-in;
   // otherwise it uses the system proxy (Electron default behavior).
-  applyProxyToBrowserSession(browserUseProxy ? _appProxy : null)
-  console.log(`[ProxyFetch] App proxy updated: ${_appProxy || 'none (auto-detect from system)'}, browser: ${browserUseProxy ? 'follows settings' : 'system'}`)
+  applyProxyToBrowserSession(browserUseProxy ? _proxyState.proxy : null, _proxyState.bypass)
+  console.log(`[ProxyFetch] App proxy updated: ${_proxyState.proxy || 'none (auto-detect from system)'}, browser: ${browserUseProxy ? 'follows settings' : 'system'}, direct: ${_proxyState.bypass.join(',')}`)
 })
 
-function getAppProxy(): string | null {
-  if (_appProxy === undefined) {
+function getProxyState(): ProxyState {
+  if (_proxyState === undefined) {
     // First call: initialize from disk once, then never again
     const network = getConfig().network
-    _appProxy = network?.proxy?.trim() || null
+    _proxyState = proxyStateFrom(network)
     // Sync to the AI Browser session so it is correct from the first page load.
     // Only apply Settings proxy when browserUseProxy is explicitly true;
     // otherwise let the browser use the system proxy (Electron default).
     const browserUseProxy = network?.browserUseProxy === true
-    applyProxyToBrowserSession(browserUseProxy ? _appProxy : null)
+    applyProxyToBrowserSession(browserUseProxy ? _proxyState.proxy : null, _proxyState.bypass)
   }
-  return _appProxy
+  return _proxyState
+}
+
+/** The proxy a request takes: none for a bypassed host, else the Settings proxy, else the system's. */
+async function resolveProxyUrl(url: string): Promise<string | null> {
+  const { proxy, goesDirect } = getProxyState()
+  if (goesDirect(url)) return null
+  return proxy ?? await resolveSystemProxy(url)
 }
 
 // ============================================================================
@@ -425,28 +433,15 @@ function makeRequest(
  *   3. Direct fetch — no proxy configured
  *
  * Supports HTTP, HTTPS, SOCKS4, SOCKS5 proxies.
- * localhost / 127.0.0.1 always bypasses proxy regardless of setting.
+ * Local addresses and the hosts in the bypass list (proxy-policy) go direct
+ * regardless of either proxy.
  */
 export async function proxyFetch(
   url: string | URL,
   init?: RequestInit
 ): Promise<Response> {
   const urlStr = typeof url === 'string' ? url : url.toString()
-
-  // App-level proxy (in-memory cache, zero disk reads after first call)
-  const appProxy = getAppProxy()
-
-  let proxyUrl: string | null
-  if (appProxy) {
-    // Manual proxy configured — still respect localhost bypass
-    const hostname = (() => {
-      try { return new URL(urlStr).hostname } catch { return '' }
-    })()
-    proxyUrl = BYPASS_HOSTS.has(hostname) ? null : appProxy
-  } else {
-    // Auto-detect from Chromium's proxy resolution engine
-    proxyUrl = await resolveSystemProxy(urlStr)
-  }
+  const proxyUrl = await resolveProxyUrl(urlStr)
 
   const method = (init?.method || 'GET').toUpperCase()
   const logging = isHttpLoggingEnabled()
@@ -518,16 +513,7 @@ export async function proxyFetch(
  * expects to mean "use the default".
  */
 export async function resolveProxyAgent(url: string): Promise<ProxyAgent | undefined> {
-  const appProxy = getAppProxy()
-  let proxyUrl: string | null
-  if (appProxy) {
-    const hostname = (() => {
-      try { return new URL(url).hostname } catch { return '' }
-    })()
-    proxyUrl = BYPASS_HOSTS.has(hostname) ? null : appProxy
-  } else {
-    proxyUrl = await resolveSystemProxy(url)
-  }
+  const proxyUrl = await resolveProxyUrl(url)
   return proxyUrl ? getOrCreateAgent(proxyUrl) : undefined
 }
 

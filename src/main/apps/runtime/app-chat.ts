@@ -76,6 +76,7 @@ import {
   disposeAppChatSink,
   type AppChatRoundHandle,
 } from './app-chat-sink'
+import type { AppChatTurnEnding } from './turn-ending'
 import {
   beginAppChatTurnStart,
   cancelAppChatTurnStarts,
@@ -228,9 +229,11 @@ export interface AppChatRequest {
   /**
    * Optional callback invoked with the AI's final response text.
    * Used by external bridges (e.g., WeCom Bot) to auto-reply
-   * the result back to the originating chat.
+   * the result back to the originating chat. `ending` says the turn stopped
+   * short (the step limit, or cut off); `finalContent` is then what was
+   * written, possibly nothing.
    */
-  onReply?: (finalContent: string) => void
+  onReply?: (finalContent: string, ending?: AppChatTurnEnding) => void
   /**
    * Optional override for the conversation/session ID.
    * When provided, this is used instead of the default "app-chat:{appId}".
@@ -1234,7 +1237,11 @@ async function runAppChatTurn(
     // round, not the start, is what holds the conversation.
     round = sink.beginRound({
       onProgress, onMessageAccepted,
-      onReply: content => { finalReply = content; onReply?.(content) },
+      onReply: (content, ending) => {
+        finalReply = content
+        if (ending) onReply?.(content, ending)
+        else onReply?.(content)
+      },
     })
     turnContext.start.end()
 

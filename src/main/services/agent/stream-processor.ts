@@ -50,9 +50,24 @@ import { analytics } from '../analytics/analytics.service'
 import { AnalyticsEvents } from '../analytics/types'
 import { deriveErrorCode } from '../analytics/error-code'
 import { beginApiRetry, endApiRetry, parseApiRetryMessage } from './api-retry'
+import { explainEngineError } from './local-connection'
 
 // Unified fallback error suffix - guides user to check logs
 const FALLBACK_ERROR_HINT = 'Check logs in Settings > System > Logs.'
+
+// A turn that ran out of steps, with or without a partial answer
+const MAX_TURNS_NOTICE = 'Reached the maximum turn limit. Send a message to continue.'
+
+/**
+ * The step limit named in an error_max_turns result's text, which closes on
+ * it: "Reached maximum number of turns (N)" (Claude Code), "… limit is N"
+ * (Halo SDK, which also names it in a system message first).
+ */
+function stepLimitFromErrors(errors: unknown[] | undefined): number | undefined {
+  const text = typeof errors?.[0] === 'string' ? errors[0] : ''
+  const match = /(\d+)\D*$/.exec(text)
+  return match ? Number(match[1]) : undefined
+}
 
 // ============================================
 // Telemetry: tool usage aggregation
@@ -244,6 +259,8 @@ export interface StreamResult {
   errorThought?: Thought
   /** Whether the session hit the SDK's maxTurns limit (error_max_turns subtype) */
   reachedMaxTurns: boolean
+  /** The step limit the engine said it reached, when it named one */
+  maxTurnsLimit?: number
   /** Whether at least one event was received in this stream() call */
   firstEventReceived: boolean
   /** Whether the post-abort drain timed out without receiving a result.
@@ -428,6 +445,7 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
   let hadErrorDuringExecution = false
   // Track if SDK reported error_max_turns (session hit the configured maxTurns limit)
   let hadMaxTurnsReached = false
+  let maxTurnsLimit: number | undefined
   // Track if we received a result message (for detecting stream interruption)
   let receivedResult = false
 
@@ -601,6 +619,7 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
       hasErrorThought: !!errorThought,
       errorThought,
       reachedMaxTurns: hadMaxTurnsReached,
+      ...(maxTurnsLimit !== undefined ? { maxTurnsLimit } : {}),
       firstEventReceived: firstEventFired,
       drainTimedOut: wasAborted && drainStartTime !== null && !receivedResult,
     }
@@ -1031,6 +1050,7 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
     // Parse SDK message into Thought and send to renderer
     // Pass credentials.model to display the user's actual configured model
     const thought = parseSDKMessage(sdkMessage, displayModel)
+    if (thought?.type === 'error') thought.content = explainEngineError(thought.content)
 
     if (thought) {
       // Handle tool_result specially - merge into corresponding tool_use thought
@@ -1211,6 +1231,11 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
         }
       }
 
+      // Halo SDK names the step limit here, just before its error_max_turns result.
+      if (subtype === 'max_turns_reached' && typeof msg.max_turns === 'number') {
+        maxTurnsLimit = msg.max_turns
+      }
+
       // Session goal changed (engines with features.goal). A user-side change
       // is echoed here once the engine hands it to the model.
       if (subtype === 'goal_updated') {
@@ -1297,22 +1322,23 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
         capturedSessionId = sessionIdFromMsg as string
       }
 
-      // Check for error_during_execution (interrupted) vs real errors
-      // Note: Real API errors (is_error=true) are already handled by parseSDKMessage above
-      // which creates an error thought and triggers agent:error via the thought.type === 'error' branch
+      // Check for the step limit, error_during_execution (interrupted) and real errors.
+      // Real API errors (is_error=true) are already handled by parseSDKMessage above,
+      // which creates an error thought and triggers agent:error via the thought.type === 'error' branch.
+      // The step limit is told by its subtype alone: the engines flag it is_error,
+      // but it is a limit the turn ran into, not a failure (parseSDKMessage agrees).
       const isError = (sdkMessage as any).is_error === true
-      if (isError) {
-        const errors = (sdkMessage as any).errors as unknown[] | undefined
+      const errors = (sdkMessage as any).errors as unknown[] | undefined
+      if ((sdkMessage as any).subtype === 'error_max_turns') {
+        hadMaxTurnsReached = true
+        maxTurnsLimit ??= stepLimitFromErrors(errors)
+        console.log(`[Agent][${conversationId}] SDK result subtype=error_max_turns, num_turns=${(sdkMessage as any).num_turns}, limit=${maxTurnsLimit ?? 'unknown'} - session reached turn limit`)
+      } else if (isError) {
         console.log(`[Agent][${conversationId}] ⚠️ SDK error (is_error=${isError}, errors=${errors?.length || 0}): ${((sdkMessage as any).result || '').substring(0, 200)}`)
       } else if ((sdkMessage as any).subtype === 'error_during_execution') {
         // Mark as interrupted - will be used for empty response handling
         hadErrorDuringExecution = true
         console.log(`[Agent][${conversationId}] SDK result subtype=error_during_execution but is_error=false, errors=[] - marked as interrupted`)
-      } else if ((sdkMessage as any).subtype === 'error_max_turns') {
-        // Session hit the configured maxTurns limit - this is a graceful SDK termination,
-        // not an error. Track it so we can show a clear message instead of "empty response".
-        hadMaxTurnsReached = true
-        console.log(`[Agent][${conversationId}] SDK result subtype=error_max_turns, num_turns=${(sdkMessage as any).num_turns} - session reached turn limit`)
       }
 
       // Extract token usage from result message
@@ -1339,8 +1365,9 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
   // | Case | hasContent | isInterrupted | hasErrorThought | wasAborted | reachedMaxTurns | Send error?      |
   // |------|------------|---------------|-----------------|------------|-----------------|------------------|
   // | 1a   | yes        | -             | -               | yes        | -               | stopped by user  |
-  // | 1b   | yes        | yes           | -               | no         | -               | interrupted      |
-  // | 2    | yes        | no            | -               | no         | -               | no               |
+  // | 1c   | yes        | -             | -               | no         | yes             | max turns notice |
+  // | 1b   | yes        | yes           | -               | no         | no              | interrupted      |
+  // | 2    | yes        | no            | -               | no         | no              | no               |
   // | 3    | no         | yes           | no              | no         | -               | interrupted      |
   // | 4    | no         | no            | no              | no         | no              | empty response   |
   // | 5    | no         | -             | yes             | -          | -               | no               |
@@ -1398,12 +1425,14 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
     if (hasMeaningfulContent) {
       // Has content: user aborted shows friendly message, other interrupts show warning
       if (wasAborted) return 'Stopped by user.'
+      // What was written so far is not the whole answer — say why it stopped
+      if (hadMaxTurnsReached) return MAX_TURNS_NOTICE
       return isInterrupted ? 'Model response interrupted unexpectedly.' : null
     } else {
       // No content: skip if already has error thought or user aborted
       if (hasErrorThought || wasAborted) return null
       // Max turns is a graceful SDK limit, not a crash — show a clear actionable message
-      if (hadMaxTurnsReached) return 'Reached the maximum turn limit. Send a message to continue.'
+      if (hadMaxTurnsReached) return MAX_TURNS_NOTICE
       return isInterrupted
         ? 'Model response interrupted unexpectedly.'
         : `Unexpected empty response. ${FALLBACK_ERROR_HINT}`

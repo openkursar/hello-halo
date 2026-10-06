@@ -59,9 +59,8 @@ runs without ever being bound to a chat.
 
 - ~~"Should it respond to every message, or only when @-mentioned / prefixed with X?"~~ — In
   WeCom group chats the platform only delivers `@`-mentioned messages to the bot; Halo never
-  sees the rest. `dispatch-inbound.ts` strips the leading mention with the note *"WeCom (and
-  similar IM platforms) deliver a group message to the bot only when the bot is mentioned...
-  no identity matching needed."* Nothing to configure.
+  sees the rest. Nothing to configure — and the mentions stay in the text the digital human
+  reads (`message-channels/wecom-bot.md` §5).
 - ~~"Which subscription type receives WeCom messages?"~~ — None. Omit `subscriptions`. Do not
   use `source.type: "wecom"`; it is schema-only with no event producer.
 - ~~"Which chat IDs should trigger this?"~~ — Scoping is implicit in which bot instance the
@@ -84,10 +83,10 @@ These behaviors are real but live on the IM channel *instance*, not the App Spec
   group chats never auto-claim.
 - `/halo-stop` (also `/stop`, `/halo-cancel`) aborts the running generation for that chat;
   `/halo-clear` (also `/clear`, `/halo-reset`) resets its context. Both are handled before the
-  message reaches the AI, and are matched against the **whole** message — a command works only
-  when it is the entire text. In a WeCom group that means the bot's `@name` prefix has to be
-  removed first, which requires the instance's Bot Name field
-  (`message-channels/wecom-bot.md` §5); without it, group commands simply read as normal
-  messages.
+  message reaches the AI, case-insensitively. In a direct chat the command must be the whole
+  message. In a group it also counts as the **last word of a message that starts with `@`** —
+  `@Halo AI 团队 /stop`, `@Halo @助手 /clear` — because group messages carry the bot's mention
+  and a bot name may contain spaces (Halo 3.0 and later; `message-channels/wecom-bot.md` §5).
+  Text after the command, no `@` at the start, or no slash makes it an ordinary message.
 - A message arriving while the app is still answering is buffered and merged into the next
   round — never dropped, never run concurrently.

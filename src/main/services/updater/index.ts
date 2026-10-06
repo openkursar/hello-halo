@@ -42,6 +42,7 @@ import {
   reconcileStagedUpdateOnStartup,
   VersionKnownBadError,
   type ReadyStagedUpdate,
+  type StagedFeed,
 } from './staged'
 import { getAnnounced, offerManualDownload, sendUpdateStatus, setAnnounced, setAnnouncedPhase } from './status'
 
@@ -60,6 +61,9 @@ const MIN_CHECK_INTERVAL_MS = 5 * 60 * 1000
 let lastCheckTime = 0
 let updateConfig: UpdateConfig | undefined
 let legacyEnabled = false
+
+/** Where this build reads staged descriptions; null when it runs the installer path. */
+let stagedFeed: StagedFeed | null = null
 
 /** True once this build has decided it is running the staged Windows path. */
 let stagedPathActive = false
@@ -81,20 +85,30 @@ let stagedInFlight: AbortController | null = null
 let legacyDriving = process.platform !== 'win32'
 
 /**
- * Whether the staged path owns this platform.
+ * The feed the staged path reads, or null when the staged path does not own
+ * this platform.
  *
  * Read once at init and cached: the answer is a build-time property, and
  * re-deriving it per event would let a mid-session config reload split one
  * update across two mechanisms.
  */
-function resolveStagedPath(): boolean {
-  if (process.platform !== 'win32') return false
-  if (getWindowsUpdateMode() !== 'staged') return false
-  if (updateConfig?.provider !== 'generic' || !updateConfig.url) {
-    console.warn('[Updater] Staged updates need a generic feed URL — using installer path')
-    return false
+function resolveStagedFeed(): StagedFeed | null {
+  if (process.platform !== 'win32') return null
+  if (getWindowsUpdateMode() !== 'staged') return null
+  if (updateConfig?.provider === 'generic' && updateConfig.url) {
+    return { kind: 'generic', url: updateConfig.url }
   }
-  return true
+  if (updateConfig?.provider === 'github' && updateConfig.owner && updateConfig.repo) {
+    // GitHub's "latest release" never points at a prerelease, which is where
+    // preview builds are published.
+    if (getUpdateChannel() !== 'stable') {
+      console.warn('[Updater] Staged updates from GitHub cover stable releases only — using installer path')
+      return null
+    }
+    return { kind: 'github', owner: updateConfig.owner, repo: updateConfig.repo }
+  }
+  console.warn('[Updater] Staged updates need a generic feed URL or a GitHub repository — using installer path')
+  return null
 }
 
 /**
@@ -125,7 +139,8 @@ export function initAutoUpdater(): void {
 
   updateConfig = loadProductConfig().updateConfig
   legacyEnabled = configureLegacyFeed(updateConfig)
-  stagedPathActive = resolveStagedPath()
+  stagedFeed = resolveStagedFeed()
+  stagedPathActive = stagedFeed !== null
   setLegacyInstallOnQuit(!stagedPathActive)
 
   console.log(
@@ -185,7 +200,7 @@ function canCheck(): boolean {
  * caller to let electron-updater handle this check instead.
  */
 async function runStagedCycle(): Promise<boolean> {
-  if (!updateConfig?.url) return false
+  if (!stagedFeed) return false
 
   // Already prepared and waiting: re-announce rather than fetch again, so a
   // periodic check does not restart work that is finished.
@@ -195,7 +210,7 @@ async function runStagedCycle(): Promise<boolean> {
   }
   if (stagedInFlight) return true
 
-  const manifest = await checkForStagedUpdate(updateConfig.url)
+  const manifest = await checkForStagedUpdate(stagedFeed)
   if (!manifest) {
     console.log('[Updater] Staged path declined this check — falling back to the installer path')
     return false

@@ -489,8 +489,13 @@ class WecomBotInstance implements ImChannelInstance {
 
     void sendAsMessages(ensureUtf8(text), WECOM_MESSAGE_LIMIT, (part) =>
       this.pushToChatAwaited(chatId, part, chatType, trace),
-    )
+    { chat: this.chatKey(chatId) })
     return true
+  }
+
+  /** A chat as this bot's sends name it, so parts of two replies never interleave. */
+  private chatKey(chatId: string): string {
+    return `${this.providerType}:${this.instanceId}:${chatId}`
   }
 
   /**
@@ -1059,7 +1064,7 @@ class WecomBotInstance implements ImChannelInstance {
         if (!delivered) {
           this.counters.totalError++
           throw new Error(
-            `[WecomBot:${this.instanceId}] Both reply and push failed for chat ${chatId} (trace=${trace})`,
+            `[WecomBot:${this.instanceId}] Reply not fully delivered to chat ${chatId} (trace=${trace})`,
           )
         }
       },
@@ -1093,7 +1098,7 @@ class WecomBotInstance implements ImChannelInstance {
         })
       }
       return this.queuePush(chatId, message, chatType, route.sourceTag, trace)
-    })
+    }, { chat: this.chatKey(chatId) })
   }
 
   private async replyMarkdown(
@@ -1155,6 +1160,7 @@ class WecomBotInstance implements ImChannelInstance {
       frame,
       streamId: `stream_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       chatId,
+      chatKey: this.chatKey(chatId),
       chatType,
       trace,
       transport: this.makeStreamingTransport(),
@@ -1589,6 +1595,7 @@ class WecomBotInstance implements ImChannelInstance {
     const f = fragment as {
       msgtype?: string
       text?: { content?: string }
+      voice?: { content?: string }
       file?: { filename?: string }
       link?: { title?: string; url?: string }
       mixed?: { msg_item?: Array<{ msgtype?: string; text?: { content?: string } }> }
@@ -1598,8 +1605,11 @@ class WecomBotInstance implements ImChannelInstance {
         return (f.text as TextMessage['text'] | undefined)?.content ?? ''
       case 'image':
         return '(image)'
-      case 'voice':
-        return '(voice message)'
+      case 'voice': {
+        // WeCom sends its own transcript of what was said.
+        const spoken = f.voice?.content?.trim()
+        return spoken ? `(voice transcript) ${spoken}` : '(voice message)'
+      }
       case 'file':
         return `(file: ${f.file?.filename ?? 'unknown'})`
       case 'video':

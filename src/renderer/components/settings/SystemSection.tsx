@@ -16,6 +16,8 @@ import { Switch } from '../ui/Switch'
 import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 import { useSecurityPolicy } from '../../hooks/useSecurityPolicy'
 import { BrowserAllowlistCard } from './BrowserAllowlistCard'
+import { ProxyBypassField } from './ProxyBypassField'
+import { ChildLocalConnectionRow } from './ChildLocalConnectionRow'
 
 interface SystemSectionProps {
   config: HaloConfig | null
@@ -430,6 +432,8 @@ export function SystemSection({ config, setConfig }: SystemSectionProps) {
               {t('Supports http://, https://')}
             </p>
 
+            <ProxyBypassField config={config} setConfig={setConfig} />
+
             {/* Browser proxy toggle — only visible when a proxy is configured */}
             {proxyInput.trim() && (
               <div className="flex items-center justify-between mt-3 pt-3 border-t border-border/50">
@@ -761,6 +765,9 @@ export function SystemSection({ config, setConfig }: SystemSectionProps) {
                               )}
                             </div>
                           </div>
+                          {healthCheckResult.services.childLocalConnection && (
+                            <ChildLocalConnectionRow check={healthCheckResult.services.childLocalConnection} />
+                          )}
                         </div>
                       </div>
                     )}

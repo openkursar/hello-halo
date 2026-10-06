@@ -153,6 +153,9 @@ vi.mock('../../../../src/main/services/agent', async () => ({
   formatReferencesBlock: (await vi.importActual<typeof import('../../../../src/main/services/agent/references')>(
     '../../../../src/main/services/agent/references',
   )).formatReferencesBlock,
+  explainEngineError: (await vi.importActual<typeof import('../../../../src/main/services/agent/local-connection')>(
+    '../../../../src/main/services/agent/local-connection',
+  )).explainEngineError,
   ...(await import('../../../../src/main/services/agent/session-manager')),
 }))
 
@@ -258,6 +261,7 @@ import {
 } from '../../../../src/main/services/agent/session-manager'
 import { missingConnections, resolveExecutionEnvironment } from '../../../../src/main/apps/runtime/execution-environment'
 import { openSessionWriter } from '../../../../src/main/apps/runtime/session-store'
+import { createScopedBrowserContext } from '../../../../src/main/services/ai-browser'
 
 // ============================================
 // Fakes
@@ -404,6 +408,27 @@ describe('executeRun — guards', () => {
   })
 })
 
+describe('executeRun — browser pages', () => {
+  it('opens the pages of a run started from the desktop where the user can watch them, under its run key', async () => {
+    nextSession = new FakeSession({ script: [systemInit(), assistantReport()] })
+    vi.mocked(createScopedBrowserContext).mockClear()
+    const result = await executeRun({
+      app: makeApp(),
+      trigger: { type: 'manual', description: 'run now', watchable: true },
+      store: makeStore(),
+      memory: makeMemory(),
+    })
+    expect(createScopedBrowserContext).toHaveBeenCalledWith({ conversationId: `app-run:app-1:${result.runId}`, spaceId: 'space-1' })
+  })
+
+  it('keeps the pages of every other run in the hidden host', async () => {
+    nextSession = new FakeSession({ script: [systemInit(), assistantReport()] })
+    vi.mocked(createScopedBrowserContext).mockClear()
+    await executeRun({ app: makeApp(), trigger: baseTrigger, store: makeStore(), memory: makeMemory() })
+    expect(createScopedBrowserContext).toHaveBeenCalledWith(undefined)
+  })
+})
+
 describe('executeRun — completion branches', () => {
   it('completes ok/useful when report_to_user is called', async () => {
     nextSession = new FakeSession({ script: [systemInit(), assistantReport()] })
@@ -467,6 +492,19 @@ describe('executeRun — completion branches', () => {
     expect(result.tokenUsage).toEqual({ inputTokens: 120, outputTokens: 80, cacheReadTokens: 9000, cacheCreationTokens: 300 })
     // The stored figure keeps its meaning: input and output only.
     expect(result.tokensUsed).toBe(200)
+  })
+
+  it('explains a refused local connection in the run\'s error, with the program to allow', async () => {
+    nextSession = new FakeSession({
+      script: [assistantReport(), { type: 'result', is_error: true, result: 'API Error: Unable to connect to API (EACCES)' }],
+    })
+
+    const result = await executeRun({ app: makeApp(), trigger: baseTrigger, store: makeStore(), memory: makeMemory() })
+
+    expect(result.outcome).toBe('error')
+    expect(result.errorMessage).toContain("Security software on this computer blocked Halo's internal connection")
+    expect(result.errorMessage).toContain('allow this program to make local connections: /usr/bin/electron')
+    expect(result.errorMessage).toContain('(engine error: API Error: Unable to connect to API (EACCES))')
   })
 
   it('leaves a failure entry with the reason when the engine fails after the run reported', async () => {

@@ -46,6 +46,7 @@ import { resolveImFileSend } from '../im-channels/file-send-resolve'
 import type { FileSendFn } from '../im-channels/file-send-mcp'
 import type { ImChannelInstance } from '../../../../shared/types/im-channel'
 import { beginAppChatTurnStart, isAppChatConversationGenerating, injectIntoAppChat } from '../app-chat-live-turn'
+import { withTurnEndingNote, type AppChatTurnEnding } from '../turn-ending'
 import { getAppManager } from '../../manager'
 import { getSpaceDir } from '../../../services/space.service'
 
@@ -610,7 +611,7 @@ export function createDefaultSessionDeps(store: TeamStore): OrchestrationSession
       // Held in a box, not a `let`: the assignment happens inside `onReply`, which
       // TypeScript's flow analysis does not see, so a plain local reads as `null`
       // below and silently types the IM push away.
-      const captured: { reply: string | null } = { reply: null }
+      const captured: { reply: string | null; ending?: AppChatTurnEnding } = { reply: null }
       await sendAppChatMessage({
         appId: request.appId,
         spaceId: request.spaceId,
@@ -621,15 +622,19 @@ export function createDefaultSessionDeps(store: TeamStore): OrchestrationSession
         // Both halves of the IM route, or neither: the framing and the tool set
         // must match what dispatch-inbound gives this same session.
         ...(imRoute ? { imSession: imRoute.imSession, imFileSend: imRoute.imFileSend } : {}),
-        onReply: (finalContent) => {
+        onReply: (finalContent, ending) => {
           captured.reply = finalContent
+          captured.ending = ending
         },
       })
 
       const finalMessage = captured.reply
-      if (imRoute && finalMessage && finalMessage.trim()) {
+      // The chat reads a turn that stopped short the way a person's own turn
+      // reads in dispatch-inbound; the team gets the text as written.
+      const pushed = captured.ending ? withTurnEndingNote(finalMessage ?? '', captured.ending) : finalMessage
+      if (imRoute && pushed && pushed.trim()) {
         try {
-          await imRoute.instance.pushToChat(imRoute.chatId, finalMessage, imRoute.chatType)
+          await imRoute.instance.pushToChat(imRoute.chatId, pushed, imRoute.chatType)
         } catch (err) {
           console.error(`${LOG_TAG} failed to push front-desk reply to IM chat:`, err)
         }

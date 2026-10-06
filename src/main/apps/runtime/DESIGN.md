@@ -536,6 +536,23 @@ Consequences that matter:
   failure callback: unexpected termination checkpoints the user message and failure,
   emits error/completion synchronously, then discards delayed predecessor failures.
   An empty interrupted/errored turn rejects rather than leaving an IM stream open.
+- **A turn that stopped short says so** (`turn-ending.ts`). Reaching the step
+  limit, or being cut off other than by the person's own stop, leaves the answer
+  unfinished. The round hands its caller the ending with whatever was written
+  (`onReply(content, ending)`), and the step limit with nothing written still
+  answers the round — a silent resolve used to leave an IM chat's message
+  spinning. A cut with nothing written fails the round as
+  `AppChatTurnInterrupted`, so a team still records a failure while the IM exit
+  can tell it from a model error. Every IM exit — the person's reply
+  (`dispatch-inbound`), a teammate-woken front-desk turn (`team/index.ts`), an
+  autonomous turn's push — adds the same note (`withTurnEndingNote`: after the
+  text, or alone), naming the step limit the person can raise. The number is
+  the one the engine reported (`StreamResult.maxTurnsLimit`): the session was
+  built with it, and the setting may have changed since; an engine that names
+  none gets the note without a number. Halo's chat page needs nothing of this:
+  the stream processor's `agent:error` (`interrupted`) notice covers the step
+  limit with or without text. A reply cut at the output-token ceiling is not
+  the step limit and gets no note on any engine (services/agent DESIGN §3).
 - Those cover a session that *reports* its death. A session that simply never
   produces a turn — a resume against a transcript a crashed process left broken,
   an engine that failed to launch — reports nothing, and the caller would await a
@@ -1242,6 +1259,7 @@ src/main/apps/runtime/
   -- Interactive chat with an App (separate from automation runs):
   app-chat.ts                -- sendAppChatMessage() and chat session lifecycle
   app-chat-sink.ts           -- TurnSink for chat: run JSONL + round/autonomous delivery (§2.12a)
+  turn-ending.ts             -- A turn that stopped short (step limit, cut off): how it is recognized and the note an IM chat gets (§2.12a)
   app-chat-browser.ts        -- The AI browser context each chat drives: resident for native chats, per-turn for IM/HTTP/team, idle/cap reaping, teardown by reason (§2.19)
   conversation-source.ts     -- The digital-human `ConversationSource` registered with services/conversation-interop (default + local sessions only; §2.20)
   run-conversation-source.ts -- A scheduled run's one-way sender identity for cross-conversation messages (§2.20)
@@ -1341,11 +1359,34 @@ WeChat 4000 characters (what the platform's own bot plugin sends per message).
 `im-channels/message-parts.ts` does the splitting for all of them, so a long
 text reads the same everywhere: ordered parts labeled `(i/n)`, each sent once
 the one before it settled, cut at a paragraph or line break near the cap and
-never inside a character, a code block closed and reopened across a cut.
+never inside a character or an emoji sequence, a code block (backtick or tilde
+fence) closed and reopened across a cut, no part that is only whitespace.
+
+What a chat gets is bounded the same way for every channel. At most
+`MAX_PARTS` (10) parts: past that a chat is the wrong place to read it, and the
+strictest burst limit (WeCom, 30 messages a minute per chat) stays clear of it
+— so the last part sent says the rest is in Halo. A part that does not go out
+stops the rest: a reply with a hole in it reads as whole, so the remaining
+parts are held back and the chat is told, best effort, that part k failed and
+the whole reply is in Halo. Two replies to one chat (an answer and a notify
+push, say) go out one after the other, never interleaved: each provider names
+the chat (`MessageRoute.chat`) and the parts of the second wait for the first.
 
 A WeCom stream that outgrows one message is closed on what fits plus a notice,
 rather than sending a frame the server rejects — which left the stream stuck
 mid-answer — and the whole answer follows as `(i/n)` pushes.
+
+### 4.3 Mentions and commands in group chats
+
+A group delivers the bot only messages that mention it, so a group message
+arrives as "@Halo AI Team @Alice please follow up" and a command as "@Halo AI
+Team /stop". The text reaches the digital human as written: who else a message
+addresses is part of it. (Feishu's SDK already removes the bot's own mention from the
+structured mention list; WeCom names nobody, and where a bot name ends cannot
+be told from the text, since names may contain spaces.) Commands are
+recognized in `dispatch-inbound.ts`: exact in a direct chat; in a group also
+when the command ends a message that starts with a mention. There is no "bot
+name" setting, and none is needed.
 
 Tests live in `tests/unit/apps/runtime/` mirroring the source layout.
 
@@ -1524,6 +1565,10 @@ and `POST /api/apps/:appId/runs/start`. It acknowledges admission without waitin
 for model completion, so the automatic-task switch remains usable while work is
 running. The existing public `/trigger` endpoint retains its completion response
 for external integrations. Both paths share admission and concurrency checks.
+Only the desktop's `app:start-run` marks the run `watchable`: the user is at the
+screen, so its browser context is announced under the run key and its pages open
+in the main window, listed in the live-session tray as "digital human · page".
+Remote, tool-started and scheduled runs keep their pages in the hidden host.
 
 
 ## Memory and file boundaries of a digital human

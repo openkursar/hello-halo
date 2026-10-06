@@ -17,7 +17,10 @@
 //     --unpacked dist/win-unpacked --out dist --version 2.1.17
 //     --channel experience --product-id halo-example
 //     [--packer win-update-helper/bin/halo-update-packer]
-//     [--base-url http://host:18080]
+//     (--base-url http://host:18080 | --github owner/repo)
+//
+// --base-url points the description at a release server's /download/ path;
+// --github points it at the archive uploaded to the release tagged v<version>.
 //
 // Environment:
 //   HALO_UPDATE_SIGNING_KEY  base64 PKCS#8 DER Ed25519 private key (required)
@@ -125,8 +128,12 @@ function main() {
     return
   }
 
-  for (const required of ['unpacked', 'out', 'version', 'channel', 'product-id', 'base-url']) {
+  for (const required of ['unpacked', 'out', 'version', 'channel', 'product-id']) {
     if (!args[required]) fail(`required: --${required}`)
+  }
+  if (!args['base-url'] === !args.github) fail('pass exactly one of --base-url or --github')
+  if (args.github && !/^[\w.-]+\/[\w.-]+$/.test(args.github)) {
+    fail(`--github must be owner/repo, got "${args.github}"`)
   }
   if (args.channel !== 'stable' && args.channel !== 'experience') {
     fail(`--channel must be "stable" or "experience", got "${args.channel}"`)
@@ -158,7 +165,9 @@ function main() {
     platform,
     arch,
     package: {
-      url: `${args['base-url'].replace(/\/+$/, '')}/download/${archiveName}`,
+      url: args.github
+        ? `https://github.com/${args.github}/releases/download/v${args.version}/${archiveName}`
+        : `${args['base-url'].replace(/\/+$/, '')}/download/${archiveName}`,
       size: measured.size,
       sha512: measured.sha512,
       format: 'tar.zst',

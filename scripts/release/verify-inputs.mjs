@@ -18,10 +18,13 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
+import { createRequire } from 'node:module'
 import {
   c, log, loadManifest, gitState, sha256File, getByPath, isEmptyValue,
   readRecord, writeRecord, diffAgainstBaseline, printDiffReport, confirmSensitive,
 } from './lib.mjs'
+
+const { planStagedArtifacts } = createRequire(import.meta.url)('./staged-artifacts.cjs')
 
 function parseArgs(argv) {
   const args = { mode: 'dev', platforms: 'all', confirmSensitive: false }
@@ -110,6 +113,28 @@ function checkUpdateChannel(product, manifest) {
   return problems
 }
 
+/**
+ * A release that enables staged Windows updates must be able to sign them.
+ *
+ * The packaging hook can only enforce this when electron-builder publishes
+ * itself. Release flows pack with `--publish never` and upload afterwards, so
+ * this is where such a release learns it cannot sign — before anything is built.
+ */
+function checkStagedSigning(product, args, mainRepo, version) {
+  const plan = planStagedArtifacts({
+    product,
+    builtWindows: args.platforms === 'all' || args.platforms.split(',').includes('win'),
+    publishing: args.mode === 'release',
+    signingKey: process.env.HALO_UPDATE_SIGNING_KEY,
+    outDir: path.join(mainRepo, 'dist'),
+    version,
+  })
+  if (plan.action === 'fail') return [plan.reason]
+  if (plan.warning) log.warn(plan.warning)
+  if (plan.action === 'sign') log.ok('staged updates: signing key present and matches the product public key')
+  return []
+}
+
 function fail(message) {
   log.fail(message)
   process.exit(1)
@@ -127,6 +152,7 @@ async function main() {
     args.baseline ?? path.join(manifest.dir, manifest.releaseBaseline ?? 'last-release-record.json')
 
   log.info(`variant=${manifest.variant} mode=${args.mode}`)
+  const version = JSON.parse(fs.readFileSync(path.join(mainRepo, 'package.json'), 'utf8')).version
   const problems = []
 
   // -- 1. Git state of every declared repo -----------------------------------
@@ -192,6 +218,7 @@ async function main() {
   }
 
   problems.push(...checkUpdateChannel(productContent, manifest))
+  problems.push(...checkStagedSigning(productContent, args, mainRepo, version))
 
   // -- 4. Engines + binaries -------------------------------------------------
   try {
@@ -231,7 +258,6 @@ async function main() {
   }
 
   // -- 6. Baseline diff (vs last successful release) -------------------------
-  const version = JSON.parse(fs.readFileSync(path.join(mainRepo, 'package.json'), 'utf8')).version
   const current = {
     schema: 1,
     variant: manifest.variant,

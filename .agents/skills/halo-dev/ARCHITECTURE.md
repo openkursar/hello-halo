@@ -188,7 +188,9 @@ src/
 │                                      #   protocol, api-validator, model-capabilities,
 │                                      #   secure-storage, browser-view, browser-policy,
 │                                      #   watcher-host
-│                                      #   (+ utilities: browser-login-pages, proxy-fetch)
+│                                      #   (+ utilities: browser-login-pages, proxy-fetch,
+│                                      #    proxy-policy — the one place proxy and NO_PROXY
+│                                      #    decisions are made, for fetch, browser and child envs)
 │
 ├── worker/                            # Utility processes (file-watcher)
 ├── shared/                            # Cross-process types, constants, protocols

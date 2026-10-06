@@ -4,12 +4,11 @@
  */
 
 import { useCallback, useEffect, useState, Suspense } from 'react'
-import { X, ChevronLeft, Maximize2, Minimize2 } from 'lucide-react'
+import { X, ChevronLeft } from 'lucide-react'
 import {
   useActiveTab,
   useCanvasActions,
   useCanvasIsOpen,
-  useTabCount,
 } from '../../hooks/useCanvasLifecycle'
 import { canvasLifecycle } from '../../services/canvas-lifecycle'
 import { CanvasTabBar } from './CanvasTabs'
@@ -318,32 +317,5 @@ export function CollapsibleCanvas({ children }: CollapsibleCanvasProps) {
     >
       {isOpen && <ContentCanvas />}
     </div>
-  )
-}
-
-/**
- * Canvas Toggle Button - Used to show/hide canvas
- */
-export function CanvasToggleButton() {
-  const { t } = useTranslation()
-  const isOpen = useCanvasIsOpen()
-  const tabCount = useTabCount()
-  const { toggleOpen } = useCanvasActions()
-
-  // Don't show if no tabs
-  if (tabCount === 0) return null
-
-  return (
-    <button
-      onClick={toggleOpen}
-      className="p-1.5 rounded hover:bg-secondary transition-colors"
-      title={isOpen ? t('Collapse canvas') : t('Expand canvas')}
-    >
-      {isOpen ? (
-        <Minimize2 className="w-4 h-4 text-muted-foreground" />
-      ) : (
-        <Maximize2 className="w-4 h-4 text-muted-foreground" />
-      )}
-    </button>
   )
 }

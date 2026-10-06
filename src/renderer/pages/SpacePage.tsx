@@ -30,7 +30,7 @@ import { ChatCapsule } from '../components/layout/ChatCapsule'
 import { SpaceSelector } from '../components/layout/SpaceSelector'
 import { MobileOverflowMenu } from '../components/layout/MobileOverflowMenu'
 import { HeaderMoreMenu } from '../components/layout/HeaderMoreMenu'
-import { CanvasTableOpener, ContentCanvas, TerminalCloseGuard, viewerBringsFileList } from '../components/canvas'
+import { CanvasTableOpener, CanvasToggleButton, ContentCanvas, TerminalCloseGuard, viewerBringsFileList } from '../components/canvas'
 import { GoalCanvasSupport } from '../components/goal'
 import { ReferenceLayer } from '../components/references'
 import { GitBashWarningBanner } from '../components/setup/GitBashWarningBanner'
@@ -522,6 +522,9 @@ export function SpacePage() {
                       title={t('Drag to resize')}
                     />
                   )}
+
+                  {/* A collapsed canvas keeps its tabs; this edge handle brings it back */}
+                  <CanvasToggleButton placement="edge" />
                 </div>
               )}
 

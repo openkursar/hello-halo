@@ -59,6 +59,20 @@ export interface StagedUpdateManifest {
   mandatory?: boolean
 }
 
+/**
+ * A genuine description for this build that is not ahead of it.
+ *
+ * Separate from the other rejections because it is what every up-to-date
+ * install sees on every check; reporting it like tampering would bury the
+ * rejections that do matter.
+ */
+export class NotNewerError extends Error {
+  constructor(version: string, currentVersion: string) {
+    super(`update description version ${version} is not newer than ${currentVersion}`)
+    this.name = 'NotNewerError'
+  }
+}
+
 /** Only this schema is understood; anything else is a newer server talking past us. */
 const SUPPORTED_SCHEMA = 1
 
@@ -152,7 +166,7 @@ function validate(
   // A correctly-signed but stale description is how a server walks a client
   // backwards onto a version with a known problem.
   if (!isUpgrade(version, expected.currentVersion)) {
-    throw new Error(`update description version ${version} is not newer than ${expected.currentVersion}`)
+    throw new NotNewerError(version, expected.currentVersion)
   }
 
   if (typeof minHelperVersion !== 'number' || !Number.isInteger(minHelperVersion)) {

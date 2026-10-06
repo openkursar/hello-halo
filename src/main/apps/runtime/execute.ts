@@ -49,6 +49,7 @@ import {
   createSessionState,
   registerActiveSession,
   unregisterActiveSession,
+  explainEngineError,
   type V2SessionLease,
 } from '../../services/agent'
 import { applyReasoningEffort } from '../../services/agent/reasoning-effort'
@@ -440,8 +441,11 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     // ── 3b. Create scoped browser context for this run ────
     //    Scoped context isolates activeViewId from user's interactive browser
     //    and other concurrent runs, while sharing the same session/cookies.
+    //    A run the user started from the desktop carries its run key, so its
+    //    pages open in the main window and the live-session tray names them
+    //    after the digital human; every other run stays in the hidden host.
     scopedBrowserCtx = usesAIBrowser
-      ? createScopedBrowserContext()
+      ? createScopedBrowserContext(trigger.watchable ? { conversationId: runSender, spaceId: app.spaceId! } : undefined)
       : undefined
 
     // ── 4. Create MCP servers ──────────────────────────────
@@ -1063,7 +1067,7 @@ async function processStream(
         if (m.is_error || m.error_during_execution) {
           result.aiReportedError = true
           if (typeof m.result === 'string' && m.result.length > 0) {
-            result.aiReportedErrorDetail = m.result
+            result.aiReportedErrorDetail = explainEngineError(m.result)
           }
           console.warn(`[Runtime][${runTag}] AI reported error in result message`)
         }

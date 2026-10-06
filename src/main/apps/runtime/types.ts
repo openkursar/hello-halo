@@ -56,6 +56,12 @@ export interface TriggerContext {
      */
     interactive?: boolean
   }
+  /**
+   * The user started this run from the desktop and can watch it: its browser
+   * pages open in the main window and appear in the live-session tray instead
+   * of the hidden host every other run uses.
+   */
+  watchable?: boolean
 }
 
 // ============================================
@@ -310,8 +316,10 @@ export interface AppRuntimeService {
    *
    * Admission checks (app runnable, per-app dedup) still reject before the run
    * starts, so a caller learns about those the same way `triggerManually` does.
+   *
+   * `watchable` is for the desktop's own Run once action (see TriggerContext).
    */
-  startManually(appId: string): Promise<AppRunStartInfo>
+  startManually(appId: string, options?: { watchable?: boolean }): Promise<AppRunStartInfo>
 
   // ── State Queries ───────────────────────────
 

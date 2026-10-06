@@ -899,7 +899,7 @@ describe('FeishuBotProvider — text longer than one message', () => {
     expect(partBodies(sentMarkdown(started)).join('')).toBe(LONG_ANSWER)
   })
 
-  it('still sends the rest when one part fails, then reports the reply as failed', async () => {
+  it('holds back the rest when a part fails, tells the chat, then reports the reply as failed', async () => {
     const started = await startInstance()
     await emitMessage(started, message())
     const send = started.channel.send.bind(started.channel)
@@ -911,7 +911,7 @@ describe('FeishuBotProvider — text longer than one message', () => {
     }
 
     await expect(started.inbound[0].reply.send(LONG_ANSWER)).rejects.toThrow(/rate limited/)
-    expect(started.channel.sends.length).toBe(2)
     expect(attempts).toBe(3)
+    expect(sentMarkdown(started)[1]).toBe('回复的第 2 条发送失败，完整内容请在 Halo 里查看')
   })
 })

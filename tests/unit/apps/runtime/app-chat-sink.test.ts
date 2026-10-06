@@ -48,6 +48,7 @@ import {
   sweepIdleAppChatSinks,
   SINK_IDLE_RELEASE_MS,
 } from '../../../../src/main/apps/runtime/app-chat-sink'
+import { AppChatTurnInterrupted } from '../../../../src/main/apps/runtime/turn-ending'
 
 // ============================================
 // Helpers
@@ -320,6 +321,93 @@ describe('app-chat sink turn ownership', () => {
     sink.onTurnComplete(makeResult())
 
     expect(pushToChat).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * A turn that stopped before its answer was done — the step limit, or cut off
+ * other than by the person's own stop. Whoever waits on the round must learn
+ * how it ended, and must hear back even when nothing was written: a silent
+ * resolve left an IM chat's "working on it" message open with no answer.
+ */
+describe('app-chat sink: a turn that stopped short', () => {
+  beforeEach(() => {
+    disposeAppChatSink(IM_KEY)
+    pushToChat.mockClear()
+  })
+
+  it('hands over what was written with the step limit as its ending', async () => {
+    const sink = makeSink()
+    const onReply = vi.fn()
+    const round = sink.beginRound({ onReply })
+
+    sink.onTurnStart()
+    feedText(sink, 'first half of the work')
+    sink.onTurnComplete(makeResult({ reachedMaxTurns: true, maxTurnsLimit: 3 }))
+
+    await expect(round.done).resolves.toBeUndefined()
+    expect(onReply).toHaveBeenCalledWith('first half of the work', { kind: 'max_turns', limit: 3 })
+  })
+
+  it('still answers the round when the step limit came before any text', async () => {
+    const sink = makeSink()
+    const onReply = vi.fn()
+    const round = sink.beginRound({ onReply })
+
+    sink.onTurnStart()
+    sink.onTurnComplete(makeResult({ reachedMaxTurns: true, maxTurnsLimit: 3, hasMeaningfulContent: false }))
+
+    await expect(round.done).resolves.toBeUndefined()
+    expect(onReply).toHaveBeenCalledWith('', { kind: 'max_turns', limit: 3 })
+  })
+
+  it('marks a turn cut off after writing something as interrupted', async () => {
+    const sink = makeSink()
+    const onReply = vi.fn()
+    sink.beginRound({ onReply })
+
+    sink.onTurnStart()
+    feedText(sink, 'partial')
+    sink.onTurnComplete(makeResult({ isInterrupted: true }))
+
+    expect(onReply).toHaveBeenCalledWith('partial', { kind: 'interrupted' })
+  })
+
+  it('fails a turn cut off before writing anything in a way its caller can tell apart', async () => {
+    const sink = makeSink()
+    const round = sink.beginRound({})
+
+    sink.onTurnStart()
+    sink.onTurnComplete(makeResult({ isInterrupted: true, hasMeaningfulContent: false }))
+
+    await expect(round.done).rejects.toBeInstanceOf(AppChatTurnInterrupted)
+  })
+
+  it('adds no ending to a finished answer, nor to one the person stopped', () => {
+    const sink = makeSink()
+    const onReply = vi.fn()
+    sink.beginRound({ onReply })
+    sink.onTurnStart()
+    feedText(sink, 'complete answer')
+    sink.onTurnComplete(makeResult())
+
+    sink.beginRound({ onReply })
+    sink.onTurnStart()
+    feedText(sink, 'stopped halfway')
+    sink.onTurnComplete(makeResult({ wasAborted: true, isInterrupted: true }))
+
+    expect(onReply.mock.calls).toEqual([['complete answer'], ['stopped halfway']])
+  })
+
+  it('notes the step limit on a turn the digital human started itself', () => {
+    const sink = makeSink()
+    sink.onTurnStart()
+    feedText(sink, 'background follow-up')
+    sink.onTurnComplete(makeResult({ reachedMaxTurns: true, maxTurnsLimit: 3 }))
+
+    expect(pushToChat).toHaveBeenCalledTimes(1)
+    const pushed = (pushToChat.mock.calls[0] as unknown[])[1] as string
+    expect(pushed).toBe('background follow-up\n\n（已达到单次最多 3 步的上限，回复“继续”可接着做）')
   })
 })
 

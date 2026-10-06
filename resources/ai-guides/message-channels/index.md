@@ -11,7 +11,7 @@ two documents are complementary, not overlapping.
 
 | Document | Read it when |
 |---|---|
-| `message-channels/wecom-bot.md` | Setting up, debugging, or explaining **WeCom Intelligent Bot** (企业微信智能机器人) — QR onboarding, manual setup, permission control, owner claiming, real-name resolution, group @mention removal |
+| `message-channels/wecom-bot.md` | Setting up, debugging, or explaining **WeCom Intelligent Bot** (企业微信智能机器人) — QR onboarding, manual setup, permission control, owner claiming, real-name resolution, group @mentions and commands |
 | `message-channels/weixin-ilink.md` | Setting up or debugging **WeChat iLink Bot** (微信个人号机器人) — QR login, session expiry, its narrower feature set |
 | §1b of this document | Setting up or debugging **Feishu Bot** (飞书机器人, Halo 3.0 and later) — QR onboarding, manual setup, the group @mention rule |
 | `create-digital-human/im-triggers.md` | Inbound/outbound message mechanics once a channel is connected: `@`-mention rule in groups, `notify_bot`, what fields do NOT exist in the App Spec |

@@ -21,7 +21,7 @@ import { KBList } from '../components/tlon/KBList'
 import { KBDetail } from '../components/tlon/KBDetail'
 import { CreateKBDialog } from '../components/tlon/CreateKBDialog'
 import { EmptyState } from '../components/tlon/EmptyState'
-import { CanvasTableOpener, ContentCanvas, TerminalCloseGuard } from '../components/canvas'
+import { CanvasTableOpener, CanvasToggleButton, ContentCanvas, TerminalCloseGuard } from '../components/canvas'
 import { useCanvasIsOpen } from '../stores/canvas.store'
 import { takeEntry, trackHome } from '../services/home-telemetry'
 
@@ -105,7 +105,7 @@ export function TlonPage() {
           <div className="px-6 sm:px-10 pt-5 sm:pt-7 flex-shrink-0">
             <h1 className="text-xl font-semibold mb-1">{t('Knowledge Base')}</h1>
             <p className="text-[13px] text-muted-foreground mb-5">
-              {t('Maintain knowledge bases; reference with @ in conversations or attach to a digital human.')}
+              {t('Maintain knowledge bases; load them into a conversation with the Knowledge button in the message box, or attach them to a digital human.')}
             </p>
           </div>
         )}
@@ -150,6 +150,9 @@ export function TlonPage() {
                     title={t('Drag to resize')}
                   />
                 )}
+
+                {/* A collapsed canvas keeps its tabs; this edge handle brings it back */}
+                {!isMobile && <CanvasToggleButton placement="edge" />}
               </div>
 
               {/* Content Canvas (desktop: side-by-side; mobile: fullscreen overlay) */}
