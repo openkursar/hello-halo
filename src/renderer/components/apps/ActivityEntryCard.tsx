@@ -15,6 +15,7 @@ import type { ActivityEntry } from '../../../shared/apps/app-types'
 import { ActivitySource } from './ActivitySource'
 import { EscalationCard } from './EscalationCard'
 import { UpgradeNote } from './UpgradeNote'
+import { MissingConnectionsNote } from './MissingConnectionsNote'
 import { MarkdownRenderer } from '../chat/MarkdownRenderer'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useAppsStore } from '../../stores/apps.store'
@@ -101,7 +102,8 @@ function entryLabel(type: ActivityEntry['type']): string {
 
 /** Whether this entry type supports "View process" drill-down */
 function hasSessionLink(entry: ActivityEntry): boolean {
-  return (entry.type === 'run_complete' || entry.type === 'run_error') && !!entry.sessionKey
+  // A run that never started has no process to view.
+  return (entry.type === 'run_complete' || entry.type === 'run_error') && !!entry.sessionKey && !entry.content.missingConnections
 }
 
 // ──────────────────────────────────────────────
@@ -165,7 +167,7 @@ export function ActivityEntryCard({ entry, appId, isLast, animationDelay }: Acti
         <div className="flex flex-wrap items-center gap-2 mb-1">
           <span className="font-mono text-[11px] text-muted-foreground/80 tabular-nums">{formatTs(entry.ts)}</span>
           <EntryIcon type={entry.type} />
-          <span className="text-xs font-medium text-muted-foreground">{entry.type === 'escalation' && entry.content.resolution ? t(entry.content.resolution.reason === 'expired' ? 'Expired' : 'Closed') : entry.type === 'escalation' && entry.userResponse ? t('Answered') : content.stopped ? t('Execution stopped') : content.upgrade ? t('Updated') : t(entryLabel(entry.type))}</span>
+          <span className="text-xs font-medium text-muted-foreground">{entry.type === 'escalation' && entry.content.resolution ? t(entry.content.resolution.reason === 'expired' ? 'Expired' : 'Closed') : entry.type === 'escalation' && entry.userResponse ? t('Answered') : content.stopped ? t('Execution stopped') : content.upgrade ? t('Updated') : content.missingConnections ? t('Not started') : t(entryLabel(entry.type))}</span>
           {durationMs != null && (
             <span className="font-mono text-[11px] text-muted-foreground/60">{formatDuration(durationMs)}</span>
           )}
@@ -186,6 +188,8 @@ export function ActivityEntryCard({ entry, appId, isLast, animationDelay }: Acti
           <EscalationCard entry={entry} appId={appId} />
         ) : content.upgrade ? (
           <UpgradeNote appId={appId} entryId={entry.id} note={content.upgrade} />
+        ) : content.missingConnections ? (
+          <MissingConnectionsNote appId={appId} missing={content.missingConnections} />
         ) : (
           <div className="space-y-1.5">
             <MarkdownRenderer content={content.summary} className="text-sm" />

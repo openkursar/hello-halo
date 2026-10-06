@@ -88,6 +88,12 @@ older run's as cleared under the retention rule (`RUN_PROCESS_CLEARED`), with no
 Continue and no reply box; its timeline entry stays and no longer offers
 Continue either.
 
+A run that did not start because a declared connection is unusable
+(`content.missingConnections`) is drawn by `MissingConnectionsNote`: each
+connection with why (not installed, turned off, waiting for sign-in, failing)
+and a button to Tools & Resources, instead of the English summary and a
+"View process" with nothing behind it.
+
 Desktop and HTTP clients use the same APIs. Layout is mobile-first; long source
 names, selected answers, loading failures and unavailable teams remain readable
 without hover. Errors are explicit and retain the last useful records and drafts.

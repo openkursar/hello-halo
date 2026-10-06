@@ -19,7 +19,7 @@ vi.mock('../../../../src/main/apps/skill-discovery', () => ({ listAvailableSkill
 vi.mock('../../../../src/main/apps/team', () => ({ getTeamStore: () => ({ listMembersByAppId: () => [{ teamId: 'team' }] }) }))
 vi.mock('../../../../src/main/apps/runtime/im-session-registry', () => ({ getImSessionRegistry: () => ({ getAllSessions: () => fixtures.sessions }) }))
 
-import { resolveChatEnvironment, resolveExecutionEnvironment, validateExecutionEnvironment, validateEnvironmentConnections, legacySessionEnvironmentKey, teamEnvironmentKey } from '../../../../src/main/apps/runtime/execution-environment'
+import { resolveChatEnvironment, resolveExecutionEnvironment, validateExecutionEnvironment, validateEnvironmentConnections, legacySessionEnvironmentKey, teamEnvironmentKey, missingConnections } from '../../../../src/main/apps/runtime/execution-environment'
 import { changeAppDefaultSpace, previewAppSpaceChange, retainAppEnvironments } from '../../../../src/main/apps/runtime/space-change'
 
 describe('retained execution environments', () => {
@@ -170,5 +170,41 @@ describe('retained execution environments', () => {
     retainAppEnvironments(manager, store, app)
     expect(store.countSessionEnvironments(app.id)).toBe(1)
     expect(previewAppSpaceChange({ manager, store, runtime }, app.id, 'b').retainedSessionCount).toBe(1)
+  })
+})
+
+describe('missingConnections', () => {
+  const person = (mcps: Array<{ id: string; enabled?: boolean }>) =>
+    ({ id: 'person', spec: { type: 'automation', name: 'Person', requires: { mcps } } }) as unknown as InstalledApp
+  const connection = (specId: string, status: string, name = specId) =>
+    ({ id: `${specId}-${status}`, specId, status, spec: { type: 'mcp', name } }) as unknown as InstalledApp
+  const manager = (installed: InstalledApp[]) => ({ listEffectiveMcpApps: () => installed })
+
+  it('names each declared connection a run cannot use, and why', () => {
+    const missing = missingConnections(
+      person([{ id: 'docs' }, { id: 'mail' }, { id: 'crm' }, { id: 'sheets' }, { id: 'calendar' }]),
+      manager([
+        connection('mail', 'paused', 'Mail'),
+        connection('crm', 'needs_login', 'CRM'),
+        connection('sheets', 'error', 'Sheets'),
+        connection('calendar', 'active', 'Calendar'),
+      ]),
+      'space',
+    )
+
+    expect(missing).toEqual([
+      { id: 'docs', name: 'docs', state: 'not_installed' },
+      { id: 'mail', name: 'Mail', state: 'disabled' },
+      { id: 'crm', name: 'CRM', state: 'needs_login' },
+      { id: 'sheets', name: 'Sheets', state: 'error' },
+    ])
+  })
+
+  it('leaves out what the owner switched off and the built-in capabilities', () => {
+    expect(missingConnections(person([{ id: 'docs', enabled: false }, { id: 'ai-browser' }, { id: 'web-search' }]), manager([]), 'space')).toEqual([])
+  })
+
+  it('counts a connection as usable when any instance of it is running', () => {
+    expect(missingConnections(person([{ id: 'docs' }]), manager([connection('docs', 'paused'), connection('docs', 'active')]), 'space')).toEqual([])
   })
 })
