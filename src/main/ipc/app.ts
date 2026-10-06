@@ -86,6 +86,8 @@ import {
   consolidateDigitalHumanMemoryNow,
   listAppReminders,
   cancelAppReminder,
+  countClearableChats,
+  clearAllChats,
 } from '../apps/runtime'
 import type { AppSpec } from '../apps/spec'
 import type { AppListFilter, UninstallOptions, UpgradeStrategy } from '../apps/manager'
@@ -871,6 +873,29 @@ export function registerAppHandlers(): void {
       } catch (error: unknown) {
         const err = error as Error
         console.error('[AppIPC] app:chat-restart error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // ── app:chats-clearable / app:chats-clear-all ─────────────────────────
+    // Every conversation of the digital human cleared as /clear clears each;
+    // the count comes first so the confirmation can say what will go.
+    appChatsClearable: async (appId: string) => {
+      try {
+        return { success: true, data: countClearableChats(appId) }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:chats-clearable error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    appChatsClearAll: async (appId: string) => {
+      try {
+        return { success: true, data: await clearAllChats(appId) }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:chats-clear-all error:', err.message)
         return { success: false, error: err.message }
       }
     },

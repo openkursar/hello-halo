@@ -424,6 +424,14 @@
     "path": "/api/apps/:appId/chat/restart"
   },
   {
+    "method": "GET",
+    "path": "/api/apps/:appId/chats/clearable"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/chats/clear-all"
+  },
+  {
     "method": "POST",
     "path": "/api/apps/:appId/im-chat/clear"
   },

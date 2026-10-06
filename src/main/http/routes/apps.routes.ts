@@ -51,7 +51,7 @@ import type {
 import { resolveAppChatTarget, resolveUserInjectTarget, type AppChatTarget } from '../../controllers/app-chat-target.controller'
 import type { EscalationAnswerPayload } from '../../../shared/apps/app-types'
 import { parseTurnReferences, toAppChatRequest } from '../../controllers/chat-turn-input'
-import { getStudioSummary, listPeopleDirectory, getAppCapabilityInventory, getAppSpaceChangePreview, moveAppDefaultSpace, readAppRunMessages, RunProcessClearedError, getDigitalHumanMemoryStatus, consolidateDigitalHumanMemoryNow, listAppReminders, cancelAppReminder } from '../../apps/runtime'
+import { getStudioSummary, listPeopleDirectory, getAppCapabilityInventory, getAppSpaceChangePreview, moveAppDefaultSpace, readAppRunMessages, RunProcessClearedError, getDigitalHumanMemoryStatus, consolidateDigitalHumanMemoryNow, listAppReminders, cancelAppReminder, countClearableChats, clearAllChats } from '../../apps/runtime'
 
 async function respondOperation(res: Response, name: string, operation: () => unknown | Promise<unknown>): Promise<void> {
   try {
@@ -1361,6 +1361,26 @@ export function registerAppsRoutes(app: Express): void {
       // Manual restart: the user clicked "Restart agent", so interrupt in-flight turns.
       const result = await restartAppChat(appId, { interruptActive: true })
       console.log('[HTTP] POST /api/apps/%s/chat/restart: closed=%d', appId, result.sessionsClosed)
+      res.json({ success: true, data: result })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/apps/:appId/chats/clearable — how many conversations a clear-all would clear
+  app.get('/api/apps/:appId/chats/clearable', async (req: Request, res: Response) => {
+    try {
+      res.json({ success: true, data: countClearableChats(req.params.appId) })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/apps/:appId/chats/clear-all — clear every conversation as /clear clears each
+  app.post('/api/apps/:appId/chats/clear-all', async (req: Request, res: Response) => {
+    try {
+      const result = await clearAllChats(req.params.appId)
+      console.log('[HTTP] POST /api/apps/%s/chats/clear-all: cleared=%d failed=%d', req.params.appId, result.cleared, result.failed)
       res.json({ success: true, data: result })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })

@@ -20,6 +20,8 @@ operations on this page:
   POST   /api/apps/<appId>/chat/send                                 Send a message to a digital human and let it reply
   GET    /api/apps/<appId>/chat/status                               Check whether a digital human chat is currently generating a reply
   POST   /api/apps/<appId>/chat/stop                                 Stop a digital human's in-progress chat reply
+  POST   /api/apps/<appId>/chats/clear-all                           Clear the history of all of a digital human's chats at once   !! destructive
+  GET    /api/apps/<appId>/chats/clearable                           Count the conversations clearing all of a digital human's chats would clear
   POST   /api/apps/<appId>/clear-memory                              Delete all of a digital human's memory files   !! destructive
   POST   /api/apps/<appId>/config                                    Replace a digital human's user configuration values
   POST   /api/apps/<appId>/escalation/<entryId>/respond              Answer a digital human's pending question (it stopped to ask a human before continuing)   !! destructive
@@ -132,6 +134,17 @@ POST   /api/apps/<appId>/chat/stop                                 Stop a digita
      # body: {"conversationId": "<conversationId — a uuid from GET /api/spaces/$HALO_SPACE_ID/conversations>"}
      # out: {success:true}
      # note: Name the session to stop. Stopping every session at once is a much bigger act, so it must be asked for explicitly: send {"all": true}. Sending neither returns 400 rather than guessing.
+
+POST   /api/apps/<appId>/chats/clear-all                           Clear the history of all of a digital human's chats at once
+     !! DESTRUCTIVE: cannot be undone. Confirm with the user in plain language before running this.
+     curl -sX POST "$HALO_API_URL/api/apps/<appId>/chats/clear-all" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:{cleared:number,failed:number}}
+     # note: Each chat is cleared as /clear clears it and starts afresh with its next message; replies in progress stop. API sessions, team chats, memory and reminders are left alone. Nothing is posted into the chats.
+
+GET    /api/apps/<appId>/chats/clearable                           Count the conversations clearing all of a digital human's chats would clear
+     curl -s "$HALO_API_URL/api/apps/<appId>/chats/clearable" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:{total:number,im:number}}
+     # note: Its default and local chats and its IM chats that have history; API sessions and team chats are not counted.
 
 POST   /api/apps/<appId>/clear-memory                              Delete all of a digital human's memory files
      !! DESTRUCTIVE: cannot be undone. Confirm with the user in plain language before running this.

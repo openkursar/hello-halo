@@ -115,6 +115,8 @@ GET    /api/apps/<appId>/chat/messages                             [ai]       di
 GET    /api/apps/<appId>/im-chat/messages                          [ai]       digital-human,channels  Read a digital human's transcript in a bound IM chat
 POST   /api/apps/<appId>/chat/clear                                [ai]       digital-human           Clear a digital human's chat history
 POST   /api/apps/<appId>/chat/restart                              [ai]       digital-human           Restart a digital human's chat agent process (reloads system prompt and config)
+GET    /api/apps/<appId>/chats/clearable                           [ai]       digital-human           Count the conversations clearing all of a digital human's chats would clear
+POST   /api/apps/<appId>/chats/clear-all                           [ai]       digital-human           Clear the history of all of a digital human's chats at once
 POST   /api/apps/<appId>/im-chat/clear                             [ai]       digital-human,channels  Clear a digital human's chat history in a bound IM chat
 POST   /api/apps/<appId>/im-chat/stop                              [ai]       digital-human,channels  Stop a digital human's in-progress reply in a bound IM chat (keeps history)
 POST   /api/apps/<appId>/sessions/create                           [ai]       digital-human           Start a new chat thread with a digital human

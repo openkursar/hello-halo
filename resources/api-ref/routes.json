@@ -861,6 +861,16 @@
     "group": "digital-human"
   },
   {
+    "method": "GET",
+    "path": "/api/apps/:appId/chats/clearable",
+    "group": "digital-human"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/chats/clear-all",
+    "group": "digital-human"
+  },
+  {
     "method": "POST",
     "path": "/api/apps/:appId/im-chat/clear",
     "group": "digital-human"

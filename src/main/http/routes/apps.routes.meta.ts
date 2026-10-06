@@ -417,6 +417,21 @@ export const MODULE: RouteModuleMeta = {
       returns: '{success:true,data:{sessionsClosed:number}}',
       notes: 'Interrupts any in-flight turn. Conversation history is preserved.',
     },
+    'GET /api/apps/:appId/chats/clearable': {
+      expose: 'ai',
+      group: 'digital-human',
+      summary: "Count the conversations clearing all of a digital human's chats would clear",
+      returns: '{success:true,data:{total:number,im:number}}',
+      notes: 'Its default and local chats and its IM chats that have history; API sessions and team chats are not counted.',
+    },
+    'POST /api/apps/:appId/chats/clear-all': {
+      expose: 'ai',
+      group: 'digital-human',
+      summary: "Clear the history of all of a digital human's chats at once",
+      returns: '{success:true,data:{cleared:number,failed:number}}',
+      notes: 'Each chat is cleared as /clear clears it and starts afresh with its next message; replies in progress stop. API sessions, team chats, memory and reminders are left alone. Nothing is posted into the chats.',
+      impact: 'irreversible',
+    },
     'POST /api/apps/:appId/im-chat/clear': {
       expose: 'ai',
       group: ['digital-human', 'channels'],

@@ -181,6 +181,9 @@ export { getDigitalHumanMemoryStatus, consolidateDigitalHumanMemoryNow } from '.
 // Reminders a digital human set in its conversations, as its page lists them (called by IPC/HTTP)
 export { listAppReminders, cancelAppReminder } from './reminders/view'
 
+// Clearing all of a digital human's conversations at once, as /clear does each (called by IPC/HTTP)
+export { countClearableChats, clearAllChats } from './chat-reset'
+
 // Re-export IM session invalidation (called by IPC reload handler)
 export { invalidateImSessions } from '../../services/agent/session-manager'
 
