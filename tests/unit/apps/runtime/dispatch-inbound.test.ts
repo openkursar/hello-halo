@@ -34,6 +34,7 @@ vi.mock('../../../../src/main/apps/manager', () => ({
 // below narrow `calls[0][0]`, which an untyped vi.fn() types as absent).
 const sendAppChatMessageMock = vi.fn(async (_request: Record<string, unknown>) => undefined)
 const clearImSessionMock = vi.fn(async (..._args: unknown[]) => undefined)
+const abortAppChatTurnMock = vi.fn(async (..._args: unknown[]) => undefined)
 // Mutable so the buffering test can flip a conversation "busy" without a
 // real generating session; defaults to false so every other test's message
 // takes the start-of-round path rather than being buffered.
@@ -43,6 +44,7 @@ let conversationChanged: ((conversationId: string) => void) | null = null
 vi.mock('../../../../src/main/apps/runtime/app-chat', () => ({
   sendAppChatMessage: (request: Record<string, unknown>) => sendAppChatMessageMock(request),
   clearImSession: (...a: unknown[]) => clearImSessionMock(...a),
+  abortAppChatTurn: (...a: unknown[]) => abortAppChatTurnMock(...a),
   isAppChatConversationGenerating: () => conversationGenerating,
   onAppChatConversationChange: (listener: (conversationId: string) => void) => {
     conversationChanged = listener
@@ -304,16 +306,18 @@ describe('dispatchInboundMessage — the processing notice', () => {
   beforeEach(() => { vi.useFakeTimers() })
   afterEach(() => { vi.useRealTimers() })
 
-  /** A turn that answers only when told to. */
-  function slowTurn(): { answer: (text: string) => void } {
+  /** A turn that answers, or ends without a word (stopped), only when told to. */
+  function slowTurn(): { answer: (text: string) => void; end: () => void } {
     let answer: (text: string) => void = () => {}
+    let end: () => void = () => {}
     sendAppChatMessageMock.mockImplementationOnce(request => new Promise<undefined>(resolve => {
       answer = text => {
         (request.onReply as (t: string) => void)(text)
         resolve(undefined)
       }
+      end = () => resolve(undefined)
     }))
-    return { answer: text => answer(text) }
+    return { answer: text => answer(text), end: () => end() }
   }
 
   it('says the message is being worked on only once the answer has taken 5 seconds', async () => {
@@ -355,6 +359,26 @@ describe('dispatchInboundMessage — the processing notice', () => {
     await dispatched
 
     expect((reply.send as ReturnType<typeof vi.fn>).mock.calls.map(([text]) => text)).toEqual(['late answer'])
+  })
+
+  it('takes back a notice still waiting when the person stops or clears the turn', async () => {
+    // Arriving after "Generation stopped." it would read as the work starting again.
+    for (const command of ['/stop', '/clear']) {
+      const reply = makeReply(false)
+      const turn = slowTurn()
+      const dispatched = dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
+      await vi.advanceTimersByTimeAsync(2_000)
+
+      conversationGenerating = true
+      await dispatchInboundMessage(makeMsg({ body: command }), makeReply(false), 'app-1', 'inst-1')
+      conversationGenerating = false
+      // The stopped turn takes a while to wind down, past the 5 seconds.
+      await vi.advanceTimersByTimeAsync(10_000)
+      turn.end()
+      await dispatched
+
+      expect(reply.send, command).not.toHaveBeenCalledWith(NOTICE)
+    }
   })
 
   it('leaves a stream showing its status at once, as before', async () => {
@@ -1097,14 +1121,36 @@ describe('dispatchInboundMessage — /answer', () => {
     expect(sendAppChatMessageMock).not.toHaveBeenCalled()
   })
 
-  it('takes it from an owner in a group too, after the mention', async () => {
+  it('takes it from an owner in a group too, right after the mention', async () => {
     instanceCfg = { permissionEnabled: true, owners: ['u1'] }
     const reply = makeReply(false)
 
-    await dispatchInboundMessage(makeMsg({ chatType: 'group', chatId: 'g-1', body: '@Halo AI 团队 /answer 12 B' }), reply, 'app-1', 'inst-1')
+    await dispatchInboundMessage(makeMsg({ chatType: 'group', chatId: 'g-1', body: '@Halo AI 团队\u2005/answer 12 B' }), reply, 'app-1', 'inst-1')
 
     expect(answerDeps.respond).toHaveBeenCalledWith('app-1', 'q-1', expect.objectContaining({ choice: 'No' }))
     expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+  })
+
+  it('leaves a group message that only uses the word later in the sentence to the digital human', async () => {
+    instanceCfg = { permissionEnabled: true, owners: ['u1'] }
+
+    await dispatchInboundMessage(makeMsg({ chatType: 'group', chatId: 'g-1', body: '@Halo\u2005我晚点用 /answer 回复' }), makeReply(false), 'app-1', 'inst-1')
+
+    expect(answerDeps.respond).not.toHaveBeenCalled()
+    expect(sendAppChatMessageMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('logs how every answer ended, never the answer itself', async () => {
+    instanceCfg = { permissionEnabled: true, owners: ['boss'] }
+    const log = vi.spyOn(console, 'log')
+
+    await dispatchInboundMessage(makeMsg({ body: '/answer 12 our secret plan' }), makeReply(false), 'app-1', 'inst-1')
+
+    const line = log.mock.calls.map(([text]) => String(text)).find(text => text.includes('Answer command'))
+    expect(line).toContain('outcome=not_owner')
+    expect(line).toContain('sender=u1')
+    expect(line).not.toContain('secret')
+    log.mockRestore()
   })
 
   it('tells anyone else it is the owner\'s to answer, and approves nothing', async () => {

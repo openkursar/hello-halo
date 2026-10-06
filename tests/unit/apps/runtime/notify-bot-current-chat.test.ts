@@ -45,7 +45,7 @@ function session(chatId: string, chatType: 'direct' | 'group'): ImSessionRecord 
 function notifyBot() {
   const server = createNotifyToolServer({
     appId: 'dh', appName: 'Desk', runId: 'run-1',
-    imSessions: [session('ops-group', 'group'), session('boss', 'direct')],
+    imSessions: [session('ops-group', 'group'), session('boss', 'direct'), { ...session('ops-group', 'group'), instanceId: 'inst-2' }],
     usesImPush: true,
     exportGate: new FileExportGate([]),
     relay: { sessionKey: 'app-chat:dh:wecom-bot:group:ops-group', contact: 'inst-1:ops-group', isOwner: true },
@@ -62,6 +62,14 @@ describe('notify_bot and the chat a turn is answering', () => {
     expect(result.isError).toBe(true)
     expect(result.content[0].text).toContain('Write the message as your reply instead')
     expect(pushToChat).not.toHaveBeenCalled()
+  })
+
+  it('still sends to the same group through another bot', async () => {
+    // Another bot in the group is another chat: this turn's reply does not go there.
+    const result = await notifyBot()({ to: 'inst-2:ops-group', message: 'Cross-posted for the other bot' })
+
+    expect(result.isError).toBeUndefined()
+    expect(pushToChat).toHaveBeenCalledWith('ops-group', 'Cross-posted for the other bot', 'group')
   })
 
   it('still sends to any other chat', async () => {

@@ -170,11 +170,17 @@ every bot serving that digital human or fronting its team:
   `dispatch-inbound` and never reaches the model. Only an owner answers (any chat); with
   permission control off, only a direct chat does. The answer is read as a choice letter, a
   choice's words or free text, one line per decision when several were asked.
-- Every escalation carries `content.number`, unique and never reused (`nextEscalationNumber`),
-  so a late answer cannot land on a newer question. A number that names another bot's
-  question is "not found", not the one question this bot has open. With one question open
-  the number may be left out. Answered, closed and expired questions only get an
-  explanation.
+- Every escalation carries `content.number`, one past the highest any kept escalation holds
+  (`nextEscalationNumber`), so a later question never takes the number of one still kept.
+  (A number comes back only once the question holding the highest one is deleted — its
+  digital human removed, or pruned after the retention period.) A leading number is always
+  looked up as a number: one that names no question, or another bot's, is "not found" and
+  is never read as an answer to the question this bot has open. Without a number, the one
+  open question is meant. Answered, closed and expired questions only get an explanation;
+  questions asked before numbering existed are answered in Halo.
+- Each question logs one line on where it went, with its counts and, when it reached no
+  chat, why; each `/answer` logs one line with its outcome and the question it was for —
+  never the answer itself.
 
 ### 2.4 report_to_user as SDK MCP Server
 
@@ -702,7 +708,8 @@ inbound message; rides into whatever history the engine keeps).
   answers anyway, so `notify_bot` refuses that chat (`relay.contact`) and tells
   the model to write the message as its reply; a push there was a second copy.
   The IM entry says which text is the reply — what follows the turn's last tool
-  call — so finishing work comes before the answer, not after it.
+  call — so finishing work comes before the answer, not after it; so does the
+  bridge a team member serving an IM chat reads (`team/team-prompt.buildTeamImBridge`).
 - **Sender side needs nothing**: the notify_bot call + result already live in
   the calling session's history.
 - **Peek/commit, not drain**: events are removed only when the engine accepts
@@ -1386,9 +1393,10 @@ caches, ...) a full recreate would wipe.
 
 Generic code hands a reply, a push or a stream's final answer to the channel
 whole (`ReplyHandle.send`, `StreamingHandle.finish`, `pushToChat` take any
-length). It used to cut every IM reply to 4000 characters first, silently: the
-rest of a long answer was lost on every channel, while WeCom's own `(i/n)`
-splitting never triggered.
+length) — a run's result pushed to the chats that receive results
+(`im-auto-sync`) included. It used to cut every IM reply to 4000 characters
+first, silently: the rest of a long answer was lost on every channel, while
+WeCom's own `(i/n)` splitting never triggered.
 
 Each provider knows its platform's cap and states it once, in the unit that
 platform counts — WeCom 20000 bytes (its stream frames, markdown replies and
@@ -1425,9 +1433,11 @@ structured mention list; WeCom names nobody, and where a bot name ends cannot
 be told from the text, since names may contain spaces.) Commands are
 recognized in `dispatch-inbound.ts`: exact in a direct chat; in a group also
 when the command ends a message that starts with a mention. `/answer` carries
-its answer after it, so it starts a direct message, or follows the mention in a
-group (`im-escalation.parseAnswerCommand`, §2.3). There is no "bot name"
-setting, and none is needed.
+its answer after it, so it starts a direct message, or in a group comes right
+after the mentions the message starts with — a WeCom mention ends with U+2005,
+one typed by hand at its first space — and nowhere later in the sentence
+(`im-escalation.parseAnswerCommand`, §2.3). There is no "bot name" setting, and
+none is needed.
 
 ### 4.4 The processing notice
 
@@ -1437,7 +1447,9 @@ reply) has nothing to show until it is done, so `dispatch-inbound` sends
 "✅ 已收到，正在处理…" first — but only once the answer has taken
 `PROCESSING_NOTICE_DELAY_MS` (5 s): a quick answer needs nothing before it, and a
 notice on every message is noise in a group. The timer is cleared by the reply,
-by a failure and when the dispatch ends. Owners can turn the notice off per
+by a failure and when the dispatch ends, and taken back by `/stop` or `/clear`
+in the same chat — a stopped turn can take a while to wind down, and a notice
+after "Generation stopped." reads as the work starting again. Owners can turn the notice off per
 instance (`ImChannelInstanceConfig.processingNotice`, on unless `false`; the
 settings card greys it out while streaming is on).
 

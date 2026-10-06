@@ -137,6 +137,42 @@ describe('asking over IM', () => {
     expect(offline).not.toHaveBeenCalled()
   })
 
+  it('logs where each question went, and why when it reached no chat', () => {
+    // "IM never got the question" has to be answerable from the log alone.
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      bot('i1', { appId: 'dh', permissionEnabled: true, owners: ['boss'] })
+      chat('i1', 'direct', 'stranger', { contactId: 'stranger' })
+      deliverEscalationToIm(question({}), 'Release Bot')
+      chat('i1', 'direct', 'boss', { contactId: 'boss' })
+      deliverEscalationToIm(question({}), 'Release Bot')
+
+      const lines = log.mock.calls.map(([line]) => String(line)).filter(line => line.includes('Question entry-1'))
+      expect(lines).toHaveLength(2)
+      expect(lines[0]).toContain('reached no IM chat (no owner direct chat known to its bots, and no group receives results)')
+      expect(lines[0]).toContain('bots=1, offline=0, ownerChats=0')
+      expect(lines[1]).toContain('sent to IM: bots=1, offline=0, ownerChats=1, groups=0, asked=1')
+    } finally {
+      log.mockRestore()
+    }
+  })
+
+  it('logs a question no bot serves, and one whose bots are offline', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      deliverEscalationToIm(question({}), 'Release Bot')
+      const offline = bot('i1', { appId: 'dh', permissionEnabled: true, owners: ['boss'] })
+      instances.set('i1', { isConnected: () => false, pushToChat: offline })
+      deliverEscalationToIm(question({}), 'Release Bot')
+
+      const lines = log.mock.calls.map(([line]) => String(line)).filter(line => line.includes('Question entry-1'))
+      expect(lines[0]).toContain('no enabled IM bot serves this digital human')
+      expect(lines[1]).toContain('its IM bots are not connected')
+    } finally {
+      log.mockRestore()
+    }
+  })
+
   it('lists several decisions, and asks for one answer per line', () => {
     const push = bot('i1', { appId: 'dh', permissionEnabled: true, owners: ['boss'] })
     chat('i1', 'direct', 'boss', { contactId: 'boss' })
@@ -162,16 +198,29 @@ describe('what counts as an answer command', () => {
     expect(parseAnswerCommand('/answer 7\nA\nB', 'direct')).toBe('7\nA\nB')
   })
 
-  it('in a group, a message to the bot that carries it', () => {
-    expect(parseAnswerCommand('@Halo AI 团队 /answer 7 A', 'group')).toBe('7 A')
+  it('in a group, right after the mentions the message starts with', () => {
+    // WeCom ends a mention with U+2005, so a bot name may hold spaces.
+    expect(parseAnswerCommand('@Halo AI 团队\u2005/answer 7 A', 'group')).toBe('7 A')
+    expect(parseAnswerCommand('@Halo\u2005@张三\u2005 /answer 7 A', 'group')).toBe('7 A')
+    expect(parseAnswerCommand('@Halo /answer 7 A', 'group')).toBe('7 A')
+    expect(parseAnswerCommand('@Halo @张三 /answer 7 A', 'group')).toBe('7 A')
+    // The bot's own mention removed by the platform (Feishu).
     expect(parseAnswerCommand('/answer 7 A', 'group')).toBe('7 A')
   })
 
-  it('never an ordinary message that mentions it', () => {
+  it('never an ordinary message that mentions it, wherever it sits', () => {
     expect(parseAnswerCommand('please /answer 7', 'direct')).toBeNull()
     expect(parseAnswerCommand('hello /answer 7', 'group')).toBeNull()
+    expect(parseAnswerCommand('@bot 我晚点用 /answer 回复', 'group')).toBeNull()
+    expect(parseAnswerCommand('@Halo\u2005我想问 /answer 7 怎么用', 'group')).toBeNull()
     expect(parseAnswerCommand('/answers 7', 'direct')).toBeNull()
     expect(parseAnswerCommand('the answer is 7', 'direct')).toBeNull()
+  })
+
+  it('reads a mention typed by hand as ending at its first space', () => {
+    // A real WeCom mention ends with U+2005; without it a name with spaces
+    // cannot be told from the words after it, so nothing is taken as an answer.
+    expect(parseAnswerCommand('@Halo AI 团队 /answer 7 A', 'group')).toBeNull()
   })
 })
 
@@ -220,7 +269,7 @@ describe('answering from IM', () => {
   it('takes an owner\'s answer by number and letter, the way Halo takes an answer, and the work goes on', async () => {
     const number = ask('a')
 
-    const reply = await answerEscalationFromIm(`${number} A`, owner, deps)
+    const { reply } = await answerEscalationFromIm(`${number} A`, owner, deps)
 
     expect(reply).toBe(`已收到，任务继续。（编号 ${number} 的问题）`)
     expect(store.getEntry('a')?.userResponse?.choice).toBe('Yes')
@@ -239,7 +288,7 @@ describe('answering from IM', () => {
     const one = ask('a')
     const two = ask('b')
 
-    const reply = await answerEscalationFromIm('A', owner, deps)
+    const { reply } = await answerEscalationFromIm('A', owner, deps)
 
     expect(reply).toContain('有 2 个问题在等你回答')
     expect(reply).toContain(`${one}、${two}`)
@@ -249,34 +298,81 @@ describe('answering from IM', () => {
   it('answers only for an owner, and in a group only where there is an owner list', async () => {
     ask('a')
 
-    expect(await answerEscalationFromIm('A', { ...owner, senderId: 'customer' }, deps)).toBe('只有主人可以回答这个问题。')
-    expect(await answerEscalationFromIm('A', { ...owner, chatType: 'group', permissionEnabled: false, owners: [] }, deps))
+    expect((await answerEscalationFromIm('A', { ...owner, senderId: 'customer' }, deps)).reply).toBe('只有主人可以回答这个问题。')
+    expect((await answerEscalationFromIm('A', { ...owner, chatType: 'group', permissionEnabled: false, owners: [] }, deps)).reply)
       .toBe('请在与机器人的私聊里回答。')
     expect(deps.respond).not.toHaveBeenCalled()
     // An owner in a group the bot serves is still the owner.
-    expect(await answerEscalationFromIm('A', { ...owner, chatType: 'group' }, deps)).toContain('已收到')
+    expect((await answerEscalationFromIm('A', { ...owner, chatType: 'group' }, deps)).reply).toContain('已收到')
   })
 
   it('says when a question was already answered, closed or expired, and changes nothing', async () => {
     const answered = ask('a')
     await answerEscalationFromIm(`${answered} A`, owner, deps)
-    expect(await answerEscalationFromIm(`${answered} B`, owner, deps)).toBe(`编号 ${answered} 的问题已经回答过了。`)
+    expect((await answerEscalationFromIm(`${answered} B`, owner, deps)).reply).toBe(`编号 ${answered} 的问题已经回答过了。`)
     expect(store.getEntry('a')?.userResponse?.choice).toBe('Yes')
 
     const expired = ask('b', { deadlineAt: Date.now() - 1000 })
-    expect(await answerEscalationFromIm(`${expired} A`, owner, deps)).toBe(`编号 ${expired} 的问题已过期。`)
+    expect((await answerEscalationFromIm(`${expired} A`, owner, deps)).reply).toBe(`编号 ${expired} 的问题已过期。`)
 
     const closed = ask('c')
     store.closeRun('c')
-    expect(await answerEscalationFromIm(`${closed} A`, owner, deps)).toBe(`编号 ${closed} 的问题已经关闭，不需要再回答。`)
+    expect((await answerEscalationFromIm(`${closed} A`, owner, deps)).reply).toBe(`编号 ${closed} 的问题已经关闭，不需要再回答。`)
     expect(deps.respond).toHaveBeenCalledTimes(1)
+  })
+
+  it('never reads a number it cannot find as an answer to the one open question', async () => {
+    // A mistyped number, or a question since removed: "99 A" is no answer to #N.
+    const open = ask('a')
+
+    const result = await answerEscalationFromIm('99 A', owner, deps)
+    const bare = await answerEscalationFromIm('99', owner, deps)
+
+    expect(result).toMatchObject({ outcome: 'no_such_number' })
+    expect(result.reply).toContain('没有找到编号 99 的问题')
+    expect(result.reply).toContain(`/answer ${open} 你的答案`)
+    expect(bare.outcome).toBe('no_such_number')
+    expect(deps.respond).not.toHaveBeenCalled()
+    expect(store.getEntry('a')?.userResponse).toBeUndefined()
+  })
+
+  it('tells the outcome of every answer for the log, and the question it was for', async () => {
+    const number = ask('a')
+
+    expect(await answerEscalationFromIm(`${number} A`, { ...owner, senderId: 'customer' }, deps)).toMatchObject({ outcome: 'not_owner' })
+    expect(await answerEscalationFromIm(`${number} A`, owner, deps)).toMatchObject({ outcome: 'answered', entryId: 'a' })
+    expect(await answerEscalationFromIm(`${number} B`, owner, deps)).toMatchObject({ outcome: 'already_answered', entryId: 'a' })
+  })
+
+  it('says a failed submission in words the chat can use, and keeps the runtime\'s words for the log', async () => {
+    const number = ask('a')
+    deps.respond = vi.fn(async () => { throw new Error('This decision has already been answered differently') })
+
+    const result = await answerEscalationFromIm(`${number} A`, owner, deps)
+
+    expect(result.outcome).toBe('submit_failed')
+    expect(result.reply).toContain('请在 Halo 里查看')
+    expect(result.reply).not.toContain('decision')
+    expect(result.error).toBe('This decision has already been answered differently')
+  })
+
+  it('sends questions asked before numbering existed to Halo', async () => {
+    for (const id of ['old-1', 'old-2']) {
+      store.insertRun({ runId: id, appId: 'dh', sessionKey: `session-${id}`, status: 'waiting_user', triggerType: 'manual', startedAt: Date.now() })
+      store.insertEntry({ id, appId: 'dh', runId: id, type: 'escalation', ts: Date.now(), content: { summary: 'Old question' } })
+    }
+
+    const result = await answerEscalationFromIm('A', owner, deps)
+
+    expect(result.outcome).toBe('number_needed')
+    expect(result.reply).toContain('另有 2 个较早的问题没有编号，请在 Halo 里回答')
   })
 
   it('never lands an answer on another question: another digital human\'s number is not found here', async () => {
     const elsewhere = ask('theirs', {}, 'other')
     ask('mine')
 
-    const reply = await answerEscalationFromIm(`${elsewhere} A`, owner, deps)
+    const { reply } = await answerEscalationFromIm(`${elsewhere} A`, owner, deps)
 
     expect(reply).toContain(`没有找到编号 ${elsewhere} 的问题`)
     expect(deps.respond).not.toHaveBeenCalled()
@@ -285,8 +381,8 @@ describe('answering from IM', () => {
   it('reads one answer per line for several decisions, and says how when the lines do not match', async () => {
     const number = ask('a', { choices: undefined, questions: [{ question: 'Ship tonight?', choices: ['Yes', 'No'] }, { question: 'Who signs off?' }] })
 
-    expect(await answerEscalationFromIm(`${number}\nB`, owner, deps)).toContain('这个问题包含 2 项')
-    expect(await answerEscalationFromIm(`${number}\nB\nLin`, owner, deps)).toContain('已收到')
+    expect((await answerEscalationFromIm(`${number}\nB`, owner, deps)).reply).toContain('这个问题包含 2 项')
+    expect((await answerEscalationFromIm(`${number}\nB\nLin`, owner, deps)).reply).toContain('已收到')
     expect(store.getEntry('a')?.userResponse?.answers).toEqual([{ choice: 'No' }, { text: 'Lin' }])
   })
 

@@ -83,6 +83,13 @@ const PROCESSING_ACK = '✅ 已收到，正在处理…'
 const PROCESSING_NOTICE_DELAY_MS = 5_000
 
 /**
+ * The processing notice each conversation has waiting, so a stop or a clear can
+ * take it back: arriving after "Generation stopped." it would read as the work
+ * starting again.
+ */
+const pendingProcessingNotices = new Map<string, () => void>()
+
+/**
  * Commands that abort the current generation.
  * Slash-prefixed to avoid false triggers from normal conversation.
  */
@@ -743,6 +750,7 @@ export async function dispatchInboundMessage(
 
   // ── Stop command: abort generation, silently drop buffered supplements ──
   if (isStopCommand(msg.body, msg.chatType)) {
+    pendingProcessingNotices.get(conversationId)?.()
     const dropped = clearSupplementBuffer(conversationId)
     const isActive = isAppChatConversationGenerating(conversationId)
     if (isActive) {
@@ -767,6 +775,7 @@ export async function dispatchInboundMessage(
 
   // ── Clear command: reset context, silently drop buffered supplements ──
   if (isClearCommand(msg.body, msg.chatType)) {
+    pendingProcessingNotices.get(conversationId)?.()
     const dropped = clearSupplementBuffer(conversationId)
     console.log(
       `${LOG_TAG} Clear command received: channel=${msg.channel}, chatId=${msg.chatId}, ` +
@@ -800,7 +809,7 @@ export async function dispatchInboundMessage(
   const answerArgs = parseAnswerCommand(msg.body, msg.chatType)
   if (answerArgs !== null) {
     const deps = await runtimeAnswerDeps()
-    const answerReply = deps
+    const result = deps
       ? await answerEscalationFromIm(answerArgs, {
           appId: app.id,
           ...(instanceCfg?.teamId ? { teamId: instanceCfg.teamId } : {}),
@@ -809,9 +818,16 @@ export async function dispatchInboundMessage(
           permissionEnabled: instanceCfg?.permissionEnabled ?? false,
           owners: instanceCfg?.owners ?? [],
         }, deps)
-      : '现在无法处理回答，请稍后再试。'
-    console.log(`${LOG_TAG} Answer command: channel=${msg.channel}, chatId=${msg.chatId}, session=${conversationId}`)
-    await reply.send(answerReply).catch(() => {})
+      : { reply: '现在无法处理回答，请稍后再试。', outcome: 'runtime_unavailable' as const }
+    // The outcome, never the answer: whether an owner's answer was taken or
+    // refused, and why, has to be readable from the log alone.
+    console.log(
+      `${LOG_TAG} Answer command: instanceId=${instanceId}, chatType=${msg.chatType}, chatId=${msg.chatId}, ` +
+      `sender=${msg.from}, outcome=${result.outcome}` +
+      `${'entryId' in result && result.entryId ? `, entry=${result.entryId}` : ''}` +
+      `${'error' in result && result.error ? `, error="${result.error}"` : ''}`
+    )
+    await reply.send(result.reply).catch(() => {})
     return
   }
 
@@ -1011,7 +1027,11 @@ export async function dispatchInboundMessage(
   } else if (instanceCfg?.processingNotice !== false) {
     processingNotice = setTimeout(() => { reply.send(PROCESSING_ACK).catch(() => {}) }, PROCESSING_NOTICE_DELAY_MS)
   }
-  const settleProcessingNotice = (): void => clearTimeout(processingNotice)
+  const settleProcessingNotice = (): void => {
+    clearTimeout(processingNotice)
+    if (pendingProcessingNotices.get(conversationId) === settleProcessingNotice) pendingProcessingNotices.delete(conversationId)
+  }
+  if (processingNotice) pendingProcessingNotices.set(conversationId, settleProcessingNotice)
 
   try {
     await sendAppChatMessage({
