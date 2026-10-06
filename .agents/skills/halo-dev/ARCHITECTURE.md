@@ -754,6 +754,23 @@ Spaces have two distinct paths:
 
 For default spaces (no custom path), `workingDir` is undefined and `path` serves both purposes.
 
+Changing `workingDir` (Edit Workspace, or the chat's "change working
+directory" when a turn cannot start because the folder is gone) goes through
+`controllers/space.controller.ts` `changeSpaceWorkingDir`, which only re-points:
+the engine's stored sessions are copied to the new folder's project-dir name
+first (`services/agent/stored-session.ts`, newer copy wins), then the record
+(meta.json before the index, so a failed write changes nothing), the digital
+humans' pinned environments (apps/runtime DESIGN §2.28), resident sessions and
+the file panel and file triggers (`rerootSpaceWatcher`, `rerootSpaceCache`).
+What is written to the old folder after the copy would be lost to the new one,
+so the change is refused while anything in the space runs, and again if any
+session of the space was asked for during the copy (even one finished by
+then); after it, no session of the space starts in a folder it left (apps/runtime
+DESIGN §2.28). One change per space at a time. Nothing in either folder is
+moved, created or deleted; folders inside Halo's and the engine's own data
+cannot be chosen, except the space's own data folder (where a space without a
+project folder works), and the default space's folder cannot be changed.
+
 Notes:
 - **Legacy custom-path spaces**: Created before centralized storage, `path` points to the project directory with `.halo/` inside it. These continue to work without migration.
 - **Lazy-loaded conversations**: `conversation.service.ts` uses `index.json` for fast listing; full conversation data is loaded only when entering a conversation.

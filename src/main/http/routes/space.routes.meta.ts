@@ -70,6 +70,16 @@ export const MODULE: RouteModuleMeta = {
       impact: 'reversible',
     },
 
+    'PUT /api/spaces/:spaceId/working-dir': {
+      expose: 'ai',
+      group: 'workspace',
+      summary: 'Point a space at another working directory',
+      body: '{"workingDir":"/absolute/path/to/existing/folder"}',
+      returns: '{"success":true,"data":{...updated space}} | {"success":false,"error":"That folder does not exist."}',
+      impact: 'reversible',
+      notes: 'Confirm with the user first, saying which space’s folder you are changing: its digital humans work in the new folder too, and the files they may send come from there. The folder must already exist, given by its full path, outside Halo’s and the engine’s own data folders; nothing is moved, created or deleted. Conversations keep their history. Refused while a reply, run or background task is going in the space, or while another change of it is under way. The default space cannot be changed.',
+    },
+
     'GET /api/spaces/:spaceId/preferences': {
       expose: 'ai',
       group: 'workspace',

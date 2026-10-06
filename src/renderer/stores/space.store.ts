@@ -44,6 +44,8 @@ interface SpaceState {
   selectDefaultSpace: () => Promise<Space | null>
   createSpace: (input: CreateSpaceInput) => Promise<Space | null>
   updateSpace: (spaceId: string, updates: { name?: string; icon?: string; color?: string }) => Promise<Space | null>
+  /** Point the space at another folder; resolves to the reason it could not, or null. */
+  setSpaceWorkingDir: (spaceId: string, workingDir: string) => Promise<string | null>
   deleteSpace: (spaceId: string) => Promise<boolean>
   /** Remove an unreachable space's registry entry — does not touch disk. */
   forgetSpace: (spaceId: string) => Promise<boolean>
@@ -182,6 +184,22 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
       console.error('Failed to update space:', error)
       set({ error: 'Failed to update space' })
       return null
+    }
+  },
+
+  setSpaceWorkingDir: async (spaceId, workingDir) => {
+    try {
+      const response = await api.setSpaceWorkingDir(spaceId, workingDir)
+      if (!response.success || !response.data) return response.error || 'Failed to update space'
+      const updatedSpace = response.data as Space
+      set((state) => ({
+        spaces: state.spaces.map((s) => s.id === spaceId ? updatedSpace : s),
+        currentSpace: state.currentSpace?.id === spaceId ? updatedSpace : state.currentSpace,
+      }))
+      return null
+    } catch (error) {
+      console.error('Failed to change the working directory:', error)
+      return (error as Error).message || 'Failed to update space'
     }
   },
 

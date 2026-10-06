@@ -4,6 +4,7 @@ import type { AppManagerService, InstalledApp } from '../manager'
 import type { ExecutionEnvironment, MissingConnection } from '../../../shared/apps/app-types'
 import { BUILTIN_MCP_SERVER_IDS } from '../../../shared/apps/builtin-mcp'
 import { getSpace, getSpaceDir } from '../../services/space.service'
+import { WorkingDirectoryUnavailableError } from '../../services/agent'
 import type { ActivityStore } from './store'
 
 /** Capture paths once; resuming a task must not reinterpret its default space. */
@@ -115,16 +116,28 @@ export function legacySessionEnvironmentKey(appId: string, runId: string): strin
   return `legacy-file:${appId}:${runId}`
 }
 
-/** An unavailable original environment blocks continuation instead of moving it. */
+/**
+ * An unavailable original environment blocks continuation instead of moving it.
+ * A missing working directory is told apart: the person can point the space at
+ * another folder from the chat, whereas history and memory must be restored.
+ */
 export function validateExecutionEnvironment(environment: ExecutionEnvironment): void {
   if (!environment.spaceId || !getSpace(environment.spaceId)) {
     throw new Error('The original work space is unavailable. Restore it before continuing.')
   }
-  for (const path of [environment.workDir, environment.spacePath, environment.memoryDir]) {
-    if (!path || !existsSync(path) || !statSync(path).isDirectory()) {
-      throw new Error('The original working directory, history or memory is unavailable. Restore it before continuing.')
+  if (!isDirectory(environment.workDir)) {
+    console.warn(`[Runtime] Working directory does not exist: "${environment.workDir}" (space ${environment.spaceId})`)
+    throw new WorkingDirectoryUnavailableError(environment.workDir, environment.spaceId)
+  }
+  for (const path of [environment.spacePath, environment.memoryDir]) {
+    if (!isDirectory(path)) {
+      throw new Error('The original history or memory is unavailable. Restore it before continuing.')
     }
   }
+}
+
+function isDirectory(path: string | undefined): boolean {
+  return !!path && existsSync(path) && statSync(path).isDirectory()
 }
 
 export function getLegacyAppDataPath(app: InstalledApp): string | undefined {

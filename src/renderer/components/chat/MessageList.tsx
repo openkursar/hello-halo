@@ -26,7 +26,8 @@ import { useTerminalToolCalls, type TerminalToolCall } from './useTerminalToolCa
 import { CompactNotice } from './CompactNotice'
 import { InterruptedBubble } from './InterruptedBubble'
 import { useStickToBottom, useHistoryWindow, transcriptRowClass, estimatedRowHeight, revealRowInView, nextTranscriptRows, type ScrollMotion, type TranscriptRows } from './transcript'
-import type { Message, Thought, CompactInfo, AgentErrorType, PendingQuestion } from '../../types'
+import type { Message, Thought, CompactInfo, AgentErrorType, PendingQuestion, WorkDirIssue } from '../../types'
+import { WorkingDirUnavailableNotice } from './WorkingDirUnavailableNotice'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { useChatStore } from '../../stores/chat.store'
 import { useAppsStore } from '../../stores/apps.store'
@@ -51,6 +52,8 @@ export interface MessageListProps {
   compactInfo?: CompactInfo | null
   error?: string | null  // Error message to display when generation fails
   errorType?: AgentErrorType | null  // Special error type for custom UI handling
+  /** The folder a turn could not start in; offers to change it where the surface passes it. */
+  workDirIssue?: WorkDirIssue | null
   onContinue?: () => void  // Callback to continue after interrupt (for InterruptedBubble)
   /** Stops the running turn; offered on the live retry notice. */
   onStop?: () => void
@@ -183,6 +186,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   compactInfo = null,
   error = null,
   errorType = null,
+  workDirIssue = null,
   onContinue,
   onStop,
   isCompact = false,
@@ -355,7 +359,14 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
               <InterruptedBubble error={error} onContinue={onContinue} />
             </div>
           )}
-          {!isGenerating && error && errorType !== 'interrupted' && (
+          {!isGenerating && error && errorType === 'working_dir_unavailable' && workDirIssue && (
+            <div className="flex justify-start animate-fade-in pb-4">
+              <div className="w-[85%]">
+                <WorkingDirUnavailableNotice issue={workDirIssue} />
+              </div>
+            </div>
+          )}
+          {!isGenerating && error && errorType !== 'interrupted' && !(errorType === 'working_dir_unavailable' && workDirIssue) && (
             <div className="flex justify-start animate-fade-in pb-4">
               <div className="w-[85%]">
                 <div className="rounded-2xl px-4 py-3 bg-destructive/10 border border-destructive/30">

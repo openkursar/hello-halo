@@ -14,9 +14,17 @@ import {
   updateSpace as serviceUpdateSpace,
   reorderSpaces as serviceReorderSpaces,
   getSpacePreferences as serviceGetSpacePreferences,
-  updateSpacePreferences as serviceUpdateSpacePreferences
+  updateSpacePreferences as serviceUpdateSpacePreferences,
+  getSpaceDir,
+  setSpaceWorkingDir,
+  workingDirChangeProblem,
 } from '../services/space.service'
 import { getSpaceMemoryStatus as serviceGetSpaceMemoryStatus, consolidateSpaceMemoryNow } from '../services/memory-consolidation'
+import { copyStoredSessions, countSessionAcquisitions, invalidateSessionsForSpace, isSpaceBusy, retireWorkingDirs } from '../services/agent'
+import { rerootSpaceWatcher } from '../services/watcher-host.service'
+import { rerootSpaceCache } from '../services/artifact-cache.service'
+import { listPinnedWorkDirs, repointSpaceEnvironments } from '../apps/runtime'
+import { resolve } from 'path'
 import type { MemorySettings } from '../../shared/types/memory'
 
 export interface ControllerResponse<T = unknown> {
@@ -127,6 +135,68 @@ export function updateSpace(
   } catch (error: unknown) {
     const err = error as Error
     return { success: false, error: err.message }
+  }
+}
+
+/** Spaces whose working directory is being changed right now. */
+const changingWorkingDir = new Set<string>()
+
+const SPACE_BUSY = 'A reply, run or background task is still going in this workspace. Change the folder once it has finished, or stop it first.'
+
+const STARTED_WHILE_COPYING = 'A reply or run started in this workspace while its conversations were being copied. Try again.'
+
+/**
+ * Point a space at another working directory — its folder was moved, deleted,
+ * or chosen wrongly. Nothing may be written to the old folder once its
+ * sessions are copied, or the next turn in the new folder would miss it:
+ *   1. refused while anything runs in the space;
+ *   2. the engine's stored sessions are copied to the new folder's name, so
+ *      conversations keep their memory — before anything points there;
+ *   3. refused if any session of the space was asked for meanwhile, even one
+ *      that has finished again; from this check to the end nothing awaits;
+ *   4. the space record, then every environment its digital humans pinned;
+ *      from then on no session starts in the folders it left, so a turn that
+ *      read the old folder just before is refused instead of run there;
+ *   5. resident sessions rebuild; the file panel and file triggers watch the
+ *      new folder.
+ * Nothing in either folder is moved, created or deleted, and Halo's own data
+ * for the space stays where it is. The default space keeps its folder.
+ */
+export async function changeSpaceWorkingDir(spaceId: string, workingDir: unknown): Promise<ControllerResponse> {
+  if (typeof workingDir !== 'string') return { success: false, error: 'Choose a folder by its full path.' }
+  const problem = workingDirChangeProblem(spaceId, workingDir.trim())
+  if (problem) return { success: false, error: problem }
+  if (changingWorkingDir.has(spaceId)) return { success: false, error: 'This workspace’s folder is already being changed.' }
+  if (isSpaceBusy(spaceId)) return { success: false, error: SPACE_BUSY }
+  const acquisitions = countSessionAcquisitions(spaceId)
+
+  const target = resolve(workingDir.trim())
+  changingWorkingDir.add(spaceId)
+  try {
+    const previous = new Set([getSpaceDir(spaceId), ...listPinnedWorkDirs(spaceId)])
+    previous.delete(target)
+    let carried = 0
+    for (const dir of previous) carried += await copyStoredSessions(dir, target)
+    if (isSpaceBusy(spaceId)) return { success: false, error: SPACE_BUSY }
+    if (countSessionAcquisitions(spaceId) !== acquisitions) return { success: false, error: STARTED_WHILE_COPYING }
+
+    const updated = setSpaceWorkingDir(spaceId, target)
+    if (!updated) return { success: false, error: 'Space not found' }
+    const repointed = repointSpaceEnvironments(spaceId, target)
+    retireWorkingDirs(spaceId, previous, target)
+    invalidateSessionsForSpace(spaceId, 'working directory change')
+    rerootSpaceWatcher(spaceId, target)
+    rerootSpaceCache(spaceId, target)
+    console.log(
+      `[SpaceController] ${spaceId} works in ${target} now (was ${[...previous].join(', ') || 'the same'}): ` +
+      `${carried} stored session file(s) carried over, ${repointed} pinned environment(s) moved`
+    )
+    return { success: true, data: updated }
+  } catch (error: unknown) {
+    console.error(`[SpaceController] Changing the working directory of ${spaceId} failed:`, error)
+    return { success: false, error: (error as Error).message }
+  } finally {
+    changingWorkingDir.delete(spaceId)
   }
 }
 

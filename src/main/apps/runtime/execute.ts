@@ -52,7 +52,7 @@ import {
   explainEngineError,
   type V2SessionLease,
 } from '../../services/agent'
-import { applyReasoningEffort } from '../../services/agent/reasoning-effort'
+import { applyReasoningEffort, pickReasoningEffort } from '../../services/agent/reasoning-effort'
 import { admitTransientSession } from './session-budget'
 import { createAIBrowserMcpServer, createScopedBrowserContext } from '../../services/ai-browser'
 import { createTerminalMcpServer, getGlobalTerminalContext, isTerminalAvailable } from '../../services/ai-terminal'
@@ -322,7 +322,10 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     const credentials = app.userOverrides?.modelSourceId
       ? await getApiCredentialsForSource(app.userOverrides.modelSourceId, app.userOverrides.modelId)
       : await getApiCredentials()
-    const resolvedCreds = await resolveCredentialsForSdk(credentials)
+    // The digital human's own thinking level, as in its chats; unset, the
+    // model's configured effort decides.
+    const pickedEffort = pickReasoningEffort(app.userOverrides?.chatReasoningEffort)
+    const resolvedCreds = await resolveCredentialsForSdk(credentials, pickedEffort)
     const electronPath = getHeadlessElectronPath()
     const workDir = environment.workDir
 
@@ -569,7 +572,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     // back by polling (see DESIGN.md §2.10), which is enough to watch a run's steps.
     sdkOptions.includePartialMessages = false
     // Enable extended thinking for automation runs (same as interactive chat)
-    applyReasoningEffort(sdkOptions, true, resolvedCreds.capabilities)
+    applyReasoningEffort(sdkOptions, true, resolvedCreds.capabilities, pickedEffort)
 
     const mcpServerNames = sdkOptions.mcpServers ? Object.keys(sdkOptions.mcpServers) : []
     console.log(

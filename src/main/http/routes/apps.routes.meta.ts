@@ -263,7 +263,7 @@ export const MODULE: RouteModuleMeta = {
       summary: 'Merge-patch per-installation overrides (notification level, model)',
       body: '{"notificationLevel": "important"}',
       returns: '{success:true}',
-      notes: 'Other fields you can set the same way: modelSourceId, modelId, spaceMemoryAccess (true lets the digital human read its space\'s memory topics), chatReasoningEffort (off|minimal|low|medium|high|xhigh|max — how hard it thinks in chat; IM replies and scheduled runs keep the model\'s configured effort), memory ({enabled, autoConsolidate, cadence: "diligent"|"balanced"|"economical"} — sent as a whole object), disabledTools (MCP servers only: tool names, as the server lists them, to leave out of every session — the whole list each time; [] or null turns them all back on). JSON Merge Patch semantics: send null to clear a field (e.g. {"modelSourceId":null} to fall back to the global model). The run schedule is NOT set here — use POST /:appId/frequency.',
+      notes: 'Other fields you can set the same way: modelSourceId, modelId, spaceMemoryAccess (true lets the digital human read its space\'s memory topics), chatReasoningEffort (off|minimal|low|medium|high|xhigh|max — how hard it thinks everywhere: its chats, IM replies and scheduled or manual runs; unset, the model\'s configured effort applies), memory ({enabled, autoConsolidate, cadence: "diligent"|"balanced"|"economical"} — sent as a whole object), disabledTools (MCP servers only: tool names, as the server lists them, to leave out of every session — the whole list each time; [] or null turns them all back on). JSON Merge Patch semantics: send null to clear a field (e.g. {"modelSourceId":null} to fall back to the global model). The run schedule is NOT set here — use POST /:appId/frequency.',
       impact: 'reversible',
     },
     'POST /api/apps/:appId/frequency': {
@@ -417,6 +417,21 @@ export const MODULE: RouteModuleMeta = {
       summary: "Restart a digital human's chat agent process (reloads system prompt and config)",
       returns: '{success:true,data:{sessionsClosed:number}}',
       notes: 'Interrupts any in-flight turn. Conversation history is preserved.',
+    },
+    'GET /api/apps/:appId/chats/clearable': {
+      expose: 'ai',
+      group: 'digital-human',
+      summary: "Count the conversations clearing all of a digital human's chats would clear",
+      returns: '{success:true,data:{total:number,im:number,teamIm:number}}',
+      notes: 'total: its default and local chats and its IM chats that have history (im of them in IM); API sessions and team chats are not counted. teamIm: IM chats with history that a team answers — a clear-all leaves them alone; /clear in each clears it.',
+    },
+    'POST /api/apps/:appId/chats/clear-all': {
+      expose: 'ai',
+      group: 'digital-human',
+      summary: "Clear the history of all of a digital human's chats at once",
+      returns: '{success:true,data:{cleared:number,failed:number}}',
+      notes: 'Each chat is cleared as /clear clears it and starts afresh with its next message; replies in progress stop. API sessions, team chats, memory and reminders are left alone. Nothing is posted into the chats.',
+      impact: 'irreversible',
     },
     'POST /api/apps/:appId/im-chat/clear': {
       expose: 'ai',

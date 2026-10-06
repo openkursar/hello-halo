@@ -39,6 +39,7 @@ import { getDeviceIdentity } from '../../foundation/device-identity'
 import { applyOfficeRuntimeEnv } from '../office-runtime'
 import { applyProxyEnv } from '../proxy-policy'
 import { buildRequestIdentity } from './request-identity-factory'
+import { WorkingDirectoryUnavailableError } from './working-dir'
 import { createMemoryWriteHooks, type MemoryWriteGuardConfig } from '../../platform/memory'
 import { buildModelPricingTable } from '../../../shared/constants/model-pricing'
 
@@ -968,13 +969,11 @@ function shellQuote(value: string): string {
 // when the real culprit is a missing cwd — the classic Node cause (#170). Log the
 // triplet and surface a bad cwd with its true cause. Don't existsSync cliPath: it
 // lives in app.asar (served from app.asar.unpacked), so existsSync false-negatives.
-function validateSpawnInputs(electronPath: string, cliPath: string, workDir: string): void {
+function validateSpawnInputs(electronPath: string, cliPath: string, workDir: string, spaceId: string): void {
   console.log(`[SDK Config] spawn inputs: command="${electronPath}", cli="${cliPath}", cwd="${workDir}"`)
   if (!existsSync(workDir)) {
-    throw new Error(
-      `[SDK Config] Working directory does not exist: "${workDir}". ` +
-      `Claude Code cannot be spawned with a missing cwd; verify the space's working directory.`
-    )
+    console.warn(`[SDK Config] Working directory does not exist: "${workDir}" (space ${spaceId}); the engine cannot be spawned there`)
+    throw new WorkingDirectoryUnavailableError(workDir, spaceId)
   }
 }
 
@@ -1059,7 +1058,7 @@ async function assembleSdkOptions(
   })
 
   const cliPath = resolveClaudeCodeCliPath()
-  validateSpawnInputs(electronPath, cliPath, workDir)
+  validateSpawnInputs(electronPath, cliPath, workDir, spaceId)
 
   // Build base options
   const sdkOptions: Record<string, any> = {

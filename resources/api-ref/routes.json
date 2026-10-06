@@ -110,6 +110,11 @@
     "group": "workspace"
   },
   {
+    "method": "PUT",
+    "path": "/api/spaces/:spaceId/working-dir",
+    "group": "workspace"
+  },
+  {
     "method": "GET",
     "path": "/api/spaces/:spaceId/preferences",
     "group": "workspace"
@@ -871,6 +876,16 @@
   {
     "method": "POST",
     "path": "/api/apps/:appId/chat/restart",
+    "group": "digital-human"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/:appId/chats/clearable",
+    "group": "digital-human"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/chats/clear-all",
     "group": "digital-human"
   },
   {

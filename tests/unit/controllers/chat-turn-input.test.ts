@@ -35,7 +35,6 @@ describe('toAppChatRequest', () => {
         conversationId: 'app-chat:app-1',
         thinkingEnabled: true,
         reasoningEffort: 'high',
-        useChatThinkingLevel: true,
         references: [reference],
       },
     })

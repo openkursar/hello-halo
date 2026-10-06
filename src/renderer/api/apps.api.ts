@@ -525,6 +525,20 @@ export const appsApi = {
     return httpRequest('POST', `/api/apps/${appId}/chat/restart`)
   },
 
+  appChatsClearable: async (appId: string): Promise<ApiResponse<{ total: number; im: number; teamIm: number }>> => {
+    if (isElectron()) {
+      return window.halo.appChatsClearable(appId)
+    }
+    return httpRequest('GET', `/api/apps/${appId}/chats/clearable`)
+  },
+
+  appChatsClearAll: async (appId: string): Promise<ApiResponse<{ cleared: number; failed: number }>> => {
+    if (isElectron()) {
+      return window.halo.appChatsClearAll(appId)
+    }
+    return httpRequest('POST', `/api/apps/${appId}/chats/clear-all`)
+  },
+
   appImChatMessages: async (appId: string, spaceId: string, channel: string, chatType: 'direct' | 'group', chatId: string): Promise<ApiResponse> => {
     if (isElectron()) {
       return window.halo.appImChatMessages({ appId, spaceId, channel, chatType, chatId })

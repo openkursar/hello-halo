@@ -79,7 +79,7 @@ export interface InstalledApp {
     modelSourceId?: string
     /** Override model within the selected AI source. Used together with modelSourceId. */
     modelId?: string
-    /** How hard it thinks in chat; see the shared InstalledApp for the contract. */
+    /** How hard it thinks, on every entry; see the shared InstalledApp for the contract. */
     chatReasoningEffort?: import('../../../shared/constants/reasoning-effort').ReasoningEffortLevel
     /**
      * Offer this digital human its space's memory topics, read-only, in every

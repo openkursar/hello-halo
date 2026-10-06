@@ -876,6 +876,40 @@ describe('executeRun — MCP wiring', () => {
   })
 })
 
+describe('executeRun — thinking level', () => {
+  async function runWith(userOverrides: Record<string, unknown>) {
+    vi.mocked(createSession).mockClear()
+    vi.mocked(resolveCredentialsForSdk).mockClear()
+    nextSession = new FakeSession({ script: [assistantReport()] })
+    await executeRun({ app: makeApp({ userOverrides }), trigger: baseTrigger, store: makeStore(), memory: makeMemory() })
+    return {
+      picked: vi.mocked(resolveCredentialsForSdk).mock.calls[0][1],
+      options: vi.mocked(createSession).mock.calls[0][0] as Record<string, unknown>,
+    }
+  }
+
+  it('runs at the digital human’s own level, as its chats do', async () => {
+    const max = await runWith({ chatReasoningEffort: 'max' })
+    expect(max.picked).toBe('max')
+    expect(max.options).toMatchObject({ reasoningEffort: 'max', pickedReasoningEffort: 'max', effort: 'max' })
+
+    // Off means a scheduled run does not think at all.
+    const off = await runWith({ chatReasoningEffort: 'off' })
+    expect(off.picked).toBe('off')
+    expect(off.options.reasoningEffort).toBe('off')
+    expect(off.options).not.toHaveProperty('effort')
+    expect(off.options).not.toHaveProperty('maxThinkingTokens')
+  })
+
+  it('keeps the model’s configured effort when the digital human has no level of its own', async () => {
+    const unset = await runWith({})
+
+    expect(unset.picked).toBeUndefined()
+    expect(unset.options).not.toHaveProperty('pickedReasoningEffort')
+    expect(unset.options.reasoningEffort).not.toBe('off')
+  })
+})
+
 describe('executeRun — memory', () => {
   beforeEach(() => {
     vi.mocked(prepareMemoryForTurn).mockClear()

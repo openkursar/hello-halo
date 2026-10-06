@@ -75,6 +75,16 @@ async function handleMessage(msg: MainToWorkerMessage): Promise<void> {
         break
       }
 
+      // One message, not destroy + init: messages are handled concurrently, and
+      // an init arriving while the stop waits for a start in flight would join
+      // that start (the old folder) just before the stop removes it.
+      case 'reroot-space': {
+        await stopWatcher(msg.spaceId)
+        await startWatcher(msg.spaceId, msg.rootPath)
+        send({ type: 'space-ready', spaceId: msg.spaceId })
+        break
+      }
+
       case 'scan-dir': {
         const nodes = await scanDirectoryTreeShallow(
           msg.dirPath, msg.rootPath, msg.depth, treeIgnoreRules

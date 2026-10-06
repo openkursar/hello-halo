@@ -114,6 +114,10 @@ export function registerSpaceHandlers(): void {
       }
     },
 
+    // Point the space at another working directory
+    setSpaceWorkingDir: async (spaceId: string, workingDir: string) =>
+      spaceController.changeSpaceWorkingDir(spaceId, workingDir),
+
     // Get default space path
     getDefaultSpacePath: async () => {
       try {

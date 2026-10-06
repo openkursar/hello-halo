@@ -328,6 +328,19 @@ export function releaseSpaceWatcher(spaceId: string, holder: string): void {
   console.log(`[WatcherHost] Stopped watching ${spaceId} (last holder ${holder} released)`)
 }
 
+/**
+ * The space's folder changed: whoever holds its watcher (the file tree, file
+ * triggers) now gets the new folder's events, with no holder having to let go
+ * and retain again. Nothing happens for a space nobody is watching.
+ */
+export function rerootSpaceWatcher(spaceId: string, rootPath: string): void {
+  const watchedRoot = activeSpaces.get(spaceId)
+  if (watchedRoot === undefined || watchedRoot === rootPath) return
+  activeSpaces.set(spaceId, rootPath)
+  sendToWorker({ type: 'reroot-space', spaceId, rootPath })
+  console.log(`[WatcherHost] ${spaceId} now watched at ${rootPath} (was ${watchedRoot})`)
+}
+
 /** Holders currently keeping each watched space alive (diagnostics). */
 export function getWatchedSpaces(): Array<{ spaceId: string; rootPath: string; holders: string[] }> {
   return Array.from(activeSpaces, ([spaceId, rootPath]) => ({

@@ -181,6 +181,9 @@ export { getDigitalHumanMemoryStatus, consolidateDigitalHumanMemoryNow } from '.
 // Reminders a digital human set in its conversations, as its page lists them (called by IPC/HTTP)
 export { listAppReminders, cancelAppReminder } from './reminders/view'
 
+// Clearing all of a digital human's conversations at once, as /clear does each (called by IPC/HTTP)
+export { countClearableChats, clearAllChats } from './chat-reset'
+
 // Re-export IM session invalidation (called by IPC reload handler)
 export { invalidateImSessions } from '../../services/agent/session-manager'
 
@@ -488,6 +491,20 @@ export function getAppMemoryService(): MemoryService | null {
  */
 export function getActivityStore(): ActivityStore | null {
   return activityStoreRef
+}
+
+/** Working directories the digital humans pinned in `spaceId` name (sessions, team seats, runs). */
+export function listPinnedWorkDirs(spaceId: string): string[] {
+  return activityStoreRef?.listSpaceWorkDirs(spaceId) ?? []
+}
+
+/**
+ * The space's working directory was changed: every environment pinned in it
+ * names the new folder, so its chats and continued runs follow the space.
+ * @returns how many environments were re-pointed
+ */
+export function repointSpaceEnvironments(spaceId: string, workDir: string): number {
+  return activityStoreRef?.repointSpaceWorkDir(spaceId, workDir) ?? 0
 }
 
 function spaceChangeDependencies() {

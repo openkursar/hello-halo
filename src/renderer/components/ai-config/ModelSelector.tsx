@@ -423,7 +423,7 @@ function DigitalHumanModelButton({ target }: { target: Extract<ActiveModelTarget
           {!isMissingSource && <div className="text-center text-xs text-muted-foreground">{t('{{name}} uses', { name: target.appName })}</div>}
           <div role={isMissingSource ? 'alert' : undefined} className="mt-0.5 text-center text-[15px] font-semibold text-foreground break-words">{modelName}</div>
           <div className="mt-3">
-            {/* One level for the whole digital human, across its sessions. */}
+            {/* One level for the whole digital human, on every entry. */}
             <ThinkingLevelControl
               key={target.appId}
               value={app?.userOverrides?.chatReasoningEffort}
@@ -433,6 +433,9 @@ function DigitalHumanModelButton({ target }: { target: Extract<ActiveModelTarget
                 void useAppsStore.getState().updateAppOverrides(target.appId, { chatReasoningEffort: level })
               }}
             />
+            <p className="mt-1.5 text-center text-[11px] text-muted-foreground">
+              {t('Also used for its IM replies and scheduled runs.')}
+            </p>
           </div>
           <button
             type="button"

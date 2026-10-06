@@ -72,6 +72,10 @@
     "path": "/api/spaces/:spaceId"
   },
   {
+    "method": "PUT",
+    "path": "/api/spaces/:spaceId/working-dir"
+  },
+  {
     "method": "GET",
     "path": "/api/spaces/:spaceId/preferences"
   },
@@ -426,6 +430,14 @@
   {
     "method": "POST",
     "path": "/api/apps/:appId/chat/restart"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/:appId/chats/clearable"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/chats/clear-all"
   },
   {
     "method": "POST",

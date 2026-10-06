@@ -1293,6 +1293,40 @@ create a digital human for a reminder.
   digital human still answers its chats, and a reminder it promised must not
   fall silent. Its page lists every reminder (Trigger group) with a cancel.
 
+### 2.28 Pinned Environments Follow a Space's Working Directory
+
+Pinned environments keep a session or run in the space it began in, but the
+space's folder itself can be changed (its folder was moved or deleted). When it
+is, `repointSpaceEnvironments` rewrites `workDir` in every environment pinned
+in that space — chat sessions, team seats and runs that can be continued — so
+they follow the space instead of failing on the old folder; `spacePath` and
+`memoryDir` are Halo's and stay. The orchestration (stored sessions first,
+then the record, the pins, resident sessions and the file panel) is
+`controllers/space.controller.ts`; see ARCHITECTURE "Space Path Architecture".
+
+A pinned folder that is gone fails `validateExecutionEnvironment` with
+`WorkingDirectoryUnavailableError`, which carries the folder and space in its
+fields (and the log) but not in its message — the message also reaches a team
+lead's report and a run's memory summary. A chat reports it as
+`errorType: 'working_dir_unavailable'` so the person can change the folder
+there; an IM chat is told only that the folder needs its owner in Halo. Missing
+history or memory keeps its plain error.
+
+Whatever is written to the old folder after its sessions are copied would be
+missing from the next resume in the new folder, so the change only goes
+through if nothing could have written there:
+- refused while anything in the space runs — a chat turn, a run, background
+  work (services/agent `isSpaceBusy`);
+- refused if any session of the space was asked for while the sessions were
+  copied (`countSessionAcquisitions` read before and after), even by a turn
+  that has finished again; every turn, run and warm-up asks first. The owner
+  tries again; nobody who wrote meanwhile is turned away;
+- from that check to the last step nothing awaits, and afterwards a turn that
+  read the old folder but had not yet asked for its session is refused when it
+  does (`WorkingDirectoryChangedError`, "send it again"). A scheduled run
+  refused this way counts as a failed run; it takes a run that read the folder
+  in the instant of the change.
+
 ---
 
 ## 3. SQLite Schema
@@ -1374,6 +1408,7 @@ src/main/apps/runtime/
   app-chat-live-turn.ts      -- The turn a chat is running RIGHT NOW: whether there is one (`isAppChatConversationGenerating` — the only truthful busy probe, counting a message still on its way to the engine (`beginAppChatTurnStart`, §2.12a) as well as a queued round and a live turn; app chat never writes the engine's legacy `activeSessions` map) and how to add a message to it (`injectIntoAppChat` for the team bus; `injectIntoAppChatWhenLive`, which waits for a starting turn to begin and answers delivered / no_turn / stopped, for the user adding to their own turn through `app:chat-inject` / `POST /chat/inject` — that path passes `{ source: 'injection' }`, which the transcript reader shows as an annotation on the reply), plus the change announcements everything waiting on a conversation is woken by (`onAppChatConversationChange`, §2.12a). Its own leaf module because the team layer asks both synchronously, and app-chat.ts imports the team runtime accessor — a static edge back would close that cycle
   config-defaults.ts         -- Merge App config_schema defaults into userConfig
   dispatch-inbound.ts        -- Route IM inbound messages into app-chat
+  chat-reset.ts              -- Clear all of a digital human's chats at once (default, local, IM), each as /clear does; API sessions, team chats, memory and reminders untouched; nothing posted into chats
   im-permission-registry.ts  -- The IM chat's last sender and their standing, for a turn with no sender of its own (a message's own turn carries its sender in `AppChatRequest.imPermission`)
   im-sender-standing.ts      -- resolveImPermission(): owner or guest under an instance's current settings; shared by inbound messages and reminders
   reminders/                 -- Reminders a digital human sets in a conversation (§2.27)

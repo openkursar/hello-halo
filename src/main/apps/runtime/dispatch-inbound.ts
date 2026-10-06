@@ -74,6 +74,14 @@ const LOG_TAG = '[Dispatch]'
 const EMPTY_RESPONSE_NOTICE = 'The model returned an empty response. Please send your message again.'
 
 /**
+ * Said in the chat when the digital human's working folder is missing. The
+ * error itself names the folder for the owner's Halo window and the log; a chat
+ * — possibly with outsiders — gets neither the owner's local path nor a step
+ * only the owner can take.
+ */
+const WORKING_DIR_UNAVAILABLE_NOTICE = '⚠️ 这个数字人的工作目录暂时不可用，请主人在 Halo 里处理。'
+
+/**
  * Immediate ack for non-streaming IM channels — the final reply arrives as a
  * separate message later. Hardcoded Chinese like buildSupplementAck because
  * the backend does not have renderer i18n loaded.
@@ -89,6 +97,11 @@ const PROCESSING_NOTICE_DELAY_MS = 5_000
  * starting again.
  */
 const pendingProcessingNotices = new Map<string, () => void>()
+
+/** Take back the processing notice the conversation has waiting, if any; a stop or a clear makes it untrue. */
+export function withdrawProcessingNotice(conversationId: string): void {
+  pendingProcessingNotices.get(conversationId)?.()
+}
 
 /**
  * Commands that abort the current generation.
@@ -755,7 +768,7 @@ export async function dispatchInboundMessage(
 
   // ── Stop command: abort generation, silently drop buffered supplements ──
   if (isStopCommand(msg.body, msg.chatType)) {
-    pendingProcessingNotices.get(conversationId)?.()
+    withdrawProcessingNotice(conversationId)
     const dropped = clearSupplementBuffer(conversationId)
     const isActive = isAppChatConversationGenerating(conversationId)
     if (isActive) {
@@ -780,7 +793,7 @@ export async function dispatchInboundMessage(
 
   // ── Clear command: reset context, silently drop buffered supplements ──
   if (isClearCommand(msg.body, msg.chatType)) {
-    pendingProcessingNotices.get(conversationId)?.()
+    withdrawProcessingNotice(conversationId)
     const dropped = clearSupplementBuffer(conversationId)
     console.log(
       `${LOG_TAG} Clear command received: channel=${msg.channel}, chatId=${msg.chatId}, ` +
@@ -1134,7 +1147,9 @@ export async function dispatchInboundMessage(
     // separate one-shot reply — otherwise WeCom receives an unterminated stream
     // plus a duplicate message, garbling the user's chat.
     try {
-      const errorMsg = imErrorReply(err)
+      const errorMsg = (err as Error)?.name === 'WorkingDirectoryUnavailableError'
+        ? WORKING_DIR_UNAVAILABLE_NOTICE
+        : imErrorReply(err)
       if (reply.streaming) {
         await reply.streaming.finish(errorMsg)
       } else {

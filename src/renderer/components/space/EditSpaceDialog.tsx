@@ -1,8 +1,8 @@
 /**
  * EditSpaceDialog
  *
- * Modal for editing a dedicated space: its name, icon color, and — folded
- * under Advanced — its shared memory. Sibling to CreateSpaceDialog (same
+ * Modal for editing a dedicated space: its name, icon color, working
+ * directory, and — folded under Advanced — its shared memory. Sibling to CreateSpaceDialog (same
  * overlay shell, same z-[60] so it sits above any z-50 panel it was opened
  * from, e.g. SpaceSelector's dropdown).
  */
@@ -12,6 +12,7 @@ import { useTranslation } from '../../i18n'
 import { useSpaceStore } from '../../stores/space.store'
 import { api } from '../../api'
 import { SpaceColorSwatch } from './SpaceColorSwatch'
+import { useChangeWorkingDir } from './useChangeWorkingDir'
 import { Disclosure } from '../ui/Disclosure'
 import { MemorySettingsPanel } from '../memory/MemorySettingsPanel'
 import { type SpaceColorId } from './spaceAvatarUtils'
@@ -36,6 +37,8 @@ export function EditSpaceDialog({ space, onClose, onSaved }: EditSpaceDialogProp
 
   const [name, setName] = useState(space.name)
   const [color, setColor] = useState<SpaceColorId>((space.color as SpaceColorId) || 'primary')
+  const { change: changeWorkingDir, status: workingDirStatus, available: folderPickerAvailable } = useChangeWorkingDir(space.id)
+  const workingDir = workingDirStatus.state === 'changed' ? workingDirStatus.workingDir : (space.workingDir || space.path)
   // The list entry carries no preferences, so the memory settings are read when
   // the dialog opens; the controls stay disabled until then, so a choice made
   // before they arrive cannot be overwritten by them.
@@ -120,6 +123,36 @@ export function EditSpaceDialog({ space, onClose, onSaved }: EditSpaceDialogProp
         <div className="mb-4">
           <label className="block text-sm text-muted-foreground mb-2">{t('Icon Color')}</label>
           <SpaceColorSwatch value={color} onChange={setColor} />
+        </div>
+
+        {/* Applies at once, apart from Save: the folder is what the AI and the
+            file panel already use, not a draft of this form. */}
+        <div className="mb-4">
+          <label className="block text-sm text-muted-foreground mb-2">{t('Working directory')}</label>
+          <div className="flex items-center gap-2">
+            <div className="flex-1 min-w-0 px-3 py-2 text-xs font-mono bg-input rounded-lg border border-border truncate" title={workingDir}>
+              {workingDir}
+            </div>
+            <button
+              onClick={() => void changeWorkingDir()}
+              disabled={!folderPickerAvailable || workingDirStatus.state === 'changing'}
+              className="h-9 px-3 flex-shrink-0 rounded-sm border border-border bg-secondary text-foreground text-[13px] font-medium hover:bg-surface-hover transition-colors ease-halo disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {t('Change folder')}
+            </button>
+          </div>
+          <p className="mt-1.5 text-xs text-muted-foreground">
+            {workingDirStatus.state === 'changed'
+              ? t('Changed. Conversations keep their history; any reply in progress finishes first.')
+              : folderPickerAvailable
+                ? t('Where the AI works and what the file panel shows. Nothing in either folder is moved.')
+                : t('The folder can only be changed in the desktop app.')}
+          </p>
+          {workingDirStatus.state === 'failed' && (
+            <p className="mt-1 text-xs text-destructive">
+              {t('Could not change the working directory: {{error}}', { error: workingDirStatus.error })}
+            </p>
+          )}
         </div>
 
         <div className="mb-6">

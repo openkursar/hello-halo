@@ -82,9 +82,10 @@ export interface InstalledApp {
     /** Override model within the selected AI source. Used together with modelSourceId. */
     modelId?: string
     /**
-     * How hard this digital human thinks in chat, picked on the composer's
-     * model card; applies to every one of its chat sessions. Automation runs
-     * keep the model's configured effort.
+     * How hard this digital human thinks, picked on the composer's model card.
+     * Applies to every entry: its chats in Halo, IM and over HTTP, its team
+     * turns, and its scheduled, event and manual runs. Unset, each entry keeps
+     * the model's configured effort.
      */
     chatReasoningEffort?: import('../constants/reasoning-effort').ReasoningEffortLevel
     /** When true, the login notice bar is permanently dismissed for this app */

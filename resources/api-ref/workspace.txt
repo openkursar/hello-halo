@@ -32,6 +32,7 @@ operations on this page:
   POST   /api/spaces/$HALO_SPACE_ID/open                             Get a space working directory path
   GET    /api/spaces/$HALO_SPACE_ID/preferences                      Read a space's preferences (layout, memory settings)
   PUT    /api/spaces/$HALO_SPACE_ID/preferences                      Change a space's preferences, e.g. turn its shared memory on or off
+  PUT    /api/spaces/$HALO_SPACE_ID/working-dir                      Point a space at another working directory
   GET    /api/spaces/default-path                                    Read the directory new spaces are created under
   GET    /api/spaces/halo                                            Read the built-in temporary space
   PUT    /api/spaces/reorder                                         Set the display order of spaces
@@ -212,6 +213,16 @@ PUT    /api/spaces/$HALO_SPACE_ID/preferences                      Change a spac
      # body: {"memory":{"enabled":false}}
      # out: {"success":true,"data":{...updated space}}
      # note: Merged into what is stored. memory.enabled turns the memory shared by the space's conversations on/off (files are kept); memory.autoConsolidate turns automatic consolidation on/off; memory.cadence is "diligent", "balanced" or "economical". Applies to new conversations.
+
+PUT    /api/spaces/$HALO_SPACE_ID/working-dir                      Point a space at another working directory
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX PUT "$HALO_API_URL/api/spaces/$HALO_SPACE_ID/working-dir" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"workingDir":"/absolute/path/to/existing/folder"}'
+     # body: {"workingDir":"/absolute/path/to/existing/folder"}
+     # out: {"success":true,"data":{...updated space}} | {"success":false,"error":"That folder does not exist."}
+     # note: Confirm with the user first, saying which space’s folder you are changing: its digital humans work in the new folder too, and the files they may send come from there. The folder must already exist, given by its full path, outside Halo’s and the engine’s own data folders; nothing is moved, created or deleted. Conversations keep their history. Refused while a reply, run or background task is going in the space, or while another change of it is under way. The default space cannot be changed.
 
 GET    /api/spaces/default-path                                    Read the directory new spaces are created under
      curl -s "$HALO_API_URL/api/spaces/default-path" -H "Authorization: Bearer $HALO_API_TOKEN"

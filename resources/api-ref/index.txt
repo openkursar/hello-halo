@@ -16,6 +16,7 @@ POST   /api/spaces                                                 [ai]       wo
 PUT    /api/spaces/reorder                                         [ai]       workspace               Set the display order of spaces
 GET    /api/spaces/$HALO_SPACE_ID                                  [ai]       workspace               Read one space
 PUT    /api/spaces/$HALO_SPACE_ID                                  [ai]       workspace               Rename a space or change its icon
+PUT    /api/spaces/$HALO_SPACE_ID/working-dir                      [ai]       workspace               Point a space at another working directory
 GET    /api/spaces/$HALO_SPACE_ID/preferences                      [ai]       workspace               Read a space's preferences (layout, memory settings)
 PUT    /api/spaces/$HALO_SPACE_ID/preferences                      [ai]       workspace               Change a space's preferences, e.g. turn its shared memory on or off
 GET    /api/spaces/$HALO_SPACE_ID/memory                           [ai]       workspace               Read the state of a space's memory
@@ -116,6 +117,8 @@ GET    /api/apps/<appId>/chat/messages                             [ai]       di
 GET    /api/apps/<appId>/im-chat/messages                          [ai]       digital-human,channels  Read a digital human's transcript in a bound IM chat
 POST   /api/apps/<appId>/chat/clear                                [ai]       digital-human           Clear a digital human's chat history
 POST   /api/apps/<appId>/chat/restart                              [ai]       digital-human           Restart a digital human's chat agent process (reloads system prompt and config)
+GET    /api/apps/<appId>/chats/clearable                           [ai]       digital-human           Count the conversations clearing all of a digital human's chats would clear
+POST   /api/apps/<appId>/chats/clear-all                           [ai]       digital-human           Clear the history of all of a digital human's chats at once
 POST   /api/apps/<appId>/im-chat/clear                             [ai]       digital-human,channels  Clear a digital human's chat history in a bound IM chat
 POST   /api/apps/<appId>/im-chat/stop                              [ai]       digital-human,channels  Stop a digital human's in-progress reply in a bound IM chat (keeps history)
 POST   /api/apps/<appId>/sessions/create                           [ai]       digital-human           Start a new chat thread with a digital human

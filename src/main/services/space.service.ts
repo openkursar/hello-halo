@@ -15,9 +15,10 @@
  */
 
 import { shell } from 'electron'
-import { join } from 'path'
+import { isAbsolute, join, resolve } from 'path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, rmSync, renameSync } from 'fs'
-import { getHaloDir, getTempSpacePath, getSpacesDir } from '../foundation/config.service'
+import { getHaloDir, getTempSpacePath, getSpacesDir, resolveClaudeConfigDir } from '../foundation/config.service'
+import { canonicalPath, isPathWithin } from '../foundation/path-containment'
 import { v4 as uuidv4 } from 'uuid'
 import { getAppManager } from './app-bridge'
 import { getTaskStateService } from '../platform/task-state'
@@ -649,26 +650,103 @@ export function updateSpace(spaceId: string, updates: { name?: string; icon?: st
 
     // Persist index
     persistIndex(getRegistry())
-
-    // Write meta.json — read existing to preserve preferences
-    const existingMeta = tryReadMeta(entry.path)
-    const meta: SpaceMeta = {
-      id: spaceId,
-      name: entry.name,
-      icon: entry.icon,
-      color: entry.color,
-      createdAt: entry.createdAt,
-      updatedAt: entry.updatedAt,
-      preferences: existingMeta?.preferences,
-      workingDir: entry.workingDir
-    }
-    writeFileSync(join(entry.path, '.halo', 'meta.json'), JSON.stringify(meta, null, 2))
+    writeMeta(spaceId, entry)
 
     return entryToSpaceWithPreferences(spaceId, entry)
   } catch (error) {
     console.error('[Space] Failed to update space:', error)
     return null
   }
+}
+
+/**
+ * Write meta.json from the registry entry, keeping the preferences already
+ * stored there. Replaced whole, so a failed write leaves the old file intact.
+ */
+function writeMeta(spaceId: string, entry: SpaceIndexEntry): void {
+  const existingMeta = tryReadMeta(entry.path)
+  const meta: SpaceMeta = {
+    id: spaceId,
+    name: entry.name,
+    icon: entry.icon,
+    color: entry.color,
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt,
+    preferences: existingMeta?.preferences,
+    workingDir: entry.workingDir
+  }
+  const metaPath = join(entry.path, '.halo', 'meta.json')
+  const tmpPath = `${metaPath}.tmp`
+  try {
+    writeFileSync(tmpPath, JSON.stringify(meta, null, 2))
+    renameSync(tmpPath, metaPath)
+  } catch (error) {
+    try { rmSync(tmpPath, { force: true }) } catch { /* ignore */ }
+    throw error
+  }
+}
+
+/**
+ * Why `workingDir` cannot be a space's working directory, or null when it can:
+ * an existing folder, given by its full path, outside the folders where Halo and
+ * the engine keep their own data — except `ownDataDir`, the space's own data
+ * folder, where a space without a project folder works. Nothing is created
+ * here — Halo neither makes nor removes the user's folders.
+ */
+export function workingDirProblem(workingDir: string, ownDataDir?: string): string | null {
+  if (!workingDir || !isAbsolute(workingDir)) return 'Choose a folder by its full path.'
+  const dir = resolve(workingDir)
+  try {
+    if (!statSync(dir).isDirectory()) return 'That is not a folder.'
+  } catch {
+    return 'That folder does not exist.'
+  }
+  const isOwnDataDir = ownDataDir !== undefined && canonicalPath(dir) === canonicalPath(ownDataDir)
+  if (!isOwnDataDir && [getHaloDir(), resolveClaudeConfigDir()].some(root => isPathWithin(dir, root))) {
+    return 'That folder holds Halo’s own data. Choose a project folder.'
+  }
+  return null
+}
+
+/**
+ * Why this space's working directory cannot be changed to `workingDir`, or null
+ * when it can. A space whose own data folder is gone — a legacy space kept in
+ * the project folder that was deleted — has nothing left to point elsewhere.
+ */
+export function workingDirChangeProblem(spaceId: string, workingDir: string): string | null {
+  const entry = getRegistry().get(spaceId)
+  if (!entry || entry.isTemp) return 'This workspace’s folder cannot be changed.'
+  const problem = workingDirProblem(workingDir, entry.path)
+  if (problem) return problem
+  if (!existsSync(join(entry.path, '.halo'))) {
+    return 'This workspace’s conversations and settings were kept in a folder that is no longer there; choosing another folder cannot bring them back. Restore or reconnect that folder first.'
+  }
+  return null
+}
+
+/**
+ * Point a space at another working directory. Only the record changes: the
+ * agent, the file panel and the space's digital humans follow it, and Halo's
+ * own data for the space stays where it is. The default space keeps its own.
+ * meta.json is written first, so a failure changes nothing.
+ *
+ * @returns the updated space, or null for an unknown or default space
+ * @throws Error with a readable reason when the folder cannot be used or the
+ *   record cannot be written
+ */
+export function setSpaceWorkingDir(spaceId: string, workingDir: string): Space | null {
+  const entry = getRegistry().get(spaceId)
+  if (!entry || entry.isTemp) return null
+  const problem = workingDirChangeProblem(spaceId, workingDir)
+  if (problem) throw new Error(problem)
+
+  const changed: SpaceIndexEntry = { ...entry, workingDir: resolve(workingDir), updatedAt: new Date().toISOString() }
+  writeMeta(spaceId, changed)
+  entry.workingDir = changed.workingDir
+  entry.updatedAt = changed.updatedAt
+  persistIndex(getRegistry())
+  console.log(`[Space] Working directory of ${spaceId} is now ${entry.workingDir}`)
+  return entryToSpaceWithPreferences(spaceId, entry)
 }
 
 /**

@@ -79,6 +79,8 @@ export const appRpc = {
   appChatSessionState: rawRpcMethod('app:chat-session-state'),
   appChatClear: rawRpcMethod('app:chat-clear'),
   appChatRestart: rawRpcMethod('app:chat-restart'),
+  appChatsClearable: rawRpcMethod('app:chats-clearable'),
+  appChatsClearAll: rawRpcMethod('app:chats-clear-all'),
   appImChatMessages: rawRpcMethod('app:im-chat-messages'),
   appImChatClear: rawRpcMethod('app:im-chat-clear'),
   appImChatStop: rawRpcMethod('app:im-chat-stop'),

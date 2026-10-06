@@ -148,6 +148,7 @@ import {
   dispatchInboundMessage,
   flushSupplementBuffer,
   releaseSupplementsWhenIdle,
+  withdrawProcessingNotice,
 } from '../../../../src/main/apps/runtime/dispatch-inbound'
 import {
   PendingRelayStore,
@@ -157,6 +158,7 @@ import { analytics } from '../../../../src/main/services/analytics/analytics.ser
 import { setImPermissionContext, clearImPermissionContext } from '../../../../src/main/apps/runtime/im-permission-registry'
 import { maybeClaimOwner } from '../../../../src/main/apps/runtime/im-channels/owner-claim'
 import { AppChatTurnInterrupted, type AppChatTurnEnding } from '../../../../src/main/apps/runtime/turn-ending'
+import { WorkingDirectoryUnavailableError } from '../../../../src/main/services/agent/working-dir'
 import type { InboundMessage, ReplyHandle } from '../../../../src/shared/types/inbound-message'
 
 const trackMock = analytics.track as ReturnType<typeof vi.fn>
@@ -384,6 +386,21 @@ describe('dispatchInboundMessage — the processing notice', () => {
     }
   })
 
+  it('takes back a notice still waiting when its conversation is cleared from Halo', async () => {
+    const reply = makeReply(false)
+    const turn = slowTurn()
+    const dispatched = dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
+    await vi.advanceTimersByTimeAsync(2_000)
+
+    // "Clear all conversations" in the digital human's settings, as /clear would.
+    withdrawProcessingNotice('app-chat:app-1:wecom-bot:direct:chat-1')
+    await vi.advanceTimersByTimeAsync(10_000)
+    turn.end()
+    await dispatched
+
+    expect(reply.send).not.toHaveBeenCalledWith(NOTICE)
+  })
+
   it('leaves a stream showing its status at once, as before', async () => {
     instanceCfg = { streaming: true, processingNotice: false }
     const reply = makeReply(true)
@@ -513,6 +530,17 @@ describe('dispatchInboundMessage — a turn that stopped short', () => {
     expect(refusedText).toContain('安全软件拦截了本机连接')
     expect(refusedText).not.toContain('/Applications')
     expect(missing.send).toHaveBeenLastCalledWith("⚠️ Error: ENOENT: no such file or directory, open '<local path>'")
+  })
+
+  it('says a missing working folder needs the owner, without the owner’s local path', async () => {
+    sendAppChatMessageMock.mockRejectedValueOnce(new WorkingDirectoryUnavailableError('/Users/owner/Private Projects/halo', 'space-1'))
+    const reply = makeReply(false)
+
+    await dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
+
+    expect(reply.send).toHaveBeenLastCalledWith('⚠️ 这个数字人的工作目录暂时不可用，请主人在 Halo 里处理。')
+    const sent = (reply.send as ReturnType<typeof vi.fn>).mock.calls.map(([text]) => String(text)).join('\n')
+    expect(sent).not.toContain('/Users/owner')
   })
 })
 

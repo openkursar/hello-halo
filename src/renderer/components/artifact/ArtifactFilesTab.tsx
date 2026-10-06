@@ -12,10 +12,13 @@ interface ArtifactFilesTabProps {
 
 export function ArtifactFilesTab({ onItemsChange }: ArtifactFilesTabProps) {
   const spaceId = useSpaceStore(state => state.currentSpace?.id) ?? ''
+  const workingDir = useSpaceStore(state => state.currentSpace?.workingDir) ?? ''
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      <ArtifactTree spaceId={spaceId} onRootCountChange={onItemsChange} />
+      {/* Keyed by the folder too: a workspace pointed at another folder shows
+          that folder's tree from the top, not the old one's open folders. */}
+      <ArtifactTree key={`${spaceId}:${workingDir}`} spaceId={spaceId} onRootCountChange={onItemsChange} />
     </div>
   )
 }
