@@ -192,6 +192,19 @@ export interface PerfResult {
   htmlPreview?: HtmlPreviewEvidence
   htmlPreviewFailure?: { stage: string; message: string; observed: Record<string, unknown> }
   /**
+   * Streaming scenarios that count updates (S17): how often the live turn
+   * changed while the reply streamed (see `lib/live-updates.ts`). Busiest
+   * one-second window and average over the streaming window.
+   */
+  liveUpdates?: {
+    /** Streamed deltas the renderer received, one IPC message each. */
+    deltaEvents: { text: number; thinking: number; maxPerSecond: number; avgPerSecond: number }
+    /** Tasks that changed the transcript's DOM while the reply streamed. */
+    commits: { total: number; maxPerSecond: number; avgPerSecond: number }
+    /** Mutation records in the live thought panel while only reply text streamed; `null` when the panel never appeared. */
+    panelMutationsWhileText: number | null
+  }
+  /**
    * Step-level checkpoints (ms since scenario start) for multi-phase
    * scenarios (e.g. S6's open-preview -> click-input -> fill-text ->
    * click-send -> first-token -> stream-complete). A bare total duration or

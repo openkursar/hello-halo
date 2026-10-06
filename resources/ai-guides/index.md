@@ -1,6 +1,6 @@
 # Halo Official Guides — Index
 
-Last updated: 2026-09-03
+Last updated: 2026-10-06
 
 Halo's own documentation about how it works, written for agents rather than for the docs site.
 Everything here is raw markdown and is read with the `read_halo_doc` tool.
@@ -30,7 +30,7 @@ Two rules hold across every guide here:
 | Setting up an AI model or API key; "invalid key"; chat produces no reply; context-length errors | `ai-model-setup/index.md` |
 | A specific model or auth failure message, and how to fix it | `ai-model-setup/troubleshooting.md` |
 | Creating, updating, or fixing a digital human (automation app) | `create-digital-human/SKILL.md` |
-| WeCom / WeChat bot setup; "my bot doesn't reply"; any request phrased as "配企业微信" | `message-channels/index.md` |
+| WeCom / WeChat / Feishu bot setup; "my bot doesn't reply"; any request phrased as "配企业微信" | `message-channels/index.md` |
 | Difference between the chat and a digital human; "why doesn't it remember?"; where files live | `spaces-and-agents/index.md` |
 | Reading or sending mail, calendar, or "email isn't working" | `email-setup/index.md` |
 | Installing or writing a skill or MCP server; "why isn't my tool showing up?" | `skills-and-mcp/index.md` |
@@ -51,7 +51,7 @@ document opens with a table of its companion documents; read the entry first and
 | `ai-model-setup/index.md` | How Settings → AI Model works: sources, the four auth methods, adding a key, OAuth, the CLI-delegated source, switching the active source, and model capability overrides. Companion: `ai-model-setup/troubleshooting.md`. |
 | `spaces-and-agents/index.md` | Spaces, working directories, and the real difference between a space conversation and a digital human — memory, skills, MCP access, and when creating a digital human is actually warranted. |
 | `create-digital-human/SKILL.md` | Authoring and updating digital humans: the interview checklist, how triggers actually work, the App Spec field reference, and worked examples. **Read before calling `create_automation_app` or `update_automation_app`.** Companions: `create-digital-human/interview-checklist.md`, `create-digital-human/im-triggers.md`, `create-digital-human/spec-reference.md`, `create-digital-human/examples.md`. |
-| `message-channels/index.md` | Connecting a digital human to WeCom / WeChat: the two bidirectional channel types, how an instance binds to one digital human, permission control, and the separate one-way notification channels that share the name "企业微信". Companions: `message-channels/wecom-bot.md`, `message-channels/weixin-ilink.md`. |
+| `message-channels/index.md` | Connecting a digital human to WeCom / WeChat / Feishu: which bidirectional channel types a given Halo version has (Feishu Bot from 3.0), how an instance binds to one digital human, permission control, and the separate one-way notification channels that share the name "企业微信". Companions: `message-channels/wecom-bot.md`, `message-channels/weixin-ilink.md`. |
 | `email-setup/index.md` | The single global email credential and its two consumers — the mailbox/calendar tools and the one-way notification channel — plus what the Test button does and does not check. |
 | `skills-and-mcp/index.md` | Skills and MCP servers: how each is installed, how global vs. space scope resolves, and why skills are ambient within a scope while MCP access is declared per automation. |
 | `ai-browser/index.md` | Halo's built-in browser: session and login reuse, when to use it instead of fetching, and its interaction model. Companion: `ai-browser/scripting.md` for writing production `browser_run` scripts. |

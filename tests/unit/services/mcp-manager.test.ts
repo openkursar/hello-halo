@@ -44,6 +44,7 @@ import {
   broadcastMcpStatus,
   getCachedMcpStatus,
   groupToolsByMcpServer,
+  onMcpServerRecovered,
   removeServerStatus,
   testMcpConnections,
   updateServerStatus
@@ -187,6 +188,66 @@ describe('MCP status derivation', () => {
     broadcastMcpStatus([{ name: 'srv', status: 'failed' }])
 
     expect(entry('other-space')?.status).toBe('connected')
+  })
+})
+
+describe('MCP recovery notifications', () => {
+  const recovered = vi.fn()
+  let unsubscribe: () => void = () => {}
+
+  afterEach(() => {
+    unsubscribe()
+    recovered.mockReset()
+    for (const s of [...getCachedMcpStatus()]) removeServerStatus(s.name)
+  })
+
+  function listen(): void {
+    unsubscribe = onMcpServerRecovered(recovered)
+  }
+
+  it('reports a failed server that a probe then connects', () => {
+    broadcastMcpStatus([{ name: 'srv', status: 'failed' }])
+    listen()
+
+    updateServerStatus('srv', { status: 'connected' })
+
+    expect(recovered).toHaveBeenCalledTimes(1)
+    expect(recovered).toHaveBeenCalledWith('srv')
+  })
+
+  it('reports a failed server that another session connects, after the cache is updated', () => {
+    broadcastMcpStatus([{ name: 'srv', status: 'failed' }])
+    let statusSeen: string | undefined
+    recovered.mockImplementation(() => {
+      statusSeen = getCachedMcpStatus().find(s => s.name === 'srv')?.status
+    })
+    listen()
+
+    broadcastMcpStatus([{ name: 'srv', status: 'connected' }, { name: 'down', status: 'failed' }])
+
+    expect(recovered.mock.calls).toEqual([['srv']])
+    expect(statusSeen).toBe('connected')
+  })
+
+  it('stays quiet while a server keeps its status or fails', () => {
+    broadcastMcpStatus([{ name: 'srv', status: 'connected' }])
+    listen()
+
+    broadcastMcpStatus([{ name: 'srv', status: 'connected' }])
+    updateServerStatus('srv', { status: 'connected' })
+    updateServerStatus('srv', { status: 'failed', errorDetail: 'ECONNREFUSED' })
+
+    expect(recovered).not.toHaveBeenCalled()
+  })
+
+  it('stops reporting after unsubscribe', () => {
+    broadcastMcpStatus([{ name: 'srv', status: 'failed' }])
+    listen()
+    unsubscribe()
+
+    updateServerStatus('srv', { status: 'connected' })
+
+    expect(recovered).not.toHaveBeenCalled()
   })
 })
 

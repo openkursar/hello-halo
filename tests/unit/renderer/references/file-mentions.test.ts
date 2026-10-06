@@ -46,6 +46,20 @@ describe('detectFileMention', () => {
     expect(detectFileMention('src/a.ts:9-3')).toBeNull()
     expect(detectFileMention('src/a.ts:0')).toBeNull()
   })
+
+  it('reads names in any script, including full-width punctuation', () => {
+    expect(detectFileMention('报告.docx')).toEqual({ path: '报告.docx' })
+    expect(detectFileMention('docs/设计.md:12-18')).toEqual({ path: 'docs/设计.md', range: { startLine: 12, endLine: 18 } })
+    for (const path of ['输出/2026年度报告（终稿）.xlsx', '《用户手册》v2.pdf', 'résumé.pdf', '資料/レポート.md', '보고서.docx', 'C:\\用户\\文档\\报告.docx']) {
+      expect(detectFileMention(path)?.path, path).toBe(path)
+    }
+  })
+
+  it('rejects names in any script that hold spaces or invisible characters, or no file name', () => {
+    for (const text of ['报告 终稿.docx', '报告\u3000终稿.docx', '报告\u00a0终稿.docx', '报\u202e告.docx', '报\u200b告.docx', '报告', '说明（a.md）']) {
+      expect(detectFileMention(text), JSON.stringify(text)).toBeNull()
+    }
+  })
 })
 
 describe('Markdown file destinations', () => {
@@ -58,12 +72,13 @@ describe('Markdown file destinations', () => {
     expect(detectFileLink('src/app.ts:3-5')).toEqual({ path: 'src/app.ts', range: { startLine: 3, endLine: 5 } })
     expect(detectFileLink('%20report.md')).toEqual({ path: ' report.md' })
     expect(detectFileLink('report.md%20')).toBeNull()
+    expect(detectFileLink('%E6%8A%A5%E5%91%8A%EF%BC%88%E7%BB%88%E7%A8%BF%EF%BC%89.docx')).toEqual({ path: '报告（终稿）.docx' })
   })
 
   it('never treats URLs, network paths or malformed destinations as files', () => {
     for (const href of ['https://example.com/a.md', 'mailto:user@example.com', 'javascript:alert(1)', 'file:///repo/a.md',
       'data:text/html,hello', 'vbscript:run', '//host/a.md', '\\\\host\\share\\a.md', '#intro', 'a.md?download', 'a.md#heading',
-      'java%73cript:alert(1).md', '%2F%2Fhost/a.md', 'a%00.md', 'a%0A.md', '%E0%A4%A.md']) {
+      'java%73cript:alert(1).md', '%2F%2Fhost/a.md', 'a%00.md', 'a%0A.md', '%E0%A4%A.md', '%E2%80%AEdm.exe.md', 'a%E3%80%80b.md']) {
       expect(detectFileLink(href), href).toBeNull()
     }
   })
@@ -99,6 +114,15 @@ describe('Markdown file destinations', () => {
     expect(nodes.some(node => node.tagName === 'script' || node.properties?.onClick || node.properties?.onclick || node.properties?.dataFileLink)).toBe(false)
     expect(JSON.stringify(tree)).not.toContain('javascript:')
     expect(JSON.stringify(tree)).not.toContain('/outside/secret.md')
+  })
+
+  it('marks inline code and named files written in any script', async () => {
+    const tree = await render('Saved `报告.docx` and `docs/设计.md:3`; see [the final draft](报告（终稿）.docx). Run `npm run 构建` first.')
+    const files = elements(tree).filter(node => node.properties?.[FILE_MENTION_PROPERTY])
+    expect(files.map(node => [node.tagName, decodeURIComponent(node.properties[FILE_MENTION_PROPERTY])])).toEqual([
+      ['code', '报告.docx'], ['code', 'docs/设计.md:3'], ['span', '报告（终稿）.docx'],
+    ])
+    expect(JSON.stringify(tree)).not.toContain('[blocked]')
   })
 
   it('does not mark code inside links twice, and leaves non-file-link surfaces unchanged', async () => {

@@ -30,14 +30,15 @@ import {
   buildImSessionKey,
   clearImSession,
   isAppChatConversationGenerating,
+  abortAppChatTurn,
+  onAppChatConversationChange,
 } from './app-chat'
 import type { ImSessionContext } from './im-channels/im-prompt'
 import { getImSessionRegistry } from './im-session-registry'
 import { getActiveImChannelManager } from './im-channels'
 import { sendToRenderer } from '../../foundation/window.service'
 import { broadcastToAll } from '../../http/websocket'
-import { stopGeneration } from '../../services/agent/control'
-import { setImPermissionContext, clearImPermissionContext } from './im-permission-registry'
+import { setImPermissionContext, clearImPermissionContext, type ImPermissionContext } from './im-permission-registry'
 import { setImStreamHandle } from './im-stream-registry'
 import { analytics } from '../../services/analytics/analytics.service'
 import { AnalyticsEvents } from '../../services/analytics/types'
@@ -60,9 +61,6 @@ import { getImChannelsPermissionDefaults } from '../../foundation/product-config
 // ============================================
 
 const LOG_TAG = '[Dispatch]'
-
-/** Maximum reply length (platform-safe limit for most IM channels) */
-const MAX_REPLY_LENGTH = 4000
 
 /**
  * Shown when the model produced no usable answer (only the whitespace
@@ -388,6 +386,27 @@ export function clearSupplementBuffersForInstance(instanceId: string): number {
   return dropped
 }
 
+/**
+ * Release a chat's buffered supplements whenever it may have gone idle: its turn
+ * ended, a start failed or was stopped before reaching the engine, a team wake
+ * gave up its hold. Deferred so the engine's own end-of-turn bookkeeping has
+ * run; the flush rechecks and waits again if the chat is still busy.
+ *
+ * @returns unsubscribe
+ */
+export function releaseSupplementsWhenIdle(): () => void {
+  return onAppChatConversationChange((conversationId) => {
+    if (!supplementBuffers.has(conversationId)) return
+    setImmediate(() => {
+      try {
+        flushSupplementBuffer(conversationId)
+      } catch (err) {
+        console.error(`${LOG_TAG} flushSupplementBuffer failed: conv=${conversationId}`, err)
+      }
+    })
+  })
+}
+
 /** Merge supplement bodies. Groups get per-entry <msg-sender> tags for attribution. */
 function buildMergedMessageText(
   entries: SupplementEntry[],
@@ -412,8 +431,9 @@ function buildMergedMessageText(
 
 /**
  * Drain the supplement buffer and dispatch a merged round. No-op if empty.
- * Re-checks the busy lock to avoid racing with a newly-arrived message;
- * if busy, defers — the next round's finally will retry.
+ * Called on every change of the chat, including ones that leave it busy (a
+ * round queued, a turn begun): while it is busy the supplements stay queued,
+ * and the change that frees it calls again.
  */
 export function flushSupplementBuffer(conversationId: string): void {
   const entries = supplementBuffers.get(conversationId)
@@ -424,9 +444,8 @@ export function flushSupplementBuffer(conversationId: string): void {
 
   if (isAppChatConversationGenerating(conversationId)) {
     console.log(
-      `${LOG_TAG} flushSupplementBuffer deferred: conv=${conversationId} is ` +
-      `busy (race with newly-arrived message), ${entries.length} supplement(s) ` +
-      `remain queued for the next idle window`
+      `${LOG_TAG} Supplements wait: conv=${conversationId} is still busy, ` +
+      `${entries.length} stay queued until it is free`
     )
     return
   }
@@ -505,14 +524,15 @@ export function flushSupplementBuffer(conversationId: string): void {
     `images=${mergedImages.length}`
   )
 
-  setImmediate(() => {
-    dispatchInboundMessage(merged, last.reply, last.appId, last.instanceId, {
-      skipBusyCheck: true,
-      preBuiltMessageText: messageText,
-      preBuiltSenderIdentity: senderIdentity,
-    }).catch((err) => {
-      console.error(`${LOG_TAG} Supplement flush dispatch failed:`, err)
-    })
+  // Dispatched in the same tick as the busy check above, which the merged round
+  // skips: the turn holds the conversation from its first synchronous step, so a
+  // message arriving in between waits behind it instead of starting beside it.
+  dispatchInboundMessage(merged, last.reply, last.appId, last.instanceId, {
+    skipBusyCheck: true,
+    preBuiltMessageText: messageText,
+    preBuiltSenderIdentity: senderIdentity,
+  }).catch((err) => {
+    console.error(`${LOG_TAG} Supplement flush dispatch failed:`, err)
   })
 }
 
@@ -627,16 +647,15 @@ export async function dispatchInboundMessage(
   // initialisation, replyScope is a reply policy. A 'group'-scoped instance
   // still needs its owner bound via DM — gating DMs first would make claiming
   // impossible while the group guide keeps pointing users at DMs.
-  // Team-backed turns run the bound member as a trusted team peer (owner
-  // posture), so owner-claim / no-owner gating does not apply — mirrors the permission-context
-  // skip below. Without this guard, enterprise builds (permissionEnabled=true by
-  // default) would block team-backed group chats until someone DMs to claim owner.
   const ownersUnset =
     instanceCfg?.permissionEnabled === true &&
     (!Array.isArray(instanceCfg.owners) || instanceCfg.owners.length === 0)
-  if (!teamBacking && ownersUnset) {
+  if (ownersUnset) {
     if (msg.chatType === 'direct' && msg.from) {
-      const claimed = await maybeClaimOwner(instanceId, msg.from)
+      // A merged re-dispatch does not retry: each of its messages already did,
+      // and awaiting here would reopen the gap between the flush's busy check
+      // and the turn start. It runs as the guest a failed claim leaves.
+      const claimed = !options.skipBusyCheck && (await maybeClaimOwner(instanceId, msg.from))
       if (claimed) {
         const confirmation = replyScope === 'group' ? OWNER_CLAIMED_GROUP_ONLY_MESSAGE : OWNER_CLAIMED_MESSAGE
         try {
@@ -732,7 +751,9 @@ export async function dispatchInboundMessage(
         `session=${conversationId}, droppedSupplements=${dropped.length}`
       )
       try {
-        await stopGeneration(conversationId)
+        // Reaches a message still on its way to the engine as well as a turn
+        // already running: both read as busy above, so both must be stoppable.
+        await abortAppChatTurn(conversationId)
         await reply.send('Generation stopped.')
       } catch (err) {
         console.error(`${LOG_TAG} Failed to stop generation: session=${conversationId}`, err)
@@ -761,8 +782,8 @@ export async function dispatchInboundMessage(
         )
       } else {
         await clearImSession(app.id, app.spaceId!, msg.channel, msg.chatType, msg.chatId)
-        clearImPermissionContext(conversationId)
       }
+      clearImPermissionContext(conversationId)
       // Undelivered relay context belongs to the discarded conversation.
       getPendingRelayStore()?.clear(conversationId)
       await reply.send('Context cleared. Starting a fresh conversation.')
@@ -851,33 +872,29 @@ export async function dispatchInboundMessage(
       : body
   }
 
-  // Resolve owner status and write permission context to the registry.
-  // app-chat.ts reads this to enforce tool restrictions for guests.
+  // Resolve the sender's standing. It travels with this message to app-chat,
+  // which holds the turn to it; the registry keeps it as the chat's last sender
+  // for turns that have none of their own (a team-fronted chat woken by a
+  // teammate).
   //
   // Three cases:
   //   permissionEnabled=false            → everyone is owner (no restrictions, personal use default)
   //   permissionEnabled=true, owners=[]  → everyone is guest, deny-all (no one has write access)
   //   permissionEnabled=true, owners=[…] → only listed IDs are owners; others are guests
-  // Team-backed turns run the bound member as a trusted team peer (owner
-  // posture): IM guest hardening is NOT applied, so the permission context is left unset
-  // (app-chat treats a null context as unrestricted for this team session key).
-  let isOwner = true
-  // Stays false for team turns: it gates relay transcript exposure on the sender
-  // being verified against an explicit owner allowlist, which a team peer is not.
-  let hasOwnerRestriction = false
-  if (!teamBacking) {
-    const permissionEnabled = instanceCfg?.permissionEnabled ?? false
-    const owners = permissionEnabled ? instanceCfg?.owners : undefined
-    hasOwnerRestriction = Array.isArray(owners) && owners.length > 0
-    isOwner = !permissionEnabled || (hasOwnerRestriction && owners!.includes(msg.from))
-    setImPermissionContext(conversationId, {
-      senderId: msg.from,
-      senderName,
-      isOwner,
-      guestPolicy: permissionEnabled ? instanceCfg?.guestPolicy : undefined,
-      ownerIds: hasOwnerRestriction ? owners! : undefined,
-    })
+  //
+  // A team-fronted chat is held to the same rules, on the member's team session.
+  const permissionEnabled = instanceCfg?.permissionEnabled ?? false
+  const owners = permissionEnabled ? instanceCfg?.owners : undefined
+  const hasOwnerRestriction = Array.isArray(owners) && owners.length > 0
+  const isOwner = !permissionEnabled || (hasOwnerRestriction && owners!.includes(msg.from))
+  const imPermission: ImPermissionContext = {
+    senderId: msg.from,
+    senderName,
+    isOwner,
+    guestPolicy: permissionEnabled ? instanceCfg?.guestPolicy : undefined,
+    ownerIds: hasOwnerRestriction ? owners! : undefined,
   }
+  setImPermissionContext(conversationId, imPermission)
 
   // Register the active round's streaming handle ONLY on the start-of-round
   // path — never on the supplement-buffer branch above (which returns early).
@@ -998,9 +1015,16 @@ export async function dispatchInboundMessage(
       imFileSend,
       senderIdentity,
       imSession,
+      imPermission,
       // Team-backed chat: hand the member its team context (tools + Entry + the
-      // long-lived conversation epoch). Absent for single-human chats.
-      ...(teamBacking ? { teamContext: teamBacking.teamContext } : {}),
+      // long-lived conversation epoch). Absent for single-human chats. A guest
+      // is someone nobody here vouched for, so their request is stamped as
+      // entering from outside: whatever it sets in motion — a teammate it is
+      // handed to, a later turn that continues it — reads silence as a refusal
+      // (team/external-origin.ts).
+      ...(teamBacking
+        ? { teamContext: isOwner ? teamBacking.teamContext : { ...teamBacking.teamContext, external: true } }
+        : {}),
 
       // IM has no Deep Thinking toggle, so replies take the same extended
       // thinking this digital human's scheduled runs get.
@@ -1048,9 +1072,9 @@ export async function dispatchInboundMessage(
         // A whitespace-only payload is the empty-response repair placeholder:
         // we must still finish the streaming session (the only normal-path
         // terminator), but surface a notice rather than a blank message.
-        const replyText = finalContent.trim()
-          ? truncateUtf16Safe(finalContent, MAX_REPLY_LENGTH)
-          : EMPTY_RESPONSE_NOTICE
+        // Handed over whole: what one message can carry is the channel's to
+        // know, and it sends a longer answer in parts.
+        const replyText = finalContent.trim() ? finalContent : EMPTY_RESPONSE_NOTICE
         const sendFn = reply.streaming
           ? () => reply.streaming!.finish(replyText)
           : () => reply.send(replyText)

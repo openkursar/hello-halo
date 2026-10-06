@@ -18,6 +18,7 @@
  */
 
 import { createSdkMcpServer } from '../agent/resolved-sdk'
+import { markMcpServerSettings } from '../agent'
 import type { EmailChannelConfig } from '../../../shared/types/notification-channels'
 import { getServiceDefaults } from '../../foundation/product-config'
 import { ImapClient } from './imap-client'
@@ -120,9 +121,10 @@ export function createEmailMcpServer(
     )
   }
 
-  return createSdkMcpServer({
+  // The clients above keep these settings, so changed settings need a new session.
+  return markMcpServerSettings(createSdkMcpServer({
     name: 'halo-email',
     version: '1.0.0',
     tools,
-  })
+  }), config)
 }

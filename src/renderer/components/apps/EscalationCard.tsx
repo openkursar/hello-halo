@@ -96,7 +96,7 @@ export function EscalationCard({ entry, appId, onResolved, compactResolved = fal
     {current.content.dataPath && <button onClick={async () => {
       setFileError(false)
       try {
-        if (api.isRemoteMode()) api.downloadArtifact(current.content.dataPath!)
+        if (api.isRemoteMode()) { const result = await api.downloadArtifact(current.content.dataPath!); if (!result.success) throw new Error(result.error ?? 'Download failed') }
         else { const result = await api.showArtifactInFolder(current.content.dataPath!); if (!result.success) throw new Error(result.error ?? 'File opening rejected') }
       } catch (cause) { console.warn('[EscalationCard] Evidence file could not open', { appId, entryId: entry.id, cause }); setFileError(true) }
     }} className="flex min-h-8 max-w-full items-center gap-2 text-xs text-primary"><FileText size={14} className="shrink-0" /><span className="truncate">{current.content.dataPath.split('/').pop()}</span></button>}

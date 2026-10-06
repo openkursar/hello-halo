@@ -249,9 +249,12 @@ async function inject(ctx: BackendContext, conversationId: string, message: stri
   const response = await api.appChatInject({ appId: target.appId, conversationId, message, ...(references?.length ? { references } : {}) })
   if (!response.success) throw new Error(response.error || i18n.t('Failed to add message'))
   if (response.data?.delivered !== false) return true
+  ctx.get().dequeueMessage(conversationId, messageSummaryText(message, references))
+  // The user stopped the turn this was meant for: false hands the text back to
+  // the composer instead of starting the work they just halted.
+  if (response.data?.stopped) return false
   // The turn ended between the click and delivery: the text still has to go
   // somewhere, and a fresh turn is where it belongs.
-  ctx.get().dequeueMessage(conversationId, messageSummaryText(message, references))
   return send(ctx, conversationId, { content: message, ...(references?.length ? { options: { references } } : {}) })
 }
 

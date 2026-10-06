@@ -95,6 +95,17 @@ function generateViewId(): string {
   return `${VIEW_ID_PREFIX}${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
+/** Guidance when no engine could be reached: say so to the user instead of retrying. */
+function searchUnavailableGuidance(query: string, engines: SearchEngine[]): string {
+  return (
+    `Web search is unavailable right now: no search engine ` +
+    `(${engines.map(engine => engine.displayName).join(', ')}) could be reached for "${query}" ` +
+    `(network or proxy problem). Do not call web_search again for this request. Tell the user ` +
+    `that web search is temporarily unavailable, then continue without it and say what could ` +
+    `not be checked online.`
+  )
+}
+
 // ============================================
 // Search Context Class
 // ============================================
@@ -128,6 +139,7 @@ export class WebSearchContext {
 
     let lastReason: SearchBlockReason = 'no_results'
     let lastEngine: SearchEngine = engines[0]
+    let allUnreachable = true
 
     // Try each engine in order
     for (const engine of engines) {
@@ -150,6 +162,7 @@ export class WebSearchContext {
         }
 
         lastReason = outcome.reason
+        if (outcome.reason !== 'unreachable') allUnreachable = false
         console.log(`[WebSearch] ${engine.displayName} failed (${outcome.reason}), trying next engine`)
       } catch (error) {
         // Unexpected error (not a handled outcome): treat as unreachable.
@@ -159,9 +172,13 @@ export class WebSearchContext {
       }
     }
 
-    // All engines failed: surface a structured, actionable failure.
+    // All engines failed: surface a structured, actionable failure. When every
+    // engine automatic search uses was out of reach, another engine cannot help.
     const searchTime = Date.now() - startTime
-    const guidance = lastEngine.buildBlockGuidance(lastReason, query)
+    const automatic = !options.engine || options.engine === 'auto'
+    const guidance = automatic && allUnreachable
+      ? searchUnavailableGuidance(query, engines)
+      : lastEngine.buildBlockGuidance(lastReason, query)
 
     console.error(`[WebSearch] All engines failed after ${searchTime}ms (${lastReason})`)
 

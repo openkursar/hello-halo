@@ -460,6 +460,7 @@ export const api = {
 3. Token stored in localStorage
 4. All API requests include `Authorization: Bearer <token>`
 5. On 401: Remote reloads page; Capacitor dispatches `halo:auth-expired` → server list
+6. Download links (remote page, mobile app) carry a two-minute single-file ticket from `POST /api/artifacts/download-ticket`, never the token (`http/auth/download-ticket.ts`)
 
 ### Capacitor Mobile App
 
@@ -982,7 +983,8 @@ InboundMessage / ReplyHandle  — normalized upward protocol
 3. Extend the `ImChannelType` union in `src/shared/types/im-channel.ts`.
 4. If the brand has unique setup/auth flow (QR, OAuth, token refresh): add `ipc/<brand>.ts` + preload + renderer API + a setup UI component. Keep this file minimal — only brand-unique flows belong here.
 5. If the provider writes temp files: add a cleanup call in `cleanupImChannelTempFiles()`.
-6. Do NOT change `manager.ts`, `dispatch-inbound.ts`, or any other existing provider.
+6. If the platform caps one message: state the cap once in the provider and send text (replies, pushes, a stream's final answer) through `im-channels/message-parts.ts`. Callers hand over text of any length.
+7. Do NOT change `manager.ts`, `dispatch-inbound.ts`, or any other existing provider.
 
 ### 22.5 Inter-Module Access
 

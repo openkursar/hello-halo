@@ -12,6 +12,7 @@
  *   - stop() cancels downloads that are still in flight
  *   - sendFile refuses cleanly when no context_token has been cached yet or the
  *     file is too large, and builds the right outbound item once it can
+ *   - a text reply longer than one message goes out as ordered (i/n) parts
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -481,5 +482,53 @@ describe('outbound sendFile', () => {
 
     expect(sent).toBe(false)
     expect(uploadIlinkMedia).not.toHaveBeenCalled()
+  })
+})
+
+describe('outbound text', () => {
+  /** About 9000 characters: three WeChat messages. */
+  const LONG_ANSWER = Array.from({ length: 30 }, (_, i) => `第${i + 1}条：${'详细的说明文字。'.repeat(37)}`).join('\n')
+
+  /** The text of every sendmessage call, in order. */
+  function sentTexts(): string[] {
+    return fetchJson.mock.calls
+      .filter((call) => typeof call[1] === 'string' && call[1].endsWith('/ilink/bot/sendmessage'))
+      .map((call) => (call[3] as { msg: { item_list: Array<{ text_item: { text: string } }> } }).msg.item_list[0].text_item.text)
+  }
+
+  it('replies to a long answer in ordered (i/n) parts of at most 4000 characters', async () => {
+    servePoll([inboundMessage([{ type: 1, text_item: { text: 'write it all down' } }])])
+    const instance = new WeixinIlinkBotProvider().createInstance('inst-1', { botToken: 'token-abc', accountId: 'bot-1' })
+    const reply = new Promise<{ send(text: string): Promise<void> }>((resolve) => {
+      instance.onInbound((_msg, handle) => resolve(handle))
+    })
+    instance.start()
+
+    await (await reply).send(LONG_ANSWER)
+    instance.stop()
+
+    const texts = sentTexts()
+    expect(texts.length).toBeGreaterThan(1)
+    const bodies = texts.map((text, i) => {
+      const label = `(${i + 1}/${texts.length})\n\n`
+      expect(text.startsWith(label)).toBe(true)
+      expect(text.length).toBeLessThanOrEqual(4000)
+      return text.slice(label.length)
+    })
+    expect(bodies.join('')).toBe(LONG_ANSWER)
+  })
+
+  it('sends a short answer as one message, unlabeled', async () => {
+    servePoll([inboundMessage([{ type: 1, text_item: { text: 'hi' } }])])
+    const instance = new WeixinIlinkBotProvider().createInstance('inst-1', { botToken: 'token-abc', accountId: 'bot-1' })
+    const reply = new Promise<{ send(text: string): Promise<void> }>((resolve) => {
+      instance.onInbound((_msg, handle) => resolve(handle))
+    })
+    instance.start()
+
+    await (await reply).send('hello')
+    instance.stop()
+
+    expect(sentTexts()).toEqual(['hello'])
   })
 })

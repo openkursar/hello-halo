@@ -134,6 +134,11 @@ export { getWorkingDir, getApiCredentials, getApiCredentialsForConversation } fr
  * a file boundary) can drop another's by assigning `hooks`.
  */
 export { addSdkHooks } from './sdk-config'
+/**
+ * For an in-process MCP server that keeps the settings it was built from: a
+ * live session built with other settings is then rebuilt on its next send.
+ */
+export { markMcpServerSettings } from './sdk-config'
 export { parseSDKMessage, buildMessageContent, formatCanvasContext } from './message-utils'
 /**
  * What a user turn carries besides its text, as the model reads it (references

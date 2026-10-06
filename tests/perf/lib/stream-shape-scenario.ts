@@ -19,6 +19,7 @@ import { installUnresponsiveTracker, readUnresponsiveCount, readCrashCount } fro
 import { installReloadGuard } from './reload-guard'
 import { writeResult, beginScenario, currentLabel, currentThrottle } from './result-writer'
 import { getBuildIdentity } from './build-identity'
+import { installLiveUpdateCounters, readLiveUpdates } from './live-updates'
 import type { PerfResult } from '../types'
 
 export interface StreamShapeScenario {
@@ -26,8 +27,12 @@ export interface StreamShapeScenario {
   prompt: string
   /** Selectors counted while the reply streams; the largest count of each is passed to `precondition`. */
   probes?: Record<string, string>
+  /** Runs on the chat page before measuring starts, e.g. to open a preview beside the chat. */
+  prepare?: (page: Page) => Promise<void>
+  /** Count how often the live turn changes (`liveUpdates` in the result). */
+  countLiveUpdates?: boolean
   /** After the reply settled: a failure message if it does not have the promised shape. */
-  precondition: (page: Page, probeMax: Record<string, number>) => Promise<string | undefined>
+  precondition: (page: Page, probeMax: Record<string, number>, liveUpdates: PerfResult['liveUpdates'] | null) => Promise<string | undefined>
 }
 
 export async function runStreamShapeScenario(
@@ -39,6 +44,7 @@ export async function runStreamShapeScenario(
   const warnings: string[] = []
 
   await navigateToChat(page)
+  await spec.prepare?.(page)
   await installRenderObserversNow(page)
   await installUnresponsiveTracker(electronApp)
 
@@ -63,6 +69,8 @@ export async function runStreamShapeScenario(
     ;(window as unknown as { __streamProbe?: unknown }).__streamProbe = { max, timer }
   }, probes)
 
+  if (spec.countLiveUpdates) await installLiveUpdateCounters(page)
+
   const sampler = new ProcessMetricsSampler(electronApp)
   sampler.start()
   const t0 = Date.now()
@@ -79,9 +87,19 @@ export async function runStreamShapeScenario(
     return probe?.max ?? {}
   })
 
+  let liveUpdates: PerfResult['liveUpdates'] | null = null
+  if (spec.countLiveUpdates) {
+    try {
+      liveUpdates = await readLiveUpdates(page)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      warnings.push(`liveUpdates: counters could not be read (${message}) — reported as null.`)
+    }
+  }
+
   // Let the finished message render statically (and highlight) before checking its shape.
   await page.waitForTimeout(1500)
-  const preconditionFailure = await spec.precondition(page, probeMax)
+  const preconditionFailure = await spec.precondition(page, probeMax, liveUpdates)
 
   const rendererReloads = reloadGuard.getReloadCount()
   const crashCount = await readCrashCount(electronApp).catch(() => 0)
@@ -115,6 +133,7 @@ export async function runStreamShapeScenario(
   const unmeasuredMetrics: string[] = []
   if (render.longtask === null) unmeasuredMetrics.push('longtask')
   if (render.eventLatency === null) unmeasuredMetrics.push('eventLatency')
+  if (spec.countLiveUpdates && liveUpdates === null) unmeasuredMetrics.push('liveUpdates')
 
   const status: PerfResult['status'] = preconditionFailure ? 'precondition-failed' : 'ok'
   const result: PerfResult = {
@@ -135,6 +154,7 @@ export async function runStreamShapeScenario(
     rendererReloads,
     crashCount,
     valid: noReloadOrCrash && status === 'ok',
+    ...(liveUpdates ? { liveUpdates } : {}),
     unmeasuredMetrics: unmeasuredMetrics.length ? unmeasuredMetrics : undefined,
     status,
     note: preconditionFailure,

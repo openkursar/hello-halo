@@ -45,7 +45,7 @@ import type { ImSessionContext } from '../im-channels/im-prompt'
 import { resolveImFileSend } from '../im-channels/file-send-resolve'
 import type { FileSendFn } from '../im-channels/file-send-mcp'
 import type { ImChannelInstance } from '../../../../shared/types/im-channel'
-import { isAppChatConversationGenerating, injectIntoAppChat } from '../app-chat-live-turn'
+import { beginAppChatTurnStart, isAppChatConversationGenerating, injectIntoAppChat } from '../app-chat-live-turn'
 import { getAppManager } from '../../manager'
 import { getSpaceDir } from '../../../services/space.service'
 
@@ -617,6 +617,7 @@ export function createDefaultSessionDeps(store: TeamStore): OrchestrationSession
         message: request.message,
         conversationId: request.conversationId,
         teamContext: request.teamContext,
+        ...(request.turnStart ? { turnStart: request.turnStart } : {}),
         // Both halves of the IM route, or neither: the framing and the tool set
         // must match what dispatch-inbound gives this same session.
         ...(imRoute ? { imSession: imRoute.imSession, imFileSend: imRoute.imFileSend } : {}),
@@ -634,6 +635,9 @@ export function createDefaultSessionDeps(store: TeamStore): OrchestrationSession
         }
       }
       return { finalMessage }
+    },
+    holdTurn(sessionKey) {
+      return beginAppChatTurnStart(sessionKey)
     },
     isSessionActive(sessionKey) {
       // A team turn runs through app-chat's consumer model, which never writes

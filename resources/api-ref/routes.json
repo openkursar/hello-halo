@@ -322,6 +322,14 @@
     "path": "/api/artifacts/download"
   },
   {
+    "method": "POST",
+    "path": "/api/artifacts/download-ticket"
+  },
+  {
+    "method": "GET",
+    "path": "/api/artifacts/file/:ticket"
+  },
+  {
     "method": "GET",
     "path": "/api/spaces/:spaceId/artifacts/download-all"
   },

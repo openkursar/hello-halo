@@ -27,6 +27,7 @@ import { useFileOperations } from '../../hooks/useFileOperations'
 import { copyToClipboard } from '../../utils/clipboard'
 import { trackHome } from '../../services/home-telemetry'
 import { holdArtifactSpace } from '../../services/artifact-space-holds'
+import { downloadArtifact } from '../../services/artifact-download'
 import { useSpaceStore } from '../../stores/space.store'
 import { useOnboardingStore } from '../../stores/onboarding.store'
 import { ONBOARDING_ARTIFACT_NAME } from '../onboarding/onboardingData'
@@ -981,7 +982,7 @@ function TreeNodeComponent({ node, style, dragHandle }: NodeRendererProps<Artifa
     }
 
     if (isWebMode) {
-      api.downloadArtifact(data.path)
+      void downloadArtifact(data.path)
     } else {
       try {
         await api.openArtifact(data.path)
@@ -999,7 +1000,7 @@ function TreeNodeComponent({ node, style, dragHandle }: NodeRendererProps<Artifa
       return
     }
     if (isWebMode) {
-      api.downloadArtifact(data.path)
+      void downloadArtifact(data.path)
     } else {
       try {
         await api.openArtifact(data.path)
@@ -1178,7 +1179,7 @@ function TreeNodeComponent({ node, style, dragHandle }: NodeRendererProps<Artifa
         <button
           onClick={(e) => {
             e.stopPropagation()
-            api.downloadArtifact(data.path)
+            void downloadArtifact(data.path)
           }}
           className="p-0.5 rounded flex-shrink-0 ml-1 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
           title={t('Download')}

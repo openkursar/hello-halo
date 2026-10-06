@@ -232,6 +232,26 @@ describe('Request Converters', () => {
       expect(other.request.thinking).toBeUndefined()
     })
 
+    it('should tell MiMo to stop thinking when thinking is off, and change nothing when it is on', () => {
+      const request: AnthropicRequest = {
+        model: 'mimo-v2.5',
+        max_tokens: 1024,
+        messages: [{ role: 'user', content: 'Hello' }],
+        thinking: { type: 'adaptive' }
+      }
+
+      const off = convertAnthropicToOpenAIChat(request, { pickedReasoningEffort: 'off' })
+      expect(off.request.thinking).toEqual({ type: 'disabled' })
+      expect(off.request.reasoning_effort).toBeUndefined()
+
+      const toggledOff = convertAnthropicToOpenAIChat({ ...request, thinking: { type: 'disabled' } })
+      expect(toggledOff.request.thinking).toEqual({ type: 'disabled' })
+
+      const on = convertAnthropicToOpenAIChat(request, { pickedReasoningEffort: 'high' })
+      expect(on.request.thinking).toBeUndefined()
+      expect(on.request.reasoning_effort).toBe('high')
+    })
+
     // ====================================================================
     // reasoning_content injection from thinking blocks
     // ====================================================================
