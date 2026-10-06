@@ -21,6 +21,13 @@ sources; an enterprise build ships one (the rest are `hidden: true` via
 free** — there is no second design for the enterprise edition, and no code
 path that only enterprise takes.
 
+Only enabled sources are read. Turning a source off stops its sync but keeps
+its mirrored rows, so every catalog read of the mirror (list, search, the "All"
+preview, category counts) filters by the enabled source ids; turning it back on
+shows the rows again without a download. Single-entry lookups by slug
+(`findEntry`: details, installs, update checks) are not filtered, so apps
+installed from it keep working.
+
 Consequence: adding support for a new registry protocol means adding one file
 under `adapters/`, one `case` in `adapters/index.ts`, and one entry in
 `STORE_SOURCE_TYPES` (`shared/store/store-types.ts`), from which both the

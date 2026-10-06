@@ -247,7 +247,7 @@ export class QueryService {
     const enabled = registries.filter(r => r.enabled)
 
     // Mirror: always query SQLite (type filter in SQL)
-    const mirror = this.queryMirror(params)
+    const mirror = this.queryMirror(params, enabled)
 
     // Proxy: query only sources that support the requested type
     const proxyRegistries = enabled.filter(r => {
@@ -274,7 +274,12 @@ export class QueryService {
 
   // ── Mirror query (SQLite + FTS5) ───────────────────────────────────────────
 
-  private queryMirror(params: StoreQueryParams): {
+  /**
+   * Mirrored entries of the enabled sources only. Turning a source off stops
+   * its sync but leaves its rows, so the filter is what makes the switch hide
+   * them — and turning it back on shows them again without a download.
+   */
+  private queryMirror(params: StoreQueryParams, enabled: RegistrySource[]): {
     items: RegistryEntry[]
     total: number
     hasMore: boolean
@@ -285,8 +290,8 @@ export class QueryService {
     const offset = (page - 1) * pageSize
     const ftsQuery = search ? ftsEscape(search) : ''
 
-    const conditions: string[] = []
-    const bindings: unknown[] = []
+    const conditions: string[] = [`ri.registry_id IN (${enabled.map(() => '?').join(', ') || 'NULL'})`]
+    const bindings: unknown[] = enabled.map(source => source.id)
 
     if (type) {
       conditions.push('ri.type = ?')
@@ -475,7 +480,7 @@ export class QueryService {
         })
       } else if (t === 'skill') {
         // Mirror sources + proxy sources that support skill (e.g. SkillHub)
-        const mirror = this.queryMirror(previewParams)
+        const mirror = this.queryMirror(previewParams, enabled)
         const skillProxies = proxyRegistries.filter(r => supportsType(r, 'skill'))
         const proxy = await this.queryProxySources(previewParams, skillProxies)
         allItems.push(...proxy.items, ...mirror.items)
@@ -487,7 +492,7 @@ export class QueryService {
         })
       } else {
         // Mirror sources for automation
-        const mirror = this.queryMirror(previewParams)
+        const mirror = this.queryMirror(previewParams, enabled)
         allItems.push(...mirror.items)
         allSources.push(...mirror.sources)
         groups.push({

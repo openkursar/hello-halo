@@ -193,4 +193,38 @@ describe('QueryService — total as a facet count', () => {
       )
     })
   })
+
+  describe('a source the user turned off', () => {
+    const OFF: RegistrySource = { ...MIRROR, enabled: false }
+
+    it('shows none of its entries in lists, searches, previews or counts, and all of them again once it is back on', async () => {
+      const typed = await service.query({ type: 'skill', page: 1, pageSize: 50 }, [OFF])
+      const searched = await service.query({ type: 'skill', search: 'content', page: 1, pageSize: 50 }, [OFF])
+      const chip = await service.query({ type: 'skill', category: 'content', page: 1, pageSize: 1 }, [OFF])
+      const preview = await service.query({ page: 1, pageSize: 50 }, [OFF])
+
+      expect(typed.items).toEqual([])
+      expect(typed.total).toBe(0)
+      expect(searched.items).toEqual([])
+      expect(chip.total).toBe(0)
+      expect(preview.items).toEqual([])
+      expect(preview.groups?.every(group => group.count === 0)).toBe(true)
+
+      const back = await service.query({ type: 'skill', page: 1, pageSize: 50 }, [MIRROR])
+      expect(back.items.map(item => item.slug).sort()).toEqual(['skill-content-1', 'skill-content-2', 'skill-data-1'])
+    })
+
+    it('keeps an enabled source’s entries beside it', async () => {
+      db.prepare(`
+        INSERT INTO registry_items (pk, slug, registry_id, name, description, author, type, category, version, path, indexed_at)
+        VALUES ('other:extra-skill', 'extra-skill', 'other', 'extra-skill', 'd', 'a', 'skill', 'content', '1.0.0', 'pkg/extra-skill', 0)
+      `).run()
+      const OTHER: RegistrySource = { id: 'other', name: 'other', url: 'https://other.example.com', enabled: true, sourceType: 'halo' }
+
+      const result = await service.query({ type: 'skill', category: 'content', page: 1, pageSize: 50 }, [OFF, OTHER])
+
+      expect(result.items.map(item => item.slug)).toEqual(['extra-skill'])
+      expect(result.total).toBe(1)
+    })
+  })
 })
