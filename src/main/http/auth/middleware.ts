@@ -20,6 +20,7 @@ import { logAuthEvent } from './audit'
 import { notifyLockout } from './alert'
 import { parseCredentialType, verifyOfficeCredential, type OfficeCredential } from './office-credential'
 import { matchOfficeScope } from './route-scope'
+import { isDownloadTicketPath } from './download-ticket'
 
 // Augment Express's Request so the office credential attached by authMiddleware
 // is typed end-to-end instead of cast through `any`. express-serve-static-core is
@@ -94,6 +95,10 @@ function clientIp(req: Request): string {
  */
 export function authMiddleware(req: Request, res: Response, next: NextFunction): void {
   if (isPublicPath(req.path)) {
+    return next()
+  }
+  // Matched on the full path: mounted at /api, req.path arrives without it.
+  if (isDownloadTicketPath(`${req.baseUrl ?? ''}${req.path}`)) {
     return next()
   }
 

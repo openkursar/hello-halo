@@ -16,6 +16,7 @@ import type { CanvasTab } from '../../../stores/canvas.store'
 import { useViewerResources } from '../viewer-resources'
 import { useTranslation } from '../../../i18n'
 import { subscribeArtifactVersions, getArtifactVersion } from '../../../services/artifact-version'
+import { downloadArtifact } from '../../../services/artifact-download'
 
 interface ImageViewerProps {
   tab: CanvasTab
@@ -134,7 +135,7 @@ export function ImageViewer({ tab }: ImageViewerProps) {
   // Download image
   const handleDownload = () => {
     if (tab.path) {
-      api.downloadArtifact(tab.path)
+      void downloadArtifact(tab.path)
     }
   }
 
