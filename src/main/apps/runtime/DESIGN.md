@@ -1279,9 +1279,11 @@ create a digital human for a reminder.
   late. An IM chat gets the framing and file sending dispatch-inbound gives it,
   the asker's `<msg-sender>` in a group (and as the subject of any push), the
   asker's standing re-resolved under the channel's current settings
-  (`im-sender-standing.ts`), and the reply pushed to the chat. A one-off still
-  waiting when Halo quits is not delivered: the scheduler disabled it when it
-  came due.
+  (`im-sender-standing.ts`), and the reply pushed to the chat. A turn that
+  fails is told to the chat as a failed turn of its own is (`imErrorReply`,
+  §2.12a); nobody waits on it, so a push the chat does not take is logged, not
+  retried. A one-off still waiting when Halo quits is not delivered: the
+  scheduler disabled it when it came due.
 - **Guests do not get it.** The server is not in the capability toggle table,
   and the guest filter keeps no server an owner was never offered a switch for:
   a guest may only query, and every reminder is a future turn someone pays for.
