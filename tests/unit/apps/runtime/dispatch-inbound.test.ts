@@ -279,6 +279,41 @@ describe('dispatchInboundMessage — streaming selection', () => {
 })
 
 // ============================================
+// Reply length
+//
+// How much one message can carry is each channel's to know and handle (it
+// sends a long reply in parts); this path must hand over the whole answer.
+// ============================================
+
+describe('dispatchInboundMessage — long replies', () => {
+  const LONG_ANSWER = '长回答的每一段都要送达。'.repeat(600)
+
+  function replyWith(content: string): void {
+    const request = sendAppChatMessageMock.mock.calls[0][0] as { onReply: (text: string) => void }
+    request.onReply(content)
+  }
+
+  it('hands a long answer to the channel whole, not cut at a fixed length', async () => {
+    const reply = makeReply(false)
+    await dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
+
+    replyWith(LONG_ANSWER)
+
+    expect(reply.send).toHaveBeenLastCalledWith(LONG_ANSWER)
+  })
+
+  it('finishes a stream with the whole answer too', async () => {
+    instanceCfg = { streaming: true }
+    const reply = makeReply(true)
+    await dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
+
+    replyWith(LONG_ANSWER)
+
+    expect(reply.streaming!.finish).toHaveBeenCalledWith(LONG_ANSWER)
+  })
+})
+
+// ============================================
 // Session-key derivation
 // ============================================
 

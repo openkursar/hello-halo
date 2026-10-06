@@ -1075,6 +1075,8 @@ src/main/apps/runtime/
                                 (opt-in via ImChannelInstance.identityCapability)
     wecom-identity-resolve.ts -- WeCom-specific identityCapability implementation
                                 (message_aibot_sessions_list over MCP Streamable HTTP)
+    message-parts.ts         -- A text longer than one platform message as ordered
+                                `(i/n)` parts; the limit is each provider's (§4.2)
     *.provider.ts            -- Brand-specific provider implementations
                                 (wecom-bot.provider.ts, weixin-ilink.provider.ts, ...)
 ```
@@ -1113,6 +1115,28 @@ connection (WeCom's `nameResolveUrl`) should declare it in
 `instance.updateConfig()` instead of a stop+recreate — otherwise every
 change resets whatever connection-scoped state (WS session, reply-window
 caches, ...) a full recreate would wipe.
+
+### 4.2 How long one message can be is the provider's
+
+Generic code hands a reply, a push or a stream's final answer to the channel
+whole (`ReplyHandle.send`, `StreamingHandle.finish`, `pushToChat` take any
+length). It used to cut every IM reply to 4000 characters first, silently: the
+rest of a long answer was lost on every channel, while WeCom's own `(i/n)`
+splitting never triggered.
+
+Each provider knows its platform's cap and states it once, in the unit that
+platform counts — WeCom 20000 bytes (its stream frames, markdown replies and
+markdown pushes are each limited to 20480), Feishu 3500 characters (the size
+its SDK already splits markdown into, kept in step through `textChunkLimit`),
+WeChat 4000 characters (what the platform's own bot plugin sends per message).
+`im-channels/message-parts.ts` does the splitting for all of them, so a long
+text reads the same everywhere: ordered parts labeled `(i/n)`, each sent once
+the one before it settled, cut at a paragraph or line break near the cap and
+never inside a character, a code block closed and reopened across a cut.
+
+A WeCom stream that outgrows one message is closed on what fits plus a notice,
+rather than sending a frame the server rejects — which left the stream stuck
+mid-answer — and the whole answer follows as `(i/n)` pushes.
 
 Tests live in `tests/unit/apps/runtime/` mirroring the source layout.
 

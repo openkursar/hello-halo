@@ -62,9 +62,6 @@ import { getImChannelsPermissionDefaults } from '../../foundation/product-config
 
 const LOG_TAG = '[Dispatch]'
 
-/** Maximum reply length (platform-safe limit for most IM channels) */
-const MAX_REPLY_LENGTH = 4000
-
 /**
  * Shown when the model produced no usable answer (only the whitespace
  * empty-response repair placeholder). A streaming IM session must still be
@@ -1075,9 +1072,9 @@ export async function dispatchInboundMessage(
         // A whitespace-only payload is the empty-response repair placeholder:
         // we must still finish the streaming session (the only normal-path
         // terminator), but surface a notice rather than a blank message.
-        const replyText = finalContent.trim()
-          ? truncateUtf16Safe(finalContent, MAX_REPLY_LENGTH)
-          : EMPTY_RESPONSE_NOTICE
+        // Handed over whole: what one message can carry is the channel's to
+        // know, and it sends a longer answer in parts.
+        const replyText = finalContent.trim() ? finalContent : EMPTY_RESPONSE_NOTICE
         const sendFn = reply.streaming
           ? () => reply.streaming!.finish(replyText)
           : () => reply.send(replyText)

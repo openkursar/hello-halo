@@ -68,12 +68,14 @@ import type {
 } from '../../../../shared/types/inbound-message'
 import type { ImageAttachment, ImageMediaType } from '../../../../shared/types/image-attachment'
 import {
+  WECOM_MESSAGE_LIMIT,
   WecomStreamSession,
   type StreamingTransport,
   type StreamLogger,
   type StreamLogLevel,
 } from './wecom-stream-session'
 import { ensureUtf8 } from './wecom-content-utf8'
+import { sendAsMessages } from './message-parts'
 import { ConnectionArbiter } from './connection-arbiter'
 import { stageMediaFile, pruneMediaTempDir } from './media-temp-files'
 import { notifyAppEvent } from '../../../services/notification.service'
@@ -465,7 +467,8 @@ class WecomBotInstance implements ImChannelInstance {
    * resolves on ack, but the ImChannelInstance contract is `boolean` — we
    * fire-and-forget and report whether the WS was ready to accept the send.
    * Errors after the synchronous return are logged but do not retroactively
-   * change the return value.
+   * change the return value. Text longer than one message goes out as ordered
+   * parts, each sent once the previous one is acked.
    */
   pushToChat(
     chatId: string,
@@ -484,34 +487,9 @@ class WecomBotInstance implements ImChannelInstance {
       return false
     }
 
-    const sanitized = ensureUtf8(text)
-    const bytes = Buffer.byteLength(sanitized, 'utf8')
-
-    // Fire and forget — the SDK queues + acks under the hood.
-    void this.wsClient
-      .sendMessage(chatId, {
-        msgtype: 'markdown',
-        markdown: { content: sanitized },
-      })
-      .then(() => {
-        this.counters.totalPush++
-        logEvent(this.instanceId, 'info', 'push_sent', {
-          trace,
-          chatId,
-          chatType,
-          bytes,
-        })
-      })
-      .catch((err: Error) => {
-        this.counters.totalError++
-        logEvent(this.instanceId, 'error', 'push_send_error', {
-          trace,
-          chatId,
-          chatType,
-          cat: 'network',
-          err: err.message,
-        })
-      })
+    void sendAsMessages(ensureUtf8(text), WECOM_MESSAGE_LIMIT, (part) =>
+      this.pushToChatAwaited(chatId, part, chatType, trace),
+    )
     return true
   }
 
@@ -1074,22 +1052,11 @@ class WecomBotInstance implements ImChannelInstance {
         // with quoteReply disabled), skip it entirely and go straight to
         // aibot_send_msg (proactive push, no req_id → plain text). Fall back to
         // push in both cases when the preferred path is unavailable.
-        const sanitized = ensureUtf8(text)
-        const replied = useQuoteReply
-          ? await this.replyMarkdown(chatId, sanitized, frame, trace)
-          : false
-        if (replied) return
-        const sourceTag = useQuoteReply ? `reply:${trace}` : `reply-noquote:${trace}`
-        logEvent(this.instanceId, 'info', useQuoteReply ? 'reply_fallback_to_push' : 'reply_skip_quote', {
-          trace,
-          chatId,
-          chatType,
-          quoteReply: useQuoteReply,
+        const delivered = await this.deliverReply(chatId, chatType, trace, frame, text, {
+          quoted: useQuoteReply,
+          sourceTag: useQuoteReply ? `reply:${trace}` : `reply-noquote:${trace}`,
         })
-        const pushed = await this.queuePush(
-          chatId, sanitized, chatType, sourceTag, trace,
-        )
-        if (!pushed) {
+        if (!delivered) {
           this.counters.totalError++
           throw new Error(
             `[WecomBot:${this.instanceId}] Both reply and push failed for chat ${chatId} (trace=${trace})`,
@@ -1098,6 +1065,35 @@ class WecomBotInstance implements ImChannelInstance {
       },
       ...(streaming ? { streaming } : {}),
     }
+  }
+
+  /**
+   * Deliver a reply of any length. Its first message is the quoted reply when
+   * `quoted` (pushed instead once the reply window is gone or the reply
+   * fails); a reply longer than one message continues as ordered pushes.
+   *
+   * @returns whether every message went out
+   */
+  private async deliverReply(
+    chatId: string,
+    chatType: 'direct' | 'group',
+    trace: string,
+    frame: WsFrameHeaders,
+    text: string,
+    route: { quoted: boolean; sourceTag: string },
+  ): Promise<boolean> {
+    return sendAsMessages(ensureUtf8(text), WECOM_MESSAGE_LIMIT, async (message, index) => {
+      if (index === 0) {
+        if (route.quoted && (await this.replyMarkdown(chatId, message, frame, trace))) return true
+        logEvent(this.instanceId, 'info', route.quoted ? 'reply_fallback_to_push' : 'reply_skip_quote', {
+          trace,
+          chatId,
+          chatType,
+          quoteReply: route.quoted,
+        })
+      }
+      return this.queuePush(chatId, message, chatType, route.sourceTag, trace)
+    })
   }
 
   private async replyMarkdown(
@@ -1234,34 +1230,22 @@ class WecomBotInstance implements ImChannelInstance {
     frame: WsFrameHeaders,
     finalText: string,
   ): Promise<void> {
-    const sanitized = ensureUtf8(finalText)
     logEvent(this.instanceId, 'info', 'streaming_finish_fallback_begin', {
       trace,
       chatId,
-      bytes: Buffer.byteLength(sanitized, 'utf8'),
+      bytes: Buffer.byteLength(finalText, 'utf8'),
     })
-    const replied = await this.replyMarkdown(chatId, sanitized, frame, trace)
-    if (replied) {
-      logEvent(this.instanceId, 'info', 'streaming_finish_fallback_via_reply', {
-        trace,
-        chatId,
-      })
-      return
-    }
-    const pushed = await this.queuePush(
-      chatId,
-      sanitized,
-      chatType,
-      `stream-finish:${trace}`,
-      trace,
-    )
-    if (!pushed) {
+    const delivered = await this.deliverReply(chatId, chatType, trace, frame, finalText, {
+      quoted: true,
+      sourceTag: `stream-finish:${trace}`,
+    })
+    if (!delivered) {
       this.counters.totalError++
       throw new Error(
         `[WecomBot:${this.instanceId}] streaming.finish fallback failed for chat ${chatId} (trace=${trace})`,
       )
     }
-    logEvent(this.instanceId, 'info', 'streaming_finish_fallback_via_push', {
+    logEvent(this.instanceId, 'info', 'streaming_finish_fallback_sent', {
       trace,
       chatId,
     })
