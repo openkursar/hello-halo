@@ -100,15 +100,16 @@ Channels page has a **Feishu Bot** (飞书机器人) card (§1).
   (Lark（国际版）).
 - **Owner.** As with WeCom, setup does not tell Halo who the owner is: right after setup the user
   sends the bot one direct message, and the first person to message it in a direct chat becomes
-  its owner. Owners and guests are managed with the same permission editor as WeCom.
+  its owner. Owners and guests are managed with the same permission editor as WeCom, guest skills
+  included (`message-channels/wecom-bot.md` §3).
 - **Groups.** **Require @mention in groups** (在群聊中需要 @ 提及) is on by default, so the bot
   answers only group messages that @ it. Feishu delivers un-mentioned group messages at all only
   when the tenant granted the sensitive "all group messages" permission; only then does turning
   the toggle off make the bot answer every group message. **Quote Reply (Group)** (引用回复（群聊）)
   decides whether group replies quote the triggering message; direct messages never quote.
 - **Replies.** **Streaming** (流式传输) shows progress live in a Feishu card that is then replaced
-  by the final answer; with it off, only the final reply is sent. The bot can also send files into
-  the chat.
+  by the final answer; with it off, only the final reply is sent, plus the **Processing Notice**
+  (处理中提示) described in §2. The bot can also send files into the chat.
 - **One machine per bot.** Feishu hands each event to exactly one connection, so the same App ID
   connected from two machines splits the messages at random between them. Keep a given bot on one
   Halo; Halo also refuses to bind a bot that is already bound to another digital human.
@@ -130,6 +131,38 @@ Channels page has a **Feishu Bot** (飞书机器人) card (§1).
   Settings → Message Channels (设置 → 消息通道). There is no per-channel config file.
 - **An instance with no `appId` or `enabled: false` never connects** — `ImChannelManager` only
   calls `createAndStartInstance` when both are set (`manager.ts`).
+- **Processing Notice** (处理中提示, Halo 3.0 and later) — a switch on every bot card (WeCom,
+  Feishu, WeChat), **on** by default. With Streaming off, a reply that has not arrived within 5
+  seconds is preceded by "✅ 已收到，正在处理…" so the sender knows the message arrived; a faster
+  reply comes alone. Switched off, only the final reply is ever sent. While Streaming is on the
+  switch is greyed out: the streaming message itself shows the status. Before 3.0 that notice was
+  sent at once for every message and could not be turned off.
+- **"?" next to each setting** (Halo 3.0 and later): the reply and permission settings on a bot card
+  each have a **?** that opens a short explanation, and it opens with a tap on a phone or in the
+  remote web page too. Point the user at it rather than paraphrasing a setting from memory.
+- **Answering the digital human's questions in IM** (Halo 3.0 and later). When the digital human
+  asks for a decision, the bot bound to it (or the bot serving its team) sends the question at once:
+  - **The owner's direct chat** gets the full question with a number and the options, e.g.
+    "【name】需要你决定（编号 12）…". The owner replies `/answer 12 B` — an option letter, the
+    option's text, or an answer in their own words. With only one question waiting, the number
+    may be left out; with several, Halo lists the numbers and asks which one.
+  - **Group chats** — those with **Auto-sync run result** (自动同步运行结果) on in the digital
+    human's bot sessions, and the group a team's work came from — get only "有一个问题在等主人回复
+    （编号 12）", never the question itself.
+  - **Who counts as the owner**: with permission control on, the IDs in the owner list, answering
+    from any chat; anyone else is told only the owner can answer. With permission control off there
+    is no owner list: the question goes only to direct chats with **Auto-sync run result** on, and
+    answers are accepted only in direct chats, never in groups.
+  - The first answer wins, from IM or Halo alike, and the task carries on; the bot confirms with
+    "已收到，任务继续". An answer to a question already answered, expired or closed gets a short
+    explanation instead.
+  - A bot limited to group chats (Reply Scope "group only") with permission control off cannot take
+    answers in IM at all — answer in Halo. The question also stays answerable in Halo whenever the
+    bot was offline.
+  - Halo learns which direct chat is the owner's from a message the owner sends there. A Feishu
+    owner whose direct chat gets no questions should message the bot once.
+  - Only messages that start with `/answer` (in a group, right after the @mention) count as
+    answers; they never reach the AI.
 
 ## 3. Configuration — shortest path
 
