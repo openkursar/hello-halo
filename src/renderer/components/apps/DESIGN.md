@@ -77,6 +77,12 @@ store's update dialog), the author's version of each loaded only when asked,
 and switching one or all of them to it. It never says the user changed them —
 after an upgrade with no earlier author's version, that is not known.
 
+A run in progress shows when it started and how long it has been going
+(`RunningSince`, from `AutomationAppState.runningAtMs`, ticking only while the
+card is shown) and, for a person with schedules, that scheduled times coming due
+meanwhile are skipped. When the run ends, its latest entry says how many were
+(`content.skippedSchedules`) — one line, not an entry per skipped time.
+
 Desktop and HTTP clients use the same APIs. Layout is mobile-first; long source
 names, selected answers, loading failures and unavailable teams remain readable
 without hover. Errors are explicit and retain the last useful records and drafts.

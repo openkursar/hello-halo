@@ -103,7 +103,9 @@ const INTERRUPTED_RUN_MESSAGE = 'Interrupted — Halo stopped while this run was
 export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService {
   const queuedAutomatic = new Map<string, Set<AbortController>>()
   const intentionallyStoppedRuns = new Set<string>()
-  const activeRunControllers = new Map<string, AbortController>()
+  // By run id. `startedAt` is this execution's own start: a continued run keeps
+  // its first start in the database.
+  const activeExecutions = new Map<string, { controller: AbortController; startedAt: number }>()
   const continuationDispatches = new Set<string>()
   let continuationInterval: ReturnType<typeof setInterval> | null = null
   let shuttingDown = false
@@ -379,6 +381,24 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     return { appId: app.id, runId, sessionKey, outcome: 'noop', startedAt: now, finishedAt: now, durationMs: 0 }
   }
 
+  /**
+   * Say on the run's latest entry how many of the person's scheduled times came
+   * due while this execution kept it busy. Each was skipped (one run per
+   * person) and left no other trace on the timeline.
+   */
+  function noteSkippedSchedules(appId: string, runId: string, busySince: number): void {
+    const until = Date.now()
+    let skipped = 0
+    for (const jobId of activations.get(appId)?.schedulerJobIds ?? []) {
+      skipped += scheduler.countDueTimes(jobId, busySince, until)
+    }
+    if (skipped === 0) return
+    const latest = store.getEntriesForRun(runId)[0]
+    const updated = latest ? store.addSkippedSchedules(latest.id, skipped) : null
+    if (updated) publishEntry(updated)
+    console.log(`[Runtime][${runId.slice(0, 8)}] ${skipped} scheduled time(s) came due during the run and were skipped`)
+  }
+
   // ── Helper: Execute with concurrency control ────────
   async function executeWithConcurrency(
     app: InstalledApp,
@@ -392,6 +412,8 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       onStarted?: (info: { runId: string; sessionKey: string; startedAt: number }) => void
     }
   ): Promise<AppRunResult> {
+    // From here the person is busy (queued or running): its scheduled times are skipped.
+    const busySince = Date.now()
     // Try to acquire a slot immediately without blocking.
     // If no slot is available, transition to 'queued' state and block.
     const immediateSlot = semaphore.tryAcquire()
@@ -491,7 +513,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         // before their first broadcast.
         onRunStarted: ({ runId, sessionKey, startedAt }) => {
           executingRunId = runId
-          activeRunControllers.set(runId, abortController)
+          activeExecutions.set(runId, { controller: abortController, startedAt })
           emitRunStarted({
             appId: app.id,
             runId,
@@ -558,6 +580,12 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         }
       }
 
+      try {
+        noteSkippedSchedules(app.id, result.runId, busySince)
+      } catch (skipErr) {
+        console.error(`[Runtime][${runTag}] Failed to note skipped scheduled times:`, skipErr)
+      }
+
       // Update manager with run outcome
       const outcome = result.outcome as RunOutcome
       appManager.updateLastRun(app.id, outcome, result.errorMessage)
@@ -621,7 +649,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       throw error
     } finally {
       if (executingRunId) {
-        activeRunControllers.delete(executingRunId)
+        activeExecutions.delete(executingRunId)
         intentionallyStoppedRuns.delete(executingRunId)
       }
       runningRuns.remove(app.id, executionKey)
@@ -1222,7 +1250,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         else if (latestRun.status === 'skipped') state.lastStatus = 'skipped'
 
         if (latestRun.status === 'running') {
-          state.runningAtMs = latestRun.startedAt
+          state.runningAtMs = activeExecutions.get(latestRun.runId)?.startedAt ?? latestRun.startedAt
           state.runningRunId = latestRun.runId
           state.runningSessionKey = latestRun.sessionKey
         }
@@ -1320,7 +1348,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     async stopRun(appId: string, runId: string): Promise<void> {
       const run = store.getRun(runId)
       if (!run || run.appId !== appId) throw new Error('Task not found')
-      const controller = activeRunControllers.get(runId)
+      const controller = activeExecutions.get(runId)?.controller
       if (!controller) throw new Error('This execution is no longer running')
       intentionallyStoppedRuns.add(runId)
       store.markRunStopped(runId)
@@ -1332,8 +1360,8 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       const run = store.getRun(runId)
       if (!run || run.appId !== appId) throw new Error('Task not found')
       for (const entry of store.closeRun(runId)) publishDecision(entry)
-      if (activeRunControllers.has(runId)) intentionallyStoppedRuns.add(runId)
-      activeRunControllers.get(runId)?.abort()
+      if (activeExecutions.has(runId)) intentionallyStoppedRuns.add(runId)
+      activeExecutions.get(runId)?.controller.abort()
       console.log('[Runtime] Task closed', { appId, runId })
       broadcastAppStatus(appId)
     },
@@ -1589,6 +1617,11 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
 
       // IM forwarding is now AI-driven via notify_bot tool (no more system auto-push)
 
+      // Stopping or closing a run is not its schedule failing: the scheduler
+      // must neither back the next time off nor disable the job after repeats.
+      if (result.outcome === 'error' && (store.wasRunStopped(result.runId) || store.isRunClosed(result.runId))) {
+        return 'noop'
+      }
       return result.outcome as RunOutcome
     } catch (err) {
       console.error(`[Runtime] Scheduled run failed: app=${appId}, job=${job.id}:`, err)

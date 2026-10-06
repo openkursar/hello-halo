@@ -11,13 +11,14 @@
  *   - result.is_error → outcome error
  *   - AI never calls report_to_user → auto-continue loop then outcome error
  *   - abort → loop short-circuits, no auto-continue nagging
+ *   - stop of a silent run → engine interrupted, then closed, so the run ends
  *   - stream throws → mapped to error outcome with errorMessage recorded
  *
  * We assert on the returned AppRunResult and on store.completeRun, which is the
  * observable contract of the branch decisions.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -160,6 +161,7 @@ vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
   createSession: vi.fn(async () => nextSession),
   query: vi.fn(),
   getActiveEngine: () => null,
+  getEngineCapabilities: () => ({ features: { interrupt: true } }),
 }))
 
 // The memory lifecycle is exercised by its own tests; here only its wiring.
@@ -238,6 +240,7 @@ vi.mock('../../../../src/main/apps/runtime/prompt', () => ({
 }))
 
 import { executeRun } from '../../../../src/main/apps/runtime/execute'
+import { ENGINE_STOP_GRACE_MS } from '../../../../src/main/apps/runtime/engine-stop'
 import { finalizeMemoryAfterTurn, prepareMemoryForTurn, loadSpaceTopicsForTurn, appMemorySettings } from '../../../../src/main/apps/runtime/turn/memory-lifecycle'
 import { generatePromptInstructions } from '../../../../src/main/platform/memory'
 import { buildAppSystemPrompt, buildInitialMessage } from '../../../../src/main/apps/runtime/prompt'
@@ -537,6 +540,82 @@ describe('executeRun — abort handling', () => {
     // auto-continue while-loop never iterates (its guard checks aborted).
     expect(nextSession.streamCalls).toBe(1)
     expect(result.outcome).toBe('error')
+  })
+})
+
+/** An engine gone silent: nothing arrives until it is closed, and interrupting it does nothing. */
+class SilentSession {
+  send = vi.fn()
+  interrupt = vi.fn(async () => {})
+  close = vi.fn(() => this.end())
+  private end!: () => void
+  private readonly closed = new Promise<void>(resolve => { this.end = resolve })
+
+  stream(): AsyncGenerator<SdkMessage> {
+    const closed = this.closed
+    return (async function* () {
+      await closed
+    })()
+  }
+}
+
+describe('executeRun — stopping a run', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('ends a silent run: the engine is interrupted, then closed after the grace period', async () => {
+    const session = new SilentSession()
+    nextSession = session as unknown as FakeSession
+    const controller = new AbortController()
+    const emitEntry = vi.fn()
+    const running = executeRun({
+      app: makeApp(),
+      trigger: baseTrigger,
+      store: makeStore(),
+      memory: makeMemory(),
+      abortSignal: controller.signal,
+      emitEntry,
+    })
+    await vi.waitFor(() => expect(session.send).toHaveBeenCalled())
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+
+    controller.abort()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(session.interrupt).toHaveBeenCalledTimes(1)
+    expect(session.close).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(ENGINE_STOP_GRACE_MS)
+    const result = await running
+
+    expect(session.close).toHaveBeenCalled()
+    expect(result.outcome).toBe('error')
+    expect(result.errorMessage).toBe('Stopped before reporting results')
+    // The stop, not the model, is why nothing was reported.
+    const entry = emitEntry.mock.calls.at(-1)?.[0]
+    expect(entry).toMatchObject({ type: 'run_error', content: { summary: 'Stopped before it reported results.' } })
+    expect(entry.content.error).toBeUndefined()
+  })
+
+  it('leaves the engine alone once the run has ended', async () => {
+    nextSession = new FakeSession({ script: [systemInit(), assistantReport()] })
+    const interrupt = vi.fn()
+    Object.assign(nextSession, { interrupt })
+    const controller = new AbortController()
+    const result = await executeRun({
+      app: makeApp(),
+      trigger: baseTrigger,
+      store: makeStore(),
+      memory: makeMemory(),
+      abortSignal: controller.signal,
+    })
+
+    controller.abort()
+
+    expect(result.outcome).toBe('useful')
+    expect(interrupt).not.toHaveBeenCalled()
+    // Closed once, by the run itself.
+    expect(nextSession.close).toHaveBeenCalledTimes(1)
   })
 })
 

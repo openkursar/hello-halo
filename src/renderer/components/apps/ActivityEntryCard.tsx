@@ -255,6 +255,14 @@ export function ActivityEntryCard({ entry, appId, isLast, animationDelay }: Acti
             )}
           </div>
         )}
+
+        {!!content.skippedSchedules && (
+          <p className="mt-1.5 text-xs text-muted-foreground">
+            {content.skippedSchedules === 1
+              ? t('1 scheduled run came due during this run and was skipped.')
+              : t('{{skipped}} scheduled runs came due during this run and were skipped.', { skipped: content.skippedSchedules })}
+          </p>
+        )}
       </div>
     </div>
   )
