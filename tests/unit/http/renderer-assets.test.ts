@@ -16,7 +16,7 @@ import { join } from 'path'
 import express from 'express'
 import { get, type IncomingMessage, type Server } from 'http'
 
-const io = vi.hoisted(() => ({ readFile: 0, stat: 0, streamed: 0, failNextRead: false }))
+const io = vi.hoisted(() => ({ readFile: 0, stat: 0, streamed: 0, failNextRead: false, holdStat: null as Promise<void> | null }))
 vi.mock('fs', async (original) => {
   const real = await original<typeof import('fs')>()
   return {
@@ -31,13 +31,18 @@ vi.mock('fs', async (original) => {
       }
       return (real.readFile as (...a: unknown[]) => void)(...args)
     }) as typeof real.readFile,
-    stat: ((...args: Parameters<typeof real.stat>) => { io.stat++; return (real.stat as (...a: unknown[]) => void)(...args) }) as typeof real.stat,
+    stat: ((...args: Parameters<typeof real.stat>) => {
+      io.stat++
+      const run = () => (real.stat as (...a: unknown[]) => void)(...args)
+      if (io.holdStat) void io.holdStat.then(run)
+      else run()
+    }) as typeof real.stat,
     open: ((...args: Parameters<typeof real.open>) => { io.streamed++; return (real.open as (...a: unknown[]) => void)(...args) }) as typeof real.open,
     createReadStream: ((...args: Parameters<typeof real.createReadStream>) => { io.streamed++; return real.createReadStream(...args) }) as typeof real.createReadStream,
   }
 })
 
-import { resolveAssetPath, serveRendererAssets } from '../../../src/main/http/renderer-assets'
+import { rendererAssetCopies, resolveAssetPath, serveRendererAssets } from '../../../src/main/http/renderer-assets'
 
 let root: string
 let server: Server
@@ -140,6 +145,22 @@ describe('one copy per file', () => {
     await new Promise((resolve) => setImmediate(resolve))
     expect((await (await fetch(`${base}/assets/big.wasm`)).arrayBuffer()).byteLength).toBe(size)
     expect(io.readFile).toBe(2)
+  })
+
+  it('holds nothing for a client that left while the file was still being checked', async () => {
+    writeFileSync(join(root, 'assets', 'left-early.js'), 'never sent')
+    let releaseStat!: () => void
+    io.holdStat = new Promise<void>((resolve) => { releaseStat = resolve })
+    const request = get(`${base}/assets/left-early.js`)
+    request.on('error', () => {})
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    request.destroy()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    io.holdStat = null
+    releaseStat()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(rendererAssetCopies()).toBe(0)
+    expect(io.readFile).toBe(0)
   })
 
   it('reads a file again once it changed', async () => {

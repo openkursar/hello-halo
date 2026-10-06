@@ -53,6 +53,11 @@ function statOf(path: string): Promise<Stats | null> {
   })
 }
 
+/** How many file copies are held for responses right now (diagnostics). */
+export function rendererAssetCopies(): number {
+  return sending.size
+}
+
 /** The file's contents for one response, shared with the others sending it until all have closed. */
 function contentFor(path: string, stats: Stats, res: Response): Promise<Buffer> {
   const version = `${stats.size}:${stats.mtimeMs}`
@@ -90,6 +95,9 @@ export function serveRendererAssets(root: string): RequestHandler {
         res.status(304).end()
         return
       }
+      // A client gone while the file was checked would hold its share forever:
+      // its close has already fired, so the release would never run.
+      if (res.destroyed) return
 
       const body = await contentFor(file, stats, res)
       res.setHeader('Content-Length', body.length)
