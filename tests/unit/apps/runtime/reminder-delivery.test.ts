@@ -126,6 +126,10 @@ describe('deliverReminder', () => {
     request.onReply('   ')
     expect(pushToChat).toHaveBeenCalledTimes(1)
     expect(pushToChat).toHaveBeenCalledWith('g-1', 'Time is up!', 'group')
+
+    // A turn cut off before it finished says so, as every IM reply does.
+    request.onReply('Time is', { kind: 'interrupted' })
+    expect(pushToChat).toHaveBeenLastCalledWith('g-1', expect.stringMatching(/^Time is\n\n（.+）$/), 'group')
   })
 
   it('names its contact in a direct chat instead of tagging the message', async () => {

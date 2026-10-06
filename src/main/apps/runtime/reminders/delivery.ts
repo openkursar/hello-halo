@@ -22,6 +22,7 @@ import { resolveImFileSend } from '../im-channels/file-send-resolve'
 import { setImPermissionContext } from '../im-permission-registry'
 import { resolveImPermission } from '../im-sender-standing'
 import { sanitizeRuntimeTags } from '../pending-relays'
+import { withTurnEndingNote } from '../turn-ending'
 import { getSpaceDir } from '../../../services/space.service'
 import { parseAppChatKey, parseNativeChatKey } from '../../../../shared/apps/im-keys'
 import { classifySessionSource, getImSessionDisplayName, LOCAL_SESSION_CHANNEL } from '../../../../shared/types/im-channel'
@@ -86,10 +87,12 @@ export function deliverReminder(reminder: ConversationReminder, dueAt: number): 
     senderIdentity,
     // IM has no Deep Thinking toggle; the same setting its inbound replies take.
     thinkingEnabled: true,
-    onReply: (reply) => {
-      if (!reply.trim()) return
+    onReply: (reply, ending) => {
+      // A turn that stopped short says so, as any reply in an IM chat does.
+      const text = ending ? withTurnEndingNote(reply, ending) : reply
+      if (!text.trim()) return
       try {
-        instance.pushToChat(parsed.chatId, reply, parsed.chatType)
+        instance.pushToChat(parsed.chatId, text, parsed.chatType)
       } catch (error) {
         console.error(`${LOG_TAG} Pushing the reminder reply failed: ${conversationId}`, error)
       }
