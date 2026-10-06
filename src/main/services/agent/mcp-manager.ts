@@ -30,6 +30,37 @@ import { AnalyticsEvents } from '../analytics/types'
 let cachedMcpStatus: McpServerStatusInfo[] = []
 let lastMcpStatusUpdate: number = 0
 
+const recoveredListeners = new Set<(name: string) => void>()
+
+/**
+ * Subscribe to a server's derived status turning 'connected' from anything
+ * else — by a probe, a connection test or any session's report. Sessions that
+ * could not use the server do not reconnect by themselves; the session manager
+ * rebuilds them on this cue.
+ */
+export function onMcpServerRecovered(listener: (name: string) => void): () => void {
+  recoveredListeners.add(listener)
+  return () => {
+    recoveredListeners.delete(listener)
+  }
+}
+
+function isRecovery(previous: McpServerStatusInfo | undefined, next: McpServerStatusInfo): boolean {
+  return next.status === 'connected' && previous?.status !== 'connected'
+}
+
+function notifyRecovered(names: string[]): void {
+  for (const name of names) {
+    for (const listener of recoveredListeners) {
+      try {
+        listener(name)
+      } catch (err) {
+        console.error(`[Agent] MCP recovery listener failed for ${name}:`, err)
+      }
+    }
+  }
+}
+
 /**
  * Get cached MCP status
  */
@@ -118,6 +149,7 @@ export function broadcastMcpStatus(
   const now = Date.now()
 
   const byName = new Map(cachedMcpStatus.map(s => [s.name, s]))
+  const recovered: string[] = []
   for (const s of mcpServers) {
     const prev = byName.get(s.name)
     const sessionStatus = s.status as NonNullable<McpServerStatusInfo['sessionStatus']>
@@ -136,11 +168,13 @@ export function broadcastMcpStatus(
       lastCheckedAt: now
     }
     next.status = deriveStatus(next)
+    if (isRecovery(prev, next)) recovered.push(s.name)
     byName.set(s.name, next)
   }
   cachedMcpStatus = Array.from(byName.values())
 
   emitMcpStatusBroadcast()
+  notifyRecovered(recovered)
 }
 
 /** Probe-sourced fields. `status` is the probe's own verdict, not the derived one. */
@@ -184,6 +218,7 @@ export function updateServerStatus(name: string, patch: McpProbeStatusPatch): vo
   else cachedMcpStatus.push(entry)
 
   emitMcpStatusBroadcast()
+  if (isRecovery(prev, entry)) notifyRecovered([name])
 }
 
 /**

@@ -70,6 +70,30 @@ are opened only for locally owned installed digital humans; remote members keep
 the workbench's existing read-only boundary. Existing team conversation drafts and
 scroll positions survive the profile round trip.
 
+An author's upgrade that kept fields at the user's version leaves a note
+(`content.upgrade`, source `upgrade`) that `UpgradeNote` draws instead of the
+summary: the kept fields by name (`spec-field-label.ts`, shared with the
+store's update dialog), the author's version of each loaded only when asked,
+and switching one or all of them to it. It never says the user changed them —
+after an upgrade with no earlier author's version, that is not known.
+
+A run in progress shows when it started and how long it has been going
+(`RunningSince`, from `AutomationAppState.runningAtMs`, ticking only while the
+card is shown) and, for a person with schedules, that scheduled times coming due
+meanwhile are skipped. When the run ends, its latest entry says how many were
+(`content.skippedSchedules`) — one line, not an entry per skipped time.
+
+Only a person's newest 200 runs keep their process. `SessionDetailView` shows an
+older run's as cleared under the retention rule (`RUN_PROCESS_CLEARED`), with no
+Continue and no reply box; its timeline entry stays and no longer offers
+Continue either.
+
+A run that did not start because a declared connection is unusable
+(`content.missingConnections`) is drawn by `MissingConnectionsNote`: each
+connection with why (not installed, turned off, waiting for sign-in, failing)
+and a button to Tools & Resources, instead of the English summary and a
+"View process" with nothing behind it.
+
 Desktop and HTTP clients use the same APIs. Layout is mobile-first; long source
 names, selected answers, loading failures and unavailable teams remain readable
 without hover. Errors are explicit and retain the last useful records and drafts.

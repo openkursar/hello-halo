@@ -460,6 +460,7 @@ export const api = {
 3. Token stored in localStorage
 4. All API requests include `Authorization: Bearer <token>`
 5. On 401: Remote reloads page; Capacitor dispatches `halo:auth-expired` → server list
+6. Download links (remote page, mobile app) carry a two-minute single-file ticket from `POST /api/artifacts/download-ticket`, never the token (`http/auth/download-ticket.ts`)
 
 ### Capacitor Mobile App
 

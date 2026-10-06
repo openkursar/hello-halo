@@ -252,6 +252,12 @@ context (what triggered this run, when, user config values).
 - For escalation follow-ups: includes the original question + user's response
 - User config values are included so the AI can use them (e.g., product URLs).
 
+**Not included: IM chats.** A scheduled or manual run starts from its trigger
+and the digital human's own memory. Excerpts of every IM chat used to be pasted
+in; with hundreds of chats that cost hundreds of thousands of tokens per run,
+read every chat file at start, and crowded the task out. What a chat taught that
+is worth keeping belongs in memory, written during the chat.
+
 ### 2.9 No IPC/HTTP Routes in This Module
 
 **Decision**: Runtime module exposes only a TypeScript service interface.
@@ -341,8 +347,9 @@ via the "Continue" button (in the Activity Thread or Session Detail view).
   session can be restored on user-initiated continue.
 
 **User-initiated continue** (`trigger_type = 'continue_followup'`):
-- Triggered by the "Continue" button on `run_error` activity entries where
-  `content.error === 'report_to_user not called'`.
+- Triggered by the "Continue" button on `run_error` activity entries that offer
+  it (`content.resumeAvailable`: the run has a session to resume, is not closed
+  and holds no unanswered decision).
 - Uses the same session restore pattern as `escalation_followup`:
   `getOrCreateV2Session(resumeSessionId)` preserves full conversation history.
 - Same `runId` is reopened (`store.reopenRun()` resets status `error → running`)
@@ -784,6 +791,13 @@ status ladder in both derivations, so an unmapped status was indistinguishable
 from a person the runtime had stopped — an uninstalled person read as one that
 had failed. Every status is now mapped explicitly and the ladder exists once.
 
+**A failed run always says why.** Every run `executeRun` records as `error`
+leaves a `run_error` entry with its reason — including one that called
+`report_to_user` before the engine failed, whose report alone reads as success.
+The pause after `MAX_CONSECUTIVE_ERRORS` failed runs records `Auto-disabled
+after N consecutive failed runs. Latest: <reason>` as the person's error
+message, which the stop's card, the inbox and the task panel show.
+
 ### 2.18 Transcript Read Model (Stable Ids, Pages, On-Demand Thoughts)
 
 **Decision**: a digital-human session is read into the same message shape as a
@@ -988,6 +1002,110 @@ the engine session layer at load. Toggling the switch changes the session's
 server set, which its inputs fingerprint already covers, so it takes effect on
 the next message. `entry-capability-matrix.test.ts` pins every row.
 
+### 2.21 An Author's Upgrade Reaches the Running Digital Human Here
+
+An author's new version is merged over the user's edits by the manager
+(`apps/manager/DESIGN.md` §2.13). Every upgrade path — the store's automatic
+and manual updates, the bundled loader — ends in `upgradeSpec`, and the runtime
+subscribes to its `onAppSpecUpgraded`, so an upgrade's effect on the running
+digital human is decided once:
+
+- **Reschedule**: `syncAppSubscriptions`. The paths themselves do not.
+- **Note**: when fields kept the user's version, a `milestone` entry carrying
+  `content.upgrade` (the outcome) and `source.kind: 'upgrade'`. It belongs to no
+  run (sentinel run id `upgrade`, like chat reports), so run pruning never
+  removes it; the app's deletion does. The renderer draws it from
+  `content.upgrade` in the user's language; `summary` is an English fallback.
+  The wording says the fields differ from the author's new version, never that
+  the user changed them, since an upgrade with no earlier original cannot know.
+- **Switching back**: `adoptAuthorVersion(appId, entryId, fields)` (IPC
+  `app:adopt-author-version`, HTTP `POST /api/apps/:appId/activity/:entryId/adopt-author-version`)
+  switches only fields the note kept, through the manager; reschedules when the
+  run times switched; records them as `content.upgrade.adopted`; and publishes
+  the note again. Both transports are user-only: whether an upgrade overrides
+  the user's own edit is the user's call.
+
+### 2.22 A Stop Reaches the Engine; What a Long Run Held Up Is Shown
+
+A run has no time limit and no idle detection, and nothing reruns it: a long run
+is left to run until it ends or the user stops it. Pause keeps its meaning
+(§2.7) — it stops scheduling, not the run in progress.
+
+- **Stop**: every stop from outside a run — "Stop this execution" (`stopRun`),
+  closing the task (`closeRun`), removing the person (`abortApp`), quitting
+  (`abortAll`) — aborts the execution's controller. The stream loop sees an
+  abort only when the engine's next message arrives, so `execute.ts` also hands
+  it to `engine-stop.ts`, which stops the engine the way a chat's Stop does: the
+  turn is interrupted, and the session is closed (through its lease when it has
+  one, and only once) when the run is still going 3 s later or the engine cannot
+  interrupt. Closing ends the stream, so a run whose engine went silent (a hung
+  tool, MCP server or model request) still ends within about 10 s. A run stopped
+  while its engine was starting sends no turn at all. A stopped run that
+  reported nothing ends `error` as "Stopped before it reported results".
+- **Schedule after a stop**: the scheduler handler reports a stopped or closed
+  run as `noop`, so the scheduler neither backs off the next time nor counts the
+  stop toward disabling the job. The runtime's own consecutive-error count
+  already ignores such runs.
+- **Skipped times**: one execution per person (§2.6) means scheduled times that
+  come due while it is queued or running are skipped (`admitAutomaticRun`; the
+  job that started the run is not even dispatched meanwhile), which leaves no
+  trace. When the execution ends, `noteSkippedSchedules` counts them from the
+  schedules (`scheduler.countDueTimes` over the activation's jobs since the
+  person became busy) and adds the count to the run's latest entry as
+  `content.skippedSchedules` — one line on the timeline, not an entry per time.
+  A job removed mid-run (pause) contributes nothing.
+- **While it runs**: `AutomationAppState.runningAtMs` is the execution's own
+  start, kept in memory by run id, because a continued run keeps its first start
+  in the database. The activity thread shows it with the running time.
+
+### 2.23 Run Transcripts Are Kept for a Person's Newest 200 Runs
+
+Every run writes the transcript "View process" reads
+(`{spacePath}/.halo/apps/{appId}/runs/{runId}.jsonl`), and the engine stores its
+own session so the run can be continued. Neither was ever deleted, so a person
+running every few minutes piled up a gigabyte within weeks, mostly younger than
+any age limit would reach. `run-retention.ts` keeps both for the newest 200 runs
+of each person:
+
+- **When**: at the end of each of the person's executions, after the skipped
+  count (§2.22), at most 50 runs per pass, so a backlog drains over the next
+  runs instead of in one pause. Nothing scans at startup; there is no setting.
+- **Which**: `listRunsPastTranscriptRetention` — runs past the newest 200 that
+  still have a transcript, through the partial index
+  `idx_runs_transcript_kept`, so a pass reads about 200 rows however long the
+  history. Skipped runs never had a transcript and do not count. Never a run
+  still going, waiting on a question or holding a queued, running or failed
+  continuation (the same protections as `pruneOldData`).
+- **What**: the run's own transcript and line index, by exact run id
+  (`deleteRunTranscript`) — never a pattern, since the same folder holds the
+  person's chat transcripts — in the space its environment names, or the
+  person's current space for a run older than environments. Then, best effort,
+  the engine's stored session through `services/agent`'s `deleteStoredSession`
+  (the default engine's; the engine that ran it is not recorded, and the other
+  engines' sessions are not covered — see that module).
+- **After**: `markTranscriptCleared` sets `transcript_cleared_at`, drops the
+  run's session id and the `resumeAvailable` of its failure entries. The
+  timeline keeps its entries (the one-year `pruneOldData` still removes them).
+  Reading the process answers `RunProcessClearedError` (code
+  `RUN_PROCESS_CLEARED` over IPC and HTTP), and `continueFailedRun` and
+  `injectIntoRun` refuse the run: nothing is left to continue it from.
+
+### 2.24 A Run Short of a Declared Connection Does Not Start
+
+An independent run hands the model only the declared connections (`requires.mcps`)
+that are running in its space. One that is not installed, turned off, waiting
+for sign-in or failing used to be skipped with a log line, so the run started
+without tools it was built around and failed with no visible reason.
+`executeRun` — the one entry of scheduled, manual, event and continued runs —
+now checks `missingConnections` after the environment checks and before
+credentials or a session exist, so nothing reaches a model. A gap throws
+`MissingConnectionsError`, which ends the run like any failure: `error`, counted
+toward the consecutive-failure pause, and a `run_error` entry carrying
+`content.missingConnections` (`{ id, name, state }`) that the timeline renders in
+the user's language with the way to Tools & Resources. A dependency the owner
+switched off for this person is a choice, not a gap; built-in capability ids are
+not installable connections. Chat keeps inheriting its workspace's connections.
+
 ---
 
 ## 3. SQLite Schema
@@ -1006,9 +1124,13 @@ CREATE TABLE automation_runs (
   duration_ms INTEGER,
   tokens_used INTEGER,
   error_message TEXT,
+  -- later migrations: session_id, environment_json, stopped_at, transcript_cleared_at
   FOREIGN KEY (app_id) REFERENCES installed_apps(id) ON DELETE CASCADE
 );
 CREATE INDEX idx_runs_app ON automation_runs(app_id, started_at DESC);
+-- Runs that still have their process transcript (§2.23)
+CREATE INDEX idx_runs_transcript_kept ON automation_runs(app_id, started_at DESC)
+  WHERE transcript_cleared_at IS NULL AND status != 'skipped';
 
 -- Activity Thread entries (user-facing)
 CREATE TABLE activity_entries (
@@ -1046,6 +1168,8 @@ src/main/apps/runtime/
   notify-availability.ts     -- resolveNotifyAvailability() — single source of truth for whether notify tools are actually loaded (mirrors notify-tool injection rules; consumed by chat + automation prompts)
   concurrency.ts              -- Counting semaphore
   execute.ts                 -- executeRun() core logic for automation runs
+  engine-stop.ts             -- makes a stop reach a run's engine: interrupt, then close after a grace period (§2.22)
+  run-retention.ts           -- keeps run transcripts and engine sessions for a person's newest 200 runs (§2.23)
   service.ts                 -- AppRuntimeService implementation
   index.ts                   -- initAppRuntime(), shutdownAppRuntime(), re-exports
 
@@ -1307,7 +1431,7 @@ Canonical entries returned after answer acceptance and emitted activity upserts
 include the durable continuation status. A stopped attempt may expose
 `resumeAvailable` only when the original session exists and no unresolved or
 expired authorization blocks it. Task closure remains terminal and distinct from
-stopping an attempt. IM trigger history also reads the pinned session environment.
+stopping an attempt.
 
 After an unexpected shutdown, startup settles interrupted attempts and requeues
 persisted running continuations. Queued decisions remain durable if dependencies

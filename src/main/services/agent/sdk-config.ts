@@ -519,6 +519,19 @@ export function getSdkSourceId(sdkOptions: Record<string, any>): string | undefi
   return decodeBackendConfig(rawKey)?.sourceId
 }
 
+/** Digests of the settings in-process MCP servers were built from, by server object. */
+const mcpServerSettings = new WeakMap<object, string>()
+
+/**
+ * Record the settings an in-process MCP server was built from and keeps for
+ * its session's life, so a session built with other settings is rebuilt on the
+ * next send (computeSessionInputsFingerprint). Only a digest is kept.
+ */
+export function markMcpServerSettings<T extends object>(server: T, settings: unknown): T {
+  mcpServerSettings.set(server, createHash('sha256').update(JSON.stringify(settings) ?? '').digest('hex').slice(0, 16))
+  return server
+}
+
 /**
  * Fingerprint the session-defining inputs a caller bakes into sdkOptions up
  * front: the system prompt plus the set of MCP server names. These are frozen at
@@ -530,9 +543,10 @@ export function getSdkSourceId(sdkOptions: Record<string, any>): string | undefi
  *
  * The MCP set is fingerprinted by server NAME only: the in-process SDK server
  * objects are rebuilt on every call, so their identity is meaningless; only which
- * servers are present matters. Callers that build MCP servers lazily (main chat)
- * must not use this — they have no eager mcpServers here and drive toolset changes
- * through their own rebuild path.
+ * servers are present matters — plus, for a server that keeps the settings it was
+ * built from (markMcpServerSettings), a digest of those settings. Callers that
+ * build MCP servers lazily (main chat) must not use this — they have no eager
+ * mcpServers here and drive toolset changes through their own rebuild path.
  *
  * The guest permission envelope (permissionMode, the disallowedTools blacklist,
  * and the dangerously-skip-permissions extra arg) is part of the fingerprint so
@@ -553,7 +567,12 @@ export function computeSessionInputsFingerprint(sdkOptions: Record<string, any>)
   // contains the would-be separator, and any bare join lets two different rule
   // sets collapse into one material (['a,b'] vs ['a','b']) — a collision that
   // reads as "inputs unchanged" and reuses a session built on other rules.
-  const mcpKeys = JSON.stringify(Object.keys(sdkOptions.mcpServers ?? {}).sort())
+  const servers: Record<string, unknown> = sdkOptions.mcpServers ?? {}
+  const mcpKeys = JSON.stringify(Object.keys(servers).sort().map(name => {
+    const server = servers[name]
+    const settings = typeof server === 'object' && server !== null ? mcpServerSettings.get(server) : undefined
+    return settings ? `${name}@${settings}` : name
+  }))
   const prompt = hostSystemPromptText(sdkOptions.systemPrompt)
   const permissionMode = String(sdkOptions.permissionMode ?? '')
   const disallowed = Array.isArray(sdkOptions.disallowedTools)

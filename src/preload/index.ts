@@ -555,6 +555,8 @@ export interface HaloAPI extends BrowserHostBridge {
   appUpdateFrequency: (input: { appId: string; subscriptionId: string; frequency: string }) => Promise<IpcResponse>
   appUpdateOverrides: (input: { appId: string; overrides: Record<string, unknown> }) => Promise<IpcResponse>
   appUpdateSpec: (input: { appId: string; specPatch: Record<string, unknown> }) => Promise<IpcResponse>
+  appGetAuthorSpec: (appId: string) => Promise<IpcResponse<AppSpec | null>>
+  appAdoptAuthorVersion: (input: { appId: string; entryId: string; fields: string[] }) => Promise<IpcResponse<import('../shared/apps/app-types').ActivityEntry>>
   appGrantPermission: (input: { appId: string; permission: string }) => Promise<IpcResponse>
   appRevokePermission: (input: { appId: string; permission: string }) => Promise<IpcResponse>
   appSetUpgradeStrategy: (input: { appId: string; strategy: 'auto' | 'notify' | 'manual' }) => Promise<IpcResponse>
@@ -702,7 +704,7 @@ export interface HaloAPI extends BrowserHostBridge {
   storeQuery: (params: { search?: string; type?: string; category?: string; page?: number; pageSize?: number; locale?: string }) => Promise<IpcResponse>
   storeListApps: (query: { search?: string; locale?: string; category?: string; type?: string; tags?: string[] }) => Promise<IpcResponse>
   storeGetAppDetail: (slug: string) => Promise<IpcResponse>
-  storeGetAppDocument: (slug: string) => Promise<IpcResponse>
+  storeGetAppDocument: (slug: string) => Promise<IpcResponse<{ content: string | null }>>
   storeInstall: (
     input: { slug: string; spaceId: string | null; userConfig?: Record<string, unknown> },
     onProgress?: (progress: StoreInstallProgress) => void,
@@ -716,6 +718,7 @@ export interface HaloAPI extends BrowserHostBridge {
   storeUpdateRegistryAdapterConfig: (input: { registryId: string; adapterConfig: Record<string, unknown> }) => Promise<IpcResponse>
   storeCheckUpdatesNow: () => Promise<IpcResponse>
   storeApplyUpgrade: (input: { appId: string; mode?: 'patch_minor' | 'major' | 'force' }) => Promise<IpcResponse>
+  storePreviewUpgrade: (input: { appId: string }) => Promise<IpcResponse<import('../shared/apps/app-types').SpecUpgradeOutcome>>
   storePublish: (input: { appId: string; author?: string; version?: string; changelog?: string; category?: string; name?: string; description?: string; tags?: string[] }) => Promise<IpcResponse>
   storePublishPreview: (input: { appId: string; author?: string; name?: string }) => Promise<IpcResponse<{ slug: string; localVersion: string; storeVersion: string | null }>>
   storeInspectSkillDeps: (input: { appId: string }) => Promise<IpcResponse<Array<{ id: string; declaredBundled: boolean; resolvable: boolean; installed: boolean; appId: string | null; storeName: string | null }>>>

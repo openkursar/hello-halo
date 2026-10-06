@@ -5,8 +5,16 @@
  * Builds the same React SPA from src/renderer/ into dist-mobile/.
  */
 import { resolve } from 'path'
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
+
+// Artifact images load straight from the Halo computer, which a LAN serves
+// over plain http; the page policy shared with the desktop allows remote
+// images only over https.
+export const allowHttpImages: Plugin = {
+  name: 'halo-mobile-http-images',
+  transformIndexHtml: (html) => html.replace(/img-src [^;"]*/, (directive) => `${directive} http:`)
+}
 
 export default defineConfig({
   root: resolve(__dirname, 'src/renderer'),
@@ -22,7 +30,7 @@ export default defineConfig({
     '__HALO_BAIDU_SITE_ID__': JSON.stringify('')
   },
 
-  plugins: [react()],
+  plugins: [react(), allowHttpImages],
 
   resolve: {
     alias: {

@@ -24,6 +24,8 @@
  *   app:update-config      Update App user configuration
  *   app:update-frequency   Update subscription frequency override
  *   app:update-spec        Update App spec (JSON Merge Patch)
+ *   app:get-author-spec    Get the author's original a digital human's upgrades compare against
+ *   app:adopt-author-version  Switch fields an upgrade kept at the user's version to the author's
  *   app:chat-send          Send a chat message to an App's AI agent
  *   app:chat-stop          Stop an active app chat generation
  *   app:chat-inject        Add a message to the turn an app chat is running
@@ -59,6 +61,7 @@ import {
   getStudioSummary,
   moveAppDefaultSpace,
   readAppRunMessages,
+  RunProcessClearedError,
   sendAppChatMessage,
   stopAppChat,
   stopAppChatConversation,
@@ -195,6 +198,14 @@ export function registerAppHandlers(): void {
       if (!r.success) return r
       await r.runtime.stopRun(input.appId, input.runId)
       return { success: true }
+    }),
+    appGetAuthorSpec: (appId: string) => appOperation('get-author-spec', () => {
+      const r = requireManager()
+      return r.success ? { success: true, data: r.manager.getAuthorSpec(appId) } : r
+    }),
+    appAdoptAuthorVersion: (input: { appId: string; entryId: string; fields: string[] }) => appOperation('adopt-author-version', () => {
+      const r = requireRuntime()
+      return r.success ? { success: true, data: r.runtime.adoptAuthorVersion(input.appId, input.entryId, input.fields) } : r
     }),
     // ── app:install ──────────────────────────────────────────────────────────
     appInstall: async (input: { spaceId: string | null; spec: AppSpec; userConfig?: Record<string, unknown> }) => {
@@ -646,6 +657,7 @@ export function registerAppHandlers(): void {
         return { success: true, data: messages }
       } catch (error: unknown) {
         const err = error as Error
+        if (error instanceof RunProcessClearedError) return { success: false, error: err.message, code: error.code }
         console.error('[AppIPC] app:get-session error:', err.message)
         return { success: false, error: err.message }
       }

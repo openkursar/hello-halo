@@ -51,7 +51,7 @@ import type {
 import { resolveAppChatTarget, resolveUserInjectTarget, type AppChatTarget } from '../../controllers/app-chat-target.controller'
 import type { EscalationAnswerPayload } from '../../../shared/apps/app-types'
 import { parseTurnReferences, toAppChatRequest } from '../../controllers/chat-turn-input'
-import { getStudioSummary, listPeopleDirectory, getAppCapabilityInventory, getAppSpaceChangePreview, moveAppDefaultSpace, readAppRunMessages, getDigitalHumanMemoryStatus, consolidateDigitalHumanMemoryNow } from '../../apps/runtime'
+import { getStudioSummary, listPeopleDirectory, getAppCapabilityInventory, getAppSpaceChangePreview, moveAppDefaultSpace, readAppRunMessages, RunProcessClearedError, getDigitalHumanMemoryStatus, consolidateDigitalHumanMemoryNow } from '../../apps/runtime'
 
 async function respondOperation(res: Response, name: string, operation: () => unknown | Promise<unknown>): Promise<void> {
   try {
@@ -141,6 +141,16 @@ export function registerAppsRoutes(app: Express): void {
     const runtime = getRuntimeOrFail(res)
     if (!runtime) return
     await respondOperation(res, 'activity-entry', () => runtime.getActivityEntry(req.params.appId, req.params.entryId))
+  })
+  app.post('/api/apps/:appId/activity/:entryId/adopt-author-version', async (req: Request, res: Response) => {
+    const runtime = getRuntimeOrFail(res)
+    if (!runtime) return
+    await respondOperation(res, 'adopt-author-version', () => runtime.adoptAuthorVersion(req.params.appId, req.params.entryId, req.body?.fields))
+  })
+  app.get('/api/apps/:appId/author-spec', async (req: Request, res: Response) => {
+    const manager = getManagerOrFail(res)
+    if (!manager) return
+    await respondOperation(res, 'author-spec', () => manager.getAuthorSpec(req.params.appId))
   })
   app.post('/api/apps/:appId/space-preview', async (req: Request, res: Response) => {
     await respondOperation(res, 'space-preview', () => getAppSpaceChangePreview(req.params.appId, req.body.newSpaceId))
@@ -721,7 +731,7 @@ export function registerAppsRoutes(app: Express): void {
       const messages = readAppRunMessages(appId, runId)
       res.json({ success: true, data: messages })
     } catch (error) {
-      res.json({ success: false, error: (error as Error).message })
+      res.json({ success: false, error: (error as Error).message, ...(error instanceof RunProcessClearedError ? { code: error.code } : {}) })
     }
   })
 

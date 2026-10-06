@@ -184,6 +184,15 @@ describe('resolveReasoningEffortValue', () => {
       .toEqual({ effort: 'xhigh', disableThinking: false })
   })
 
+  it('switches MiMo off through thinking.type and leaves thinking-on requests as they were', () => {
+    // mimo.mi.com deep-thinking guide: thinking.type enabled|disabled, on by default.
+    for (const model of ['mimo-v2.5', 'mimo-v2.6-pro', 'XiaomiMiMo/MiMo-V2.5-Pro']) {
+      expect(resolveReasoning(adaptive, undefined, model, 'off'), model).toEqual({ effort: undefined, disableThinking: true })
+      expect(resolveReasoning(disabled, undefined, model), model).toEqual({ effort: undefined, disableThinking: true })
+      expect(resolveReasoning(adaptive, undefined, model, 'high'), model).toEqual({ effort: 'high', disableThinking: false })
+    }
+  })
+
   it('never sends a thinking toggle to a model that has none', () => {
     expect(resolveReasoning(disabled, undefined, 'gpt-4o').disableThinking).toBe(false)
     expect(resolveReasoning(adaptive, undefined, 'glm-5.2', 'off').disableThinking).toBe(false)

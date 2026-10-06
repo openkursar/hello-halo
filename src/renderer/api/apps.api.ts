@@ -13,6 +13,7 @@ import type {
   ApiResponse,
 } from './_shared'
 import type { ActivityEntry, AutomationAppState, AvailableSkill, EscalationAnswerPayload, InstalledApp, PendingDecisionQuery } from '../../shared/apps/app-types'
+import type { AppSpec } from '../../shared/apps/spec-types'
 import type { CapabilityInventory } from '../../shared/apps/capability-inventory'
 import type { AppSpaceChangePreview } from '../../shared/apps/app-environment'
 import type { ImageAttachment } from '../../shared/types/image-attachment'
@@ -277,6 +278,17 @@ export const appsApi = {
       return window.halo.appUpdateSpec({ appId, specPatch })
     }
     return httpRequest('PATCH', `/api/apps/${appId}/spec`, specPatch)
+  },
+
+  /** The author's version a digital human's upgrades compare against; null when none is recorded. */
+  appGetAuthorSpec: async (appId: string): Promise<ApiResponse<AppSpec | null>> => {
+    if (isElectron()) return window.halo.appGetAuthorSpec(appId)
+    return httpRequest('GET', `/api/apps/${encodeURIComponent(appId)}/author-spec`)
+  },
+
+  appAdoptAuthorVersion: async (appId: string, entryId: string, fields: string[]): Promise<ApiResponse<ActivityEntry>> => {
+    if (isElectron()) return window.halo.appAdoptAuthorVersion({ appId, entryId, fields })
+    return httpRequest('POST', `/api/apps/${encodeURIComponent(appId)}/activity/${encodeURIComponent(entryId)}/adopt-author-version`, { fields })
   },
 
   appGrantPermission: async (appId: string, permission: string): Promise<ApiResponse> => {

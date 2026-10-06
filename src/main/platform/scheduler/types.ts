@@ -284,4 +284,12 @@ export interface SchedulerService {
 
   /** Get aggregated run statistics for a job since a given timestamp. */
   getRunStats(jobId: string, since?: number): RunStats
+
+  /**
+   * How many times the job's schedule came due in (afterMs, untilMs] — for
+   * instance while another run of the same app held it back. Computed from
+   * the schedule alone, from the job's creation at the earliest; 0 for a
+   * missing, paused or disabled job. Counting stops at `limit` (default 1000).
+   */
+  countDueTimes(jobId: string, afterMs: number, untilMs: number, limit?: number): number
 }

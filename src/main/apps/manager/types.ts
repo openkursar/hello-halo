@@ -7,6 +7,7 @@
 
 import type { AppSpec, AppType } from '../spec'
 import { isBuiltinApp } from '../../../shared/apps/app-types'
+import type { SpecUpgradeOutcome } from '../../../shared/apps/app-types'
 
 // ============================================
 // App Status
@@ -171,6 +172,9 @@ export type AppUninstallReason = 'user' | 'ai' | 'system' | 'space-deleted'
  * just before the status transition so subscribers still see the full spec.
  */
 export type AppUninstalledHandler = (app: InstalledApp, reason: AppUninstallReason) => void
+
+/** Callback fired after an author's new version was applied with `upgradeSpec`. */
+export type SpecUpgradedHandler = (appId: string, outcome: SpecUpgradeOutcome) => void
 
 /** Unsubscribe function returned by event registration */
 export type Unsubscribe = () => void
@@ -393,6 +397,52 @@ export interface AppManagerService {
   updateSpec(appId: string, specPatch: Record<string, unknown>): void
 
   /**
+   * Apply an author's new version — a store or bundled upgrade — without
+   * overwriting the user's edits. For a digital human, a field the user changed
+   * since the author's original keeps the user's value, every other field takes
+   * the new version, and the new version becomes the recorded original. Other
+   * App types are replaced as `updateSpec` would.
+   *
+   * The single entry for every upgrade path; user and AI edits keep using
+   * `updateSpec`, which never touches the original.
+   *
+   * @throws AppNotFoundError if the App does not exist
+   * @throws AppSpecValidationError if the author's spec is invalid
+   */
+  upgradeSpec(appId: string, authorSpec: AppSpec): SpecUpgradeOutcome
+
+  /** What `upgradeSpec` would keep for this author's spec, without applying it. */
+  previewUpgradeSpec(appId: string, authorSpec: AppSpec): SpecUpgradeOutcome
+
+  /**
+   * Switch fields of a digital human to the author's original, after which
+   * upgrades update them again. Release fields and fields already equal to the
+   * original are left alone.
+   *
+   * @returns the fields that changed
+   * @throws AppNotFoundError if the App does not exist
+   * @throws Error if no author's original is recorded
+   * @throws AppSpecValidationError if the result is invalid (a field depending on another one kept)
+   */
+  adoptAuthorVersion(appId: string, fields: readonly string[]): string[]
+
+  /**
+   * Record the author's original for a digital human installed before
+   * originals were kept. Only the spec of the installed version qualifies, and
+   * an original already recorded is never replaced.
+   *
+   * @returns whether it was recorded
+   * @throws AppNotFoundError if the App does not exist
+   */
+  recordAuthorSpec(appId: string, authorSpec: AppSpec): boolean
+
+  /** The author's original that upgrades compare against, or null when none is recorded. */
+  getAuthorSpec(appId: string): AppSpec | null
+
+  /** Store-installed digital humans that have no author's original recorded yet. */
+  listStoreInstallsWithoutAuthorSpec(): string[]
+
+  /**
    * Move an App to a different space (or to/from global scope).
    *
    * For skill apps: atomically removes the skill files from the current
@@ -532,4 +582,10 @@ export interface AppManagerService {
    * Returns an unsubscribe function.
    */
   onAppUninstalled(handler: AppUninstalledHandler): Unsubscribe
+
+  /**
+   * Register a callback fired after every `upgradeSpec`, whichever path
+   * upgraded the App. Returns an unsubscribe function.
+   */
+  onAppSpecUpgraded(handler: SpecUpgradedHandler): Unsubscribe
 }

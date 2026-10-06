@@ -15,15 +15,20 @@ export interface FileMention {
   range?: ReferenceLineRange
 }
 
-/** Characters a mentioned path may contain; anything else (spaces, quotes, parentheses) means it is not one. */
-const PATH_CHARS = /^[\w.\-/\\@+~]+$/
+/**
+ * Characters a mentioned path may contain. Code is ASCII, so any character beyond it (CJK, accents,
+ * full-width brackets) may belong to a name; ASCII spaces, quotes and parentheses mean it is not one.
+ */
+const PATH_CHARS = /^[\w.\-/\\@+~\u{80}-\u{10FFFF}]+$/u
 /** The last path segment names a file: `name.ext`, a dotfile, or a well-known extensionless name. */
-const FILE_NAME = /(^|[/\\])(?:[\w\-@+~][\w\-@+~.]*\.\w{1,12}|\.\w[\w.-]*|Makefile|Dockerfile|Jenkinsfile|Gemfile|Rakefile|LICENSE)$/
+const FILE_NAME = /(^|[/\\])(?:[\w\-@+~\u{80}-\u{10FFFF}][\w\-@+~.\u{80}-\u{10FFFF}]*\.\w{1,12}|\.[\w\u{80}-\u{10FFFF}][\w.\-\u{80}-\u{10FFFF}]*|Makefile|Dockerfile|Jenkinsfile|Gemfile|Rakefile|LICENSE)$/u
+/** Never part of a name: whitespace other than the plain space, and invisible characters such as bidi controls. */
+const HIDDEN_CHARS = /[^\S ]|\p{C}/u
 /** `:line`, `:line:column`, `:line-line`. */
 const LINE_SUFFIX = /:(\d{1,7})(?::\d{1,5})?(?:-(\d{1,7}))?$/
 const MAX_MENTION_CHARS = 400
-const LINK_PATH_CHARS = /^[\w.\-/\\@+~ ()\p{L}\p{N}\p{M}]+$/u
-const LINK_FILE_NAME = /(^|[/\\])(?:[\w\-@+~ ()\p{L}\p{N}\p{M}][\w\-@+~. ()\p{L}\p{N}\p{M}]*\.\w{1,12}|\.[\w\p{L}\p{N}][\w.\-\p{L}\p{N}\p{M}]*|Makefile|Dockerfile|Jenkinsfile|Gemfile|Rakefile|LICENSE)$/u
+const LINK_PATH_CHARS = /^[\w.\-/\\@+~ ()\u{80}-\u{10FFFF}]+$/u
+const LINK_FILE_NAME = /(^|[/\\])(?:[\w\-@+~ ()\u{80}-\u{10FFFF}][\w\-@+~. ()\u{80}-\u{10FFFF}]*\.\w{1,12}|\.[\w\u{80}-\u{10FFFF}][\w.\-\u{80}-\u{10FFFF}]*|Makefile|Dockerfile|Jenkinsfile|Gemfile|Rakefile|LICENSE)$/u
 
 export function detectFileMention(raw: string): FileMention | null {
   return parseFilePath(raw.trim(), PATH_CHARS, FILE_NAME)
@@ -47,7 +52,7 @@ function parseFilePath(text: string, pathChars: RegExp, fileName: RegExp): FileM
   // A Windows drive (`C:\…`) is the only colon a path may keep.
   const drive = /^[A-Za-z]:[\\/]/.test(path) ? path.slice(0, 2) : ''
   const rest = path.slice(drive.length)
-  if (!rest || rest.includes(':') || !pathChars.test(rest) || !fileName.test(rest)) return null
+  if (!rest || rest.includes(':') || HIDDEN_CHARS.test(rest) || !pathChars.test(rest) || !fileName.test(rest)) return null
   // A bare `name.ext` without a folder is still a mention; a dotted identifier like `obj.method` is
   // filtered out by the existence check, never by guessing here.
   return range ? { path, range } : { path }

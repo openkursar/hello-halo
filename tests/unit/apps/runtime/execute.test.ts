@@ -11,13 +11,14 @@
  *   - result.is_error → outcome error
  *   - AI never calls report_to_user → auto-continue loop then outcome error
  *   - abort → loop short-circuits, no auto-continue nagging
+ *   - stop of a silent run → engine interrupted, then closed, so the run ends
  *   - stream throws → mapped to error outcome with errorMessage recorded
  *
  * We assert on the returned AppRunResult and on store.completeRun, which is the
  * observable contract of the branch decisions.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -89,6 +90,7 @@ vi.mock('../../../../src/main/apps/runtime/execution-environment', () => ({
   })),
   validateExecutionEnvironment: vi.fn(),
   validateEnvironmentConnections: vi.fn(),
+  missingConnections: vi.fn(() => []),
 }))
 vi.mock('../../../../src/main/apps/runtime/person-context-tool', () => ({
   createPersonContextMcpServer: vi.fn(() => ({ name: 'halo-person-context' })),
@@ -160,6 +162,7 @@ vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
   createSession: vi.fn(async () => nextSession),
   query: vi.fn(),
   getActiveEngine: () => null,
+  getEngineCapabilities: () => ({ features: { interrupt: true } }),
 }))
 
 // The memory lifecycle is exercised by its own tests; here only its wiring.
@@ -238,6 +241,7 @@ vi.mock('../../../../src/main/apps/runtime/prompt', () => ({
 }))
 
 import { executeRun } from '../../../../src/main/apps/runtime/execute'
+import { ENGINE_STOP_GRACE_MS } from '../../../../src/main/apps/runtime/engine-stop'
 import { finalizeMemoryAfterTurn, prepareMemoryForTurn, loadSpaceTopicsForTurn, appMemorySettings } from '../../../../src/main/apps/runtime/turn/memory-lifecycle'
 import { generatePromptInstructions } from '../../../../src/main/platform/memory'
 import { buildAppSystemPrompt, buildInitialMessage } from '../../../../src/main/apps/runtime/prompt'
@@ -252,7 +256,7 @@ import {
   unregisterActiveSession,
   closeV2Session,
 } from '../../../../src/main/services/agent/session-manager'
-import { resolveExecutionEnvironment } from '../../../../src/main/apps/runtime/execution-environment'
+import { missingConnections, resolveExecutionEnvironment } from '../../../../src/main/apps/runtime/execution-environment'
 import { openSessionWriter } from '../../../../src/main/apps/runtime/session-store'
 
 // ============================================
@@ -443,6 +447,26 @@ describe('executeRun — completion branches', () => {
     )
   })
 
+  it('leaves a failure entry with the reason when the engine fails after the run reported', async () => {
+    nextSession = new FakeSession({
+      script: [assistantReport(), { type: 'result', is_error: true, result: 'model rate-limited' }],
+    })
+    const emitEntry = vi.fn()
+
+    const result = await executeRun({ app: makeApp(), trigger: baseTrigger, store: makeStore(), memory: makeMemory(), emitEntry })
+
+    expect(result.outcome).toBe('error')
+    // The report alone would read as success; the timeline also says it failed, and why.
+    expect(emitEntry).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'run_error',
+      content: expect.objectContaining({
+        summary: 'This run finally ended with an error: model rate-limited',
+        error: 'model rate-limited',
+        status: 'error',
+      }),
+    }))
+  })
+
   it('auto-continues then errors when report_to_user is never called', async () => {
     // Empty stream on every cycle → the auto-continue loop runs to its cap.
     nextSession = new FakeSession({ script: [] })
@@ -521,7 +545,7 @@ describe('executeRun — a run that asks the user', () => {
 })
 
 describe('executeRun — abort handling', () => {
-  it('short-circuits the auto-continue loop when aborted', async () => {
+  it('sends nothing and does not auto-continue when stopped before its first turn', async () => {
     const controller = new AbortController()
     controller.abort()
     nextSession = new FakeSession({ script: [] })
@@ -533,10 +557,112 @@ describe('executeRun — abort handling', () => {
       abortSignal: controller.signal,
     })
 
-    // Aborted before dispatch: the stream loop breaks immediately and the
-    // auto-continue while-loop never iterates (its guard checks aborted).
-    expect(nextSession.streamCalls).toBe(1)
+    // Stopped while the engine was starting: no turn is sent, so none is paid
+    // for, and the auto-continue loop never iterates (its guard checks aborted).
+    expect(nextSession.send).not.toHaveBeenCalled()
+    expect(nextSession.streamCalls).toBe(0)
     expect(result.outcome).toBe('error')
+    expect(result.errorMessage).toBe('Stopped before reporting results')
+  })
+})
+
+/** An engine gone silent: nothing arrives until it is closed, and interrupting it does nothing. */
+class SilentSession {
+  send = vi.fn()
+  interrupt = vi.fn(async () => {})
+  close = vi.fn(() => this.end())
+  private end!: () => void
+  private readonly closed = new Promise<void>(resolve => { this.end = resolve })
+
+  stream(): AsyncGenerator<SdkMessage> {
+    const closed = this.closed
+    return (async function* () {
+      await closed
+    })()
+  }
+}
+
+describe('executeRun — stopping a run', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('ends a silent run: the engine is interrupted, then closed after the grace period', async () => {
+    const session = new SilentSession()
+    nextSession = session as unknown as FakeSession
+    const controller = new AbortController()
+    const emitEntry = vi.fn()
+    const running = executeRun({
+      app: makeApp(),
+      trigger: baseTrigger,
+      store: makeStore(),
+      memory: makeMemory(),
+      abortSignal: controller.signal,
+      emitEntry,
+    })
+    await vi.waitFor(() => expect(session.send).toHaveBeenCalled())
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+
+    controller.abort()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(session.interrupt).toHaveBeenCalledTimes(1)
+    expect(session.close).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(ENGINE_STOP_GRACE_MS)
+    const result = await running
+
+    expect(session.close).toHaveBeenCalled()
+    expect(result.outcome).toBe('error')
+    expect(result.errorMessage).toBe('Stopped before reporting results')
+    // The stop, not the model, is why nothing was reported.
+    const entry = emitEntry.mock.calls.at(-1)?.[0]
+    expect(entry).toMatchObject({ type: 'run_error', content: { summary: 'Stopped before it reported results.' } })
+    expect(entry.content.error).toBeUndefined()
+  })
+
+  it('leaves the engine alone once the run has ended', async () => {
+    nextSession = new FakeSession({ script: [systemInit(), assistantReport()] })
+    const interrupt = vi.fn()
+    Object.assign(nextSession, { interrupt })
+    const controller = new AbortController()
+    const result = await executeRun({
+      app: makeApp(),
+      trigger: baseTrigger,
+      store: makeStore(),
+      memory: makeMemory(),
+      abortSignal: controller.signal,
+    })
+
+    controller.abort()
+
+    expect(result.outcome).toBe('useful')
+    expect(interrupt).not.toHaveBeenCalled()
+    // Closed once, by the run itself.
+    expect(nextSession.close).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('executeRun — a declared connection is unusable', () => {
+  it('does not start: no model call, a failed run whose entry names what to install or turn on', async () => {
+    const missing = [{ id: 'docs', name: 'Team Docs', state: 'not_installed' as const }]
+    vi.mocked(missingConnections).mockReturnValueOnce(missing)
+    vi.mocked(createSession).mockClear()
+    vi.mocked(getApiCredentials).mockClear()
+    nextSession = new FakeSession({ script: [assistantReport()] })
+    const store = makeStore()
+    const emitEntry = vi.fn()
+
+    const result = await executeRun({ app: makeApp(), trigger: baseTrigger, store, memory: makeMemory(), emitEntry })
+
+    expect(getApiCredentials).not.toHaveBeenCalled()
+    expect(createSession).not.toHaveBeenCalled()
+    expect(nextSession.send).not.toHaveBeenCalled()
+    expect(result.outcome).toBe('error')
+    expect(result.errorMessage).toContain('"Team Docs" (not installed)')
+    expect(store.completeRun).toHaveBeenCalledWith(result.runId, expect.objectContaining({ status: 'error' }))
+    const entry = emitEntry.mock.calls.at(-1)?.[0]
+    expect(entry).toMatchObject({ type: 'run_error', content: { missingConnections: missing, status: 'error' } })
+    expect(entry.content.error).toBeUndefined()
   })
 })
 
@@ -794,6 +920,43 @@ describe('executeRun — managed follow-up lifecycle', () => {
     expect(unregisterActiveSession).toHaveBeenCalledTimes(1)
     expect(unregisterActiveSession).toHaveBeenCalledWith('old-thread')
     expect(nextSession.close).toHaveBeenCalledTimes(1)
+  })
+
+  it('stops a continued run through its lease and records it as stopped', async () => {
+    const session = new SilentSession()
+    nextSession = session as unknown as FakeSession
+    vi.mocked(acquireV2Session).mockResolvedValueOnce(managedLease(nextSession))
+    const store = makeStore()
+    store.getRun.mockReturnValue({ environment: {
+      spaceId: 'space-1', spacePath: '/tmp/space-1', workDir: '/tmp/space-1', memoryDir: '/tmp/app-1',
+    } })
+    const controller = new AbortController()
+    const running = executeRun({
+      app: makeApp(), trigger: { type: 'continue_followup', description: 'Continue', continue: { sessionId: 'saved-session' } },
+      store, memory: makeMemory(), abortSignal: controller.signal,
+      existingRunId: 'old-run', existingSessionKey: 'old-thread',
+    })
+    await vi.waitFor(() => expect(session.send).toHaveBeenCalled())
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+
+    try {
+      controller.abort()
+      await vi.advanceTimersByTimeAsync(ENGINE_STOP_GRACE_MS)
+      const result = await running
+
+      expect(session.interrupt).toHaveBeenCalledTimes(1)
+      // Closed once, through the manager, never behind its back.
+      expect(closeManagedSession).toHaveBeenCalledTimes(1)
+      expect(session.close).toHaveBeenCalledTimes(1)
+      expect(releaseManagedSession).toHaveBeenCalledTimes(1)
+      expect(unregisterActiveSession).toHaveBeenCalledWith('old-thread')
+      expect(result.errorMessage).toBe('Stopped before reporting results')
+      expect(store.completeRun).toHaveBeenCalledWith('old-run', expect.objectContaining({
+        status: 'error', errorMessage: 'Stopped before reporting results',
+      }))
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('keeps fresh transient runs outside the managed-session registry', async () => {

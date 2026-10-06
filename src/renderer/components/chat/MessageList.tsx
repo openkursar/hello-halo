@@ -25,14 +25,13 @@ import { useBrowserToolCalls, type BrowserToolCall } from './useBrowserToolCalls
 import { useTerminalToolCalls, type TerminalToolCall } from './useTerminalToolCalls'
 import { CompactNotice } from './CompactNotice'
 import { InterruptedBubble } from './InterruptedBubble'
-import { useStickToBottom, useHistoryWindow, transcriptRowClass, estimatedRowHeight, revealRowInView, type ScrollMotion } from './transcript'
+import { useStickToBottom, useHistoryWindow, transcriptRowClass, estimatedRowHeight, revealRowInView, nextTranscriptRows, type ScrollMotion, type TranscriptRows } from './transcript'
 import type { Message, Thought, CompactInfo, AgentErrorType, PendingQuestion } from '../../types'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { useChatStore } from '../../stores/chat.store'
 import { useAppsStore } from '../../stores/apps.store'
 import { appChatAppId } from '../../../shared/apps/im-keys'
 import { resolveSpecI18n } from '../../utils/spec-i18n'
-import { messageRowKeys } from '../../utils/message-row-key'
 
 export interface MessageListProps {
   /**
@@ -221,22 +220,17 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   // new CollapsedThoughtProcess mounts with defaultExpanded=true so the panel stays open.
   const expandedThoughtIds = useRef(new Set<string>())
 
-  // Filter out injection messages (shown as annotations on assistant bubbles, not as independent bubbles)
-  // and empty assistant placeholder message during generation
-  const displayMessages = useMemo(() => {
-    let filtered = messages.filter(msg => msg.source !== 'injection')
-    if (isGenerating) {
-      filtered = filtered.filter((msg, idx) => {
-        const isLastMessage = idx === filtered.length - 1
-        const isEmptyAssistant = msg.role === 'assistant' && !msg.content
-        return !(isLastMessage && isEmptyAssistant)
-      })
-    }
-    return filtered
+  // Rows, keys, previous costs and injected messages, derived again only from
+  // the first message that changed (see transcript/transcript-rows).
+  const transcriptRef = useRef<TranscriptRows | null>(null)
+  const transcript = useMemo(() => {
+    const next = nextTranscriptRows(transcriptRef.current, messages, isGenerating)
+    transcriptRef.current = next
+    return next
   }, [messages, isGenerating])
+  const { messages: displayMessages, keys: rowKeys, previousCosts, injections } = transcript
 
   const follower = useStickToBottom({ onAtBottomChange: onAtBottomStateChange, live: isGenerating })
-  const rowKeys = useMemo(() => messageRowKeys(displayMessages), [displayMessages])
   const history = useHistoryWindow(rowKeys, follower.scroller, { onReachStart: onLoadEarlier })
   const { scroller, detach } = follower
   const { reveal, toEnd } = history
@@ -258,43 +252,6 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     },
     scrollToBottom,
   }), [scroller, detach, reveal, scrollToBottom])
-
-  // Pre-compute injection map: assistant message ID → injection messages that follow it.
-  // Injection messages are consecutive user messages with source='injection' after an assistant message.
-  // O(n) scan, recomputed only when messages change.
-  const injectionMap = useMemo(() => {
-    const map = new Map<string, Message[]>()
-    for (let i = 0; i < messages.length; i++) {
-      if (messages[i].role === 'assistant') {
-        const injections: Message[] = []
-        for (let j = i + 1; j < messages.length; j++) {
-          if (messages[j].source === 'injection') {
-            injections.push(messages[j])
-          } else {
-            break
-          }
-        }
-        if (injections.length > 0) {
-          map.set(messages[i].id, injections)
-        }
-      }
-    }
-    return map
-  }, [messages])
-
-  // Pre-compute cost map: index → previous assistant cost (O(n) once, then O(1) per lookup)
-  const previousCostMap = useMemo(() => {
-    const map = new Map<number, number>()
-    let lastCost = 0
-    for (let i = 0; i < displayMessages.length; i++) {
-      map.set(i, lastCost)
-      const msg = displayMessages[i]
-      if (msg.role === 'assistant' && msg.tokenUsage?.totalCostUsd) {
-        lastCost = msg.tokenUsage.totalCostUsd
-      }
-    }
-    return map
-  }, [displayMessages])
 
   // Extract real-time browser tool calls from streaming thoughts
   const streamingBrowserToolCalls = useBrowserToolCalls(thoughts)
@@ -340,13 +297,13 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
         <div key={key} data-transcript-index={index} className={transcriptRowClass(message)}>
           <MessageRow
             message={message}
-            previousCost={previousCostMap.get(index) ?? 0}
+            previousCost={previousCosts[index]}
             defaultThoughtsExpanded={defaultThoughtsExpanded || expandedThoughtIds.current.has(message.id)}
             defaultThoughtsMaximized={defaultThoughtsMaximized}
             onLoadThoughts={hasThoughtsLoader ? handleLoadThoughts : undefined}
             hideBrowserLiveView={hideBrowserLiveView}
             hideTerminalOpen={hideTerminalOpen}
-            injectionMessages={injectionMap.get(message.id)}
+            injectionMessages={injections.get(message.id)}
             className={contentWidthClass}
             senderName={message.role === 'assistant' ? senderName : undefined}
           />
@@ -355,7 +312,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     }
     if (liveStart >= displayMessages.length) out.push(<div key="history-start" ref={sentinelRef} aria-hidden="true" />)
     return out
-  }, [displayMessages, start, liveStart, liveEnd, placeholderHeight, sentinelRef, endSentinelRef, previousCostMap, defaultThoughtsExpanded, defaultThoughtsMaximized, hasThoughtsLoader, handleLoadThoughts, hideBrowserLiveView, hideTerminalOpen, rowKeys, injectionMap, contentWidthClass, senderName])
+  }, [displayMessages, start, liveStart, liveEnd, placeholderHeight, sentinelRef, endSentinelRef, previousCosts, defaultThoughtsExpanded, defaultThoughtsMaximized, hasThoughtsLoader, handleLoadThoughts, hideBrowserLiveView, hideTerminalOpen, rowKeys, injections, contentWidthClass, senderName])
 
   // Keep the footer mounted for an active question independently of isGenerating:
   // a recovered question can be paused on the answer with isGenerating false, and

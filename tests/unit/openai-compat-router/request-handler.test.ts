@@ -41,7 +41,8 @@ const streamOpenAIChatToAnthropic = vi.fn()
 const streamOpenAIResponsesToAnthropic = vi.fn()
 const streamAnthropicPassthrough = vi.fn()
 const pipeAnthropicPassthrough = vi.fn()
-vi.mock('../../../src/main/openai-compat-router/stream', () => ({
+vi.mock('../../../src/main/openai-compat-router/stream', async (importOriginal) => ({
+  collectAnthropicMessage: (await importOriginal<typeof import('../../../src/main/openai-compat-router/stream')>()).collectAnthropicMessage,
   streamOpenAIChatToAnthropic: (...a: unknown[]) => streamOpenAIChatToAnthropic(...a),
   streamOpenAIResponsesToAnthropic: (...a: unknown[]) => streamOpenAIResponsesToAnthropic(...a),
   streamAnthropicPassthrough: (...a: unknown[]) => streamAnthropicPassthrough(...a),

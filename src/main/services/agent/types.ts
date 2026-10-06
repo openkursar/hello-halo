@@ -299,6 +299,9 @@ export interface V2SessionInfo {
   // undefined for main chat, which builds MCP servers lazily and handles toolset
   // changes via requestSessionRebuild.
   inputsFingerprint?: string
+  // MCP servers the engine reported as failed at this session's latest turn.
+  // The engine does not retry them within the session (see noteSessionMcpStatus).
+  failedMcpServers?: string[]
   // Detaches this session's process-exit listener. Must be called on cleanup:
   // session.close() never calls transport.close(), so the listener would
   // otherwise outlive the session and fire against a successor registered

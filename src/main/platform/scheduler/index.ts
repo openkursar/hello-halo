@@ -295,6 +295,26 @@ export async function initScheduler(deps: SchedulerDeps): Promise<SchedulerServi
 
     getRunStats(jobId: string, since?: number): RunStats {
       return store.getRunStats(jobId, since)
+    },
+
+    countDueTimes(jobId: string, afterMs: number, untilMs: number, limit = 1000): number {
+      const job = store.getJob(jobId)
+      if (!job || !job.enabled || job.status === 'paused' || job.status === 'disabled') return 0
+      let count = 0
+      // A job re-added mid-window (its schedule changed) has no due times before it existed.
+      let from = Math.max(afterMs, job.createdAt)
+      while (count < limit) {
+        let next: number | undefined
+        try {
+          next = computeNextRun(job.schedule, job.anchorMs, from)
+        } catch {
+          break
+        }
+        if (next === undefined || next > untilMs) break
+        count++
+        from = next
+      }
+      return count
     }
   }
 

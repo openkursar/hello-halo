@@ -111,6 +111,8 @@ export interface AutomationRun {
   errorMessage?: string
   /** V2 session ID for escalation context recovery */
   sessionId?: string
+  /** When the retention rule deleted its process transcript and engine session; it can no longer be continued. */
+  transcriptClearedAt?: number
 }
 
 /**
@@ -243,8 +245,6 @@ export interface AppRuntimeDeps {
     retain(spaceId: string, holder: string): void
     release(spaceId: string, holder: string): void
   }
-  /** IM session registry for proactive push routing (null if not initialized) */
-  imSessionRegistry?: import('./im-session-registry').ImSessionRegistry | null
   /**
    * @deprecated IM forwarding is now AI-driven via notify_bot tool.
    * Retained for backward compatibility — no longer used at runtime.
@@ -329,6 +329,16 @@ export interface AppRuntimeService {
    */
   retryEscalationContinuation(appId: string, entryId: string): Promise<void>
   confirmEscalationDeadline(appId: string, entryId: string, deadlineAt: number | null): void
+
+  /**
+   * Switch fields an author's upgrade kept at the user's version to the
+   * author's version, from that upgrade's activity note. Only fields the note
+   * lists are switched; it records them and is published again.
+   *
+   * @returns the updated note
+   * @throws Error if the note does not exist, or the result is invalid
+   */
+  adoptAuthorVersion(appId: string, entryId: string, fields: string[]): ActivityEntry
   /** Decline ONE unanswered request; the run it belongs to keeps going. */
   dismissEscalation(appId: string, entryId: string): Promise<void>
   closeRun(appId: string, runId: string): Promise<void>

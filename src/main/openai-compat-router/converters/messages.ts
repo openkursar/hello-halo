@@ -23,8 +23,10 @@ import type {
 
 import {
   anthropicBlockToOpenAIChatPart,
+  anthropicImageToOpenAIChatImage,
   anthropicToolUseToOpenAIChatToolCall,
   anthropicBlockToResponsesInputPart,
+  anthropicImageToResponsesInputImage,
   anthropicToolUseToResponsesFunctionCall,
   anthropicToolResultToResponsesFunctionCallOutput,
   extractTextFromAnthropicBlocks,
@@ -63,15 +65,27 @@ export interface MessagesConvertOptions {
 }
 
 /**
- * Drop image blocks from a tool_result.content array. Used when the target
- * model has no vision capability — image blocks inside tool results (e.g.
- * MCP screenshot tools, Read on image files) would otherwise be stringified
- * as JSON and either rejected or confuse the model.
+ * Drop image blocks from a tool_result.content array before it is serialized
+ * as tool output text. Images inside tool results (e.g. MCP screenshot tools,
+ * Read on image files) would otherwise reach the model as base64 text — a
+ * single screenshot can exceed a provider's whole input limit. Vision targets
+ * get those images as image parts of the following user message instead.
  */
 function stripImagesFromToolResultContent(
   content: AnthropicContentBlock[]
 ): AnthropicContentBlock[] {
   return content.filter((b) => b.type !== 'image')
+}
+
+/**
+ * Output of a tool result whose only content was images, now in the user
+ * message that follows. Left empty it would read as the tool having returned
+ * nothing.
+ */
+function movedImagesNote(count: number): string {
+  return count === 1
+    ? 'Image attached in the following user message.'
+    : `${count} images attached in the following user message.`
 }
 
 /**
@@ -147,24 +161,38 @@ export function convertAnthropicMessagesToOpenAIChat(
     const blocks = msg.content as AnthropicContentBlock[]
 
     if (msg.role === 'user') {
-      // Extract tool_result blocks -> convert to tool messages
+      // Tool messages come first: every tool call must be answered before user
+      // content. Images from tool results open the user message that follows,
+      // together with the turn's own content — one user message, because some
+      // strict providers reject two consecutive user messages.
+      const openaiContent: OpenAIChatContentPart[] = []
+
       const toolResults = extractToolResultBlocks(blocks)
       for (const toolResult of toolResults) {
         // Detect images in tool_result.content array before any stripping
         // so `hasImages` reflects the original input regardless of stripImages.
         let toolResultContent = toolResult.content
+        let movedImages = 0
         if (Array.isArray(toolResultContent)) {
           if (toolResultContent.some((b) => b.type === 'image')) {
             hasImages = true
-            if (stripImages) {
-              toolResultContent = stripImagesFromToolResultContent(toolResultContent)
+            if (!stripImages) {
+              for (const block of toolResultContent) {
+                if (block.type === 'image' && block.source) {
+                  openaiContent.push(anthropicImageToOpenAIChatImage(block))
+                  movedImages++
+                }
+              }
             }
+            toolResultContent = stripImagesFromToolResultContent(toolResultContent)
           }
         }
 
-        const content = typeof toolResultContent === 'string'
-          ? toolResultContent
-          : JSON.stringify(toolResultContent)
+        const content = movedImages > 0 && Array.isArray(toolResultContent) && toolResultContent.length === 0
+          ? movedImagesNote(movedImages)
+          : typeof toolResultContent === 'string'
+            ? toolResultContent
+            : JSON.stringify(toolResultContent)
 
         const toolMessage: OpenAIChatToolMessage = {
           role: 'tool',
@@ -180,25 +208,21 @@ export function convertAnthropicMessagesToOpenAIChat(
         (b) => (b.type === 'text' && (b as any).text) || (b.type === 'image' && (b as any).source)
       )
 
-      if (contentBlocks.length > 0) {
-        const openaiContent: OpenAIChatContentPart[] = []
-
-        for (const block of contentBlocks) {
-          if (block.type === 'image') {
-            hasImages = true
-            // Skip image conversion for non-vision targets; the provider's
-            // schema does not recognize `image_url` and would reject the request.
-            if (stripImages) continue
-          }
-          const converted = anthropicBlockToOpenAIChatPart(block)
-          if (converted) {
-            openaiContent.push(converted)
-          }
+      for (const block of contentBlocks) {
+        if (block.type === 'image') {
+          hasImages = true
+          // Skip image conversion for non-vision targets; the provider's
+          // schema does not recognize `image_url` and would reject the request.
+          if (stripImages) continue
         }
-
-        if (openaiContent.length > 0) {
-          result.push({ role: 'user', content: openaiContent })
+        const converted = anthropicBlockToOpenAIChatPart(block)
+        if (converted) {
+          openaiContent.push(converted)
         }
+      }
+
+      if (openaiContent.length > 0) {
+        result.push({ role: 'user', content: openaiContent })
       }
     } else if (msg.role === 'assistant') {
       // Extract text and tool_use blocks
@@ -317,23 +341,34 @@ export function convertAnthropicMessagesToResponsesInput(
     const blocks = msg.content as AnthropicContentBlock[]
 
     if (msg.role === 'user') {
-      // Process tool_result blocks -> function_call_output items.
-      // When stripping images, drop image blocks from tool_result.content
-      // arrays before they're stringified into the function_call_output.
+      // Same layout as the Chat path: every function_call_output first, then
+      // one user message opened by the images from tool results.
+      const contentParts: OpenAIResponsesInputContentPart[] = []
+
       const toolResults = extractToolResultBlocks(blocks)
       for (const toolResult of toolResults) {
-        const sanitized = stripImages && Array.isArray(toolResult.content)
-          ? { ...toolResult, content: stripImagesFromToolResultContent(toolResult.content) }
-          : toolResult
-        result.push(anthropicToolResultToResponsesFunctionCallOutput(sanitized))
+        let output = toolResult
+        if (Array.isArray(toolResult.content) && toolResult.content.some((b) => b.type === 'image')) {
+          let movedImages = 0
+          if (!stripImages) {
+            for (const block of toolResult.content) {
+              if (block.type === 'image' && block.source) {
+                contentParts.push(anthropicImageToResponsesInputImage(block))
+                movedImages++
+              }
+            }
+          }
+          const rest = stripImagesFromToolResultContent(toolResult.content)
+          output = { ...toolResult, content: movedImages > 0 && rest.length === 0 ? movedImagesNote(movedImages) : rest }
+        }
+        result.push(anthropicToolResultToResponsesFunctionCallOutput(output))
       }
 
       // Convert other content blocks
-      const contentParts: OpenAIResponsesInputContentPart[] = []
       for (const block of blocks) {
         if (block.type === 'tool_result') continue
-        // Skip image blocks for non-vision targets; preserves text/thinking parts.
-        if (stripImages && block.type === 'image') continue
+        // Skip image blocks for non-vision targets, and any without a source to convert.
+        if (block.type === 'image' && (stripImages || !block.source)) continue
         const converted = anthropicBlockToResponsesInputPart(block, 'user')
         if (converted) {
           contentParts.push(converted)

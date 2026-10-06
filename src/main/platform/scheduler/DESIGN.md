@@ -202,8 +202,14 @@ interface SchedulerService {
   stop(): void
   getRunLog(jobId, limit?): RunLogEntry[]
   getRunStats(jobId, since?): RunStats
+  countDueTimes(jobId, afterMs, untilMs, limit?): number   // due times in a window, from the schedule alone
 }
 ```
+
+`countDueTimes` is how apps/runtime tells the user how many scheduled runs came
+due while a run of the same app was still going. A running job is never
+dispatched and its next time is computed from when it finished, so those due
+times leave no trace in the scheduler; they are counted from the schedule.
 
 ## 5. Dependencies
 

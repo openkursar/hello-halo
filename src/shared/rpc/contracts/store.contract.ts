@@ -19,6 +19,7 @@ export const storeRpc = {
   storeUpdateRegistryAdapterConfig: rawRpcMethod('store:update-registry-adapter-config'),
   storeCheckUpdatesNow: rawRpcMethod('store:check-updates-now'),
   storeApplyUpgrade: rawRpcMethod('store:apply-upgrade'),
+  storePreviewUpgrade: rawRpcMethod('store:preview-upgrade'),
   storePublish: rawRpcMethod('store:publish'),
   storePublishPreview: rawRpcMethod('store:publish-preview'),
   storeInspectSkillDeps: rawRpcMethod('store:inspect-skill-deps'),

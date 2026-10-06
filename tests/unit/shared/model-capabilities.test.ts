@@ -167,6 +167,28 @@ describe('supportsVisionById — production parity snapshot', () => {
   })
 })
 
+describe('Zhipu vision variants inside text-only GLM families', () => {
+  // Ids as the provider's API documentation names them, plus case and gateway forms.
+  it.each([
+    'glm-5v-turbo', 'GLM-5V-Turbo', 'glm-4.6v', 'glm-4.6v-flash', 'glm-4.6v-flashx',
+    'glm-4.5v', 'glm-4.1v-thinking-flash', 'glm-4.1v-thinking-flashx', 'Pro/zai-org/GLM-4.5V',
+  ])('treats %s as vision-capable', (id) => {
+    expect(supportsVisionById(id)).toBe(true)
+    expect(resolveModelVision(null, id)).toBe(true)
+  })
+
+  it.each(['glm-5', 'glm-5.1', 'glm-5-turbo', 'glm-4.6', 'glm-4.5', 'glm-4.5-air'])(
+    'keeps the text-only sibling %s text-only', (id) => {
+      expect(supportsVisionById(id)).toBe(false)
+    }
+  )
+
+  it('still lets the user switch vision off for such a model', () => {
+    const source = { modelOverrides: { 'glm-5v-turbo': { vision: false } } }
+    expect(resolveModelVision(source, 'glm-5v-turbo')).toBe(false)
+  })
+})
+
 describe('glm-5.3 family — the one intended behavior change', () => {
   it('keeps glm-5.3 text-only like the rest of the glm-5 family', () => {
     expect(supportsVisionById('glm-5.3')).toBe(false)

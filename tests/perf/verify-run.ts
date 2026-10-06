@@ -38,7 +38,9 @@ const EXPECTED_BY_SET: Record<string, string[]> = {
     's6-preview-plus-chat',
     's7a-terminal-streaming',
     's7b-browser-view',
-    's8-digital-human-run'
+    's8-digital-human-run',
+    's17-stream-burst',
+    's17b-stream-burst-preview'
   ],
   // Mirrors the `perf-release` project. The threshold check that follows names
   // each scenario it needs, so this list only has to cover what that project

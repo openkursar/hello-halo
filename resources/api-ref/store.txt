@@ -236,8 +236,9 @@ POST   /api/store/updates/<appId>/apply                            Apply an avai
           -H "Content-Type: application/json" \
           -d '{"mode":"force"}'
      # body: {"mode":"force"}
-     # out: {success:true,data:{appId,from,to,severity}} or {success:false,error}
+     # out: {success:true,data:{appId,from,to,severity,kept,editsKnown}} or {success:false,error}
      # note: mode is optional: "patch_minor"|"major"|"force", defaults to "force". No built-in downgrade path — reinstalling the old version is the way back.
+     # note: A digital human keeps the user's version of every field that differs from the author's new version (prompt, run schedule, name, ...); kept lists those fields, empty when the update applied in full. editsKnown false means there was no earlier author version to compare with, so every difference was kept. The user can switch kept fields to the author's version in the app.
 
 POST   /api/store/updates/check-now                                Re-check all installed apps for available updates right now
      # note: reversible — can be undone or corrected afterward.

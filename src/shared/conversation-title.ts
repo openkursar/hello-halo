@@ -23,6 +23,25 @@ export function previewFromMessage(content: string, references?: readonly Conten
   return text.length > PREVIEW_LENGTH ? truncateChars(text, PREVIEW_LENGTH) + '...' : text
 }
 
+interface PreviewSource {
+  content: string
+  metadata?: { references?: readonly ContentReference[] }
+}
+
+/**
+ * The conversation list's line: the preview of the latest message that names
+ * something, so a reply that carries no text does not blank it. Undefined for
+ * a conversation without messages, empty when none names anything.
+ */
+export function previewFromMessages(messages: readonly PreviewSource[]): string | undefined {
+  if (messages.length === 0) return undefined
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const preview = previewFromMessage(messages[i].content, messages[i].metadata?.references)
+    if (preview) return preview
+  }
+  return ''
+}
+
 /**
  * Returns null when the message names nothing (e.g. image-only), so the caller
  * keeps the existing title instead of blanking it. Attached paths and other

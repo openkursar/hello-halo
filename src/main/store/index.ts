@@ -13,6 +13,7 @@ export {
   installFromStore,
   checkUpdates,
   applyUpgrade,
+  previewUpgrade,
   getRegistries,
   addRegistry,
   removeRegistry,

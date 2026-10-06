@@ -66,6 +66,20 @@ describe('file links in completed replies', () => {
     expect(env.resolve).toHaveBeenCalledTimes(1)
   })
 
+  it('links inline names in any script only when the space has the file', async () => {
+    const spaceId = `unicode-${++space}`
+    const nodes = [element('CODE', '报告.docx'), element('CODE', 'docs/设计.md:3'), element('CODE', '不存在.md')]
+    env.resolve.mockImplementation(async (_space: string, paths: string[]) => ({
+      success: true, data: paths.map(path => ({ path, absolutePath: path === '不存在.md' ? null : `/repo/${path}`, isDirectory: false })),
+    }))
+    prepare(nodes, spaceId)
+    await finishBatch()
+    expect(env.resolve).toHaveBeenCalledWith(spaceId, ['报告.docx', 'docs/设计.md', '不存在.md'], undefined)
+    expect(nodes.map(node => node.dataset.fileLink)).toEqual(['/repo/报告.docx', '/repo/docs/设计.md', undefined])
+    expect(nodes[1].dataset.fileLines).toBe('3-3')
+    expect(nodes[2].attributes.has('role')).toBe(false)
+  })
+
   it('keeps missing, directory and rejected paths inert; streaming performs no DOM or file checks', async () => {
     const nodes = [element('SPAN', 'missing.md'), element('SPAN', 'folder.md'), element('SPAN', '../outside.md')]
     env.resolve.mockResolvedValue({ success: true, data: [

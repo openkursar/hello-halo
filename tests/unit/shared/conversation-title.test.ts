@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { titleFromFirstMessage } from '../../../src/shared/conversation-title'
+import { previewFromMessages, titleFromFirstMessage } from '../../../src/shared/conversation-title'
 
 describe('titleFromFirstMessage', () => {
   it('keeps a short message as-is', () => {
@@ -23,5 +23,17 @@ describe('titleFromFirstMessage', () => {
   it('returns null for a message with no text', () => {
     expect(titleFromFirstMessage('')).toBeNull()
     expect(titleFromFirstMessage(' \n\t')).toBeNull()
+  })
+})
+
+describe('previewFromMessages', () => {
+  it('shows the latest message that has text, skipping replies that carry none', () => {
+    expect(previewFromMessages([{ content: 'Deploy staging' }, { content: '' }])).toBe('Deploy staging')
+    expect(previewFromMessages([{ content: 'first' }, { content: 'Done.' }])).toBe('Done.')
+  })
+
+  it('is undefined without messages and empty when none has text', () => {
+    expect(previewFromMessages([])).toBeUndefined()
+    expect(previewFromMessages([{ content: '' }, { content: ' ' }])).toBe('')
   })
 })

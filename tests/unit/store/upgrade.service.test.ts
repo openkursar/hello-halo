@@ -8,12 +8,13 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
-const { getAppManagerMock, checkUpdatesMock, applyUpgradeMock, emitUpgradeAvailableMock } =
+const { getAppManagerMock, checkUpdatesMock, applyUpgradeMock, emitUpgradeAvailableMock, recordStoreOriginalsMock } =
   vi.hoisted(() => ({
     getAppManagerMock: vi.fn(),
     checkUpdatesMock: vi.fn(),
     applyUpgradeMock: vi.fn(),
     emitUpgradeAvailableMock: vi.fn(),
+    recordStoreOriginalsMock: vi.fn(),
   }))
 
 vi.mock('../../../src/main/apps/manager', () => ({
@@ -24,6 +25,7 @@ vi.mock('../../../src/main/store/registry.service', () => ({
   checkUpdates: checkUpdatesMock,
   applyUpgrade: applyUpgradeMock,
   emitUpgradeAvailable: emitUpgradeAvailableMock,
+  recordStoreOriginals: recordStoreOriginalsMock,
 }))
 
 import { checkNow } from '../../../src/main/store/upgrade.service'
@@ -58,6 +60,28 @@ describe('upgrade.service checkNow', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     getAppManagerMock.mockReturnValue(managerWith([{ id: 'app-1' }]))
     applyUpgradeMock.mockResolvedValue(undefined)
+    recordStoreOriginalsMock.mockResolvedValue(0)
+  })
+
+  // An upgrade records its new version as the original, so only installs that
+  // were not upgraded this tick are left for recordStoreOriginals to look at.
+  it('records the originals of earlier installs after dispatching upgrades', async () => {
+    checkUpdatesMock.mockResolvedValue([update({ strategy: 'auto', severity: 'patch' })])
+
+    await checkNow()
+
+    expect(recordStoreOriginalsMock).toHaveBeenCalledTimes(1)
+    expect(applyUpgradeMock.mock.invocationCallOrder[0])
+      .toBeLessThan(recordStoreOriginalsMock.mock.invocationCallOrder[0])
+  })
+
+  it('still completes the tick when recording originals fails', async () => {
+    checkUpdatesMock.mockResolvedValue([update({ strategy: 'auto', severity: 'patch' })])
+    recordStoreOriginalsMock.mockRejectedValue(new Error('offline'))
+
+    const result = await checkNow()
+
+    expect(result.autoApplied).toBe(1)
   })
 
   it('auto + patch → applyUpgrade (silent)', async () => {
