@@ -698,6 +698,11 @@ inbound message; rides into whatever history the engine keeps).
   an owner's slash commands and skills, which must start the message. (A
   borrowed turn's message never runs as a command at all; see "Skills on a
   borrowed turn".)
+- **Never to the chat being answered**: a turn's reply reaches the chat it
+  answers anyway, so `notify_bot` refuses that chat (`relay.contact`) and tells
+  the model to write the message as its reply; a push there was a second copy.
+  The IM entry says which text is the reply — what follows the turn's last tool
+  call — so finishing work comes before the answer, not after it.
 - **Sender side needs nothing**: the notify_bot call + result already live in
   the calling session's history.
 - **Peek/commit, not drain**: events are removed only when the engine accepts

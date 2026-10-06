@@ -262,6 +262,17 @@ function buildNotifyBotTool(context: NotifyToolContext) {
       const instanceId = input.to.slice(0, colonIndex)
       const chatId = input.to.slice(colonIndex + 1)
 
+      // The chat this turn answers gets the turn's reply anyway; a push there
+      // arrives as a second copy of it.
+      if (context.relay.contact && input.to === context.relay.contact) {
+        return textResult(
+          'Not sent: this is the chat you are answering right now, and your reply — the text you ' +
+          'end this turn with — is delivered to it. Write the message as your reply instead; ' +
+          'to send a file here, use send_file_to_chat.',
+          true
+        )
+      }
+
       // Find the matching session to get chatType
       const session = context.imSessions!.find(
         s => s.instanceId === instanceId && s.chatId === chatId
