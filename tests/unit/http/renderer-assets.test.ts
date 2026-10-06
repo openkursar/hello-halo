@@ -2,8 +2,10 @@
  * Remote browsers get the built renderer by whole-file reads only. Opening a
  * file inside app.asar as a stream makes Electron extract it to a temp file
  * that macOS later deletes, after which every page and asset failed until a
- * restart; a whole-file read goes to the archive itself. The validators the
- * browser caches against stay those `express.static` sent.
+ * restart; a whole-file read goes to the archive itself. Each file is read once
+ * and shared by every response sending it, so slow or simultaneous downloads
+ * cannot pile up copies. The validators the browser caches against stay those
+ * `express.static` sent.
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -13,12 +15,21 @@ import { join } from 'path'
 import express from 'express'
 import { get, type Server } from 'http'
 
-const io = vi.hoisted(() => ({ readFile: 0, stat: 0, streamed: 0 }))
+const io = vi.hoisted(() => ({ readFile: 0, stat: 0, streamed: 0, failNextRead: false }))
 vi.mock('fs', async (original) => {
   const real = await original<typeof import('fs')>()
   return {
     ...real,
-    readFile: ((...args: Parameters<typeof real.readFile>) => { io.readFile++; return (real.readFile as (...a: unknown[]) => void)(...args) }) as typeof real.readFile,
+    readFile: ((...args: Parameters<typeof real.readFile>) => {
+      io.readFile++
+      if (io.failNextRead) {
+        io.failNextRead = false
+        const callback = args[args.length - 1] as (error: Error) => void
+        setImmediate(() => callback(Object.assign(new Error('EIO: i/o error'), { code: 'EIO' })))
+        return
+      }
+      return (real.readFile as (...a: unknown[]) => void)(...args)
+    }) as typeof real.readFile,
     stat: ((...args: Parameters<typeof real.stat>) => { io.stat++; return (real.stat as (...a: unknown[]) => void)(...args) }) as typeof real.stat,
     open: ((...args: Parameters<typeof real.open>) => { io.streamed++; return (real.open as (...a: unknown[]) => void)(...args) }) as typeof real.open,
     createReadStream: ((...args: Parameters<typeof real.createReadStream>) => { io.streamed++; return real.createReadStream(...args) }) as typeof real.createReadStream,
@@ -106,6 +117,34 @@ describe('remote renderer assets', () => {
       expect(await response.text(), path).toBe('spa shell')
     }
     expect(await (await fetch(`${base}/assets/index-abc123.js`, { method: 'POST' })).text()).toBe('spa shell')
+  })
+})
+
+describe('one copy per file', () => {
+  it('reads a file once for every response sending it, at the same time or later', async () => {
+    writeFileSync(join(root, 'assets', 'shared-1.js'), 'shared one')
+    const bodies = await Promise.all([1, 2, 3].map(async () => (await fetch(`${base}/assets/shared-1.js`)).text()))
+    expect(bodies).toEqual(['shared one', 'shared one', 'shared one'])
+    expect(await (await fetch(`${base}/assets/shared-1.js`)).text()).toBe('shared one')
+    expect(io.readFile).toBe(1)
+  })
+
+  it('reads a file again once it changed', async () => {
+    writeFileSync(join(root, 'assets', 'shared-2.js'), 'before')
+    expect(await (await fetch(`${base}/assets/shared-2.js`)).text()).toBe('before')
+    writeFileSync(join(root, 'assets', 'shared-2.js'), 'after the change')
+    expect(await (await fetch(`${base}/assets/shared-2.js`)).text()).toBe('after the change')
+    expect(io.readFile).toBe(2)
+  })
+
+  it('keeps no failed read', async () => {
+    writeFileSync(join(root, 'assets', 'shared-3.js'), 'eventually')
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {})
+    io.failNextRead = true
+    expect((await fetch(`${base}/assets/shared-3.js`)).status).toBe(500)
+    expect(await (await fetch(`${base}/assets/shared-3.js`)).text()).toBe('eventually')
+    expect(io.readFile).toBe(2)
+    quiet.mockRestore()
   })
 })
 
