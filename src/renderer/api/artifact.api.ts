@@ -6,6 +6,7 @@ import {
   getAuthToken,
   getRemoteServerUrl,
   httpRequest,
+  isCapacitor,
   isElectron,
   onEvent,
 } from './_shared'
@@ -18,6 +19,13 @@ import type { ArtifactChangeBatchEvent, FileQueryResult, ResolvedArtifactPath } 
 // Batches raised inside this renderer (a lapsed space hold: changes were lost),
 // delivered to the same subscribers as those from main.
 const localChangedBatchListeners = new Set<(data: ArtifactChangeBatchEvent) => void>()
+
+// On the Halo server's own address: the mobile app's page is local to the
+// phone, and a reverse proxy may serve Halo under a path prefix.
+function artifactDownloadUrl(filePath: string): string {
+  const token = getAuthToken()
+  return `${getRemoteServerUrl()}/api/artifacts/download?path=${encodeURIComponent(filePath)}&token=${encodeURIComponent(token || '')}`
+}
 
 export const artifactApi = {
   // ===== Artifact =====
@@ -134,9 +142,13 @@ export const artifactApi = {
       window.halo.openArtifact(filePath)
       return
     }
-    // In remote mode, trigger download via browser with token in URL
-    const token = getAuthToken()
-    const url = `/api/artifacts/download?path=${encodeURIComponent(filePath)}&token=${encodeURIComponent(token || '')}`
+    const url = artifactDownloadUrl(filePath)
+    if (isCapacitor()) {
+      // The app's web view cannot save files: the native shell hands the link
+      // to the system (Android's download listener, the system browser on iOS).
+      window.open(url, '_blank')
+      return
+    }
     const link = document.createElement('a')
     link.href = url
     link.download = filePath.split('/').pop() || 'download'
@@ -146,10 +158,7 @@ export const artifactApi = {
   },
 
   // Get download URL for an artifact (for use with fetch or direct links)
-  getArtifactDownloadUrl: (filePath: string): string => {
-    const token = getAuthToken()
-    return `/api/artifacts/download?path=${encodeURIComponent(filePath)}&token=${encodeURIComponent(token || '')}`
-  },
+  getArtifactDownloadUrl: (filePath: string): string => artifactDownloadUrl(filePath),
 
   // Read artifact content for Content Canvas
   readArtifactContent: async (filePath: string): Promise<ApiResponse> => {

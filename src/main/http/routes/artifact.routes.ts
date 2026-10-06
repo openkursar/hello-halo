@@ -164,8 +164,12 @@ export function registerArtifactRoutes(app: Express): void {
         const ext = fileName.split('.').pop()?.toLowerCase() || ''
         const contentType = mimeTypes[ext] || 'application/octet-stream'
 
+        // RFC 6266: an ASCII stand-in for old clients, then the exact UTF-8 name
+        // that browsers and phones save the file under.
+        const asciiName = fileName.replace(/[^\x20-\x7e]|["\\]/g, '_')
+        const utf8Name = encodeURIComponent(fileName).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)
         res.setHeader('Content-Type', contentType)
-        res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName)}"`)
+        res.setHeader('Content-Disposition', `attachment; filename="${asciiName}"; filename*=UTF-8''${utf8Name}`)
         res.setHeader('Content-Length', stats.size)
 
         const readStream = createReadStream(validatedPath)
