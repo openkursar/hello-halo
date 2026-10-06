@@ -10,12 +10,13 @@ import {
   httpRequest,
   isCapacitor,
   isElectron,
-  onEvent,
   setAuthToken,
 } from './_shared'
 import type {
   ApiResponse,
 } from './_shared'
+import type { OAuthCompleteResult } from '../../shared/types/ai-sources'
+import type { OAuthLoginStart } from '../../shared/rpc/contracts/auth.contract'
 
 export const authApi = {
   // ===== Authentication (remote only) =====
@@ -49,47 +50,53 @@ export const authApi = {
     return httpRequest('GET', '/api/auth/providers')
   },
 
-  authStartLogin: async (providerType: string): Promise<ApiResponse> => {
+  authStartLogin: async (providerType: string, sourceId?: string): Promise<ApiResponse<OAuthLoginStart>> => {
     if (isElectron()) {
-      return window.halo.authStartLogin(providerType)
+      return window.halo.authStartLogin(providerType, sourceId)
     }
-    return httpRequest('POST', '/api/auth/start-login', { providerType })
+    return httpRequest('POST', '/api/auth/start-login', { providerType, sourceId })
   },
 
-  authOpenLoginWindow: async (providerType: string, loginUrl: string, redirectUri: string): Promise<ApiResponse> => {
+  authOpenLoginWindow: async (providerType: string, loginId: string): Promise<ApiResponse<OAuthCompleteResult>> => {
     if (isElectron()) {
-      return window.halo.authOpenLoginWindow(providerType, loginUrl, redirectUri)
+      return window.halo.authOpenLoginWindow(providerType, loginId)
     }
-    // Web mode: not supported, fall back to completing with URL
     return { success: false, error: 'Login window not supported in web mode' }
   },
 
-  authCompleteLogin: async (providerType: string, state: string): Promise<ApiResponse> => {
+  authCompleteLogin: async (providerType: string, stateOrCode: string, loginId: string): Promise<ApiResponse<OAuthCompleteResult>> => {
     if (isElectron()) {
-      return window.halo.authCompleteLogin(providerType, state)
+      return window.halo.authCompleteLogin(providerType, stateOrCode, loginId)
     }
-    return httpRequest('POST', '/api/auth/complete-login', { providerType, state })
+    return httpRequest('POST', '/api/auth/complete-login', { providerType, state: stateOrCode, loginId })
   },
 
-  authRefreshToken: async (providerType: string): Promise<ApiResponse> => {
+  authCancelLogin: async (providerType: string, loginId: string): Promise<ApiResponse<void>> => {
     if (isElectron()) {
-      return window.halo.authRefreshToken(providerType)
+      return window.halo.authCancelLogin(providerType, loginId)
     }
-    return httpRequest('POST', '/api/auth/refresh-token', { providerType })
+    return httpRequest('POST', '/api/auth/cancel-login', { providerType, loginId })
   },
 
-  authCheckToken: async (providerType: string): Promise<ApiResponse> => {
+  authRefreshToken: async (sourceId: string): Promise<ApiResponse<void>> => {
     if (isElectron()) {
-      return window.halo.authCheckToken(providerType)
+      return window.halo.authRefreshToken(sourceId)
     }
-    return httpRequest('GET', `/api/auth/check-token?providerType=${providerType}`)
+    return httpRequest('POST', '/api/auth/refresh-token', { sourceId })
   },
 
-  authLogout: async (providerType: string): Promise<ApiResponse> => {
+  authCheckToken: async (sourceId: string): Promise<ApiResponse<{ valid: boolean; needsRefresh?: boolean; reason?: string }>> => {
     if (isElectron()) {
-      return window.halo.authLogout(providerType)
+      return window.halo.authCheckToken(sourceId)
     }
-    return httpRequest('POST', '/api/auth/logout', { providerType })
+    return httpRequest('GET', `/api/auth/check-token?sourceId=${encodeURIComponent(sourceId)}`)
+  },
+
+  authLogout: async (sourceId: string): Promise<ApiResponse<void>> => {
+    if (isElectron()) {
+      return window.halo.authLogout(sourceId)
+    }
+    return httpRequest('POST', '/api/auth/logout', { sourceId })
   },
 
   /**
@@ -125,8 +132,5 @@ export const authApi = {
     }
     return { success: false, error: 'Delegated login requires the desktop app' }
   },
-
-  onAuthLoginProgress: (callback: (data: { provider: string; status: string }) => void) =>
-    onEvent('auth:login-progress', callback),
 
 }

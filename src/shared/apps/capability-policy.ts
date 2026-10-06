@@ -177,7 +177,7 @@ export const CAPABILITY_TOOL_GROUPS: readonly CapabilityToolGroup[] = ['file', '
 // ── MCP server universe ──
 
 /** Halo MCP servers always available: read-only, no side effects, no local reach. */
-export const CAPABILITY_SAFE_MCP: readonly string[] = ['web-search', 'halo-memory']
+export const CAPABILITY_SAFE_MCP: readonly string[] = ['web-search']
 
 /**
  * Halo MCP servers gated by a policy toggle, in display order.

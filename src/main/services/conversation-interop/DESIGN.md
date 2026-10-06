@@ -308,8 +308,7 @@ resolution semantics). **The actual fix is the dependency-inversion seam
 file): `broker.ts` declares the slot and calls whatever was registered into
 it; it holds no static reference to `conversation-interop` at all.
 Bootstrap (`bootstrap/extended.ts`) wires the real implementation in once,
-the same way it wires `setActiveTeamRuntime` / `setMemorySdk` /
-`setActiveImChannelManager` — after both modules exist, nowhere near either
+the same way it wires `setActiveTeamRuntime` / `setActiveImChannelManager` — after both modules exist, nowhere near either
 module's own load time. `busy.ts`'s import of `session-manager.ts` and
 `mcp-server.ts`'s import of `resolved-sdk.ts` are both back to plain static
 imports; the seam is the only thing standing between broker.ts and the cycle.

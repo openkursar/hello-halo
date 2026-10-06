@@ -11,6 +11,7 @@ import {
 import { maskConfigFields, unmaskSentinels } from '../foundation/config-encryption'
 import { validateApiConnection, fetchModelsFromApi } from '../services/api-validator.service'
 import { ModelFetchError } from '../../shared/model-fetch-error'
+import type { AISourcesConfig } from '../../shared/types/ai-sources'
 
 export interface ControllerResponse<T = unknown> {
   success: boolean
@@ -27,7 +28,7 @@ export interface ControllerResponse<T = unknown> {
 export function getConfig(): ControllerResponse {
   try {
     const config = serviceGetConfig()
-    return { success: true, data: maskConfigFields(config as Record<string, unknown>) }
+    return { success: true, data: maskConfigFields(config as unknown as Record<string, unknown>) }
   } catch (error: unknown) {
     const err = error as Error
     return { success: false, error: err.message }
@@ -47,16 +48,43 @@ export function getCredentialFailures(): ControllerResponse {
   }
 }
 
+/** Managed account edits and selection use targeted APIs, never stale client snapshots. */
+export function preserveManagedSources(updates: Record<string, unknown>, existing: Record<string, unknown>): void {
+  const incoming = updates.aiSources as AISourcesConfig | undefined
+  const current = existing.aiSources as AISourcesConfig | undefined
+  if (updates.aiSources === undefined) return
+  if (incoming?.version !== 2 || !Array.isArray(incoming.sources)) throw new Error('Invalid AI sources configuration')
+  if (new Set(incoming.sources.map(source => source.id)).size !== incoming.sources.length) {
+    throw new Error('Duplicate AI source ids')
+  }
+  const managed = (current?.version === 2 ? current.sources : []).filter(source => source.authType === 'oauth' || source.authType === 'delegated')
+  const byId = new Map(managed.map(source => [source.id, source]))
+  const sources = incoming.sources.flatMap(source => {
+    const live = byId.get(source.id)
+    if (live) return [live]
+    return source.authType === 'oauth' || source.authType === 'delegated' ? [] : [source]
+  })
+  const includedIds = new Set(sources.map(source => source.id))
+  for (const source of managed) {
+    if (!includedIds.has(source.id)) sources.push(source)
+  }
+  const currentId = sources.some(source => source.id === current?.currentId)
+    ? current!.currentId
+    : sources.some(source => source.id === incoming.currentId) ? incoming.currentId : sources[0]?.id ?? null
+  updates.aiSources = { ...incoming, sources, currentId }
+}
+
 /**
  * Update configuration. '***' sentinels in the incoming payload are
  * replaced with the current value so unchanged secrets are preserved.
  */
 export function setConfig(updates: Record<string, unknown>): ControllerResponse {
   try {
-    const existing = serviceGetConfig() as Record<string, unknown>
+    const existing = serviceGetConfig() as unknown as Record<string, unknown>
     unmaskSentinels(updates, existing)
+    preserveManagedSources(updates, existing)
     const config = serviceSaveConfig(updates as any)
-    return { success: true, data: maskConfigFields(config as Record<string, unknown>) }
+    return { success: true, data: maskConfigFields(config as unknown as Record<string, unknown>) }
   } catch (error: unknown) {
     const err = error as Error
     return { success: false, error: err.message }

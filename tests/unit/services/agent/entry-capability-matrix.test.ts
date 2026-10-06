@@ -38,6 +38,8 @@ const state = vi.hoisted(() => ({
   sessions: [] as Array<Record<string, any>>,
   engine: { features: { permissionRules: true, hooks: true } } as unknown,
   teamContext: null as unknown,
+  memoryEnabled: true,
+  sent: [] as string[],
 }))
 
 const { createHaloAppsMcpServer } = vi.hoisted(() => ({
@@ -76,7 +78,7 @@ vi.mock('../../../../src/main/services/agent/resolved-sdk', async (importOrigina
         message: { content: [{ type: 'tool_use', name: 'mcp__halo-report__report_to_user', input: {} }] },
       }
     }
-    return { send: vi.fn(), close: vi.fn(), stream }
+    return { send: vi.fn((message: string) => state.sent.push(message)), close: vi.fn(), stream }
   }),
   query: vi.fn(),
 }))
@@ -104,7 +106,7 @@ vi.mock('../../../../src/main/services/agent/session-manager', () => ({
   getRunningConsumerIds: () => [],
   markTurnDispatched: vi.fn(),
   updateConsumerDisplayModel: vi.fn(),
-  getOrCreateV2Session: vi.fn(async (
+  acquireV2Session: vi.fn(async (
     _spaceId: string, _conversationId: string, sdkOptions: Record<string, any>,
     _resume?: string, _workDir?: string, _consumer?: unknown, _kbIds?: unknown,
     buildMcpServers?: () => Record<string, unknown> | null,
@@ -116,7 +118,8 @@ vi.mock('../../../../src/main/services/agent/session-manager', () => ({
       else delete sdkOptions.mcpServers
     }
     state.sessions.push(sdkOptions)
-    return { send: vi.fn(), setMaxThinkingTokens: vi.fn(), close: vi.fn() }
+    const session = { send: vi.fn((message: string) => state.sent.push(message)), setMaxThinkingTokens: vi.fn(), close: vi.fn() }
+    return { session, isCurrent: true, send: session.send, close: session.close, release: vi.fn() }
   }),
 }))
 vi.mock('../../../../src/main/services/agent/control', () => ({
@@ -148,10 +151,6 @@ vi.mock('../../../../src/main/services/agent/permission-handler', () => ({
 vi.mock('../../../../src/main/services/agent/knowledge-context', () => ({
   resolveConversationKnowledgeBases: vi.fn(() => []),
   resolveConversationKnowledgeBaseIds: vi.fn(() => []),
-}))
-vi.mock('../../../../src/main/services/agent/space-memory', () => ({
-  resolveSpaceMemorySession: vi.fn(() => null),
-  buildSpaceMemoryPreamble: vi.fn(async () => ''),
 }))
 vi.mock('../../../../src/main/services/agent/conversation-sink', () => ({ createConversationSink: vi.fn() }))
 vi.mock('../../../../src/main/services/agent/goal', () => ({ prepareGoalInput: vi.fn(), setGoalForTurn: vi.fn() }))
@@ -231,11 +230,15 @@ vi.mock('../../../../src/main/services/conversation.service', () => ({
   updateMessageById: vi.fn(),
   getConversation: vi.fn(() => ({ id: 'conv-1', sessionId: undefined })),
 }))
-vi.mock('../../../../src/main/services/space.service', () => ({
-  getSpace: () => ({ id: 'space-1', path: state.workDir }),
-  getSpaceDir: () => state.workDir,
-  isSpaceMemoryEnabled: () => false,
-}))
+vi.mock('../../../../src/main/services/space.service', async () => {
+  const { resolveMemoryLayout } = await import('../../../../src/main/platform/memory/paths')
+  return {
+    getSpace: () => ({ id: 'space-1', path: state.workDir }),
+    getSpaceDir: () => state.workDir,
+    isSpaceMemoryEnabled: () => state.memoryEnabled,
+    getSpaceMemoryLayout: () => resolveMemoryLayout({ type: 'user', spaceId: 'space-1', spacePath: state.workDir }, 'space'),
+  }
+})
 
 // ============================================
 // apps/runtime collaborators
@@ -343,17 +346,20 @@ vi.mock('../../../../src/main/apps/runtime/execution-environment', () => ({
   legacySessionEnvironmentKey: (appId: string, runId: string) => `legacy:${appId}:${runId}`,
   appChatRunId: (conversationId: string, appId: string) => `run-${conversationId}-${appId}`,
 }))
-vi.mock('../../../../src/main/apps/runtime/index', () => ({
-  getAppMemoryService: () => ({ getPromptInstructions: () => 'MEMORY-INSTRUCTIONS', saveSessionSummary: vi.fn() }),
-  getActivityStore: () => ({ getSessionEnvironment: vi.fn(), deleteSessionEnvironment: vi.fn(), pinSessionEnvironment: vi.fn() }),
-}))
+vi.mock('../../../../src/main/apps/runtime/index', async () => {
+  const { generatePromptInstructions } = await import('../../../../src/main/platform/memory/prompt')
+  return {
+    getAppMemoryService: () => ({ getPromptInstructions: generatePromptInstructions, saveSessionSummary: vi.fn() }),
+    getActivityStore: () => ({ getSessionEnvironment: vi.fn(), deleteSessionEnvironment: vi.fn(), pinSessionEnvironment: vi.fn() }),
+  }
+})
 vi.mock('../../../../src/main/apps/runtime/turn/memory-lifecycle', () => ({
   prepareMemoryForTurn: vi.fn(async () => ({
     snapshot: {
       exists: false, totalLines: 0, sizeBytes: 0, nowBytes: 0, fullContent: null, headers: [], firstSection: null,
       layout: { file: '/m/memory.md', dataDir: '/m', topicsDir: '/m/topics', runDir: '/m/run', archiveDir: '/m/archive', snapshotsDir: '/m/.snapshots', consolidationDir: '/m/.c', stateFile: '/m/.state.json' },
       topics: { root: '/m/topics', children: [], topicCount: 0, totalBytes: 0, truncated: false },
-      runFiles: [], runTotalCount: 0, archiveCount: 0, lastModified: null,
+      runTotalCount: 0, archiveCount: 0,
     },
     runTimestamp: '2026-08-30-1000',
   })),
@@ -362,15 +368,11 @@ vi.mock('../../../../src/main/apps/runtime/turn/memory-lifecycle', () => ({
   memoryPromptOptions: vi.fn(() => ({})),
   loadSpaceTopicsForTurn: vi.fn(async () => null),
   appMemoryGuard: vi.fn(() => ({ writable: [], readOnly: [], label: 'test' })),
-  appMemorySettings: vi.fn(() => ({ enabled: true, autoConsolidate: true, cadence: 'diligent' })),
+  appMemorySettings: vi.fn(() => ({ enabled: state.memoryEnabled, autoConsolidate: true, cadence: 'diligent' })),
   appTurnFileAccess: vi.fn(() => ({
     cwd: '/tmp', memoryWritable: [], memoryReadable: [], attachedFiles: [],
     workspaceRoots: ['/tmp'], closed: [], hookGuarded: [], memorySystemPaths: [],
   })),
-}))
-vi.mock('../../../../src/main/platform/memory', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../../../src/main/platform/memory')>()),
-  createMemoryStatusMcpServer: () => ({ _isMcpServer: true, name: 'halo-memory' }),
 }))
 vi.mock('../../../../src/main/services/memory-consolidation', () => ({ requestConsolidation: vi.fn() }))
 
@@ -388,6 +390,8 @@ import { setImPermissionContext, clearImPermissionContext } from '../../../../sr
 import { buildImSessionKey, buildTeamSessionKey } from '../../../../src/shared/apps/im-keys'
 import { createSession } from '../../../../src/main/services/agent/resolved-sdk'
 import { DEFAULT_DISABLED_TOOLS } from '../../../../src/shared/constants/disabled-tools'
+import { generatePromptInstructions, MEMORY_FILE_FORMAT, TOPIC_FILE_FORMAT } from '../../../../src/main/platform/memory'
+import { describeSelfInstance, formatInstanceTag } from '../../../../src/main/apps/runtime/live-instances'
 
 // ============================================
 // Row drivers: run the real entry, return the options it built the session with
@@ -469,7 +473,7 @@ const ROW_DRIVERS = {
       getRun: vi.fn(), pinRunEnvironment: vi.fn(), insertRun: vi.fn(), completeRun: vi.fn(),
       updateRunSessionId: vi.fn(), insertEntry: vi.fn(),
     } as any
-    const memory = { getPromptInstructions: () => '', saveSessionSummary: vi.fn(async () => {}) } as any
+    const memory = { getPromptInstructions: generatePromptInstructions, saveSessionSummary: vi.fn(async () => {}) } as any
     vi.mocked(createSession).mockClear()
     const result = await executeRun({
       app: { ...app, userOverrides: {} } as any,
@@ -498,19 +502,19 @@ const ROWS = Object.keys(ROW_DRIVERS) as Row[]
 const EXPECTED_SERVERS: Record<Row, readonly string[]> = {
   'space chat': ['capabilities', 'halo-apps', 'halo-conversations', 'halo-docs', 'web-search'],
   'digital human chat (owner)': [
-    'ai-browser', 'halo-apps', 'halo-docs', 'halo-memory', 'halo-notify', 'halo-person-context', 'ocr', 'web-search',
+    'ai-browser', 'halo-apps', 'halo-docs', 'halo-notify', 'halo-person-context', 'ocr', 'web-search',
   ],
   // Only what the strict policy classes as safe survives the guest filter.
-  'digital human chat (IM guest)': ['halo-memory', 'web-search'],
+  'digital human chat (IM guest)': ['web-search'],
   'team member': [
-    'ai-browser', 'halo-apps', 'halo-docs', 'halo-memory', 'halo-notify', 'halo-person-context', 'halo-report',
+    'ai-browser', 'halo-apps', 'halo-docs', 'halo-notify', 'halo-person-context', 'halo-report',
     'halo-team', 'ocr', 'web-search',
   ],
   'team member (disposable)': [
     'ai-browser', 'halo-docs', 'halo-notify', 'halo-person-context', 'halo-report', 'halo-team', 'ocr', 'web-search',
   ],
   'automation run': [
-    'ai-browser', 'halo-docs', 'halo-memory', 'halo-notify', 'halo-person-context', 'halo-report', 'ocr', 'web-search',
+    'ai-browser', 'halo-docs', 'halo-notify', 'halo-person-context', 'halo-report', 'ocr', 'web-search',
   ],
 }
 
@@ -546,6 +550,8 @@ beforeEach(() => {
   state.config = { agent: {}, notificationChannels: {} }
   state.teamContext = null
   state.engine = { features: { permissionRules: true, hooks: true } }
+  state.memoryEnabled = true
+  state.sent.length = 0
 })
 
 // ============================================
@@ -559,6 +565,43 @@ describe('entry x capability: servers each entry starts with', () => {
       expect(observed.servers).toEqual([...EXPECTED_SERVERS[row]].sort())
     })
   }
+})
+
+describe('entry x memory harness', () => {
+  it.each(ROWS)('%s: shared format reaches the final engine prompt without a retired tool or roster', async row => {
+    const { systemPrompt, servers } = await ROW_DRIVERS[row]()
+    if (row === 'team member (disposable)') {
+      expect(systemPrompt).not.toContain(MEMORY_FILE_FORMAT)
+      expect(state.sent.join('\n')).not.toContain('## Memory')
+    } else {
+      expect(systemPrompt).toContain(MEMORY_FILE_FORMAT)
+      expect(systemPrompt).toContain(TOPIC_FILE_FORMAT)
+      expect(systemPrompt).toContain('Your History author tag is')
+    }
+    expect(servers).not.toContain('halo-memory')
+    expect(systemPrompt).not.toContain('memory_status')
+    expect(state.sent.join('\n')).not.toMatch(/Running right now|No other instance|You are `(?:chat|im|team|manual)#/)
+  })
+
+  it.each(ROWS)('%s: disabled memory does not describe automatic memory maintenance', async row => {
+    state.memoryEnabled = false
+    const { systemPrompt, servers } = await ROW_DRIVERS[row]()
+    expect(systemPrompt).not.toContain(MEMORY_FILE_FORMAT)
+    expect(state.sent.join('\n')).not.toContain('## Memory')
+    expect(servers).not.toContain('halo-memory')
+  })
+
+  it('signs IM guest entries with runtime-owned provenance', async () => {
+    const observed = await ROW_DRIVERS['digital human chat (IM guest)']()
+    setImPermissionContext(GUEST_KEY(), { senderId: 'stranger', senderName: 'Stranger', isOwner: false, guestPolicy: {} })
+    try {
+      const tag = formatInstanceTag(describeSelfInstance({ conversationId: GUEST_KEY() }))
+      expect(tag).toMatch(/^im-guest#/)
+      expect(observed.systemPrompt).toContain(`Your History author tag is \`${tag}\``)
+    } finally {
+      clearImPermissionContext(GUEST_KEY())
+    }
+  })
 })
 
 describe('entry x global setting: every entry follows the user\'s AI settings', () => {

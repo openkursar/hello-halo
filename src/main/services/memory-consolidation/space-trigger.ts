@@ -9,7 +9,6 @@
 
 import { onAgentEvent, activeSessions, getApiCredentialsForConversation, getApiCredentials } from '../agent'
 import { resolveCredentialsForSdk } from '../agent/sdk-config'
-import { getConfig } from '../../foundation/config.service'
 import { getConversation } from '../conversation.service'
 import { getSpace, getSpaceMemoryLayout, getSpaceMemorySettings } from '../space.service'
 import type { IDisposable } from '../../platform/event'
@@ -35,11 +34,10 @@ function spaceRequest(
     settings,
     tag: `space:${spaceId.slice(0, 8)}`,
     resolveCredentials: async () => {
-      const config = getConfig()
       // The conversation's own model when a turn triggered it; otherwise the global one.
       const credentials = conversationId
-        ? await getApiCredentialsForConversation(config, getConversation(spaceId, conversationId))
-        : await getApiCredentials(config)
+        ? await getApiCredentialsForConversation(getConversation(spaceId, conversationId))
+        : await getApiCredentials()
       return resolveCredentialsForSdk(credentials)
     },
     isBusy: () => [...activeSessions.values()].some(

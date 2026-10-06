@@ -6,7 +6,7 @@
  */
 
 import { query as claudeQuery } from './resolved-sdk'
-import { getConfig, getTempSpacePath } from '../../foundation/config.service'
+import { getTempSpacePath } from '../../foundation/config.service'
 import { ensureOpenAICompatRouter, encodeBackendConfig } from '../../openai-compat-router'
 import type { McpProbeStatus, McpServerStatusInfo } from './types'
 import {
@@ -237,10 +237,8 @@ async function runMcpConnectionTest(): Promise<McpConnectionTestResult> {
   console.log('[Agent] Starting MCP connection test...')
 
   try {
-    const config = getConfig()
-
     // Get API credentials based on current aiSources configuration
-    const credentials = await getApiCredentials(config)
+    const credentials = await getApiCredentials()
     if (!credentials.apiKey && credentials.provider !== 'oauth') {
       return { success: false, servers: [], error: 'API key not configured' }
     }
@@ -299,6 +297,8 @@ async function runMcpConnectionTest(): Promise<McpConnectionTestResult> {
         // makes it authenticate as an API-key user and ignore its own credential.
         ...(delegatedRoutingHeader ? {} : { apiKey: anthropicApiKey }),
         model: sdkModel,
+        apiCredentials: credentials,
+        credentialsGeneration: credentials.credentialsGeneration,
         anthropicBaseUrl,
         cwd,
         executable: electronPath,

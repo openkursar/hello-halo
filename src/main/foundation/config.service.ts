@@ -476,27 +476,45 @@ function seedEmailChannelDefaults(): void {
 // config.service calls registered callbacks (no import from agent)
 // ============================================================================
 
-type ApiConfigChangeHandler = () => void
+export interface ApiConfigChange {
+  sourceIds?: string[]
+  selectionChanged?: boolean
+}
+
+type ApiConfigChangeHandler = (change?: ApiConfigChange) => void
 const apiConfigChangeHandlers: ApiConfigChangeHandler[] = []
 
 // ============================================================================
 // CREDENTIALS GENERATION COUNTER
 // ============================================================================
-// A monotonically increasing counter that increments whenever API credentials change.
-// Sessions record their generation at creation time. When reusing a session, we compare
-// generations - if different, the session was created with stale credentials and must
-// be recreated. This is a standard cache invalidation pattern (similar to database
-// optimistic locking) that provides deterministic correctness regardless of async timing.
+// The global epoch is reserved for legacy API changes. Source epochs track
+// independent managed accounts and are retained only while a source exists.
 // ============================================================================
 
 let credentialsGeneration = 0
+let nextSourceCredentialsGeneration = 0
+const sourceCredentialsGenerations = new Map<string, number>()
 
-/**
- * Get the current credentials generation counter.
- * Sessions compare this value to detect stale credentials.
- */
-export function getCredentialsGeneration(): number {
-  return credentialsGeneration
+function syncSourceCredentialsGenerations(aiSources?: AISourcesConfig): void {
+  const sourceIds = new Set(aiSources?.sources.map(source => source.id) ?? [])
+  for (const id of sourceCredentialsGenerations.keys()) {
+    if (!sourceIds.has(id)) sourceCredentialsGenerations.delete(id)
+  }
+  for (const id of sourceIds) {
+    if (!sourceCredentialsGenerations.has(id)) {
+      sourceCredentialsGenerations.set(id, ++nextSourceCredentialsGeneration)
+    }
+  }
+}
+
+/** No disk reads; a deleted source has no epoch and re-adding it gets a fresh one. */
+export function getCredentialsGeneration(): number
+export function getCredentialsGeneration(sourceId: string): string
+export function getCredentialsGeneration(sourceId: string | undefined): number | string
+export function getCredentialsGeneration(sourceId?: string): number | string {
+  return sourceId === undefined
+    ? credentialsGeneration
+    : JSON.stringify([credentialsGeneration, sourceId, sourceCredentialsGenerations.get(sourceId) ?? 0])
 }
 
 // Tracks sensitive fields that could not be decoded at rest. The consumer gets
@@ -1207,100 +1225,47 @@ function normalizeAiSources(parsed: Record<string, any>): AISourcesConfig {
   return migrateAiSourcesToV2(parsed)
 }
 
-// Stable serialization of modelOverrides for the session-rebuild signature.
-// Sorted by id so object-key insertion order doesn't churn sessions.
-function serializeModelOverridesForSignature(
-  overrides?: AISource['modelOverrides']
-): string {
-  if (!overrides) return ''
-  const ids = Object.keys(overrides).sort()
-  if (ids.length === 0) return ''
-  return ids
-    .map(id => {
-      const v = overrides[id] || {}
-      return `${id}:${v.maxOutputTokens ?? ''}:${v.contextWindow ?? ''}:${v.reasoningEffort ?? ''}`
-    })
-    .join(';')
+function getSourceCredentialsSignature(source: AISource): string {
+  const overrides = Object.entries(source.modelOverrides ?? {})
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([id, value]) => [
+      id, value.maxOutputTokens, value.contextWindow, value.reasoningEffort,
+      value.vision, value.thinking, value.adaptiveThinking
+    ])
+  // Conversations can pin a model other than the source's default.
+  const models = [...(source.availableModels ?? [])]
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map(model => [model.id, model.supportsVision, model.capabilities?.contextWindow, model.capabilities?.maxOutputTokens])
+  const codexCapabilities = [...(source.modelCatalogCache?.entries ?? [])]
+    .sort((a, b) => a.slug.localeCompare(b.slug))
+    .map(entry => [entry.slug, entry.supports_reasoning_summary_parameter, entry.use_responses_lite, entry.supported_reasoning_levels])
+
+  // OAuth tokens are absent on purpose: the router resolves each request's
+  // credential, so a rotation must not rebuild the sessions using the account.
+  return JSON.stringify([
+    source.provider, source.authType, source.apiUrl, source.apiType, source.apiKey,
+    source.user?.uid, source.accountId, source.profileArn, source.model,
+    overrides, models, codexCapabilities
+  ])
 }
 
-// The provider-declared capability for the currently selected model
-// (ModelOption.capabilities, set from a live "Fetch Models" catalog read)
-// feeds into modelCapabilitiesService.resolve() the same way modelOverrides
-// does — see its `catalogCapability` parameter. Re-fetching a refreshed
-// context/output limit for the active model must therefore also trigger a
-// session rebuild, or the running CC subprocess keeps the stale env var.
-function serializeCatalogCapabilityForSignature(
-  source: Pick<AISource, 'model' | 'availableModels'>
-): string {
-  const capability = source.availableModels?.find(m => m.id === source.model)?.capabilities
-  if (!capability) return ''
-  return `${capability.contextWindow ?? ''}:${capability.maxOutputTokens ?? ''}`
-}
-
-function getAiSourcesSignature(aiSources?: AISourcesConfig): string {
-  if (!aiSources) return ''
-
-  // v2 format: use currentId and sources array
-  if (aiSources.version === 2 && Array.isArray(aiSources.sources)) {
-    const currentSource = aiSources.sources.find(s => s.id === aiSources.currentId)
-    if (!currentSource) return ''
-
-    // modelOverrides are baked into CC subprocess env at startup — include in
-    // signature so panel edits trigger session rebuild instead of staying stale.
-    const overridesSig = serializeModelOverridesForSignature(currentSource.modelOverrides)
-    const catalogSig = serializeCatalogCapabilityForSignature(currentSource)
-
-    if (currentSource.authType === 'api-key') {
-      return [
-        'api-key',
-        currentSource.provider || '',
-        currentSource.apiUrl || '',
-        currentSource.apiKey || '',
-        currentSource.model || '',
-        overridesSig,
-        catalogSig
-      ].join('|')
+function getAiSourcesChange(previous?: AISourcesConfig, next?: AISourcesConfig): ApiConfigChange {
+  const previousSources = new Map(previous?.sources.map(source => [source.id, source]) ?? [])
+  const nextSources = new Map(next?.sources.map(source => [source.id, source]) ?? [])
+  const sourceIds: string[] = []
+  for (const id of new Set([...previousSources.keys(), ...nextSources.keys()])) {
+    const before = previousSources.get(id)
+    const after = nextSources.get(id)
+    if (!before || !after || getSourceCredentialsSignature(before) !== getSourceCredentialsSignature(after)) {
+      sourceIds.push(id)
     }
-
-    // OAuth source
-    return [
-      'oauth',
-      currentSource.provider || '',
-      currentSource.accessToken || '',
-      currentSource.refreshToken || '',
-      currentSource.tokenExpires || '',
-      currentSource.model || '',
-      overridesSig,
-      catalogSig
-    ].join('|')
   }
-
-  // Legacy v1 format fallback (should not happen after migration)
-  const legacy = aiSources as unknown as LegacyAISourcesConfig
-  const current = legacy.current || 'custom'
-
-  if (current === 'custom') {
-    const custom = legacy.custom
-    return [
-      'custom',
-      custom?.provider || '',
-      custom?.apiUrl || '',
-      custom?.apiKey || ''
-    ].join('|')
+  const previousModel = previousSources.get(previous?.currentId ?? '')?.model
+  const nextModel = nextSources.get(next?.currentId ?? '')?.model
+  return {
+    sourceIds,
+    selectionChanged: previous?.currentId !== next?.currentId || previousModel !== nextModel
   }
-
-  const currentConfig = legacy[current] as Record<string, any> | undefined
-  if (currentConfig && typeof currentConfig === 'object') {
-    return [
-      'oauth',
-      current,
-      currentConfig.accessToken || '',
-      currentConfig.refreshToken || '',
-      currentConfig.tokenExpires || ''
-    ].join('|')
-  }
-
-  return current
 }
 
 // Initialize app directories
@@ -1365,6 +1330,7 @@ export function getConfig(): HaloConfig {
 
   if (!existsSync(configPath)) {
     configReadFailed = false
+    syncSourceCredentialsGenerations(DEFAULT_CONFIG.aiSources)
     return DEFAULT_CONFIG
   }
 
@@ -1417,6 +1383,7 @@ export function getConfig(): HaloConfig {
       copilot: parsed.copilot
     }
     configReadFailed = false
+    syncSourceCredentialsGenerations(aiSources)
     return merged
   } catch (error) {
     configReadFailed = true
@@ -1439,7 +1406,6 @@ export function saveConfig(config: HaloConfigPatch): HaloConfig {
     ...config,
     api: { ...currentConfig.api, ...config.api }
   }
-  const previousAiSourcesSignature = getAiSourcesSignature(currentConfig.aiSources)
 
   // Deep merge for nested objects
   if (config.permissions) {
@@ -1555,37 +1521,38 @@ export function saveConfig(config: HaloConfigPatch): HaloConfig {
   writeFileSync(tmpPath, JSON.stringify(toWrite, null, 2))
   renameSync(tmpPath, configPath)
 
-  // Detect API config changes and notify subscribers
-  // This allows agent.service to invalidate sessions when API config changes
-  const nextAiSourcesSignature = getAiSourcesSignature(newConfig.aiSources)
-  const aiSourcesChanged = previousAiSourcesSignature !== nextAiSourcesSignature
-
   if (config.api || config.aiSources) {
-    const apiChanged =
-      !!config.api &&
-      (config.api.provider !== currentConfig.api.provider ||
-        config.api.apiKey !== currentConfig.api.apiKey ||
-        config.api.apiUrl !== currentConfig.api.apiUrl)
-
-    if (apiChanged || aiSourcesChanged) {
-      // Increment credentials generation counter - sessions will detect stale credentials
-      credentialsGeneration++
-      console.log(`[Config] Credentials generation: ${credentialsGeneration}`)
+    const apiChanged = !!config.api && (
+      newConfig.api.provider !== currentConfig.api.provider ||
+      newConfig.api.apiKey !== currentConfig.api.apiKey ||
+      newConfig.api.apiUrl !== currentConfig.api.apiUrl ||
+      newConfig.api.model !== currentConfig.api.model
+    )
+    const sourceChange = getAiSourcesChange(currentConfig.aiSources, newConfig.aiSources)
+    const sourceIds = sourceChange.sourceIds ?? []
+    syncSourceCredentialsGenerations(newConfig.aiSources)
+    for (const id of sourceIds) {
+      if (sourceCredentialsGenerations.has(id)) {
+        sourceCredentialsGenerations.set(id, ++nextSourceCredentialsGeneration)
+      }
     }
+    if (apiChanged) credentialsGeneration++
 
-    if ((apiChanged || aiSourcesChanged) && apiConfigChangeHandlers.length > 0) {
-      console.log('[Config] API config changed, notifying subscribers...')
-      // Use setTimeout to avoid blocking the save operation
-      // and ensure all handlers are called asynchronously
-      setTimeout(() => {
-        apiConfigChangeHandlers.forEach(handler => {
-          try {
-            handler()
-          } catch (e) {
-            console.error('[Config] Error in API config change handler:', e)
-          }
-        })
-      }, 0)
+    if (apiChanged || sourceIds.length > 0 || sourceChange.selectionChanged) {
+      console.log(`[Config] Credentials changed: global=${apiChanged}, sources=${sourceIds.length}, selection=${sourceChange.selectionChanged}`)
+      if (apiConfigChangeHandlers.length > 0) {
+        const change = apiChanged ? undefined : sourceChange
+        // Epochs advance synchronously; teardown retains its asynchronous boundary.
+        setTimeout(() => {
+          apiConfigChangeHandlers.forEach(handler => {
+            try {
+              handler(change)
+            } catch (e) {
+              console.error('[Config] Error in API config change handler:', e)
+            }
+          })
+        }, 0)
+      }
     }
   }
 

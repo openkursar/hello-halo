@@ -15,7 +15,7 @@
  */
 
 import { proxyFetch } from '../../proxy-fetch'
-import { randomBytes } from 'crypto'
+import { createHash, randomBytes } from 'crypto'
 import { v4 as uuidv4 } from 'uuid'
 import open from 'open'
 import { getConfig, saveConfig } from '../../../foundation/config.service'
@@ -88,6 +88,10 @@ const GITHUB_SCOPES = 'read:user'
 const POLL_INTERVAL_MS           = 5000
 const POLL_TIMEOUT_MS            = 300000   // 5 minutes
 const TOKEN_REFRESH_THRESHOLD_MS = 5 * 60 * 1000  // refresh 5 min before expiry
+const TOKEN_REQUEST_TIMEOUT_MS = 15_000
+const TOKEN_CACHE_TTL_MS = 60 * 60 * 1000
+const MAX_CACHED_ACCOUNTS = 32
+const MAX_CACHED_MODELS = 8
 
 // ============================================================================
 // Persistent Identity
@@ -242,15 +246,15 @@ function getSimulationConfig(): CopilotSimulation {
   let max: number
 
   if (hasMin && hasMax) {
-    min = sim.idReuseMin
-    max = sim.idReuseMax
+    min = sim.idReuseMin ?? DEFAULT_SIMULATION.idReuseMin
+    max = sim.idReuseMax ?? DEFAULT_SIMULATION.idReuseMax
     if (min > max) { const tmp = min; min = max; max = tmp }
   } else if (hasMin) {
-    min = sim.idReuseMin
-    max = sim.idReuseMin
+    min = sim.idReuseMin ?? DEFAULT_SIMULATION.idReuseMin
+    max = min
   } else if (hasMax) {
-    min = sim.idReuseMax
-    max = sim.idReuseMax
+    max = sim.idReuseMax ?? DEFAULT_SIMULATION.idReuseMax
+    min = max
   } else {
     min = DEFAULT_SIMULATION.idReuseMin
     max = DEFAULT_SIMULATION.idReuseMax
@@ -274,15 +278,26 @@ function getSimulationConfig(): CopilotSimulation {
   return { idReuseMin: min, idReuseMax: max, idReuseHighMin: highMin, idReuseHighWeight: weight, idMaxAgeMinutes }
 }
 
-// Read config once at startup so the hot path (every request) has zero I/O.
-// Both idRemainingUses and idCurrentMaxAgeMs are refreshed on every rotation.
-const _initSim                         = getSimulationConfig()
-let currentInteractionId: string       = uuidv4()
-let currentRequestId: string           = uuidv4()
-let idRemainingUses: number            = weightedRandomInteractionCount(_initSim)
-let isFirstRequestInCycle: boolean     = true
-let idCycleStartedAt: number           = Date.now()
-let idCurrentMaxAgeMs: number          = _initSim.idMaxAgeMinutes * 60 * 1000
+interface RequestIds {
+  interactionId: string
+  requestId: string
+  remainingUses: number
+  firstRequest: boolean
+  startedAt: number
+  maxAgeMs: number
+}
+
+function createRequestIds(): RequestIds {
+  const sim = getSimulationConfig()
+  return {
+    interactionId: uuidv4(),
+    requestId: uuidv4(),
+    remainingUses: weightedRandomInteractionCount(sim),
+    firstRequest: true,
+    startedAt: Date.now(),
+    maxAgeMs: sim.idMaxAgeMinutes * 60 * 1000
+  }
+}
 
 /**
  * Returns the current set of per-request IDs and advances the state.
@@ -297,32 +312,18 @@ let idCurrentMaxAgeMs: number          = _initSim.idMaxAgeMinutes * 60 * 1000
  * Simulation parameters are re-read from config on each rotation,
  * so config changes take effect at the next cycle without restart.
  */
-function getNextRequestIds(): {
+function getNextRequestIds(ids: RequestIds): {
   interactionId: string
-  requestId:     string
-  initiator:     'user' | 'agent'
+  requestId: string
+  initiator: 'user' | 'agent'
 } {
-  const now = Date.now()
-  if (idRemainingUses <= 0 || now - idCycleStartedAt > idCurrentMaxAgeMs) {
-    // Re-read config only on rotation — keeps the hot path (every request) I/O-free.
-    const sim             = getSimulationConfig()
-    currentInteractionId  = uuidv4()
-    currentRequestId      = uuidv4()
-    idRemainingUses       = weightedRandomInteractionCount(sim)
-    isFirstRequestInCycle = true
-    idCycleStartedAt      = now
-    idCurrentMaxAgeMs     = sim.idMaxAgeMinutes * 60 * 1000
+  if (ids.remainingUses <= 0 || Date.now() - ids.startedAt > ids.maxAgeMs) {
+    Object.assign(ids, createRequestIds())
   }
-
-  const initiator = isFirstRequestInCycle ? 'user' as const : 'agent' as const
-  isFirstRequestInCycle = false
-  idRemainingUses--
-
-  return {
-    interactionId: currentInteractionId,
-    requestId:     currentRequestId,
-    initiator
-  }
+  const initiator = ids.firstRequest ? 'user' as const : 'agent' as const
+  ids.firstRequest = false
+  ids.remainingUses--
+  return { interactionId: ids.interactionId, requestId: ids.requestId, initiator }
 }
 
 // ============================================================================
@@ -344,18 +345,34 @@ interface CachedCopilotToken {
 }
 
 interface CachedSessionToken {
-  token:            string
-  expiresAt:        number
-  availableModels:  string[]
-  selectedModel:    string
+  token: string
+  expiresAt: number
+  availableModels: string[]
+  selectedModel: string
+  copilotToken: CachedCopilotToken
+}
+
+interface SessionCacheEntry {
+  token?: CachedSessionToken
+  pending?: Promise<CachedSessionToken | null>
+}
+
+interface AccountTokenCache {
+  sourceId: string
+  credentialId: string
+  lastUsedAt: number
+  copilot?: CachedCopilotToken
+  pendingCopilot?: Promise<CachedCopilotToken | null>
+  sessions: Map<string, SessionCacheEntry>
+  requestIds: RequestIds
+}
+
+function credentialFingerprint(token: string): string {
+  return createHash('sha256').update(token).digest('hex')
 }
 
 /** Lazy-loaded persistent identity (machineId + deviceId). */
 let identity: CopilotIdentity | null = null
-
-let pendingAuth:        PendingAuth        | null = null
-let cachedCopilotToken: CachedCopilotToken | null = null
-let cachedSessionToken: CachedSessionToken | null = null
 
 /** Ensure identity is loaded exactly once. */
 function getIdentity(): CopilotIdentity {
@@ -460,10 +477,69 @@ class GitHubCopilotProvider implements OAuthAISourceProvider {
   readonly type: AISourceType = 'github-copilot'
   readonly displayName = 'GitHub Copilot'
 
+  private pendingAuth: PendingAuth | null = null
+  private startingLogin: object | null = null
+  private readonly tokenCache = new Map<string, AccountTokenCache>()
+
+  private conf(config: AISourcesConfig): OAuthSourceConfig | undefined {
+    return (config as unknown as Record<string, OAuthSourceConfig | undefined>)['github-copilot']
+  }
+
+  private cacheKey(c: OAuthSourceConfig): string {
+    const credentialId = credentialFingerprint(c.accessToken!)
+    return JSON.stringify([c.sourceId || credentialId, credentialId])
+  }
+
+  private ownsEntry(entry: AccountTokenCache): boolean {
+    return this.tokenCache.get(JSON.stringify([entry.sourceId, entry.credentialId])) === entry
+  }
+
+  private releaseEntry(key: string, entry: AccountTokenCache): void {
+    if (this.tokenCache.get(key) !== entry) return
+    this.tokenCache.delete(key)
+    entry.copilot = undefined
+    entry.pendingCopilot = undefined
+    entry.sessions.clear()
+  }
+
+  private getCache(c: OAuthSourceConfig, create = false): AccountTokenCache | undefined {
+    const now = Date.now()
+    for (const [key, entry] of this.tokenCache) {
+      if (now - entry.lastUsedAt >= TOKEN_CACHE_TTL_MS) this.releaseEntry(key, entry)
+    }
+    const key = this.cacheKey(c)
+    let entry = this.tokenCache.get(key)
+    if (!entry && create) {
+      if (c.sourceId) {
+        for (const [oldKey, old] of this.tokenCache) {
+          if (old.sourceId === c.sourceId) this.releaseEntry(oldKey, old)
+        }
+      }
+      while (this.tokenCache.size >= MAX_CACHED_ACCOUNTS) {
+        const oldest = this.tokenCache.entries().next().value as [string, AccountTokenCache]
+        this.releaseEntry(...oldest)
+      }
+      const credentialId = credentialFingerprint(c.accessToken!)
+      entry = {
+        sourceId: c.sourceId || credentialId,
+        credentialId,
+        lastUsedAt: now,
+        sessions: new Map(),
+        requestIds: createRequestIds()
+      }
+    }
+    if (entry) {
+      entry.lastUsedAt = now
+      this.tokenCache.delete(key)
+      this.tokenCache.set(key, entry)
+    }
+    return entry
+  }
+
   // ── Configuration ──────────────────────────────────────────────────────────
 
   isConfigured(config: AISourcesConfig): boolean {
-    const c = config['github-copilot'] as OAuthSourceConfig | undefined
+    const c = this.conf(config)
     return !!(c?.loggedIn && c?.accessToken)
   }
 
@@ -477,27 +553,24 @@ class GitHubCopilotProvider implements OAuthAISourceProvider {
    * every call. x-interaction-id rotates after a weighted-random 10–20 uses.
    */
   getBackendConfig(config: AISourcesConfig): BackendRequestConfig | null {
-    const c = config['github-copilot'] as OAuthSourceConfig | undefined
+    const c = this.conf(config)
     if (!c?.loggedIn || !c?.accessToken) {
       return null
     }
 
     const now = Date.now()
-
-    // Use cached Copilot token when available and not expired
-    const apiToken = (cachedCopilotToken && cachedCopilotToken.expiresAt > now)
-      ? cachedCopilotToken.token
-      : c.accessToken
-
-    const apiBase = cachedCopilotToken?.apiEndpoint || COPILOT_API_FALLBACK
-
-    if (!cachedCopilotToken || cachedCopilotToken.expiresAt <= now) {
-      console.warn('[GitHubCopilot] No valid cached Copilot token — request may fail')
+    const model = c.model || 'gpt-4o'
+    const entry = this.getCache(c)
+    const copilot = entry?.copilot
+    const session = entry?.sessions.get(model)?.token
+    if (!entry || !copilot || copilot.expiresAt <= now || !session || session.expiresAt <= now ||
+        session.selectedModel !== model || session.copilotToken !== copilot) {
+      console.warn('[GitHubCopilot] Backend config unavailable: account/model tokens missing or expired')
+      return null
     }
-
-    // All IDs share the same lifecycle (rotate together every 10–20 calls).
-    // x-initiator is "user" on the first call in a cycle, "agent" thereafter.
-    const { interactionId, requestId, initiator } = getNextRequestIds()
+    const apiToken = copilot.token
+    const apiBase = copilot.apiEndpoint
+    const { interactionId, requestId, initiator } = getNextRequestIds(entry.requestIds)
     const id = getIdentity()
 
     const headers: Record<string, string> = {
@@ -510,12 +583,8 @@ class GitHubCopilotProvider implements OAuthAISourceProvider {
       'x-request-id':       requestId
     }
 
-    // Include session token only when cached and valid
-    if (cachedSessionToken && cachedSessionToken.expiresAt > now) {
-      headers['copilot-session-token'] = cachedSessionToken.token
-    }
+    headers['copilot-session-token'] = session.token
 
-    const model = c.model || 'gpt-4o'
     const isClaude = model.startsWith('claude-')
 
     if (isClaude) {
@@ -523,6 +592,7 @@ class GitHubCopilotProvider implements OAuthAISourceProvider {
       // Authorization header is injected here so fetchAnthropicUpstream skips x-api-key.
       headers['Authorization'] = `Bearer ${apiToken}`
       return {
+        sourceId: c.sourceId,
         url:     `${apiBase}/v1/messages`,
         key:     apiToken,
         model,
@@ -532,6 +602,7 @@ class GitHubCopilotProvider implements OAuthAISourceProvider {
     }
 
     return {
+      sourceId: c.sourceId,
       url:     `${apiBase}/chat/completions`,
       key:     apiToken,
       model,
@@ -541,34 +612,29 @@ class GitHubCopilotProvider implements OAuthAISourceProvider {
   }
 
   getCurrentModel(config: AISourcesConfig): string | null {
-    const c = config['github-copilot'] as OAuthSourceConfig | undefined
+    const c = this.conf(config)
     return c?.model || null
   }
 
   // ── Available Models ────────────────────────────────────────────────────────
 
   async getAvailableModels(config: AISourcesConfig): Promise<string[]> {
-    const c = config['github-copilot'] as OAuthSourceConfig | undefined
+    const c = this.conf(config)
     if (!c?.accessToken) {
       return []
     }
 
     try {
-      const copilotToken = await this.getCopilotToken(c.accessToken)
-      if (!copilotToken) {
+      const entry = this.getCache(c, true)!
+      const copilot = await this.getCopilotToken(entry, c.accessToken)
+      if (!copilot) return c.availableModels || []
+
+      const pickerModels = await this.fetchModelsWithToken(copilot.token, copilot.apiEndpoint)
+      if (!this.ownsEntry(entry) || entry.copilot !== copilot) {
+        console.warn('[GitHubCopilot] Model catalog discarded: credential cache released or token replaced')
         return c.availableModels || []
       }
-      const apiBase      = cachedCopilotToken?.apiEndpoint || COPILOT_API_FALLBACK
-      const requestModel = (c as OAuthSourceConfig & { model?: string }).model || 'gpt-4o'
-
-      // Use /models with model_picker_enabled:true — this is the same filter VSCode uses
-      // to populate its model picker. The server already scopes results to the auth token.
-      const pickerModels = await this.fetchModelsWithToken(copilotToken, apiBase)
-      if (pickerModels.length > 0) {
-        return pickerModels
-      }
-
-      return c.availableModels || []
+      return pickerModels.length > 0 ? pickerModels : c.availableModels || []
     } catch (err) {
       console.error('[GitHubCopilot] Error fetching models:', err)
       return c.availableModels || []
@@ -576,18 +642,23 @@ class GitHubCopilotProvider implements OAuthAISourceProvider {
   }
 
   getUserInfo(config: AISourcesConfig): AISourceUserInfo | null {
-    const c = config['github-copilot'] as OAuthSourceConfig | undefined
+    const c = this.conf(config)
     return c?.user || null
   }
 
   // ── OAuth Device Flow ───────────────────────────────────────────────────────
 
   async startLogin(): Promise<ProviderResult<OAuthStartResult>> {
+    const attempt = {}
+    this.startingLogin = attempt
+    this.pendingAuth = null
+    let pending: PendingAuth | undefined
     try {
       console.log('[GitHubCopilot] Starting device code flow')
 
       const response = await proxyFetch(GITHUB_DEVICE_CODE_URL, {
         method: 'POST',
+        signal: AbortSignal.timeout(TOKEN_REQUEST_TIMEOUT_MS),
         headers: {
           'Accept':       'application/json',
           'Content-Type': 'application/x-www-form-urlencoded',
@@ -604,19 +675,35 @@ class GitHubCopilotProvider implements OAuthAISourceProvider {
       }
 
       const data: DeviceCodeResponse = await response.json()
-
-      pendingAuth = {
-        deviceCode:      data.device_code,
-        userCode:        data.user_code,
-        verificationUri: data.verification_uri,
-        expiresAt:       Date.now() + data.expires_in * 1000,
-        interval:        Math.max(data.interval, 5)
+      if (typeof data.device_code !== 'string' || !data.device_code ||
+          typeof data.user_code !== 'string' || !data.user_code ||
+          typeof data.verification_uri !== 'string' || !data.verification_uri ||
+          !Number.isFinite(data.expires_in) || data.expires_in <= 0) {
+        throw new Error('Invalid device code response')
       }
+
+      if (this.startingLogin !== attempt) {
+        console.warn('[GitHubCopilot] Login start discarded: authorization cancelled or replaced')
+        return { success: false, error: 'Authentication cancelled' }
+      }
+      pending = {
+        deviceCode: data.device_code,
+        userCode: data.user_code,
+        verificationUri: data.verification_uri,
+        expiresAt: Date.now() + data.expires_in * 1000,
+        interval: Number.isFinite(data.interval)
+          ? Math.max(data.interval, POLL_INTERVAL_MS / 1000) : POLL_INTERVAL_MS / 1000
+      }
+      this.pendingAuth = pending
 
       const loginUrl = `${data.verification_uri}?user_code=${data.user_code}`
       await open(loginUrl)
+      if (this.pendingAuth !== pending) {
+        console.warn('[GitHubCopilot] Login start discarded: authorization cancelled or replaced')
+        return { success: false, error: 'Authentication cancelled' }
+      }
 
-      console.log('[GitHubCopilot] Device code flow started, user code:', data.user_code)
+      console.log('[GitHubCopilot] Device code flow started')
 
       return {
         success: true,
@@ -629,133 +716,123 @@ class GitHubCopilotProvider implements OAuthAISourceProvider {
       }
     } catch (error) {
       console.error('[GitHubCopilot] Start login error:', error)
+      if (pending && this.pendingAuth === pending) this.pendingAuth = null
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to start login'
       }
+    } finally {
+      if (this.startingLogin === attempt) this.startingLogin = null
     }
   }
 
   async completeLogin(state: string): Promise<ProviderResult<OAuthCompleteResult>> {
-    if (!pendingAuth || pendingAuth.userCode !== state) {
+    const pending = this.pendingAuth
+    if (!pending || pending.userCode !== state) {
+      console.warn('[GitHubCopilot] Login completion rejected: no pending authentication or state mismatch')
       return { success: false, error: 'No pending authentication or state mismatch' }
     }
 
+    let loginEntry: AccountTokenCache | undefined
     try {
-      console.log('[GitHubCopilot] Polling for authorization...')
-      const startTime = Date.now()
-
-      while (Date.now() - startTime < POLL_TIMEOUT_MS) {
-        if (Date.now() > pendingAuth.expiresAt) {
-          pendingAuth = null
-          return { success: false, error: 'Device code expired' }
-        }
-
+      const deadline = Math.min(pending.expiresAt, Date.now() + POLL_TIMEOUT_MS)
+      while (Date.now() < deadline) {
+        this.requirePending(pending)
         const response = await proxyFetch(GITHUB_ACCESS_TOKEN_URL, {
           method: 'POST',
+          signal: AbortSignal.timeout(TOKEN_REQUEST_TIMEOUT_MS),
           headers: {
-            'Accept':       'application/json',
+            'Accept': 'application/json',
             'Content-Type': 'application/x-www-form-urlencoded',
-            'User-Agent':   USER_AGENT
+            'User-Agent': USER_AGENT
           },
           body: new URLSearchParams({
-            client_id:   GITHUB_CLIENT_ID,
-            device_code: pendingAuth.deviceCode,
-            grant_type:  'urn:ietf:params:oauth:grant-type:device_code'
+            client_id: GITHUB_CLIENT_ID,
+            device_code: pending.deviceCode,
+            grant_type: 'urn:ietf:params:oauth:grant-type:device_code'
           })
         })
-
+        if (!response.ok) throw new Error(`Authorization polling failed: ${response.status}`)
         const data: GitHubTokenResponse = await response.json()
+        this.requirePending(pending)
 
         if (data.access_token) {
           const githubToken = data.access_token
-          pendingAuth = null
-
-          console.log('[GitHubCopilot] Got GitHub token, fetching user info...')
           const user = await this.fetchGitHubUser(githubToken)
-
-          const copilotToken = await this.getCopilotToken(githubToken)
-          if (!copilotToken) {
-            return {
-              success: false,
-              error: 'Could not get Copilot token. Make sure you have an active Copilot subscription.'
-            }
+          this.requirePending(pending)
+          const provisional: OAuthSourceConfig = {
+            sourceId: uuidv4(),
+            loggedIn: true,
+            accessToken: githubToken,
+            model: 'gpt-4o',
+            availableModels: []
           }
+          const entry = this.getCache(provisional, true)!
+          loginEntry = entry
+          const copilot = await this.getCopilotToken(entry, githubToken)
+          this.requirePending(pending)
+          if (!copilot) {
+            throw new Error('Could not get Copilot token. Make sure you have an active Copilot subscription.')
+          }
+          const session = await this.fetchSessionToken(entry, copilot, provisional.model)
+          this.requirePending(pending)
+          if (!session) throw new Error('Could not get a usable Copilot session token')
 
-          const apiBase = cachedCopilotToken?.apiEndpoint || COPILOT_API_FALLBACK
-
-          // Fetch session token — this also returns the actual available models
-          // for this account, which may be a subset of the full /models catalog.
-          const defaultModel = 'gpt-4o'
-          await this.fetchSessionToken(copilotToken, apiBase, defaultModel)
-
-          // Use session's available_models as the authoritative model list
-          const models = cachedSessionToken?.availableModels || [defaultModel]
-          const selectedModel = cachedSessionToken?.selectedModel || defaultModel
-
-          console.log('[GitHubCopilot] Login successful for user:', user?.login)
-
+          const uid = typeof user?.id === 'number' && Number.isSafeInteger(user.id) && user.id > 0
+            ? String(user.id) : ''
+          if (!uid) console.warn('[GitHubCopilot] Login completed without verified account identity')
           const result: OAuthCompleteResult & {
-            _tokenData:      { accessToken: string; refreshToken: string; expiresAt: number; uid: string }
+            _tokenData: { accessToken: string; refreshToken: string; expiresAt: number; uid: string }
             _availableModels: string[]
-            _modelNames:      Record<string, string>
-            _defaultModel:    string
+            _modelNames: Record<string, string>
+            _defaultModel: string
           } = {
             success: true,
             user: {
-              name:   user?.name || user?.login || 'GitHub User',
+              name: user?.name || user?.login || 'GitHub User',
               avatar: user?.avatar_url,
-              uid:    user?.login || ''
+              uid
             },
             _tokenData: {
-              accessToken:  githubToken,
+              accessToken: githubToken,
               refreshToken: githubToken,
-              expiresAt:    Date.now() + 365 * 24 * 60 * 60 * 1000,
-              uid:          user?.login || ''
+              expiresAt: Date.now() + 365 * 24 * 60 * 60 * 1000,
+              uid
             },
-            _availableModels: models,
-            _modelNames:      this.getModelDisplayNames(models),
-            _defaultModel:    selectedModel
+            _availableModels: session.availableModels,
+            _modelNames: this.getModelDisplayNames(session.availableModels),
+            _defaultModel: session.selectedModel
           }
-
+          console.log('[GitHubCopilot] OAuth login completed')
           return { success: true, data: result }
         }
 
-        if (data.error === 'authorization_pending') {
-          await new Promise(resolve => setTimeout(resolve, pendingAuth!.interval * 1000))
+        if (data.error === 'authorization_pending' || data.error === 'slow_down') {
+          if (data.error === 'slow_down') pending.interval += 5
+          await new Promise(resolve => setTimeout(resolve, Math.min(pending.interval * 1000, deadline - Date.now())))
           continue
         }
-
-        if (data.error === 'slow_down') {
-          pendingAuth.interval += 5
-          await new Promise(resolve => setTimeout(resolve, pendingAuth!.interval * 1000))
-          continue
-        }
-
-        if (data.error === 'expired_token') {
-          pendingAuth = null
-          return { success: false, error: 'Device code expired. Please try again.' }
-        }
-
-        if (data.error === 'access_denied') {
-          pendingAuth = null
-          return { success: false, error: 'Access denied. User cancelled the authorization.' }
-        }
-
-        pendingAuth = null
-        return { success: false, error: data.error_description || data.error || 'Unknown error' }
+        if (data.error === 'expired_token') throw new Error('Device code expired. Please try again.')
+        if (data.error === 'access_denied') throw new Error('Access denied. User cancelled the authorization.')
+        throw new Error('Authorization polling returned an unexpected response')
       }
-
-      pendingAuth = null
-      return { success: false, error: 'Timeout waiting for authorization' }
+      throw new Error('Timeout waiting for authorization')
     } catch (error) {
       console.error('[GitHubCopilot] Complete login error:', error)
-      pendingAuth = null
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to complete login'
       }
+    } finally {
+      if (this.pendingAuth === pending) this.pendingAuth = null
+      if (loginEntry) {
+        this.releaseEntry(JSON.stringify([loginEntry.sourceId, loginEntry.credentialId]), loginEntry)
+      }
     }
+  }
+
+  private requirePending(pending: PendingAuth): void {
+    if (this.pendingAuth !== pending) throw new Error('Authentication cancelled')
   }
 
   async refreshToken(): Promise<ProviderResult<void>> {
@@ -766,10 +843,22 @@ class GitHubCopilotProvider implements OAuthAISourceProvider {
     return { success: true, data: { valid: true } }
   }
 
-  async logout(): Promise<ProviderResult<void>> {
-    cachedCopilotToken = null
-    cachedSessionToken = null
-    pendingAuth        = null
+  async cancelLogin(): Promise<ProviderResult<void>> {
+    this.pendingAuth = null
+    this.startingLogin = null
+    return { success: true }
+  }
+
+  async logout(config?: AISourcesConfig): Promise<ProviderResult<void>> {
+    const c = config && this.conf(config)
+    if (c?.sourceId || c?.accessToken) {
+      const credentialId = c.accessToken ? credentialFingerprint(c.accessToken) : undefined
+      for (const [key, entry] of this.tokenCache) {
+        if (c.sourceId ? entry.sourceId === c.sourceId : entry.credentialId === credentialId) {
+          this.releaseEntry(key, entry)
+        }
+      }
+    }
     return { success: true }
   }
 
@@ -784,56 +873,35 @@ class GitHubCopilotProvider implements OAuthAISourceProvider {
    * new model_hints so the backend accepts the request.
    */
   async ensureCopilotTokenCached(config: AISourcesConfig): Promise<boolean> {
-    const c = config['github-copilot'] as OAuthSourceConfig | undefined
+    const c = this.conf(config)
     if (!c?.accessToken) {
       return false
     }
 
-    const now          = Date.now()
-    const requestModel = (c as OAuthSourceConfig & { model?: string }).model || 'gpt-4o'
-    const copilotValid = cachedCopilotToken && cachedCopilotToken.expiresAt > now + TOKEN_REFRESH_THRESHOLD_MS
-
-    // Session is valid only when not expired AND bound to the requested model
-    const sessionValid =
-      cachedSessionToken &&
-      cachedSessionToken.expiresAt > now + TOKEN_REFRESH_THRESHOLD_MS &&
-      cachedSessionToken.selectedModel === requestModel
-
-    if (copilotValid && sessionValid) {
-      return true
-    }
-
-    // Refresh Copilot token if needed
-    const copilotToken = copilotValid
-      ? cachedCopilotToken!.token
-      : await this.getCopilotToken(c.accessToken)
-    if (!copilotToken) {
-      return false
-    }
-
-    // Re-fetch session token (either expired or model changed)
-    if (!sessionValid) {
-      const apiBase = cachedCopilotToken?.apiEndpoint || COPILOT_API_FALLBACK
-      await this.fetchSessionToken(copilotToken, apiBase, requestModel)
-    }
-
-    return true
+    const requestModel = c.model || 'gpt-4o'
+    const entry = this.getCache(c, true)!
+    const copilot = await this.getCopilotToken(entry, c.accessToken)
+    if (!copilot) return false
+    const session = await this.fetchSessionToken(entry, copilot, requestModel)
+    return !!session && this.ownsEntry(entry) && entry.copilot === copilot &&
+      entry.sessions.get(requestModel)?.token === session
   }
 
   checkTokenWithConfig(config: AISourcesConfig): { valid: boolean; expiresIn?: number; needsRefresh: boolean } {
-    const c = config['github-copilot'] as OAuthSourceConfig | undefined
+    const c = this.conf(config)
     if (!c?.accessToken) {
       return { valid: false, needsRefresh: false }
     }
 
-    const now          = Date.now()
-    const requestModel = (c as OAuthSourceConfig & { model?: string }).model || 'gpt-4o'
+    const now = Date.now()
+    const model = c.model || 'gpt-4o'
+    const entry = this.getCache(c)
+    const copilot = entry?.copilot
+    const session = entry?.sessions.get(model)?.token
     const needsRefresh =
-      !cachedCopilotToken ||
-      cachedCopilotToken.expiresAt <= now + TOKEN_REFRESH_THRESHOLD_MS ||
-      !cachedSessionToken ||
-      cachedSessionToken.expiresAt <= now + TOKEN_REFRESH_THRESHOLD_MS ||
-      cachedSessionToken.selectedModel !== requestModel   // model switch
+      !copilot || copilot.expiresAt <= now + TOKEN_REFRESH_THRESHOLD_MS ||
+      !session || session.expiresAt <= now + TOKEN_REFRESH_THRESHOLD_MS ||
+      session.selectedModel !== model || session.copilotToken !== copilot
 
     return { valid: true, needsRefresh }
   }
@@ -843,7 +911,7 @@ class GitHubCopilotProvider implements OAuthAISourceProvider {
     refreshToken: string
     expiresAt:    number
   }>> {
-    const c = config['github-copilot'] as OAuthSourceConfig | undefined
+    const c = this.conf(config)
     if (!c?.accessToken) {
       return { success: false, error: 'No token to refresh' }
     }
@@ -864,7 +932,7 @@ class GitHubCopilotProvider implements OAuthAISourceProvider {
   }
 
   async refreshConfig(config: AISourcesConfig): Promise<ProviderResult<Partial<AISourcesConfig>>> {
-    const c = config['github-copilot'] as OAuthSourceConfig | undefined
+    const c = this.conf(config)
     if (!c?.accessToken) {
       return { success: false, error: 'Not logged in' }
     }
@@ -879,18 +947,28 @@ class GitHubCopilotProvider implements OAuthAISourceProvider {
             availableModels: models,
             modelNames: this.getModelDisplayNames(models)
           }
-        }
+        } as unknown as Partial<AISourcesConfig>
       }
     } catch (error) {
+      console.warn('[GitHubCopilot] Model catalog refresh failed')
       return { success: false, error: String(error) }
     }
   }
 
   // ── Private Helpers ─────────────────────────────────────────────────────────
 
+  async getAccountId(config: AISourcesConfig): Promise<string | null> {
+    const token = this.conf(config)?.accessToken
+    if (!token) return null
+    const user = await this.fetchGitHubUser(token)
+    return typeof user?.id === 'number' && Number.isSafeInteger(user.id) && user.id > 0
+      ? String(user.id) : null
+  }
+
   private async fetchGitHubUser(token: string): Promise<GitHubUser | null> {
     try {
       const response = await proxyFetch(GITHUB_USER_URL, {
+        signal: AbortSignal.timeout(TOKEN_REQUEST_TIMEOUT_MS),
         headers: {
           'Authorization': `Bearer ${token}`,
           'Accept':        'application/json',
@@ -912,60 +990,61 @@ class GitHubCopilotProvider implements OAuthAISourceProvider {
    * Exchange a GitHub OAuth token for a short-lived Copilot token (~30 min).
    * Results are cached; re-fetched when within TOKEN_REFRESH_THRESHOLD_MS of expiry.
    */
-  private async getCopilotToken(githubToken: string): Promise<string | null> {
-    const now = Date.now()
-    if (cachedCopilotToken && cachedCopilotToken.expiresAt > now + TOKEN_REFRESH_THRESHOLD_MS) {
-      return cachedCopilotToken.token
+  private async getCopilotToken(entry: AccountTokenCache, githubToken: string): Promise<CachedCopilotToken | null> {
+    if (!this.ownsEntry(entry)) {
+      console.warn('[GitHubCopilot] Token exchange skipped: credential cache released')
+      return null
     }
+    if (entry.copilot && entry.copilot.expiresAt > Date.now() + TOKEN_REFRESH_THRESHOLD_MS) {
+      return entry.copilot
+    }
+    if (entry.pendingCopilot) return entry.pendingCopilot
 
+    const exchange = this.exchangeCopilotToken(entry, githubToken)
+    entry.pendingCopilot = exchange
+    try {
+      return await exchange
+    } finally {
+      if (entry.pendingCopilot === exchange) entry.pendingCopilot = undefined
+    }
+  }
+
+  private async exchangeCopilotToken(entry: AccountTokenCache, githubToken: string): Promise<CachedCopilotToken | null> {
     try {
       const response = await proxyFetch(COPILOT_TOKEN_URL, {
+        signal: AbortSignal.timeout(TOKEN_REQUEST_TIMEOUT_MS),
         headers: {
-          'Authorization':      `token ${githubToken}`,
-          'Accept':             'application/json',
-          'editor-version':     VSCODE_VERSION,
+          'Authorization': `token ${githubToken}`,
+          'Accept': 'application/json',
+          'editor-version': VSCODE_VERSION,
           'editor-plugin-version': PLUGIN_VERSION,
-          'user-agent':         USER_AGENT
+          'user-agent': USER_AGENT
         }
       })
-
       if (!response.ok) {
         console.warn('[GitHubCopilot] Failed to get Copilot token:', response.status)
         return null
       }
-
       const data: CopilotTokenResponse = await response.json()
-
-      if (data.error_details) {
-        console.warn('[GitHubCopilot] Copilot token error:', data.error_details.message)
+      if (data.error_details || typeof data.token !== 'string' || !data.token ||
+          !Number.isFinite(data.expires_at) || data.expires_at * 1000 <= Date.now()) {
+        console.warn('[GitHubCopilot] Copilot token rejected: missing token, expired token or upstream error')
         return null
       }
-
-      const apiEndpoint = data.endpoints?.api || COPILOT_API_FALLBACK
-
-      // Decode token claims for diagnostics (token is a semicolon-delimited string, not JWT)
-      const tokenClaims: Record<string, string> = {}
-      for (const part of data.token.split(';')) {
-        const eq = part.indexOf('=')
-        if (eq !== -1) tokenClaims[part.slice(0, eq)] = part.slice(eq + 1)
+      if (!this.ownsEntry(entry)) {
+        console.warn('[GitHubCopilot] Token exchange discarded: credential cache released')
+        return null
       }
-      console.log('[GitHubCopilot] Copilot token claims:', JSON.stringify({
-        sku:      tokenClaims['sku'],
-        ip:       tokenClaims['ip'],
-        asn:      tokenClaims['asn']?.split(':')[0],
-        exp:      tokenClaims['exp'],
-        endpoint: apiEndpoint
-      }))
-
-      cachedCopilotToken = {
-        token:       data.token,
-        expiresAt:   data.expires_at * 1000,
-        apiEndpoint
+      const token: CachedCopilotToken = {
+        token: data.token,
+        expiresAt: data.expires_at * 1000,
+        apiEndpoint: data.endpoints?.api || COPILOT_API_FALLBACK
       }
-
-      return data.token
-    } catch (err) {
-      console.error('[GitHubCopilot] Error getting Copilot token:', err)
+      entry.copilot = token
+      entry.sessions.clear()
+      return token
+    } catch {
+      console.warn('[GitHubCopilot] Copilot token exchange failed or timed out')
       return null
     }
   }
@@ -980,59 +1059,83 @@ class GitHubCopilotProvider implements OAuthAISourceProvider {
    * Request mirrors the exact headers sent by copilot-chat/0.39.1.
    */
   private async fetchSessionToken(
-    copilotToken: string,
-    apiBase:      string,
-    model:        string,
-    /** When true, omit model_hints so the server returns all subscription models.
-     *  When false (default), pass model as a hint so the session JWT's selected_model
-     *  matches the target model for chat requests. */
-    forListing = false
-  ): Promise<void> {
-    const id  = getIdentity()
-    const url = `${apiBase}/models/session`
-
+    entry: AccountTokenCache,
+    copilot: CachedCopilotToken,
+    model: string
+  ): Promise<CachedSessionToken | null> {
+    if (!this.ownsEntry(entry) || entry.copilot !== copilot) {
+      console.warn('[GitHubCopilot] Session exchange skipped: credential cache released or token replaced')
+      return null
+    }
+    let session = entry.sessions.get(model)
+    if (session) {
+      entry.sessions.delete(model)
+      entry.sessions.set(model, session)
+      if (session.token && session.token.expiresAt > Date.now() + TOKEN_REFRESH_THRESHOLD_MS &&
+          session.token.selectedModel === model && session.token.copilotToken === copilot) {
+        return session.token
+      }
+      if (session.pending) return session.pending
+    } else {
+      while (entry.sessions.size >= MAX_CACHED_MODELS) {
+        entry.sessions.delete(entry.sessions.keys().next().value as string)
+      }
+      session = {}
+      entry.sessions.set(model, session)
+    }
+    const exchange = this.exchangeSessionToken(entry, session, copilot, model)
+    session.pending = exchange
     try {
-      // For listing: omit model_hints → server returns full subscription entitlements.
-      // For chat:    pass model_hints → session JWT encodes the correct selected_model.
-      const body = forListing
-        ? { auto_mode: {} }
-        : { auto_mode: { model_hints: [model] } }
+      return await exchange
+    } finally {
+      if (session.pending === exchange) session.pending = undefined
+    }
+  }
 
-      const response = await proxyFetch(url, {
+  private async exchangeSessionToken(
+    entry: AccountTokenCache,
+    session: SessionCacheEntry,
+    copilot: CachedCopilotToken,
+    model: string
+  ): Promise<CachedSessionToken | null> {
+    try {
+      const response = await proxyFetch(`${copilot.apiEndpoint}/models/session`, {
         method: 'POST',
+        signal: AbortSignal.timeout(TOKEN_REQUEST_TIMEOUT_MS),
         headers: {
-          'Authorization':                    `Bearer ${copilotToken}`,
-          'Content-Type':                     'application/json',
-          ...buildCommonCopilotHeaders(id)
+          'Authorization': `Bearer ${copilot.token}`,
+          'Content-Type': 'application/json',
+          ...buildCommonCopilotHeaders(getIdentity())
         },
-        body: JSON.stringify(body)
+        body: JSON.stringify({ auto_mode: { model_hints: [model] } })
       })
-
       if (!response.ok) {
         console.warn('[GitHubCopilot] Failed to fetch session token:', response.status)
-        return
+        return null
       }
-
       const data: SessionTokenResponse = await response.json()
-
-      cachedSessionToken = {
-        token:           data.session_token,
-        expiresAt:       data.expires_at * 1000,
-        availableModels: data.available_models,
-        selectedModel:   data.selected_model
+      if (typeof data.session_token !== 'string' || !data.session_token ||
+          !Number.isFinite(data.expires_at) || data.expires_at * 1000 <= Date.now() ||
+          data.selected_model !== model || !Array.isArray(data.available_models)) {
+        console.warn('[GitHubCopilot] Session token rejected: invalid token, expiry or selected model')
+        return null
       }
-
-      console.log(
-        '[GitHubCopilot] /models/session response:',
-        JSON.stringify({
-          selected_model:   data.selected_model,
-          available_models: data.available_models,
-          expires_at:       data.expires_at,
-          raw_keys:         Object.keys(data)
-        }, null, 2)
-      )
-    } catch (err) {
-      console.error('[GitHubCopilot] Error fetching session token:', err)
+      if (!this.ownsEntry(entry) || entry.sessions.get(model) !== session || entry.copilot !== copilot) {
+        console.warn('[GitHubCopilot] Session exchange discarded: credential/model cache released or replaced')
+        return null
+      }
+      const token: CachedSessionToken = {
+        token: data.session_token,
+        expiresAt: data.expires_at * 1000,
+        availableModels: data.available_models.filter(id => typeof id === 'string'),
+        selectedModel: data.selected_model,
+        copilotToken: copilot
+      }
+      session.token = token
+      return token
+    } catch {
+      console.warn('[GitHubCopilot] Session token exchange failed or timed out')
+      return null
     }
   }
 
@@ -1049,6 +1152,7 @@ class GitHubCopilotProvider implements OAuthAISourceProvider {
       console.log('[GitHubCopilot] Fetching models from:', url)
 
       const response = await proxyFetch(url, {
+        signal: AbortSignal.timeout(TOKEN_REQUEST_TIMEOUT_MS),
         headers: {
           'Authorization':      `Bearer ${copilotToken}`,
           ...buildCommonCopilotHeaders(id),

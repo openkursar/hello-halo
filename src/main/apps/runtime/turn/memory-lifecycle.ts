@@ -122,9 +122,8 @@ export function appMemorySettings(app: { userOverrides?: { memory?: MemorySettin
 // ── Space memory topics ──
 
 /**
- * The space's topics, offered read-only when the owner allowed it — to every
- * turn, a guest's included: a digital human cannot work without what it knows,
- * and the memory instructions keep sensitive content from guests.
+ * The space's topics, offered read-only in the opening snapshot when allowed,
+ * guests included. Later turns retrieve current content with native file tools.
  */
 export async function loadSpaceTopicsForTurn(
   scope: MemoryCallerScope,

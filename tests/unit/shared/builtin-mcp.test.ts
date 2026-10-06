@@ -19,6 +19,7 @@ import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { BUILTIN_MCP_SERVER_IDS } from '../../../src/shared/apps/builtin-mcp'
 import { BASE_SERVER_IDS } from '../../../src/main/services/agent/toolsets/base'
+import { findMatches, listSourceFiles } from '../architecture/lib/source-scan'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../..')
 
@@ -40,7 +41,15 @@ describe('BUILTIN_MCP_SERVER_IDS', () => {
 
   it('extraction finds the runtime injection sites (guards the regex itself)', () => {
     expect(runtimeIds.size).toBeGreaterThanOrEqual(5)
-    expect(runtimeIds.has('halo-memory')).toBe(true)
+    expect(runtimeIds.has('halo-report')).toBe(true)
+    expect(runtimeIds.has('halo-memory')).toBe(false)
+    expect(BUILTIN_MCP_SERVER_IDS.has('halo-memory')).toBe(false)
+  })
+
+  it('keeps the retired memory tool, SDK injection seam and live roster out of production sources', () => {
+    const files = [...listSourceFiles('src/main'), ...listSourceFiles('src/shared')]
+    const retired = /\b(?:memory_status|createMemoryStatusMcpServer|setMemorySdk|listLiveInstances|buildLiveInstancesSection|noteInstanceTurnStarted|noteInstanceTurnEnded)\b|['"]halo-memory['"]/
+    expect(findMatches(files, retired)).toEqual([])
   })
 
   it('every runtime-injected built-in server id is in the shared set', () => {

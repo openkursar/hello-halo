@@ -7,7 +7,7 @@
  */
 
 import { readFile, writeFile, mkdir, readdir, rename, stat, link, copyFile } from 'fs/promises'
-import { existsSync, readFileSync, readdirSync, statSync } from 'fs'
+import { existsSync } from 'fs'
 import { join, dirname } from 'path'
 import type { MemoryLayout } from './paths'
 import type { MemoryOwnerKind } from './prompt'
@@ -139,9 +139,8 @@ export async function readMemoryFile(filePath: string): Promise<string | null> {
  * would be read as something remembered.
  */
 const MEMORY_SKELETON: Record<MemoryOwnerKind, string> = {
-  // `## State` is the line a digital human's instructions keep first.
   'digital-human': '# now\n\n## State\n\n# History\n',
-  space: '# now\n\n# History\n',
+  space: '# now\n\n## State\n\n# History\n',
 }
 
 /** A skeleton line: a section heading with nothing after it. */
@@ -154,26 +153,6 @@ const SKELETON_MAX_BYTES = 256
 export function isBlankMemory(content: string | null): boolean {
   if (content === null) return true
   return content.split('\n').every(line => line.trim() === '' || SKELETON_LINE.test(line.trim()))
-}
-
-/**
- * Whether a memory records anything yet — in memory.md beyond its skeleton, or
- * as a topic. Synchronous and cheap (a stat, and a read only of a file small
- * enough to be a skeleton), for the session setup that picks instructions.
- */
-export function memoryHasContent(layout: MemoryLayout): boolean {
-  try {
-    if (statSync(layout.file).size > SKELETON_MAX_BYTES) return true
-    if (!isBlankMemory(readFileSync(layout.file, 'utf-8'))) return true
-  } catch (err: unknown) {
-    if (!isNodeError(err) || err.code !== 'ENOENT') throw err
-  }
-  try {
-    return readdirSync(layout.topicsDir).some(name => !name.startsWith('.'))
-  } catch (err: unknown) {
-    if (isNodeError(err) && err.code === 'ENOENT') return false
-    throw err
-  }
 }
 
 /**

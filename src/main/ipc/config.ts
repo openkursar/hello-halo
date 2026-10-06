@@ -5,9 +5,9 @@
 import { getConfig, saveConfig, getCredentialDecodeFailures } from '../foundation/config.service'
 import { getAISourceManager } from '../services/ai-sources'
 import { decryptString } from '../foundation/secure-storage.service'
-import { unmaskSentinels } from '../foundation/config-encryption'
+import { unmaskSentinels, maskOAuthFields } from '../foundation/config-encryption'
 import { validateApiConnection } from '../services/api-validator.service'
-import { fetchModels as controllerFetchModels } from '../controllers/config.controller'
+import { fetchModels as controllerFetchModels, preserveManagedSources } from '../controllers/config.controller'
 import { runConfigProbe, emitConfigChange } from '../services/health'
 import type { AISourcesConfig, AISource } from '../../shared/types'
 import { configRpc } from '../../shared/rpc/contracts/config.contract'
@@ -36,7 +36,7 @@ export function registerConfigHandlers(): void {
         }
 
         console.log('[Settings] config:get - Loaded, aiSources v2, currentId:', config.aiSources?.currentId || 'none')
-        return { success: true, data: config }
+        return { success: true, data: maskOAuthFields(config as unknown as Record<string, unknown>) }
       } catch (error: unknown) {
         const err = error as Error
         console.error('[Settings] config:get - Failed:', err.message)
@@ -83,11 +83,9 @@ export function registerConfigHandlers(): void {
       try {
         const processedUpdates = { ...updates }
 
-        // v2 format: aiSources is replaced entirely (sources array is the source of truth)
-        // No deep merging needed - frontend manages the complete sources array
-
-        // Restore '***' sentinels to real values before saving.
-        unmaskSentinels(processedUpdates, { ...getConfig() })
+        const existing = { ...getConfig() }
+        unmaskSentinels(processedUpdates, existing)
+        preserveManagedSources(processedUpdates, existing)
 
         const config = saveConfig(processedUpdates)
         console.log('[Settings] config:set - Saved successfully')
@@ -107,7 +105,7 @@ export function registerConfigHandlers(): void {
           })
         }
 
-        return { success: true, data: config }
+        return { success: true, data: maskOAuthFields(config as unknown as Record<string, unknown>) }
       } catch (error: unknown) {
         const err = error as Error
         console.error('[Settings] config:set - Failed:', err.message)
@@ -155,7 +153,7 @@ export function registerConfigHandlers(): void {
         const modelRefresh = await manager.refreshAllConfigs()
         const config = getConfig()
         console.log('[Settings] config:refresh-ai-sources - Completed:', modelRefresh)
-        return { success: true, data: config, modelRefresh }
+        return { success: true, data: maskOAuthFields(config as unknown as Record<string, unknown>), modelRefresh }
       } catch (error: unknown) {
         const err = error as Error
         console.error('[Settings] config:refresh-ai-sources - Failed:', err.message)
@@ -177,7 +175,7 @@ export function registerConfigHandlers(): void {
         }
         emitConfigChange(['aiSources.currentId'])
         runConfigProbe().catch(err => console.error('[Settings] ai-sources:switch-source - Probe failed:', err))
-        return { success: true, data: result }
+        return { success: true, data: maskOAuthFields({ aiSources: result }).aiSources }
       } catch (error: unknown) {
         const err = error as Error
         console.error('[Settings] ai-sources:switch-source - Failed:', err.message)
@@ -192,7 +190,7 @@ export function registerConfigHandlers(): void {
         const manager = getAISourceManager()
         const result = manager.switchCurrentModel(modelId)
         emitConfigChange(['aiSources.model'])
-        return { success: true, data: result }
+        return { success: true, data: maskOAuthFields({ aiSources: result }).aiSources }
       } catch (error: unknown) {
         const err = error as Error
         console.error('[Settings] ai-sources:set-model - Failed:', err.message)
@@ -208,7 +206,7 @@ export function registerConfigHandlers(): void {
         const result = manager.addSource(source)
         emitConfigChange(['aiSources.sources'])
         runConfigProbe().catch(err => console.error('[Settings] ai-sources:add-source - Probe failed:', err))
-        return { success: true, data: result }
+        return { success: true, data: maskOAuthFields({ aiSources: result }).aiSources }
       } catch (error: unknown) {
         const err = error as Error
         console.error('[Settings] ai-sources:add-source - Failed:', err.message)
@@ -224,7 +222,7 @@ export function registerConfigHandlers(): void {
         const result = manager.updateSource(sourceId, updates)
         emitConfigChange(['aiSources.sources'])
         runConfigProbe().catch(err => console.error('[Settings] ai-sources:update-source - Probe failed:', err))
-        return { success: true, data: result }
+        return { success: true, data: maskOAuthFields({ aiSources: result }).aiSources }
       } catch (error: unknown) {
         const err = error as Error
         console.error('[Settings] ai-sources:update-source - Failed:', err.message)
@@ -239,7 +237,7 @@ export function registerConfigHandlers(): void {
         const manager = getAISourceManager()
         const result = manager.deleteSource(sourceId)
         emitConfigChange(['aiSources.sources'])
-        return { success: true, data: result }
+        return { success: true, data: maskOAuthFields({ aiSources: result }).aiSources }
       } catch (error: unknown) {
         const err = error as Error
         console.error('[Settings] ai-sources:delete-source - Failed:', err.message)

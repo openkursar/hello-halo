@@ -48,15 +48,18 @@ export function createConversationSink(spaceId: string, conversationId: string):
       notifyTaskComplete(conversation?.title || 'Conversation')
     },
 
-    onTurnError(error: Error, turnStarted: boolean) {
-      // With a placeholder in place we can update it. Without one, system:init
-      // never arrived, so updateLastMessage would corrupt the *previous* turn's
-      // assistant message instead.
-      if (turnStarted) {
-        updateLastMessage(spaceId, conversationId, {
-          content: '',
-          error: error.message,
-        })
+    onConsumerStopped(partial) {
+      if (partial) {
+        persistTurnResult(spaceId, conversationId, partial, 'Chat session ended before the reply completed.')
+      }
+    },
+
+    onTurnError(error: Error, turnStarted: boolean, partial?: StreamResult) {
+      // A failure before init has no placeholder and must not overwrite the previous reply.
+      if (turnStarted && partial) {
+        persistTurnResult(spaceId, conversationId, partial, error.message)
+      } else if (turnStarted) {
+        updateLastMessage(spaceId, conversationId, { error: error.message })
       } else {
         addMessage(spaceId, conversationId, {
           role: 'assistant',
@@ -76,6 +79,7 @@ function persistTurnResult(
   spaceId: string,
   conversationId: string,
   result: StreamResult,
+  error?: string,
 ): void {
   const { finalContent, hasMeaningfulContent, thoughts, tokenUsage, capturedSessionId, hasErrorThought, errorThought } = result
 
@@ -90,7 +94,7 @@ function persistTurnResult(
   // reasoning survives a reload.
   const contentToStore = hasMeaningfulContent ? finalContent : ''
 
-  if (contentToStore || hasErrorThought || thoughts.length > 0) {
+  if (contentToStore || hasErrorThought || thoughts.length > 0 || error) {
     // Extract file changes summary
     let metadata: { fileChanges?: FileChangesSummary } | undefined
     let sources: KBSource[] | undefined
@@ -121,7 +125,7 @@ function persistTurnResult(
       tokenUsage: tokenUsage || undefined,
       metadata,
       sources,
-      error: errorThought?.content,
+      error: error || errorThought?.content,
     })
   }
 }

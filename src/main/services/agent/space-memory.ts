@@ -5,7 +5,7 @@
  * `space`), on unless the space turned it off. Two pieces reach a session:
  *
  * - Session setup: the memory instructions (system prompt) and the write guard.
- *   Stable per space, so a warmed session and the first real turn agree.
+ *   Stable per conversation, so a warmed session and the first real turn agree.
  * - First turn only: the memory itself, rendered ahead of the user's message.
  *   A resumed conversation already holds it in its transcript. memory.md is
  *   given its skeleton here if it has none, so the first thing a space ever
@@ -22,7 +22,6 @@ import {
   formatMemoryUsage,
   generatePromptInstructions,
   ensureMemoryFile,
-  memoryHasContent,
   type MemoryLayout,
   type MemoryWriteGuardConfig,
 } from '../../platform/memory'
@@ -44,26 +43,15 @@ export function resolveSpaceMemorySession(spaceId: string, conversationId: strin
   if (!isSpaceMemoryEnabled(spaceId)) return null
   const layout = getSpaceMemoryLayout(spaceId)
   if (!layout) return null
-  const empty = !hasContent(layout)
   return {
     layout,
     // The paths ride along so a conversation resumed without its opening
     // memory block still knows where the memory is.
-    instructions:
-      generatePromptInstructions('session', { owner: 'space', empty }) +
-      `\n\nThis space's memory: \`${layout.file}\`; topics under \`${layout.topicsDir}/\`.`,
+    instructions: generatePromptInstructions('session', {
+      owner: 'space', layout, authorTag: spaceChatInstanceTag(conversationId),
+    }),
     guard: { writable: [layout], label: `chat:${conversationId.slice(0, 8)}` },
     contextKey: `space-memory:${layout.file}`,
-  }
-}
-
-/** A memory that cannot be read counts as holding something: the full instructions are the safe side. */
-function hasContent(layout: MemoryLayout): boolean {
-  try {
-    return memoryHasContent(layout)
-  } catch (err) {
-    console.warn(`[Agent] Space memory could not be checked (${layout.file}):`, (err as Error).message)
-    return true
   }
 }
 
@@ -83,7 +71,6 @@ export async function buildSpaceMemoryPreamble(layout: MemoryLayout, conversatio
     }
     const snapshot = await buildMemorySnapshot(layout)
     console.log(`[Agent][${conversationId}] Space memory loaded: ${formatMemoryUsage(snapshot)}`)
-    const tag = spaceChatInstanceTag(conversationId)
     const section = renderMemorySection(snapshot, {
       ...MEMORY_SECTION_LIMITS.space,
       framing:
@@ -91,7 +78,7 @@ export async function buildSpaceMemoryPreamble(layout: MemoryLayout, conversatio
         'by many of them. A line describing work in progress was written by whichever ' +
         'conversation was doing it — verify before relying on it.',
     })
-    return `${section}\n\nYou are \`${tag}\` — sign your \`# History\` entries with \`[by: ${tag}]\`.\n\n`
+    return `${section}\n\n`
   } catch (err) {
     console.error(`[Agent][${conversationId}] Space memory snapshot failed, continuing without it:`, err)
     return ''

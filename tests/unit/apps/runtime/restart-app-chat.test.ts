@@ -66,7 +66,7 @@ vi.mock('../../../../src/main/services/agent/session-manager', () => ({
   getConsumerHandle: (id: string) => consumers.get(id) ?? null,
   getRunningConsumerIds: () => Array.from(consumers.keys()),
   // Unused by restartAppChat but referenced by app-chat module-level imports
-  getOrCreateV2Session: vi.fn(),
+  acquireV2Session: vi.fn(),
   markTurnDispatched: vi.fn(),
   updateConsumerDisplayModel: vi.fn(),
 }))
@@ -157,12 +157,6 @@ vi.mock('../../../../src/main/apps/runtime/index', () => ({
 // dispatch-inbound pulls in analytics → electron-CJS at module load.
 vi.mock('../../../../src/main/apps/runtime/dispatch-inbound', () => ({
   flushSupplementBuffer: vi.fn(),
-}))
-
-// Memory snapshot — used at module load.
-vi.mock('../../../../src/main/platform/memory', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../../../src/main/platform/memory')>()),
-  createMemoryStatusMcpServer: vi.fn(),
 }))
 
 vi.mock('../../../../src/main/services/memory-consolidation', () => ({

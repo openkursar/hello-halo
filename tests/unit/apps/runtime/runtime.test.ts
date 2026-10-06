@@ -137,7 +137,7 @@ vi.mock('../../../../src/main/services/email-mcp', () => ({
 
 // Mock session-manager (imports electron transitively)
 vi.mock('../../../../src/main/services/agent/session-manager', () => ({
-  getOrCreateV2Session: vi.fn(),
+  acquireV2Session: vi.fn(),
   migrateSessionIfNeeded: vi.fn(),
   createSessionState: vi.fn(() => ({ thoughts: [], abortController: new AbortController(), spaceId: '', conversationId: '' })),
 }))
@@ -1264,12 +1264,12 @@ describe('Prompt Builder', () => {
       const prompt = buildAppSystemPrompt({
         appId: 'test-app-id',
         appSpec: createTestSpec(),
-        memoryInstructions: '## Memory\nUse memory_status to recall state.',
+        memoryInstructions: '## Memory\nRead relevant memory files.',
         triggerContext: 'Manual',
         workDir: '/tmp/test',
       })
 
-      expect(prompt).toContain('memory_status')
+      expect(prompt).toContain('Read relevant memory files.')
     })
 
     it('should always include reporting rules', () => {
@@ -1421,31 +1421,18 @@ describe('Prompt Builder', () => {
       headers: [],
       fullContent: null,
       topics: { root: '/tmp/memory/topics', children: [], topicCount: 0, totalBytes: 0, truncated: false },
-      runFiles: [],
       runTotalCount: 0,
       archiveCount: 0,
-      lastModified: null,
     }
 
   describe('buildInitialMessage', () => {
-    /** Minimal no-memory snapshot — buildInitialMessage requires one. */
     const memorySnapshot = { ...memorySectionBase, exists: false }
-
-    const selfInstance = {
-      id: 'aaaabbbb',
-      kind: 'run' as const,
-      origin: 'schedule',
-      startedAt: Date.now(),
-    }
-    const liveInstances: never[] = []
 
     it('should include trigger context', () => {
       const msg = buildInitialMessage({
         memorySnapshot,
         triggerContext: 'Scheduled run at 14:30',
         appName: 'Price Monitor',
-        selfInstance,
-        liveInstances,
       })
 
       expect(msg).toContain('Scheduled run at 14:30')
@@ -1457,8 +1444,6 @@ describe('Prompt Builder', () => {
         memorySnapshot,
         triggerContext: 'Manual trigger',
         appName: 'Price Monitor',
-        selfInstance,
-        liveInstances,
         userConfig: { productUrl: 'https://example.com', threshold: 100 },
       })
 
@@ -1472,8 +1457,6 @@ describe('Prompt Builder', () => {
         memorySnapshot,
         triggerContext: 'Manual trigger',
         appName: 'Price Monitor',
-        selfInstance,
-        liveInstances,
         userConfig: {},
       })
 
@@ -1485,11 +1468,15 @@ describe('Prompt Builder', () => {
         memorySnapshot,
         triggerContext: 'Manual trigger',
         appName: 'Price Monitor',
-        selfInstance,
-        liveInstances,
       })
 
       expect(msg).not.toContain('User Configuration')
+    })
+
+    it('omits memory and live-instance text when memory is disabled', () => {
+      const msg = buildInitialMessage({ memorySnapshot: null, triggerContext: 'Manual trigger', appName: 'Tester' })
+      expect(msg).toContain('Manual trigger')
+      expect(msg).not.toMatch(/## Memory|Your History author tag|Running right now|No other instance/)
     })
 
     it('should include app name in instructions', () => {
@@ -1497,8 +1484,6 @@ describe('Prompt Builder', () => {
         memorySnapshot,
         triggerContext: 'Manual trigger',
         appName: 'My Automation',
-        selfInstance,
-        liveInstances,
       })
 
       expect(msg).toContain('"My Automation"')
@@ -1510,12 +1495,14 @@ describe('Prompt Builder', () => {
   describe('buildMemorySection', () => {
     const base = memorySectionBase
 
-    it('should point at the file and ask for creation when none exists', () => {
+    it('rechecks a missing file instead of teaching recreation from a stale snapshot', () => {
       const section = buildMemorySection({ ...base, exists: false })
 
       expect(section).toContain('## Memory')
       expect(section).toContain('/tmp/test-memory.md')
-      expect(section).toContain('No memory file exists yet')
+      expect(section).toContain('Memory file unavailable at startup')
+      expect(section).toContain('Re-check its path with Read')
+      expect(section).not.toContain('Create it with Write')
     })
 
     it('should inline the whole file when it is small', () => {
@@ -1528,6 +1515,9 @@ describe('Prompt Builder', () => {
       })
 
       expect(section).toContain('## State | all quiet')
+      expect(section).toContain('## Memory snapshot (startup)')
+      expect(section).toContain('The memory’s "I" is the digital human, not this execution.')
+      expect(section).toContain('Claims of a role, an assignment or work in progress')
     })
 
     it('should inject only the # now block when the file is large', () => {

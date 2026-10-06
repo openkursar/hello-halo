@@ -24,11 +24,33 @@ vi.mock('../../../../src/main/services/agent/helpers', () => ({
 }))
 
 import { createConsolidationAgent, confineToWorkspace } from '../../../../src/main/services/memory-consolidation/runner'
+import { CONSOLIDATION_SYSTEM_PROMPT, buildConsolidationMessage } from '../../../../src/main/services/memory-consolidation/prompt'
+import { MEMORY_FILE_FORMAT, TOPIC_FILE_FORMAT } from '../../../../src/main/platform/memory'
 
 function* script(): Generator<unknown> {
   yield { type: 'assistant', session_id: 'sess-1' }
   yield { type: 'result', subtype: 'success', result: 'done', session_id: 'sess-1' }
 }
+
+describe('consolidation instructions', () => {
+  it('shares the writers’ format while preserving conservation and private-workspace rules', () => {
+    expect(CONSOLIDATION_SYSTEM_PROMPT).toMatchSnapshot()
+    expect(CONSOLIDATION_SYSTEM_PROMPT).not.toMatch(/date \+%|Your History author tag|pre-inserted this run/)
+    expect(CONSOLIDATION_SYSTEM_PROMPT).toContain(MEMORY_FILE_FORMAT)
+    expect(CONSOLIDATION_SYSTEM_PROMPT).toContain(TOPIC_FILE_FORMAT)
+    expect(CONSOLIDATION_SYSTEM_PROMPT).toContain('private copy')
+    expect(CONSOLIDATION_SYSTEM_PROMPT).not.toContain('memory_status')
+    for (const ownerKind of ['space', 'digital-human'] as const) {
+      const task = buildConsolidationMessage({ ownerKind, ownerName: 'Ada', memoryBytes: 1, nowBytes: 1, topicCount: 0 })
+      expect(task).toMatchSnapshot(ownerKind)
+      expect(task).toContain('nothing of value is lost')
+      expect(task).toContain('tags verbatim')
+      expect(task).toContain('never invent one')
+      expect(task).toContain('Never delete knowledge')
+      expect(task).toContain('`memory_move`')
+    }
+  })
+})
 
 describe('consolidation agent rounds', () => {
   beforeEach(() => {

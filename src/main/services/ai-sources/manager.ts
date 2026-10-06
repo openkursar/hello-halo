@@ -27,6 +27,8 @@ import {
   getCurrentSource,
   createEmptyAISourcesConfig,
   resolveLocalizedText,
+  toPublicOAuthStartResult,
+  toPublicOAuthCompleteResult,
   type AISourceType,
   type AISourcesConfig,
   type AISource,
@@ -49,17 +51,18 @@ import {
   resolveModelVision,
   CLAUDE_SUBSCRIPTION_MODELS
 } from '../../../shared/constants'
-import { getConfig, saveConfig } from '../../foundation/config.service'
+import { getConfig, saveConfig, onApiConfigChange } from '../../foundation/config.service'
 import { getCustomProvider } from './providers/custom.provider'
 import { getGitHubCopilotProvider } from './providers/github-copilot.provider'
 import { getClaudeProvider } from './providers/claude.provider'
 import { getZhipuCodingOAuthProvider } from './providers/zhipu-coding-oauth.provider'
-import { getChatGPTProvider, restoreChatGPTCatalogCache } from './providers/chatgpt.provider'
+import { getChatGPTProvider } from './providers/chatgpt.provider'
 import { getCliDelegatedProvider } from './providers/cli-delegated.provider'
 import { loadAuthProvidersAsync } from './auth-loader'
 import { loadProductConfig } from '../../foundation/product-config'
 import { decryptString } from '../../foundation/secure-storage.service'
-import { normalizeApiUrl } from '../../openai-compat-router'
+import { MASK_SENTINEL } from '../../foundation/config-encryption'
+import { normalizeApiUrl, type RequestCredentials } from '../../openai-compat-router'
 import { analytics } from '../analytics/analytics.service'
 import { AnalyticsEvents } from '../analytics/types'
 
@@ -72,7 +75,75 @@ interface OAuthProviderWithTokenManagement extends OAuthAISourceProvider {
     accessToken: string
     refreshToken: string
     expiresAt: number
+    apiUrl?: string
+    profileArn?: string
   }>>
+}
+
+interface OAuthLoginAccount {
+  key: string
+  label: string
+  id: string
+}
+
+interface OAuthLoginPayload extends OAuthCompleteResult {
+  _tokenData?: { accessToken?: string; refreshToken?: string; expiresAt?: number; uid?: string }
+  _accounts?: OAuthLoginAccount[]
+  _availableModels?: string[]
+  _modelNames?: Record<string, string>
+  _modelCapabilities?: Record<string, ModelOption['capabilities']>
+  _modelVision?: Record<string, boolean>
+  _modelCatalogCache?: AISource['modelCatalogCache']
+  _defaultModel?: string
+  _catalogDegraded?: boolean
+  _apiUrl?: string
+  _accountId?: string
+  _profileArn?: string
+}
+
+interface ManagedCatalogRefresh {
+  source: AISource
+  promise: Promise<ProviderResult<{ degraded: boolean }>>
+}
+
+/**
+ * One pending authorization per provider. A newer start supersedes it; the slot
+ * stays mapped to the newest login while older ones drain.
+ */
+interface ManagedOAuthLogin {
+  loginId: string
+  sourceId?: string
+  target?: AISource
+  context?: OAuthStartResult
+  startPromise?: Promise<ProviderResult<OAuthStartResult>>
+  completionPromise?: Promise<ProviderResult<OAuthCompleteResult>>
+  cancellation?: Promise<void>
+  cancelled: boolean
+  expiresAt: number
+  timer?: ReturnType<typeof setTimeout>
+}
+
+const OAUTH_LOGIN_TIMEOUT_MS = 10 * 60 * 1000
+/** Providers renew a token minutes before it expires, so a minute-old answer is still current. */
+const REQUEST_CREDENTIAL_RECHECK_MS = 60_000
+const ACCOUNT_REMOVED_ERROR = 'This account was removed. Choose another account for this conversation.'
+/** Upper bound on waiting for a superseded login whose provider work cannot be interrupted. */
+const OAUTH_SUPERSEDE_DRAIN_MS = 15_000
+
+/** Token and account identity change on every login and refresh, so they version a source's credential. */
+function sameCredentials(current: AISource | null | undefined, captured: AISource): boolean {
+  return !!current && current.accessToken === captured.accessToken &&
+    current.refreshToken === captured.refreshToken && current.user?.uid === captured.user?.uid
+}
+
+/** Multi-account providers list every authorized account; the others authorize exactly one. */
+function loginAccounts(data: OAuthLoginPayload): OAuthLoginAccount[] {
+  if (data._accounts?.length) return data._accounts
+  return [{
+    key: data._tokenData?.accessToken || '',
+    id: data._tokenData?.uid || data.user?.uid || '',
+    label: data.user?.name || ''
+  }]
 }
 
 /**
@@ -92,6 +163,11 @@ class AISourceManager {
   private providers: Map<AISourceType, AISourceProvider> = new Map()
   private initialized = false
   private initPromise: Promise<void> | null = null
+  private logins = new Map<ProviderId, ManagedOAuthLogin>()
+  private tokenRefreshes = new Map<string, { source: AISource; model: string; promise: Promise<ProviderResult<void>> }>()
+  private catalogRefreshes = new Map<string, ManagedCatalogRefresh>()
+  /** Keyed by source and model; see resolveRequestCredentials. */
+  private requestCredentials = new Map<string, { sourceId: string; credentials: RequestCredentials | null; checkedAt: number }>()
 
   constructor() {
     // Register built-in providers immediately
@@ -109,8 +185,9 @@ class AISourceManager {
 
     // Sync saved sources' model lists with current BUILTIN_PROVIDERS
     this.syncBuiltinModels()
-    const chatgptSource = this.getAiSourcesConfig().sources.find(source => source.provider === 'chatgpt' && source.modelCatalogCache)
-    restoreChatGPTCatalogCache(chatgptSource?.modelCatalogCache)
+
+    // Edits that bypass this manager (settings saved as a whole) still reach cached request credentials.
+    onApiConfigChange(change => this.dropRequestCredentials(change?.sourceIds))
 
     // Start async initialization (optional providers + dynamic loading)
     this.initPromise = this.initializeAsync()
@@ -189,26 +266,37 @@ class AISourceManager {
     return getCurrentSource(aiSources)
   }
 
+  getSourceConfig(sourceId: string): AISource | null {
+    return this.getDecryptedAiSources().sources.find(source => source.id === sourceId) ?? null
+  }
+
+  /** Store identity follows the selected account, otherwise the first configured one. */
+  getOAuthSource(providerType: ProviderId): AISource | null {
+    const config = this.getDecryptedAiSources()
+    const matches = (source: AISource) => source.provider === providerType &&
+      source.authType === 'oauth' && !!source.accessToken
+    const current = getCurrentSource(config)
+    if (current?.provider === providerType && current.authType === 'oauth') return current
+    return config.sources.find(matches) ?? null
+  }
+
   /**
    * Return a valid OAuth access token for a provider type, or null when no such
    * source is signed in. Refreshes an expiring token first. Used by the
    * store to authenticate to an identity-bound registry server.
    */
   async getOAuthAccessToken(providerType: ProviderId): Promise<string | null> {
-    const source = this.getDecryptedAiSources().sources.find(
-      s => s.provider === providerType && s.authType === 'oauth' && !!s.accessToken
-    )
+    const source = this.getOAuthSource(providerType)
     if (!source) return null
-    await this.ensureValidToken(source.id)
+    const result = await this.ensureValidToken(source.id)
+    if (!result.success) return null
     const refreshed = this.getDecryptedAiSources().sources.find(s => s.id === source.id)
     return refreshed?.accessToken ?? null
   }
 
   /** The signed-in OAuth user for a provider, or null when not signed in. */
   getOAuthIdentity(providerType: ProviderId): AISourceUser | null {
-    const source = this.getDecryptedAiSources().sources.find(
-      s => s.provider === providerType && s.authType === 'oauth' && !!s.accessToken
-    )
+    const source = this.getOAuthSource(providerType)
     return source?.user ?? null
   }
 
@@ -467,6 +555,7 @@ class AISourceManager {
    */
   private stampVisionCapability(source: AISource, config: BackendRequestConfig | null): void {
     if (!config) return
+    config.sourceId = source.id
     config.visionOverride = resolveModelVision(source, config.model)
   }
 
@@ -476,7 +565,13 @@ class AISourceManager {
    * Add a new source
    */
   addSource(source: AISource): AISourcesConfig {
+    if (source.authType !== 'api-key') throw new Error('Managed accounts must be added through their login flow')
+    return this.appendSource(source)
+  }
+
+  private appendSource(source: AISource): AISourcesConfig {
     const aiSources = this.getAiSourcesConfig()
+    if (aiSources.sources.some(item => item.id === source.id)) throw new Error('Source already exists')
 
     const newSources = [...aiSources.sources, source]
     const newConfig: AISourcesConfig = {
@@ -512,7 +607,7 @@ class AISourceManager {
         availableModels: models,
         updatedAt: now
       }
-      this.updateSource(existing.id, source)
+      this.writeSource(existing.id, source)
       this.setCurrentSource(existing.id)
       return source
     }
@@ -530,7 +625,7 @@ class AISourceManager {
       updatedAt: now
     }
 
-    this.addSource(source)
+    this.appendSource(source)
     this.setCurrentSource(source.id)
     console.log(`[AISourceManager] Delegated source created: ${source.id}`)
     return source
@@ -540,8 +635,33 @@ class AISourceManager {
    * Update an existing source
    */
   updateSource(sourceId: string, updates: Partial<AISource>): AISourcesConfig {
-    const aiSources = this.getAiSourcesConfig()
+    const source = this.getAiSourcesConfig().sources.find(item => item.id === sourceId)
+    if (!source) throw new Error('Source not found')
+    const metadata = { ...updates }
+    delete metadata.id
+    delete metadata.createdAt
+    delete metadata.authType
+    if (metadata.apiKey === MASK_SENTINEL) delete metadata.apiKey
+    if (source.authType === 'oauth' || source.authType === 'delegated') {
+      delete metadata.provider
+      delete metadata.authType
+      delete metadata.apiKey
+      delete metadata.accessToken
+      delete metadata.refreshToken
+      delete metadata.tokenExpires
+      delete metadata.user
+      delete metadata.apiUrl
+      delete metadata.apiType
+      delete metadata.accountId
+      delete metadata.profileArn
+      delete metadata.modelCatalogCache
+    }
+    return this.writeSource(sourceId, metadata)
+  }
 
+  private writeSource(sourceId: string, updates: Partial<AISource>): AISourcesConfig {
+    this.dropRequestCredentials([sourceId])
+    const aiSources = this.getAiSourcesConfig()
     const newConfig: AISourcesConfig = {
       ...aiSources,
       sources: aiSources.sources.map(s =>
@@ -552,7 +672,6 @@ class AISourceManager {
     }
 
     saveConfig({ aiSources: newConfig } as any)
-    console.log(`[AISourceManager] Updated source: ${sourceId}`)
 
     return newConfig
   }
@@ -563,6 +682,12 @@ class AISourceManager {
   deleteSource(sourceId: string): AISourcesConfig {
     const aiSources = this.getAiSourcesConfig()
 
+    this.tokenRefreshes.delete(sourceId)
+    this.catalogRefreshes.delete(sourceId)
+    this.dropRequestCredentials([sourceId])
+    for (const [providerType, login] of this.logins) {
+      if (login.sourceId === sourceId) void this.abandonLogin(providerType, login)
+    }
     const newSources = aiSources.sources.filter(s => s.id !== sourceId)
     let newCurrentId = aiSources.currentId
 
@@ -663,21 +788,131 @@ class AISourceManager {
   // ========== OAuth Methods ==========
 
   /**
-   * Start OAuth login for a provider type
+   * Start adding (no sourceId) or reauthenticating (sourceId) an OAuth account.
+   * A newer start for the same provider supersedes the pending one; it waits
+   * for that login to drain, so the provider's single authorization slot is
+   * never shared between two logins.
    */
-  async startOAuthLogin(providerType: ProviderId): Promise<ProviderResult<OAuthStartResult>> {
+  async startOAuthLogin(providerType: ProviderId, sourceId?: string): Promise<ProviderResult<OAuthStartResult>> {
     await this.ensureInitialized()
-
     const provider = this.providers.get(providerType)
-    if (!provider) {
-      return { success: false, error: `Unknown provider type: ${providerType}` }
-    }
-
-    if (!this.isOAuthProvider(provider)) {
+    if (!provider || !this.isOAuthProvider(provider)) {
+      console.warn(`[AISourceManager] OAuth start refused: provider=${providerType} source=${sourceId ?? 'new'} provider unavailable or unsupported`)
       return { success: false, error: `Provider ${providerType} does not support OAuth` }
     }
+    const target = sourceId ? this.getSourceConfig(sourceId) : undefined
+    if (sourceId && (!target || target.provider !== providerType || target.authType !== 'oauth')) {
+      console.warn(`[AISourceManager] OAuth start refused: provider=${providerType} source=${sourceId} target unavailable or mismatched`)
+      return { success: false, error: 'OAuth source not found for this provider' }
+    }
+    const previous = this.logins.get(providerType)
+    const login: ManagedOAuthLogin = {
+      loginId: uuidv4(), sourceId, target: target ?? undefined,
+      cancelled: false, expiresAt: Date.now() + OAUTH_LOGIN_TIMEOUT_MS
+    }
+    this.logins.set(providerType, login)
+    login.timer = setTimeout(() => {
+      console.warn(`[AISourceManager] OAuth authorization timed out: provider=${providerType}`)
+      void this.abandonLogin(providerType, login)
+    }, OAUTH_LOGIN_TIMEOUT_MS)
+    login.timer.unref?.()
+    login.startPromise = this.startProviderLogin(providerType, provider, login, previous)
+    return login.startPromise
+  }
 
-    return provider.startLogin()
+  private async startProviderLogin(
+    providerType: ProviderId,
+    provider: OAuthAISourceProvider,
+    login: ManagedOAuthLogin,
+    previous?: ManagedOAuthLogin
+  ): Promise<ProviderResult<OAuthStartResult>> {
+    try {
+      if (previous) {
+        console.log(`[AISourceManager] OAuth login superseded: provider=${providerType} source=${previous.sourceId ?? 'new'}`)
+        await this.drainLogin(providerType, previous)
+      }
+      if (login.cancelled) {
+        console.warn(`[AISourceManager] OAuth start discarded: provider=${providerType} cancelled while the previous login drained`)
+        return { success: false, error: 'Login cancelled' }
+      }
+      const result = await provider.startLogin()
+      if (login.cancelled || Date.now() >= login.expiresAt) {
+        console.warn(`[AISourceManager] Discarded OAuth start: provider=${providerType} source=${login.sourceId ?? 'new'} authorization cancelled`)
+        // The cancellation ran before this authorization existed; clear what the start created.
+        await login.cancellation
+        try {
+          await provider.cancelLogin?.()
+        } catch (error) {
+          console.warn(`[AISourceManager] OAuth cancellation cleanup failed: provider=${providerType}`, error)
+        }
+        return { success: false, error: 'Login cancelled or expired' }
+      }
+      if (!result.success || !result.data) {
+        console.warn(`[AISourceManager] OAuth start failed: provider=${providerType} source=${login.sourceId ?? 'new'} ${result.success ? 'missing authorization context' : 'provider rejected authorization'}`)
+        return { success: false, error: result.error || 'Failed to start login' }
+      }
+      login.context = toPublicOAuthStartResult({ ...result.data, loginId: login.loginId })
+      return { success: true, data: login.context }
+    } catch (error) {
+      console.error(`[AISourceManager] OAuth start failed: provider=${providerType}`, error)
+      return { success: false, error: 'Failed to start login' }
+    } finally {
+      if (!login.context) this.finishOAuthLogin(providerType, login)
+    }
+  }
+
+  getOAuthLoginContext(providerType: ProviderId, loginId?: string): OAuthStartResult | null {
+    const login = this.logins.get(providerType)
+    return loginId && login?.loginId === loginId && !login.cancelled && Date.now() < login.expiresAt && login.context
+      ? toPublicOAuthStartResult(login.context) : null
+  }
+
+  /** Cancels only the caller's own login; a superseded or finished one is already gone. */
+  async cancelOAuthLogin(providerType: ProviderId, loginId?: string): Promise<ProviderResult<void>> {
+    if (!loginId) {
+      console.warn(`[AISourceManager] OAuth cancellation refused: provider=${providerType} missing login id`)
+      return { success: false, error: 'Login ID is required' }
+    }
+    const login = this.logins.get(providerType)
+    if (!login || login.loginId !== loginId) return { success: true }
+    await this.abandonLogin(providerType, login)
+    return { success: true }
+  }
+
+  /** Idempotent. The slot is released once the login's own provider work has settled. */
+  private abandonLogin(providerType: ProviderId, login: ManagedOAuthLogin): Promise<void> {
+    if (login.cancellation) return login.cancellation
+    login.cancelled = true
+    if (login.timer) clearTimeout(login.timer)
+    login.cancellation = (async () => {
+      try {
+        const provider = this.providers.get(providerType)
+        if (provider && this.isOAuthProvider(provider)) await provider.cancelLogin?.()
+      } catch (error) {
+        console.warn(`[AISourceManager] OAuth cancellation cleanup failed: provider=${providerType}`, error)
+      }
+    })()
+    void Promise.allSettled([login.startPromise, login.completionPromise, login.cancellation])
+      .then(() => this.finishOAuthLogin(providerType, login))
+    return login.cancellation
+  }
+
+  private async drainLogin(providerType: ProviderId, login: ManagedOAuthLogin): Promise<void> {
+    await this.abandonLogin(providerType, login)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const drained = await Promise.race([
+      Promise.allSettled([login.startPromise, login.completionPromise]).then(() => true),
+      new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), OAUTH_SUPERSEDE_DRAIN_MS) })
+    ])
+    clearTimeout(timer)
+    if (!drained) {
+      console.warn(`[AISourceManager] Superseded OAuth login still running after ${OAUTH_SUPERSEDE_DRAIN_MS}ms: provider=${providerType}; starting the new login anyway`)
+    }
+  }
+
+  private finishOAuthLogin(providerType: ProviderId, login: ManagedOAuthLogin): void {
+    if (login.timer) clearTimeout(login.timer)
+    if (this.logins.get(providerType) === login) this.logins.delete(providerType)
   }
 
   /**
@@ -685,197 +920,198 @@ class AISourceManager {
    */
   async completeOAuthLogin(
     providerType: ProviderId,
-    state: string
+    state: string,
+    loginId?: string
   ): Promise<ProviderResult<OAuthCompleteResult>> {
     await this.ensureInitialized()
-
     const provider = this.providers.get(providerType)
-    if (!provider) {
-      return { success: false, error: `Unknown provider type: ${providerType}` }
-    }
-
-    if (!this.isOAuthProvider(provider)) {
+    if (!provider || !this.isOAuthProvider(provider)) {
+      console.warn(`[AISourceManager] OAuth completion refused: provider=${providerType} provider unavailable or unsupported`)
       return { success: false, error: `Provider ${providerType} does not support OAuth` }
     }
-
-    const result = await provider.completeLogin(state)
-
-    if (result.success && result.data) {
-      await this.handleOAuthLoginSuccess(providerType, result.data)
+    const login = this.logins.get(providerType)
+    if (!loginId || !login || login.cancelled || login.loginId !== loginId || !login.context) {
+      console.warn(`[AISourceManager] OAuth completion refused: provider=${providerType} no matching active authorization`)
+      return { success: false, error: 'No matching pending authentication' }
     }
+    if (Date.now() >= login.expiresAt) {
+      console.warn(`[AISourceManager] OAuth completion refused: provider=${providerType} authorization expired`)
+      await this.abandonLogin(providerType, login)
+      return { success: false, error: 'Login expired' }
+    }
+    if (login.completionPromise) return login.completionPromise
+    login.completionPromise = this.completeProviderLogin(providerType, provider, login, state)
+    return login.completionPromise
+  }
 
-    return result
+  private async completeProviderLogin(
+    providerType: ProviderId,
+    provider: OAuthAISourceProvider,
+    login: ManagedOAuthLogin,
+    state: string
+  ): Promise<ProviderResult<OAuthCompleteResult>> {
+    try {
+      const result = await provider.completeLogin(state)
+      if (login.cancelled || Date.now() >= login.expiresAt) {
+        console.warn(`[AISourceManager] Discarded cancelled OAuth completion: provider=${providerType}`)
+        return { success: false, error: 'Login cancelled or expired' }
+      }
+      if (!result.success || !result.data) {
+        console.warn(`[AISourceManager] OAuth completion failed: provider=${providerType} source=${login.sourceId ?? 'new'} ${result.success ? 'missing account credentials' : 'provider rejected authorization'}`)
+        return { success: false, error: result.error || 'Login failed' }
+      }
+      const data = result.data as OAuthLoginPayload
+      const storedMatches = await this.matchStoredAccounts(providerType, provider, loginAccounts(data), login.target)
+      if (login.cancelled || Date.now() >= login.expiresAt) {
+        console.warn(`[AISourceManager] Discarded OAuth completion after identity verification: provider=${providerType} cancelled or expired`)
+        return { success: false, error: 'Login cancelled or expired' }
+      }
+      if (login.target && !sameCredentials(this.getSourceConfig(login.target.id), login.target)) {
+        console.warn(`[AISourceManager] Discarded obsolete reauthentication: source=${login.target.id}`)
+        return { success: false, error: 'Account changed or was removed during login. Please retry.' }
+      }
+      const sourceIds = this.handleOAuthLoginSuccess(providerType, data, login.target?.id, storedMatches)
+      return {
+        success: true,
+        data: toPublicOAuthCompleteResult({ success: true, user: data.user, sourceId: sourceIds[0], sourceIds })
+      }
+    } catch (error) {
+      console.error(`[AISourceManager] OAuth completion failed: provider=${providerType}`, error)
+      return { success: false, error: error instanceof Error ? error.message : 'Login failed' }
+    } finally {
+      this.finishOAuthLogin(providerType, login)
+    }
   }
 
   /**
-   * Handle successful OAuth login - create or update OAuth source in v2 format
-   * If a source with the same provider already exists, update it instead of creating a new one
+   * Stored sources whose identity predates the provider's current format,
+   * keyed by the account id the provider now reports for them. Only accounts
+   * without an exact identity match are looked up, so a normal login makes no
+   * extra request.
    */
-  private async handleOAuthLoginSuccess(
+  private async matchStoredAccounts(
     providerType: ProviderId,
-    loginResult: OAuthCompleteResult
-  ): Promise<void> {
-    const data = loginResult as any
-    const tokenData = data._tokenData
-    const availableModels: string[] = data._availableModels || []
-    const modelNames: Record<string, string> = data._modelNames || {}
-    const modelCapabilities: Record<string, ModelOption['capabilities']> = data._modelCapabilities || {}
-    const modelVision: Record<string, boolean> = data._modelVision || {}
-    const defaultModel = data._defaultModel || ''
-    const catalogDegraded = providerType === 'chatgpt' && data._catalogDegraded === true
+    provider: OAuthAISourceProvider,
+    accounts: OAuthLoginAccount[],
+    target?: AISource
+  ): Promise<Map<string, string>> {
+    const matches = new Map<string, string>()
+    const accountIds = new Set(accounts.map(account => account.id).filter(Boolean))
+    if (!provider.getAccountId || accountIds.size === 0) return matches
+    const sources = this.getAiSourcesConfig().sources
+      .filter(source => source.provider === providerType && source.authType === 'oauth')
+    // A reauthentication only needs its target's current id; a new login only
+    // considers accounts no stored source already claims.
+    const claimed = new Set(sources.map(source => source.user?.uid).filter((uid): uid is string => !!uid))
+    const unmatched = target ? accountIds : new Set([...accountIds].filter(id => !claimed.has(id)))
+    const candidates = target
+      ? (target.user?.uid && !accountIds.has(target.user.uid) ? [target] : [])
+      : sources.filter(source => !accountIds.has(source.user?.uid ?? ''))
+    if (unmatched.size === 0 || candidates.length === 0) return matches
 
-    const builtin = getBuiltinProvider(providerType)
-    const now = new Date().toISOString()
-
-    // Convert to ModelOption format
-    const models: ModelOption[] = availableModels.map(id => ({
-      id,
-      name: modelNames[id] || id,
-      ...(modelCapabilities[id] ? { capabilities: modelCapabilities[id] } : {}),
-      ...(typeof modelVision[id] === 'boolean' ? { supportsVision: modelVision[id] } : {})
+    await Promise.all(candidates.map(async candidate => {
+      try {
+        // A target is checked with the credential the login captured, so the
+        // later unchanged-credential check still holds; other accounts may
+        // need a renewed token before the provider can name them.
+        const refreshed: ProviderResult<void> = target ? { success: true } : await this.ensureValidToken(candidate.id)
+        const current = refreshed.success ? this.getSourceConfig(candidate.id) : null
+        if (!current) {
+          console.warn(`[AISourceManager] Stored account identity unavailable: source=${candidate.id} ${refreshed.error || 'source removed'}`)
+          return
+        }
+        const accountId = await provider.getAccountId!(this.buildLegacyOAuthConfig(current))
+        if (accountId && unmatched.has(accountId) && !matches.has(accountId)) {
+          matches.set(accountId, candidate.id)
+          console.log(`[AISourceManager] Matched stored account by provider identity: provider=${providerType} source=${candidate.id}`)
+        }
+      } catch (error) {
+        console.warn(`[AISourceManager] Stored account identity unavailable: source=${candidate.id}`, error)
+      }
     }))
+    return matches
+  }
 
-    if (models.length === 0 && defaultModel) {
-      models.push({ id: defaultModel, name: modelNames[defaultModel] || defaultModel })
-    }
-
+  private handleOAuthLoginSuccess(
+    providerType: ProviderId,
+    data: OAuthLoginPayload,
+    targetId: string | undefined,
+    storedMatches: Map<string, string>
+  ): string[] {
+    const tokenData = data._tokenData
+    const defaultModel = data._defaultModel || ''
+    const models: ModelOption[] = (data._availableModels || []).map(id => ({
+      id, name: data._modelNames?.[id] || id,
+      ...(data._modelCapabilities?.[id] ? { capabilities: data._modelCapabilities[id] } : {}),
+      ...(typeof data._modelVision?.[id] === 'boolean' ? { supportsVision: data._modelVision[id] } : {})
+    }))
+    if (!models.length && defaultModel) models.push({ id: defaultModel, name: data._modelNames?.[defaultModel] || defaultModel })
     const aiSources = this.getAiSourcesConfig()
-
-    // Multi-account providers (e.g. Zhipu Coding Plan returns one entry per
-    // organization) create/update one source per account so the user can see and
-    // switch organizations from the source list. Sources are matched by the stable
-    // account id carried in user.uid. Backward compatible: providers that do not
-    // return `_accounts` fall through to the single-source path below.
-    const accounts = data._accounts as Array<{ key: string; label: string; id: string }> | undefined
-    if (Array.isArray(accounts) && accounts.length > 0) {
-      // The source list already groups by provider, so the source name is just
-      // the organization label (no redundant provider prefix). The org id is kept
-      // in user.uid to match sources across re-logins.
-      let sources = [...aiSources.sources]
-      let firstId: string | null = null
-      for (const acct of accounts) {
-        const existing = sources.find(
-          s => s.provider === providerType && s.authType === 'oauth' && s.user?.uid === acct.id
-        )
-        if (existing) {
-          const keepModel = models.some(m => m.id === existing.model) ? existing.model : (defaultModel || existing.model)
-          sources = sources.map(s => s.id === existing.id ? {
-            ...s,
-            name: acct.label,
-            accessToken: acct.key,
-            refreshToken: '',
-            tokenExpires: tokenData?.expiresAt,
-            user: { name: '', uid: acct.id },
-            model: keepModel,
-            availableModels: models.length > 0 ? models : s.availableModels,
-            updatedAt: now
-          } : s)
-          if (!firstId) firstId = existing.id
-        } else {
-          const id = uuidv4()
-          sources.push({
-            id,
-            name: acct.label,
-            provider: providerType,
-            authType: 'oauth',
-            apiUrl: '',
-            accessToken: acct.key,
-            refreshToken: '',
-            tokenExpires: tokenData?.expiresAt,
-            user: { name: '', uid: acct.id },
-            model: defaultModel,
-            availableModels: models,
-            createdAt: now,
-            updatedAt: now
-          })
-          if (!firstId) firstId = id
-        }
+    const target = targetId ? aiSources.sources.find(source => source.id === targetId) : undefined
+    if (targetId && !target) throw new Error('Source was removed during login')
+    const accounts = loginAccounts(data)
+    if (accounts.some(account => !account.key)) throw new Error('Login returned no access token')
+    const matchesTarget = (account: OAuthLoginAccount) => !target?.user?.uid ||
+      (!!account.id && (account.id === target.user.uid || storedMatches.get(account.id) === target.id))
+    const selectedAccounts = target
+      ? [accounts.find(matchesTarget) ?? (() => { throw new Error('A different account was authorized. Add it as a new account instead.') })()]
+      : accounts
+    let sources = [...aiSources.sources]
+    const ids: string[] = []
+    const now = new Date().toISOString()
+    const sameProvider = (source: AISource) => source.provider === providerType && source.authType === 'oauth'
+    for (const account of selectedAccounts) {
+      let existing = target
+      if (!existing && account.id) {
+        const storedId = storedMatches.get(account.id)
+        existing = sources.find(source => sameProvider(source) && source.user?.uid === account.id) ??
+          (storedId ? sources.find(source => source.id === storedId) : undefined)
+      } else if (!existing) {
+        // Without a verified identity, multiple accounts cannot be told apart:
+        // reuse the provider's only unverified source instead of adding another.
+        const unverified = sources.filter(source => sameProvider(source) && !source.user?.uid)
+        existing = unverified.length === 1 ? unverified[0] : undefined
+        console.warn(`[AISourceManager] OAuth login without verified account identity: provider=${providerType} ${existing ? `reusing source=${existing.id}` : 'adding a new source'}`)
       }
-      const newConfig: AISourcesConfig = { version: 2, currentId: firstId, sources }
-      saveConfig({ aiSources: newConfig, isFirstLaunch: false } as any)
-      console.log(`[AISourceManager] OAuth login for ${providerType} upserted ${accounts.length} account source(s)`)
-      return
-    }
-
-    // Check if an OAuth source with the same provider already exists
-    const existingSource = aiSources.sources.find(
-      s => s.provider === providerType && s.authType === 'oauth'
-    )
-
-    let newSources: AISource[]
-    let sourceId: string
-
-    if (existingSource) {
-      // Update existing source
-      sourceId = existingSource.id
-      newSources = aiSources.sources.map(s => {
-        if (s.id === existingSource.id) {
-          const sameAccount = !s.user?.uid || !data.user?.uid || s.user.uid === data.user.uid
-          const offlineConfig = catalogDegraded && sameAccount
-            ? this.providers.get(providerType)?.getOfflineConfig?.(this.buildLegacyOAuthConfig(s))
-            : undefined
-          const offlineData = offlineConfig?.[providerType as keyof AISourcesConfig] as OAuthSourceConfig | undefined
-          const loginModels = offlineData?.availableModels?.map(id => ({
-            ...s.availableModels.find(item => item.id === id),
-            id,
-            name: offlineData.modelNames?.[id] || id,
-            ...(offlineData.modelCapabilities?.[id] ? { capabilities: offlineData.modelCapabilities[id] } : {}),
-            ...(typeof offlineData.modelVision?.[id] === 'boolean' ? { supportsVision: offlineData.modelVision[id] } : {})
-          }))
-          return {
-            ...s,
-            accessToken: tokenData?.accessToken || '',
-            refreshToken: tokenData?.refreshToken || '',
-            tokenExpires: tokenData?.expiresAt,
-            user: {
-              name: loginResult.user?.name || '',
-              uid: tokenData?.uid || ''
-            },
-            model: sameAccount ? (s.model || defaultModel) : defaultModel,
-            availableModels: loginModels ?? (models.length > 0 ? models : s.availableModels),
-            modelCatalogCache: data._modelCatalogCache ?? (sameAccount ? s.modelCatalogCache : undefined),
-            updatedAt: now
-          }
-        }
-        return s
-      })
-      console.log(`[AISourceManager] OAuth login for ${providerType} updated existing source: ${sourceId}`)
-    } else {
-      // Create new source
-      sourceId = uuidv4()
-      const newSource: AISource = {
-        id: sourceId,
-        name: builtin?.name || getProviderDisplayName(providerType),
-        provider: providerType,
-        authType: 'oauth',
-        apiUrl: '',
-        accessToken: tokenData?.accessToken || '',
-        refreshToken: tokenData?.refreshToken || '',
+      const id = existing?.id || uuidv4()
+      const offline = data._catalogDegraded && existing
+        ? this.providers.get(providerType)?.getOfflineConfig?.(this.buildLegacyOAuthConfig(existing))
+        : undefined
+      const offlineData = (offline as Record<string, OAuthSourceConfig> | undefined)?.[providerType]
+      const loginModels = offlineData?.availableModels?.map(modelId => ({
+        ...existing?.availableModels.find(model => model.id === modelId),
+        id: modelId, name: offlineData.modelNames?.[modelId] || modelId,
+        ...(offlineData.modelCapabilities?.[modelId] ? { capabilities: offlineData.modelCapabilities[modelId] } : {}),
+        ...(typeof offlineData.modelVision?.[modelId] === 'boolean' ? { supportsVision: offlineData.modelVision[modelId] } : {})
+      })) ?? (models.length ? models : existing?.availableModels || [])
+      const name = existing?.name || (data._accounts?.length
+        ? account.label : getBuiltinProvider(providerType)?.name || getProviderDisplayName(providerType))
+      const source: AISource = {
+        ...existing,
+        id, name, provider: providerType, authType: 'oauth',
+        apiUrl: data._apiUrl ?? existing?.apiUrl ?? '',
+        accountId: data._accountId ?? existing?.accountId,
+        profileArn: data._profileArn ?? existing?.profileArn,
+        accessToken: account.key,
+        refreshToken: data._accounts?.length ? '' : tokenData?.refreshToken || existing?.refreshToken || '',
         tokenExpires: tokenData?.expiresAt,
-        user: {
-          name: loginResult.user?.name || '',
-          uid: tokenData?.uid || ''
-        },
-        model: defaultModel,
-        availableModels: models,
-        modelCatalogCache: data._modelCatalogCache,
-        createdAt: now,
-        updatedAt: now
+        user: { ...data.user, name: account.label, uid: account.id || existing?.user?.uid || '' },
+        model: existing?.model || defaultModel,
+        availableModels: loginModels,
+        modelCatalogCache: data._modelCatalogCache ?? existing?.modelCatalogCache,
+        createdAt: existing?.createdAt || now, updatedAt: now
       }
-      newSources = [...aiSources.sources, newSource]
-      console.log(`[AISourceManager] OAuth login for ${providerType} created new source: ${sourceId}`)
+      sources = existing ? sources.map(item => item.id === id ? source : item) : [...sources, source]
+      this.tokenRefreshes.delete(id)
+      this.catalogRefreshes.delete(id)
+      this.dropRequestCredentials([id])
+      ids.push(id)
     }
-
-    const newConfig: AISourcesConfig = {
-      version: 2,
-      currentId: sourceId,
-      sources: newSources
-    }
-
-    saveConfig({
-      aiSources: newConfig,
-      isFirstLaunch: false
-    } as any)
+    saveConfig({ aiSources: {
+      ...aiSources, currentId: aiSources.currentId || ids[0] || null, sources
+    }, isFirstLaunch: false } as any)
+    console.log(`[AISourceManager] OAuth account credentials saved: provider=${providerType} sources=${ids.join(',')}`)
+    return ids
   }
 
   /**
@@ -889,17 +1125,21 @@ class AISourceManager {
       return { success: false, error: 'Source not found' }
     }
 
-    // Call provider logout if OAuth. The config is passed so a provider that can
-    // revoke its credential upstream does so before the local copy is dropped.
+    const decrypted = this.getSourceConfig(sourceId) || source
+    // Remove locally before awaiting revocation so late refreshes cannot revive
+    // the account or delete credentials obtained by a subsequent login.
+    this.deleteSource(sourceId)
     if (source.authType === 'oauth') {
       const provider = this.providers.get(source.provider)
       if (provider && this.isOAuthProvider(provider)) {
-        const decrypted = this.getDecryptedAiSources().sources.find(s => s.id === sourceId) || source
-        await provider.logout(this.buildLegacyOAuthConfig(decrypted))
+        try {
+          await provider.logout(this.buildLegacyOAuthConfig(decrypted))
+        } catch (error) {
+          console.warn(`[AISourceManager] Account removed; upstream logout failed: source=${sourceId}`, error)
+        }
       }
     }
 
-    this.deleteSource(sourceId)
     console.log(`[AISourceManager] Logout complete for source: ${sourceId}`)
 
     return { success: true }
@@ -910,42 +1150,109 @@ class AISourceManager {
   /**
    * Check and refresh token if needed (for OAuth sources)
    */
-  async ensureValidToken(sourceId: string): Promise<ProviderResult<void>> {
-    const aiSources = this.getDecryptedAiSources()
-    const source = aiSources.sources.find(s => s.id === sourceId)
-
-    if (!source || source.authType !== 'oauth') {
-      return { success: true }
+  async ensureValidToken(sourceId: string, modelId?: string): Promise<ProviderResult<void>> {
+    const source = this.getSourceConfig(sourceId)
+    if (!source) {
+      console.warn(`[AISourceManager] Token preparation refused: source=${sourceId} source not found`)
+      return { success: false, error: 'Source not found' }
     }
-
+    if (source.authType !== 'oauth') return { success: true }
+    if (!source.accessToken) {
+      console.warn(`[AISourceManager] Token preparation refused: source=${sourceId} account is not signed in`)
+      return { success: false, error: 'Account is not signed in. Please sign in again.' }
+    }
     const provider = this.providers.get(source.provider) as OAuthProviderWithTokenManagement | undefined
-    if (!provider?.checkTokenWithConfig || !provider?.refreshTokenWithConfig) {
-      return { success: true }
+    if (!provider) {
+      console.warn(`[AISourceManager] Token preparation refused: source=${sourceId} provider=${source.provider} provider unavailable`)
+      return { success: false, error: 'Authentication provider is unavailable' }
     }
-
-    // Build legacy config format for provider
-    const legacyConfig = this.buildLegacyOAuthConfig(source)
+    if (!provider.checkTokenWithConfig || !provider.refreshTokenWithConfig) return { success: true }
+    const model = modelId || source.model
+    const pending = this.tokenRefreshes.get(sourceId)
+    if (pending && sameCredentials(source, pending.source)) {
+      if (pending.model === model) return pending.promise
+      await pending.promise
+      return this.ensureValidToken(sourceId, modelId)
+    }
+    const legacyConfig = this.buildLegacyOAuthConfig(source, modelId)
     const tokenStatus = provider.checkTokenWithConfig(legacyConfig)
-
-    console.log(`[AISourceManager] Token status for ${source.name}:`, tokenStatus)
-
-    if (!tokenStatus.valid || tokenStatus.needsRefresh) {
-      const refreshResult = await provider.refreshTokenWithConfig(legacyConfig)
-
-      if (refreshResult.success && refreshResult.data) {
-        this.updateSource(sourceId, {
-          accessToken: refreshResult.data.accessToken,
-          refreshToken: refreshResult.data.refreshToken,
-          tokenExpires: refreshResult.data.expiresAt
+    if (tokenStatus.valid && !tokenStatus.needsRefresh) return { success: true }
+    const refresh = { source, model, promise: Promise.resolve<ProviderResult<void>>({ success: true }) }
+    this.tokenRefreshes.set(sourceId, refresh)
+    refresh.promise = (async (): Promise<ProviderResult<void>> => {
+      try {
+        const result = await provider.refreshTokenWithConfig!(legacyConfig)
+        const current = this.getSourceConfig(sourceId)
+        if (this.tokenRefreshes.get(sourceId) !== refresh || !sameCredentials(current, source)) {
+          console.warn(`[AISourceManager] Discarded obsolete token refresh: source=${sourceId}`)
+          return current?.accessToken
+            ? { success: true } : { success: false, error: 'Account was removed during token refresh' }
+        }
+        if (!result.success || !result.data?.accessToken) {
+          console.warn(`[AISourceManager] Token refresh failed: source=${sourceId} reason=${result.error || 'No access token'}`)
+          return { success: false, error: result.error || 'Token refresh returned no access token' }
+        }
+        this.writeSource(sourceId, {
+          accessToken: result.data.accessToken,
+          refreshToken: result.data.refreshToken || source.refreshToken,
+          tokenExpires: result.data.expiresAt,
+          ...(result.data.apiUrl ? { apiUrl: result.data.apiUrl } : {}),
+          ...(result.data.profileArn ? { profileArn: result.data.profileArn } : {})
         })
-        console.log('[AISourceManager] Token refreshed and saved')
+        return { success: true }
+      } catch (error) {
+        console.error(`[AISourceManager] Token refresh failed: source=${sourceId}`, error)
+        return { success: false, error: error instanceof Error ? error.message : 'Token refresh failed' }
+      } finally {
+        if (this.tokenRefreshes.get(sourceId) === refresh) this.tokenRefreshes.delete(sourceId)
+      }
+    })()
+    return refresh.promise
+  }
+
+  /**
+   * The current credential for a request the router proxies on an account's
+   * behalf. Answers from memory for up to a minute; any write to the account
+   * drops its answers at once. Null keeps the session's encoded credential.
+   * Throws when the account can no longer be used, so the request fails with
+   * a clear reason instead of borrowing a credential the user removed.
+   */
+  async resolveRequestCredentials(sourceId: string, model?: string): Promise<RequestCredentials | null> {
+    const key = `${sourceId}\u0000${model ?? ''}`
+    const cached = this.requestCredentials.get(key)
+    if (cached && Date.now() - cached.checkedAt < REQUEST_CREDENTIAL_RECHECK_MS) return cached.credentials
+
+    const source = this.getSourceConfig(sourceId)
+    if (!source) throw new Error(ACCOUNT_REMOVED_ERROR)
+    let credentials: RequestCredentials | null = null
+    if (source.authType === 'oauth') {
+      if (!source.accessToken) throw new Error('This account is signed out. Sign in again to continue.')
+      const token = await this.ensureValidToken(sourceId, model)
+      if (token.success) {
+        const backend = this.getBackendConfigForSource(sourceId, model)
+        credentials = backend
+          ? { key: backend.key, headers: backend.headers, profileArn: backend.profileArn }
+          : null
+      } else if (!this.getSourceConfig(sourceId)) {
+        throw new Error(ACCOUNT_REMOVED_ERROR)
       } else {
-        console.error(`[AISourceManager] Token refresh failed:`, refreshResult.error)
-        return { success: false, error: refreshResult.error }
+        // The renewal may have failed transiently; the encoded token can still be valid. Retried after the recheck interval.
+        console.warn(`[AISourceManager] Request credential not renewed: source=${sourceId} ${token.error ?? 'unknown error'}; keeping the session credential`)
       }
     }
+    this.requestCredentials.set(key, { sourceId, credentials, checkedAt: Date.now() })
+    return credentials
+  }
 
-    return { success: true }
+  /** Undefined drops every cached answer. */
+  private dropRequestCredentials(sourceIds?: string[]): void {
+    if (!sourceIds) {
+      this.requestCredentials.clear()
+      return
+    }
+    for (const [key, entry] of this.requestCredentials) {
+      if (sourceIds.includes(entry.sourceId)) this.requestCredentials.delete(key)
+    }
   }
 
   // ========== Configuration Refresh ==========
@@ -1024,7 +1331,22 @@ class AISourceManager {
    */
   async refreshSourceConfig(sourceId: string): Promise<ProviderResult<{ degraded: boolean }>> {
     await this.ensureInitialized()
+    const source = this.getSourceConfig(sourceId)
+    if (!source) {
+      console.warn(`[AISourceManager] Catalog refresh refused: source=${sourceId} no longer exists`)
+      return { success: false, error: 'Source not found' }
+    }
+    const pending = this.catalogRefreshes.get(sourceId)
+    if (pending && sameCredentials(source, pending.source)) return pending.promise
+    const refresh: ManagedCatalogRefresh = { source, promise: Promise.resolve({ success: true }) }
+    this.catalogRefreshes.set(sourceId, refresh)
+    refresh.promise = this.refreshSourceCatalog(sourceId, refresh).finally(() => {
+      if (this.catalogRefreshes.get(sourceId) === refresh) this.catalogRefreshes.delete(sourceId)
+    })
+    return refresh.promise
+  }
 
+  private async refreshSourceCatalog(sourceId: string, refresh: ManagedCatalogRefresh): Promise<ProviderResult<{ degraded: boolean }>> {
     // Capability check first — decide "unsupported" without an unrelated token
     // refresh. Uses the plain (non-decrypted) config since only provider type
     // is needed here.
@@ -1056,9 +1378,15 @@ class AISourceManager {
     // Decrypted config is needed so providers can make authenticated API calls.
     const refreshed = this.getDecryptedAiSources().sources.find(s => s.id === sourceId)
     if (!refreshed) {
+      console.warn(`[AISourceManager] Catalog refresh discarded after authentication: source=${sourceId} was removed`)
       return { success: false, error: 'Source not found' }
     }
 
+    if (this.catalogRefreshes.get(sourceId) !== refresh) {
+      console.warn(`[AISourceManager] Catalog refresh discarded before fetch: source=${sourceId} account changed`)
+      return { success: false, error: 'Account changed during model refresh. Please retry.' }
+    }
+    refresh.source = refreshed
     // Build legacy config format that all providers consume
     const legacyConfig = this.buildLegacyOAuthConfig(refreshed)
 
@@ -1100,6 +1428,11 @@ class AISourceManager {
 
     // Read fresh config from disk to avoid overwriting concurrent token rotations
     const freshAiSources = this.getAiSourcesConfig()
+    const current = this.getSourceConfig(sourceId)
+    if (this.catalogRefreshes.get(sourceId) !== refresh || !sameCredentials(current, refreshed)) {
+      console.warn(`[AISourceManager] Discarded obsolete model catalog: source=${sourceId}`)
+      return { success: false, error: 'Account changed during model refresh. Please retry.' }
+    }
     const now = new Date().toISOString()
 
     const nextOverrides = providerData.modelOverrides as AISource['modelOverrides']
@@ -1113,9 +1446,10 @@ class AISourceManager {
             ? { ...s.availableModels.find(item => item.id === model.id), ...model }
             : model)
           : s.availableModels,
-        model: providerData.degraded ? s.model : (providerData.model || s.model),
+        model: providerData.degraded || s.model !== refreshed.model ? s.model : (providerData.model || s.model),
         modelCatalogCache: providerData.modelCatalogCache ?? s.modelCatalogCache,
-        modelOverrides: nextOverrides ?? s.modelOverrides,
+        modelOverrides: JSON.stringify(s.modelOverrides) === JSON.stringify(refreshed.modelOverrides)
+          ? nextOverrides ?? s.modelOverrides : s.modelOverrides,
         updatedAt: now
       }
     })
@@ -1234,6 +1568,10 @@ class AISourceManager {
     return {
       current: source.provider,
       [source.provider]: {
+        sourceId: source.id,
+        apiUrl: source.apiUrl,
+        accountId: source.accountId,
+        profileArn: source.profileArn,
         loggedIn: true,
         user: source.user,
         model: effectiveModel,

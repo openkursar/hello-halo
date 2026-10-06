@@ -26,6 +26,7 @@ import { findMissingRequiredConfig } from '../../../shared/apps/config-validatio
 import { resolveSpecI18n } from '../../utils/spec-i18n'
 import { api } from '../../api'
 import { useSpaceStore } from '../../stores/space.store'
+import { useAppStore } from '../../stores/app.store'
 import { AppModelSelector } from './AppModelSelector'
 import { AppNotifyChannelsSection } from './AppNotifyChannelsSection'
 import { AppCapabilitiesSection } from './AppCapabilitiesSection'
@@ -597,8 +598,13 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart, onRestartAgen
   // ── Group quick-jump: a status board as much as a menu ──
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null)
 
+  const aiSources = useAppStore(state => state.config?.aiSources)
+  const hasMissingModelSource = !!app.userOverrides.modelSourceId && !!aiSources &&
+    !aiSources.sources.some(source => source.id === app.userOverrides.modelSourceId)
   const consumedCapabilities = ['ai-browser', 'ai-terminal', 'email', 'im-push'].filter(p => resolvePermission(app, p)).length
-  const modelSummary = app.userOverrides.modelId ?? specRecommendedModel ?? t('Default')
+  const modelSummary = hasMissingModelSource
+    ? t('Account removed. Choose another account.')
+    : app.userOverrides.modelId ?? specRecommendedModel ?? t('Default')
   const missingRequiredConfig = findMissingRequiredConfig(configSchema, app.userConfig)
   const scheduleBadge = currentScheduleValue
     ? (currentScheduleValue.type === 'every' ? currentScheduleValue.every : currentScheduleValue.cron)

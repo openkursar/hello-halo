@@ -13,24 +13,24 @@
  * - Dynamic OAuth provider support (configured via product.json)
  */
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import {
-  Plus, Check, ChevronDown, ChevronRight, Edit2, Trash2, LogOut, Loader2, Key, Globe,
-  Copy, Brain, ExternalLink
+  Plus, Check, ChevronRight, Edit2, Trash2, LogOut, Loader2, Key, Globe, RefreshCw
 } from 'lucide-react'
 import type {
   AISource,
   AISourcesConfig,
-  HaloConfig,
-  ProviderId
+  HaloConfig
 } from '../../types'
-import { getBuiltinProvider, isOAuthProvider as isOAuthProviderFn } from '../../types'
+import { getBuiltinProvider } from '../../types'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { api } from '../../api'
 import { ProviderSelector } from './ProviderSelector'
 import { DelegatedLoginDialog } from './DelegatedLoginDialog'
 import { getBrandIcon } from '../icons/BrandIcons'
 import { ProviderIconTile } from '../icons/ProviderIconTile'
+import { OAuthRedirectLogin } from '../ai-config/OAuthRedirectLogin'
+import { useOAuthLogin } from '../../hooks/useOAuthLogin'
 import { resolveLocalizedText, type LocalizedText, type AuthProviderConfig } from '../../../shared/types'
 import { CLI_DELEGATED_PROVIDER_ID } from '../../../shared/constants/claude-models'
 
@@ -45,34 +45,6 @@ function getLocalizedText(value: LocalizedText): string {
 interface AISourcesSectionProps {
   config: HaloConfig
   setConfig: (config: HaloConfig) => void
-}
-
-// OAuth login state
-interface OAuthLoginState {
-  provider: string
-  status: string
-  userCode?: string
-  verificationUri?: string
-}
-
-// Claude OAuth login dialog state
-interface ClaudeLoginState {
-  /** The authorize URL for the user to copy / open */
-  loginUrl: string
-  /** PKCE state (verifier) */
-  state: string
-  /** Redirect URI the BrowserWindow should intercept (provider-owned) */
-  redirectUri: string
-  /** User-pasted authorization code */
-  manualCode: string
-  /** Whether the auto login (BrowserWindow) is in progress */
-  autoLoginInProgress: boolean
-  /** Error message (if any) */
-  error: string | null
-  /** Whether the code was copied to clipboard */
-  copied: boolean
-  /** Whether manual code submission is in progress */
-  submitting: boolean
 }
 
 export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
@@ -96,12 +68,16 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
   const [deletingSourceId, setDeletingSourceId] = useState<string | null>(null)
   const [expandedSourceId, setExpandedSourceId] = useState<string | null>(null)
 
-  // OAuth state
-  const [loginState, setLoginState] = useState<OAuthLoginState | null>(null)
   const [loggingOutSourceId, setLoggingOutSourceId] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [renameSource, setRenameSource] = useState<{ sourceId: string; name: string } | null>(null)
+  const [renaming, setRenaming] = useState(false)
+  const mountedRef = useRef(false)
 
-  // Claude OAuth dialog state
-  const [claudeLogin, setClaudeLogin] = useState<ClaudeLoginState | null>(null)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
 
   // Delegated (CLI-managed) login dialog
   const [delegatedLoginOpen, setDelegatedLoginOpen] = useState(false)
@@ -114,45 +90,24 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
     const fetchProviders = async () => {
       try {
         const result = await api.authGetProviders()
-        if (result.success && result.data) {
-          // Filter to get only OAuth providers (exclude 'custom' which is API Key based)
-          // Note: 'builtin' means the provider code is bundled in the app, not that it's not OAuth
-          // Both external and builtin OAuth providers should be shown here
-          const providers = (result.data as AuthProviderConfig[])
-            .filter(p => p.type !== 'custom')
-          setOAuthProviders(providers)
-        }
-      } catch (error) {
-        console.error('[AISourcesSection] Failed to fetch auth providers:', error)
+        if (!mountedRef.current) return
+        if (!result.success || !result.data) throw new Error(result.error || t('Failed to load login providers'))
+        const providers = (result.data as AuthProviderConfig[]).filter(p => p.type !== 'custom')
+        setOAuthProviders(providers)
+      } catch (err) {
+        if (mountedRef.current) setError(err instanceof Error ? err.message : t('Failed to load login providers'))
       }
     }
     fetchProviders()
   }, [])
 
-  // Listen for OAuth login progress
-  useEffect(() => {
-    const unsubscribe = api.onAuthLoginProgress((data: { provider: string; status: string }) => {
-      setLoginState(data)
-      if (data.status === 'completed' || data.status === 'failed') {
-        setTimeout(() => {
-          reloadConfig()
-          setLoginState(null)
-        }, 500)
-      }
-    })
-    return () => unsubscribe()
-  }, [])
-
-  // Reload config from backend
   const reloadConfig = async () => {
     const result = await api.getConfig()
-    if (result.success && result.data) {
-      setConfig(result.data as HaloConfig)
-    }
+    if (!result.success || !result.data) throw new Error(result.error || t('Failed to load config'))
+    if (mountedRef.current) setConfig(result.data as HaloConfig)
   }
 
-  // Get current source
-  const currentSource = aiSources.sources.find(s => s.id === aiSources.currentId)
+  const oauth = useOAuthLogin({ onSignedIn: reloadConfig, onError: setError })
 
   // Handle switch source (atomic: backend reads latest tokens from disk)
   const handleSwitchSource = async (sourceId: string) => {
@@ -201,153 +156,34 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
     setDeletingSourceId(null)
   }
 
-  // Handle OAuth login
-  const handleOAuthLogin = async (providerType: ProviderId) => {
-    try {
-      setLoginState({ provider: providerType, status: t('Starting login...') })
-
-      const result = await api.authStartLogin(providerType)
-      if (!result.success) {
-        console.error('[AISourcesSection] OAuth login start failed:', result.error)
-        setLoginState(null)
-        return
-      }
-
-      const { loginUrl, state, userCode, verificationUri, redirectUri } = result.data as {
-        loginUrl: string
-        state: string
-        userCode?: string
-        verificationUri?: string
-        redirectUri?: string
-      }
-
-      // ── Claude OAuth: show dual-mode login dialog ──────────────────────
-      if (providerType === 'claude' && loginUrl && !userCode) {
-        setLoginState(null) // Clear generic spinner
-        setClaudeLogin({
-          loginUrl,
-          state,
-          redirectUri: redirectUri ?? '',
-          manualCode: '',
-          autoLoginInProgress: false,
-          error: null,
-          copied: false,
-          submitting: false
-        })
-        return
-      }
-
-      // ── Device code flow (GitHub Copilot, etc.) ────────────────────────
-      setLoginState({
-        provider: providerType,
-        status: userCode ? t('Enter the code in your browser') : t('Waiting for login...'),
-        userCode,
-        verificationUri
-      })
-
-      const completeResult = await api.authCompleteLogin(providerType, state)
-      if (!completeResult.success) {
-        console.error('[AISourcesSection] OAuth login complete failed:', completeResult.error)
-        setLoginState(null)
-        return
-      }
-
-      // Success - reload config
-      await reloadConfig()
-      setLoginState(null)
-    } catch (err) {
-      console.error('[AISourcesSection] OAuth login error:', err)
-      setLoginState(null)
-    }
-  }
-
-  // ── Claude: "Direct Login" button handler ────────────────────────────
-  const handleClaudeDirectLogin = async () => {
-    if (!claudeLogin) return
-    if (!claudeLogin.redirectUri) {
-      setClaudeLogin(prev => prev ? { ...prev, error: t('Login flow misconfigured (missing redirect URI). Please retry.') } : null)
-      return
-    }
-    setClaudeLogin(prev => prev ? { ...prev, autoLoginInProgress: true, error: null } : null)
-
-    try {
-      const windowResult = await api.authOpenLoginWindow('claude', claudeLogin.loginUrl, claudeLogin.redirectUri)
-
-      if (!windowResult.success) {
-        const errMsg = windowResult.error || t('Login failed')
-        if (errMsg === 'Login window closed') {
-          // User cancelled — just reset the auto login state
-          setClaudeLogin(prev => prev ? { ...prev, autoLoginInProgress: false } : null)
-          return
-        }
-        setClaudeLogin(prev => prev ? { ...prev, autoLoginInProgress: false, error: errMsg } : null)
-        return
-      }
-
-      // Success
-      await reloadConfig()
-      setClaudeLogin(null)
-    } catch (err) {
-      setClaudeLogin(prev => prev ? {
-        ...prev,
-        autoLoginInProgress: false,
-        error: err instanceof Error ? err.message : t('Login failed')
-      } : null)
-    }
-  }
-
-  // ── Claude: "Submit Code" button handler ─────────────────────────────
-  const handleClaudeManualLogin = async () => {
-    if (!claudeLogin || !claudeLogin.manualCode.trim()) return
-    setClaudeLogin(prev => prev ? { ...prev, submitting: true, error: null } : null)
-
-    try {
-      const completeResult = await api.authCompleteLogin('claude', claudeLogin.manualCode.trim())
-      if (!completeResult.success) {
-        setClaudeLogin(prev => prev ? {
-          ...prev,
-          submitting: false,
-          error: completeResult.error || t('Login failed')
-        } : null)
-        return
-      }
-
-      // Success
-      await reloadConfig()
-      setClaudeLogin(null)
-    } catch (err) {
-      setClaudeLogin(prev => prev ? {
-        ...prev,
-        submitting: false,
-        error: err instanceof Error ? err.message : t('Login failed')
-      } : null)
-    }
-  }
-
-  // ── Claude: Copy URL to clipboard ────────────────────────────────────
-  const handleClaudeCopyUrl = async () => {
-    if (!claudeLogin) return
-    try {
-      await navigator.clipboard.writeText(claudeLogin.loginUrl)
-      setClaudeLogin(prev => prev ? { ...prev, copied: true } : null)
-      setTimeout(() => {
-        setClaudeLogin(prev => prev ? { ...prev, copied: false } : null)
-      }, 2000)
-    } catch {
-      // Fallback: select text in the URL display
-    }
-  }
-
   // Handle OAuth logout
   const handleOAuthLogout = async (sourceId: string) => {
     try {
       setLoggingOutSourceId(sourceId)
-      await api.authLogout(sourceId)
+      setError(null)
+      const result = await api.authLogout(sourceId)
+      if (!result.success) throw new Error(result.error || t('Unable to sign out'))
       await reloadConfig()
     } catch (err) {
-      console.error('[AISourcesSection] OAuth logout error:', err)
+      if (mountedRef.current) setError(err instanceof Error ? err.message : t('Unable to sign out'))
     } finally {
-      setLoggingOutSourceId(null)
+      if (mountedRef.current) setLoggingOutSourceId(null)
+    }
+  }
+
+  const handleRenameSource = async () => {
+    if (!renameSource?.name.trim() || renaming) return
+    setRenaming(true)
+    setError(null)
+    try {
+      const result = await api.aiSourcesUpdateSource(renameSource.sourceId, { name: renameSource.name.trim() })
+      if (!result.success) throw new Error(result.error || t('Failed to rename account'))
+      await reloadConfig()
+      if (mountedRef.current) setRenameSource(null)
+    } catch (err) {
+      if (mountedRef.current) setError(err instanceof Error ? err.message : t('Failed to rename account'))
+    } finally {
+      if (mountedRef.current) setRenaming(false)
     }
   }
 
@@ -391,7 +227,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
               e.stopPropagation()
               if (!isCurrent) handleSwitchSource(source.id)
             }}
-            className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors ${
+            className={`w-5 h-5 shrink-0 rounded-full border-2 flex items-center justify-center transition-colors ${
               isCurrent
                 ? 'border-primary bg-primary'
                 : 'border-border-secondary hover:border-primary'
@@ -401,7 +237,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
           </button>
 
           {/* Icon */}
-          <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+          <div className={`w-8 h-8 shrink-0 rounded-lg flex items-center justify-center ${
             isCurrent ? 'bg-primary/20' : 'bg-surface-tertiary'
           }`}>
             {(() => {
@@ -421,19 +257,17 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
             <div className="text-xs text-text-tertiary truncate">
               {source.model || t('No model selected')}
             </div>
+            {isCredentialless && source.user?.name && (
+              <div className="text-xs text-text-secondary truncate" title={source.user.name}>
+                {source.user.name}
+              </div>
+            )}
           </div>
-
-          {/* Signed-in account */}
-          {isCredentialless && source.user?.name && (
-            <span className="text-xs text-text-secondary px-2 py-1 bg-surface-tertiary rounded">
-              {source.user.name}
-            </span>
-          )}
 
           {/* Expand arrow */}
           <ChevronRight
             size={18}
-            className={`text-text-tertiary transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+            className={`shrink-0 text-text-tertiary transition-transform ${isExpanded ? 'rotate-90' : ''}`}
           />
         </div>
 
@@ -451,7 +285,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
               <div className="flex justify-between text-sm">
                 <span className="text-text-secondary">{t('Auth Type')}</span>
                 <span className="text-text-primary">
-                  {isDelegated ? t('Claude Code CLI') : isOAuth ? 'OAuth' : 'API Key'}
+                  {isDelegated ? t('Claude Code CLI') : isOAuth ? t('OAuth') : t('API Key')}
                 </span>
               </div>
 
@@ -465,8 +299,52 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
                 </div>
               )}
 
+              {renameSource?.sourceId === source.id && (
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <input
+                    aria-label={t('Account name')}
+                    value={renameSource.name}
+                    onChange={event => setRenameSource({ sourceId: source.id, name: event.target.value })}
+                    disabled={renaming}
+                    className="w-full min-w-0 flex-1 px-3 py-2 bg-background border border-border rounded-md text-sm"
+                    onKeyDown={event => {
+                      if (event.key === 'Enter') void handleRenameSource()
+                    }}
+                  />
+                  <div className="flex gap-2">
+                    <button onClick={handleRenameSource} disabled={renaming || !renameSource.name.trim()} className="px-3 py-2 bg-primary text-primary-foreground rounded-md text-sm disabled:opacity-50">
+                      {t('Save')}
+                    </button>
+                    <button onClick={() => setRenameSource(null)} disabled={renaming} className="px-3 py-2 bg-surface-tertiary rounded-md text-sm">
+                      {t('Cancel')}
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Actions */}
-              <div className="flex gap-2 pt-2">
+              <div className="flex flex-wrap gap-2 pt-2">
+                {isOAuth && (
+                  <>
+                    <button
+                      onClick={() => oauth.start(source.provider, source.id)}
+                      disabled={!!oauth.login}
+                      className="flex items-center gap-1 px-3 py-1.5 text-sm text-text-secondary
+                               bg-surface-tertiary hover:bg-surface-primary rounded-md transition-colors disabled:opacity-50"
+                    >
+                      <RefreshCw size={14} />
+                      {t('Reauthenticate')}
+                    </button>
+                    <button
+                      onClick={() => setRenameSource({ sourceId: source.id, name: source.name })}
+                      className="flex items-center gap-1 px-3 py-1.5 text-sm text-text-secondary
+                               bg-surface-tertiary hover:bg-surface-primary rounded-md transition-colors"
+                    >
+                      <Edit2 size={14} />
+                      {t('Rename')}
+                    </button>
+                  </>
+                )}
                 {isCredentialless ? (
                   // No key to edit. For delegated sources this only removes the
                   // source — the CLI keeps its own credential either way.
@@ -564,167 +442,42 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
     )
   }
 
-  // Show Claude OAuth dual-mode login dialog
-  if (claudeLogin) {
+  if (oauth.login?.redirect) {
+    const provider = oauthProviders.find(entry => entry.type === oauth.login?.provider)
     return (
-      <div className="p-4 bg-surface-secondary rounded-lg border border-border-primary space-y-5">
-        {/* Header */}
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg flex items-center justify-center"
-               style={{ backgroundColor: 'rgba(217, 119, 87, 0.15)' }}>
-            <Brain size={20} style={{ color: '#d97757' }} />
-          </div>
-          <div>
-            <h3 className="font-medium text-text-primary">{t('Claude Login')}</h3>
-            <p className="text-xs text-text-tertiary">{t('Choose a login method')}</p>
-          </div>
-        </div>
-
-        {/* Error display */}
-        {claudeLogin.error && (
-          <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-md">
-            <p className="text-sm text-red-500">{claudeLogin.error}</p>
-          </div>
-        )}
-
-        {/* Option 1: Direct Login */}
-        <div className="space-y-2">
-          <h4 className="text-sm font-medium text-text-secondary">
-            {t('Option 1: Direct Login')}
-          </h4>
-          <p className="text-xs text-text-tertiary">
-            {t('Requires access to claude.ai (with proxy or direct connection)')}
-          </p>
-          <button
-            onClick={handleClaudeDirectLogin}
-            disabled={claudeLogin.autoLoginInProgress || claudeLogin.submitting}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2.5
-                     bg-[#d97757] hover:bg-[#c5684a] disabled:opacity-50
-                     text-white rounded-lg transition-colors text-sm font-medium"
-          >
-            {claudeLogin.autoLoginInProgress ? (
-              <>
-                <Loader2 size={16} className="animate-spin" />
-                {t('Logging in...')}
-              </>
-            ) : (
-              <>
-                <ExternalLink size={16} />
-                {t('Open Login Window')}
-              </>
-            )}
-          </button>
-        </div>
-
-        {/* Divider */}
-        <div className="flex items-center gap-3">
-          <div className="flex-1 h-px bg-border-secondary" />
-          <span className="text-xs text-text-tertiary">{t('or')}</span>
-          <div className="flex-1 h-px bg-border-secondary" />
-        </div>
-
-        {/* Option 2: Manual Code Paste (partner-assisted) */}
-        <div className="space-y-3">
-          <h4 className="text-sm font-medium text-text-secondary">
-            {t('Option 2: Partner-Assisted Login')}
-          </h4>
-          <p className="text-xs text-text-tertiary">
-            {t('Copy the link below and send it to your service provider')}
-          </p>
-
-          {/* URL display with copy button */}
-          <div className="flex items-center gap-2">
-            <div className="flex-1 p-2.5 bg-surface-tertiary rounded-md border border-border-secondary
-                          font-mono text-xs text-text-secondary break-all select-all overflow-hidden max-h-16 overflow-y-auto">
-              {claudeLogin.loginUrl}
-            </div>
-            <button
-              onClick={handleClaudeCopyUrl}
-              className="shrink-0 flex items-center gap-1 px-3 py-2.5 text-sm
-                       bg-surface-tertiary hover:bg-surface-primary
-                       border border-border-secondary rounded-md transition-colors"
-              title={t('Copy link')}
-            >
-              <Copy size={14} className={claudeLogin.copied ? 'text-green-500' : 'text-text-secondary'} />
-              <span className={`text-xs ${claudeLogin.copied ? 'text-green-500' : 'text-text-secondary'}`}>
-                {claudeLogin.copied ? t('Copied') : t('Copy')}
-              </span>
-            </button>
-          </div>
-
-          {/* Manual code input */}
-          <div className="space-y-2">
-            <p className="text-xs text-text-tertiary">
-              {t('Paste the authorization code from your service provider')}
-            </p>
-            <input
-              type="text"
-              value={claudeLogin.manualCode}
-              onChange={(e) => setClaudeLogin(prev => prev ? { ...prev, manualCode: e.target.value } : null)}
-              placeholder={t('Paste authorization code here')}
-              className="w-full px-3 py-2.5 bg-surface-tertiary border border-border-secondary rounded-md
-                       text-sm text-text-primary placeholder:text-text-tertiary
-                       focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/30
-                       font-mono"
-              disabled={claudeLogin.submitting}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && claudeLogin.manualCode.trim()) {
-                  handleClaudeManualLogin()
-                }
-              }}
-            />
-          </div>
-
-          {/* Submit button */}
-          <button
-            onClick={handleClaudeManualLogin}
-            disabled={!claudeLogin.manualCode.trim() || claudeLogin.submitting || claudeLogin.autoLoginInProgress}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2.5
-                     bg-primary hover:bg-primary/90 disabled:opacity-50
-                     text-white rounded-lg transition-colors text-sm font-medium"
-          >
-            {claudeLogin.submitting ? (
-              <>
-                <Loader2 size={16} className="animate-spin" />
-                {t('Verifying...')}
-              </>
-            ) : (
-              <>
-                <Check size={16} />
-                {t('Complete Login')}
-              </>
-            )}
-          </button>
-        </div>
-
-        {/* Cancel button */}
-        <button
-          onClick={() => setClaudeLogin(null)}
-          disabled={claudeLogin.autoLoginInProgress || claudeLogin.submitting}
-          className="w-full px-4 py-2 text-sm text-text-secondary
-                   hover:bg-surface-tertiary rounded-md transition-colors"
-        >
-          {t('Cancel')}
-        </button>
+      <div className="min-w-0 p-4 bg-surface-secondary rounded-lg border border-border-primary">
+        <OAuthRedirectLogin
+          title={provider ? getLocalizedText(provider.displayName) : oauth.login.provider}
+          redirect={oauth.login.redirect}
+          onOpenWindow={oauth.openLoginWindow}
+          onSubmitCode={oauth.submitCode}
+          onCodeChange={oauth.setManualCode}
+          onCopyLink={oauth.copyLoginUrl}
+          onCancel={oauth.cancel}
+        />
       </div>
     )
   }
 
   // Show OAuth login state
-  if (loginState) {
+  if (oauth.login) {
+    const { phase, userCode, verificationUri } = oauth.login
+    const status = phase === 'starting'
+      ? t('Starting login...')
+      : userCode ? t('Enter the code in your browser') : t('Waiting for login...')
     return (
       <div className="p-4 bg-surface-secondary rounded-lg border border-border-primary space-y-4">
         <div className="flex items-center gap-3">
           <Loader2 size={20} className="animate-spin text-primary" />
-          <span className="text-text-primary">{loginState.status}</span>
+          <span className="text-text-primary">{status}</span>
         </div>
-        {loginState.userCode && (
+        {userCode && (
           <div className="p-3 bg-surface-tertiary rounded-md text-center">
             <p className="text-sm text-text-secondary mb-2">{t('Your code')}:</p>
-            <p className="text-2xl font-mono font-bold text-primary">{loginState.userCode}</p>
-            {loginState.verificationUri && (
+            <p className="text-2xl font-mono font-bold text-primary">{userCode}</p>
+            {verificationUri && (
               <a
-                href={loginState.verificationUri}
+                href={verificationUri}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-sm text-primary hover:underline mt-2 block"
@@ -734,12 +487,20 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
             )}
           </div>
         )}
+        <button onClick={oauth.cancel} className="w-full px-4 py-2 text-sm text-text-secondary hover:bg-surface-tertiary rounded-md">
+          {t('Cancel')}
+        </button>
       </div>
     )
   }
 
   return (
     <div className="space-y-4">
+      {error && (
+        <div role="alert" className="p-3 bg-destructive/10 border border-destructive/20 rounded-md">
+          <p className="text-sm text-destructive break-words">{error}</p>
+        </div>
+      )}
       {/* Sources List */}
       {aiSources.sources.length > 0 ? (
         <div className="space-y-2">
@@ -778,11 +539,13 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
           )
         })
 
-        // OAuth entries: anything without a preset block. The legacy
-        // `s.provider === provider.type` filter still works for OAuth sources.
         const availableOAuthProviders = oauthProviders.filter(provider => {
           if (provider.preset) return false
-          return !aiSources.sources.some(s => s.provider === provider.type)
+          // The CLI owns one external credential slot; managed OAuth accounts do not.
+          if (provider.type === CLI_DELEGATED_PROVIDER_ID) {
+            return !api.isRemoteMode() && !aiSources.sources.some(s => s.provider === provider.type)
+          }
+          return true
         })
 
         if (availablePresetProviders.length === 0 && availableOAuthProviders.length === 0) {
@@ -801,12 +564,14 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
                        border border-border-primary rounded-lg transition-colors"
             >
               <ProviderIconTile provider={provider} size="md" />
-              <div className="flex-1 text-left">
-                <div className="font-medium text-text-primary">
+              <div className="flex-1 min-w-0 text-left">
+                <div className="font-medium text-text-primary truncate">
                   {getLocalizedText(provider.displayName)}
                 </div>
-                <div className="text-xs text-text-secondary">
-                  {getLocalizedText(provider.description)}
+                <div className="text-xs text-text-secondary break-words">
+                  {!provider.preset && provider.type !== CLI_DELEGATED_PROVIDER_ID && aiSources.sources.some(s => s.provider === provider.type)
+                    ? t('Add another account')
+                    : getLocalizedText(provider.description)}
                 </div>
               </div>
             </button>
@@ -840,7 +605,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
                         // Delegated sign-in has no OAuth flow to start: the CLI
                         // owns the credential, so the dialog only runs its login.
                         ? () => setDelegatedLoginOpen(true)
-                        : () => handleOAuthLogin(provider.type as ProviderId)
+                        : () => oauth.start(provider.type)
                     )
                   )}
                 </div>

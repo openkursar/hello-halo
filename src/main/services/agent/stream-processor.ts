@@ -211,6 +211,8 @@ export interface StreamCallbacks {
    *  Consumer uses this to create the assistant placeholder message.
    *  Fires once per stream() call (first system:init only). */
   onTurnInit?(): void
+  /** Supplies a lazy authoritative snapshot for synchronous retirement or thrown streams. */
+  onSnapshotReady?(readSnapshot: () => StreamResult): void
 }
 
 /**
@@ -272,8 +274,10 @@ export interface ProcessStreamParams {
    *  When provided, token-usage display uses it instead of guessing from the
    *  model name — keeps the UI window consistent with compaction behavior. */
   contextWindow?: number
-  /** Abort controller for cancellation */
+  /** Abort controller for per-turn interruption; the stream drains its result. */
   abortController: AbortController
+  /** Session retirement ends consumption without publishing late output. */
+  sessionSignal?: AbortSignal
   /** Timestamp of send start (for timing logs) */
   t0: number
   /** Strategy callbacks for caller-specific behavior */
@@ -311,41 +315,21 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
     displayModel,
     contextWindow,
     abortController,
+    sessionSignal,
     t0,
     callbacks
   } = params
 
-  // Only keep track of the LAST text block as the final reply
-  // Intermediate text blocks are shown in thought process, not accumulated into message bubble
-  //
-  // TODO: lastTextContent can be corrupted by dual-path state interference.
-  //   The for-await loop processes both stream_events (token-level SSE) and SDK messages
-  //   (complete assistant/result messages). Both paths write to lastTextContent and share
-  //   the hadSubstantiveToolSinceLastText flag. When parseSDKMessage (message-utils.ts)
-  //   skips tool_use blocks for assistant messages, the SDK message path's text handler
-  //   resets hadSubstantiveToolSinceLastText without the corresponding tool_use ever
-  //   setting it — corrupting the stream_event path's merge/overwrite logic.
-  //
-  //   Current impact: IM channels (app-chat.ts) now bypass this by extracting text
-  //   directly from raw SDK messages (same principle as the JSONL transcript path).
-  //   Halo UI uses frontend delta accumulation (unaffected).
-  //   The main chat path (send-message.ts) persists finalContent via updateLastMessage —
-  //   investigate whether this path is also affected under certain provider/adapter configs.
-  //
-  //   Root fix options:
-  //   - Skip SDK message path writes to shared state when stream_events are active
-  //   - Make parseSDKMessage return tool_use thoughts for assistant messages
-  //   - Separate state tracking per path
+  const assertSessionActive = () => {
+    if (!sessionSignal?.aborted) return
+    console.warn(`[Agent][${conversationId}] Discarded retired session stream: consumer stopped before output could be published`)
+    throw Object.assign(new Error('Session consumer stopped'), { name: 'AbortError' })
+  }
+
+  // Consecutive text blocks form one reply; substantive tools break continuity.
   let lastTextContent = ''
 
-  // Authoritative final content locked at the SDK result thought.
-  // Set exactly once when the result message arrives. Unlike lastTextContent, this variable
-  // is never touched after the result thought, so subsequent stream_events (e.g. a trailing
-  // content_block_stop that re-fires after the result) cannot corrupt it.
-  //
-  // Note: this only protects against POST-result corruption. If lastTextContent is already
-  // wrong at result time (due to the dual-path issue above), lockedFinalContent locks a bad value.
-  // IM channels have a separate fix (see app-chat.ts lastAssistantText).
+  // A trailing frame must not rewrite the reply finalized by the result envelope.
   let lockedFinalContent = ''
 
   let capturedSessionId: string | undefined
@@ -420,9 +404,9 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
   // Token-level streaming state
   let currentStreamingText = ''  // Accumulates text_delta tokens
   let isStreamingTextBlock = false  // True when inside a text content block
-  // What currentStreamingText held before the open text block began — restored
-  // when the engine abandons that block to resend the request.
-  let textBeforeStreamingBlock = ''
+  let streamingTextBlockIndex: number | undefined
+  // The aggregate for a streamed response still adds a thought, but not its text twice.
+  let streamedTextResponse: { messageId: string | undefined } | null = null
   const STREAM_THROTTLE_MS = 30  // Throttle updates to ~33fps
 
   // Track if SDK reported error_during_execution (for interrupted detection)
@@ -533,9 +517,10 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
     const rolledBackText = isStreamingTextBlock ||
       lastTextContent !== attemptTextBaseline || currentStreamingText !== attemptStreamingTextBaseline
     isStreamingTextBlock = false
+    streamingTextBlockIndex = undefined
+    streamedTextResponse = null
     lastTextContent = attemptTextBaseline
     currentStreamingText = attemptStreamingTextBaseline
-    textBeforeStreamingBlock = attemptStreamingTextBaseline
     hadSubstantiveToolSinceLastText = attemptToolBreakBaseline
     if (rolledBackText) {
       emitAgentEvent('agent:message', spaceId, conversationId, {
@@ -575,10 +560,44 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
   // Track whether onTurnInit has been called (once per stream() call)
   let turnInitFired = false
 
+  const readSnapshot = (): StreamResult => {
+    const openThoughts = new Map([...streamingBlocks.values()].map(block => [block.thoughtId, block]))
+    const thoughts = openThoughts.size === 0 ? sessionState.thoughts : sessionState.thoughts.map(thought => {
+      const block = openThoughts.get(thought.id)
+      if (!block) return thought
+      return {
+        ...thought,
+        ...(block.type === 'thinking' ? { content: block.content } : {}),
+        isStreaming: false,
+      }
+    })
+    const finalContent = lockedFinalContent ||
+      (isStreamingTextBlock ? currentStreamingText : lastTextContent || currentStreamingText) || ''
+    const errorThought = thoughts.find(thought => thought.type === 'error')
+    const wasAborted = abortController.signal.aborted
+    return {
+      finalContent,
+      hasMeaningfulContent: finalContent.trim().length > 0,
+      thoughts,
+      tokenUsage,
+      capturedSessionId,
+      isInterrupted: !receivedResult || hadErrorDuringExecution,
+      wasAborted,
+      hasErrorThought: !!errorThought,
+      errorThought,
+      reachedMaxTurns: hadMaxTurnsReached,
+      firstEventReceived: firstEventFired,
+      drainTimedOut: wasAborted && drainStartTime !== null && !receivedResult,
+    }
+  }
+  callbacks.onSnapshotReady?.(readSnapshot)
+  assertSessionActive()
+
   // Stream messages from V2 session
   // Single-turn stream consumption: process events until stream() completes.
   // The consumer's outer loop handles turn boundaries and re-entering stream().
   for await (const sdkMessage of v2Session.stream()) {
+    assertSessionActive()
     loopIterationCount++
 
     // Track first event for no-event detection
@@ -590,8 +609,10 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
     // Fires once per stream() call; consumer uses this to create assistant placeholder.
     if (!turnInitFired && sdkMessage.type === 'system' && (sdkMessage as any).subtype === 'init') {
       turnInitFired = true
+      capturedSessionId = (sdkMessage as { session_id?: string }).session_id
       if (callbacks.onTurnInit) {
         callbacks.onTurnInit()
+        assertSessionActive()
       }
     }
 
@@ -649,6 +670,7 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
     // Notify caller of raw SDK message (for JSONL persistence in automation)
     if (callbacks.onRawMessage) {
       callbacks.onRawMessage(sdkMessage)
+      assertSessionActive()
     }
 
     // A pending retry is over as soon as the resent request answers.
@@ -684,6 +706,7 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
       if (event.type === 'message_start') {
         beginStreamingAttempt()
         streamingMessageId = event.message?.id
+        streamedTextResponse = null
       } else if (event.type === 'message_delta') {
         const deltaUsage = extractStreamDeltaUsage(event)
         if (deltaUsage) {
@@ -699,21 +722,16 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
       // Text block started
       if (event.type === 'content_block_start' && event.content_block?.type === 'text') {
         isStreamingTextBlock = true
+        streamingTextBlockIndex = event.index ?? 0
+        streamedTextResponse = { messageId: streamingMessageId }
         const blockText = event.content_block.text || ''
-        textBeforeStreamingBlock = hadSubstantiveToolSinceLastText ? '' : currentStreamingText
-
         if (hadSubstantiveToolSinceLastText) {
-          // A substantive tool occurred — previous text was transitional, start fresh
-          currentStreamingText = blockText
-          hadSubstantiveToolSinceLastText = false
-        } else {
-          // Consecutive text block (or only transparent tools in between) — append
-          if (currentStreamingText) {
-            currentStreamingText += '\n\n' + blockText
-          } else {
-            currentStreamingText = blockText
-          }
+          lastTextContent = ''
         }
+        currentStreamingText = lastTextContent
+          ? lastTextContent + '\n\n' + blockText
+          : blockText
+        hadSubstantiveToolSinceLastText = false
 
         // 🔑 Send precise signal for new text block (fixes truncation bug)
         // This is 100% reliable - comes directly from SDK's content_block_start event
@@ -937,8 +955,9 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
         }
 
         // Handle text block stop (existing logic)
-        if (isStreamingTextBlock) {
+        if (isStreamingTextBlock && streamingTextBlockIndex === blockIndex) {
           isStreamingTextBlock = false
+          streamingTextBlockIndex = undefined
           // Send final content of this block (full accumulated text including merged blocks)
           emitAgentEvent('agent:message', spaceId, conversationId, {
             type: 'message',
@@ -1077,21 +1096,28 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
 
         // Handle specific thought types
         if (thought.type === 'text') {
-          // Merge consecutive text blocks: append if no substantive tool in between
-          if (hadSubstantiveToolSinceLastText || !lastTextContent) {
-            lastTextContent = thought.content
-            hadSubstantiveToolSinceLastText = false
-          } else {
-            // Consecutive text (or only transparent tools like TodoWrite in between) — append
-            lastTextContent += '\n\n' + thought.content
+          const messageId = (sdkMessage as { message?: { id?: string } }).message?.id
+          const alreadyStreamed = sdkMessage.type === 'assistant' && streamedTextResponse !== null &&
+            (streamedTextResponse.messageId === undefined || messageId === streamedTextResponse.messageId)
+          if (!alreadyStreamed) {
+            if (sdkMessage.type === 'assistant' && isStreamingTextBlock) {
+              console.warn(`[Agent][${conversationId}] Discarded unfinished streamed text block ${streamingTextBlockIndex}: superseded by a completed assistant response`)
+              isStreamingTextBlock = false
+              streamingTextBlockIndex = undefined
+              currentStreamingText = ''
+            }
+            if (hadSubstantiveToolSinceLastText || !lastTextContent) {
+              lastTextContent = thought.content
+              hadSubstantiveToolSinceLastText = false
+            } else {
+              lastTextContent += '\n\n' + thought.content
+            }
+            emitAgentEvent('agent:message', spaceId, conversationId, {
+              type: 'message',
+              content: lastTextContent,
+              isComplete: false
+            })
           }
-
-          // Send streaming update - frontend shows this during generation
-          emitAgentEvent('agent:message', spaceId, conversationId, {
-            type: 'message',
-            content: lastTextContent,
-            isComplete: false
-          })
         } else if (thought.type === 'tool_use') {
           // Mark substantive tool — breaks text continuity
           if (!isTransparentTool(thought.toolName || '')) {
@@ -1291,6 +1317,8 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
     }
   }
 
+  assertSessionActive()
+
   // A retry still pending here never got its answer: the turn ended on the
   // final failure or on a stop.
   if (sessionState.apiRetry) {
@@ -1312,25 +1340,8 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
   // | 6    | no         | -             | -               | yes        | -               | no               |
   // | 7    | no         | no            | no              | no         | yes             | max turns notice |
 
-  // Prefer lockedFinalContent (captured at result thought, immune to post-result stream mutations).
-  // Fall back to lastTextContent for interrupted streams that never reach a result thought,
-  // then to currentStreamingText for streams that ended mid-block without a text_block_stop.
-  const finalContent = lockedFinalContent || lastTextContent || currentStreamingText || ''
-  // Whitespace-only content is the repair placeholder injected by the
-  // openai-compat router when the provider returned an empty response. Treat
-  // it as empty for error reporting so the user still sees the empty-response
-  // notice — while the placeholder keeps the session transcript valid, so
-  // continuing the conversation works.
-  const hasMeaningfulContent = finalContent.trim().length > 0
-  const wasAborted = abortController.signal.aborted
-  const hasErrorThought = sessionState.thoughts.some((t: Thought) => t.type === 'error')
-  // Two independent interrupt reasons: SDK reported error_during_execution, or stream ended unexpectedly
-  const isInterrupted = !receivedResult || hadErrorDuringExecution
-
-  // Find the error thought for callers
-  const errorThought = hasErrorThought
-    ? sessionState.thoughts.find((t: Thought) => t.type === 'error')
-    : undefined
+  const result = readSnapshot()
+  const { finalContent, hasMeaningfulContent, wasAborted, hasErrorThought, isInterrupted, errorThought } = result
 
   // Log content source for debugging. Gate on meaningful content so the
   // repair placeholder (whitespace-only) is logged as "no content", matching
@@ -1349,22 +1360,6 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
     console.log(`[Agent][${conversationId}] Error thought present: ${errorThought?.content}`)
   }
 
-  // Build the result object
-  const result: StreamResult = {
-    finalContent,
-    hasMeaningfulContent,
-    thoughts: sessionState.thoughts,
-    tokenUsage,
-    capturedSessionId,
-    isInterrupted,
-    wasAborted,
-    hasErrorThought,
-    errorThought,
-    reachedMaxTurns: hadMaxTurnsReached,
-    firstEventReceived: firstEventFired,
-    drainTimedOut: wasAborted && drainStartTime !== null && !receivedResult,
-  }
-
   const turnDurationMs = Date.now() - t0
   if (isInterrupted || hasErrorThought || wasAborted) {
     const errorSummary = String((errorThought?.content as unknown) ?? '').slice(0, 300).replace(/"/g, "'")
@@ -1377,6 +1372,7 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
   // handle persistence externally, legacy callers like app-chat.ts use this)
   if (callbacks.onComplete) {
     callbacks.onComplete(result)
+    assertSessionActive()
   }
 
   // Emit agent:complete for legacy callers that don't use the consumer.

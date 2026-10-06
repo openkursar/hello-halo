@@ -289,6 +289,17 @@ export function maskConfigFields(config: Record<string, unknown>): Record<string
   return clone
 }
 
+/** Hide managed tokens on desktop without changing the existing API-key editor contract. */
+export function maskOAuthFields(config: Record<string, unknown>): Record<string, unknown> {
+  const clone = JSON.parse(JSON.stringify(config)) as Record<string, unknown>
+  visitSensitiveFields(clone, (parent, key, path) => {
+    if (path.startsWith('aiSources.sources[') && (key === 'accessToken' || key === 'refreshToken') && parent[key]) {
+      parent[key] = MASK_SENTINEL
+    }
+  })
+  return clone
+}
+
 /**
  * Before persisting an update submitted by a client, replace any
  * {@link MASK_SENTINEL} values with the matching value from `existing`.

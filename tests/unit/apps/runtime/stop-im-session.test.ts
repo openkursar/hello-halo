@@ -70,7 +70,7 @@ const { getImStreamHandle, clearImStreamHandle } = vi.hoisted(() => {
 vi.mock('../../../../src/main/services/agent/session-manager', () => ({
   v2Sessions,
   closeV2Session,
-  getOrCreateV2Session: vi.fn(),
+  acquireV2Session: vi.fn(),
   getConsumerHandle: (id: string) => consumers.get(id) ?? null,
   getRunningConsumerIds: () => Array.from(consumers.keys()),
   markTurnDispatched: vi.fn(),
@@ -156,11 +156,6 @@ vi.mock('../../../../src/main/apps/runtime/dispatch-inbound', () => ({
 vi.mock('../../../../src/main/apps/runtime/im-stream-registry', () => ({
   getImStreamHandle,
   clearImStreamHandle,
-}))
-
-vi.mock('../../../../src/main/platform/memory', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../../../src/main/platform/memory')>()),
-  createMemoryStatusMcpServer: vi.fn(),
 }))
 
 vi.mock('../../../../src/main/services/memory-consolidation', () => ({

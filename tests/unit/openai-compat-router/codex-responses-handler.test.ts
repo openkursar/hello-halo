@@ -18,7 +18,11 @@ vi.mock('electron', () => ({
     fromPartition: vi.fn(() => ({ setProxy: vi.fn(async () => undefined) }))
   }
 }))
+const { proxyFetch } = vi.hoisted(() => ({ proxyFetch: vi.fn() }))
+vi.mock('../../../src/main/services/proxy-fetch', () => ({ proxyFetch }))
+
 import {
+  handleResponsesRequest,
   anthropicToCodexResponse,
   buildCodexToolNamespaceMap,
   codexResponsesToAnthropicRequest,
@@ -26,6 +30,28 @@ import {
 } from '../../../src/main/openai-compat-router/server/codex-responses-handler'
 
 describe('Codex Responses compatibility', () => {
+  it('applies conflicting account capabilities independently through the Responses ingress', async () => {
+    proxyFetch.mockResolvedValue(new Response(JSON.stringify({ error: { message: 'test upstream' } }), { status: 400 }))
+    for (const capabilities of [
+      { reasoningSummary: false, responsesLite: true, reasoningLevels: ['low'] },
+      { reasoningSummary: true, responsesLite: false, reasoningLevels: ['high'] }
+    ]) {
+      await handleResponsesRequest({
+        model: 'shared-model', instructions: 'System policy', input: 'Hello', reasoning: { effort: 'high' }
+      }, {
+        key: 'fake-key', model: 'shared-model', url: 'https://chatgpt.com/backend-api/codex/responses',
+        apiType: 'responses', adapterId: 'openai-codex', codexModelCapabilities: capabilities
+      }, { status: vi.fn().mockReturnThis(), json: vi.fn() } as any)
+    }
+    const requests = proxyFetch.mock.calls.map(call => JSON.parse(call[1].body))
+    expect(requests[0].instructions).toBeUndefined()
+    expect(requests[0].input[0].role).toBe('developer')
+    expect(requests[0].reasoning).toEqual({ effort: 'low' })
+    expect(requests[1].instructions).toBe('System policy')
+    expect(requests[1].reasoning).toEqual({ effort: 'high', summary: 'auto' })
+    proxyFetch.mockReset()
+  })
+
   it('converts Codex Responses text input and developer instructions to Anthropic format', () => {
     const request = codexResponsesToAnthropicRequest({
       model: 'gpt-5.1-codex-max',

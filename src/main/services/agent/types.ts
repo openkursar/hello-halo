@@ -10,6 +10,7 @@ import type { Goal, GoalInput } from '../../../shared/types/goal'
 import type { ApiRetryState } from '../../../shared/types/api-retry'
 import type { ContentReference } from '../../../shared/types/content-reference'
 import type { MessageTask } from '../../../shared/types/message-task'
+import type { BackendRequestConfig } from '../../../shared/types/ai-sources'
 
 // ============================================
 // API Credentials
@@ -45,6 +46,11 @@ export interface ResolvedModelCapabilities {
  * Unified structure for custom API and OAuth sources
  */
 export interface ApiCredentials {
+  sourceId?: BackendRequestConfig['sourceId']
+  /** Captured with this credential snapshot, before asynchronous SDK preparation. */
+  credentialsGeneration?: number | string
+  codexModelCapabilities?: BackendRequestConfig['codexModelCapabilities']
+  profileArn?: BackendRequestConfig['profileArn']
   baseUrl: string
   apiKey: string
   model: string
@@ -241,7 +247,7 @@ export interface PendingApiRetry {
  * using minimal interface for type safety and maintainability, avoiding inference to never.
  */
 export type V2SDKSession = {
-  send: (message: any) => void
+  send: (message: any) => void | Promise<void>
   stream: () => AsyncIterable<any>
   close: () => void
   interrupt?: () => Promise<void> | void
@@ -259,9 +265,9 @@ export type V2SDKSession = {
 /**
  * V2 Session info stored in the sessions map
  *
- * Note: session rebuilds are driven by credentialsGeneration (global model /
- * API-config changes), a per-conversation credentialsFingerprint (this
- * conversation's own model/source pin — see session-manager
+ * Note: session rebuilds are driven by credentialsGeneration (global legacy
+ * epoch plus this source's epoch), a per-conversation credentialsFingerprint
+ * (this conversation's own model/source pin — see session-manager
  * computeCredentialsFingerprint), and a knowledgeFingerprint (the conversation's
  * knowledge-base set, baked into the system prompt at creation). Toolset changes
  * are seeded at creation and take effect via an explicit rebuild (toolset broker),
@@ -273,9 +279,9 @@ export interface V2SessionInfo {
   conversationId: string
   createdAt: number
   lastUsedAt: number
-  // Credentials generation at session creation time
-  // Used to detect stale credentials (session created before global config change)
-  credentialsGeneration: number
+  sourceId?: string
+  // Captured before asynchronous creation, so a racing config change stays stale.
+  credentialsGeneration: number | string
   // Per-conversation credential/model fingerprint at session creation time.
   // Detects a change to THIS conversation's model pin (which the global
   // credentialsGeneration does not track), triggering a targeted rebuild.

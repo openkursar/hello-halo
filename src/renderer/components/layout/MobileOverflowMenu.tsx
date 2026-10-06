@@ -12,7 +12,7 @@ import { MoreHorizontal, Sparkles, Search, Settings, ChevronRight, X, Globe, Ter
 import { useAppStore } from '../../stores/app.store'
 import { useActiveModelTarget } from '../../hooks/useActiveModelTarget'
 import { openPersonModelSettings } from '../../utils/people-navigation'
-import { getModelDisplayName, type AISourcesConfig } from '../../types'
+import { getModelDisplayName, getSourceById, type AISourcesConfig } from '../../types'
 import { useTranslation } from '../../i18n'
 import { ModelSelectSheet } from '../ai-config/ModelSelector'
 import { useSpaceQuickActions } from '../../hooks/useSpaceQuickActions'
@@ -36,9 +36,12 @@ export function MobileOverflowMenu({ onSearch }: MobileOverflowMenuProps) {
   // The model the conversation on screen runs on: a regular conversation's own
   // pin, or the settings of the digital human being talked to.
   const modelTarget = useActiveModelTarget()
-  const currentModelName = modelTarget.kind === 'digital-human'
-    ? getModelDisplayName(aiSources, modelTarget.modelSourceId, modelTarget.modelId)
-    : getModelDisplayName(aiSources, modelTarget.conversation?.modelSourceId, modelTarget.conversation?.modelId)
+  const sourceId = modelTarget.kind === 'digital-human' ? modelTarget.modelSourceId : modelTarget.conversation?.modelSourceId
+  const modelId = modelTarget.kind === 'digital-human' ? modelTarget.modelId : modelTarget.conversation?.modelId
+  const isMissingSource = !!sourceId && !getSourceById(aiSources, sourceId)
+  const currentModelName = isMissingSource
+    ? t('Account removed. Choose another account.')
+    : getModelDisplayName(aiSources, sourceId, modelId)
 
   const {
     canOpenBrowser,
@@ -135,8 +138,11 @@ export function MobileOverflowMenu({ onSearch }: MobileOverflowMenuProps) {
               >
                 <Sparkles className="w-4 h-4 text-muted-foreground flex-shrink-0" />
                 <span className="text-sm text-foreground">{t('Model')}</span>
-                <span className="ml-auto text-sm text-muted-foreground truncate max-w-[160px]">
+                <span className={`ml-auto min-w-0 text-sm text-muted-foreground ${isMissingSource ? 'flex-1 text-right break-words' : 'truncate max-w-[160px]'}`}>
                   {currentModelName}
+                  {isMissingSource && modelTarget.kind === 'digital-human' && (
+                    <span className="mt-1 block text-xs">{t('Change in its settings')}</span>
+                  )}
                 </span>
                 <ChevronRight className="w-4 h-4 text-muted-foreground flex-shrink-0" />
               </button>

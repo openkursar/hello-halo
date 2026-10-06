@@ -2,9 +2,9 @@
  * Resolve Halo's SDK options into what the dsh runtime needs to be launched.
  *
  * The explicit resolve step the Codex adapter also has (`codex/options.ts`):
- * everything ambient — app config, the active AI source's credentials, Halo's
- * data directory — is read HERE and nowhere deeper, so the session adapter and
- * the normalizer stay free of global state and testable without a subprocess.
+ * credentials are captured in the supplied SDK options; only process paths are
+ * read here. The session adapter and normalizer stay free of global state and
+ * testable without a subprocess.
  *
  * dsh pins provider and model process-wide at `initialize`, so a resolved spec
  * describes exactly one runtime child process.
@@ -12,9 +12,9 @@
 
 import path from 'path'
 import { app } from 'electron'
-import { getConfig } from '../../../foundation/config.service'
 import { encodeBackendConfig, ensureOpenAICompatRouter } from '../../../openai-compat-router'
-import { credentialsToBackendConfig, getApiCredentials } from '../helpers'
+import { credentialsToBackendConfig } from '../helpers'
+import { getSdkApiCredentials } from '../sdk-config'
 import { modelAcceptsImages } from '../image-attachments'
 import { hostSystemPromptText } from '../system-prompt'
 import { partitionMcpServers } from '../mcp/partition'
@@ -49,7 +49,7 @@ const DSH_PROVIDER = 'deepseek-official'
 export async function resolveDshOptions(
   sdkOptions: Record<string, any>
 ): Promise<DshResolvedOptions> {
-  const credentials = await getApiCredentials(getConfig())
+  const credentials = getSdkApiCredentials(sdkOptions)
   const workDir = sdkOptions.cwd || process.cwd()
 
   const { model, fellBack } = resolveDshModel(sdkOptions.model, credentials.model)

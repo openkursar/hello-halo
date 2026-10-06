@@ -76,6 +76,9 @@ const CLAUDE_API_BASE = 'https://api.anthropic.com'
 
 /** Token refresh threshold — refresh 5 minutes before expiry */
 const TOKEN_REFRESH_THRESHOLD_MS = 5 * 60 * 1000
+const TOKEN_REQUEST_TIMEOUT_MS = 15_000
+const PROFILE_TIMEOUT_MS = 10_000
+const CLAUDE_PROFILE_URL = `${CLAUDE_API_BASE}/api/oauth/profile`
 
 // ============================================================================
 // Model Catalog
@@ -157,8 +160,16 @@ interface PendingClaudeAuth {
   createdAt: number
 }
 
-/** Current pending authorization (one at a time) */
-let pendingAuth: PendingClaudeAuth | null = null
+interface ClaudeTokenResponse {
+  access_token: string
+  refresh_token?: string
+  expires_in: number
+  account?: { uuid?: string; email_address?: string }
+}
+
+interface ClaudeProfile {
+  account?: { uuid?: string; email?: string; display_name?: string }
+}
 
 // ============================================================================
 // Claude OAuth Provider Implementation
@@ -168,10 +179,16 @@ class ClaudeProvider implements OAuthAISourceProvider {
   readonly type: AISourceType = 'claude'
   readonly displayName = 'Claude'
 
+  private pendingAuth: PendingClaudeAuth | null = null
+
+  private conf(config: AISourcesConfig): OAuthSourceConfig | undefined {
+    return (config as unknown as Record<string, OAuthSourceConfig | undefined>)['claude']
+  }
+
   // ── Configuration ──────────────────────────────────────────────────────────
 
   isConfigured(config: AISourcesConfig): boolean {
-    const c = config['claude'] as OAuthSourceConfig | undefined
+    const c = this.conf(config)
     return !!(c?.loggedIn && c?.accessToken)
   }
 
@@ -195,7 +212,7 @@ class ClaudeProvider implements OAuthAISourceProvider {
    * router forwards the query string through.
    */
   getBackendConfig(config: AISourcesConfig): BackendRequestConfig | null {
-    const c = config['claude'] as OAuthSourceConfig | undefined
+    const c = this.conf(config)
     if (!c?.loggedIn || !c?.accessToken) {
       return null
     }
@@ -226,6 +243,7 @@ class ClaudeProvider implements OAuthAISourceProvider {
     const url = `${CLAUDE_API_BASE}/v1/messages`
 
     return {
+      sourceId: c.sourceId,
       url,
       key: c.accessToken,
       model,
@@ -235,7 +253,7 @@ class ClaudeProvider implements OAuthAISourceProvider {
   }
 
   getCurrentModel(config: AISourcesConfig): string | null {
-    const c = config['claude'] as OAuthSourceConfig | undefined
+    const c = this.conf(config)
     return c?.model || null
   }
 
@@ -246,7 +264,7 @@ class ClaudeProvider implements OAuthAISourceProvider {
   }
 
   getUserInfo(config: AISourcesConfig): AISourceUserInfo | null {
-    const c = config['claude'] as OAuthSourceConfig | undefined
+    const c = this.conf(config)
     return c?.user || null
   }
 
@@ -286,7 +304,7 @@ class ClaudeProvider implements OAuthAISourceProvider {
 
       const authorizeUrl = url.toString()
 
-      pendingAuth = {
+      this.pendingAuth = {
         verifier: pkce.verifier,
         state,
         authorizeUrl,
@@ -324,63 +342,56 @@ class ClaudeProvider implements OAuthAISourceProvider {
    *   code_verifier, state.
    */
   async completeLogin(state: string): Promise<ProviderResult<OAuthCompleteResult>> {
-    if (!pendingAuth) {
+    const pending = this.pendingAuth
+    if (!pending) {
+      console.warn('[Claude] Login completion rejected: no pending authentication')
       return { success: false, error: 'No pending authentication' }
     }
 
+    const parts = state.trim().split('#')
+    if (!parts[0] || parts.length > 2 || (parts.length === 2 && parts[1] !== pending.state)) {
+      console.warn('[Claude] Login completion rejected: invalid callback or state mismatch')
+      return { success: false, error: 'Authentication state mismatch or missing code' }
+    }
+
     try {
-      console.log('[Claude] Exchanging authorization code for tokens')
-
-      // The 'state' parameter here is actually the authorization code from the callback
-      const code = state
-
-      // splits[0] = authorization code, splits[1] = state echoed by the server
-      // (which must equal the state we sent in startLogin).
-      const splits = code.split('#')
-
       const response = await proxyFetch(CLAUDE_TOKEN_URL, {
         method: 'POST',
+        signal: AbortSignal.timeout(TOKEN_REQUEST_TIMEOUT_MS),
         headers: {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           grant_type: 'authorization_code',
-          code: splits[0],
+          code: parts[0],
           redirect_uri: CLAUDE_REDIRECT_URI,
           client_id: CLAUDE_CLIENT_ID,
-          code_verifier: pendingAuth.verifier,
-          state: splits[1] || pendingAuth.state
+          code_verifier: pending.verifier,
+          state: pending.state
         })
       })
 
       if (!response.ok) {
-        const errorText = await response.text().catch(() => '')
-        console.error('[Claude] Token exchange failed:', response.status, errorText)
-        pendingAuth = null
-        return {
-          success: false,
-          error: `Token exchange failed: ${response.status}`
-        }
+        console.error('[Claude] Token exchange failed:', response.status)
+        return { success: false, error: `Token exchange failed: ${response.status}` }
       }
 
-      const json = await response.json() as {
-        access_token: string
-        refresh_token: string
-        expires_in: number
+      const json = await response.json() as ClaudeTokenResponse
+      if (typeof json.access_token !== 'string' || !json.access_token ||
+          !Number.isFinite(json.expires_in) || json.expires_in <= 0) {
+        console.warn('[Claude] Token exchange rejected: missing token or invalid expiry')
+        return { success: false, error: 'Invalid token response' }
       }
 
-      const accessToken = json.access_token
-      const refreshToken = json.refresh_token
-      const expiresAt = Date.now() + json.expires_in * 1000
-
-      pendingAuth = null
-
-      console.log('[Claude] Token exchange successful, expires in', json.expires_in, 'seconds')
-
-      // Get available models
-      const models = await this.getAvailableModels({} as AISourcesConfig)
-      const modelNames = CLAUDE_MODELS
-      const defaultModel = DEFAULT_MODEL
+      if (this.pendingAuth !== pending) {
+        console.warn('[Claude] Token exchange discarded: authorization cancelled or replaced')
+        return { success: false, error: 'Authentication cancelled' }
+      }
+      const user = await this.resolveUser(json)
+      if (this.pendingAuth !== pending) {
+        console.warn('[Claude] Login completion discarded: authorization cancelled or replaced')
+        return { success: false, error: 'Authentication cancelled' }
+      }
 
       const result: OAuthCompleteResult & {
         _tokenData: { accessToken: string; refreshToken: string; expiresAt: number; uid: string }
@@ -389,29 +400,74 @@ class ClaudeProvider implements OAuthAISourceProvider {
         _defaultModel: string
       } = {
         success: true,
-        user: {
-          name: 'Claude User',
-          uid: ''
-        },
+        user,
         _tokenData: {
-          accessToken,
-          refreshToken,
-          expiresAt,
-          uid: ''
+          accessToken: json.access_token,
+          refreshToken: json.refresh_token || '',
+          expiresAt: Date.now() + json.expires_in * 1000,
+          uid: user.uid || ''
         },
-        _availableModels: models,
-        _modelNames: modelNames,
-        _defaultModel: defaultModel
+        _availableModels: Object.keys(CLAUDE_MODELS),
+        _modelNames: CLAUDE_MODELS,
+        _defaultModel: DEFAULT_MODEL
       }
 
+      console.log('[Claude] OAuth login completed')
       return { success: true, data: result }
     } catch (error) {
       console.error('[Claude] Complete login error:', error)
-      pendingAuth = null
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to complete login'
       }
+    } finally {
+      if (this.pendingAuth === pending) this.pendingAuth = null
+    }
+  }
+
+  private async resolveUser(tokens: ClaudeTokenResponse): Promise<AISourceUserInfo> {
+    let uid = tokens.account?.uuid?.trim() || ''
+    let name = tokens.account?.email_address?.trim() || ''
+    if (!uid || !name) {
+      const profile = await this.fetchProfile(tokens.access_token)
+      const profileUid = profile?.account?.uuid?.trim() || ''
+      if (uid && profileUid && uid !== profileUid) {
+        console.warn('[Claude] Profile enrichment ignored: token and profile accounts differ')
+      } else if (profile) {
+        uid ||= profileUid
+        name ||= profile.account?.email?.trim() || profile.account?.display_name?.trim() || ''
+      }
+    }
+    if (!uid) console.warn('[Claude] Login completed without verified account identity')
+    return { name: name || 'Claude User', uid }
+  }
+
+  /** Account identity of a stored credential, for sources saved before identities were recorded. */
+  async getAccountId(config: AISourcesConfig): Promise<string | null> {
+    const token = this.conf(config)?.accessToken
+    if (!token) return null
+    const profile = await this.fetchProfile(token)
+    return profile?.account?.uuid?.trim() || null
+  }
+
+  private async fetchProfile(accessToken: string): Promise<ClaudeProfile | null> {
+    try {
+      const response = await proxyFetch(CLAUDE_PROFILE_URL, {
+        method: 'GET',
+        signal: AbortSignal.timeout(PROFILE_TIMEOUT_MS),
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        }
+      })
+      if (!response.ok) {
+        console.warn('[Claude] Profile unavailable:', response.status)
+        return null
+      }
+      return await response.json() as ClaudeProfile
+    } catch {
+      console.warn('[Claude] Profile unavailable: request failed or timed out')
+      return null
     }
   }
 
@@ -423,8 +479,12 @@ class ClaudeProvider implements OAuthAISourceProvider {
     return { success: true, data: { valid: true } }
   }
 
-  async logout(): Promise<ProviderResult<void>> {
-    pendingAuth = null
+  async cancelLogin(): Promise<ProviderResult<void>> {
+    this.pendingAuth = null
+    return { success: true }
+  }
+
+  async logout(_config?: AISourcesConfig): Promise<ProviderResult<void>> {
     return { success: true }
   }
 
@@ -434,7 +494,7 @@ class ClaudeProvider implements OAuthAISourceProvider {
    * Check token validity for the manager's ensureValidToken() flow.
    */
   checkTokenWithConfig(config: AISourcesConfig): { valid: boolean; expiresIn?: number; needsRefresh: boolean } {
-    const c = config['claude'] as OAuthSourceConfig | undefined
+    const c = this.conf(config)
     if (!c?.accessToken) {
       return { valid: false, needsRefresh: false }
     }
@@ -464,22 +524,23 @@ class ClaudeProvider implements OAuthAISourceProvider {
     refreshToken: string
     expiresAt: number
   }>> {
-    const c = config['claude'] as OAuthSourceConfig | undefined
-    if (!c?.refreshToken) {
+    const c = this.conf(config)
+    const refreshToken = c?.refreshToken
+    if (!refreshToken) {
+      console.warn('[Claude] Token refresh rejected: no refresh token')
       return { success: false, error: 'No refresh token available' }
     }
 
     try {
-      console.log('[Claude] Refreshing OAuth token')
-
       const response = await proxyFetch(CLAUDE_TOKEN_URL, {
         method: 'POST',
+        signal: AbortSignal.timeout(TOKEN_REQUEST_TIMEOUT_MS),
         headers: {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           grant_type: 'refresh_token',
-          refresh_token: c.refreshToken,
+          refresh_token: refreshToken,
           client_id: CLAUDE_CLIENT_ID,
           // Narrows from the authorize-time superset (drops org:create_api_key).
           scope: CLAUDE_AI_OAUTH_SCOPES.join(' ')
@@ -487,27 +548,25 @@ class ClaudeProvider implements OAuthAISourceProvider {
       })
 
       if (!response.ok) {
-        const errorText = await response.text().catch(() => '')
-        console.error('[Claude] Token refresh failed:', response.status, errorText)
+        console.error('[Claude] Token refresh failed:', response.status)
         return {
           success: false,
           error: `Token refresh failed: ${response.status}`
         }
       }
 
-      const json = await response.json() as {
-        access_token: string
-        refresh_token: string
-        expires_in: number
+      const json = await response.json() as ClaudeTokenResponse
+      if (typeof json.access_token !== 'string' || !json.access_token ||
+          !Number.isFinite(json.expires_in) || json.expires_in <= 0) {
+        console.warn('[Claude] Token refresh rejected: missing token or invalid expiry')
+        return { success: false, error: 'Invalid token response' }
       }
-
-      console.log('[Claude] Token refreshed, expires in', json.expires_in, 'seconds')
 
       return {
         success: true,
         data: {
           accessToken: json.access_token,
-          refreshToken: json.refresh_token,
+          refreshToken: json.refresh_token || refreshToken,
           expiresAt: Date.now() + json.expires_in * 1000
         }
       }
@@ -521,7 +580,7 @@ class ClaudeProvider implements OAuthAISourceProvider {
   }
 
   async refreshConfig(config: AISourcesConfig): Promise<ProviderResult<Partial<AISourcesConfig>>> {
-    const c = config['claude'] as OAuthSourceConfig | undefined
+    const c = this.conf(config)
     if (!c?.accessToken) {
       return { success: false, error: 'Not logged in' }
     }
@@ -536,9 +595,10 @@ class ClaudeProvider implements OAuthAISourceProvider {
             availableModels: models,
             modelNames: CLAUDE_MODELS
           }
-        }
+        } as unknown as Partial<AISourcesConfig>
       }
     } catch (error) {
+      console.warn('[Claude] Model catalog refresh failed')
       return { success: false, error: String(error) }
     }
   }

@@ -35,16 +35,16 @@ export {
   getMemoryFilePath,
   type MemoryLayout,
 } from './paths'
-export { insertHistoryHeading, formatTimestamp, ensureMemoryFile, memoryHasContent } from './file-ops'
+export { insertHistoryHeading, formatTimestamp, ensureMemoryFile } from './file-ops'
 export {
   generatePromptInstructions,
+  MEMORY_FILE_FORMAT,
   TOPIC_FILE_FORMAT,
-  TOPIC_GUIDE,
   type MemoryPromptOptions,
   type MemoryOwnerKind,
   type MemoryTrackedItem,
 } from './prompt'
-export { buildMemorySnapshot, createMemoryStatusMcpServer, type MemorySnapshot } from './snapshot'
+export { buildMemorySnapshot, type MemorySnapshot } from './snapshot'
 export { scanTopics, type TopicsTree } from './topics'
 export { renderMemorySection, formatMemoryUsage, MEMORY_SECTION_LIMITS, type MemorySectionOptions } from './section'
 export {

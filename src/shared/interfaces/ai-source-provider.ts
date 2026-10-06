@@ -75,6 +75,9 @@ export interface OAuthProvider {
    */
   completeLogin(state: string): Promise<ProviderResult<OAuthCompleteResult>>
 
+  /** Cancel only the pending authorization; never revoke a stored account. */
+  cancelLogin?(): Promise<ProviderResult<void>> | void
+
   /**
    * Refresh the access token if expired
    */
@@ -86,11 +89,8 @@ export interface OAuthProvider {
   checkToken(): Promise<ProviderResult<{ valid: boolean; expiresIn?: number }>>
 
   /**
-   * Logout and clear tokens.
-   *
-   * `config` is optional so existing providers are unaffected. It is supplied
-   * by the manager so a provider whose issuer supports revocation can revoke
-   * the refresh token upstream before the local copy is deleted.
+   * Called after local removal with this source's credentials for optional
+   * upstream revocation; never clear a sibling account or pending login.
    */
   logout(config?: AISourcesConfig): Promise<ProviderResult<void>>
 }
@@ -178,6 +178,9 @@ export interface OAuthAISourceProvider extends AISourceProvider, OAuthProvider {
    * Get the current logged-in user info
    */
   getUserInfo(config: AISourcesConfig): AISourceUserInfo | null
+
+  /** Verify a legacy account id from this source's credential before identity migration. */
+  getAccountId?(config: AISourcesConfig): Promise<string | null> | string | null
 
   /**
    * Report the current metered quota for this source. Optional capability:

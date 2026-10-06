@@ -20,7 +20,7 @@ import { getAppManager, type InstalledApp } from '../manager'
 import { resolveExecutionEnvironment, validateExecutionEnvironment, validateEnvironmentConnections } from './execution-environment'
 import { createPersonContextMcpServer, personContextPrompt } from './person-context-tool'
 import { resolvePermission } from '../../../shared/apps/app-types'
-import { createMemoryStatusMcpServer, resolveMemoryLayout, type MemoryService, type MemoryCallerScope } from '../../platform/memory'
+import { resolveMemoryLayout, type MemoryService, type MemoryCallerScope } from '../../platform/memory'
 import type { ActivityStore } from './store'
 import type {
   TriggerContext,
@@ -43,9 +43,15 @@ import { autoSyncRunResult } from './im-auto-sync'
 import { getApiCredentials, getApiCredentialsForSource, getHeadlessElectronPath, getMcpServersForRequires } from '../../services/agent/helpers'
 import { resolveCredentialsForSdk, buildUserSessionSdkOptions } from '../../services/agent/sdk-config'
 import { toEngineSystemPrompt } from '../../services/agent/system-prompt'
-import { formatReferencesBlock } from '../../services/agent'
+import {
+  formatReferencesBlock,
+  acquireV2Session,
+  createSessionState,
+  registerActiveSession,
+  unregisterActiveSession,
+  type V2SessionLease,
+} from '../../services/agent'
 import { applyReasoningEffort } from '../../services/agent/reasoning-effort'
-import { getOrCreateV2Session } from '../../services/agent/session-manager'
 import { admitTransientSession } from './session-budget'
 import { createAIBrowserMcpServer, createScopedBrowserContext } from '../../services/ai-browser'
 import { createTerminalMcpServer, getGlobalTerminalContext, isTerminalAvailable } from '../../services/ai-terminal'
@@ -68,7 +74,7 @@ import {
 } from './turn/memory-lifecycle'
 import { appConsolidationInputs } from './memory-control'
 import { registerActiveRun, unregisterActiveRun } from './active-runs'
-import { describeSelfInstance, formatInstanceTag, listLiveInstances } from './live-instances'
+import { describeSelfInstance, formatInstanceTag } from './live-instances'
 
 // ============================================
 // Types
@@ -208,7 +214,8 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
 
   const manager = getAppManager()
   if (!manager) throw new RunExecutionError(app.id, runId, 'App manager is unavailable')
-  const originalEnvironment = existingRunId ? store.getRun(existingRunId)?.environment : undefined
+  const originalRun = existingRunId ? store.getRun(existingRunId) : undefined
+  const originalEnvironment = originalRun?.environment
   if (existingRunId && !originalEnvironment) {
     throw new RunExecutionError(app.id, runId, 'The original execution environment is unavailable; restore it before continuing')
   }
@@ -217,11 +224,11 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
   app = { ...app, spaceId: environment.spaceId }
 
   const runTag = runId.slice(0, 8)
-  const selfInstance = describeSelfInstance(app.id, {
+  const selfInstance = describeSelfInstance({
     runId,
-    triggerType: trigger.type,
-    startedAt,
+    triggerType: originalRun?.triggerType ?? trigger.type,
   })
+  const selfTag = formatInstanceTag(selfInstance)
   console.log(
     `[Runtime][${runTag}] ▶ Starting run: app=${app.id}, trigger=${trigger.type}, ` +
     `appName="${app.spec.name}", spaceId=${app.spaceId}` +
@@ -259,6 +266,8 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
 
   // Session reference for cleanup
   let session: any = null
+  let sessionLease: V2SessionLease | undefined
+  let managedSessionActive = false
 
   // Sender key while the run can message other conversations (opened in try, closed in finally)
   let runSenderKey: string | undefined
@@ -289,8 +298,8 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     //     modelInfo feeds into base prompt's model display)
     const config = getConfig()
     const credentials = app.userOverrides?.modelSourceId
-      ? await getApiCredentialsForSource(config, app.userOverrides.modelSourceId, app.userOverrides.modelId)
-      : await getApiCredentials(config)
+      ? await getApiCredentialsForSource(app.userOverrides.modelSourceId, app.userOverrides.modelId)
+      : await getApiCredentials()
     const resolvedCreds = await resolveCredentialsForSdk(credentials)
     const electronPath = getHeadlessElectronPath()
     const workDir = environment.workDir
@@ -303,7 +312,11 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     // ── 2. Build system prompt ─────────────────────────────
     const memorySettings = appMemorySettings(app)
     const memoryInstructions = memorySettings.enabled
-      ? memory.getPromptInstructions('run', memoryPromptOptions(app.id, app.spec))
+      ? memory.getPromptInstructions('run', {
+          ...memoryPromptOptions(app.id, app.spec),
+          layout: resolveMemoryLayout(memoryScope, 'app'),
+          authorTag: selfTag,
+        })
       : ''
     const usesAIBrowser = resolvePermission(app, 'ai-browser')
     const usesTerminal = resolvePermission(app, 'ai-terminal') && isTerminalAvailable()
@@ -377,11 +390,10 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     // ── 3. Build initial message ───────────────────────────
     //    Build memory snapshot + pre-insert History heading. With memory off
     //    the run neither reads nor writes it.
-    const selfTag = formatInstanceTag(selfInstance)
-    const memorySnapshot = memorySettings.enabled
+    const freshRun = !isResuming
+    const memorySnapshot = memorySettings.enabled && freshRun
       ? (await prepareMemoryForTurn(memoryScope, { byLabel: selfTag })).snapshot
       : null
-    const freshRun = trigger.type !== 'continue_followup' && !(trigger.type === 'escalation_followup' && existingRunId && trigger.escalation)
     // Only a fresh run opens with memory; a resumed one already holds it.
     const spaceTopics = memorySnapshot && freshRun
       ? await loadSpaceTopicsForTurn(memoryScope, { enabledForApp: app.userOverrides?.spaceMemoryAccess === true })
@@ -400,8 +412,6 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
             appName: app.spec.name,
             memorySnapshot,
             spaceTopics,
-            selfInstance,
-            liveInstances: listLiveInstances(app.id, selfInstance.id),
           })
 
     console.log(
@@ -418,12 +428,6 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       : undefined
 
     // ── 4. Create MCP servers ──────────────────────────────
-    //    Register the lightweight memory_status tool (structural metadata only).
-    //    The AI uses native Read/Edit/Write on memory.md directly.
-    const memoryMcpServer = memorySettings.enabled
-      ? createMemoryStatusMcpServer(resolveMemoryLayout(memoryScope, 'app'))
-      : null
-
     // Resolve plans directory for file-based data_path guidance in report_to_user.
     // Uses the same CC config directory that the SDK session uses for consistency.
     const configDir = resolveClaudeConfigDir()
@@ -510,7 +514,6 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       // Built-in server ids below are mirrored in shared/apps/builtin-mcp.ts — keep in sync.
       mcpServers: {
         ...requiredMcpServers,              // declared MCP dependencies
-        ...(memoryMcpServer ? { 'halo-memory': memoryMcpServer } : {}), // built-in: persistent memory
         'halo-report': reportMcpServer,     // built-in: completion signal
         'halo-notify': notifyMcpServer,     // built-in: user notification
         'halo-person-context': createPersonContextMcpServer({ authority: 'owner', appId: app.id, environmentSpaceId: app.spaceId!, capabilityMode: 'automation' }),
@@ -553,7 +556,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
 
     // Session creation strategy:
     //   escalation_followup / continue_followup → restore existing session via
-    //     getOrCreateV2Session to recover full conversation context.
+    //     acquireV2Session to recover full conversation context.
     //   All other triggers → create a fresh session.
     const escalationResumeId = trigger.escalation?.sessionId
     const continueResumeId = trigger.continue?.sessionId
@@ -564,7 +567,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     // would silently spawn a consumer.
     if (trigger.type === 'escalation_followup' && escalationResumeId) {
       console.log(`[Runtime][${runTag}] Restoring session for escalation followup: ${escalationResumeId}`)
-      session = await getOrCreateV2Session(
+      sessionLease = await acquireV2Session(
         app.spaceId!,
         sessionKey,
         sdkOptions,
@@ -573,7 +576,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       )
     } else if (trigger.type === 'continue_followup' && continueResumeId) {
       console.log(`[Runtime][${runTag}] Restoring session for user-initiated continue: ${continueResumeId}`)
-      session = await getOrCreateV2Session(
+      sessionLease = await acquireV2Session(
         app.spaceId!,
         sessionKey,
         sdkOptions,
@@ -583,6 +586,11 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     } else {
       admitTransientSession(runTag)
       session = await createSession(sdkOptions)
+    }
+    if (sessionLease) session = sessionLease.session
+    if (isResuming) {
+      registerActiveSession(sessionKey, createSessionState(app.spaceId!, sessionKey, abortController))
+      managedSessionActive = true
     }
     console.log(`[Runtime][${runTag}] V2 session created, sending initial message`)
 
@@ -877,10 +885,17 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     // via CC's disk-based resume (sessionId), not process reuse.
     if (session) {
       try {
-        session.close()
+        if (sessionLease) {
+          sessionLease.close()
+        } else {
+          session.close()
+        }
         console.log(`[Runtime][${runTag}] Session closed`)
       } catch (closeErr) {
         console.error(`[Runtime] Failed to close session: run=${runId}:`, closeErr)
+      } finally {
+        sessionLease?.release()
+        if (managedSessionActive) unregisterActiveSession(sessionKey)
       }
     }
 

@@ -6,7 +6,7 @@
  * - finalizeMemoryAfterTurn skips the run record on noop runs and requests
  *   consolidation unless told not to.
  * - memory_schema reaches the instructions as tracked items.
- * - The space's topics are offered only when allowed, and never to a guest.
+ * - The space's topics are offered read-only when enabled for the app and space.
  * - The guard lets the digital human write its own memory and only read the
  *   space's.
  */

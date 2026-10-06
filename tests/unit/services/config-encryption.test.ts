@@ -19,6 +19,7 @@ import {
   decryptConfigFields,
   applyFailedDecodeGuard,
   maskConfigFields,
+  maskOAuthFields,
   unmaskSentinels,
   configHasUnmigratedCredentials,
   MASK_SENTINEL,
@@ -157,6 +158,18 @@ describe('config-encryption', () => {
   // --------------------------------------------------------------------------
 
   describe('maskConfigFields', () => {
+    it('masks desktop managed tokens without changing custom API-key editing', () => {
+      const config = makeConfig()
+      const masked = maskOAuthFields(config)
+      const source = (masked.aiSources as any).sources[0]
+      expect(source.apiKey).toBe('sk-source-key')
+      expect(source.accessToken).toBe(MASK_SENTINEL)
+      expect(source.refreshToken).toBe(MASK_SENTINEL)
+      expect(source.oauth.accessToken).toBe(MASK_SENTINEL)
+      expect(source.oauth.refreshToken).toBe(MASK_SENTINEL)
+      expect((config.aiSources as any).sources[0].accessToken).toBe('access-tok')
+    })
+
     it('replaces all sensitive fields with *** in the returned clone', () => {
       setProfile(false)
       const config = makeConfig()

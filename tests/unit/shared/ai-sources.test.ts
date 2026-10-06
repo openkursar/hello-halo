@@ -6,7 +6,25 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { resolveLocalizedText } from '../../../src/shared/types/ai-sources'
+import { resolveLocalizedText, getModelDisplayName, type AISource, type AISourcesConfig } from '../../../src/shared/types/ai-sources'
+
+describe('strict model selection display', () => {
+  const source = (id: string): AISource => ({
+    id, name: id, provider: 'custom', authType: 'api-key', apiUrl: '', model: `${id}-model`,
+    availableModels: [{ id: `${id}-model`, name: `${id} model` }], createdAt: '', updatedAt: '',
+  })
+  const config: AISourcesConfig = { version: 2, currentId: 'b', sources: [source('a'), source('b')] }
+  it('follows global only without a source pin', () => {
+    expect(getModelDisplayName(config)).toBe('b model')
+    expect(getModelDisplayName(config, 'a')).toBe('a model')
+    expect(getModelDisplayName(config, 'a', 'custom-model')).toBe('custom-model')
+  })
+  it('never labels a deleted pin as a different account, including when every account was deleted', () => {
+    expect(getModelDisplayName(config, 'removed', 'old-model')).toBe('')
+    expect(getModelDisplayName({ version: 2, currentId: null, sources: [] }, 'a')).toBe('')
+    expect(config.currentId).toBe('b')
+  })
+})
 
 describe('resolveLocalizedText', () => {
   it('returns a plain string verbatim, ignoring the locale', () => {

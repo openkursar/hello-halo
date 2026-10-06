@@ -58,10 +58,10 @@ export interface SessionSummaryParams {
  * Where the turn sits. It decides only HOW memory reached the agent — the agent
  * is the same one with the same memory wherever it works.
  *
- * - `run`     — an automation run: fresh context per trigger, so the snapshot is
- *               injected and a `# History` heading pre-inserted every time
- * - `session` — an ongoing session (chat, IM, team): the snapshot is injected when
- *               the session starts and stays in context for the turns that follow
+ * - `run`     — an automation run: a fresh run opens with a snapshot and a signed
+ *               History heading; a continuation keeps the original entry
+ * - `session` — an ongoing session (chat, IM, team): only a fresh session opens
+ *               with a snapshot; later turns retrieve current files on demand
  */
 export type MemoryTurnMode = 'run' | 'session'
 
@@ -94,7 +94,7 @@ export interface MemoryService {
    *
    * @param mode - What the caller actually does for this turn, so the
    *               instructions never promise an injection that did not happen
-   * @param opts - Owner kind and declared tracked items
+   * @param opts - Owner policy, tracked items, memory paths and trusted author tag
    */
   getPromptInstructions(mode: MemoryTurnMode, opts?: MemoryPromptOptions): string
 }

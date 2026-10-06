@@ -5,15 +5,18 @@
  * capturing every request that happens to share the host.
  */
 
-import { describe, expect, it, afterEach } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { applyProviderAdapter, type AdapterContext } from '../../../src/main/openai-compat-router/server/provider-adapters'
-import { setCodexModelCapabilities } from '../../../src/main/openai-compat-router/server/codex-capabilities'
+import type { CodexModelCapability } from '../../../src/shared/types/ai-sources'
 import { CODEX_ADAPTER_ID } from '../../../src/shared/constants/codex-models'
 
 const CODEX_URL = 'https://chatgpt.com/backend-api/codex/responses'
 
-function context(sessionId = ''): AdapterContext {
-  return { originalRequest: {} as AdapterContext['originalRequest'], sessionId }
+function context(sessionId = '', capability?: Partial<CodexModelCapability>): AdapterContext {
+  return {
+    originalRequest: {} as AdapterContext['originalRequest'], sessionId,
+    codexModelCapabilities: capability ? { reasoningSummary: true, responsesLite: false, ...capability } : undefined
+  }
 }
 
 describe('openai-codex provider adapter', () => {
@@ -122,13 +125,27 @@ describe('openai-codex provider adapter', () => {
     expect(body.stream_options).toEqual({ include_usage: true })
   })
 
-  describe('capability-driven reshapes', () => {
-    afterEach(() => {
-      setCodexModelCapabilities([])
-    })
+  it('keeps conflicting capabilities of the same model independent across accounts', () => {
+    const makeBody = () => ({ model: 'shared-model', reasoning: { effort: 'max' }, input: [
+      { type: 'message', role: 'system', content: [{ type: 'input_text', text: 'SYS' }] }
+    ] }) as Record<string, unknown>
+    const first = makeBody()
+    const second = makeBody()
+    const third = makeBody()
+    const a = context('', { responsesLite: true, reasoningSummary: false, reasoningLevels: ['low'] })
+    const b = context('', { responsesLite: false, reasoningSummary: true, reasoningLevels: ['high', 'xhigh'] })
+    applyProviderAdapter(CODEX_URL, first, {}, CODEX_ADAPTER_ID, a)
+    applyProviderAdapter(CODEX_URL, second, {}, CODEX_ADAPTER_ID, b)
+    applyProviderAdapter(CODEX_URL, third, {}, CODEX_ADAPTER_ID, a)
+    expect(first.instructions).toBeUndefined()
+    expect(first.reasoning).toEqual({ effort: 'low' })
+    expect(second.instructions).toBe('SYS')
+    expect(second.reasoning).toEqual({ effort: 'xhigh', summary: 'auto' })
+    expect(third).toEqual(first)
+  })
 
+  describe('capability-driven reshapes', () => {
     it('requests a reasoning summary while thinking is on', () => {
-      setCodexModelCapabilities([{ slug: 'm-summary' }])
       const body: Record<string, unknown> = { model: 'm-summary', input: [], reasoning: { effort: 'high' } }
 
       applyProviderAdapter(CODEX_URL, body, {}, CODEX_ADAPTER_ID, context())
@@ -137,7 +154,6 @@ describe('openai-codex provider adapter', () => {
     })
 
     it('leaves summaries off when thinking is disabled', () => {
-      setCodexModelCapabilities([{ slug: 'm-summary' }])
       const body: Record<string, unknown> = { model: 'm-summary', input: [], reasoning: { effort: 'none' } }
 
       applyProviderAdapter(CODEX_URL, body, {}, CODEX_ADAPTER_ID, context())
@@ -146,25 +162,22 @@ describe('openai-codex provider adapter', () => {
     })
 
     it('leaves summaries off when the catalog states the model rejects the parameter', () => {
-      setCodexModelCapabilities([{ slug: 'm-no-summary', supports_reasoning_summary_parameter: false }])
       const body: Record<string, unknown> = { model: 'm-no-summary', input: [], reasoning: { effort: 'high' } }
 
-      applyProviderAdapter(CODEX_URL, body, {}, CODEX_ADAPTER_ID, context())
+      applyProviderAdapter(CODEX_URL, body, {}, CODEX_ADAPTER_ID, context('', { reasoningSummary: false }))
 
       expect((body.reasoning as { summary?: string }).summary).toBeUndefined()
     })
 
     it('holds the effort to the levels the catalog lists for the model', () => {
-      setCodexModelCapabilities([{ slug: 'm-levels', supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh'] }])
       const body: Record<string, unknown> = { model: 'm-levels', input: [], reasoning: { effort: 'max' } }
 
-      applyProviderAdapter(CODEX_URL, body, {}, CODEX_ADAPTER_ID, context())
+      applyProviderAdapter(CODEX_URL, body, {}, CODEX_ADAPTER_ID, context('', { reasoningLevels: ['low', 'medium', 'high', 'xhigh'] }))
 
       expect((body.reasoning as { effort: string }).effort).toBe('xhigh')
     })
 
     it('bounds the effort by the Codex CLI enum before the catalog is read', () => {
-      setCodexModelCapabilities([])
       const body: Record<string, unknown> = { model: 'm-unknown', input: [], reasoning: { effort: 'max' } }
 
       applyProviderAdapter(CODEX_URL, body, {}, CODEX_ADAPTER_ID, context())
@@ -173,18 +186,16 @@ describe('openai-codex provider adapter', () => {
     })
 
     it('runs an off switch the catalog does not list at the lowest listed level', () => {
-      setCodexModelCapabilities([{ slug: 'm-levels', supported_reasoning_levels: ['medium', 'high'] }])
       const body: Record<string, unknown> = { model: 'm-levels', input: [], reasoning: { effort: 'none' } }
 
-      applyProviderAdapter(CODEX_URL, body, {}, CODEX_ADAPTER_ID, context())
+      applyProviderAdapter(CODEX_URL, body, {}, CODEX_ADAPTER_ID, context('', { reasoningLevels: ['medium', 'high'] }))
 
       expect((body.reasoning as { effort: string }).effort).toBe('medium')
     })
 
     it('keeps an off switch the catalog lists or cannot rule on', () => {
-      setCodexModelCapabilities([{ slug: 'm-none', supported_reasoning_levels: ['none', 'low'] }])
       const listed: Record<string, unknown> = { model: 'm-none', input: [], reasoning: { effort: 'none' } }
-      applyProviderAdapter(CODEX_URL, listed, {}, CODEX_ADAPTER_ID, context())
+      applyProviderAdapter(CODEX_URL, listed, {}, CODEX_ADAPTER_ID, context('', { reasoningLevels: ['none', 'low'] }))
       expect((listed.reasoning as { effort: string }).effort).toBe('none')
 
       const unread: Record<string, unknown> = { model: 'm-unread', input: [], reasoning: { effort: 'none' } }
@@ -214,7 +225,6 @@ describe('openai-codex provider adapter', () => {
      * prompt into `input` as a developer item for them.
      */
     it('moves the system prompt into a developer item for a Responses-Lite model', () => {
-      setCodexModelCapabilities([{ slug: 'm-lite', use_responses_lite: true }])
       const body: Record<string, unknown> = {
         model: 'm-lite',
         input: [
@@ -223,7 +233,7 @@ describe('openai-codex provider adapter', () => {
         ]
       }
 
-      applyProviderAdapter(CODEX_URL, body, {}, CODEX_ADAPTER_ID, context())
+      applyProviderAdapter(CODEX_URL, body, {}, CODEX_ADAPTER_ID, context('', { responsesLite: true }))
 
       expect('instructions' in body).toBe(false)
       const input = body.input as Array<Record<string, unknown>>

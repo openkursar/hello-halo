@@ -52,6 +52,8 @@ import {
   registerConversationSource,
 } from '../services/conversation-interop'
 import { setConversationInteropFactory } from '../services/agent/toolsets/broker'
+import { getAISourceManager } from '../services/ai-sources'
+import { setRequestCredentialResolver } from '../openai-compat-router'
 import { initSpaceMemoryConsolidation, disposeSpaceMemoryConsolidation } from '../services/memory-consolidation'
 import { markExtendedServicesReady } from './state'
 import { getMainWindow, sendToRenderer } from '../foundation/window.service'
@@ -67,8 +69,6 @@ import { initTaskState } from '../platform/task-state'
 import { initScheduler, shutdownScheduler } from '../platform/scheduler'
 import { combinedDisposable } from '../platform/event'
 import { initMemory } from '../platform/memory'
-import { setMemorySdk } from '../platform/memory/sdk'
-import { tool as sdkTool, createSdkMcpServer as sdkCreateMcpServer } from '../services/agent/resolved-sdk'
 import { initAppManager, shutdownAppManager } from '../apps/manager'
 import { initAppRuntime, shutdownAppRuntime, getEventRouter, getActivityStore, getImSessionRegistry, isNativeChatGone, createDigitalHumanConversationSource, createRunConversationSource, releaseTeamEpochSessions } from '../apps/runtime'
 import { initTeamStore, shutdownTeamStore, getTeamStore, initTeamService, shutdownTeamService, getTeamService } from '../apps/team'
@@ -192,12 +192,6 @@ async function initPlatformAndApps(): Promise<void> {
     initMemory(),
   ])
 
-  // Inject the resolved agent-SDK MCP primitives into the memory tier, so
-  // platform/memory builds its MCP server without importing the services
-  // tier. The SDK is already initialized (see index.ts) and these refs are
-  // only invoked later, when a session's memory MCP server is built.
-  setMemorySdk({ tool: sdkTool, createSdkMcpServer: sdkCreateMcpServer })
-
   // Get the background service singleton (already initialized by initBackground())
   const background = getBackgroundService()
   if (!background) {
@@ -224,7 +218,7 @@ async function initPlatformAndApps(): Promise<void> {
   initSpaceMemoryConsolidation()
 
   // Wire the toolset broker's dependency-inversion seam (mirrors
-  // setSessionInvalidator/setActiveTeamRuntime/setMemorySdk): broker.ts must
+  // setSessionInvalidator/setActiveTeamRuntime): broker.ts must
   // not import conversation-interop statically, since conversation-interop
   // imports session-manager.ts, which imports FROM broker.ts — a real cycle
   // that pulled the whole agent stack into broker's own module-load time.
@@ -1445,6 +1439,11 @@ export function initializeExtendedServices(): void {
   // Security: expose renderer-safe security policy flags so the UI can
   // gate features (e.g. Tunnel section visibility under tunnelSafe).
   registerSecurityHandlers()
+
+  // Router seam: each proxied request uses its account's current credential, so a
+  // token refresh never needs an engine session rebuilt. Sessions started before
+  // this line use the credential they were created with, which is still current.
+  setRequestCredentialResolver((sourceId, model) => getAISourceManager().resolveRequestCredentials(sourceId, model))
 
   // Push credential decode failures to renderer (IPC) and remote clients (WS).
   // Registered before the migration task so failures surfaced during it reach a

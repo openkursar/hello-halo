@@ -11,6 +11,14 @@ export const MODULE: RouteModuleMeta = {
       notes: 'What this build could be configured with, not what the user has configured — read GET /api/config for that. On an enterprise build the preset field carries deployment-internal endpoints; do not repeat them back.',
     },
 
+    // Login codes and states belong to the initiating client, never an agent chat.
+    'POST /api/auth/start-login': { expose: 'internal' },
+    'POST /api/auth/complete-login': { expose: 'internal' },
+    'POST /api/auth/cancel-login': { expose: 'internal' },
+    'POST /api/auth/refresh-token': { expose: 'internal' },
+    'GET /api/auth/check-token': { expose: 'internal' },
+    'POST /api/auth/logout': { expose: 'internal' },
+
     'GET /api/system/version': {
       expose: 'ai',
       group: 'settings',

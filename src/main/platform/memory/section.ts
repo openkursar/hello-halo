@@ -55,9 +55,10 @@ export function renderMemorySection(snapshot: MemorySnapshot, opts: MemorySectio
   const { layout } = snapshot
   const nowLimit = opts.nowLimitBytes ?? DEFAULT_NOW_LIMIT_BYTES
   const lines: string[] = []
-  lines.push('## Memory')
+  lines.push('## Memory snapshot (startup)')
   lines.push('')
-  lines.push('Your persistent memory from previous work. Read it to maintain continuity and avoid repeating work.')
+  lines.push('Use this bounded startup snapshot to maintain continuity and avoid repeating work.')
+  lines.push('Read the file paths below for current or omitted content; this is not live state.')
   lines.push('')
 
   // Only where there is content to misread.
@@ -70,12 +71,11 @@ export function renderMemorySection(snapshot: MemorySnapshot, opts: MemorySectio
 
   if (!snapshot.exists) {
     lines.push('')
-    lines.push('No memory file exists yet. Create it with Write using the `# now` / `# History` structure')
-    lines.push('when there is something worth keeping; `# now` is loaded automatically next time.')
+    lines.push('Memory file unavailable at startup. Re-check its path with Read before recording anything;')
+    lines.push('do not recreate it from this snapshot.')
   } else if (snapshot.blank) {
     lines.push('')
-    lines.push('Nothing recorded yet: the file has its `# now` and `# History` headings and nothing under them.')
-    lines.push('Edit in what is worth keeping; `# now` is loaded automatically next time.')
+    lines.push('Nothing recorded yet. Read the current file, then Edit in what is worth keeping.')
   } else if (snapshot.fullContent !== null && snapshot.sizeBytes <= nowLimit) {
     lines.push(`**Size**: ${snapshot.totalLines} lines, ${formatKB(snapshot.sizeBytes)}`)
     lines.push('')

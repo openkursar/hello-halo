@@ -162,10 +162,12 @@ baseline in for an hour.
 
 ### 3.4 Identity-bound calls target the primary source only
 
-A build mints one identity token from the one provider declared in
-`product.json.identityProvider`, so exactly one store can attribute a
-publication to this user. "My publications" therefore reads and unpublishes
-against the primary source — reads included.
+A build resolves one identity token from the provider declared in
+`product.json.identityProvider`: its selected signed-in account when current,
+otherwise its first configured signed-in account. Failed token renewal never
+substitutes another account, and forced sign-in targets that same source.
+"My publications" reads and unpublishes against the primary store source —
+reads included.
 
 Federating the read while writing to the primary would be incoherent twice
 over: the user could act on a row the write path cannot address, and the

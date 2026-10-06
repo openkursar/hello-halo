@@ -107,4 +107,5 @@ export { handleMessagesRequest, handleCountTokensRequest } from './request-handl
 export { handleResponsesRequest } from './codex-responses-handler'
 export { shouldForceStream } from './api-type'
 export { applyProviderAdapter, findAdapter } from './provider-adapters'
+export { setRequestCredentialResolver, type RequestCredentials, type RequestCredentialResolver } from './request-credentials'
 export type { ProviderAdapter } from './provider-adapters'

@@ -132,14 +132,26 @@ vi.mock('../../../../src/main/services/email-mcp', () => ({
 }))
 
 vi.mock('../../../../src/main/services/agent/session-manager', () => ({
-  getOrCreateV2Session: vi.fn(),
+  acquireV2Session: vi.fn(),
+  createSessionState: vi.fn((spaceId: string, conversationId: string, abortController: AbortController) => ({
+    spaceId, conversationId, abortController, thoughts: [],
+  })),
+  registerActiveSession: vi.fn(),
+  unregisterActiveSession: vi.fn(),
+  closeV2Session: vi.fn(),
+  getRunningConsumerIds: () => [],
+  isSessionBusy: () => false,
+}))
+vi.mock('../../../../src/main/apps/runtime/app-chat-sink', () => ({
+  getConversationsWithActiveRound: () => [],
 }))
 
-// The engine's public surface would load every toolset; a run needs only the references block.
+// Keep the public surface limited to the runtime's references and session lifecycle.
 vi.mock('../../../../src/main/services/agent', async () => ({
   formatReferencesBlock: (await vi.importActual<typeof import('../../../../src/main/services/agent/references')>(
     '../../../../src/main/services/agent/references',
   )).formatReferencesBlock,
+  ...(await import('../../../../src/main/services/agent/session-manager')),
 }))
 
 // The fake session used by createSession — swapped per test via nextSession.
@@ -148,11 +160,6 @@ vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
   createSession: vi.fn(async () => nextSession),
   query: vi.fn(),
   getActiveEngine: () => null,
-}))
-
-vi.mock('../../../../src/main/platform/memory', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../../../src/main/platform/memory')>()),
-  createMemoryStatusMcpServer: vi.fn().mockReturnValue({ name: 'halo-memory', _isMcpServer: true }),
 }))
 
 // The memory lifecycle is exercised by its own tests; here only its wiring.
@@ -223,12 +230,6 @@ vi.mock('../../../../src/main/apps/runtime/active-runs', () => ({
   listActiveRuns: vi.fn(() => []),
 }))
 
-vi.mock('../../../../src/main/apps/runtime/live-instances', () => ({
-  describeSelfInstance: vi.fn(() => ({ id: 'aaaabbbb', kind: 'run', origin: 'schedule', startedAt: 0 })),
-  listLiveInstances: vi.fn(() => []),
-  formatInstanceTag: vi.fn(() => 'schedule#aaaa'),
-}))
-
 // Keep prompt building cheap and side-effect-free.
 vi.mock('../../../../src/main/apps/runtime/prompt', () => ({
   buildAppSystemPrompt: vi.fn().mockReturnValue('SYSTEM PROMPT'),
@@ -237,12 +238,20 @@ vi.mock('../../../../src/main/apps/runtime/prompt', () => ({
 }))
 
 import { executeRun } from '../../../../src/main/apps/runtime/execute'
-import { finalizeMemoryAfterTurn } from '../../../../src/main/apps/runtime/turn/memory-lifecycle'
+import { finalizeMemoryAfterTurn, prepareMemoryForTurn, loadSpaceTopicsForTurn, appMemorySettings } from '../../../../src/main/apps/runtime/turn/memory-lifecycle'
+import { generatePromptInstructions } from '../../../../src/main/platform/memory'
+import { buildAppSystemPrompt, buildInitialMessage } from '../../../../src/main/apps/runtime/prompt'
 import { RunExecutionError } from '../../../../src/main/apps/runtime/errors'
 import { query as agentSdkQuery, createSession } from '../../../../src/main/services/agent/resolved-sdk'
-import { getApiCredentials, getMcpServersForRequires } from '../../../../src/main/services/agent/helpers'
+import { getApiCredentials, getApiCredentialsForSource, getMcpServersForRequires } from '../../../../src/main/services/agent/helpers'
 import { resolveCredentialsForSdk, buildUserSessionSdkOptions } from '../../../../src/main/services/agent/sdk-config'
-import { getOrCreateV2Session } from '../../../../src/main/services/agent/session-manager'
+import {
+  acquireV2Session,
+  createSessionState,
+  registerActiveSession,
+  unregisterActiveSession,
+  closeV2Session,
+} from '../../../../src/main/services/agent/session-manager'
 import { resolveExecutionEnvironment } from '../../../../src/main/apps/runtime/execution-environment'
 import { openSessionWriter } from '../../../../src/main/apps/runtime/session-store'
 
@@ -292,6 +301,14 @@ class FakeSession {
   }
 }
 
+const closeManagedSession = vi.fn()
+const releaseManagedSession = vi.fn()
+
+function managedLease(session: FakeSession) {
+  closeManagedSession.mockImplementation(() => session.close())
+  return { session, isCurrent: true, send: session.send, close: closeManagedSession, release: releaseManagedSession }
+}
+
 function makeApp(overrides: Record<string, unknown> = {}) {
   return {
     id: 'app-1',
@@ -323,7 +340,7 @@ function makeStore() {
 
 function makeMemory() {
   return {
-    getPromptInstructions: vi.fn().mockReturnValue(''),
+    getPromptInstructions: vi.fn(generatePromptInstructions),
     saveSessionSummary: vi.fn().mockResolvedValue(undefined),
   } as any
 }
@@ -356,6 +373,23 @@ const baseTrigger = {
 describe('executeRun — guards', () => {
   beforeEach(() => {
     nextSession = new FakeSession()
+  })
+
+  it('records an unavailable pinned account as a run failure without resolving global credentials', async () => {
+    vi.mocked(getApiCredentials).mockClear()
+    vi.mocked(createSession).mockClear()
+    vi.mocked(getApiCredentialsForSource).mockRejectedValueOnce(new Error('AI source is unavailable. Please select an available source.'))
+    const store = makeStore()
+    const result = await executeRun({
+      app: makeApp({ userOverrides: { modelSourceId: 'removed', modelId: 'old-model' } }),
+      trigger: baseTrigger, store, memory: makeMemory(),
+    })
+    expect(result.outcome).toBe('error')
+    expect(result.errorMessage).toContain('unavailable')
+    expect(getApiCredentialsForSource).toHaveBeenCalledWith('removed', 'old-model')
+    expect(getApiCredentials).not.toHaveBeenCalled()
+    expect(createSession).not.toHaveBeenCalled()
+    expect(store.completeRun).toHaveBeenCalledWith(result.runId, expect.objectContaining({ status: 'error' }))
   })
 
   it('throws RunExecutionError for a non-automation app', async () => {
@@ -581,7 +615,7 @@ describe('executeRun — MCP wiring', () => {
     expect(sdkOptions.mcpServers).toEqual(expect.objectContaining({ 'weather-mcp': fakeMcpServer }))
   })
 
-  it('still wires the built-in report/notify/memory MCP tools when the app declares no MCP requirement', async () => {
+  it('still wires the built-in report and notification tools when the app declares no MCP requirement', async () => {
     nextSession = new FakeSession({ script: [assistantReport()] })
     await executeRun({
       app: makeApp(),
@@ -592,12 +626,61 @@ describe('executeRun — MCP wiring', () => {
 
     const sdkOptions = vi.mocked(createSession).mock.calls[0][0] as { mcpServers: Record<string, unknown> }
     expect(Object.keys(sdkOptions.mcpServers)).toEqual(
-      expect.arrayContaining(['halo-memory', 'halo-report', 'halo-notify', 'web-search', 'ocr'])
+      expect.arrayContaining(['halo-report', 'halo-notify', 'web-search', 'ocr'])
     )
   })
 })
 
 describe('executeRun — memory', () => {
+  beforeEach(() => {
+    vi.mocked(prepareMemoryForTurn).mockClear()
+    vi.mocked(loadSpaceTopicsForTurn).mockClear()
+    vi.mocked(appMemorySettings).mockReturnValue({ enabled: true, autoConsolidate: true, cadence: 'diligent' })
+  })
+
+  it('opens a fresh run with one signed heading and puts paths and authorship in the standing prompt', async () => {
+    nextSession = new FakeSession({ script: [assistantReport()] })
+    const memory = makeMemory()
+    const result = await executeRun({ app: makeApp(), trigger: baseTrigger, store: makeStore(), memory })
+    const authorTag = `schedule#${result.runId.replace(/-/g, '').slice(0, 4)}`
+    expect(prepareMemoryForTurn).toHaveBeenCalledTimes(1)
+    expect(prepareMemoryForTurn).toHaveBeenCalledWith(expect.any(Object), { byLabel: authorTag })
+    expect(memory.getPromptInstructions).toHaveBeenCalledWith('run', expect.objectContaining({ authorTag, layout: expect.any(Object) }))
+    expect(vi.mocked(buildAppSystemPrompt).mock.calls.at(-1)?.[0].memoryInstructions).toContain(authorTag)
+    expect(vi.mocked(buildInitialMessage).mock.calls.at(-1)?.[0]).not.toHaveProperty('liveInstances')
+    expect(vi.mocked(buildUserSessionSdkOptions).mock.calls.at(-1)?.[0].mcpServers).not.toHaveProperty('halo-memory')
+  })
+
+  it.each(['continue_followup', 'escalation_followup'] as const)('%s keeps the original run author and does not insert another heading', async type => {
+    nextSession = new FakeSession({ script: [assistantReport()] })
+    vi.mocked(acquireV2Session).mockResolvedValueOnce(managedLease(nextSession))
+    const store = makeStore()
+    store.getRun.mockReturnValue({
+      triggerType: 'schedule', environment: { spaceId: 'space-1', spacePath: '/tmp/space-1', workDir: '/tmp/space-1', memoryDir: '/tmp/app-1' },
+    })
+    const memory = makeMemory()
+    const trigger = type === 'continue_followup'
+      ? { type, description: 'Continue', continue: { sessionId: 'saved-sdk-session', userMessage: 'continue' } }
+      : { type, description: 'Answer', escalation: { sessionId: 'saved-sdk-session', originalQuestion: 'Proceed?', userResponse: { ts: 1, text: 'yes' } } }
+    const result = await executeRun({ app: makeApp(), trigger, store, memory, existingRunId: 'a1b2c3d4-0000-0000-0000-000000000000', existingSessionKey: 'original-thread' })
+    expect(result.outcome).toBe('useful')
+    expect(memory.getPromptInstructions).toHaveBeenCalledWith('run', expect.objectContaining({ authorTag: 'schedule#a1b2' }))
+    expect(prepareMemoryForTurn).not.toHaveBeenCalled()
+    expect(loadSpaceTopicsForTurn).not.toHaveBeenCalled()
+    expect(nextSession.send.mock.calls.at(-1)?.[0]).not.toContain('## Memory')
+  })
+
+  it('with memory off builds no instructions, heading or snapshot', async () => {
+    vi.mocked(appMemorySettings).mockReturnValueOnce({ enabled: false, autoConsolidate: true, cadence: 'diligent' })
+    nextSession = new FakeSession({ script: [assistantReport()] })
+    const memory = makeMemory()
+    await executeRun({ app: makeApp(), trigger: baseTrigger, store: makeStore(), memory })
+    expect(memory.getPromptInstructions).not.toHaveBeenCalled()
+    expect(prepareMemoryForTurn).not.toHaveBeenCalled()
+    expect(vi.mocked(buildInitialMessage).mock.calls.at(-1)?.[0].memorySnapshot).toBeNull()
+    expect(vi.mocked(buildUserSessionSdkOptions).mock.calls.at(-1)?.[0].mcpServers).not.toHaveProperty('halo-memory')
+  })
+
   it('records the run and requests consolidation after it, but never consolidates on the error path', async () => {
     vi.mocked(finalizeMemoryAfterTurn).mockClear()
     nextSession = new FakeSession({ script: [assistantReport()] })
@@ -623,6 +706,108 @@ describe('executeRun — memory', () => {
   })
 })
 
+describe('executeRun — managed follow-up lifecycle', () => {
+  beforeEach(() => {
+    vi.mocked(createSessionState).mockClear()
+    vi.mocked(registerActiveSession).mockClear()
+    vi.mocked(unregisterActiveSession).mockClear()
+    vi.mocked(closeV2Session).mockClear()
+    closeManagedSession.mockClear()
+    releaseManagedSession.mockClear()
+  })
+
+  it.each(['continue_followup', 'escalation_followup'] as const)(
+    '%s stays active through streaming and auto-continue, then releases through the manager',
+    async type => {
+      let release!: () => void
+      const held = new Promise<void>(resolve => { release = resolve })
+      nextSession = new FakeSession()
+      let cycle = 0
+      vi.spyOn(nextSession, 'stream').mockImplementation(async function* () {
+        cycle++
+        expect(registerActiveSession).toHaveBeenCalledTimes(1)
+        expect(unregisterActiveSession).not.toHaveBeenCalled()
+        expect(releaseManagedSession).not.toHaveBeenCalled()
+        expect(nextSession.close).not.toHaveBeenCalled()
+        if (cycle === 1) await held
+        else yield assistantReport()
+      })
+      vi.mocked(acquireV2Session).mockResolvedValueOnce(managedLease(nextSession))
+      const store = makeStore()
+      store.getRun.mockReturnValue({ environment: {
+        spaceId: 'space-1', spacePath: '/tmp/space-1', workDir: '/tmp/space-1', memoryDir: '/tmp/app-1',
+      } })
+      const trigger = type === 'continue_followup'
+        ? { type, description: 'Continue', continue: { sessionId: 'saved-session' } }
+        : { type, description: 'Answer', escalation: {
+            sessionId: 'saved-session', originalQuestion: 'Proceed?', userResponse: { ts: 1, text: 'yes' },
+          } }
+      const pending = executeRun({
+        app: makeApp(), trigger, store, memory: makeMemory(),
+        existingRunId: 'old-run', existingSessionKey: 'old-thread',
+      })
+      await vi.waitFor(() => expect(nextSession.send).toHaveBeenCalledTimes(1))
+      expect(createSessionState).toHaveBeenCalledWith('space-1', 'old-thread', expect.any(AbortController))
+      expect(registerActiveSession).toHaveBeenCalledWith('old-thread', expect.objectContaining({
+        spaceId: 'space-1', conversationId: 'old-thread', abortController: expect.any(AbortController),
+      }))
+      expect(nextSession.close).not.toHaveBeenCalled()
+      release()
+      expect((await pending).outcome).toBe('useful')
+      expect(cycle).toBe(2)
+      expect(closeManagedSession).toHaveBeenCalledTimes(1)
+      expect(releaseManagedSession).toHaveBeenCalledTimes(1)
+      expect(closeV2Session).not.toHaveBeenCalled()
+      expect(unregisterActiveSession).toHaveBeenCalledTimes(1)
+      expect(unregisterActiveSession).toHaveBeenCalledWith('old-thread')
+      expect(nextSession.close).toHaveBeenCalledTimes(1)
+      expect(closeManagedSession.mock.invocationCallOrder[0]).toBeLessThan(
+        releaseManagedSession.mock.invocationCallOrder[0],
+      )
+      expect(releaseManagedSession.mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(unregisterActiveSession).mock.invocationCallOrder[0],
+      )
+    },
+  )
+
+  it.each(['stream-error', 'abort'] as const)('releases an active follow-up after %s', async outcome => {
+    const abort = new AbortController()
+    nextSession = new FakeSession({
+      throwOnStream: outcome === 'stream-error' ? new Error('stream failed') : undefined,
+      script: [assistantReport()],
+    })
+    vi.mocked(acquireV2Session).mockResolvedValueOnce(managedLease(nextSession))
+    if (outcome === 'abort') abort.abort()
+    const store = makeStore()
+    store.getRun.mockReturnValue({ environment: {
+      spaceId: 'space-1', spacePath: '/tmp/space-1', workDir: '/tmp/space-1', memoryDir: '/tmp/app-1',
+    } })
+    await executeRun({
+      app: makeApp(), trigger: { type: 'continue_followup', description: 'Continue', continue: { sessionId: 'saved-session' } },
+      store, memory: makeMemory(), abortSignal: abort.signal,
+      existingRunId: 'old-run', existingSessionKey: 'old-thread',
+    })
+    expect(registerActiveSession).toHaveBeenCalledTimes(1)
+    expect(closeManagedSession).toHaveBeenCalledTimes(1)
+    expect(releaseManagedSession).toHaveBeenCalledTimes(1)
+    expect(closeV2Session).not.toHaveBeenCalled()
+    expect(unregisterActiveSession).toHaveBeenCalledTimes(1)
+    expect(unregisterActiveSession).toHaveBeenCalledWith('old-thread')
+    expect(nextSession.close).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps fresh transient runs outside the managed-session registry', async () => {
+    nextSession = new FakeSession({ script: [assistantReport()] })
+    await executeRun({ app: makeApp(), trigger: baseTrigger, store: makeStore(), memory: makeMemory() })
+    expect(registerActiveSession).not.toHaveBeenCalled()
+    expect(unregisterActiveSession).not.toHaveBeenCalled()
+    expect(closeV2Session).not.toHaveBeenCalled()
+    expect(closeManagedSession).not.toHaveBeenCalled()
+    expect(releaseManagedSession).not.toHaveBeenCalled()
+    expect(nextSession.close).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('executeRun — original continuation context', () => {
   it('refuses to infer an unpinned old execution environment from the current default', async () => {
     vi.mocked(resolveExecutionEnvironment).mockClear()
@@ -638,7 +823,7 @@ describe('executeRun — original continuation context', () => {
 
   it('fails a continuation without an original engine session instead of starting fresh', async () => {
     vi.mocked(createSession).mockClear()
-    vi.mocked(getOrCreateV2Session).mockClear()
+    vi.mocked(acquireV2Session).mockClear()
     const store = makeStore()
     store.getRun.mockReturnValue({ environment: { spaceId: 'space-1', spacePath: '/tmp/space-1', workDir: '/tmp/space-1', memoryDir: '/tmp/app-1' } })
     const result = await executeRun({
@@ -648,17 +833,17 @@ describe('executeRun — original continuation context', () => {
     expect(result.outcome).toBe('error')
     expect(result.errorMessage).toContain('original execution context is unavailable')
     expect(createSession).not.toHaveBeenCalled()
-    expect(getOrCreateV2Session).not.toHaveBeenCalled()
+    expect(acquireV2Session).not.toHaveBeenCalled()
     expect(store.insertRun).not.toHaveBeenCalled()
   })
 
   it('restores the original engine session and storage despite a changed default space', async () => {
     vi.mocked(createSession).mockClear()
-    vi.mocked(getOrCreateV2Session).mockClear()
+    vi.mocked(acquireV2Session).mockClear()
     vi.mocked(resolveExecutionEnvironment).mockClear()
     vi.mocked(openSessionWriter).mockClear()
     nextSession = new FakeSession({ script: [assistantReport()] })
-    vi.mocked(getOrCreateV2Session).mockResolvedValueOnce(nextSession as any)
+    vi.mocked(acquireV2Session).mockResolvedValueOnce(managedLease(nextSession))
     const store = makeStore()
     const directory = mkdtempSync(join(tmpdir(), 'halo-execute-context-'))
     const environment = { spaceId: 'old-space', spacePath: join(directory, 'storage'), workDir: join(directory, 'work'), memoryDir: join(directory, 'memory') }
@@ -673,7 +858,7 @@ describe('executeRun — original continuation context', () => {
     expect(result.outcome).toBe('useful')
     expect(result.runId).toBe('old-run')
     expect(result.sessionKey).toBe('old-thread')
-    expect(getOrCreateV2Session).toHaveBeenCalledWith('old-space', 'old-thread', expect.any(Object), 'old-engine', environment.workDir)
+    expect(acquireV2Session).toHaveBeenCalledWith('old-space', 'old-thread', expect.any(Object), 'old-engine', environment.workDir)
     expect(createSession).not.toHaveBeenCalled()
     expect(resolveExecutionEnvironment).not.toHaveBeenCalled()
     expect(store.insertRun).not.toHaveBeenCalled()

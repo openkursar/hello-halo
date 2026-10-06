@@ -60,9 +60,10 @@ export async function ensureStoreIdentity(force = false): Promise<boolean> {
   // actually mints a fresh token instead of silently returning the stale one.
   if (!force && await manager.getOAuthAccessToken(providerType)) return true
 
-  const start = await manager.startOAuthLogin(providerType)
+  const sourceId = manager.getOAuthSource(providerType)?.id
+  const start = await manager.startOAuthLogin(providerType, sourceId)
   if (!start.success || !start.data) return false
-  const done = await manager.completeOAuthLogin(providerType, start.data.state)
+  const done = await manager.completeOAuthLogin(providerType, start.data.state, start.data.loginId)
   return done.success
 }
 

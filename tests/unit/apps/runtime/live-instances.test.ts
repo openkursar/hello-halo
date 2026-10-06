@@ -1,54 +1,34 @@
-/**
- * Unit tests for apps/runtime/live-instances — who else is executing this
- * digital human right now.
- *
- * The contract the rest of the change leans on: the list is derived (a
- * conversation that is no longer running cannot appear, whatever start time was
- * recorded for it), a caller never sees itself, an origin taken from a user
- * -controlled IM group name cannot break out of the markdown heading it lands
- * in, and a turn too young to be worth mentioning is withheld.
- */
+/** Stable History attribution and truthful consolidation busy checks. */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
-const { runs, rounds, consumers, imSessions } = vi.hoisted(() => ({
-  runs: [] as any[],
+const { runs, rounds, consumers, generating, permission } = vi.hoisted(() => ({
+  runs: [] as Array<{ appId: string; runId: string }>,
   rounds: new Set<string>(),
   consumers: new Set<string>(),
-  imSessions: new Map<string, any>(),
+  generating: new Set<string>(),
+  permission: { isOwner: true },
 }))
 
 vi.mock('../../../../src/main/apps/runtime/active-runs', () => ({
-  listActiveRuns: (appId: string) => runs.filter((r) => r.appId === appId),
+  listActiveRuns: (appId: string) => runs.filter(run => run.appId === appId),
 }))
-
 vi.mock('../../../../src/main/apps/runtime/app-chat-sink', () => ({
   getConversationsWithActiveRound: () => Array.from(rounds),
 }))
-
 vi.mock('../../../../src/main/services/agent/session-manager', () => ({
   getRunningConsumerIds: () => Array.from(consumers),
+  isSessionBusy: (id: string) => generating.has(id),
 }))
-
-vi.mock('../../../../src/main/apps/runtime/im-session-registry', () => ({
-  getImSessionRegistry: () => ({
-    findSession: (_appId: string, channel: string, chatId: string) =>
-      imSessions.get(`${channel}:${chatId}`),
-  }),
-}))
-
-vi.mock('../../../../src/main/apps/runtime/team', () => ({
-  getActiveTeamRuntime: () => ({
-    getTeamName: () => 'Ops',
-  }),
+vi.mock('../../../../src/main/apps/runtime/im-permission-registry', () => ({
+  getImPermissionContext: () => permission,
 }))
 
 import {
+  collectAppConversationIds,
   describeSelfInstance,
   formatInstanceTag,
-  listLiveInstances,
-  noteInstanceTurnEnded,
-  noteInstanceTurnStarted,
+  hasOtherAppExecution,
 } from '../../../../src/main/apps/runtime/live-instances'
 
 const APP = 'app-1'
@@ -56,87 +36,84 @@ const CHAT = 'app-chat:app-1'
 const IM = 'app-chat:app-1:wecom-bot:group:chat-77'
 const TEAM = 'app-chat:app-1:team:team-9:epoch-3'
 
-/** Old enough to clear the visibility floor. */
-function startedLongAgo(conversationId: string): void {
-  noteInstanceTurnStarted(conversationId)
-  vi.setSystemTime(Date.now() + 60_000)
-}
-
 beforeEach(() => {
-  vi.useFakeTimers()
-  vi.setSystemTime(new Date('2026-03-01T15:00:00'))
   runs.length = 0
   rounds.clear()
   consumers.clear()
-  imSessions.clear()
-  for (const id of [CHAT, IM, TEAM]) noteInstanceTurnEnded(id)
+  generating.clear()
+  permission.isOwner = true
 })
 
-describe('live instances', () => {
-  it('names each surface the way a person would', () => {
-    imSessions.set('wecom-bot:chat-77', { displayName: '产品群', chatId: 'chat-77' })
-    runs.push({ runId: 'a1b2c3d4-0000-0000-0000-000000000000', appId: APP, triggerType: 'schedule', startedAt: Date.now() })
-    for (const id of [CHAT, IM, TEAM]) {
-      consumers.add(id)
-      startedLongAgo(id)
-    }
-
-    const byKind = Object.fromEntries(listLiveInstances(APP).map((i) => [i.kind, i.origin]))
-    expect(byKind).toEqual({
-      run: 'schedule',
-      chat: 'chat',
-      im: '产品群',
-      team: 'team:Ops',
-    })
+describe('execution identity', () => {
+  it.each([
+    [CHAT, 'chat'],
+    [IM, 'im'],
+    [TEAM, 'team'],
+    ['app-chat:app-1:local:direct:local-7', 'chat'],
+    ['app-chat:app-1:http:direct:session-7', 'chat'],
+  ])('uses a runtime-owned origin for %s', (conversationId, origin) => {
+    expect(describeSelfInstance({ conversationId }).origin).toBe(origin)
   })
 
-  it('drops a conversation that stopped running, even with a start time on file', () => {
-    consumers.add(CHAT)
-    startedLongAgo(CHAT)
-    expect(listLiveInstances(APP)).toHaveLength(1)
-
-    consumers.delete(CHAT)
-    expect(listLiveInstances(APP)).toEqual([])
+  it('is stable across time and gives a forked destination its own identity', () => {
+    const source = describeSelfInstance({ conversationId: IM })
+    expect(describeSelfInstance({ conversationId: IM })).toEqual(source)
+    expect(describeSelfInstance({ conversationId: 'app-chat:app-1:local:direct:fork-1' }).id).not.toBe(source.id)
   })
 
-  it('never lists the caller', () => {
+  it('changes guest attribution without changing the session digest', () => {
+    const owner = describeSelfInstance({ conversationId: IM })
+    permission.isOwner = false
+    const guest = describeSelfInstance({ conversationId: IM })
+    expect(guest.id).toBe(owner.id)
+    expect(formatInstanceTag(guest)).toMatch(/^im-guest#[a-f0-9]{4}$/)
+    permission.isOwner = true
+    expect(describeSelfInstance({ conversationId: IM })).toEqual(owner)
+  })
+
+  it.each(['[evil]\n| ## heading', '`injected`', '产品群'])('never uses user text from a session key as the origin (%s)', chatId => {
+    const tag = formatInstanceTag(describeSelfInstance({ conversationId: `app-chat:app-1:wecom-bot:group:${chatId}` }))
+    expect(tag).toMatch(/^im#[a-f0-9]{4}$/)
+  })
+
+  it('preserves the run digest and trigger attribution', () => {
+    const self = describeSelfInstance({ runId: 'a1b2c3d4-5555-0000-0000-000000000000', triggerType: 'schedule' })
+    expect(formatInstanceTag(self)).toBe('schedule#a1b2')
+  })
+})
+
+describe('consolidation activity', () => {
+  it('keeps idle resident sessions enumerable for stop and clear, but not busy', () => {
     consumers.add(CHAT)
     consumers.add(IM)
-    startedLongAgo(CHAT)
-    startedLongAgo(IM)
-
-    const self = describeSelfInstance(APP, { conversationId: CHAT })
-    const others = listLiveInstances(APP, self.id)
-    expect(others.map((i) => i.id)).not.toContain(self.id)
-    expect(others).toHaveLength(1)
+    consumers.add('app-chat:other')
+    expect(collectAppConversationIds(APP)).toEqual([CHAT, IM])
+    expect(hasOtherAppExecution(APP)).toBe(false)
   })
 
-  it('withholds a turn that only just began', () => {
+  it('counts queued rounds immediately, without a visibility-age threshold', () => {
+    rounds.add(CHAT)
+    expect(hasOtherAppExecution(APP)).toBe(true)
+    rounds.clear()
+    expect(hasOtherAppExecution(APP)).toBe(false)
+  })
+
+  it('counts autonomous consumer turns and excludes only the specified caller', () => {
     consumers.add(CHAT)
-    noteInstanceTurnStarted(CHAT)
-    expect(listLiveInstances(APP)).toEqual([])
-
-    vi.setSystemTime(Date.now() + 6_000)
-    expect(listLiveInstances(APP)).toHaveLength(1)
+    generating.add(CHAT)
+    const self = describeSelfInstance({ conversationId: CHAT })
+    expect(hasOtherAppExecution(APP)).toBe(true)
+    expect(hasOtherAppExecution(APP, self.id)).toBe(false)
+    rounds.add(IM)
+    expect(hasOtherAppExecution(APP, self.id)).toBe(true)
   })
 
-  it('strips the characters an IM group name could use to break out of a heading', () => {
-    const tag = formatInstanceTag({
-      id: 'deadbeef',
-      kind: 'im',
-      origin: '[evil]\n| ## heading | injected text that runs on and on',
-      startedAt: 0,
-    })
-    expect(tag).toBe('evil ## heading injected#dead')
-    expect(tag).not.toMatch(/[[\]|\r\n]/)
-  })
-
-  it('gives a run the tag its logs use', () => {
-    const self = describeSelfInstance(APP, {
-      runId: 'a1b2c3d4-5555-0000-0000-000000000000',
-      triggerType: 'schedule',
-      startedAt: Date.now(),
-    })
-    expect(formatInstanceTag(self)).toBe('schedule#a1b2')
+  it('isolates apps and counts active runs immediately', () => {
+    rounds.add('app-chat:app-10')
+    runs.push({ appId: 'other', runId: '99999999' })
+    expect(hasOtherAppExecution(APP)).toBe(false)
+    runs.push({ appId: APP, runId: 'a1b2c3d4-0000-0000-0000-000000000000' })
+    expect(hasOtherAppExecution(APP)).toBe(true)
+    expect(hasOtherAppExecution(APP, 'a1b2c3d4')).toBe(false)
   })
 })

@@ -48,12 +48,30 @@ digital-human chat in `app-chat.ts`) rather than routing through the space chat'
 - Tools: `buildBaseToolset` (`toolsets/base.ts`) — web search, Halo documentation and,
   while digital humans are enabled, `halo-apps`. Each entry starts from it and states
   its exclusions where it builds (automation: no `halo-apps`; a disposable team
-  member: no `halo-apps`). Everything else an entry mounts — memory, notify, report,
+  member: no `halo-apps`). Everything else an entry mounts — notify, report,
   team, browser, terminal, OCR, email, Halo API, person context, IM file send — is
   its own, granted by app permission and caller.
-- Session engine: chat goes through `getOrCreateV2Session` with a `TurnSink`
-  (2.12a); automation creates its session with `createSession` and drives its own
-  stream (2.10).
+- Session engine: chat acquires an `acquireV2Session` lease with a `TurnSink`
+  (2.12a); fresh automation runs use `createSession`, while follow-ups acquire a
+  lease without a consumer. Automation drives its own stream (2.10).
+  The manager protects each leased instance before handing it to its caller, so
+  asynchronous thinking/memory preparation cannot be interrupted by credential
+  invalidation or another source's acquisition. Chat dispatch transfers that
+  protection to awaiting-init/the consumer only after awaited SDK acceptance;
+  a rejected send reports through the lease's instance-owned synchronous failure
+  callback, closes only its owned instance and cancels its round. A retired
+  rejection reaches the original caller without publishing into its replacement;
+  preparation and round failures check the lease's current instance before reporting.
+  The public chat wrapper reports setup errors only, never repeats an inner report.
+  On retirement or a thrown stream, the consumer supplies the acknowledged turn's
+  authoritative partial snapshot synchronously. The chat sink writes one
+  `turn_snapshot` checkpoint, preserving open streaming blocks without per-token
+  JSONL writes; replay replaces the current turn's aggregates with that checkpoint
+  rather than duplicating them. Partial retirement still rejects the waiting round,
+  never delivers it as a successful reply. Abandoned preparation releases in `finally`.
+  A manager-owned follow-up holds its lease and active session for the entire
+  execution, including auto-continue, then closes its own instance and releases
+  before unregistering. Its cleanup cannot close a successor; transient runs close directly.
 
 **What is Runtime's own**: session lifecycle and persistence (the run JSONL, not the
 conversation store), the per-entry tool list, the capability policy for callers who
@@ -71,8 +89,9 @@ runtime's stream processing is much simpler (no thought accumulation, no UI even
 
 ### 2.2 Stateless Runs (No Cross-Run Session Persistence)
 
-**Decision**: Each run creates a fresh V2 session. Sessions are closed after
-the run completes. No session reuse across runs.
+**Decision**: Independent runs create fresh V2 sessions. Every execution closes
+its live session when it ends; follow-ups restore the original recorded engine
+session rather than keeping its process alive between executions.
 
 **Rationale**:
 - Conversation sessions benefit from reuse (user expects continuity within a chat).
@@ -138,8 +157,8 @@ Two consequences follow:
 ### 2.4 report_to_user as SDK MCP Server
 
 **Decision**: `report_to_user` is implemented as an SDK MCP server using
-`tool()` + `createSdkMcpServer()`, same pattern as `platform/memory/snapshot.ts` (`memory_status`)
-and `services/ai-browser/sdk-mcp-server.ts`.
+`tool()` + `createSdkMcpServer()`, same pattern as
+`services/ai-browser/sdk-mcp-server.ts`. Memory uses native file tools, not an MCP server.
 
 **Rationale**:
 - Consistent with existing Halo patterns for injecting custom tools.
@@ -179,8 +198,9 @@ memory pressure (`platform/background/memory-pressure`) is above normal. The
 limit is pushed down to the engine (`setResidentSessionLimit`), which enforces it
 before creating any NEW session by closing least-recently-used idle ones; the
 policy re-pushes on config and pressure changes and trims immediately when the
-limit drops. Automation runs create transient sessions outside that path, so
-`execute.ts` calls `admitTransientSession()` first. An epoch seal releases that
+limit drops. Fresh automation runs create transient sessions outside that path,
+so `execute.ts` calls `admitTransientSession()` first. Resumed follow-ups use the
+manager and its resident admission path instead. An epoch seal releases that
 epoch's idle member sessions (`releaseTeamEpochSessions`).
 
 **Never refuses**: a busy session is never evicted; if all are busy the new one
@@ -328,7 +348,9 @@ via the "Continue" button (in the Activity Thread or Session Detail view).
 - Same `runId` is reopened (`store.reopenRun()` resets status `error → running`)
   so the Activity Thread entry updates in-place (no duplicate entry).
 - Sends only `"Continue."` as the initial message (no reminder — the user's
-  intent is clear and context is already in the session).
+  intent is clear and context is already in the session). Memory instructions
+  retain the original run's author tag and trigger origin; no new History heading
+  or opening snapshot is inserted for a continuation.
 - Resets the auto-continue counter to 0; the 10-retry loop runs again.
   This cycle repeats indefinitely until `report_to_user` is finally called.
 
@@ -415,11 +437,12 @@ inputs and dispatches.
 ```
 sendAppChatMessage
   ├── prompt / MCP / permission envelope   (unchanged)
-  ├── getOrCreateV2Session(..., { displayModel, sink })   → consumer starts here
-  ├── sink.writeUserMessage(text)          → run JSONL
+  ├── acquireV2Session(..., { displayModel, sink })   → protected lease + consumer
+  ├── prepare thinking / memory, sink.writeUserMessage(text) → run JSONL
   ├── sink.beginRound({ onProgress, onReply, onMessageAccepted })
-  ├── markTurnDispatched + v2Session.send()
-  └── await round.done
+  ├── await lease.send() → SDK acceptance, awaiting-init/consumer protection
+  ├── await round.done
+  └── finally: lease.release()
 ```
 
 **Turn ownership**: the SDK stream carries no correlation between a `send()` and
@@ -439,8 +462,15 @@ Consequences that matter:
   autonomous turn as busy, so an inbound message arriving then is buffered as a
   supplement instead of starting a round.
 - A round that can never be answered is settled, not left hanging:
-  `onConsumerStopped` rejects outstanding rounds when the session dies, and an
-  empty interrupted/errored turn rejects rather than leaving an IM stream open.
+  `onConsumerStopped` rejects outstanding rounds synchronously at consumer
+  retirement (or once on natural exit). The sink outlives its SDK sessions, so a
+  stopped predecessor cannot call it again when its stream finally exits or emit
+  late turn hooks into a successor's rounds. A started turn's completion event is
+  emitted during retirement, before replacement, so other clients and turn-end
+  listeners also settle. Before `system:init`, acquisitions register an instance-owned
+  failure callback: unexpected termination checkpoints the user message and failure,
+  emits error/completion synchronously, then discards delayed predecessor failures.
+  An empty interrupted/errored turn rejects rather than leaving an IM stream open.
 - Those cover a session that *reports* its death. A session that simply never
   produces a turn — a resume against a transcript a crashed process left broken,
   an engine that failed to launch — reports nothing, and the caller would await a
@@ -474,10 +504,10 @@ consumer mid-turn) and every caller — stop, clear, restart, supplement bufferi
 — goes through it.
 
 **Reading `activeSessions` for an app chat is always wrong, and it fails
-silently.** `registerActiveSession` has no callers at all, so the map is empty
-and every `activeSessions.has(...)` answers a confident, permanent `false` —
-worse than an obvious break, because each caller reads a plausible answer and
-none can tell it is a constant. Two probes were left on it and both are now
+silently.** App chat never registers there; the map protects only headless
+manager-owned run continuations. Every app-chat `activeSessions.has(...)` therefore
+answers a confident, permanent `false` — worse than an obvious break, because each
+caller reads a plausible answer and none can tell it is a constant. Two probes were left on it and both are now
 moved (`bootstrap/extended.ts`): the authority reconciler's owner-busy check,
 where a streaming member read idle and had its in-progress task reassigned out
 from under it on authority handover, and the session-feed's, where a turn's
@@ -1246,4 +1276,15 @@ for external integrations. Both paths share admission and concurrency checks.
   - Bash and the terminal cannot be held to paths; they follow the policy only.
   - Codex runs no restricted turn at all (it cannot enforce a policy).
 - TodoWrite is available to every caller (`ALWAYS_AVAILABLE_BUILTIN_TOOLS`).
-- A guest's History entries are signed `im-guest#xxxx` (`live-instances.ts`).
+- Memory's shared annotated format, mature example, recording policy, paths and current
+  author tag are standing system instructions; opening memory data is bounded and
+  injected only for a fresh run or chat. Resumed chats and forks still receive the
+  destination author's tag in session configuration, without repeating the data.
+- Authors come from runtime-owned origins (`chat`, `im`, `im-guest`, `team`, or the
+  run's trigger) and a stable session/run digest, never a caller's display name.
+  Owner/guest transitions update the tag and session inputs together.
+- No per-turn running-instance roster or memory-status MCP tool is injected.
+  Stop/reset enumeration still includes idle resident consumers. Automatic
+  consolidation's busy probe counts queued rounds, active generation/subagents and
+  active runs, not idle sessions; its existing repeated-deferral limit and the
+  manual "consolidate now" override remain unchanged.

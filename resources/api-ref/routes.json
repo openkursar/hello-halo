@@ -521,6 +521,30 @@
     "group": "settings"
   },
   {
+    "method": "POST",
+    "path": "/api/auth/start-login"
+  },
+  {
+    "method": "POST",
+    "path": "/api/auth/complete-login"
+  },
+  {
+    "method": "POST",
+    "path": "/api/auth/cancel-login"
+  },
+  {
+    "method": "POST",
+    "path": "/api/auth/refresh-token"
+  },
+  {
+    "method": "GET",
+    "path": "/api/auth/check-token"
+  },
+  {
+    "method": "POST",
+    "path": "/api/auth/logout"
+  },
+  {
     "method": "GET",
     "path": "/api/system/version",
     "group": "settings"

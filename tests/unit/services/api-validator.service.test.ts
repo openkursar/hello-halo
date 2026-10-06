@@ -10,8 +10,10 @@ vi.mock('../../../src/main/services/analytics/analytics.service', () => ({
   analytics: { track: vi.fn(), trackErrorSurface: vi.fn() }
 }))
 
-const { proxyFetchMock } = vi.hoisted(() => ({
-  proxyFetchMock: vi.fn()
+const { proxyFetchMock, createSessionMock, ensureRouterMock } = vi.hoisted(() => ({
+  proxyFetchMock: vi.fn(),
+  createSessionMock: vi.fn(),
+  ensureRouterMock: vi.fn(),
 }))
 
 vi.mock('../../../src/main/services/proxy-fetch', () => ({
@@ -19,10 +21,33 @@ vi.mock('../../../src/main/services/proxy-fetch', () => ({
 }))
 
 vi.mock('../../../src/main/services/agent/resolved-sdk', () => ({
-  getResolvedAgentSdk: vi.fn()
+  createSession: createSessionMock,
 }))
+vi.mock('../../../src/main/openai-compat-router', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../src/main/openai-compat-router')>()
+  return { ...actual, ensureOpenAICompatRouter: ensureRouterMock }
+})
 
-import { fetchModelsFromApi } from '../../../src/main/services/api-validator.service'
+import { fetchModelsFromApi, validateApiConnection, normalizeApiUrl } from '../../../src/main/services/api-validator.service'
+import { getSdkApiCredentials } from '../../../src/main/services/agent/sdk-config'
+
+describe('validateApiConnection captured credentials', () => {
+  it.each(['anthropic', 'openai'] as const)('passes the explicit %s validation credentials to the engine', async provider => {
+    ensureRouterMock.mockResolvedValue({ baseUrl: 'http://127.0.0.1:51234' })
+    const close = vi.fn()
+    createSessionMock.mockResolvedValue({
+      send: vi.fn(), close,
+      stream: async function* () { yield { type: 'result' } },
+    })
+    const params = { provider, apiKey: 'test-validation-only', apiUrl: 'https://validation.example/v1', model: 'validation-model' }
+    expect(await validateApiConnection(params)).toMatchObject({ valid: true, model: params.model })
+    const options = createSessionMock.mock.calls.at(-1)![0]
+    expect(getSdkApiCredentials(options)).toEqual({
+      provider, apiKey: params.apiKey, baseUrl: normalizeApiUrl(params.apiUrl, provider), model: params.model,
+    })
+    expect(close).toHaveBeenCalledTimes(1)
+  })
+})
 
 describe('fetchModelsFromApi error details', () => {
   beforeEach(() => {

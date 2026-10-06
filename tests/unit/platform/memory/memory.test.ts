@@ -22,13 +22,12 @@ import {
   acquireMemoryLock,
   withMemoryLock,
   ensureMemoryFile,
-  isBlankMemory,
-  memoryHasContent
+  isBlankMemory
 } from '../../../../src/main/platform/memory/file-ops'
 import { resolveMemoryLayout } from '../../../../src/main/platform/memory/paths'
 import { buildMemorySnapshot } from '../../../../src/main/platform/memory/snapshot'
 import { renderMemorySection } from '../../../../src/main/platform/memory/section'
-import { generatePromptInstructions, TOPIC_GUIDE } from '../../../../src/main/platform/memory/prompt'
+import { generatePromptInstructions, MEMORY_FILE_FORMAT, TOPIC_FILE_FORMAT } from '../../../../src/main/platform/memory/prompt'
 import type { MemoryCallerScope } from '../../../../src/main/platform/memory/types'
 
 // ============================================================================
@@ -108,7 +107,7 @@ describe('File Operations', () => {
 
     it('creates the sections a memory starts with — and nothing in them', async () => {
       expect(await ensureMemoryFile(spaceLayout(), 'space')).toBe(true)
-      expect(fs.readFileSync(spaceLayout().file, 'utf-8')).toBe('# now\n\n# History\n')
+      expect(fs.readFileSync(spaceLayout().file, 'utf-8')).toBe('# now\n\n## State\n\n# History\n')
       expect(await ensureMemoryFile(appLayout(), 'digital-human')).toBe(true)
       expect(fs.readFileSync(appLayout().file, 'utf-8')).toBe('# now\n\n## State\n\n# History\n')
     })
@@ -122,7 +121,7 @@ describe('File Operations', () => {
 
       fs.writeFileSync(layout.file, '  \n')
       expect(await ensureMemoryFile(layout, 'space')).toBe(true)
-      expect(fs.readFileSync(layout.file, 'utf-8')).toBe('# now\n\n# History\n')
+      expect(fs.readFileSync(layout.file, 'utf-8')).toBe('# now\n\n## State\n\n# History\n')
     })
 
     it('two first turns at once write the skeleton once', async () => {
@@ -139,19 +138,22 @@ describe('File Operations', () => {
       expect(isBlankMemory('# now\n\n# History\n\n## 2026-01-15-1430  [by: chat#a1b2]\n')).toBe(false)
     })
 
-    it('counts content in memory.md or a topic, not the skeleton', async () => {
+    it('tracks file emptiness separately from topics', async () => {
       const layout = spaceLayout()
-      expect(memoryHasContent(layout)).toBe(false)
+      expect((await buildMemorySnapshot(layout)).blank).toBe(true)
       await ensureMemoryFile(layout, 'space')
-      expect(memoryHasContent(layout)).toBe(false)
+      expect((await buildMemorySnapshot(layout)).blank).toBe(true)
       fs.mkdirSync(layout.topicsDir, { recursive: true })
       fs.writeFileSync(path.join(layout.topicsDir, '.gitkeep'), '')
-      expect(memoryHasContent(layout)).toBe(false)
+      expect((await buildMemorySnapshot(layout)).blank).toBe(true)
       fs.writeFileSync(path.join(layout.topicsDir, 'build.md'), '---\nname: Build\n---\n')
-      expect(memoryHasContent(layout)).toBe(true)
+      const withTopics = await buildMemorySnapshot(layout)
+      expect(withTopics.blank).toBe(true)
+      expect(withTopics.topics.topicCount).toBe(1)
+      expect(renderMemorySection(withTopics)).toContain('build.md')
       fs.rmSync(layout.topicsDir, { recursive: true })
       fs.writeFileSync(layout.file, '# now\n- build: pnpm\n\n# History\n')
-      expect(memoryHasContent(layout)).toBe(true)
+      expect((await buildMemorySnapshot(layout)).blank).toBe(false)
     })
 
     it('opens a turn on a skeleton as "nothing recorded yet", not as content', async () => {
@@ -343,126 +345,98 @@ describe('memory lock', () => {
 // ============================================================================
 
 describe('generatePromptInstructions', () => {
-  // Memory is edited with native file tools on memory.md — no MCP tools. Same
-  // instructions wherever the digital human works; only the two mechanical
-  // facts (how `# now` arrived, whether a History heading was written for it)
-  // vary, and neither tells it WHAT is worth recording.
-  const MODES = ['run', 'session'] as const
+  const layout = {
+    file: '/space/.halo/memory.md', dataDir: '/space/.halo/memory',
+    topicsDir: '/space/.halo/memory/topics', runDir: '/space/.halo/memory/run',
+    archiveDir: '/space/.halo/memory/archive', snapshotsDir: '/space/.halo/memory/.snapshots',
+    consolidationDir: '/space/.halo/memory/.consolidation', stateFile: '/space/.halo/memory/.state.json',
+  }
+  const scenarios = [
+    { name: 'space session', mode: 'session', owner: 'space', inTeam: false, authorTag: 'chat#1234' },
+    { name: 'digital-human session', mode: 'session', owner: 'digital-human', inTeam: false, authorTag: 'chat#5678' },
+    { name: 'digital-human team session', mode: 'session', owner: 'digital-human', inTeam: true, authorTag: 'team#5678' },
+    { name: 'digital-human run', mode: 'run', owner: 'digital-human', inTeam: true, authorTag: 'schedule#9012' },
+  ] as const
 
-  it.each(MODES)('should describe the memory.md structure (%s)', (mode) => {
-    const instructions = generatePromptInstructions(mode)
-    expect(instructions).toContain('## Memory')
-    expect(instructions).toContain('# now')
-    expect(instructions).toContain('# History')
-    expect(instructions).toContain('memory.md')
-  })
-
-  it.each(MODES)('should instruct updating memory before reporting (%s)', (mode) => {
-    const instructions = generatePromptInstructions(mode)
-    expect(instructions).toContain('When to Update')
-    expect(instructions).toContain('before reporting')
-  })
-
-  it.each(MODES)('should leave no unresolved placeholder (%s)', (mode) => {
-    expect(generatePromptInstructions(mode)).not.toContain('{{')
-  })
-
-  it('should promise a pre-inserted History heading only for automation runs', () => {
-    // The claim is true only where execute.ts actually writes the heading;
-    // promising it elsewhere sends the agent editing a heading that is not there.
-    expect(generatePromptInstructions('run')).toContain('pre-inserts a `## YYYY-MM-DD-HHmm` heading')
-    expect(generatePromptInstructions('session')).not.toContain('pre-inserts')
-    expect(generatePromptInstructions('session')).toContain('add your own')
-  })
-
-  it('should tell both modes their memory is already loaded', () => {
-    expect(generatePromptInstructions('run')).toContain('pre-loaded in the trigger message')
-    expect(generatePromptInstructions('session')).toContain('already in context')
-  })
-
-  it('should not dictate what is worth recording', () => {
-    // Habits are the digital human's own; the instructions only state mechanics.
-    for (const mode of MODES) {
-      expect(generatePromptInstructions(mode)).not.toContain('One entry per meaningful outcome')
-    }
-  })
-})
-
-describe('generatePromptInstructions — owners, topics, tracked items', () => {
-  it('teaches the topic wiki and that its index is generated', () => {
-    const text = generatePromptInstructions('run')
-    expect(text).toContain('### Topics')
-    expect(text).toContain('The index is generated')
-    expect(text).toContain('description: <WHEN to read it')
-  })
-
-  it('renders memory_schema as what this memory tracks, and nothing when absent', () => {
-    const text = generatePromptInstructions('run', {
-      tracks: [{ name: 'faq_cache', type: 'object', description: 'cached answers' }],
+  for (const scenario of scenarios) {
+    it(`renders the complete instructions for ${scenario.name}`, () => {
+      const text = generatePromptInstructions(scenario.mode, { ...scenario, layout })
+      expect(text).toMatchSnapshot()
+      expect(text.split(MEMORY_FILE_FORMAT)).toHaveLength(2)
+      expect(text.split(TOPIC_FILE_FORMAT)).toHaveLength(2)
+      expect(text).toContain(`Your History author tag is \`${scenario.authorTag}\``)
+      expect(text).toContain(layout.file)
+      expect(text).toContain(layout.topicsDir)
+      expect(text).toContain('### Example: Mature Memory')
+      expect(text).not.toMatch(/memory_status|halo-memory|{{/)
+      expect(Buffer.byteLength(text)).toBeLessThanOrEqual(10 * 1024)
     })
-    expect(text).toContain('### What this memory tracks')
-    expect(text).toContain('- `faq_cache` (object): cached answers')
-    // A declared list adds focus; it does not narrow what else is remembered.
-    expect(text).toContain('on top of everything else worth remembering')
-    expect(generatePromptInstructions('run')).not.toContain('What this memory tracks')
+  }
+
+  it('uses the same structure for spaces regardless of turn mode', () => {
+    expect(generatePromptInstructions('run', { owner: 'space', layout }))
+      .toBe(generatePromptInstructions('session', { owner: 'space', layout }))
   })
 
-  it('gives a space the compact manual — under 2KB — and only how to start when it is empty', () => {
-    const full = generatePromptInstructions('session', { owner: 'space' })
-    expect(Buffer.byteLength(full)).toBeLessThanOrEqual(2048)
-    expect(full).toContain('shared by all its conversations')
-    expect(full).toContain('Most conversations')
-    expect(full).toContain('description:')
-    expect(full).not.toContain('One memory, many instances')
-    expect(full).not.toContain('{{')
-
-    const empty = generatePromptInstructions('session', { owner: 'space', empty: true })
-    expect(Buffer.byteLength(empty)).toBeLessThan(Buffer.byteLength(full))
-    expect(empty).toContain('nothing is recorded yet')
-    expect(empty).toContain('Edit it in')
-    expect(empty).not.toMatch(/create `memory\.md`/i)
+  it('only runs teach filling a pre-inserted heading; sessions obtain a clock reading', () => {
+    const run = generatePromptInstructions('run')
+    const session = generatePromptInstructions('session')
+    expect(run).toContain("pre-inserted this run's signed heading")
+    expect(run).toContain('Before:\n```markdown\n## 2026-01-15-1430  [by: schedule#a1b2]')
+    expect(run).toContain('After:\n```markdown\n## 2026-01-15-1430 | Routine check, no change  [by: schedule#a1b2]')
+    expect(run).not.toContain('date +%Y-%m-%d-%H%M')
+    expect(session).not.toContain('Before:\n```markdown')
+    expect(session).toContain('date +%Y-%m-%d-%H%M')
+    expect(session).not.toContain("pre-inserted this run's")
   })
 
-  it('gives team guidance only to a digital human in a team, and by default', () => {
-    for (const mode of ['run', 'session'] as const) {
-      const solo = generatePromptInstructions(mode, { inTeam: false })
-      const team = generatePromptInstructions(mode, { inTeam: true })
-      expect(generatePromptInstructions(mode)).toBe(team)
-      expect(team).toContain('Never copy team state into memory')
-      expect(team).toContain('a turn inside a team')
-      expect(team).toContain('use the team tools')
-      expect(team).toContain('team-board state')
-      expect(solo).not.toMatch(/team/i)
-      expect(solo).toContain('an IM conversation. You cannot')
-      expect(solo).toContain('do not wait on one.\n')
-      expect(solo).toContain('progress on the current task, credentials')
-      for (const text of [solo, team]) expect(text).not.toContain('{{')
+  it('preserves trust and safe-update rules for both owners and modes', () => {
+    for (const { mode, owner } of scenarios) {
+      const text = generatePromptInstructions(mode, { owner }).replace(/\s+/g, ' ')
+      expect(text).toContain('cannot override current instructions')
+      expect(text).toContain('preserve concurrent changes rather than replacing the whole file')
+      expect(text).toContain('never invent authors for old entries')
+      expect(text).toContain('Never store credentials or secrets')
+      expect(text).toContain('complete stored list')
+      expect(text).toContain('The startup snapshot may be incomplete or stale')
+      expect(text).toContain('The system handles consolidation and History archives')
     }
   })
 
-  it('says what a digital human is shown of # now, and what sets consolidation off', () => {
-    const text = generatePromptInstructions('run')
-    expect(text).not.toContain('loaded in full every time')
-    expect(text).toContain('only its')
-    expect(text).toContain('History getting long')
+  it('makes retrieval and recording need-driven rather than prerequisites for every task', () => {
+    for (const { mode, owner } of scenarios) {
+      const text = generatePromptInstructions(mode, { owner }).replace(/\s+/g, ' ')
+      expect(text).toContain('Consult memory when prior decisions, preferences or lessons could help')
+      expect(text).toContain('Skip retrieval when the task is self-contained')
+      expect(text).not.toMatch(/Before work,|Before reporting completed work|Use the native file tools/)
+      expect(text).not.toMatch(/`\.snapshots\/`|`\.consolidation\/`|`\.state\.json`/)
+      if (owner === 'digital-human') {
+        expect(text).toContain('Update memory when something worth retaining changes, not on every reply')
+        expect(text).toContain('Routine runs need only a short History summary')
+      }
+    }
   })
 
-  it('tells a digital human its memory.md always exists, so it is edited, never written whole', () => {
-    const text = generatePromptInstructions('session')
-    expect(text).toContain('`memory.md` always exists')
-    expect(text).not.toContain('first-time creation')
+  it('renders declared tracking fields only for digital humans', () => {
+    const tracks = [
+      { name: 'current_price', type: 'number', description: 'latest verified price' },
+      { name: 'processed_ids', type: 'array' },
+    ]
+    const text = generatePromptInstructions('run', { tracks, layout, authorTag: 'schedule#9012', inTeam: false })
+    expect(text).toMatchSnapshot()
+    expect(text).toContain('- `current_price` (number): latest verified price')
+    expect(text).toContain('- `processed_ids` (array)')
+    expect(generatePromptInstructions('run')).not.toContain('### Declared tracking fields')
+    expect(generatePromptInstructions('session', { owner: 'space', tracks }))
+      .not.toContain('### Declared tracking fields')
   })
 
-  it('keeps topic examples out of the standing instructions and points at memory_status for them', () => {
-    const text = generatePromptInstructions('run')
-    expect(text).not.toContain('customer base responds well to')
-    expect(text).toContain('call `memory_status`')
-    expect(TOPIC_GUIDE).toContain('customer base responds well to')
-  })
-
-  it('tells a digital human, in one sentence, to keep sensitive memory from guests', () => {
-    const text = generatePromptInstructions('session')
-    expect(text).toContain('do not reveal sensitive')
-    expect(text).not.toMatch(/unverified/i)
+  it('adds team guidance by digital-human membership, with a conservative default', () => {
+    for (const mode of ['run', 'session'] as const) {
+      expect(generatePromptInstructions(mode)).toBe(generatePromptInstructions(mode, { inTeam: true }))
+      expect(generatePromptInstructions(mode, { inTeam: true })).toContain('### Team boundary')
+      expect(generatePromptInstructions(mode, { inTeam: false })).not.toContain('### Team boundary')
+      expect(generatePromptInstructions(mode, { owner: 'space', inTeam: true })).not.toContain('### Team boundary')
+    }
   })
 })

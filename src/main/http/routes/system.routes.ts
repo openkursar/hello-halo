@@ -5,6 +5,7 @@
 import type { Express, Request, Response } from 'express'
 import {
   analytics,
+  authController,
   RENDERER_ALLOWED_EVENTS,
   electronApp,
   getEnabledAuthProviderConfigs,
@@ -25,9 +26,13 @@ function warnRejectedOnce(event: string): void {
   console.warn(`[Analytics/HTTP] Rejected unknown event: ${event.slice(0, 80)}`)
 }
 
+/** Invalid fields are a client error; every other auth outcome is reported in the body. */
+function sendAuthResult(res: Response, result: { success: boolean; error?: string }): void {
+  res.status(!result.success && result.error === authController.INVALID_AUTH_REQUEST ? 400 : 200).json(result)
+}
+
 export function registerSystemRoutes(app: Express): void {
-  // ===== Auth Routes (Read-only for remote access) =====
-  // Remote clients use host machine's auth state, no login operations needed
+  // ===== Auth Routes =====
   app.get('/api/auth/providers', async (req: Request, res: Response) => {
     try {
       const providers = getEnabledAuthProviderConfigs()
@@ -37,6 +42,32 @@ export function registerSystemRoutes(app: Express): void {
     }
   })
 
+  app.post('/api/auth/start-login', async (req: Request, res: Response) => {
+    const { providerType, sourceId } = req.body ?? {}
+    sendAuthResult(res, await authController.startLogin(providerType, sourceId))
+  })
+
+  app.post('/api/auth/complete-login', async (req: Request, res: Response) => {
+    const { providerType, state, loginId } = req.body ?? {}
+    sendAuthResult(res, await authController.completeLogin(providerType, state, loginId))
+  })
+
+  app.post('/api/auth/cancel-login', async (req: Request, res: Response) => {
+    const { providerType, loginId } = req.body ?? {}
+    sendAuthResult(res, await authController.cancelLogin(providerType, loginId))
+  })
+
+  app.post('/api/auth/refresh-token', async (req: Request, res: Response) => {
+    sendAuthResult(res, await authController.refreshToken(req.body?.sourceId))
+  })
+
+  app.get('/api/auth/check-token', async (req: Request, res: Response) => {
+    sendAuthResult(res, await authController.checkToken(req.query.sourceId))
+  })
+
+  app.post('/api/auth/logout', async (req: Request, res: Response) => {
+    sendAuthResult(res, await authController.logout(req.body?.sourceId))
+  })
 
   // ===== System Routes =====
   app.get('/api/system/version', async (req: Request, res: Response) => {

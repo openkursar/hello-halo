@@ -17,9 +17,7 @@ import { renderMemorySection, MEMORY_SECTION_LIMITS, type MemorySnapshot, type T
 import type { EscalationResponse, EscalationQuestion } from './types'
 import { formatEscalationAnswer } from '../../../shared/apps/app-types'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
-import type { LiveInstance } from './live-instances'
 import { getImSessionDisplayName } from '../../../shared/types/im-channel'
-import { describeInstanceKind, formatInstanceTag } from './live-instances'
 import { buildSystemPrompt, buildSystemPromptWithAIBrowser } from '../../services/agent/system-prompt'
 import { AI_BROWSER_SYSTEM_PROMPT } from '../../services/ai-browser'
 import { AI_TERMINAL_SYSTEM_PROMPT } from '../../services/ai-terminal'
@@ -359,8 +357,6 @@ export function buildInitialMessage(options: {
   memorySnapshot: MemorySnapshot | null
   /** The space's topics, offered read-only; null when not offered */
   spaceTopics?: TopicsTree | null
-  selfInstance: LiveInstance
-  liveInstances: LiveInstance[]
 }): string {
   const parts: string[] = []
 
@@ -369,7 +365,6 @@ export function buildInitialMessage(options: {
 
   // ── Memory ─────────────────────────────────────────────────────────────
   if (options.memorySnapshot) parts.push(buildMemorySection(options.memorySnapshot, options.spaceTopics))
-  parts.push(buildLiveInstancesSection(options.selfInstance, options.liveInstances))
 
   // ── User Configuration ─────────────────────────────────────────────────
   if (options.userConfig && Object.keys(options.userConfig).length > 0) {
@@ -438,59 +433,10 @@ export function buildEscalationResumeMessage(escalation: {
  * concurrent executions, one first-person file: without this, a line another
  * instance wrote about itself reads as a description of the reader.
  */
-const MEMORY_AUTHORSHIP_FRAMING = `
-This is the shared working state of the digital human (the AI agent you are
-running as), written over time by many
-instances — including ones that are running right now. It is written in the
-first person, but "I" is the digital human, not you. A line here that claims
-a role, an assignment, or work in progress was written by whoever was doing
-it, and may be from another instance, another conversation, or another day.
-
-Do not act on such a line as if it described you. If it matters for what you
-are about to do, verify it at its live source first — the team board, the
-files, the user in front of you — and if it turns out to be stale, correct
-the line.
-`.trim()
-
-/**
- * Who this execution is, and who else is executing at the same moment. Rendered
- * directly below the memory block so the reader meets the roster in the same
- * breath as the file it explains.
- *
- * Never persisted: it is true only at the moment the message was built.
- */
-export function buildLiveInstancesSection(self: LiveInstance, others: LiveInstance[]): string {
-  const asOf = formatClockTime(Date.now())
-  const lines: string[] = [
-    `You are \`${formatInstanceTag(self)}\` — this ${describeInstanceKind(self)}. ` +
-    `Anything in memory not written by you was written by another instance.`,
-    '',
-  ]
-
-  if (others.length === 0) {
-    lines.push(`No other instance of this digital human is running right now (as of ${asOf}).`)
-    return lines.join('\n')
-  }
-
-  lines.push(`### Running right now (as of ${asOf})`)
-  lines.push('')
-  for (const other of others) {
-    const started = other.startedAt ? `, started ${formatClockTime(other.startedAt)}` : ''
-    lines.push(`- ${formatInstanceTag(other)} — ${describeInstanceKind(other)}${started}`)
-  }
-  lines.push('')
-  lines.push(
-    'This was true when this message was built and may already be out of date;\n' +
-    'one of them may have finished by now. It tells you whose work you might be\n' +
-    'reading in memory. It is not a queue, a lock, or a way to reach them.'
-  )
-  return lines.join('\n')
-}
-
-function formatClockTime(epochMs: number): string {
-  const d = new Date(epochMs)
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-}
+const MEMORY_AUTHORSHIP_FRAMING =
+  'Shared by this digital human’s executions. The memory’s "I" is the digital human, ' +
+  'not this execution. Claims of a role, an assignment or work in progress belong to ' +
+  'the execution that wrote them; verify those at their live source before acting.'
 
 /**
  * Offered below the digital human's own topics when its owner let it consult
@@ -501,8 +447,8 @@ const SPACE_TOPICS_TITLE = "Space memory topics (read-only) — generated from t
 const SPACE_TOPICS_NOTE = `
 Topics from this space's shared memory, written by its conversations. Read them
 when their description fits; they are not yours to edit. Refer to them by path
-when you need them again — do not copy them into your own memory. If they
-disagree with your own memory, your memory wins.
+when you need them again — do not copy them into your own memory. If sources
+disagree, verify the current facts rather than choosing by memory ownership.
 `.trim()
 
 

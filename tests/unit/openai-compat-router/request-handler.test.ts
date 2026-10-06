@@ -250,6 +250,19 @@ describe('handleMessagesRequest dispatch', () => {
     expect(handleKiroRequest).not.toHaveBeenCalled()
   })
 
+  it('keeps account-scoped capabilities attached to both an initial Responses request and its retry', async () => {
+    const capabilities = { reasoningSummary: false, responsesLite: true, reasoningLevels: ['low'] }
+    convertAnthropicToOpenAIResponses.mockReturnValue({ request: { model: 'shared', input: [] } })
+    proxyFetch.mockResolvedValueOnce(fakeResponse({ ok: false, status: 400, text: 'stream must be set to true' }))
+      .mockResolvedValueOnce(fakeResponse({ ok: true, body: {} }))
+    await handleMessagesRequest(anthReq(), baseConfig({
+      apiType: 'responses', adapterId: 'openai-codex', codexModelCapabilities: capabilities
+    }), makeRes() as unknown as ExpressResponse)
+    expect(applyProviderAdapter).toHaveBeenCalledTimes(2)
+    expect(applyProviderAdapter.mock.calls[0][4]).toMatchObject({ codexModelCapabilities: capabilities })
+    expect(applyProviderAdapter.mock.calls[1][4]).toBe(applyProviderAdapter.mock.calls[0][4])
+  })
+
   it('short-circuits when an interceptor already responded', async () => {
     runInterceptors.mockResolvedValue({ intercepted: true, responded: true })
     const res = makeRes()

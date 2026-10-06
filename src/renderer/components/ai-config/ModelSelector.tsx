@@ -18,6 +18,7 @@ import { api } from '../../api'
 import {
   getModelDisplayName,
   getCurrentSource,
+  getSourceById,
   AVAILABLE_MODELS,
   type AISourcesConfig,
   type AISource,
@@ -70,9 +71,12 @@ function ModelList({ onDone }: { onDone: () => void }) {
   const currentConversation = target.kind === 'conversation' ? target.conversation : null
   const pinSourceId = currentConversation?.modelSourceId
   const pinModelId = currentConversation?.modelId
+  const isMissingSource = !!pinSourceId && !getSourceById(aiSources, pinSourceId)
 
   // State for expanded sections (accordion)
-  const [expandedSection, setExpandedSection] = useState<string | null>(currentSource?.id ?? null)
+  const [expandedSection, setExpandedSection] = useState<string | null>(
+    pinSourceId && !isMissingSource ? pinSourceId : currentSource?.id ?? null
+  )
 
   const toggleSection = (sourceId: string, e: React.MouseEvent) => {
     e.stopPropagation()
@@ -174,6 +178,11 @@ function ModelList({ onDone }: { onDone: () => void }) {
 
   return (
     <>
+      {isMissingSource && (
+        <p role="alert" className="px-3 py-2 text-sm text-foreground break-words">
+          {t('Account removed. Choose another account.')}
+        </p>
+      )}
       {/* Iterate all configured sources */}
       {aiSources.sources.map(source => {
         const isExpanded = expandedSection === source.id
@@ -210,7 +219,7 @@ function ModelList({ onDone }: { onDone: () => void }) {
               // When the conversation has a pin, the checkmark follows it;
               // otherwise fall back to the global active source + model.
               const isSelected = pinSourceId
-                ? (pinSourceId === source.id && pinModelId === modelId)
+                ? (pinSourceId === source.id && (pinModelId || source.model) === modelId)
                 : (isActiveSource && source.model === modelId)
 
               return (
@@ -247,7 +256,7 @@ function ModelList({ onDone }: { onDone: () => void }) {
           className="w-full px-3 py-3 text-left text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors flex items-center gap-2"
         >
           <Plus className="w-3.5 h-3.5" />
-          {t('Add AI Provider')}
+          {t('Configure AI Source')}
         </button>
       ) : (
         <div className="mt-1 flex items-center justify-between border-t border-border/50 px-4 pt-2.5 pb-1.5">
@@ -280,11 +289,8 @@ export function ModelSelectSheet({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation()
   const [isAnimatingOut, setIsAnimatingOut] = useState(false)
 
-  const aiSources = useAiSources()
-  const currentConversation = useCurrentConversation()
-  const currentModelName = getModelDisplayName(
-    aiSources, currentConversation?.modelSourceId, currentConversation?.modelId
-  )
+  const { name, isMissingSource } = useConversationModel()
+  const currentModelName = isMissingSource ? t('Account removed. Choose another account.') : name
 
   const handleClose = () => {
     setIsAnimatingOut(true)
@@ -324,16 +330,16 @@ export function ModelSelectSheet({ onClose }: { onClose: () => void }) {
 
         {/* Header */}
         <div className="px-4 py-2 border-b border-border/50 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Sparkles className="w-5 h-5 text-primary" />
-            <div>
+          <div className="flex min-w-0 items-center gap-2">
+            <Sparkles className="w-5 h-5 shrink-0 text-primary" />
+            <div className="min-w-0">
               <h3 className="text-base font-semibold text-foreground">{t('Select Model')}</h3>
-              <p className="text-xs text-muted-foreground">{currentModelName}</p>
+              {!isMissingSource && <p className="text-xs text-muted-foreground break-words">{currentModelName}</p>}
             </div>
           </div>
           <button
             onClick={handleClose}
-            className="p-2 hover:bg-secondary rounded-lg transition-colors"
+            className="shrink-0 p-2 hover:bg-secondary rounded-lg transition-colors"
           >
             <X className="w-5 h-5 text-muted-foreground" />
           </button>
@@ -386,8 +392,11 @@ function DigitalHumanModelButton({ target }: { target: Extract<ActiveModelTarget
   const aiSources = useAiSources()
   const [isOpen, setIsOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
-  const modelName = getModelDisplayName(aiSources, target.modelSourceId, target.modelId)
-  const source = target.modelSourceId ? aiSources.sources.find(s => s.id === target.modelSourceId) : getCurrentSource(aiSources)
+  const source = target.modelSourceId ? getSourceById(aiSources, target.modelSourceId) : getCurrentSource(aiSources)
+  const isMissingSource = !!target.modelSourceId && !source
+  const modelName = isMissingSource
+    ? t('Account removed. Choose another account.')
+    : getModelDisplayName(aiSources, target.modelSourceId, target.modelId)
   const modelId = target.modelId ?? source?.model
   const app = useAppsStore(state => state.apps.find(a => a.id === target.appId))
 
@@ -402,15 +411,16 @@ function DigitalHumanModelButton({ target }: { target: Extract<ActiveModelTarget
         }}
         className="h-8 flex items-center gap-1 pl-1.5 pr-2 rounded-sm text-xs text-foreground hover:bg-secondary transition-colors ease-halo"
         title={modelName}
+        aria-label={modelName}
       >
         <Sparkles className="w-4 h-4 sm:hidden" />
-        <span className="hidden sm:inline truncate max-w-[140px]">{modelName}</span>
+        <span className={`hidden sm:inline ${isMissingSource ? 'max-w-[200px] whitespace-normal text-left' : 'truncate max-w-[140px]'}`}>{modelName}</span>
         <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
       </button>
       {isOpen && (
         <div className="absolute right-0 bottom-full mb-1 w-64 bg-card border border-border rounded-xl shadow-pop z-50 p-3">
-          <div className="text-center text-xs text-muted-foreground">{t('{{name}} uses', { name: target.appName })}</div>
-          <div className="mt-0.5 text-center text-[15px] font-semibold text-foreground break-all">{modelName}</div>
+          {!isMissingSource && <div className="text-center text-xs text-muted-foreground">{t('{{name}} uses', { name: target.appName })}</div>}
+          <div role={isMissingSource ? 'alert' : undefined} className="mt-0.5 text-center text-[15px] font-semibold text-foreground break-words">{modelName}</div>
           <div className="mt-3">
             {/* One level for the whole digital human, across its sessions. */}
             <ThinkingLevelControl
@@ -457,12 +467,14 @@ function formatContextWindow(tokens: number): string {
 function useConversationModel() {
   const aiSources = useAiSources()
   const conversation = useCurrentConversation()
-  const fallback = getCurrentSource(aiSources)
-  const source = (conversation?.modelSourceId && aiSources.sources.find(s => s.id === conversation.modelSourceId)) || fallback
-  const modelId = conversation?.modelSourceId === source?.id && conversation?.modelId ? conversation.modelId : source?.model
+  const sourceId = conversation?.modelSourceId
+  const source = sourceId ? getSourceById(aiSources, sourceId) : getCurrentSource(aiSources)
+  const isMissingSource = !!sourceId && !source
+  const modelId = source ? (sourceId ? conversation?.modelId || source.model : source.model) : undefined
   const model = source?.availableModels.find(m => m.id === modelId)
+  const name = getModelDisplayName(aiSources, sourceId, conversation?.modelId)
   const configuredEffort = modelId ? source?.modelOverrides?.[modelId]?.reasoningEffort : undefined
-  return { aiSources, source, modelId, model, configuredEffort }
+  return { aiSources, source, modelId, model, name, isMissingSource, configuredEffort }
 }
 
 /**
@@ -471,9 +483,28 @@ function useConversationModel() {
  */
 function CurrentModelCard({ onSwitch }: { onSwitch: () => void }) {
   const { t } = useTranslation()
-  const { aiSources, source, modelId, model } = useConversationModel()
-  const name = getModelDisplayName(aiSources, source?.id, modelId)
+  const navigate = useAppStore(state => state.navigate)
+  const { aiSources, source, model, name, isMissingSource } = useConversationModel()
   const contextWindow = model?.capabilities?.contextWindow
+
+  if (isMissingSource) {
+    const hasSources = aiSources.sources.length > 0
+    return (
+      <div className="p-3">
+        <p role="alert" className="text-sm text-foreground break-words">
+          {t('Account removed. Choose another account.')}
+        </p>
+        <button
+          type="button"
+          onClick={hasSources ? onSwitch : () => navigate('settings')}
+          className="mt-3 flex w-full items-center justify-center gap-1 rounded-lg bg-secondary/60 px-3 py-2 text-sm text-foreground hover:bg-secondary transition-colors ease-halo"
+        >
+          {hasSources ? t('Choose another account') : t('Configure AI Source')}
+          <ChevronRight className="w-4 h-4 shrink-0" />
+        </button>
+      </div>
+    )
+  }
 
   return (
     <div className="p-3">
@@ -535,6 +566,7 @@ function ConversationThinkingLevel() {
 }
 
 function ConversationModelSelector() {
+  const { t } = useTranslation()
   const isMobile = useIsMobile()
   const config = useAppStore(s => s.config)
   const [isOpen, setIsOpen] = useState(false)
@@ -543,11 +575,8 @@ function ConversationModelSelector() {
   const [maxHeight, setMaxHeight] = useState<number>()
   const dropdownRef = useRef<HTMLDivElement>(null)
 
-  const aiSources = useAiSources()
-  const currentConversation = useCurrentConversation()
-  const currentModelName = getModelDisplayName(
-    aiSources, currentConversation?.modelSourceId, currentConversation?.modelId
-  )
+  const { name, isMissingSource } = useConversationModel()
+  const currentModelName = isMissingSource ? t('Account removed. Choose another account.') : name
 
   // The mobile sheet handles its own dismissal.
   useDismiss(dropdownRef, isOpen && !isMobile, () => setIsOpen(false))
@@ -573,12 +602,13 @@ function ConversationModelSelector() {
         onClick={toggle}
         className="h-8 flex items-center gap-1 pl-1.5 pr-2 rounded-sm text-xs text-foreground hover:bg-secondary transition-colors ease-halo"
         title={currentModelName}
+        aria-label={currentModelName}
       >
         {/* Mobile: show Sparkles icon */}
         <Sparkles className="w-4 h-4 sm:hidden" />
         {/* Desktop: model name */}
         <div className="hidden sm:flex items-center gap-1.5 min-w-0">
-          <span className="truncate max-w-[140px]">{currentModelName}</span>
+          <span className={isMissingSource ? 'max-w-[200px] whitespace-normal text-left' : 'truncate max-w-[140px]'}>{currentModelName}</span>
         </div>
         <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
       </button>

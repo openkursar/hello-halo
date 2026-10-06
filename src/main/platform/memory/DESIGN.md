@@ -1,6 +1,6 @@
 # platform/memory -- Design Document
 
-> Status: V4.2 — topics, space memory, agent consolidation with deterministic merge, write guard, owner settings
+> Status: V4.3 — shared compact memory instructions, native file tools, agent consolidation with deterministic merge, write guard, owner settings
 
 ---
 
@@ -11,20 +11,20 @@ Memory is plain markdown on disk, edited by the agent with its own file tools
 
 | Part | Like a person's | Answers | Where | At turn start the agent sees |
 |---|---|---|---|---|
-| `# now` | working memory | what is true right now | `memory.md` | full text |
+| `# now` | working memory | what is true right now | `memory.md` | bounded text |
 | `# History` + archives | episodic memory | what happened, when, by whom | `memory.md`, `memory/run/`, `memory/archive/` | headings |
 | Topics | knowledge | what is known about one subject | `memory/topics/` | a generated index |
 
 `memory_schema` (digital-human spec) sits beside this: it says *what* a digital
 human should track, not how memory is organised. It is rendered into the memory
-instructions as "What this memory tracks".
+instructions as "Declared tracking fields"; it adds focus, not a recording whitelist.
 
 Owners:
 
 | Owner | Scope | Written by | Read-only for |
 |---|---|---|---|
 | Digital human | `app` | its runs, chats, IM threads, team turns | — |
-| Space | `space` | every conversation in the space | digital humans (opt-in per digital human, every turn) |
+| Space | `space` | every conversation in the space | digital humans (opt-in per digital human) |
 | User | `user` | reserved; resolvable, not wired | — |
 
 Each memory has owner settings (`shared/types/memory.ts`): on/off, automatic
@@ -109,8 +109,9 @@ a future reader sees before deciding to open it. A category is a folder whose
 `index.md` holds only that front matter; its contents are never listed by hand.
 
 **The index is generated** (`scanTopics` + `renderTopicIndexLines`) from the files
-at every turn start and never written anywhere. A stored list would drift from
-the files, and a consolidation could drop a line and orphan a topic.
+for each opening memory snapshot and never written anywhere. Resumed turns read
+current files on demand. A stored list would drift from the files, and a
+consolidation could drop a line and orphan a topic.
 
 - Categories first, then files; files carry `.md`, folders `/`; sizes shown.
 - Breadth-first within a 6KB budget: the whole top level always, deeper levels
@@ -134,32 +135,48 @@ start   ensureMemoryFile(layout, owner) — the skeleton, when memory.md is miss
           # now (up to a limit, cut at a `##` boundary with a note) ·
           History as "N entries" + the newest few titles ·
           generated topic index (6KB budget, shared with any read-only topics)
-        instructions: generatePromptInstructions(mode, { owner, tracks, empty, inTeam })
-work    agent Reads/Edits memory.md and topics; memory_status for structure
-          and for topic-writing examples (not sent every turn)
+        instructions: generatePromptInstructions(mode, { owner, tracks, inTeam, layout, authorTag })
+work    agent Reads/Edits memory.md and topics with native file tools
+          shared format, mature example and topic front matter already in the system prompt
 end     run record (automation only) · requestConsolidation (services)
 ```
 
 | Caller | Instructions | Memory block |
 |---|---|---|
-| Automation run (`apps/runtime/execute.ts`) | full manual, `run` (~11KB) | trigger message; `# now` ≤16KB, 8 History titles; heading pre-inserted |
-| Digital-human chat / IM / team (`apps/runtime/app-chat.ts`) | full manual, `session` | first message of the session, same limits |
-| Space chat (`services/agent/space-memory.ts`) | compact, ≤2KB; ~0.5KB while the memory is empty | first message of a new conversation; `# now` ≤8KB, 3 History titles |
+| Automation run (`apps/runtime/execute.ts`) | shared compact format + digital-human policies, `run` | trigger message; `# now` ≤16KB, 8 History titles; heading pre-inserted |
+| Digital-human chat / IM / team (`apps/runtime/app-chat.ts`) | same format + digital-human policies, `session`; trusted author tag in session configuration | first message of the session, same limits; no live-instance roster |
+| Space chat (`services/agent/space-memory.ts`) | same format + selective-recording policy; trusted author tag in session configuration | first message of a new conversation; `# now` ≤8KB, 3 History titles |
 
-The skeleton is the sections and nothing in them (`# now` / `# History`, plus
-`## State` for a digital human), created on first use rather than when a space
+All enabled memories receive the same annotated structural template, three-way
+classification rule and mature-memory example, including empty memories. The template
+explains `State`, optional entity/`Patterns`/`Errors` sections, signed History entries
+and topic front matter. Examples teach short summaries with detail below, without
+per-entry character limits. Run instructions demonstrate filling the pre-inserted
+heading; sessions obtain the local time only when writing an entry, never guess it.
+Owner policies differ in what deserves recording, not in the file format. Stable instructions
+stay in the system prompt; actual memory is read with Read/Grep/Glob and updated with
+Edit/Write. There is no memory-status MCP server or tutorial-fetch requirement. The
+startup block carries data and locations, not another copy of the instructions.
+Digital-human policies add continuity, tracked fields, guest privacy and team-state
+boundaries without turning ordinary questions into mandatory memory writes. Runs
+still fill their pre-inserted History heading before reporting.
+
+The skeleton is the sections and nothing in them (`# now` / `## State` / `# History`),
+created on first use rather than when a space
 or app is created, and never over a file that holds anything. The agent's first
 write is therefore an Edit under the writers' lock, like every later one, and
 the instructions never teach creating the file. A memory is *empty*
-(`memoryHasContent`, `snapshot.blank`) while memory.md holds at most its
-skeleton and there are no topics; an empty memory is rendered as "nothing
-recorded yet" instead of its headings.
+(`snapshot.blank` for the file) while memory.md holds at most its
+skeleton. The topic tree is tracked separately and remains visible even when the
+file itself is empty; an empty file is rendered as "nothing recorded yet" instead
+of its headings.
 
 A digital human is one long-lived persona and leans on continuity; a space is
 many unrelated conversations, so it gets the current facts and the index and
-reads the rest on demand. With memory turned off, none of this happens: no
-instructions, no block, no heading, no run record, no consolidation; the guard
-makes the memory read-only.
+reads the rest on demand. With memory turned off, no
+instructions, block, heading, run record or automatic consolidation is produced.
+Digital-human sessions retain a read-only write guard; space chats omit memory
+setup. The settings' manual "consolidate now" action still works on existing files.
 
 The team guidance in a digital human's manual (never copy team state into
 memory; the team tools) is given by membership (`inTeam`, from any team), not
@@ -167,7 +184,7 @@ by whether the turn is a team turn: every turn shares the memory, and a chat
 with the owner can copy team state into it as easily.
 
 A digital human may be offered its space's topics read-only (setting
-`spaceMemoryAccess`, default off) — in every turn, guests' included. They are
+`spaceMemoryAccess`, default off) — in the opening snapshot, guests' included. They are
 listed one level deep after its own topics, from what is left of the shared
 budget, with a note to refer to them by path rather than copy them into its own
 memory, so knowledge is not held twice.
@@ -226,9 +243,10 @@ Engines without hooks (Codex) degrade: no lock and no read-only boundary for the
 agent's tools, logged once per process; the instructions still ask for
 edit-don't-rewrite. Shell writes to memory files are out of scope.
 
-**Readers never see a missing file**: writes are temp-then-rename, archives are
-hard links, and a consolidation never removes memory.md. A reader finding no file
-is told to create one, which would replace the memory — so absence must not occur.
+**System writes never expose a missing file**: writes are temp-then-rename,
+archives are hard links, and a consolidation never removes memory.md. If an
+opening snapshot nevertheless finds it unavailable, the agent is told to re-check
+the path, not recreate a file from a stale snapshot.
 
 ---
 
@@ -289,13 +307,12 @@ src/main/platform/memory/
   permissions.ts    who may write which scope through this module
   file-ops.ts       lock, atomic write, History heading, archive link
   topics.ts         front matter, scan, generated index
-  snapshot.ts       buildMemorySnapshot, memory_status tool
+  snapshot.ts       buildMemorySnapshot and heading parser (pure reads)
   section.ts        renderMemorySection — the block a turn opens with
-  prompt.ts         instructions (mode × owner × tracks), TOPIC_FILE_FORMAT
+  prompt.ts         shared format + instructions (mode × owner × tracks), TOPIC_FILE_FORMAT
   guard.ts          engine-hook write guard
   consolidation.ts  file side of consolidation: assess, prepare, validate,
                     commit/rebase, trim, .state.json
-  sdk.ts            injected agent-SDK primitives (seam; see ARCHITECTURE §2)
 
 src/shared/types/memory.ts                settings, status, cadences (renderer-safe)
 src/main/services/memory-consolidation/   the consolidating agent, harness, scheduling, space controls

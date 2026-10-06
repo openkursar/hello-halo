@@ -5,13 +5,12 @@
  */
 
 import { getAppManager, type InstalledApp } from '../manager'
-import { getConfig } from '../../foundation/config.service'
 import { getApiCredentials, getApiCredentialsForSource } from '../../services/agent/helpers'
 import { resolveCredentialsForSdk } from '../../services/agent/sdk-config'
 import { getSpace } from '../../services/space.service'
 import { resolveMemoryLayout, type MemoryCallerScope } from '../../platform/memory'
 import type { MemoryStatus } from '../../../shared/types/memory'
-import { listLiveInstances } from './live-instances'
+import { hasOtherAppExecution } from './live-instances'
 import { consolidateNow, getMemoryStatus } from '../../services/memory-consolidation'
 import {
   appMemorySettings,
@@ -28,13 +27,12 @@ export function appConsolidationInputs(app: InstalledApp, selfId?: string): AppC
     appName: app.spec.name,
     settings: appMemorySettings(app),
     resolveCredentials: async () => {
-      const config = getConfig()
       const credentials = app.userOverrides?.modelSourceId
-        ? await getApiCredentialsForSource(config, app.userOverrides.modelSourceId, app.userOverrides.modelId)
-        : await getApiCredentials(config)
+        ? await getApiCredentialsForSource(app.userOverrides.modelSourceId, app.userOverrides.modelId)
+        : await getApiCredentials()
       return resolveCredentialsForSdk(credentials)
     },
-    isBusy: () => listLiveInstances(app.id, selfId).length > 0,
+    isBusy: () => hasOtherAppExecution(app.id, selfId),
   }
 }
 

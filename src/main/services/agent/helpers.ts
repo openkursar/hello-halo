@@ -8,7 +8,7 @@
 
 import { join, dirname, basename } from 'path'
 import { existsSync, mkdirSync } from 'fs'
-import { getConfig, getTempSpacePath } from '../../foundation/config.service'
+import { getTempSpacePath, getCredentialsGeneration } from '../../foundation/config.service'
 import { getSpace } from '../space.service'
 import { getAISourceManager } from '../ai-sources'
 import { getAppManager } from '../app-bridge'
@@ -219,185 +219,77 @@ function resolveCapabilitiesFromSource(
   }
 }
 
-/**
- * Get API credentials based on current aiSources configuration (v2)
- * This is the central place that determines which API to use
- * Now uses AISourceManager for unified access with v2 format
- */
-export async function getApiCredentials(config: ReturnType<typeof getConfig>): Promise<ApiCredentials> {
+/** Capture the selection once; a token refresh must not redirect it to another account. */
+export async function getApiCredentials(): Promise<ApiCredentials> {
   const manager = getAISourceManager()
   await manager.ensureInitialized()
-
-  console.log('[AgentService] getApiCredentials called')
-
-  // Get current source from manager (v2 format)
-  const currentSource = manager.getCurrentSourceConfig()
-
-  console.log('[AgentService] currentSource:', currentSource ? {
-    id: currentSource.id,
-    name: currentSource.name,
-    provider: currentSource.provider,
-    authType: currentSource.authType
-  } : null)
-
-  // Ensure token is valid for OAuth sources
-  if (currentSource?.authType === 'oauth') {
-    console.log('[AgentService] Checking OAuth token validity for:', currentSource.name)
-    const tokenResult = await manager.ensureValidToken(currentSource.id)
-    console.log('[AgentService] Token check result:', tokenResult.success)
-    if (!tokenResult.success) {
-      throw new Error('OAuth token expired or invalid. Please login again.')
-    }
-  }
-
-  // Get backend config from manager
-  console.log('[AgentService] Calling manager.getBackendConfig()')
-  const backendConfig = manager.getBackendConfig()
-  console.log('[AgentService] backendConfig:', backendConfig ? {
-    url: backendConfig.url,
-    model: backendConfig.model,
-    hasKey: !!backendConfig.key
-  } : null)
-
-  if (!backendConfig) {
+  const source = manager.getCurrentSourceConfig()
+  if (!source) {
+    console.warn('[AgentService] Credential resolution refused: no AI source selected')
     throw new Error('No AI source configured. Please configure an API key or login.')
   }
-
-  if (backendConfig.delegatedAuth) {
-    assertDelegatedAuthReady()
-  }
-
-  // Determine provider type based on current source
-  let provider: 'anthropic' | 'openai' | 'oauth'
-  let oauthProvider: string | undefined
-
-  if (currentSource?.authType === 'delegated') {
-    // The CLI speaks the Anthropic wire protocol on its own credential; the
-    // router still sits in between, which the 'oauth' path already models.
-    provider = 'oauth'
-    console.log('[Agent] Using CLI-delegated credential via AISourceManager')
-  } else if (currentSource?.authType === 'oauth') {
-    provider = 'oauth'
-    // Preserve the provider identity: only Claude OAuth tokens are
-    // first-party-locked, and consumers like compaction's provider fork (#121)
-    // need to distinguish it from Copilot/智谱 OAuth.
-    oauthProvider = currentSource.provider
-    console.log(`[Agent] Using OAuth provider ${currentSource.provider} via AISourceManager`)
-  } else if (currentSource?.provider === 'anthropic') {
-    provider = 'anthropic'
-    console.log(`[Agent] Using Anthropic API via AISourceManager`)
-  } else {
-    // OpenAI-compatible providers (deepseek, siliconflow, etc.)
-    provider = 'openai'
-    console.log(`[Agent] Using OpenAI-compatible API (${currentSource?.provider || 'unknown'}) via AISourceManager`)
-  }
-
-  const modelId = resolveModelId(backendConfig.model)
-  const modelOption = currentSource?.availableModels?.find(m => m.id === modelId)
-  const displayModel = modelOption?.name || modelId
-  // Capabilities MUST resolve against the wire model id. Both the preset
-  // patterns in model-capabilities.json (e.g. "claude-opus-", "deepseek-chat")
-  // and the user's per-model overrides (keyed in ModelConfigPanel by the
-  // selected model id) live on the wire id, not the human-friendly name.
-  // Passing displayModel here would silently fall back to defaults whenever
-  // the source labels a model with a friendly name — re-introducing the
-  // original "32K cap not honored" symptom on every custom source.
-  const capabilities = resolveCapabilitiesFromSource(currentSource, modelId)
-
-  return {
-    baseUrl: backendConfig.url,
-    apiKey: backendConfig.key,
-    model: modelId,
-    displayModel,
-    provider,
-    oauthProvider,
-    customHeaders: backendConfig.headers,
-    apiType: backendConfig.apiType,
-    forceStream: backendConfig.forceStream,
-    filterContent: backendConfig.filterContent,
-    adapterId: backendConfig.adapterId,
-    visionOverride: backendConfig.visionOverride,
-    delegatedAuth: backendConfig.delegatedAuth,
-    capabilities,
-    supportsVision: modelOption?.supportsVision,
-  }
+  return resolveSourceCredentials(manager, source.id)
 }
 
-/**
- * Get API credentials for a specific AI source (used for per-app model overrides).
- * Falls back to getApiCredentials() if the specified source is not found or not configured.
- */
+/** An unavailable explicit source is an error, never an account substitution. */
 export async function getApiCredentialsForSource(
-  config: ReturnType<typeof getConfig>,
   sourceId: string,
   modelId?: string
 ): Promise<ApiCredentials> {
   const manager = getAISourceManager()
   await manager.ensureInitialized()
+  return resolveSourceCredentials(manager, sourceId, modelId)
+}
 
-  const aiSources = config.aiSources
-  const source = aiSources?.version === 2
-    ? aiSources.sources.find((s: any) => s.id === sourceId)
-    : null
-
+async function resolveSourceCredentials(
+  manager: ReturnType<typeof getAISourceManager>,
+  sourceId: string,
+  modelId?: string
+): Promise<ApiCredentials> {
+  let source = manager.getSourceConfig(sourceId)
   if (!source) {
-    console.warn(`[AgentService] getApiCredentialsForSource: source ${sourceId} not found, falling back to global`)
-    return getApiCredentials(config)
+    console.warn(`[AgentService] Credential resolution refused: source ${sourceId} not found`)
+    throw new Error(`AI source "${sourceId}" is unavailable. Please select an available source.`)
   }
 
-  // Ensure token is valid for OAuth sources
+  const effectiveModel = modelId || source.model
   if (source.authType === 'oauth') {
-    const tokenResult = await manager.ensureValidToken(source.id)
+    const tokenResult = await manager.ensureValidToken(sourceId, effectiveModel)
     if (!tokenResult.success) {
       throw new Error('OAuth token expired or invalid. Please login again.')
     }
+    // Refresh may replace the source record, its account metadata and catalog.
+    source = manager.getSourceConfig(sourceId)
+    if (!source) {
+      console.warn(`[AgentService] Credential resolution refused: source ${sourceId} removed during refresh`)
+      throw new Error(`AI source "${sourceId}" is unavailable. Please select an available source.`)
+    }
   }
 
-  const backendConfig = manager.getBackendConfigForSource(sourceId, modelId)
+  const backendConfig = manager.getBackendConfigForSource(sourceId, effectiveModel)
   if (!backendConfig) {
-    console.warn(`[AgentService] getApiCredentialsForSource: no backend config for source ${sourceId}, falling back to global`)
-    return getApiCredentials(config)
+    console.warn(`[AgentService] Credential resolution refused: source ${sourceId} has no usable backend config`)
+    throw new Error(`AI source "${sourceId}" is not configured or unavailable. Please configure it or login again.`)
   }
+  if (backendConfig.delegatedAuth) assertDelegatedAuthReady()
 
-  if (backendConfig.delegatedAuth) {
-    assertDelegatedAuthReady()
-  }
-
-  // Determine provider type
-  let provider: 'anthropic' | 'openai' | 'oauth'
-  let oauthProvider: string | undefined
-  if (source.authType === 'delegated') {
-    // The CLI speaks the Anthropic wire protocol on its own credential; the
-    // router still sits in between, which the 'oauth' path already models.
-    provider = 'oauth'
-  } else if (source.authType === 'oauth') {
-    provider = 'oauth'
-    oauthProvider = source.provider
-  } else if (source.provider === 'anthropic') {
-    provider = 'anthropic'
-  } else {
-    provider = 'openai'
-  }
-
-  const effectiveModelId = backendConfig.model || source.model
-  const modelOption = source.availableModels?.find((m: any) => m.id === effectiveModelId)
-  const displayModel = modelOption?.name || effectiveModelId
-  // Per-app overrides still belong to the same source — resolve capabilities
-  // from that source's modelOverrides so apps inherit user-configured limits.
-  // Always use the wire model id here (see getApiCredentials for full
-  // rationale): preset pattern matching and the modelOverrides keys both
-  // live on the wire id, not the friendly displayModel.
-  const capabilities = resolveCapabilitiesFromSource(source, effectiveModelId)
-
-  console.log(`[AgentService] Using per-app model override: source=${source.name}, model=${displayModel}`)
+  const provider = source.authType === 'oauth' || source.authType === 'delegated'
+    ? 'oauth'
+    : source.provider === 'anthropic' ? 'anthropic' : 'openai'
+  const effectiveModelId = resolveModelId(backendConfig.model || modelId || source.model)
+  const modelOption = source.availableModels?.find(model => model.id === effectiveModelId)
 
   return {
+    sourceId,
+    credentialsGeneration: getCredentialsGeneration(sourceId),
+    codexModelCapabilities: backendConfig.codexModelCapabilities,
+    profileArn: backendConfig.profileArn,
     baseUrl: backendConfig.url,
     apiKey: backendConfig.key,
     model: effectiveModelId,
-    displayModel,
+    displayModel: modelOption?.name || effectiveModelId,
     provider,
-    oauthProvider,
+    oauthProvider: source.authType === 'oauth' ? source.provider : undefined,
     customHeaders: backendConfig.headers,
     apiType: backendConfig.apiType,
     forceStream: backendConfig.forceStream,
@@ -405,40 +297,19 @@ export async function getApiCredentialsForSource(
     adapterId: backendConfig.adapterId,
     visionOverride: backendConfig.visionOverride,
     delegatedAuth: backendConfig.delegatedAuth,
-    capabilities,
+    capabilities: resolveCapabilitiesFromSource(source, effectiveModelId),
     supportsVision: modelOption?.supportsVision,
   }
 }
 
-/**
- * Get API credentials for a conversation, honoring its per-conversation model
- * pin (Cursor-style) and falling back to the global selection.
- *
- * Resolution order:
- *  1. Conversation has a `modelSourceId` that still exists in config → resolve
- *     from that source + `modelId` (reuses the per-app override path).
- *  2. Otherwise (legacy conversation with no pin, or a pin whose source was
- *     deleted) → fall back to the global current source via getApiCredentials.
- *
- * Accepts a minimal structural shape rather than the full Conversation type to
- * avoid coupling the agent module to conversation.service's internal interface.
- */
+/** Only legacy conversations without a source pin use the current global selection. */
 export async function getApiCredentialsForConversation(
-  config: ReturnType<typeof getConfig>,
   conversation: { modelSourceId?: string; modelId?: string } | null | undefined
 ): Promise<ApiCredentials> {
   const sourceId = conversation?.modelSourceId
-  if (sourceId) {
-    const aiSources = config.aiSources
-    const sourceExists = aiSources?.version === 2 && aiSources.sources.some(s => s.id === sourceId)
-    if (sourceExists) {
-      return getApiCredentialsForSource(config, sourceId, conversation?.modelId)
-    }
-    console.warn(
-      `[AgentService] Conversation model pin source ${sourceId} unavailable, falling back to global selection`
-    )
-  }
-  return getApiCredentials(config)
+  return sourceId !== undefined
+    ? getApiCredentialsForSource(sourceId, conversation?.modelId)
+    : getApiCredentials()
 }
 
 /**
@@ -477,6 +348,9 @@ export function credentialsToBackendConfig(
   overrides?: Partial<BackendRequestConfig>
 ): BackendRequestConfig {
   return {
+    sourceId: credentials.sourceId,
+    codexModelCapabilities: credentials.codexModelCapabilities,
+    profileArn: credentials.profileArn,
     url: credentials.baseUrl,
     key: credentials.apiKey,
     model: credentials.model,

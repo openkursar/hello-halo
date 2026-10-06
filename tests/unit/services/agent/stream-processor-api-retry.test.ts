@@ -267,6 +267,34 @@ describe('abandoning the failed attempt', () => {
     }
   })
 
+  it('restores the substantive-tool boundary when an open text response is retried', async () => {
+    const state = newState()
+    const outcome = await run(state, [
+      init,
+      streamEvent({ type: 'message_start', message: { id: 'prefix' } }),
+      streamEvent({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }),
+      streamEvent({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Earlier text' } }),
+      streamEvent({ type: 'content_block_stop', index: 0 }),
+      { type: 'assistant', message: { id: 'prefix', content: [{ type: 'text', text: 'Earlier text' }] } },
+      streamEvent({ type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'executed', name: 'Bash' } }),
+      streamEvent({ type: 'content_block_stop', index: 1 }),
+      { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'executed', content: 'Real output' }] } },
+      streamEvent({ type: 'message_start', message: { id: 'failed' } }),
+      streamEvent({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }),
+      streamEvent({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Abandoned text' } }),
+      retryFrame(1),
+      streamEvent({ type: 'message_start', message: { id: 'retried' } }),
+      streamEvent({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }),
+      streamEvent({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Fresh reply' } }),
+      { type: 'assistant', message: { id: 'retried', content: [{ type: 'text', text: 'Fresh reply' }] } },
+      streamEvent({ type: 'content_block_stop', index: 0 }),
+      { ...result, result: 'Fresh reply' },
+    ])
+    expect(outcome.finalContent).toBe('Fresh reply')
+    expect(state.thoughts.find(thought => thought.type === 'tool_use')?.toolResult).toMatchObject({ output: 'Real output', isError: false })
+    expect(state.apiRetry).toBeNull()
+  })
+
   it('takes the partial text off the reply and keeps the resent answer only', async () => {
     const state = newState()
 

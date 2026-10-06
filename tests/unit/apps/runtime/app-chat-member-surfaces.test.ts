@@ -19,11 +19,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 // Mocks (must be declared before importing app-chat)
 // ============================================
 
-const MEMORY_INSTRUCTIONS = 'SENTINEL-MEMORY-INSTRUCTIONS'
+const MEMORY_INSTRUCTIONS = '## State | one-line summary'
 
-const { getPromptInstructions, createMemoryStatusMcpServer, createHaloAppsMcpServer } = vi.hoisted(() => ({
-  getPromptInstructions: vi.fn(() => 'SENTINEL-MEMORY-INSTRUCTIONS'),
-  createMemoryStatusMcpServer: vi.fn(() => ({ _isMcpServer: true, name: 'sentinel-halo-memory' })),
+const { getPromptInstructions, createHaloAppsMcpServer } = vi.hoisted(() => ({
+  getPromptInstructions: vi.fn(),
   createHaloAppsMcpServer: vi.fn(() => ({ _isMcpServer: true, name: 'sentinel-halo-apps' })),
 }))
 
@@ -38,17 +37,21 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   })),
 }))
 
-const { consumers, v2Sessions } = vi.hoisted(() => ({
+const { consumers, v2Sessions, send } = vi.hoisted(() => ({
   consumers: new Map<string, unknown>(),
   v2Sessions: new Map<string, unknown>(),
+  send: vi.fn(),
 }))
 
 vi.mock('../../../../src/main/services/agent/session-manager', () => ({
   v2Sessions,
   closeV2Session: vi.fn(),
-  getOrCreateV2Session: vi.fn(async () => ({
-    send: vi.fn(),
-    setMaxThinkingTokens: vi.fn(),
+  acquireV2Session: vi.fn(async () => ({
+    session: { send, setMaxThinkingTokens: vi.fn() },
+    isCurrent: true,
+    send,
+    close: vi.fn(),
+    release: vi.fn(),
   })),
   getConsumerHandle: (id: string) => consumers.get(id) ?? null,
   getRunningConsumerIds: () => Array.from(consumers.keys()),
@@ -116,11 +119,6 @@ vi.mock('../../../../src/main/services/app-bridge', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   createHaloAppsMcpServer,
 }))
-vi.mock('../../../../src/main/platform/memory', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../../../src/main/platform/memory')>()),
-  createMemoryStatusMcpServer,
-}))
-
 const { buildUserSessionSdkOptions } = vi.hoisted(() => ({ buildUserSessionSdkOptions: vi.fn(() => ({})) }))
 const { getEngineCapabilities } = vi.hoisted(() => ({ getEngineCapabilities: vi.fn((): unknown => null) }))
 vi.mock('../../../../src/main/services/agent/resolved-sdk', async (importOriginal) => ({
@@ -211,12 +209,19 @@ vi.mock('../../../../src/main/apps/runtime/person-context-tool', () => ({
 vi.mock('../../../../src/main/apps/runtime/report-tool', () => ({
   createReportToolServer: () => ({ _isMcpServer: true, name: 'halo-report' }),
 }))
-const sessionRegistry = vi.hoisted(() => ({ current: null as null | { register: ReturnType<typeof vi.fn> } }))
+const sessionRegistry = vi.hoisted(() => ({
+  current: null as null | {
+    register: ReturnType<typeof vi.fn>
+    getPendingResume?: () => string | undefined
+    getPushableSessions: () => []
+  },
+}))
+const { loadChatSessionId } = vi.hoisted(() => ({ loadChatSessionId: vi.fn<[], string | undefined>() }))
 vi.mock('../../../../src/main/apps/runtime/im-session-registry', () => ({
   getImSessionRegistry: () => sessionRegistry.current,
 }))
 vi.mock('../../../../src/main/apps/runtime/session-store', () => ({
-  loadChatSessionId: () => undefined,
+  loadChatSessionId,
   saveChatSessionId: vi.fn(),
   deleteChatSessionId: vi.fn(),
   copySessionJsonl: vi.fn(),
@@ -286,7 +291,7 @@ vi.mock('../../../../src/main/apps/runtime/turn/memory-lifecycle', () => ({
       exists: false, totalLines: 0, sizeBytes: 0, nowBytes: 0, fullContent: null, headers: [], firstSection: null,
       layout: { file: '/tmp/memory.md', dataDir: '/tmp/memory', topicsDir: '/tmp/memory/topics', runDir: '/tmp/memory/run', archiveDir: '/tmp/memory/archive', snapshotsDir: '/tmp/memory/.snapshots', consolidationDir: '/tmp/memory/.consolidation', stateFile: '/tmp/memory/.state.json' },
       topics: { root: '/tmp/memory/topics', children: [], topicCount: 0, totalBytes: 0, truncated: false },
-      runFiles: [], runTotalCount: 0, archiveCount: 0, lastModified: null,
+      runTotalCount: 0, archiveCount: 0,
     },
   })),
   requestAppMemoryConsolidation: vi.fn(),
@@ -311,10 +316,24 @@ vi.mock('../../../../src/main/services/memory-consolidation', () => ({
 import { sendAppChatMessage } from '../../../../src/main/apps/runtime/app-chat'
 import { hasChatBrowserContext } from '../../../../src/main/apps/runtime/app-chat-browser'
 import { createScopedBrowserContext } from '../../../../src/main/services/ai-browser'
-import { getOrCreateV2Session, updateConsumerDisplayModel } from '../../../../src/main/services/agent/session-manager'
+import { acquireV2Session, updateConsumerDisplayModel } from '../../../../src/main/services/agent/session-manager'
 import { resolveCredentialsForSdk } from '../../../../src/main/services/agent/sdk-config'
-import { requestAppMemoryConsolidation } from '../../../../src/main/apps/runtime/turn/memory-lifecycle'
+import { requestAppMemoryConsolidation, prepareMemoryForTurn, appMemorySettings, loadSpaceTopicsForTurn } from '../../../../src/main/apps/runtime/turn/memory-lifecycle'
+import { generatePromptInstructions } from '../../../../src/main/platform/memory'
+import { describeSelfInstance, formatInstanceTag } from '../../../../src/main/apps/runtime/live-instances'
+import { setImPermissionContext, clearImPermissionContext } from '../../../../src/main/apps/runtime/im-permission-registry'
 import { buildTeamSessionKey } from '../../../../src/shared/apps/team-types'
+
+beforeEach(() => {
+  getPromptInstructions.mockImplementation(generatePromptInstructions)
+  send.mockClear()
+  loadChatSessionId.mockReset()
+  getEngineCapabilities.mockReturnValue({ features: { permissionRules: true, hooks: true } })
+  sessionRegistry.current = null
+  vi.mocked(prepareMemoryForTurn).mockClear()
+  vi.mocked(loadSpaceTopicsForTurn).mockClear()
+  vi.mocked(appMemorySettings).mockReturnValue({ enabled: true, autoConsolidate: true, cadence: 'diligent' })
+})
 
 const TEAM_ID = 'team-1'
 const EPOCH_ID = 'epoch-1'
@@ -383,7 +402,6 @@ describe('a temporary collaboration member mounts no memory and no digital-human
     buildUserSessionSdkOptions.mockClear()
     beginRound.mockClear()
     getPromptInstructions.mockClear()
-    createMemoryStatusMcpServer.mockClear()
     createHaloAppsMcpServer.mockClear()
     vi.mocked(requestAppMemoryConsolidation).mockClear()
     disposableMemberContext()
@@ -401,13 +419,12 @@ describe('a temporary collaboration member mounts no memory and no digital-human
     expect(Object.keys(servers)).not.toContain('halo-memory')
     expect(Object.keys(servers)).not.toContain('halo-apps')
     // Not merely uninjected — never built, so nothing can leak one back in.
-    expect(createMemoryStatusMcpServer).not.toHaveBeenCalled()
     expect(createHaloAppsMcpServer).not.toHaveBeenCalled()
   })
 
   it('opens the session with no memory block and does no memory housekeeping', async () => {
     await sendAppChatMessage(memberTurn())
-    const sent = (sink.writeUserMessage as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0] as string
+    const sent = send.mock.calls.at(-1)![0] as string
     expect(sent).not.toContain('## Memory')
     expect(requestAppMemoryConsolidation).not.toHaveBeenCalled()
   })
@@ -421,11 +438,10 @@ describe('a temporary collaboration member mounts no memory and no digital-human
   })
 })
 
-describe('a digital human with a life beyond the work keeps both', () => {
+describe('a kept digital human retains persistent memory through native file tools', () => {
   beforeEach(() => {
     buildUserSessionSdkOptions.mockClear()
     getPromptInstructions.mockClear()
-    createMemoryStatusMcpServer.mockClear()
     createHaloAppsMcpServer.mockClear()
     vi.mocked(requestAppMemoryConsolidation).mockClear()
     keptMemberContext()
@@ -434,11 +450,86 @@ describe('a digital human with a life beyond the work keeps both', () => {
   it('mounts memory and the digital-human tools as before', async () => {
     await sendAppChatMessage(memberTurn())
     const { mcpServers, systemPrompt } = mountedSurfaces()
-    expect(Object.keys(mcpServers)).toContain('halo-memory')
+    expect(Object.keys(mcpServers)).not.toContain('halo-memory')
     expect(Object.keys(mcpServers)).toContain('halo-apps')
     expect(getPromptInstructions).toHaveBeenCalled()
     expect(systemPrompt).toContain(MEMORY_INSTRUCTIONS)
     expect(requestAppMemoryConsolidation).toHaveBeenCalled()
+  })
+})
+
+describe('memory context across session lifecycles', () => {
+  beforeEach(() => {
+    keptMemberContext()
+    buildUserSessionSdkOptions.mockClear()
+    getPromptInstructions.mockClear()
+    vi.mocked(requestAppMemoryConsolidation).mockClear()
+  })
+
+  it('sends a startup snapshot once, not on later resumed messages or into the recorded user text', async () => {
+    const turn = memberTurn()
+    await sendAppChatMessage(turn)
+    expect(send.mock.calls.at(-1)![0]).toContain('## Memory')
+    expect(sink.writeUserMessage.mock.calls.at(-1)![0]).toBe(turn.message)
+    loadChatSessionId.mockReturnValue('saved-sdk-session')
+    await sendAppChatMessage(turn)
+    expect(send.mock.calls.at(-1)![0]).toBe(turn.message)
+    expect(prepareMemoryForTurn).toHaveBeenCalledTimes(1)
+    expect(loadSpaceTopicsForTurn).toHaveBeenCalledTimes(1)
+    const tag = formatInstanceTag(describeSelfInstance({ conversationId: CONVERSATION }))
+    expect(mountedSurfaces().systemPrompt).toContain(`Your History author tag is \`${tag}\``)
+    expect(mountedSurfaces().systemPrompt).toContain('never invent authors for old entries')
+    expect(send.mock.calls.flat().join('\n')).not.toMatch(/Running right now|No other instance|You are `team#/)
+    expect(vi.mocked(acquireV2Session).mock.calls.at(-1)?.[9]).toEqual({ requireFreshInputs: true })
+  })
+
+  it('gives a fork its destination author even when resuming the source transcript', async () => {
+    const conversationId = `app-chat:${app.id}:local:direct:fork-7`
+    sessionRegistry.current = { register: vi.fn(), getPendingResume: () => 'source-sdk-session', getPushableSessions: () => [] }
+    await sendAppChatMessage({ appId: app.id, spaceId: 'space-1', conversationId, message: 'continue' })
+    const call = vi.mocked(acquireV2Session).mock.calls.at(-1)!
+    expect(call[3]).toBe('source-sdk-session')
+    expect(call[2]).toHaveProperty('forkSession', true)
+    const tag = formatInstanceTag(describeSelfInstance({ conversationId }))
+    expect(mountedSurfaces().systemPrompt).toContain(`Your History author tag is \`${tag}\``)
+    expect(prepareMemoryForTurn).not.toHaveBeenCalled()
+    expect(send.mock.calls.at(-1)![0]).toBe('continue')
+  })
+
+  it('refreshes owner and guest attribution for the same IM session without a repeated roster', async () => {
+    const conversationId = `app-chat:${app.id}:wecom-bot:group:group-7`
+    const turn = {
+      appId: app.id, spaceId: 'space-1', conversationId, message: 'answer',
+      imSession: { channel: 'wecom-bot', chatType: 'group' as const, displayName: 'Group', sessionId: 'inst:group-7' },
+    }
+    loadChatSessionId.mockReturnValue('saved-sdk-session')
+    try {
+      setImPermissionContext(conversationId, { senderId: 'guest', senderName: 'Guest', isOwner: false, guestPolicy: {} })
+      await sendAppChatMessage(turn)
+      expect(mountedSurfaces().systemPrompt).toMatch(/Your History author tag is `im-guest#[a-f0-9]{4}`/)
+      expect(mountedSurfaces().systemPrompt).toContain('Do not reveal sensitive')
+      setImPermissionContext(conversationId, { senderId: 'owner', senderName: 'Owner', isOwner: true, ownerIds: ['owner'] })
+      await sendAppChatMessage(turn)
+      expect(mountedSurfaces().systemPrompt).toMatch(/Your History author tag is `im#[a-f0-9]{4}`/)
+      expect(mountedSurfaces().systemPrompt).not.toMatch(/Your History author tag is `im-guest#/)
+      expect(vi.mocked(acquireV2Session).mock.calls.at(-1)?.[9]).toEqual({ requireFreshInputs: true })
+      expect(send.mock.calls.map(([message]) => message)).toEqual(['answer', 'answer'])
+      expect(send.mock.calls.every(([, onFailure]) => typeof onFailure === 'function')).toBe(true)
+    } finally {
+      clearImPermissionContext(conversationId)
+    }
+  })
+
+  it('with memory disabled sends only the user message and skips all automatic memory work', async () => {
+    vi.mocked(appMemorySettings).mockReturnValue({ enabled: false, autoConsolidate: true, cadence: 'diligent' })
+    const turn = memberTurn()
+    await sendAppChatMessage(turn)
+    expect(getPromptInstructions).not.toHaveBeenCalled()
+    expect(prepareMemoryForTurn).not.toHaveBeenCalled()
+    expect(requestAppMemoryConsolidation).not.toHaveBeenCalled()
+    expect(send.mock.calls.at(-1)![0]).toBe(turn.message)
+    expect(mountedSurfaces().systemPrompt).not.toContain('Your History author tag')
+    expect(mountedSurfaces().mcpServers).not.toHaveProperty('halo-memory')
   })
 })
 
@@ -463,9 +554,9 @@ describe('a restricted borrowed turn keeps every tool-call watcher', () => {
 
   it('on an engine that cannot enforce a policy (Codex), a restricted turn does not start at all', async () => {
     getEngineCapabilities.mockReturnValue({ features: { permissionRules: false, hooks: false } })
-    vi.mocked(getOrCreateV2Session).mockClear()
+    vi.mocked(acquireV2Session).mockClear()
     await expect(sendAppChatMessage(memberTurn())).rejects.toThrow(/cannot hold/)
-    expect(getOrCreateV2Session).not.toHaveBeenCalled()
+    expect(acquireV2Session).not.toHaveBeenCalled()
   })
 
   it('a turn refused while being set up gives back the browser context it took', async () => {
@@ -511,7 +602,7 @@ describe('a restricted borrowed turn keeps every tool-call watcher', () => {
 describe('the consumer of a digital-human chat knows the model\'s context window', () => {
   beforeEach(() => {
     keptMemberContext()
-    vi.mocked(getOrCreateV2Session).mockClear()
+    vi.mocked(acquireV2Session).mockClear()
     vi.mocked(updateConsumerDisplayModel).mockClear()
     vi.mocked(resolveCredentialsForSdk).mockResolvedValueOnce({
       displayModel: 'test-model',
@@ -528,7 +619,7 @@ describe('the consumer of a digital-human chat knows the model\'s context window
     const turn = memberTurn()
     await sendAppChatMessage({ ...turn, conversationId: own, teamContext: { ...turn.teamContext!, epochId: 'epoch-context-window' } })
 
-    const creation = vi.mocked(getOrCreateV2Session).mock.calls.at(-1)![5] as { contextWindow?: number }
+    const creation = vi.mocked(acquireV2Session).mock.calls.at(-1)![5] as { contextWindow?: number }
     expect(creation.contextWindow).toBe(321_000)
     // A reuse refreshes the consumer; leaving the window out would clear it.
     expect(updateConsumerDisplayModel).toHaveBeenLastCalledWith(own, 'test-model', 321_000)
@@ -538,7 +629,7 @@ describe('the consumer of a digital-human chat knows the model\'s context window
 describe('the conversation list names a message of cards alone', () => {
   it('by its first card, as a space conversation would', async () => {
     const register = vi.fn()
-    sessionRegistry.current = { register }
+    sessionRegistry.current = { register, getPushableSessions: () => [] }
     keptMemberContext()
     try {
       await sendAppChatMessage({

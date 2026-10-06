@@ -39,8 +39,10 @@ export {
   stopOpenAICompatRouter,
   getRouterInfo,
   isRouterRunning,
-  createApp
+  createApp,
+  setRequestCredentialResolver
 } from './server'
+export type { RequestCredentials, RequestCredentialResolver } from './server'
 
 // ============================================================================
 // Converters

@@ -32,7 +32,6 @@ import {
 
 const ALL_MCP = {
   'web-search': {},
-  'halo-memory': {},
   'ocr': {},
   'ai-browser': {},
   'ai-terminal': {},
@@ -160,7 +159,7 @@ describe('MCP server injection', () => {
   it('gives a guest only the always-safe servers by default', () => {
     const out = filterMcpServersByPolicy(ALL_MCP, DB_MCP, {}, 'strict')
 
-    expect(Object.keys(out).sort()).toEqual(['halo-memory', 'web-search'])
+    expect(Object.keys(out).sort()).toEqual(['web-search'])
   })
 
   it('keeps a guest away from OCR until the host allows it', () => {

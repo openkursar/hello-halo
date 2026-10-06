@@ -1716,9 +1716,8 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
  * without them has no credentials and fails with 403.
  */
 export async function proposeMembersViaSdk(goal: string, owningSpaceId: string): Promise<ProposedMember[]> {
-  const [{ query }, { getConfig }, helpers, sdkConfig] = await Promise.all([
+  const [{ query }, helpers, sdkConfig] = await Promise.all([
     import('../../services/agent/resolved-sdk'),
-    import('../../foundation/config.service'),
     import('../../services/agent/helpers'),
     import('../../services/agent/sdk-config'),
   ])
@@ -1732,8 +1731,7 @@ export async function proposeMembersViaSdk(goal: string, owningSpaceId: string):
 
   let text = ''
   try {
-    const config = getConfig()
-    const credentials = await helpers.getApiCredentials(config)
+    const credentials = await helpers.getApiCredentials()
     const resolvedCreds = await sdkConfig.resolveCredentialsForSdk(credentials)
     const workDir = helpers.getWorkingDir(owningSpaceId)
     const electronPath = helpers.getHeadlessElectronPath()

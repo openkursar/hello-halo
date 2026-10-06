@@ -19,6 +19,8 @@ import {
   toEngineSystemPrompt,
 } from '../../../../src/main/services/agent/system-prompt'
 
+import { generatePromptInstructions } from '../../../../src/main/platform/memory'
+
 const ctx = { workDir: '/tmp/w', modelInfo: 'test-model', today: '2026-01-02' }
 
 describe('system prompt per engine', () => {
@@ -61,6 +63,17 @@ describe('system prompt per engine', () => {
   it('ignores promptProfile on the halo engine', () => {
     engine.id = 'halo'
     expect(buildSystemPrompt({ ...ctx, promptProfile: 'official' })).toBe(buildSystemPrompt(ctx))
+  })
+
+  it.each(['anthropic', 'halo', 'codex'])('preserves standing memory context on %s without repeating it', id => {
+    engine.id = id
+    const memory = generatePromptInstructions('session', { owner: 'space', authorTag: 'chat#ab12' })
+    const options = toEngineSystemPrompt(buildSystemPrompt(ctx))
+    const prompt = appendToSystemPrompt(options, `\n\n${memory}`)
+    expect(hostSystemPromptText(prompt)).toContain(memory)
+    expect(hostSystemPromptText(prompt).split('Your History author tag')).toHaveLength(2)
+    if (id === 'halo') expect(prompt).toMatchObject({ type: 'preset', preset: 'default' })
+    else expect(typeof prompt).toBe('string')
   })
 
   it('omits the digital humans line when disabled', () => {

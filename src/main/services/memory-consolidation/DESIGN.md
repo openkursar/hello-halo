@@ -84,6 +84,13 @@ prompt style — see `services/agent/DESIGN.md` §11), rooted in the workspace:
   instruction only, logged;
 - 60 turns / 10 minutes per round; running out of turns still goes to validation.
 
+The consolidation prompt shares the writers' annotated memory format and topic
+front matter. Its own FAQ, codebase and support examples guide topic organisation;
+examples are illustrative, not knowledge to copy. Writer-only instructions (clock
+reads, run-heading insertion and reporting) are not passed to the consolidator.
+Rendered prompt snapshots cover both owners alongside the conservation and
+workspace-confinement checks.
+
 Credentials are resolved only when a consolidation actually starts: the digital
 human's model override, the triggering conversation's model for a space, or the
 global model for a space's "consolidate now".

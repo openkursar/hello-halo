@@ -1,151 +1,128 @@
-/**
- * Unit test: services/agent/dsh/options — what Halo pins on the runtime child.
- *
- * Two things the runtime cannot work out for itself converge here. Its DeepSeek
- * adapter assumes DeepSeek's own numbers (256K output, 1M window) for every
- * vendor, so an unstated cap means a GLM endpoint answers HTTP 400 before the
- * turn starts and compaction never fires inside the real window. And it builds
- * its own request headers around a single bearer, so unless it is pointed at
- * Halo's compat router the active source's headers and adapter never reach the
- * provider — which is how the runtime's own `User-Agent` came to be what
- * a provider gateway saw, and refused.
- */
-
 import { describe, expect, it, vi, beforeEach } from 'vitest'
+import type { ApiCredentials } from '../../../../../src/main/services/agent/types'
 
 const getApiCredentials = vi.fn()
 const buildDshLaunchSpec = vi.fn()
 const ensureOpenAICompatRouter = vi.fn()
 
-vi.mock('../../../../../src/main/services/agent/helpers', async (importOriginal) => {
-  const actual = await importOriginal<
-    typeof import('../../../../../src/main/services/agent/helpers')
-  >()
-  return {
-    ...actual,
-    getApiCredentials: (config: unknown) => getApiCredentials(config),
-  }
+vi.mock('../../../../../src/main/services/agent/helpers', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../../../src/main/services/agent/helpers')>()
+  return { ...actual, getApiCredentials: (config: unknown) => getApiCredentials() }
 })
-
-vi.mock('../../../../../src/main/openai-compat-router', () => ({
-  ensureOpenAICompatRouter: (options: unknown) => ensureOpenAICompatRouter(options),
-  encodeBackendConfig: (config: unknown) =>
-    Buffer.from(JSON.stringify(config)).toString('base64'),
-}))
-
+vi.mock('../../../../../src/main/openai-compat-router', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../../../src/main/openai-compat-router')>()
+  return { ...actual, ensureOpenAICompatRouter: (options: unknown) => ensureOpenAICompatRouter(options) }
+})
 vi.mock('../../../../../src/main/services/agent/dsh/runtime', () => ({
   buildDshLaunchSpec: (options: Record<string, any>) => buildDshLaunchSpec(options),
 }))
 
-const { resolveDshOptions } = await import(
-  '../../../../../src/main/services/agent/dsh/options'
-)
+import { resolveDshOptions } from '../../../../../src/main/services/agent/dsh/options'
+import { encodeBackendConfig, decodeBackendConfig } from '../../../../../src/main/openai-compat-router'
 
 const LAUNCH = { command: 'node', args: ['entry.js', 'config.yml'], env: {}, cwd: '/work' }
 
-/** What `getApiCredentials` returns for a GLM route behind a custom gateway. */
-function credentials(capabilities?: { maxOutputTokens: number; contextWindow: number }) {
+function credentials(capabilities?: { maxOutputTokens: number; contextWindow: number }): ApiCredentials {
   return {
+    sourceId: 'account-a', credentialsGeneration: 'captured-a',
     baseUrl: 'https://gateway.example.com/v1/chat/completions',
-    apiKey: 'k',
-    model: 'glm-4.7-zp',
-    provider: 'openai' as const,
-    ...(capabilities ? { capabilities } : {}),
+    apiKey: 'test-key-a', model: 'glm-4.7-zp', provider: 'openai',
+    ...(capabilities ? { capabilities: { ...capabilities, maxOutputTokensConfigured: true } } : {}),
   }
 }
 
-/** The descriptor the runtime was handed as its bearer token. */
-function launchedBackendConfig(): Record<string, unknown> {
-  const { apiKey } = buildDshLaunchSpec.mock.calls[0][0]
-  return JSON.parse(Buffer.from(apiKey, 'base64').toString('utf-8'))
+function launchedBackendConfig() {
+  return decodeBackendConfig(buildDshLaunchSpec.mock.calls[0][0].apiKey)
 }
 
 beforeEach(() => {
-  getApiCredentials.mockReset()
-  buildDshLaunchSpec.mockReset()
-  buildDshLaunchSpec.mockReturnValue(LAUNCH)
-  ensureOpenAICompatRouter.mockReset()
-  ensureOpenAICompatRouter.mockResolvedValue({ baseUrl: 'http://127.0.0.1:51234', port: 51234 })
+  getApiCredentials.mockReset().mockResolvedValue({ ...credentials(), sourceId: 'account-b', apiKey: 'test-key-b' })
+  buildDshLaunchSpec.mockReset().mockReturnValue(LAUNCH)
+  ensureOpenAICompatRouter.mockReset().mockResolvedValue({ baseUrl: 'http://127.0.0.1:51234', port: 51234 })
 })
 
-describe('resolveDshOptions egress', () => {
-  it('sends the runtime to the compat router carrying the source descriptor', async () => {
-    getApiCredentials.mockResolvedValue({
-      ...credentials(),
-      customHeaders: { 'User-Agent': 'ExampleIDE/1.0.0' },
-      adapterId: 'tencent',
-      apiType: 'chat_completions' as const,
-    })
-
-    await resolveDshOptions({ cwd: '/work' })
-
+describe('resolveDshOptions account egress', () => {
+  it('uses the selected snapshot rather than the globally selected account', async () => {
+    await resolveDshOptions({ cwd: '/work', apiCredentials: {
+      ...credentials(), customHeaders: { 'User-Agent': 'ExampleIDE/1.0.0', 'ChatGPT-Account-Id': 'account-a' },
+      adapterId: 'tencent', apiType: 'chat_completions', profileArn: 'profile-a',
+      codexModelCapabilities: { reasoningSummary: true, responsesLite: false },
+    } })
+    expect(getApiCredentials).not.toHaveBeenCalled()
     expect(buildDshLaunchSpec.mock.calls[0][0].baseUrl).toBe('http://127.0.0.1:51234/v1')
     expect(launchedBackendConfig()).toMatchObject({
-      url: 'https://gateway.example.com/v1/chat/completions',
-      key: 'k',
-      headers: { 'User-Agent': 'ExampleIDE/1.0.0' },
-      adapterId: 'tencent',
-      apiType: 'chat_completions',
+      sourceId: 'account-a', url: 'https://gateway.example.com/v1/chat/completions', key: 'test-key-a',
+      headers: { 'User-Agent': 'ExampleIDE/1.0.0', 'ChatGPT-Account-Id': 'account-a' },
+      adapterId: 'tencent', apiType: 'chat_completions', profileArn: 'profile-a',
+      codexModelCapabilities: { reasoningSummary: true, responsesLite: false },
     })
   })
 
-  it('never hands the provider credential to the runtime directly', async () => {
-    // The child inherits an allowlisted environment it can read; the only
-    // credential in it must be one that is worthless outside this router.
-    getApiCredentials.mockResolvedValue(credentials())
+  it('does not change account or model while awaiting router preparation', async () => {
+    let release!: (value: { baseUrl: string }) => void
+    ensureOpenAICompatRouter.mockReturnValueOnce(new Promise(resolve => { release = resolve }))
+    const pending = resolveDshOptions({ cwd: '/work', model: 'sdk-decorated-model[1m]', apiCredentials: credentials() })
+    await vi.waitFor(() => expect(ensureOpenAICompatRouter).toHaveBeenCalledTimes(1))
+    getApiCredentials.mockResolvedValue({ ...credentials(), sourceId: 'account-c', apiKey: 'test-key-c', model: 'new-default' })
+    release({ baseUrl: 'http://127.0.0.1:51234' })
+    expect((await pending).init.model).toBe('glm-4.7-zp')
+    expect(launchedBackendConfig()).toMatchObject({ sourceId: 'account-a', key: 'test-key-a', model: 'glm-4.7-zp' })
+    expect(getApiCredentials).not.toHaveBeenCalled()
+  })
 
-    await resolveDshOptions({ cwd: '/work' })
+  it('passes only an encoded descriptor to the runtime auth channel', async () => {
+    await resolveDshOptions({ cwd: '/work', apiCredentials: credentials() })
+    expect(buildDshLaunchSpec.mock.calls[0][0].apiKey).not.toBe('test-key-a')
+    expect(launchedBackendConfig()?.key).toBe('test-key-a')
+  })
 
-    expect(buildDshLaunchSpec.mock.calls[0][0].apiKey).not.toBe('k')
-    expect(launchedBackendConfig().key).toBe('k')
+  it('honors the selected account vision override', async () => {
+    await resolveDshOptions({ cwd: '/work', apiCredentials: { ...credentials(), visionOverride: true } })
+    expect(buildDshLaunchSpec.mock.calls[0][0].imageInputModel).toBe('glm-4.7-zp')
+    buildDshLaunchSpec.mockClear()
+    await resolveDshOptions({ cwd: '/work', apiCredentials: { ...credentials(), visionOverride: false } })
+    expect(buildDshLaunchSpec.mock.calls[0][0]).not.toHaveProperty('imageInputModel')
+  })
+
+  it('can use a standalone validation descriptor without reading a stored source', async () => {
+    await resolveDshOptions({ cwd: '/work', model: 'validation-model', env: {
+      ANTHROPIC_API_KEY: encodeBackendConfig({ url: 'https://example.invalid/v1/chat/completions', key: 'test-validation' }),
+    } })
+    expect(launchedBackendConfig()).toMatchObject({ key: 'test-validation', model: 'validation-model' })
+    expect(getApiCredentials).not.toHaveBeenCalled()
+  })
+
+  it.each(['missing', 'unusable', 'delegated'] as const)('refuses %s credentials without global fallback', async state => {
+    const apiCredentials = state === 'missing' ? undefined
+      : { ...credentials(), apiKey: state === 'unusable' ? '' : 'test-key-a', delegatedAuth: state === 'delegated' }
+    await expect(resolveDshOptions({ cwd: '/work', apiCredentials })).rejects.toThrow('captured API credentials')
+    expect(getApiCredentials).not.toHaveBeenCalled()
+    expect(buildDshLaunchSpec).not.toHaveBeenCalled()
+    expect(ensureOpenAICompatRouter).not.toHaveBeenCalled()
   })
 })
 
-describe('resolveDshOptions model limits', () => {
-
-  it('pins the runtime to the active model resolved capabilities', async () => {
-    getApiCredentials.mockResolvedValue(
-      credentials({ maxOutputTokens: 131_072, contextWindow: 200_000 })
-    )
-
-    const resolved = await resolveDshOptions({ cwd: '/work' })
-
+describe('resolveDshOptions selected model limits', () => {
+  it('pins the runtime to the captured model capabilities', async () => {
+    const resolved = await resolveDshOptions({ cwd: '/work', apiCredentials: credentials({ maxOutputTokens: 131_072, contextWindow: 200_000 }) })
     expect(resolved.init.maxTokens).toBe(131_072)
     expect(buildDshLaunchSpec.mock.calls[0][0].contextWindow).toBe(200_000)
   })
 
-  it('bounds a capability the user drove out of range', async () => {
-    // Settings lets a per-model override name any number; the runtime must
-    // still be handed something a provider can accept.
-    getApiCredentials.mockResolvedValue(
-      credentials({ maxOutputTokens: 9_000_000, contextWindow: 1_024 })
-    )
-
-    const resolved = await resolveDshOptions({ cwd: '/work' })
-
+  it('bounds capabilities driven out of range', async () => {
+    const resolved = await resolveDshOptions({ cwd: '/work', apiCredentials: credentials({ maxOutputTokens: 9_000_000, contextWindow: 1_024 }) })
     expect(resolved.init.maxTokens).toBe(1_000_000)
     expect(buildDshLaunchSpec.mock.calls[0][0].contextWindow).toBe(40_000)
   })
 
-  it('states nothing when Halo resolved no capabilities for the model', async () => {
-    // Silence leaves the runtime on its own defaults, which is right when Halo
-    // has nothing better to offer — inventing a cap would break a model that
-    // legitimately allows more.
-    getApiCredentials.mockResolvedValue(credentials())
-
-    const resolved = await resolveDshOptions({ cwd: '/work' })
-
+  it('leaves runtime defaults alone when no model capabilities were resolved', async () => {
+    const resolved = await resolveDshOptions({ cwd: '/work', apiCredentials: credentials() })
     expect(resolved.init.maxTokens).toBeUndefined()
     expect(buildDshLaunchSpec.mock.calls[0][0].contextWindow).toBeUndefined()
   })
 
-  it('lets an explicit caller cap win over the model preset', async () => {
-    getApiCredentials.mockResolvedValue(
-      credentials({ maxOutputTokens: 131_072, contextWindow: 200_000 })
-    )
-
-    const resolved = await resolveDshOptions({ cwd: '/work', maxTokens: 2_048 })
-
+  it('lets an explicit caller output cap win', async () => {
+    const resolved = await resolveDshOptions({ cwd: '/work', maxTokens: 2_048, apiCredentials: credentials({ maxOutputTokens: 131_072, contextWindow: 200_000 }) })
     expect(resolved.init.maxTokens).toBe(2_048)
   })
 })

@@ -8,7 +8,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 
 // Mock heavy dependencies that mcp-manager.ts imports transitively
-vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
+vi.mock('../../../src/main/services/agent/resolved-sdk', () => ({
   query: vi.fn()
 }))
 vi.mock('../../../src/main/foundation/config.service', () => ({
@@ -48,7 +48,9 @@ import {
   testMcpConnections,
   updateServerStatus
 } from '../../../src/main/services/agent/mcp-manager'
-import { getApiCredentials } from '../../../src/main/services/agent/helpers'
+import { getApiCredentials, getDbMcpServers } from '../../../src/main/services/agent/helpers'
+import { query } from '../../../src/main/services/agent/resolved-sdk'
+import type { ApiCredentials } from '../../../src/main/services/agent/types'
 
 describe('groupToolsByMcpServer', () => {
   it('groups MCP tools by server name', () => {
@@ -197,6 +199,32 @@ describe('testMcpConnections telemetry', () => {
 
   afterEach(() => {
     vi.clearAllMocks()
+  })
+
+  it('forwards the captured account and capabilities to the query without reconstructing them', async () => {
+    vi.useFakeTimers()
+    const credentials: ApiCredentials = {
+      provider: 'anthropic', sourceId: 'account-a', credentialsGeneration: 'captured-a',
+      baseUrl: 'https://example.invalid/v1/messages', apiKey: 'test-account-a', model: 'test-model-a',
+      customHeaders: { 'x-account-id': 'account-a' }, supportsVision: false,
+      capabilities: { contextWindow: 100_000, maxOutputTokens: 64_000, maxOutputTokensConfigured: true },
+    }
+    credentialsMock.mockResolvedValue(credentials)
+    vi.mocked(getDbMcpServers).mockReturnValue({ srv: { type: 'stdio', command: 'test-mcp' } })
+    vi.mocked(query).mockImplementation(async function* () {
+      yield { type: 'system', mcp_servers: [{ name: 'srv', status: 'connected' }] }
+    })
+    try {
+      expect(await testMcpConnections()).toMatchObject({ success: true, servers: [{ name: 'srv', status: 'connected' }] })
+      expect(credentialsMock).toHaveBeenCalledTimes(1)
+      const options = vi.mocked(query).mock.calls[0][0].options
+      expect(options.apiCredentials).toBe(credentials)
+      expect(options.credentialsGeneration).toBe('captured-a')
+    } finally {
+      removeServerStatus('srv')
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
   })
 
   it('does not report any event when no API key is configured', async () => {

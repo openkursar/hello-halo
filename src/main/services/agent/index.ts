@@ -139,6 +139,11 @@ export { formatTurnAttachments, formatReferencesBlock, formatMessageAttachmentsB
 /** Making text that is not the user's own safe to place inside those blocks (see prompt-text.ts). */
 export { inlineCode, inlinePath, inlineText } from './prompt-text'
 export { getOrCreateV2Session, activeSessions, v2Sessions, getConsumerHandle, SessionOptionsStaleError } from './session-manager'
+/** Sending entries acquire before preparation and await lease.send() through SDK acceptance. */
+export { acquireV2Session } from './session-manager'
+export type { V2SessionLease } from './session-manager'
+/** Headless callers protect manager-owned sessions until their execution reaches its release boundary. */
+export { createSessionState, registerActiveSession, unregisterActiveSession } from './session-manager'
 // Whether a conversation's session must not be disturbed: a turn in flight, or team agents still working between turns.
 export { isSessionBusy } from './session-manager'
 export { listResidentSessions, evictIdleSession, setResidentSessionLimit, getSessionEvictionCount, getResidentSessionLimit } from './session-manager'

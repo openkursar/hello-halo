@@ -59,6 +59,102 @@ function sampleRun(): StoredEvent[] {
   ]
 }
 
+describe('partial turn checkpoints', () => {
+  const checkpoint = (content: string, n: number): StoredEvent => ({
+    _ts: ts(n), type: 'turn_snapshot', content,
+    thoughts: [{ id: 'partial-thinking', type: 'thinking', content: 'received reasoning', timestamp: ts(n), isStreaming: false }],
+    error: 'Chat session ended before the reply completed.',
+  })
+
+  it('replaces current aggregates without duplicating text, thoughts or changing the message id', () => {
+    const events = [user('question', 1), assistant([thinking('received reasoning'), text('partial')], 2)]
+    const before = convertEventsToMessages(events)
+    const after = convertEventsToMessages([...events, checkpoint('partial plus received suffix', 3)])
+    expect(after).toHaveLength(2)
+    expect(after[1]).toMatchObject({ id: before[1].id, content: 'partial plus received suffix', error: expect.stringContaining('session ended') })
+    expect(after[1].thoughts).toHaveLength(1)
+  })
+
+  it.each([true, false])('preserves the preceding reply when a successor checkpoints (preceding result=%s)', terminal => {
+    const preceding = [user('question', 1), assistant([thinking('first reasoning'), text('completed answer')], 2)]
+    if (terminal) preceding.push(result('completed answer', 3))
+    const before = convertEventsToMessages(preceding)
+    const after = convertEventsToMessages([
+      ...preceding,
+      { _ts: ts(4), type: 'system', subtype: 'init' },
+      assistant([text('background aggregate')], 5),
+      checkpoint('background partial', 6),
+    ])
+    expect(after.map(message => message.content)).toEqual(['question', 'completed answer', 'background partial'])
+    expect(after[1]).toEqual(before[1])
+    expect(after[2].id).not.toBe(before[1].id)
+    expect(after[2].thoughts?.map(thought => thought.content)).toEqual(['received reasoning'])
+  })
+
+  it('keeps a result-only predecessor separate from an autonomous checkpoint without another init', () => {
+    const preceding = [user('question', 1), result('completed answer', 2)]
+    const before = convertEventsToMessages(preceding)
+    const after = convertEventsToMessages([...preceding, checkpoint('background partial', 3)])
+    expect(after.map(message => message.content)).toEqual(['question', 'completed answer', 'background partial'])
+    expect(after[1]).toEqual(before[1])
+    expect(after[2].id).toBe('session-msg-3')
+  })
+
+  it.each(['streaming-only', 'aggregate'] as const)('preserves both turns and their thought reads across JSONL reload (%s successor)', mode => {
+    const dir = mkdtempSync(join(tmpdir(), 'halo-autonomous-checkpoint-'))
+    try {
+      const writer = openSessionWriter(dir, 'app-1', 'run-1')
+      writer.writeTrigger('question')
+      writer.writeEvent({ type: 'system', subtype: 'init' })
+      writer.writeEvent(assistant([thinking('first reasoning'), text('completed answer')], 2))
+      writer.writeEvent(result('completed answer', 3))
+      const before = readSessionMessages(dir, 'app-1', 'run-1')
+      writer.writeEvent({ type: 'system', subtype: 'init' })
+      if (mode === 'aggregate') writer.writeEvent(assistant([text('background aggregate')], 4))
+      writer.writeEvent(checkpoint('background partial', 5))
+      const after = readSessionMessages(dir, 'app-1', 'run-1')
+      expect(after.map(message => message.content)).toEqual(['question', 'completed answer', 'background partial'])
+      expect(after[1]).toEqual(before[1])
+      expect(new Set(after.map(message => message.id)).size).toBe(3)
+      expect(readSessionMessageThoughts(dir, 'app-1', 'run-1', after[1].id)).toEqual(before[1].thoughts)
+      expect(readSessionMessageThoughts(dir, 'app-1', 'run-1', after[2].id)).toEqual(after[2].thoughts)
+      expect(readSessionTranscript(dir, 'app-1', 'run-1', { limit: 1 }).messages[0].id).toBe(after[2].id)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('separates an autonomous successor from the terminal partial checkpoint', () => {
+    const messages = convertEventsToMessages([
+      user('question', 1), assistant([text('partial')], 2), checkpoint('partial', 3),
+      { _ts: ts(4), type: 'system', subtype: 'init' }, assistant([text('next turn')], 5),
+    ])
+    expect(messages.map(message => message.content)).toEqual(['question', 'partial', 'next turn'])
+    expect(messages[2].error).toBeUndefined()
+  })
+
+  it('recovers streaming-only and error-only turns without an aggregate envelope', () => {
+    const messages = convertEventsToMessages([
+      user('question', 1), checkpoint('received tokens', 2), user('next', 3),
+      { _ts: ts(4), type: 'turn_snapshot', content: '', thoughts: [], error: 'engine exited' },
+    ])
+    expect(messages.map(message => message.content)).toEqual(['question', 'received tokens', 'next', ''])
+    expect(messages.at(-1)?.error).toBe('engine exited')
+  })
+
+  it('preserves the partial checkpoint across JSONL reload and on-demand thought reads', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'halo-partial-transcript-'))
+    try {
+      const writer = openSessionWriter(dir, 'app-1', 'run-1')
+      writer.writeTrigger('question')
+      writer.writeEvent(assistant([text('partial')], 2))
+      writer.writeEvent(checkpoint('partial and streamed suffix', 3))
+      const stored = readSessionMessages(dir, 'app-1', 'run-1')
+      expect(stored).toHaveLength(2)
+      expect(stored[1]).toMatchObject({ content: 'partial and streamed suffix', error: expect.stringContaining('session ended') })
+      expect(readSessionMessageThoughts(dir, 'app-1', 'run-1', stored[1].id)).toEqual(stored[1].thoughts)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+})
+
 describe('message id stability', () => {
   it('keeps every already-visible message id (and role) in every longer prefix of the log', () => {
     const events = sampleRun()

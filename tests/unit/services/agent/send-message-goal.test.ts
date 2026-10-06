@@ -12,7 +12,7 @@ const m = vi.hoisted(() => ({
   getConversation: vi.fn(() => ({ id: 'conv-1', sessionId: undefined as string | undefined })),
   prepareGoalInput: vi.fn((g: { objective: string; doneWhen?: string[] }) => ({ objective: g.objective.trim(), doneWhen: g.doneWhen ?? [] })),
   setGoalForTurn: vi.fn(),
-  getOrCreateV2Session: vi.fn(),
+  acquireV2Session: vi.fn(),
 }))
 
 vi.mock('../../../../src/main/foundation/config.service', () => ({ getConfig: () => ({ agent: {} }) }))
@@ -41,7 +41,7 @@ vi.mock('../../../../src/main/services/agent/helpers', () => ({
 }))
 vi.mock('../../../../src/main/services/agent/events', () => ({ emitAgentEvent: vi.fn() }))
 vi.mock('../../../../src/main/services/agent/session-manager', () => ({
-  getOrCreateV2Session: m.getOrCreateV2Session,
+  acquireV2Session: m.acquireV2Session,
   closeV2Session: vi.fn(),
   updateConsumerDisplayModel: vi.fn(),
   markTurnDispatched: vi.fn(),
@@ -94,7 +94,7 @@ describe('sendMessage with a goal', () => {
 
   it('records the goal on the message and sets it on the session receiving the turn', async () => {
     const session = { send: vi.fn(async () => {}) }
-    m.getOrCreateV2Session.mockResolvedValueOnce(session)
+    m.acquireV2Session.mockResolvedValueOnce({ session, isCurrent: true, send: session.send, close: vi.fn(), release: vi.fn() })
 
     await sendMessage(request)
 
@@ -104,7 +104,7 @@ describe('sendMessage with a goal', () => {
   })
 
   it('drops the goal from the message when the session cannot be created', async () => {
-    m.getOrCreateV2Session.mockRejectedValueOnce(new Error('spawn failed'))
+    m.acquireV2Session.mockRejectedValueOnce(new Error('spawn failed'))
 
     await sendMessage(request)
 

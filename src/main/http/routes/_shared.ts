@@ -11,6 +11,7 @@ import { createGzip } from 'zlib'
 import { Readable } from 'stream'
 
 import * as agentController from '../../controllers/agent.controller'
+import * as authController from '../../controllers/auth.controller'
 import * as spaceController from '../../controllers/space.controller'
 import * as conversationController from '../../controllers/conversation.controller'
 import * as taskController from '../../controllers/task.controller'
@@ -232,6 +233,7 @@ export {
   WecomScanAuthError,
   FeishuScanAuthError,
   agentController,
+  authController,
   analytics,
   RENDERER_ALLOWED_EVENTS,
   appController,

@@ -39,6 +39,8 @@ export interface OAuthProvider {
      * Polls for token completion and returns user info
      */
     completeLogin(state: string): Promise<ProviderResult<OAuthCompleteResult>>;
+    /** Cancel pending authorization without logging out a stored account. */
+    cancelLogin?(): Promise<ProviderResult<void>> | void;
     /**
      * Refresh the access token if expired
      */
@@ -50,10 +52,8 @@ export interface OAuthProvider {
         valid: boolean;
         expiresIn?: number;
     }>>;
-    /**
-     * Logout and clear tokens
-     */
-    logout(): Promise<ProviderResult<void>>;
+    /** Called after local removal for account-local upstream revocation only. */
+    logout(config?: AISourcesConfig): Promise<ProviderResult<void>>;
 }
 /**
  * AI Source Provider Interface
@@ -114,6 +114,8 @@ export interface OAuthAISourceProvider extends AISourceProvider, OAuthProvider {
      * Get the current logged-in user info
      */
     getUserInfo(config: AISourcesConfig): AISourceUserInfo | null;
+    /** Verify a legacy account id from the selected credential. */
+    getAccountId?(config: AISourcesConfig): Promise<string | null> | string | null;
 }
 /**
  * Type guard to check if provider supports OAuth

@@ -8,8 +8,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const m = vi.hoisted(() => ({
   addMessage: vi.fn((_s: string, _c: string, msg: Record<string, unknown>) => ({ id: 'msg-1', timestamp: 't', ...msg })),
   getConversation: vi.fn(() => ({ id: 'conv-1', sessionId: undefined as string | undefined })),
-  getOrCreateV2Session: vi.fn(),
+  acquireV2Session: vi.fn(),
   prepareNonVisionImageFallback: vi.fn(() => null as null | { contextBlock: string; filePaths: string[] }),
+  memoryEnabled: true,
+  buildMemorySnapshot: vi.fn(),
+  ensureMemoryFile: vi.fn(async () => false),
 }))
 
 vi.mock('../../../../src/main/foundation/config.service', () => ({ getConfig: () => ({ agent: {} }) }))
@@ -38,7 +41,7 @@ vi.mock('../../../../src/main/services/agent/helpers', () => ({
 }))
 vi.mock('../../../../src/main/services/agent/events', () => ({ emitAgentEvent: vi.fn() }))
 vi.mock('../../../../src/main/services/agent/session-manager', () => ({
-  getOrCreateV2Session: m.getOrCreateV2Session,
+  acquireV2Session: m.acquireV2Session,
   closeV2Session: vi.fn(),
   updateConsumerDisplayModel: vi.fn(),
   markTurnDispatched: vi.fn(),
@@ -55,9 +58,14 @@ vi.mock('../../../../src/main/services/agent/sdk-config', () => ({
   resolveCredentialsForSdk: vi.fn(async () => ({ displayModel: 'm', capabilities: {} })),
   buildUserSessionSdkOptions: vi.fn(async () => ({})),
 }))
-vi.mock('../../../../src/main/services/agent/space-memory', () => ({
-  resolveSpaceMemorySession: vi.fn(() => ({ layout: {}, contextKey: 'k' })),
-  buildSpaceMemoryPreamble: vi.fn(async () => '<memory/>\n\n'),
+vi.mock('../../../../src/main/services/space.service', () => ({
+  isSpaceMemoryEnabled: () => m.memoryEnabled,
+  getSpaceMemoryLayout: () => memoryLayout,
+}))
+vi.mock('../../../../src/main/platform/memory', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../../src/main/platform/memory')>()),
+  buildMemorySnapshot: m.buildMemorySnapshot,
+  ensureMemoryFile: m.ensureMemoryFile,
 }))
 vi.mock('../../../../src/main/services/agent/reasoning-effort', () => ({ applyReasoningEffort: vi.fn(() => 0), pickReasoningEffort: vi.fn(() => undefined) }))
 vi.mock('../../../../src/main/services/agent/conversation-sink', () => ({ createConversationSink: vi.fn() }))
@@ -67,6 +75,8 @@ vi.mock('../../../../src/main/services/agent/stream-processor', () => ({ flushTo
 vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({ analytics: { track: vi.fn(async () => {}), trackErrorSurface: vi.fn() } }))
 
 import { sendMessage } from '../../../../src/main/services/agent/send-message'
+import { buildUserSessionSdkOptions } from '../../../../src/main/services/agent/sdk-config'
+import { resolveMemoryLayout, MEMORY_FILE_FORMAT, TOPIC_FILE_FORMAT } from '../../../../src/main/platform/memory'
 import type { ContentReference } from '../../../../src/shared/types/content-reference'
 import type { CodeReviewTask } from '../../../../src/shared/types/message-task'
 
@@ -78,13 +88,22 @@ const task: CodeReviewTask = {
   scopeLabel: 'Uncommitted changes', beforeRevision: 'abc1234', fileCount: 1, language: 'en',
 }
 
+const memoryLayout = resolveMemoryLayout({ type: 'user', spaceId: 's', spacePath: '/spaces/s' }, 'space')
+
 let session: { send: ReturnType<typeof vi.fn> }
 
 beforeEach(() => {
   vi.clearAllMocks()
   session = { send: vi.fn() }
-  m.getOrCreateV2Session.mockResolvedValue(session)
+  m.acquireV2Session.mockResolvedValue({ session, isCurrent: true, send: session.send, close: vi.fn(), release: vi.fn() })
   m.getConversation.mockReturnValue({ id: 'conv-1', sessionId: undefined })
+  m.memoryEnabled = true
+  m.buildMemorySnapshot.mockResolvedValue({
+    layout: memoryLayout, exists: true, blank: true, totalLines: 5, sizeBytes: 27, nowBytes: 14,
+    firstSection: null, fullContent: '# now\n\n## State\n\n# History\n', headers: [],
+    topics: { root: memoryLayout.topicsDir, children: [], topicCount: 0, totalBytes: 0, truncated: false },
+    runTotalCount: 0, archiveCount: 0,
+  })
 })
 
 describe('sendMessage with references and a task', () => {
@@ -103,7 +122,7 @@ describe('sendMessage with references and a task', () => {
       taskInstructions: 'Review the changes: M src/a.ts  (+1 -0)',
     })
     const sent: string = session.send.mock.calls[0][0]
-    const order = ['<memory/>', '<halo_canvas>', '<halo_references>', '<halo_task type="code-review" variant="quick">', '<halo_attachments/>', 'Look']
+    const order = ['## Memory', '<halo_canvas>', '<halo_references>', '<halo_task type="code-review" variant="quick">', '<halo_attachments/>', 'Look']
       .map(marker => sent.indexOf(marker))
     expect(order.every(i => i >= 0)).toBe(true)
     expect([...order].sort((a, b) => a - b)).toEqual(order)
@@ -118,5 +137,52 @@ describe('sendMessage with references and a task', () => {
 
     await sendMessage({ spaceId: 's', conversationId: 'conv-1', message: 'plain' })
     expect(m.addMessage.mock.calls[1][2]).not.toHaveProperty('metadata')
+  })
+})
+
+describe('space memory session context', () => {
+  it('keeps the format, paths, author and native guard in setup, with a first-message-only snapshot', async () => {
+    const conversationId = 'ab12-3456'
+    await sendMessage({ spaceId: 's', conversationId, message: 'first' })
+    expect(session.send.mock.calls[0][0]).toContain('## Memory snapshot (startup)')
+    expect(m.addMessage.mock.calls[0][2].content).toBe('first')
+
+    m.getConversation.mockReturnValue({ id: conversationId, sessionId: 'saved-session' })
+    await sendMessage({ spaceId: 's', conversationId, message: 'second' })
+    expect(session.send.mock.calls[1][0]).not.toContain('## Memory')
+    expect(m.buildMemorySnapshot).toHaveBeenCalledTimes(1)
+    expect(m.ensureMemoryFile).toHaveBeenCalledTimes(1)
+
+    for (const [options] of vi.mocked(buildUserSessionSdkOptions).mock.calls) {
+      expect(options.memoryInstructions).toContain(MEMORY_FILE_FORMAT)
+      expect(options.memoryInstructions).toContain(TOPIC_FILE_FORMAT)
+      expect(options.memoryInstructions).toContain(`Memory file: \`${memoryLayout.file}\``)
+      expect(options.memoryInstructions).toContain('Your History author tag is `chat#ab12`')
+      expect(options.memoryGuard).toMatchObject({ writable: [memoryLayout] })
+    }
+    expect(m.acquireV2Session.mock.calls.at(-1)?.[3]).toBe('saved-session')
+    expect(m.acquireV2Session.mock.calls.at(-1)?.[9]).toEqual({ creationContext: `space-memory:${memoryLayout.file}` })
+  })
+
+  it('resuming another transcript uses the destination conversation author without repeating the snapshot', async () => {
+    await sendMessage({ spaceId: 's', conversationId: 'cd34-7890', resumeSessionId: 'source-session', message: 'continue' })
+    const options = vi.mocked(buildUserSessionSdkOptions).mock.calls[0][0]
+    expect(options.memoryInstructions).toContain('Your History author tag is `chat#cd34`')
+    expect(m.acquireV2Session.mock.calls[0][3]).toBe('source-session')
+    expect(m.buildMemorySnapshot).not.toHaveBeenCalled()
+    expect(m.ensureMemoryFile).not.toHaveBeenCalled()
+    expect(session.send.mock.calls[0][0]).not.toMatch(/## Memory|Running right now|No other instance/)
+  })
+
+  it('disabled memory adds no instructions, guard, snapshot or initialization work', async () => {
+    m.memoryEnabled = false
+    await sendMessage({ spaceId: 's', conversationId: 'conv-1', message: 'plain' })
+    const options = vi.mocked(buildUserSessionSdkOptions).mock.calls[0][0]
+    expect(options.memoryInstructions).toBeUndefined()
+    expect(options.memoryGuard).toBeUndefined()
+    expect(m.buildMemorySnapshot).not.toHaveBeenCalled()
+    expect(m.ensureMemoryFile).not.toHaveBeenCalled()
+    expect(m.acquireV2Session.mock.calls[0][9]).toEqual({ creationContext: undefined })
+    expect(session.send.mock.calls[0][0]).not.toMatch(/## Memory|Your History author tag|Running right now|No other instance/)
   })
 })

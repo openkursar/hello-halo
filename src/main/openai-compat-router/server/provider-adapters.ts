@@ -15,7 +15,7 @@
 import type { AnthropicRequest } from '../types'
 import { inlineToolSchemaRefs } from '../utils/json-schema'
 import { CODEX_ADAPTER_ID } from '../../../shared/constants/codex-models'
-import { getCodexModelCapability } from './codex-capabilities'
+import type { CodexModelCapability } from '../../../shared/types/ai-sources'
 import { isThinkingEffort } from '../converters/reasoning-effort'
 import {
   CODEX_REASONING_EFFORT_LEVELS,
@@ -42,6 +42,7 @@ export interface AdapterContext {
    * already uses for its own affinity.
    */
   readonly sessionId?: string
+  readonly codexModelCapabilities?: CodexModelCapability
 }
 
 export interface ProviderAdapter {
@@ -417,8 +418,8 @@ function applyToolStrictness(body: Record<string, unknown>): void {
  *   sends as headers. Unset, every turn is a cache miss.
  * - `reasoning.effort` is held to the model's catalog levels,
  *   `reasoning.summary` is requested whenever thinking is on, and tool
- *   `strict` flags are always present. The first two come from
- *   {@link getCodexModelCapability}, which the provider fills from the catalog.
+ *   `strict` flags are always present. The account's selected-model capabilities
+ *   travel with the request, never through a process-wide catalog.
  * - Models flagged `use_responses_lite` take the system prompt as a leading
  *   `developer` item and must not receive `instructions`.
  *
@@ -450,7 +451,7 @@ const openAICodexAdapter: ProviderAdapter = {
       body.input = remainder
     }
 
-    const capability = getCodexModelCapability(body.model)
+    const capability = context?.codexModelCapabilities
     const systemPrompt = instructions.join('\n')
 
     if (capability?.responsesLite) {

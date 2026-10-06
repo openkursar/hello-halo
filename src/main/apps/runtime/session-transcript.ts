@@ -15,6 +15,7 @@ import type { ContentReference } from '../../../shared/types/content-reference'
 import type {
   Thought,
   TranscriptMessage,
+  TokenUsage,
   TranscriptProvenanceMetadata,
   TranscriptSource,
 } from '../../../shared/types/transcript'
@@ -73,8 +74,8 @@ function createThoughtIdGenerator(): () => string {
  * every assistant text event, producing 5-8 fragmented messages per run.
  *
  * New strategy:
- * 1. Text does NOT trigger a flush. Only a user message (new conversation turn)
- *    or end-of-events triggers a flush.
+ * 1. Text does NOT trigger a flush. User messages, terminal results, new turn
+ *    initialization, terminal checkpoints and end-of-events delimit turns.
  * 2. Intermediate text blocks are demoted to 'text' type thoughts visible in the
  *    collapsed thought process (same as stream-processor.ts:586).
  * 3. Text merging follows the main-space rule:
@@ -120,6 +121,8 @@ export function convertEventsToMessages(events: StoredEvent[], lines?: readonly 
   // content when a turn reconstructed no assistant text.
   let pendingResultText = ''
   let pendingResultTs = ''
+  let pendingError: string | undefined
+  let snapshotUsage: TokenUsage | undefined
 
   // File line of the event that first put something into the pending assistant
   // turn; becomes the message id on flush.
@@ -137,13 +140,15 @@ export function convertEventsToMessages(events: StoredEvent[], lines?: readonly 
   /** Flush accumulated thoughts + lastText into one assistant Message, then reset state. */
   function flush(): void {
     const content = lastText || pendingResultText
-    if (pendingThoughts.length === 0 && !content) return
+    if (pendingThoughts.length === 0 && !content && !pendingError) return
 
     const record: TranscriptMessage = {
       id: messageId(turnFirstLine ?? lineOf(events.length - 1)),
       role: 'assistant',
       ...(teamMetadata ? { metadata: teamMetadata } : {}),
       content,
+      ...(pendingError ? { error: pendingError } : {}),
+      ...(snapshotUsage ? { tokenUsage: snapshotUsage } : {}),
       timestamp: lastTextTs || lastThoughtTs || pendingResultTs || new Date().toISOString(),
     }
 
@@ -162,6 +167,8 @@ export function convertEventsToMessages(events: StoredEvent[], lines?: readonly 
     hadSubstantiveTool = false
     pendingResultText = ''
     pendingResultTs = ''
+    pendingError = undefined
+    snapshotUsage = undefined
     turnFirstLine = null
   }
 
@@ -176,6 +183,28 @@ export function convertEventsToMessages(events: StoredEvent[], lines?: readonly 
     const event = events[index]
     const ts = event._ts || new Date().toISOString()
     noteTurnStart(index - 1)
+
+    if (event.type === 'system' && event.subtype === 'init') {
+      flush()
+      streamBlocks.clear()
+      toolUseMap.clear()
+      continue
+    }
+
+    // A terminal partial checkpoint replaces this turn's aggregates, not a new reply.
+    if (event.type === 'turn_snapshot') {
+      turnFirstLine ??= lineOf(index)
+      lastText = typeof event.content === 'string' ? event.content : ''
+      lastTextTs = ts
+      pendingResultText = ''
+      pendingThoughts = Array.isArray(event.thoughts) ? event.thoughts as Thought[] : []
+      pendingError = typeof event.error === 'string' ? event.error : undefined
+      snapshotUsage = event.tokenUsage as TokenUsage | undefined
+      flush()
+      streamBlocks.clear()
+      toolUseMap.clear()
+      continue
+    }
 
     // ── User events ──
     if (event.type === 'user') {
@@ -436,6 +465,10 @@ export function convertEventsToMessages(events: StoredEvent[], lines?: readonly 
           pendingResultTs = ts
         }
       }
+      noteTurnStart(index)
+      flush()
+      streamBlocks.clear()
+      toolUseMap.clear()
       continue
     }
 

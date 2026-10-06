@@ -204,6 +204,11 @@ class AppChatSink implements TurnSink {
     this.getWriter()?.writeTrigger(text, images, teamOrigin, provenance, references)
   }
 
+  /** A message failed before the engine created a turn to checkpoint. */
+  writePreInitFailure(error: Error): void {
+    this.getWriter()?.writeEvent({ type: 'turn_snapshot', content: '', thoughts: [], error: error.message })
+  }
+
   /**
    * This turn asked the user a decision, so it ends as soon as the transcript
    * allows it. Called from the report tool while the turn is still running; the
@@ -284,19 +289,21 @@ class AppChatSink implements TurnSink {
     }
   }
 
-  onTurnError(error: Error): void {
-    const round = this.takeCurrentRound()
-    round?.reject(error)
-    this.turnRunning = false
-    this.armTurnStartDeadline()
+  onTurnError(error: Error, _turnStarted?: boolean, partial?: StreamResult): void {
+    try {
+      if (partial) this.persistPartial(partial, error.message)
+    } finally {
+      const round = this.takeCurrentRound()
+      round?.reject(error)
+      this.turnRunning = false
+      this.armTurnStartDeadline()
+    }
   }
 
   private completeTurn(result: StreamResult): void {
     this.persistSessionId(result)
 
-    // Read the reply from the raw SDK messages rather than processStream's
-    // lastTextContent, which is subject to the dual-path pollution documented
-    // in stream-processor.ts.
+    // Raw aggregates define delivery independently of the live UI's streaming state.
     const accumulated = this.turn.accumulator.getReply()
     const replyContent = accumulated || result.finalContent
 
@@ -338,16 +345,20 @@ class AppChatSink implements TurnSink {
     round.resolve()
   }
 
-  onConsumerStopped(): void {
-    this.turnRunning = false
-    this.clearTurnStartDeadline()
-    const pending = this.takeCurrentRound()
-    pending?.reject(new Error('Chat session ended before the reply completed.'))
-    while (this.queue.length > 0) {
-      const round = this.queue.shift()!
-      if (round.settled) continue
-      round.settled = true
-      round.reject(new Error('Chat session ended before the message was processed.'))
+  onConsumerStopped(partial?: StreamResult): void {
+    try {
+      if (partial) this.persistPartial(partial, 'Chat session ended before the reply completed.')
+    } finally {
+      this.turnRunning = false
+      this.clearTurnStartDeadline()
+      const pending = this.takeCurrentRound()
+      pending?.reject(new Error('Chat session ended before the reply completed.'))
+      while (this.queue.length > 0) {
+        const round = this.queue.shift()!
+        if (round.settled) continue
+        round.settled = true
+        round.reject(new Error('Chat session ended before the message was processed.'))
+      }
     }
   }
 
@@ -433,6 +444,17 @@ class AppChatSink implements TurnSink {
         : undefined
     }
     return this.writer
+  }
+
+  private persistPartial(partial: StreamResult, error: string): void {
+    this.persistSessionId(partial)
+    this.getWriter()?.writeEvent({
+      type: 'turn_snapshot',
+      content: partial.hasMeaningfulContent ? partial.finalContent : '',
+      thoughts: partial.thoughts,
+      tokenUsage: partial.tokenUsage,
+      error,
+    })
   }
 
   private persistSessionId(result: StreamResult): void {

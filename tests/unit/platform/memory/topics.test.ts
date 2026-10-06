@@ -159,12 +159,13 @@ describe('renderMemorySection', () => {
     expect(section).not.toContain('deep.md')
   })
 
-  it('shows topics even before memory.md exists, and asks for memory.md to be created', async () => {
+  it('shows topics with a missing memory file, without encouraging recreation from a snapshot', async () => {
     const layout = layoutOf(space)
     mkdirSync(layout.topicsDir, { recursive: true })
     writeFileSync(join(layout.topicsDir, 'a.md'), topic('when a'))
     const section = renderMemorySection(await buildMemorySnapshot(layout))
-    expect(section).toContain('No memory file exists yet')
+    expect(section).toContain('Memory file unavailable at startup')
+    expect(section).toContain('do not recreate it')
     expect(section).toContain('a.md')
   })
 })

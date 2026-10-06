@@ -39,13 +39,15 @@ export interface TurnSink {
    * @param turnStarted whether `onTurnStart` had fired for this turn — false
    *   means the failure happened before CC acknowledged anything, so no
    *   turn-scoped state exists to update.
+   * @param partial received output from that acknowledged turn, before the failure.
    */
-  onTurnError?(error: Error, turnStarted: boolean): void
+  onTurnError?(error: Error, turnStarted: boolean, partial?: StreamResult): void
 
   /**
-   * The consumer loop exited: no further turn will arrive on this session.
-   * Sinks that hand out per-turn promises must settle the outstanding ones
-   * here, or their callers wait forever.
+   * Called once on synchronous retirement or natural loop exit. No turn from
+   * this consumer can reach the sink afterward, including delayed stream output.
+   * Persist the acknowledged partial turn and settle outstanding promises before
+   * a successor can enqueue new rounds.
    */
-  onConsumerStopped?(): void
+  onConsumerStopped?(partial?: StreamResult): void
 }

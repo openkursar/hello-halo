@@ -29,7 +29,7 @@
  */
 
 import http from 'http'
-import { randomBytes } from 'crypto'
+import { createHash, randomBytes } from 'crypto'
 import open from 'open'
 import { proxyFetch } from '../../proxy-fetch'
 import type {
@@ -87,6 +87,7 @@ const AUTHORIZE_TIMEOUT_MS = 5 * 60 * 1000
 
 /** Retries for the transient 5xx the ZCode token exchange occasionally returns. */
 const TOKEN_EXCHANGE_MAX_ATTEMPTS = 3
+const TOKEN_REQUEST_TIMEOUT_MS = 15_000
 
 /**
  * GLM coding-plan model catalog served by the coding endpoint. Offline default;
@@ -121,10 +122,22 @@ interface PendingAuth {
   rejectCode: (err: Error) => void
   /** Awaited by completeLogin. */
   codePromise: Promise<string>
-  createdAt: number
+  timeout: ReturnType<typeof setTimeout>
+  closed: boolean
 }
 
-let pendingAuth: PendingAuth | null = null
+interface CodingAccount {
+  key: string
+  label: string
+  id: string
+  organizationId: string
+}
+
+function codingAccount(key: string, label: string, organizationId: string): CodingAccount {
+  // Secret-copy availability must not change the account identity.
+  const fingerprint = createHash('sha256').update(key.split('.')[0]).digest('hex').slice(0, 32)
+  return { key, label, organizationId, id: `${organizationId}:${fingerprint}` }
+}
 
 // ============================================================================
 // Response envelope helpers
@@ -151,6 +164,9 @@ class ZhipuCodingOAuthProvider implements OAuthAISourceProvider {
   readonly type: AISourceType = PROVIDER_TYPE
   readonly displayName = 'Zhipu GLM Coding Plan'
 
+  private pendingAuth: PendingAuth | null = null
+  private startingLogin: object | null = null
+
   /**
    * Read this provider's slice from the legacy v1 config the manager builds via
    * buildLegacyOAuthConfig(). Typed access avoids a string-index error on the
@@ -158,6 +174,15 @@ class ZhipuCodingOAuthProvider implements OAuthAISourceProvider {
    */
   private conf(config: AISourcesConfig): OAuthSourceConfig | undefined {
     return (config as unknown as Record<string, OAuthSourceConfig | undefined>)[PROVIDER_TYPE]
+  }
+
+  getAccountId(config: AISourcesConfig): string | null {
+    const c = this.conf(config)
+    if (!c?.accessToken || !c.user?.uid) return null
+    const fingerprint = createHash('sha256').update(c.accessToken.split('.')[0]).digest('hex').slice(0, 32)
+    const suffix = `:${fingerprint}`
+    const organizationId = c.user.uid.endsWith(suffix) ? c.user.uid.slice(0, -suffix.length) : c.user.uid
+    return codingAccount(c.accessToken, '', organizationId).id
   }
 
   // ── Configuration ──────────────────────────────────────────────────────────
@@ -181,6 +206,7 @@ class ZhipuCodingOAuthProvider implements OAuthAISourceProvider {
       return null
     }
     return {
+      sourceId: c.sourceId,
       url: CODING_CHAT_URL,
       key: c.accessToken,
       model: c.model || DEFAULT_MODEL,
@@ -211,9 +237,12 @@ class ZhipuCodingOAuthProvider implements OAuthAISourceProvider {
    * start → complete path (completeLogin blocks on the loopback callback).
    */
   async startLogin(): Promise<ProviderResult<OAuthStartResult>> {
+    const attempt = {}
+    this.startingLogin = attempt
+    this.cleanupPending(this.pendingAuth)
+    let pending: PendingAuth | undefined
+    let server: http.Server | undefined
     try {
-      this.cleanupPending()
-
       const state = randomBytes(16).toString('hex')
 
       let resolveCode!: (code: string) => void
@@ -226,27 +255,21 @@ class ZhipuCodingOAuthProvider implements OAuthAISourceProvider {
       // unhandledRejection if the server errors before completeLogin awaits it.
       codePromise.catch(() => {})
 
-      const server = http.createServer()
+      const callbackServer = http.createServer()
+      server = callbackServer
       await new Promise<void>((resolve, reject) => {
-        server.once('error', reject)
-        server.listen(0, '127.0.0.1', () => {
-          server.removeListener('error', reject)
+        callbackServer.once('error', reject)
+        callbackServer.listen(0, '127.0.0.1', () => {
+          callbackServer.removeListener('error', reject)
           resolve()
         })
       })
 
-      const addr = server.address()
-      if (!addr || typeof addr === 'string') {
-        server.close()
-        return { success: false, error: 'Failed to bind loopback callback port' }
-      }
+      if (this.startingLogin !== attempt) throw new Error('Authentication cancelled')
+      const addr = callbackServer.address()
+      if (!addr || typeof addr === 'string') throw new Error('Failed to bind loopback callback port')
       const redirectUri = `http://127.0.0.1:${addr.port}/callback`
-
-      server.on('request', (req, res) => {
-        this.handleLoopbackRequest(req, res, state)
-      })
-      // Guard against the user abandoning the browser tab.
-      server.setTimeout(AUTHORIZE_TIMEOUT_MS)
+      callbackServer.setTimeout(AUTHORIZE_TIMEOUT_MS)
 
       const url = new URL(BIGMODEL_LOGIN_URL)
       url.searchParams.set('redirect', redirectUri)
@@ -254,15 +277,30 @@ class ZhipuCodingOAuthProvider implements OAuthAISourceProvider {
       url.searchParams.set('state', state)
       const loginUrl = url.toString()
 
-      pendingAuth = {
+      const auth: PendingAuth = {
         state,
         redirectUri,
-        server,
+        server: callbackServer,
         resolveCode,
         rejectCode,
         codePromise,
-        createdAt: Date.now()
+        closed: false,
+        timeout: setTimeout(() => {
+          auth.rejectCode(new Error('Authorization timed out'))
+          this.cleanupPending(auth)
+          console.warn('[ZhipuCodingOAuth] Authorization timed out; callback server closed')
+        }, AUTHORIZE_TIMEOUT_MS)
       }
+      pending = auth
+      this.pendingAuth = auth
+      callbackServer.on('request', (req, res) => {
+        this.handleLoopbackRequest(req, res, auth)
+      })
+      callbackServer.on('error', () => {
+        auth.rejectCode(new Error('Loopback callback server failed'))
+        this.cleanupPending(auth)
+        console.warn('[ZhipuCodingOAuth] Loopback callback server failed')
+      })
 
       console.log('[ZhipuCodingOAuth] Login started, loopback callback on', redirectUri)
 
@@ -277,11 +315,14 @@ class ZhipuCodingOAuthProvider implements OAuthAISourceProvider {
       }
     } catch (error) {
       console.error('[ZhipuCodingOAuth] Start login error:', error)
-      this.cleanupPending()
+      if (pending) this.cleanupPending(pending)
+      else if (server) server.close()
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to start login'
       }
+    } finally {
+      if (this.startingLogin === attempt) this.startingLogin = null
     }
   }
 
@@ -290,23 +331,28 @@ class ZhipuCodingOAuthProvider implements OAuthAISourceProvider {
    * a BigModel access token, mint the coding-plan key, and return the token data.
    */
   async completeLogin(state: string): Promise<ProviderResult<OAuthCompleteResult>> {
-    const pending = pendingAuth
+    const pending = this.pendingAuth
     if (!pending) {
+      console.warn('[ZhipuCodingOAuth] Login completion rejected: no pending authentication')
       return { success: false, error: 'No pending authentication' }
     }
     if (pending.state !== state) {
+      console.warn('[ZhipuCodingOAuth] Login completion rejected: state mismatch')
       return { success: false, error: 'Authentication state mismatch' }
     }
 
     try {
       console.log('[ZhipuCodingOAuth] Waiting for browser authorization...')
-      const code = await this.awaitAuthorizationCode(pending)
+      const code = await pending.codePromise
+      this.requirePending(pending)
 
       console.log('[ZhipuCodingOAuth] Exchanging authorization code for access token')
       const bigModelToken = await this.exchangeBigModelCode(code, pending)
+      this.requirePending(pending)
 
       console.log('[ZhipuCodingOAuth] Resolving coding-plan accounts')
       const accounts = await this.resolveAccounts(bigModelToken)
+      this.requirePending(pending)
       if (accounts.length === 0) {
         throw new Error('no coding-plan key with quota on this account')
       }
@@ -316,7 +362,7 @@ class ZhipuCodingOAuthProvider implements OAuthAISourceProvider {
       const primary = accounts[0]
       const result: OAuthCompleteResult & {
         _tokenData: { accessToken: string; refreshToken: string; expiresAt: number; uid: string }
-        _accounts: Array<{ key: string; label: string; id: string }>
+        _accounts: CodingAccount[]
         _availableModels: string[]
         _modelNames: Record<string, string>
         _defaultModel: string
@@ -326,7 +372,7 @@ class ZhipuCodingOAuthProvider implements OAuthAISourceProvider {
         _tokenData: { accessToken: primary.key, refreshToken: '', expiresAt: 0, uid: primary.id },
         // One entry per organization that owns the plan; the manager creates a
         // source per entry so the user can switch organizations from the list.
-        _accounts: accounts.map(a => ({ key: a.key, label: a.label, id: a.id })),
+        _accounts: accounts,
         _availableModels: models,
         _modelNames: GLM_MODELS,
         _defaultModel: DEFAULT_MODEL
@@ -341,7 +387,7 @@ class ZhipuCodingOAuthProvider implements OAuthAISourceProvider {
         error: error instanceof Error ? error.message : 'Failed to complete login'
       }
     } finally {
-      this.cleanupPending()
+      this.cleanupPending(pending)
     }
   }
 
@@ -353,9 +399,18 @@ class ZhipuCodingOAuthProvider implements OAuthAISourceProvider {
     return { success: true, data: { valid: true } }
   }
 
-  async logout(): Promise<ProviderResult<void>> {
-    this.cleanupPending()
+  async cancelLogin(): Promise<ProviderResult<void>> {
+    this.startingLogin = null
+    this.cleanupPending(this.pendingAuth)
     return { success: true }
+  }
+
+  async logout(_config?: AISourcesConfig): Promise<ProviderResult<void>> {
+    return { success: true }
+  }
+
+  private requirePending(pending: PendingAuth): void {
+    if (this.pendingAuth !== pending) throw new Error('Authentication cancelled')
   }
 
   /**
@@ -371,31 +426,11 @@ class ZhipuCodingOAuthProvider implements OAuthAISourceProvider {
 
   // ── Internals ────────────────────────────────────────────────────────────────
 
-  /** Wait for the loopback callback code, bounded by the authorize timeout. */
-  private awaitAuthorizationCode(pending: PendingAuth): Promise<string> {
-    const remaining = Math.max(0, AUTHORIZE_TIMEOUT_MS - (Date.now() - pending.createdAt))
-    return new Promise<string>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error('Authorization timed out'))
-      }, remaining)
-      pending.codePromise.then(
-        (code) => {
-          clearTimeout(timer)
-          resolve(code)
-        },
-        (err) => {
-          clearTimeout(timer)
-          reject(err)
-        }
-      )
-    })
-  }
-
   /**
    * Loopback callback handler: extracts `authCode` (or `code`) and `state` from
    * the redirect, validates the state, and settles the pending flow.
    */
-  private handleLoopbackRequest(req: http.IncomingMessage, res: http.ServerResponse, expectedState: string): void {
+  private handleLoopbackRequest(req: http.IncomingMessage, res: http.ServerResponse, pending: PendingAuth): void {
     let code = ''
     let stateParam = ''
     let errParam = ''
@@ -419,16 +454,19 @@ class ZhipuCodingOAuthProvider implements OAuthAISourceProvider {
       '<h2>Authorization received</h2><p>You can close this tab and return to Halo.</p></body></html>'
     )
 
-    if (!pendingAuth) return
+    if (this.pendingAuth !== pending) {
+      console.warn('[ZhipuCodingOAuth] Callback ignored: authorization cancelled or replaced')
+      return
+    }
     if (errParam) {
-      pendingAuth.rejectCode(new Error(`Authorization failed: ${errParam}`))
+      pending.rejectCode(new Error('Authorization failed'))
       return
     }
-    if (!code || stateParam !== expectedState) {
-      pendingAuth.rejectCode(new Error('Authorization callback missing code or state mismatch'))
+    if (!code || stateParam !== pending.state) {
+      pending.rejectCode(new Error('Authorization callback missing code or state mismatch'))
       return
     }
-    pendingAuth.resolveCode(code)
+    pending.resolveCode(code)
   }
 
   /**
@@ -447,6 +485,7 @@ class ZhipuCodingOAuthProvider implements OAuthAISourceProvider {
 
     let lastErr: Error | null = null
     for (let attempt = 1; attempt <= TOKEN_EXCHANGE_MAX_ATTEMPTS; attempt++) {
+      this.requirePending(pending)
       try {
         const data = await this.postEnvelope(`${ZCODE_OAUTH_BASE}/oauth/token`, body)
         const token = this.extractAccessToken(data)
@@ -455,6 +494,7 @@ class ZhipuCodingOAuthProvider implements OAuthAISourceProvider {
         }
         return token
       } catch (error) {
+        this.requirePending(pending)
         lastErr = error instanceof Error ? error : new Error(String(error))
         console.warn(`[ZhipuCodingOAuth] Token exchange attempt ${attempt}/${TOKEN_EXCHANGE_MAX_ATTEMPTS} failed:`, lastErr.message)
         if (attempt < TOKEN_EXCHANGE_MAX_ATTEMPTS) {
@@ -491,7 +531,7 @@ class ZhipuCodingOAuthProvider implements OAuthAISourceProvider {
    * user picks the org, and an org without quota simply surfaces the upstream
    * error the first time it is used.
    */
-  private async resolveAccounts(accessToken: string): Promise<Array<{ key: string; label: string; id: string }>> {
+  private async resolveAccounts(accessToken: string): Promise<CodingAccount[]> {
     const ci = await this.getEnvelope(`${BIGMODEL_BIZ_BASE}/api/biz/customer/getCustomerInfo`, accessToken) as {
       organizations?: Array<{
         organizationId?: string
@@ -523,7 +563,7 @@ class ZhipuCodingOAuthProvider implements OAuthAISourceProvider {
       }
     }))
 
-    return resolved.filter((a): a is { key: string; label: string; id: string } => a !== null)
+    return resolved.filter((a): a is CodingAccount => a !== null)
   }
 
   /**
@@ -535,7 +575,7 @@ class ZhipuCodingOAuthProvider implements OAuthAISourceProvider {
   private async resolveOrgAccount(
     org: { organizationId?: string; organizationName?: string; projects?: Array<{ projectId?: string; projectName?: string }> },
     accessToken: string
-  ): Promise<{ key: string; label: string; id: string } | null> {
+  ): Promise<CodingAccount | null> {
     const orgId = (org.organizationId || '').trim()
     if (!orgId) return null
     const label = (org.organizationName || '').trim() || orgId
@@ -565,7 +605,7 @@ class ZhipuCodingOAuthProvider implements OAuthAISourceProvider {
       const pick = keys.find(k => (k.name || '').startsWith('member')) || keys[0]
       if (pick?.apiKey) {
         const key = await this.appendSecret(keysUrl, pick.apiKey, accessToken)
-        if (key) return { key, label, id: orgId }
+        if (key) return codingAccount(key, label, orgId)
       }
     }
 
@@ -575,7 +615,7 @@ class ZhipuCodingOAuthProvider implements OAuthAISourceProvider {
       try {
         const res = await this.postEnvelope(keysUrl, JSON.stringify({ name: MINT_KEY_NAME }), accessToken) as { apiKey?: string }
         const key = await this.appendSecret(keysUrl, res?.apiKey, accessToken)
-        if (key) return { key, label, id: orgId }
+        if (key) return codingAccount(key, label, orgId)
       } catch (error) {
         console.warn('[ZhipuCodingOAuth] Create API key failed:', error instanceof Error ? error.message : error)
       }
@@ -616,7 +656,9 @@ class ZhipuCodingOAuthProvider implements OAuthAISourceProvider {
     }
     if (authorization) headers['Authorization'] = authorization
 
-    const resp = await proxyFetch(url, { method, headers, body })
+    const resp = await proxyFetch(url, {
+      method, headers, body, signal: AbortSignal.timeout(TOKEN_REQUEST_TIMEOUT_MS)
+    })
     const text = await resp.text().catch(() => '')
     if (!resp.ok) {
       throw new Error(`HTTP ${resp.status}: ${text.slice(0, 200)}`)
@@ -633,15 +675,16 @@ class ZhipuCodingOAuthProvider implements OAuthAISourceProvider {
     return env.data
   }
 
-  /** Release the loopback server and clear pending state. Idempotent. */
-  private cleanupPending(): void {
-    if (pendingAuth) {
-      try {
-        pendingAuth.server.close()
-      } catch {
-        // ignore close errors
-      }
-      pendingAuth = null
+  private cleanupPending(pending: PendingAuth | null): void {
+    if (!pending || pending.closed) return
+    pending.closed = true
+    clearTimeout(pending.timeout)
+    if (this.pendingAuth === pending) this.pendingAuth = null
+    pending.rejectCode(new Error('Authentication cancelled'))
+    try {
+      pending.server.close()
+    } catch {
+      console.warn('[ZhipuCodingOAuth] Failed to close loopback callback server')
     }
   }
 }

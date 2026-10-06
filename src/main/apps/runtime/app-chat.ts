@@ -35,7 +35,7 @@ import { analytics } from '../../services/analytics/analytics.service'
 import { AnalyticsEvents } from '../../services/analytics/types'
 import { resolvePermission } from '../../../shared/apps/app-types'
 import { getTaskStateService } from '../../platform/task-state'
-import { createMemoryStatusMcpServer, resolveMemoryLayout, type MemoryCallerScope, type TopicsTree } from '../../platform/memory'
+import { resolveMemoryLayout, type MemoryCallerScope, type TopicsTree } from '../../platform/memory'
 import { getConfig } from '../../foundation/config.service'
 import {
   getApiCredentials,
@@ -56,17 +56,15 @@ import { createAIBrowserMcpServer } from '../../services/ai-browser'
 import { createTerminalMcpServer, getGlobalTerminalContext, isTerminalAvailable } from '../../services/ai-terminal'
 import { acquireChatBrowserContext, endChatBrowserTurn, destroyChatBrowserContext } from './app-chat-browser'
 import { buildMessageContent, formatCanvasContext } from '../../services/agent/message-utils'
-import { formatTurnAttachments } from '../../services/agent'
+import { acquireV2Session, formatTurnAttachments, type V2SessionLease } from '../../services/agent'
 import type { CanvasContext } from '../../services/agent/types'
 import type { ContentReference } from '../../../shared/types/content-reference'
 import { messageSummaryText } from '../../../shared/content-reference'
 import { prepareNonVisionImageFallback } from '../../services/agent/image-attachments'
 import {
-  getOrCreateV2Session,
   closeV2Session,
   getConsumerHandle,
   getRunningConsumerIds,
-  markTurnDispatched,
   updateConsumerDisplayModel,
   v2Sessions
 } from '../../services/agent/session-manager'
@@ -123,9 +121,8 @@ import { getImSessionRegistry } from './im-session-registry'
 import {
   collectAppConversationIds,
   describeSelfInstance,
-  listLiveInstances,
-  noteInstanceTurnEnded,
-  noteInstanceTurnStarted,
+  formatInstanceTag,
+  hasOtherAppExecution,
 } from './live-instances'
 import { buildBaseToolset } from '../../services/agent/toolsets/base'
 import { createOcrMcpServer } from '../../services/ocr'
@@ -149,7 +146,7 @@ import {
   appTurnFileAccess,
 } from './turn/memory-lifecycle'
 import { closedFolderDenyRules } from './turn-file-access'
-import { buildLiveInstancesSection, buildMemorySection } from './prompt'
+import { buildMemorySection } from './prompt'
 import { createReportToolServer, type ReportToolContext } from './report-tool'
 // Key builders live in shared/ so the renderer can import them without
 // depending on main-process modules.
@@ -418,26 +415,28 @@ function registerExternalChatSession(
  * turn uses, then rethrown for the caller's own logging. Without it, sending to a
  * digital human that no longer exists looks exactly like sending to one that does.
  */
-/** Whether a turn holds its chat's browser context (between acquire and release). */
-interface BrowserTurnHold {
-  held: boolean
+interface ChatTurnContext {
+  browserHeld: boolean
+  failureHandled: boolean
 }
 
 export async function sendAppChatMessage(request: AppChatRequest): Promise<void> {
   const conversationId = request.conversationId ?? getAppChatConversationId(request.appId)
-  const browserTurn: BrowserTurnHold = { held: false }
+  const turnContext: ChatTurnContext = { browserHeld: false, failureHandled: false }
   try {
-    await runAppChatTurn(request, browserTurn)
+    await runAppChatTurn(request, turnContext)
   } catch (error: unknown) {
     // A failure while the turn was still being set up leaves the browser turn
     // it took; returned, it no longer protects the context from reaping.
-    if (browserTurn.held) {
-      browserTurn.held = false
+    if (turnContext.browserHeld) {
+      turnContext.browserHeld = false
       endChatBrowserTurn(conversationId)
     }
-    const message = error instanceof Error ? error.message : String(error)
-    console.error(`[AppChat][${request.appId}] Chat could not start: ${message}`)
-    emitAgentEvent('agent:error', request.spaceId, conversationId, { type: 'error', error: message })
+    if (!turnContext.failureHandled) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.error(`[AppChat][${request.appId}] Chat could not start: ${message}`)
+      emitAgentEvent('agent:error', request.spaceId, conversationId, { type: 'error', error: message })
+    }
     throw error
   }
 }
@@ -455,13 +454,14 @@ export async function sendAppChatMessage(request: AppChatRequest): Promise<void>
  */
 async function runAppChatTurn(
   request: AppChatRequest,
-  browserTurn: BrowserTurnHold
+  turnContext: ChatTurnContext
 ): Promise<void> {
   const {
     appId, message, images, thinkingEnabled, reasoningEffort, onReply, onProgress,
     imFileSend, senderIdentity, imSession, teamContext, relayOrigin, onMessageAccepted,
   } = request
   const conversationId = request.conversationId ?? getAppChatConversationId(appId)
+  const imStreamHandle = getImStreamHandle(conversationId)
 
   console.log(`[AppChat][${appId}] sendMessage: "${message.substring(0, 100)}"`)
 
@@ -505,8 +505,8 @@ async function runAppChatTurn(
 
   const config = getConfig()
   const credentials = app.userOverrides?.modelSourceId
-    ? await getApiCredentialsForSource(config, app.userOverrides.modelSourceId, app.userOverrides.modelId)
-    : await getApiCredentials(config)
+    ? await getApiCredentialsForSource(app.userOverrides.modelSourceId, app.userOverrides.modelId)
+    : await getApiCredentials()
   // In chat the digital human's own level wins over one the send carries.
   const pickedEffort = pickReasoningEffort(
     request.useChatThinkingLevel ? app.userOverrides?.chatReasoningEffort : undefined, reasoningEffort
@@ -547,9 +547,14 @@ async function runAppChatTurn(
   const memoryActive = !disposableMember && memorySettings.enabled
 
   // ── 3. Build system prompt for interactive chat ──────
+  const selfInstance = describeSelfInstance({ conversationId })
   const memoryInstructions = !memoryActive
     ? ''
-    : memory.getPromptInstructions('session', memoryPromptOptions(appId, app.spec))
+    : memory.getPromptInstructions('session', {
+        ...memoryPromptOptions(appId, app.spec),
+        layout: resolveMemoryLayout(memoryScope, 'app'),
+        authorTag: formatInstanceTag(selfInstance),
+      })
   const usesAIBrowser = resolvePermission(app, 'ai-browser')
   const usesTerminal = resolvePermission(app, 'ai-terminal') && isTerminalAvailable()
   const usesEmail = resolvePermission(app, 'email') // gated on channel config downstream
@@ -665,8 +670,6 @@ async function runAppChatTurn(
   const systemPrompt = assembleAppChatPrompt({ identity, entry, constraints })
 
   // ── 4. Build MCP servers ─────────────────────────────
-  const memoryMcpServer = !memoryActive ? null : createMemoryStatusMcpServer(resolveMemoryLayout(memoryScope, 'app'))
-
   validateEnvironmentConnections(environment, app, manager, 'chat')
   const disabledMcpIds = new Set(
     (app.spec.requires?.mcps ?? []).filter(dependency => dependency.enabled === false).map(dependency => dependency.id)
@@ -682,7 +685,7 @@ async function runAppChatTurn(
   const scopedBrowserCtx = usesAIBrowser
     ? acquireChatBrowserContext(conversationId, appId, spaceId)
     : undefined
-  browserTurn.held = !!scopedBrowserCtx
+  turnContext.browserHeld = !!scopedBrowserCtx
   if (!usesAIBrowser) destroyChatBrowserContext(conversationId, 'ai-browser-disabled')
 
   // Notify tool: allows AI to send notifications to channels and IM contacts.
@@ -736,7 +739,6 @@ async function runAppChatTurn(
   // policy below decides whether the guest may use it.
   const mcpServers: Record<string, any> = {
     ...(dbMcpServers ?? {}),
-    ...(memoryMcpServer ? { 'halo-memory': memoryMcpServer } : {}),
     'halo-notify': notifyMcpServer,
     ...(personCaller.authority !== 'guest' ? { 'halo-person-context': createPersonContextMcpServer(personCaller) } : {}),
     ...buildBaseToolset({
@@ -988,10 +990,45 @@ async function runAppChatTurn(
   }
 
   let round: AppChatRoundHandle | undefined
+  let sessionLease: V2SessionLease | undefined
   // Carried to the finally below, which is where a team turn's ending is
   // reported: the block runs for every exit, but only the catch knows which one.
   let turnFailure: string | null = null
   let finalReply: string | undefined
+  let dispatchAttempted = false
+  let dispatchAccepted = false
+  let userMessageRecorded = false
+  const recordUserMessage = () => {
+    if (userMessageRecorded) return
+    userMessageRecorded = true
+    sink.writeUserMessage(
+      request.recorded?.content ?? message,
+      images,
+      teamContext ? { kind: teamContext.kind ?? 'human_message', correlationId: teamContext.correlationId } : undefined,
+      request.recorded?.provenance,
+      request.references
+    )
+  }
+  let failureReported = false
+  const reportFailure = (error: unknown): void => {
+    if (failureReported) return
+    failureReported = true
+    const err = error as Error
+    console.error(`[AppChat][${appId}] Error:`, error)
+    emitAgentEvent('agent:error', spaceId, conversationId, {
+      type: 'error', error: err.message || 'Unknown error during app chat',
+    })
+  }
+  const reportPreInitFailure = (error: Error): void => {
+    if (failureReported) return
+    reportFailure(error)
+    try {
+      recordUserMessage()
+      sink.writePreInitFailure(error)
+    } finally {
+      emitAgentEvent('agent:complete', spaceId, conversationId, { type: 'complete', duration: 0 })
+    }
+  }
   try {
     const t0 = Date.now()
 
@@ -1016,7 +1053,7 @@ async function runAppChatTurn(
       console.log(`[AppChat][${appId}] Forking new local session from source SDK session ${forkResumeSessionId}`)
     }
 
-    const v2Session = await getOrCreateV2Session(
+    sessionLease = await acquireV2Session(
       spaceId,
       conversationId,
       sdkOptions,
@@ -1026,12 +1063,12 @@ async function runAppChatTurn(
       undefined,
       undefined,
       undefined,
-      // A restricted turn must run on a session actually built with its
-      // restrictions. Reuse normally defers a rebuild while the session is busy
-      // and hands back the one that exists — here that would run this request
-      // with whatever the previous caller was allowed.
-      applied?.enforced ? { requireFreshInputs: true } : undefined
+      // Busy reuse must not hand this turn another caller's permissions or
+      // memory author tag; require the current inputs instead of a deferred rebuild.
+      applied?.enforced || memoryActive ? { requireFreshInputs: true } : undefined,
+      reportPreInitFailure
     )
+    const v2Session = sessionLease.session
 
     // A reused session keeps the consumer it was created with; refresh the model
     // label so thought parsing stays correct after a model switch that did not
@@ -1061,16 +1098,12 @@ async function runAppChatTurn(
 
     console.log(`[AppChat][${appId}] V2 session ready: ${Date.now() - t0}ms`)
 
+    if (!sessionLease.isCurrent) throw new Error('The acquired session is no longer available')
+
     // ── 7. Persist the user message for reload recovery ──
     // Original images are persisted regardless of the vision fallback — they
     // feed the chat bubble display, not the model.
-    sink.writeUserMessage(
-      request.recorded?.content ?? message,
-      images,
-      teamContext ? { kind: teamContext.kind ?? 'human_message', correlationId: teamContext.correlationId } : undefined,
-      request.recorded?.provenance,
-      request.references
-    )
+    recordUserMessage()
 
     // ── 8. Dispatch and wait for this message's turn ────
     // Every session opens with the digital human's memory, the same way an
@@ -1091,27 +1124,16 @@ async function runAppChatTurn(
           })
         )
 
-    // Who else is executing this same digital human right now. Unlike the memory
-    // block this goes on EVERY turn: it is true only at the moment it is built,
-    // and a session that ran for an hour on a first-turn snapshot would be
-    // reading a roster from an hour ago. It rides the user message rather than
-    // the system prompt precisely because it changes every turn — the system
-    // prompt is fingerprinted for session reuse (sdk-config.ts), so per-turn
-    // content there would rebuild the session on every message.
-    // A guest's turn is described as `im-guest`, so its History entries are
-    // signed as a guest's without the instructions having to say so.
-    const selfInstance = describeSelfInstance(appId, { conversationId })
-    const livePreamble =
-      buildLiveInstancesSection(selfInstance, listLiveInstances(appId, selfInstance.id)) + '\n\n'
-
     // With the non-vision fallback active, image blocks are replaced by the
     // injected attachment-paths block.
     const messageContent = buildMessageContent(
-      memoryPreamble + livePreamble + formatCanvasContext(request.canvasContext)
+      memoryPreamble + formatCanvasContext(request.canvasContext)
         + formatTurnAttachments({ references: request.references, workDir })
         + (imageFallback?.contextBlock ?? '') + message,
       imageFallback ? undefined : images
     )
+
+    if (!sessionLease.isCurrent) throw new Error('The acquired session is no longer available')
 
     // Claim the next turn for this message. Enqueued immediately before send so
     // the window in which an autonomous turn could start first — and therefore
@@ -1121,20 +1143,14 @@ async function runAppChatTurn(
       onReply: content => { finalReply = content; onReply?.(content) },
     })
 
-    // Mark the dispatch BEFORE send: from here until system:init the consumer
-    // looks idle, and an unguarded rebuild in that window would destroy this
-    // message.
-    markTurnDispatched(conversationId)
-    // Stamps this conversation's start time so a concurrent instance can say
-    // when it began. The entry is an annotation on a derived list, so a path
-    // that skips it loses the time, never the entry (live-instances.ts).
-    noteInstanceTurnStarted(conversationId)
+    dispatchAttempted = true
     try {
       if (typeof messageContent === 'string') {
-        v2Session.send(messageContent)
+        await sessionLease.send(messageContent, error => reportPreInitFailure(error as Error))
       } else {
-        v2Session.send({ type: 'user', message: { role: 'user', content: messageContent } } as any)
+        await sessionLease.send({ type: 'user', message: { role: 'user', content: messageContent } } as any, error => reportPreInitFailure(error as Error))
       }
+      dispatchAccepted = true
     } catch (sendErr) {
       // Nothing reached CC, so no turn will arrive to settle this round.
       round.cancel()
@@ -1148,19 +1164,24 @@ async function runAppChatTurn(
     const err = error as Error
     turnFailure = err.message || 'Unknown error during app chat'
 
-    console.error(`[AppChat][${appId}] Error:`, error)
-    emitAgentEvent('agent:error', spaceId, conversationId, {
-      type: 'error',
-      error: err.message || 'Unknown error during app chat'
-    })
+    turnContext.failureHandled = true
+    if (!dispatchAttempted || dispatchAccepted) {
+      if (!sessionLease || sessionLease.isCurrent) {
+        if (!dispatchAttempted) reportPreInitFailure(err)
+        else reportFailure(error)
+      } else {
+        console.warn(`[AppChat][${appId}][${conversationId}] Discarded retired session's turn failure; original caller still receives it`)
+      }
+    }
 
     // Let the caller close out its transport (IM stream, HTTP client).
     throw err
   } finally {
+    sessionLease?.release()
     // Native chats keep their browser context (and its pages) for the next
     // message, failed turn or not; every other session's ends with the turn.
-    if (browserTurn.held) {
-      browserTurn.held = false
+    if (turnContext.browserHeld) {
+      turnContext.browserHeld = false
       endChatBrowserTurn(conversationId)
     }
 
@@ -1169,12 +1190,12 @@ async function runAppChatTurn(
       // Round is over — drop the streaming handle registered by dispatch-inbound
       // so stopImSession can no longer reach it. Stale handles left from a prior
       // round would let stop() finish/dispose a stream that's already complete.
-      clearImStreamHandle(conversationId)
+      if (imStreamHandle && getImStreamHandle(conversationId) === imStreamHandle) {
+        clearImStreamHandle(conversationId)
+      }
     }
 
     console.log(`[AppChat][${appId}] Active session cleaned up`)
-
-    noteInstanceTurnEnded(conversationId)
 
     // A TEAM-session turn ended — bus-driven, human 1:1, or IM alike.
     const endedTeamSession = parseTeamSessionKey(conversationId)
@@ -1243,7 +1264,7 @@ async function runAppChatTurn(
         appName: app.spec.name,
         settings: memorySettings,
         resolveCredentials: async () => resolvedCreds,
-        isBusy: () => listLiveInstances(appId, describeSelfInstance(appId, { conversationId }).id).length > 0,
+        isBusy: () => hasOtherAppExecution(appId),
       }, chatRunId)
     }
 

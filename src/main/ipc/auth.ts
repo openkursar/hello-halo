@@ -5,9 +5,10 @@
  * Provider types are configured in product.json and loaded dynamically.
  *
  * Channels:
- * - auth:start-login (providerType) - Start OAuth login for a provider
- * - auth:open-login-window (providerType, loginUrl, redirectUri) - Open BrowserWindow for redirect OAuth (PKCE)
- * - auth:complete-login (providerType, state) - Complete OAuth login
+ * - auth:start-login (providerType, sourceId?) - Add or reauthenticate an OAuth account
+ * - auth:open-login-window (providerType, loginId) - Open the manager-owned redirect flow
+ * - auth:complete-login (providerType, stateOrCode, loginId) - Complete OAuth login
+ * - auth:cancel-login (providerType, loginId) - Cancel only the owned pending login
  * - auth:refresh-token (sourceId) - Refresh token for a source (by ID)
  * - auth:check-token (sourceId) - Check token status (by ID)
  * - auth:logout (sourceId) - Logout from a source (by ID)
@@ -18,13 +19,16 @@
  * - auth:delegated-activate - Create/refresh the delegated source after login
  */
 
-import { BrowserWindow, nativeTheme, session } from 'electron'
+import { BrowserWindow, nativeTheme } from 'electron'
+import { randomUUID } from 'crypto'
 import { getAISourceManager, getEnabledAuthProviderConfigs } from '../services/ai-sources'
 import { BUILTIN_PROVIDERS } from '../../shared/constants'
 import { buildLoginLoadingPage, buildLoginErrorPage, loginPageBg } from '../services/browser-login-pages'
 import { readCliAuthState } from '../services/agent/cli-auth'
 import { buildCliLoginCommand } from '../services/agent/sdk-config'
-import type { ProviderId } from '../../shared/types'
+import type { OAuthCompleteResult, ProviderId } from '../../shared/types'
+import type { RpcHandlers, RpcResponse } from '../../shared/rpc/define'
+import * as authController from '../controllers/auth.controller'
 import { authRpc } from '../../shared/rpc/contracts/auth.contract'
 import { registerRawRpcHandlers } from './rpc'
 
@@ -37,7 +41,10 @@ const LOGIN_WINDOW_TIMEOUT_MS = 10 * 60 * 1000
 export function registerAuthHandlers(): void {
   const manager = getAISourceManager()
 
-  registerRawRpcHandlers(authRpc, {
+  const loginWindows = new Map<string, () => void>()
+  const loginWindowResults = new Map<string, Promise<RpcResponse<OAuthCompleteResult>>>()
+
+  const handlers: RpcHandlers<typeof authRpc> = {
     /**
      * Get list of available authentication providers (OAuth)
      */
@@ -65,233 +72,172 @@ export function registerAuthHandlers(): void {
       }
     },
 
-    /**
-     * Start OAuth login flow for a provider
-     */
-    authStartLogin: async (providerType: ProviderId) => {
+    authStartLogin: (providerType: ProviderId, sourceId?: string) =>
+      authController.startLogin(providerType, sourceId),
+
+    authOpenLoginWindow: async (providerType: ProviderId, loginId: string) => {
       try {
-        console.log(`[Auth IPC] Starting login for provider: ${providerType}`)
-        const result = await manager.startOAuthLogin(providerType)
-        return result
-      } catch (error: unknown) {
-        const err = error as Error
-        console.error(`[Auth IPC] Start login error for ${providerType}:`, err)
-        return { success: false, error: err.message }
-      }
-    },
+        const context = typeof loginId === 'string' && loginId
+          ? manager.getOAuthLoginContext(providerType, loginId)
+          : null
+        if (!context || context.loginId !== loginId || !context.redirectUri) {
+          console.warn(`[Auth IPC] Rejected login window for ${providerType}: no matching redirect flow`)
+          return { success: false, error: 'No active redirect login. Please start login again.' }
+        }
+        const existing = loginWindowResults.get(loginId)
+        if (existing) return existing
 
-    /**
-     * Open a BrowserWindow for standard redirect OAuth (PKCE flow).
-     * Used by Claude OAuth — intercepts the callback redirect to extract the code
-     * and automatically completes the login flow.
-     *
-     * Flow:
-     * 1. Open BrowserWindow pointing to loginUrl
-     * 2. Monitor will-redirect / will-navigate events for the redirectUri
-     * 3. Extract code from redirect URL query params
-     * 4. Call manager.completeOAuthLogin(providerType, code)
-     * 5. Close window and return result
-     */
-    authOpenLoginWindow: async (providerType: ProviderId, loginUrl: string, redirectUri: string) => {
-      return new Promise<{ success: boolean; error?: string }>((resolve) => {
-        const mainWindow = BrowserWindow.getAllWindows()[0]
-        const isDark = nativeTheme.shouldUseDarkColors
-
-        console.log(`[Auth IPC] Opening login window for ${providerType}: ${loginUrl}`)
-
-        // ── Create login BrowserWindow ──────────────────────────────────────
-        const loginWindow = new BrowserWindow({
-          width: 520,
-          height: 680,
-          show: false,
-          modal: false,
-          parent: mainWindow || undefined,
-          backgroundColor: loginPageBg(isDark),
-          title: 'Sign in to Claude',
-          webPreferences: {
-            nodeIntegration: false,
-            contextIsolation: true,
-            sandbox: true,
-          }
-        })
-
-        // Show loading page instantly before network request
-        loginWindow.loadURL(buildLoginLoadingPage(loginUrl, 'Sign in to Claude', isDark))
-
-        loginWindow.once('ready-to-show', () => {
-          loginWindow.show()
-          // Navigate to actual OAuth URL after window is visible
-          loginWindow.loadURL(loginUrl).catch((err) => {
-            console.error('[Auth IPC] Failed to load login URL:', err)
-            loginWindow.loadURL(buildLoginErrorPage(loginUrl, String(err), isDark))
-          })
-        })
-
-        // ── Timeout guard ───────────────────────────────────────────────────
-        const timeout = setTimeout(() => {
-          console.warn(`[Auth IPC] Login window timeout for ${providerType}`)
-          if (!loginWindow.isDestroyed()) loginWindow.close()
-          resolve({ success: false, error: 'Login timed out' })
-        }, LOGIN_WINDOW_TIMEOUT_MS)
-
-        const cleanup = () => {
-          clearTimeout(timeout)
+        const loginUrl = new URL(context.loginUrl)
+        const redirectUrl = new URL(context.redirectUri)
+        if (!['http:', 'https:'].includes(loginUrl.protocol) || !['http:', 'https:'].includes(redirectUrl.protocol)) {
+          console.warn(`[Auth IPC] Rejected login window for ${providerType}: invalid URL protocol`)
+          return { success: false, error: 'Invalid login URL' }
         }
 
-        // ── Redirect intercept ─────────────────────────────────────────────
-        /**
-         * Intercept navigations to the redirectUri to extract the auth code.
-         * Anthropic's redirect: https://platform.claude.com/oauth/code/callback?code=...
-         * The code may contain '#' — split on '#' and use the first part as the actual code.
-         */
-        const handleRedirect = (url: string): boolean => {
-          if (!url.startsWith(redirectUri)) return false
+        const result = new Promise<RpcResponse<OAuthCompleteResult>>((resolve) => {
+          const mainWindow = BrowserWindow.getAllWindows().find(window => !window.isDestroyed())
+          const isDark = nativeTheme.shouldUseDarkColors
+          const title = manager.getProvider(providerType)?.displayName || providerType
+          const loginWindow = new BrowserWindow({
+            width: 520,
+            height: 680,
+            show: false,
+            modal: false,
+            parent: mainWindow,
+            backgroundColor: loginPageBg(isDark),
+            title,
+            webPreferences: {
+              nodeIntegration: false,
+              contextIsolation: true,
+              sandbox: true,
+              partition: `oauth-${randomUUID()}`,
+            }
+          })
 
-          console.log(`[Auth IPC] OAuth redirect intercepted for ${providerType}`)
+          const loginSession = loginWindow.webContents.session
+          let settled = false
+          let completing = false
+          let cancelling = false
+          const finish = (result: RpcResponse<OAuthCompleteResult>) => {
+            if (settled) return
+            settled = true
+            clearTimeout(timeout)
+            loginWindows.delete(loginId)
+            void loginSession.clearStorageData().catch(() => {
+              console.warn(`[Auth IPC] Could not clear ephemeral login storage for ${providerType}`)
+            })
+            resolve(result)
+            if (!loginWindow.isDestroyed()) loginWindow.close()
+          }
+          const cancel = async (error: string) => {
+            if (settled || cancelling) return
+            cancelling = true
+            completing = true
+            clearTimeout(timeout)
+            if (!loginWindow.isDestroyed()) loginWindow.close()
+            try {
+              const result = await manager.cancelOAuthLogin(providerType, loginId)
+              if (!result.success) console.warn(`[Auth IPC] Window cancellation failed for ${providerType}`)
+            } catch {
+              console.error(`[Auth IPC] Window cancellation threw for ${providerType}`)
+            }
+            finish({ success: false, error })
+          }
+          const timeout = setTimeout(() => {
+            console.warn(`[Auth IPC] Login window timed out for ${providerType}`)
+            void cancel('Login timed out')
+          }, LOGIN_WINDOW_TIMEOUT_MS)
+          loginWindows.set(loginId, () => finish({ success: false, error: 'Login cancelled' }))
 
-          try {
-            const parsed = new URL(url)
+          const handleRedirect = (url: string): boolean => {
+            let parsed: URL
+            try {
+              parsed = new URL(url)
+            } catch {
+              return false
+            }
+            if (parsed.origin !== redirectUrl.origin || parsed.pathname !== redirectUrl.pathname) return false
+            if (settled || completing) return true
+
             const code = parsed.searchParams.get('code')
-
-            if (!code) {
-              console.error('[Auth IPC] No code in redirect URL')
-              cleanup()
-              if (!loginWindow.isDestroyed()) loginWindow.close()
-              resolve({ success: false, error: 'No authorization code in callback' })
+            const queryState = parsed.searchParams.get('state')
+            const codeState = code?.split('#')[1]
+            const callbackState = queryState ?? codeState ?? (parsed.hash ? parsed.hash.slice(1) : undefined)
+            if (!code || (context.state && callbackState !== context.state) || (queryState && codeState && queryState !== codeState)) {
+              console.warn(`[Auth IPC] Rejected OAuth callback for ${providerType}: ${code ? 'state mismatch' : 'missing code'}`)
+              void cancel(code ? 'Invalid OAuth state' : 'No authorization code in callback')
               return true
             }
 
-            // Close window immediately — user doesn't need to see the callback page
+            // Mark completion before closing: Electron emits closed synchronously.
+            completing = true
             if (!loginWindow.isDestroyed()) loginWindow.close()
-
-            // Complete login with the code (async, don't block the event handler)
-            manager.completeOAuthLogin(providerType, code)
-              .then((result) => {
-                cleanup()
-                if (result.success) {
-                  // Notify renderer of completion
-                  if (mainWindow && !mainWindow.isDestroyed()) {
-                    mainWindow.webContents.send('auth:login-progress', {
-                      provider: providerType,
-                      status: 'completed'
-                    })
-                  }
-                  resolve({ success: true })
-                } else {
-                  resolve({ success: false, error: result.error || 'Login failed' })
-                }
+            const stateOrCode = callbackState && !code.includes('#') ? `${code}#${callbackState}` : code
+            void authController.completeLogin(providerType, stateOrCode, loginId)
+              .then(result => {
+                if (!cancelling) finish(result)
               })
-              .catch((err) => {
-                cleanup()
-                resolve({ success: false, error: String(err) })
+              .catch(() => {
+                console.error(`[Auth IPC] OAuth window completion threw for ${providerType}`)
+                void cancel('Login failed')
               })
-
-          } catch (err) {
-            console.error('[Auth IPC] Error parsing redirect URL:', err)
-            cleanup()
-            if (!loginWindow.isDestroyed()) loginWindow.close()
-            resolve({ success: false, error: String(err) })
+            return true
           }
 
-          return true
-        }
-
-        // Monitor both will-redirect (server redirects) and will-navigate (JS navigation)
-        loginWindow.webContents.on('will-redirect', (_e, url) => {
-          if (handleRedirect(url)) {
-            // Prevent Electron from actually navigating to the callback URL
-            _e.preventDefault()
-          }
-        })
-
-        loginWindow.webContents.on('will-navigate', (_e, url) => {
-          if (handleRedirect(url)) {
-            _e.preventDefault()
-          }
-        })
-
-        // ── Window closed by user ──────────────────────────────────────────
-        loginWindow.on('closed', () => {
-          cleanup()
-          // Only resolve if not already resolved by redirect handler
-          resolve({ success: false, error: 'Login window closed' })
-        })
-      })
-    },
-
-    /**
-     * Complete OAuth login flow for a provider
-     */
-    authCompleteLogin: async (providerType: ProviderId, state: string) => {
-      try {
-        console.log(`[Auth IPC] Completing login for provider: ${providerType}`)
-        const mainWindow = BrowserWindow.getAllWindows()[0]
-
-        // The manager's completeOAuthLogin handles everything including config save
-        const result = await manager.completeOAuthLogin(providerType, state)
-
-        // Send progress update on completion
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          if (result.success) {
-            mainWindow.webContents.send('auth:login-progress', {
-              provider: providerType,
-              status: 'completed'
+          loginWindow.webContents.on('will-redirect', (event, url) => {
+            if (handleRedirect(url)) event.preventDefault()
+          })
+          loginWindow.webContents.on('will-navigate', (event, url) => {
+            if (handleRedirect(url)) event.preventDefault()
+          })
+          loginWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+          loginWindow.on('closed', () => {
+            if (settled || completing) return
+            console.info(`[Auth IPC] Login window closed by user for ${providerType}`)
+            void cancel('Login window closed')
+          })
+          loginWindow.once('ready-to-show', () => {
+            if (settled || completing || loginWindow.isDestroyed()) return
+            loginWindow.show()
+            void loginWindow.loadURL(context.loginUrl).catch(() => {
+              if (settled || completing || loginWindow.isDestroyed()) return
+              console.warn(`[Auth IPC] Failed to load login page for ${providerType}`)
+              void loginWindow.loadURL(buildLoginErrorPage(context.loginUrl, 'Unable to load login page', isDark)).catch(() => {
+                if (settled || completing) return
+                console.error(`[Auth IPC] Failed to load login error page for ${providerType}`)
+                void cancel('Unable to load login page')
+              })
             })
-          }
-        }
-
-        return result
-      } catch (error: unknown) {
-        const err = error as Error
-        console.error(`[Auth IPC] Complete login error for ${providerType}:`, err)
-        return { success: false, error: err.message }
+          })
+          void loginWindow.loadURL(buildLoginLoadingPage(context.loginUrl, title, isDark)).catch(() => {
+            if (settled || completing) return
+            console.error(`[Auth IPC] Failed to load login loading page for ${providerType}`)
+            void cancel('Unable to load login page')
+          })
+        })
+        loginWindowResults.set(loginId, result)
+        try { return await result }
+        finally { if (loginWindowResults.get(loginId) === result) loginWindowResults.delete(loginId) }
+      } catch {
+        console.error(`[Auth IPC] Could not open login window for ${providerType}`)
+        return { success: false, error: 'Unable to open login window' }
       }
     },
 
-    /**
-     * Refresh token for a source (by source ID)
-     */
-    authRefreshToken: async (sourceId: string) => {
-      try {
-        const result = await manager.ensureValidToken(sourceId)
-        return result
-      } catch (error: unknown) {
-        const err = error as Error
-        console.error(`[Auth IPC] Refresh token error for ${sourceId}:`, err)
-        return { success: false, error: err.message }
-      }
+    authCompleteLogin: (providerType: ProviderId, stateOrCode: string, loginId: string) =>
+      authController.completeLogin(providerType, stateOrCode, loginId),
+
+    authCancelLogin: async (providerType: ProviderId, loginId: string) => {
+      const result = await authController.cancelLogin(providerType, loginId)
+      if (result.success) loginWindows.get(loginId)?.()
+      return result
     },
 
-    /**
-     * Check token status for a source (by source ID)
-     */
-    authCheckToken: async (sourceId: string) => {
-      try {
-        const result = await manager.ensureValidToken(sourceId)
-        if (result.success) {
-          return { success: true, data: { valid: true, needsRefresh: false } }
-        } else {
-          return { success: true, data: { valid: false, reason: result.error } }
-        }
-      } catch (error: unknown) {
-        const err = error as Error
-        return { success: false, error: err.message }
-      }
-    },
+    authRefreshToken: (sourceId: string) => authController.refreshToken(sourceId),
 
-    /**
-     * Logout from a source (by source ID)
-     */
-    authLogout: async (sourceId: string) => {
-      try {
-        const result = await manager.logout(sourceId)
-        return result
-      } catch (error: unknown) {
-        const err = error as Error
-        console.error(`[Auth IPC] Logout error for ${sourceId}:`, err)
-        return { success: false, error: err.message }
-      }
-    },
+    authCheckToken: (sourceId: string) => authController.checkToken(sourceId),
+
+    authLogout: (sourceId: string) => authController.logout(sourceId),
 
     /**
      * Report the current metered quota for a source. Returns
@@ -352,7 +298,8 @@ export function registerAuthHandlers(): void {
         return { success: false, error: err.message }
       }
     },
-  })
+  }
+  registerRawRpcHandlers(authRpc, handlers)
 
   console.log('[Auth IPC] Registered auth handlers')
 }

@@ -21,10 +21,10 @@
 
 import path from 'path'
 import { mkdirSync } from 'fs'
-import { getApiCredentials, credentialsToBackendConfig } from '../helpers'
+import { credentialsToBackendConfig } from '../helpers'
 import { pickReasoningEffort, resolveCodexReasoningEffort } from '../reasoning-effort'
-import { getConfig, getHaloDir } from '../../../foundation/config.service'
-import { getCleanUserEnv } from '../sdk-config'
+import { getHaloDir } from '../../../foundation/config.service'
+import { getCleanUserEnv, getSdkApiCredentials } from '../sdk-config'
 import { ensureOpenAICompatRouter, encodeBackendConfig } from '../../../openai-compat-router'
 import type { ApiCredentials } from '../types'
 import type { AskForApproval, SandboxMode, ThreadStartParams } from './types/codex-protocol'
@@ -73,8 +73,7 @@ export interface CodexResolvedOptions {
 }
 
 export async function resolveCodexOptions(sdkOptions: Record<string, any>): Promise<CodexResolvedOptions> {
-  const appConfig = getConfig()
-  const credentials = await getApiCredentials(appConfig)
+  const credentials = getSdkApiCredentials(sdkOptions)
   const model = resolveCodexModel(sdkOptions.model, credentials)
   const cwd = sdkOptions.cwd || process.cwd()
 

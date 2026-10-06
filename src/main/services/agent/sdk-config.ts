@@ -64,6 +64,10 @@ const PROXY_ANTHROPIC = true
  * This is the output of credential resolution process.
  */
 export interface ResolvedSdkCredentials {
+  sourceId?: string
+  credentialsGeneration?: number | string
+  /** Captured source credentials for adapters; never re-resolve global selection. */
+  apiCredentials?: Readonly<ApiCredentials>
   /** Base URL for Anthropic API (may be OpenAI compat router) */
   anthropicBaseUrl: string
   /** API key for Anthropic API (may be encoded backend config) */
@@ -91,6 +95,7 @@ export interface ResolvedSdkCredentials {
  * Parameters for building SDK environment variables
  */
 export interface SdkEnvParams {
+  sourceId?: string
   anthropicApiKey: string
   anthropicBaseUrl: string
   /** See ResolvedSdkCredentials.delegatedRoutingHeader. */
@@ -320,7 +325,7 @@ function buildDisallowedTools(userDisabledTools?: string[]): string[] {
  *
  * Important: The model is encoded into the apiKey (ANTHROPIC_API_KEY env var)
  * at session creation time. Model changes require session rebuild — they cannot
- * be switched dynamically via setModel(). See config.service.ts getAiSourcesSignature().
+ * be switched dynamically via setModel(). See config.service.ts getAiSourcesChange().
  *
  * @param credentials - Raw API credentials from getApiCredentials()
  * @param pickedReasoningEffort - Level picked for this session, which a router
@@ -377,6 +382,9 @@ export async function resolveCredentialsForSdk(
     sdkModel,
     displayModel,
     capabilities: credentials.capabilities,
+    sourceId: credentials.sourceId,
+    credentialsGeneration: credentials.credentialsGeneration,
+    apiCredentials: credentials,
   }
 }
 
@@ -404,14 +412,24 @@ export function computeCredentialsFingerprint(sdkOptions: Record<string, any>): 
     .replace(new RegExp(`^${DELEGATED_ROUTING_HEADER}:\\s*`), '')
 
   const backend = decodeBackendConfig(rawKey)
+  // A source's credential rotates under it; the router supplies the current
+  // one per request, so only the account identity decides reuse.
+  const sourced = !!backend?.sourceId
   const keyIdentity = backend
     ? [
+        backend.sourceId ?? '',
         backend.url,
-        backend.key,
+        sourced ? '' : backend.key,
         backend.model ?? '',
         backend.apiType ?? '',
         backend.adapterId ?? '',
         backend.profileArn ?? '',
+        JSON.stringify(stableAccountHeaders(backend.headers, sourced)),
+        JSON.stringify(backend.codexModelCapabilities ? [
+          backend.codexModelCapabilities.reasoningSummary,
+          backend.codexModelCapabilities.responsesLite,
+          backend.codexModelCapabilities.reasoningLevels ?? null,
+        ] : null),
         // Vision capability is frozen in the session's encoded key, while the
         // image fallback re-resolves it per turn. Without it here, flipping the
         // Vision setting mid-conversation makes the two disagree: the turn
@@ -421,6 +439,7 @@ export function computeCredentialsFingerprint(sdkOptions: Record<string, any>): 
     : rawKey  // Direct Anthropic: plain key, stable as-is
 
   const material = [
+    String(env.HALO_AI_SOURCE_ID ?? ''),
     String(sdkOptions.model ?? ''),
     String(env.ANTHROPIC_BASE_URL ?? ''),
     keyIdentity,
@@ -432,6 +451,72 @@ export function computeCredentialsFingerprint(sdkOptions: Record<string, any>): 
     String(sdkOptions.pickedReasoningEffort ?? ''),
   ].join('|')
   return createHash('sha256').update(material).digest('hex').slice(0, 16)
+}
+
+const CREDENTIAL_HEADERS = new Set(['authorization', 'x-api-key', 'api-key', 'copilot-session-token'])
+const ACCOUNT_IDENTITY_HEADERS = new Set([
+  ...CREDENTIAL_HEADERS,
+  'chatgpt-account-id', 'openai-organization', 'openai-project',
+  'anthropic-organization-id', 'x-organization-id', 'x-org-id',
+  'x-account-id', 'x-user-id',
+])
+
+function stableAccountHeaders(headers: Record<string, string> | undefined, omitCredentials: boolean): [string, string][] {
+  return Object.entries(headers ?? {})
+    .map(([name, value]): [string, string] => [name.toLowerCase(), value])
+    .filter(([name]) => ACCOUNT_IDENTITY_HEADERS.has(name) && !(omitCredentials && CREDENTIAL_HEADERS.has(name)))
+    .sort(([a], [b]) => a.localeCompare(b))
+}
+
+/** Adapter credentials come only from these options, including standalone API-validation sessions. */
+export function getSdkApiCredentials(sdkOptions: Record<string, any>): Readonly<ApiCredentials> {
+  let credentials = sdkOptions.apiCredentials as Readonly<ApiCredentials> | undefined
+  if (!credentials) {
+    const env = sdkOptions.env ?? {}
+    const rawKey = String(env.ANTHROPIC_API_KEY ?? env.ANTHROPIC_CUSTOM_HEADERS ?? '')
+      .replace(new RegExp(`^${DELEGATED_ROUTING_HEADER}:\\s*`), '')
+    const backend = decodeBackendConfig(rawKey)
+    if (backend) {
+      credentials = {
+        sourceId: backend.sourceId,
+        credentialsGeneration: sdkOptions.credentialsGeneration,
+        baseUrl: backend.url,
+        apiKey: backend.key,
+        model: backend.model || sdkOptions.model || '',
+        provider: 'openai',
+        customHeaders: backend.headers,
+        apiType: backend.apiType,
+        forceStream: backend.forceStream,
+        filterContent: backend.filterContent,
+        adapterId: backend.adapterId,
+        profileArn: backend.profileArn,
+        codexModelCapabilities: backend.codexModelCapabilities,
+        visionOverride: backend.visionOverride,
+        delegatedAuth: backend.delegatedAuth,
+      }
+    } else if (rawKey && env.ANTHROPIC_BASE_URL && !env.ANTHROPIC_CUSTOM_HEADERS && !env.HALO_AI_SOURCE_ID) {
+      credentials = {
+        baseUrl: String(env.ANTHROPIC_BASE_URL), apiKey: rawKey,
+        model: sdkOptions.model || '', provider: 'anthropic',
+      }
+    }
+  }
+  if (!credentials?.baseUrl || !credentials.apiKey || credentials.delegatedAuth) {
+    console.warn(`[SDK Config] Engine credential resolution refused: source=${credentials?.sourceId || getSdkSourceId(sdkOptions) || '(standalone)'} no usable captured credential`)
+    throw new Error('The selected session has no usable captured API credentials.')
+  }
+  return credentials
+}
+
+/** Source marker first; older SDK options can still identify their encoded backend. */
+export function getSdkSourceId(sdkOptions: Record<string, any>): string | undefined {
+  const env = sdkOptions.env ?? {}
+  if (typeof env.HALO_AI_SOURCE_ID === 'string' && env.HALO_AI_SOURCE_ID) {
+    return env.HALO_AI_SOURCE_ID
+  }
+  const rawKey = String(env.ANTHROPIC_API_KEY ?? env.ANTHROPIC_CUSTOM_HEADERS ?? '')
+    .replace(new RegExp(`^${DELEGATED_ROUTING_HEADER}:\\s*`), '')
+  return decodeBackendConfig(rawKey)?.sourceId
 }
 
 /**
@@ -522,6 +607,9 @@ async function resolveDelegatedAuth(
     sdkModel,
     displayModel: credentials.displayModel || credentials.model,
     capabilities: credentials.capabilities,
+    sourceId: credentials.sourceId,
+    credentialsGeneration: credentials.credentialsGeneration,
+    apiCredentials: credentials,
     delegatedRoutingHeader: `${DELEGATED_ROUTING_HEADER}: ${routingConfig}`,
   }
 }
@@ -557,6 +645,9 @@ async function resolveAnthropicPassthrough(
     sdkModel,
     displayModel: credentials.displayModel || credentials.model,
     capabilities: credentials.capabilities,
+    sourceId: credentials.sourceId,
+    credentialsGeneration: credentials.credentialsGeneration,
+    apiCredentials: credentials,
   }
 }
 
@@ -654,6 +745,7 @@ export function getCleanUserEnv(): Record<string, string | undefined> {
     }
   }
   for (const key of SELF_API_ENV_KEYS) delete env[key]
+  delete env.HALO_AI_SOURCE_ID
   return env
 }
 
@@ -678,6 +770,7 @@ export function buildSdkEnv(params: SdkEnvParams): Record<string, string | numbe
       ? { ANTHROPIC_CUSTOM_HEADERS: params.delegatedRoutingHeader }
       : { ANTHROPIC_API_KEY: params.anthropicApiKey }),
     ANTHROPIC_BASE_URL: params.anthropicBaseUrl,
+    ...(params.sourceId ? { HALO_AI_SOURCE_ID: params.sourceId } : {}),
 
     // Halo's own HTTP API, for the agent to operate Halo itself (see halo_api_ref).
     // All three or none: HALO_SPACE_ID is only ever read by the manual's own curl
@@ -967,6 +1060,7 @@ async function assembleSdkOptions(
     anthropicBaseUrl: credentials.anthropicBaseUrl,
     delegatedRoutingHeader: credentials.delegatedRoutingHeader,
     capabilities: credentials.capabilities,
+    sourceId: credentials.sourceId,
     selfApi,
     spaceId,
   })
@@ -977,6 +1071,8 @@ async function assembleSdkOptions(
   // Build base options
   const sdkOptions: Record<string, any> = {
     model: credentials.sdkModel,
+    credentialsGeneration: credentials.credentialsGeneration,
+    apiCredentials: credentials.apiCredentials,
     cwd: workDir,
     env,
     pathToClaudeCodeExecutable: cliPath,

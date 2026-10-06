@@ -15,9 +15,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 // ── Collaborators the sink reaches for on delivery / persistence ──
-const { pushToChat, findSession } = vi.hoisted(() => ({
+const { pushToChat, findSession, writeEvent, saveChatSessionId } = vi.hoisted(() => ({
   pushToChat: vi.fn(() => true),
   findSession: vi.fn(() => ({ instanceId: 'inst-1' })),
+  writeEvent: vi.fn(),
+  saveChatSessionId: vi.fn(),
 }))
 
 vi.mock('../../../../src/main/apps/runtime/im-session-registry', () => ({
@@ -29,8 +31,8 @@ vi.mock('../../../../src/main/apps/runtime/im-channels', () => ({
 }))
 
 vi.mock('../../../../src/main/apps/runtime/session-store', () => ({
-  openSessionWriter: () => ({ writeEvent: vi.fn(), writeTrigger: vi.fn() }),
-  saveChatSessionId: vi.fn(),
+  openSessionWriter: () => ({ writeEvent, writeTrigger: vi.fn() }),
+  saveChatSessionId,
 }))
 
 const { stopGeneration } = vi.hoisted(() => ({ stopGeneration: vi.fn(async () => {}) }))
@@ -104,6 +106,8 @@ describe('app-chat sink turn ownership', () => {
     disposeAppChatSink(IM_KEY)
     pushToChat.mockClear()
     findSession.mockClear()
+    writeEvent.mockReset()
+    saveChatSessionId.mockReset()
   })
 
   it('settles the round with the reply of the turn that follows it', async () => {
@@ -267,6 +271,42 @@ describe('app-chat sink turn ownership', () => {
 
     await expect(first.done).rejects.toThrow(/session ended/i)
     await expect(second.done).rejects.toThrow(/session ended/i)
+  })
+
+  it.each(['session-id', 'checkpoint'] as const)('settles every round even when retirement cannot persist its %s', async stage => {
+    const sink = makeSink()
+    const onReply = vi.fn()
+    const first = sink.beginRound({ onReply })
+    const second = sink.beginRound({ onReply })
+    sink.onTurnStart()
+    const failure = new Error('Fixture disk write failed')
+    const writer = stage === 'session-id' ? saveChatSessionId : writeEvent
+    writer.mockImplementationOnce(() => { throw failure })
+
+    expect(() => sink.onConsumerStopped(makeResult({
+      capturedSessionId: 'partial-sdk', finalContent: 'Received partial reply',
+    }))).toThrow(failure)
+    await expect(first.done).rejects.toThrow(/session ended/i)
+    await expect(second.done).rejects.toThrow(/session ended/i)
+    expect(hasActiveAppChatRound(IM_KEY)).toBe(false)
+    expect(onReply).not.toHaveBeenCalled()
+    expect(pushToChat).not.toHaveBeenCalled()
+  })
+
+  it('rejects a failed turn even when its partial checkpoint cannot be written', async () => {
+    const sink = makeSink()
+    const onReply = vi.fn()
+    const round = sink.beginRound({ onReply })
+    sink.onTurnStart()
+    const streamError = new Error('Fixture stream failed')
+    const diskError = new Error('Fixture checkpoint write failed')
+    writeEvent.mockImplementationOnce(() => { throw diskError })
+
+    expect(() => sink.onTurnError(streamError, true, makeResult({ finalContent: 'Received partial reply' }))).toThrow(diskError)
+    await expect(round.done).rejects.toBe(streamError)
+    expect(hasActiveAppChatRound(IM_KEY)).toBe(false)
+    expect(onReply).not.toHaveBeenCalled()
+    expect(pushToChat).not.toHaveBeenCalled()
   })
 
   it('does not push an autonomous turn for a native session', () => {

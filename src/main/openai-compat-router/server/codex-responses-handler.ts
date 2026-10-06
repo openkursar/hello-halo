@@ -743,7 +743,10 @@ export async function handleResponsesRequest(
     ...(customHeaders || {}),
     ...pickSessionAffinityHeaders(sdkHeaders),
   }
-  const adapterContext: AdapterContext = { originalRequest: requestToSend, sessionId: pickSessionId(sdkHeaders) }
+  const adapterContext: AdapterContext = {
+    originalRequest: requestToSend, sessionId: pickSessionId(sdkHeaders),
+    codexModelCapabilities: config.codexModelCapabilities
+  }
   applyProviderAdapter(backendUrl, openaiRequest as unknown as Record<string, unknown>, requestHeaders, adapterId, adapterContext)
 
   console.log(`[CodexResponsesHandler] Proxy ${apiType} -> ${backendUrl} stream=${codexRequest.stream === true}`)

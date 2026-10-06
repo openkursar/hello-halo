@@ -502,7 +502,10 @@ async function handleOpenAIConversion(
     }
 
     // Apply provider-specific transformations (e.g., Groq temperature fix, OpenRouter headers)
-    const adapterContext: AdapterContext = { originalRequest: requestToSend, sessionId: pickSessionId(sdkHeaders) }
+    const adapterContext: AdapterContext = {
+      originalRequest: requestToSend, sessionId: pickSessionId(sdkHeaders),
+      codexModelCapabilities: config.codexModelCapabilities
+    }
     const adapter = applyProviderAdapter(
       backendUrl,
       openaiRequest as unknown as Record<string, unknown>,

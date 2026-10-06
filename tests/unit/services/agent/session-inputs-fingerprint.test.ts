@@ -22,10 +22,11 @@ vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
 }))
 
 import { computeSessionInputsFingerprint } from '../../../../src/main/services/agent/sdk-config'
+import { generatePromptInstructions } from '../../../../src/main/platform/memory/prompt'
 
 describe('computeSessionInputsFingerprint', () => {
   it('is stable for identical inputs', () => {
-    const opts = { systemPrompt: 'You are Ada.', mcpServers: { 'web-search': {}, 'halo-memory': {} } }
+    const opts = { systemPrompt: 'You are Ada.', mcpServers: { 'web-search': {}, 'halo-docs': {} } }
     expect(computeSessionInputsFingerprint(opts)).toBe(computeSessionInputsFingerprint({ ...opts }))
   })
 
@@ -36,9 +37,25 @@ describe('computeSessionInputsFingerprint', () => {
   })
 
   it('changes when a capability tool is added (browser enabled)', () => {
-    const off = { systemPrompt: 'p', mcpServers: { 'web-search': {}, 'halo-memory': {} } }
-    const on = { systemPrompt: 'p', mcpServers: { 'web-search': {}, 'halo-memory': {}, 'ai-browser': {} } }
+    const off = { systemPrompt: 'p', mcpServers: { 'web-search': {}, 'halo-docs': {} } }
+    const on = { systemPrompt: 'p', mcpServers: { 'web-search': {}, 'halo-docs': {}, 'ai-browser': {} } }
     expect(computeSessionInputsFingerprint(off)).not.toBe(computeSessionInputsFingerprint(on))
+  })
+
+  it('changes when a server is removed', () => {
+    const before = { mcpServers: { 'web-search': {}, 'halo-docs': {} } }
+    const after = { mcpServers: { 'web-search': {} } }
+    expect(computeSessionInputsFingerprint(before)).not.toBe(computeSessionInputsFingerprint(after))
+  })
+
+  it('keeps memory instructions stable, but refreshes a changed author identity', () => {
+    const prompt = (authorTag: string) => ({
+      systemPrompt: generatePromptInstructions('session', { authorTag }),
+    })
+    expect(computeSessionInputsFingerprint(prompt('im#abcd')))
+      .toBe(computeSessionInputsFingerprint(prompt('im#abcd')))
+    expect(computeSessionInputsFingerprint(prompt('im#abcd')))
+      .not.toBe(computeSessionInputsFingerprint(prompt('im-guest#abcd')))
   })
 
   it('changes when the system prompt changes (prompt/config edit)', () => {

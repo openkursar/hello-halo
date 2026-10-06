@@ -4,38 +4,23 @@
  * Dynamically supports any provider configured in product.json
  */
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useAppStore } from '../stores/app.store'
 import { api } from '../api'
 import { LoginSelector, type AuthProviderConfig } from '../components/setup/LoginSelector'
 import { SetupProviderConfig } from '../components/setup/SetupProviderConfig'
 import { PreferencesStep } from '../components/setup/PreferencesStep'
+import { OAuthRedirectLogin } from '../components/ai-config/OAuthRedirectLogin'
+import { useOAuthLogin } from '../hooks/useOAuthLogin'
 import { useTranslation } from '../i18n'
-import { Loader2, Brain, ExternalLink, Copy, Check } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
+import type { HaloConfig } from '../types'
 
 // First step is `preferences` only on the very first launch (gated by
 // config.isFirstLaunch). Old users re-entering Setup (e.g., after clearing
-// the AI source) skip preferences and land on `select` directly.
-type SetupStep = 'preferences' | 'select' | 'oauth-waiting' | 'claude-login' | 'config'
-
-/** Device code info for display in UI */
-interface DeviceCodeInfo {
-  userCode: string
-  verificationUri: string
-}
-
-/** Claude OAuth login dialog state */
-interface ClaudeLoginState {
-  loginUrl: string
-  state: string
-  /** Redirect URI the BrowserWindow should intercept (provider-owned) */
-  redirectUri: string
-  manualCode: string
-  autoLoginInProgress: boolean
-  error: string | null
-  copied: boolean
-  submitting: boolean
-}
+// the AI source) skip preferences and land on `select` directly. A running
+// OAuth login takes over the screen until it finishes or is cancelled.
+type SetupStep = 'preferences' | 'select' | 'config'
 
 export function SetupPage() {
   const { t } = useTranslation()
@@ -50,168 +35,18 @@ export function SetupPage() {
   const shouldShowPreferences = config?.isFirstLaunch === true && !hasPassedPreferences
   const effectiveStep: SetupStep = shouldShowPreferences ? 'preferences' : step
 
-  const [currentProvider, setCurrentProvider] = useState<string | null>(null)
-  const [oauthState, setOauthState] = useState<string | null>(null)
-  const [loginStatus, setLoginStatus] = useState<string>('')
   const [error, setError] = useState<string | null>(null)
-  const [deviceCodeInfo, setDeviceCodeInfo] = useState<DeviceCodeInfo | null>(null)
-  const [claudeLogin, setClaudeLogin] = useState<ClaudeLoginState | null>(null)
-  // Auth entry currently being configured (preset gateway or Custom API/BYOK);
-  // drives the setup config form.
   const [configEntry, setConfigEntry] = useState<AuthProviderConfig | null>(null)
 
-  // Handle OAuth provider login (generic)
-  const handleSelectProvider = async (providerType: string) => {
-    setError(null)
-    setCurrentProvider(providerType)
-    setStep('oauth-waiting')
-    setLoginStatus(t('Opening login page...'))
-    setDeviceCodeInfo(null)
-
-    try {
-      // Start the login flow - this opens the browser
-      const result = await api.authStartLogin(providerType)
-      if (!result.success) {
-        throw new Error(result.error || t('Failed to start login'))
-      }
-
-      const { loginUrl, state, userCode, verificationUri, redirectUri } = result.data as {
-        loginUrl: string
-        state: string
-        userCode?: string
-        verificationUri?: string
-        redirectUri?: string
-      }
-      setOauthState(state)
-
-      // ── Claude OAuth: show dual-mode login dialog ──────────────────────
-      if (providerType === 'claude' && loginUrl && !userCode) {
-        setStep('claude-login')
-        setClaudeLogin({
-          loginUrl,
-          state,
-          redirectUri: redirectUri ?? '',
-          manualCode: '',
-          autoLoginInProgress: false,
-          error: null,
-          copied: false,
-          submitting: false
-        })
-        return
-      }
-
-      // If device code flow, show user code and verification URL
-      if (userCode && verificationUri) {
-        setDeviceCodeInfo({ userCode, verificationUri })
-        setLoginStatus(t('Enter the code in your browser'))
-      } else {
-        setLoginStatus(t('Waiting for login...'))
-      }
-
-      // Complete the login - this polls for the token
-      const completeResult = await api.authCompleteLogin(providerType, state)
-      if (!completeResult.success) {
-        throw new Error(completeResult.error || t('Login failed'))
-      }
-
-      // Success! Reload config and enter the app
-      const configResult = await api.getConfig()
-      if (configResult.success && configResult.data) {
-        setConfig(configResult.data as any)
-      }
-
+  const oauth = useOAuthLogin({
+    onError: setError,
+    onSignedIn: async () => {
+      const result = await api.getConfig()
+      if (!result.success || !result.data) throw new Error(result.error || t('Failed to load config'))
+      setConfig(result.data as HaloConfig)
       await enterApp()
-    } catch (err) {
-      console.error(`[SetupPage] ${providerType} login error:`, err)
-      setError(err instanceof Error ? err.message : t('Login failed'))
-      setStep('select')
-      setCurrentProvider(null)
     }
-  }
-
-  // ── Claude: "Direct Login" button handler ────────────────────────────
-  const handleClaudeDirectLogin = async () => {
-    if (!claudeLogin) return
-    if (!claudeLogin.redirectUri) {
-      setClaudeLogin(prev => prev ? { ...prev, error: t('Login flow misconfigured (missing redirect URI). Please retry.') } : null)
-      return
-    }
-    setClaudeLogin(prev => prev ? { ...prev, autoLoginInProgress: true, error: null } : null)
-
-    try {
-      const windowResult = await api.authOpenLoginWindow('claude', claudeLogin.loginUrl, claudeLogin.redirectUri)
-
-      if (!windowResult.success) {
-        const errMsg = windowResult.error || t('Login failed')
-        if (errMsg === 'Login window closed') {
-          setClaudeLogin(prev => prev ? { ...prev, autoLoginInProgress: false } : null)
-          return
-        }
-        setClaudeLogin(prev => prev ? { ...prev, autoLoginInProgress: false, error: errMsg } : null)
-        return
-      }
-
-      // Success! Reload config and enter the app
-      const configResult = await api.getConfig()
-      if (configResult.success && configResult.data) {
-        setConfig(configResult.data as any)
-      }
-      setClaudeLogin(null)
-      await enterApp()
-    } catch (err) {
-      setClaudeLogin(prev => prev ? {
-        ...prev,
-        autoLoginInProgress: false,
-        error: err instanceof Error ? err.message : t('Login failed')
-      } : null)
-    }
-  }
-
-  // ── Claude: "Submit Code" button handler ─────────────────────────────
-  const handleClaudeManualLogin = async () => {
-    if (!claudeLogin || !claudeLogin.manualCode.trim()) return
-    setClaudeLogin(prev => prev ? { ...prev, submitting: true, error: null } : null)
-
-    try {
-      const completeResult = await api.authCompleteLogin('claude', claudeLogin.manualCode.trim())
-      if (!completeResult.success) {
-        setClaudeLogin(prev => prev ? {
-          ...prev,
-          submitting: false,
-          error: completeResult.error || t('Login failed')
-        } : null)
-        return
-      }
-
-      // Success! Reload config and enter the app
-      const configResult = await api.getConfig()
-      if (configResult.success && configResult.data) {
-        setConfig(configResult.data as any)
-      }
-      setClaudeLogin(null)
-      await enterApp()
-    } catch (err) {
-      setClaudeLogin(prev => prev ? {
-        ...prev,
-        submitting: false,
-        error: err instanceof Error ? err.message : t('Login failed')
-      } : null)
-    }
-  }
-
-  // ── Claude: Copy URL to clipboard ────────────────────────────────────
-  const handleClaudeCopyUrl = async () => {
-    if (!claudeLogin) return
-    try {
-      await navigator.clipboard.writeText(claudeLogin.loginUrl)
-      setClaudeLogin(prev => prev ? { ...prev, copied: true } : null)
-      setTimeout(() => {
-        setClaudeLogin(prev => prev ? { ...prev, copied: false } : null)
-      }, 2000)
-    } catch {
-      // Fallback: text is already selectable in the URL display
-    }
-  }
+  })
 
   // Handle skip — defer model configuration and enter Home directly.
   // The modelConfigSkipped flag tells the setup-entry guard not to re-show
@@ -256,241 +91,78 @@ export function SetupPage() {
     setStep('select')
   }
 
-  // Listen for login progress updates (generic)
-  useEffect(() => {
-    if (step !== 'oauth-waiting' || !currentProvider) return
-
-    // Listen to generic auth progress
-    const unsubscribe = api.onAuthLoginProgress((data: { provider: string; status: string }) => {
-      if (data.provider === currentProvider) {
-        setLoginStatus(data.status)
-      }
-    })
-
-    return unsubscribe
-  }, [step, currentProvider])
-
   // Render based on derived step (see hasPassedPreferences comment above)
   if (effectiveStep === 'preferences') {
     return <PreferencesStep onContinue={() => setHasPassedPreferences(true)} />
   }
 
-  if (effectiveStep === 'select') {
+  if (oauth.login?.redirect) {
     return (
-      <>
-        <LoginSelector
-          onSelectProvider={handleSelectProvider}
-          onSelectPreset={handleSelectPreset}
-          onSelectCustom={handleSelectCustom}
-          onSkip={handleSkipModelConfig}
-        />
-        {error && (
-          <div className="fixed bottom-8 left-1/2 -translate-x-1/2 p-4 bg-destructive/10 border border-destructive/20 rounded-lg z-50">
-            <p className="text-sm text-destructive">{error}</p>
-          </div>
-        )}
-      </>
-    )
-  }
-
-  if (step === 'claude-login' && claudeLogin) {
-    return (
-      <div className="h-full w-full flex flex-col items-center justify-center bg-background p-8">
-        {/* Header with Logo */}
-        <div className="flex flex-col items-center mb-8">
+      <div className="h-full w-full overflow-y-auto flex flex-col items-center bg-background p-4 sm:p-8">
+        <div className="flex flex-col items-center shrink-0 mt-auto mb-8">
           <div className="w-20 h-20 rounded-full border-2 border-primary/60 flex items-center justify-center halo-glow">
             <div className="w-14 h-14 rounded-full bg-gradient-to-br from-primary/30 to-transparent" />
           </div>
-          <h1 className="mt-4 text-3xl font-light tracking-wide">Halo</h1>
+          <h1 className="mt-4 text-3xl font-light tracking-wide">{t('Halo')}</h1>
         </div>
-
-        {/* Claude Login Card */}
-        <div className="w-full max-w-md space-y-5">
-          {/* Header */}
-          <div className="flex items-center gap-3 justify-center">
-            <div className="w-9 h-9 rounded-lg flex items-center justify-center"
-                 style={{ backgroundColor: 'rgba(217, 119, 87, 0.15)' }}>
-              <Brain size={20} style={{ color: '#d97757' }} />
-            </div>
-            <div>
-              <h2 className="font-medium text-foreground">{t('Claude Login')}</h2>
-              <p className="text-xs text-muted-foreground">{t('Choose a login method')}</p>
-            </div>
-          </div>
-
-          {/* Error display */}
-          {claudeLogin.error && (
-            <div className="p-3 bg-destructive/10 border border-destructive/20 rounded-lg">
-              <p className="text-sm text-destructive">{claudeLogin.error}</p>
-            </div>
-          )}
-
-          {/* Option 1: Direct Login */}
-          <div className="p-4 bg-card border border-border rounded-xl space-y-3">
-            <h4 className="text-sm font-medium text-foreground">
-              {t('Option 1: Direct Login')}
-            </h4>
-            <p className="text-xs text-muted-foreground">
-              {t('Requires access to claude.ai (with proxy or direct connection)')}
-            </p>
-            <button
-              onClick={handleClaudeDirectLogin}
-              disabled={claudeLogin.autoLoginInProgress || claudeLogin.submitting}
-              className="w-full flex items-center justify-center gap-2 px-4 py-2.5
-                       bg-[#d97757] hover:bg-[#c5684a] disabled:opacity-50
-                       text-white rounded-lg transition-colors text-sm font-medium"
-            >
-              {claudeLogin.autoLoginInProgress ? (
-                <>
-                  <Loader2 size={16} className="animate-spin" />
-                  {t('Logging in...')}
-                </>
-              ) : (
-                <>
-                  <ExternalLink size={16} />
-                  {t('Open Login Window')}
-                </>
-              )}
-            </button>
-          </div>
-
-          {/* Divider */}
-          <div className="flex items-center gap-3">
-            <div className="flex-1 h-px bg-border" />
-            <span className="text-xs text-muted-foreground">{t('or')}</span>
-            <div className="flex-1 h-px bg-border" />
-          </div>
-
-          {/* Option 2: Manual Code Paste (partner-assisted) */}
-          <div className="p-4 bg-card border border-border rounded-xl space-y-3">
-            <h4 className="text-sm font-medium text-foreground">
-              {t('Option 2: Partner-Assisted Login')}
-            </h4>
-            <p className="text-xs text-muted-foreground">
-              {t('Copy the link below and send it to your service provider')}
-            </p>
-
-            {/* URL display with copy button */}
-            <div className="flex items-center gap-2">
-              <div className="flex-1 p-2.5 bg-muted/50 rounded-md border border-border
-                            font-mono text-xs text-muted-foreground break-all select-all overflow-hidden max-h-16 overflow-y-auto">
-                {claudeLogin.loginUrl}
-              </div>
-              <button
-                onClick={handleClaudeCopyUrl}
-                className="shrink-0 flex items-center gap-1 px-3 py-2.5 text-sm
-                         bg-muted/50 hover:bg-muted
-                         border border-border rounded-md transition-colors"
-                title={t('Copy link')}
-              >
-                <Copy size={14} className={claudeLogin.copied ? 'text-green-500' : 'text-muted-foreground'} />
-                <span className={`text-xs ${claudeLogin.copied ? 'text-green-500' : 'text-muted-foreground'}`}>
-                  {claudeLogin.copied ? t('Copied') : t('Copy')}
-                </span>
-              </button>
-            </div>
-
-            {/* Manual code input */}
-            <div className="space-y-2">
-              <p className="text-xs text-muted-foreground">
-                {t('Paste the authorization code from your service provider')}
-              </p>
-              <input
-                type="text"
-                value={claudeLogin.manualCode}
-                onChange={(e) => setClaudeLogin(prev => prev ? { ...prev, manualCode: e.target.value } : null)}
-                placeholder={t('Paste authorization code here')}
-                className="w-full px-3 py-2.5 bg-background border border-border rounded-md
-                         text-sm text-foreground placeholder:text-muted-foreground
-                         focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/30
-                         font-mono"
-                disabled={claudeLogin.submitting}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && claudeLogin.manualCode.trim()) {
-                    handleClaudeManualLogin()
-                  }
-                }}
-              />
-            </div>
-
-            {/* Submit button */}
-            <button
-              onClick={handleClaudeManualLogin}
-              disabled={!claudeLogin.manualCode.trim() || claudeLogin.submitting || claudeLogin.autoLoginInProgress}
-              className="w-full flex items-center justify-center gap-2 px-4 py-2.5
-                       bg-primary hover:bg-primary/90 disabled:opacity-50
-                       text-white rounded-lg transition-colors text-sm font-medium"
-            >
-              {claudeLogin.submitting ? (
-                <>
-                  <Loader2 size={16} className="animate-spin" />
-                  {t('Verifying...')}
-                </>
-              ) : (
-                <>
-                  <Check size={16} />
-                  {t('Complete Login')}
-                </>
-              )}
-            </button>
-          </div>
-
-          {/* Cancel button */}
-          <button
-            onClick={() => {
-              setClaudeLogin(null)
-              setStep('select')
-              setCurrentProvider(null)
-            }}
-            disabled={claudeLogin.autoLoginInProgress || claudeLogin.submitting}
-            className="w-full px-4 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
-          >
-            {t('Cancel')}
-          </button>
+        <div className="w-full min-w-0 max-w-md shrink-0 mb-auto">
+          <OAuthRedirectLogin
+            title={t('Sign in')}
+            redirect={oauth.login.redirect}
+            onOpenWindow={oauth.openLoginWindow}
+            onSubmitCode={oauth.submitCode}
+            onCodeChange={oauth.setManualCode}
+            onCopyLink={oauth.copyLoginUrl}
+            onCancel={oauth.cancel}
+          />
         </div>
       </div>
     )
   }
 
-  if (step === 'oauth-waiting') {
+  if (oauth.login) {
+    const { phase, userCode, verificationUri } = oauth.login
+    const status = phase === 'starting'
+      ? t('Opening login page...')
+      : userCode ? t('Enter the code in your browser') : t('Waiting for login...')
     return (
-      <div className="h-full w-full flex flex-col items-center justify-center bg-background p-8">
+      <div className="h-full w-full overflow-y-auto flex flex-col items-center bg-background p-4 sm:p-8">
         {/* Header with Logo */}
-        <div className="flex flex-col items-center mb-10">
+        <div className="flex flex-col items-center shrink-0 mt-auto mb-10">
           <div className="w-20 h-20 rounded-full border-2 border-primary/60 flex items-center justify-center halo-glow">
             <div className="w-14 h-14 rounded-full bg-gradient-to-br from-primary/30 to-transparent" />
           </div>
-          <h1 className="mt-4 text-3xl font-light tracking-wide">Halo</h1>
+          <h1 className="mt-4 text-3xl font-light tracking-wide">{t('Halo')}</h1>
         </div>
 
         {/* Loading state */}
-        <div className="flex flex-col items-center gap-4">
+        <div className="w-full min-w-0 max-w-md shrink-0 flex flex-col items-center gap-4">
           <Loader2 className="w-8 h-8 animate-spin text-primary" />
-          <p className="text-muted-foreground">{loginStatus}</p>
+          <p className="text-muted-foreground">{status}</p>
 
           {/* Device code display for OAuth Device Code flow */}
-          {deviceCodeInfo && (
-            <div className="mt-4 p-6 bg-muted/50 border border-border rounded-lg text-center">
+          {userCode && verificationUri && (
+            <div className="w-full min-w-0 mt-4 p-4 sm:p-6 bg-muted/50 border border-border rounded-lg text-center">
               <p className="text-sm text-muted-foreground mb-2">
                 {t('Visit this URL to login:')}
               </p>
               <a
-                href={deviceCodeInfo.verificationUri}
+                href={verificationUri}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-primary hover:underline font-mono text-sm"
+                className="text-primary hover:underline font-mono text-sm break-all"
               >
-                {deviceCodeInfo.verificationUri}
+                {verificationUri}
               </a>
               <p className="text-sm text-muted-foreground mt-4 mb-2">
                 {t('Enter this code:')}
               </p>
               <div className="flex items-center justify-center gap-2">
                 <code className="text-2xl font-bold font-mono tracking-widest bg-background px-4 py-2 rounded border border-border select-all">
-                  {deviceCodeInfo.userCode}
+                  {userCode}
                 </code>
                 <button
-                  onClick={() => navigator.clipboard.writeText(deviceCodeInfo.userCode)}
+                  onClick={() => navigator.clipboard.writeText(userCode)}
                   className="p-2 text-muted-foreground hover:text-foreground transition-colors"
                   title={t('Copy code')}
                 >
@@ -503,31 +175,39 @@ export function SetupPage() {
             </div>
           )}
 
-          {!deviceCodeInfo && (
+          {!userCode && (
             <p className="text-sm text-muted-foreground/70">
               {t('Please complete login in your browser')}
             </p>
           )}
         </div>
 
-        {/* Error message */}
-        {error && (
-          <div className="mt-6 p-4 bg-destructive/10 border border-destructive/20 rounded-lg">
-            <p className="text-sm text-destructive">{error}</p>
-          </div>
-        )}
-
         {/* Cancel button */}
         <button
-          onClick={() => {
-            setStep('select')
-            setCurrentProvider(null)
-          }}
-          className="mt-8 px-6 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+          onClick={oauth.cancel}
+          className="shrink-0 mt-8 mb-auto px-6 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
         >
           {t('Cancel')}
         </button>
       </div>
+    )
+  }
+
+  if (effectiveStep === 'select') {
+    return (
+      <>
+        <LoginSelector
+          onSelectProvider={provider => oauth.start(provider)}
+          onSelectPreset={handleSelectPreset}
+          onSelectCustom={handleSelectCustom}
+          onSkip={handleSkipModelConfig}
+        />
+        {error && (
+          <div role="alert" className="fixed bottom-8 left-4 right-4 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 sm:max-w-md p-4 bg-destructive/10 border border-destructive/20 rounded-lg z-50 break-words">
+            <p className="text-sm text-destructive">{error}</p>
+          </div>
+        )}
+      </>
     )
   }
 

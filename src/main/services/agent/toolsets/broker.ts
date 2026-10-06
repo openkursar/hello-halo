@@ -66,7 +66,7 @@ export function setSessionInvalidator(invalidator: SessionInvalidator): void {
  * exactly what broke `broker.test.ts` / `toolsets-last-used.test.ts` (they
  * mock `config.service` without `onAgentConfigChange`, which only that cycle
  * ever needed). Bootstrap wires the real implementation in once, after both
- * modules exist, the same way it wires `setActiveTeamRuntime`/`setMemorySdk`.
+ * modules exist, the same way it wires `setActiveTeamRuntime`.
  */
 type ConversationInteropFactory = (
   scope: { spaceId: string; conversationId: string },

@@ -196,7 +196,7 @@ export function resolveModelId(model?: string | null): string {
 export interface AISourceUser {
   name: string
   avatar?: string
-  /** User ID (for API headers, should be ASCII-safe) */
+  /** Verified stable account identity, separate from provider-owned routing context. */
   uid?: string
 }
 
@@ -244,6 +244,10 @@ export interface AISource {
   // ===== API Configuration (Required) =====
   /** API endpoint URL (base URL, e.g., https://api.openai.com/v1) */
   apiUrl: string
+  /** Provider-owned workspace used for account routing, separate from user identity. */
+  accountId?: string
+  /** Provider-owned account routing context (Kiro Desktop). */
+  profileArn?: string
   /** API type for OpenAI compatible providers (default: chat_completions) */
   apiType?: 'chat_completions' | 'responses' | 'anthropic_passthrough' | 'kiro'
 
@@ -320,6 +324,10 @@ export interface AISourcesConfig {
  * Legacy OAuth source configuration (v1)
  */
 export interface OAuthSourceConfig {
+  sourceId?: string
+  apiUrl?: string
+  accountId?: string
+  profileArn?: string
   loggedIn: boolean
   user?: AISourceUser
   model: string
@@ -388,7 +396,15 @@ export interface DirectCallEndpoint {
  * Configuration for making API requests
  * Used by OpenAI compat router
  */
+export interface CodexModelCapability {
+  reasoningSummary: boolean
+  responsesLite: boolean
+  reasoningLevels?: readonly string[]
+}
+
 export interface BackendRequestConfig {
+  sourceId?: string
+  codexModelCapabilities?: CodexModelCapability
   url: string
   key: string
   model?: string
@@ -449,6 +465,7 @@ export interface OAuthLoginState {
  * Result from starting an OAuth login flow
  */
 export interface OAuthStartResult {
+  loginId?: string
   loginUrl: string
   state: string
   /** User code for device code flow (e.g., GitHub Copilot) */
@@ -464,10 +481,39 @@ export interface OAuthStartResult {
   redirectUri?: string
 }
 
+/** Rejects empty, padded or oversized identifiers before they reach the account manager. */
+export function isAuthRequestString(value: unknown, maxLength = 512): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= maxLength && value === value.trim()
+}
+
+/** Allowlist of what leaves the main process; providers may attach credentials to their results. */
+export function toPublicOAuthCompleteResult(data: OAuthCompleteResult): OAuthCompleteResult {
+  return {
+    success: data.success,
+    sourceId: data.sourceId,
+    sourceIds: data.sourceIds ? [...data.sourceIds] : undefined,
+    user: data.user ? { name: data.user.name, avatar: data.user.avatar, uid: data.user.uid } : undefined,
+    error: data.error,
+  }
+}
+
+export function toPublicOAuthStartResult(data: OAuthStartResult): OAuthStartResult {
+  return {
+    loginId: data.loginId,
+    loginUrl: data.loginUrl,
+    state: data.state,
+    redirectUri: data.redirectUri,
+    userCode: data.userCode,
+    verificationUri: data.verificationUri,
+  }
+}
+
 /**
  * Result from completing an OAuth login flow
  */
 export interface OAuthCompleteResult {
+  sourceId?: string
+  sourceIds?: string[]
   success: boolean
   user?: AISourceUser
   error?: string
@@ -515,27 +561,23 @@ export function getCurrentModelName(config: AISourcesConfig): string {
 }
 
 /**
- * Resolve the display name for an explicit source + model pair, used by the
- * per-conversation model selector (a conversation may be pinned to a model that
- * differs from the current global selection).
- *
- * Falls back to the current global model name when the pin is absent or its
- * source is no longer available — so legacy conversations and pins whose source
- * was deleted still render a sensible label.
+ * Only an absent source pin follows global selection. A pin whose account was
+ * removed has no name — never another account's; callers show their own
+ * translated missing-account notice.
  */
 export function getModelDisplayName(
   config: AISourcesConfig,
   sourceId?: string,
   modelId?: string
 ): string {
-  if (sourceId && modelId) {
-    const source = config.sources.find(s => s.id === sourceId)
-    if (source) {
-      const modelOption = source.availableModels.find(m => m.id === modelId)
-      return modelOption?.name || modelId
-    }
-  }
-  return getCurrentModelName(config)
+  if (!sourceId) return getCurrentModelName(config)
+
+  const source = getSourceById(config, sourceId)
+  if (!source) return ''
+
+  const effectiveModelId = modelId || source.model
+  const modelOption = source.availableModels.find(m => m.id === effectiveModelId)
+  return modelOption?.name || effectiveModelId
 }
 
 /**

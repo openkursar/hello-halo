@@ -75,6 +75,7 @@ import type { AppType, AppSpec } from '../shared/apps/spec-types'
 
 type GitRpcClient = RpcClient<typeof gitRpc>
 type CodeReviewRpcClient = RpcClient<typeof codeReviewRpc>
+type AuthRpcClient = RpcClient<typeof authRpc>
 
 // Seed --display-scale before the renderer's first paint. The main process
 // passes the persisted scale via additionalArguments at window creation;
@@ -98,16 +99,16 @@ export interface HaloAPI {
   // Generic Auth (provider-agnostic)
   authGetProviders: () => Promise<IpcResponse>
   authGetBuiltinProviders: () => Promise<IpcResponse>
-  authStartLogin: (providerType: string) => Promise<IpcResponse>
-  authOpenLoginWindow: (providerType: string, loginUrl: string, redirectUri: string) => Promise<IpcResponse>
-  authCompleteLogin: (providerType: string, state: string) => Promise<IpcResponse>
-  authRefreshToken: (sourceId: string) => Promise<IpcResponse>
-  authCheckToken: (sourceId: string) => Promise<IpcResponse>
-  authLogout: (sourceId: string) => Promise<IpcResponse>
+  authStartLogin: AuthRpcClient['authStartLogin']
+  authOpenLoginWindow: AuthRpcClient['authOpenLoginWindow']
+  authCompleteLogin: AuthRpcClient['authCompleteLogin']
+  authCancelLogin: AuthRpcClient['authCancelLogin']
+  authRefreshToken: AuthRpcClient['authRefreshToken']
+  authCheckToken: AuthRpcClient['authCheckToken']
+  authLogout: AuthRpcClient['authLogout']
   authGetQuota: (sourceId: string) => Promise<IpcResponse>
   authDelegatedStatus: () => Promise<IpcResponse>
   authDelegatedActivate: () => Promise<IpcResponse>
-  onAuthLoginProgress: (callback: (data: { provider: string; status: string }) => void) => () => void
 
   // Config
   getConfig: () => Promise<IpcResponse>
@@ -849,7 +850,6 @@ const api: HaloAPI = {
 
   // Generic Auth (provider-agnostic)
   ...bindRpc(authRpc),
-  onAuthLoginProgress: (callback) => createEventListener('auth:login-progress', callback),
 
   // Config + AI Sources CRUD (derived from configRpc contract)
   ...bindRpc(configRpc),

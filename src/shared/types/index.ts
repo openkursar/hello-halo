@@ -54,7 +54,10 @@ export {
   setCurrentSource,
   setCurrentModel,
   getAvailableModels,
-  resolveLocalizedText
+  resolveLocalizedText,
+  isAuthRequestString,
+  toPublicOAuthStartResult,
+  toPublicOAuthCompleteResult,
 } from './ai-sources'
 
 // Health System types

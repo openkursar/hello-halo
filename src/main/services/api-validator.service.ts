@@ -207,6 +207,7 @@ export async function validateApiConnection(params: ValidateApiParams): Promise<
   try {
     const sdkOptions: Record<string, unknown> = {
       model: testModel,
+      apiCredentials: { baseUrl: normalizedUrl, apiKey, model: testModel, provider },
       // Halo's own temp space, never the OS temp dir: on macOS the latter is the
       // shared $TMPDIR that Chromium fills with short-lived `.<bundle-id>.XXXXXX`
       // files, and a CLI subprocess rooted there races their deletion (ENOENT).

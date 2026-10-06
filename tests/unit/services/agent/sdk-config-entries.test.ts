@@ -29,12 +29,17 @@ vi.mock('../../../../src/main/foundation/config.service', () => ({
 vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
   analytics: { track: vi.fn(), trackErrorSurface: vi.fn() },
 }))
+vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
+  getActiveEngine: () => 'anthropic',
+  getEngineCapabilities: () => ({ features: { hooks: true } }),
+}))
 
 import {
   buildUserSessionSdkOptions,
   buildInternalTaskSdkOptions,
   type ResolvedSdkCredentials,
 } from '../../../../src/main/services/agent/sdk-config'
+import { generatePromptInstructions, resolveMemoryLayout } from '../../../../src/main/platform/memory'
 import { DEFAULT_MAX_TURNS } from '../../../../src/shared/constants/agent-limits'
 import { DEFAULT_DISABLED_TOOLS, TEAM_TOOLS } from '../../../../src/shared/constants/disabled-tools'
 
@@ -89,6 +94,22 @@ describe('buildUserSessionSdkOptions', () => {
     expect(reads).toEqual({ promptProfile: 1, enableDigitalHumans: 1 })
   })
 
+  it('carries the source and credential snapshot version through both entries', async () => {
+    const apiCredentials = {
+      sourceId: 'account-a', credentialsGeneration: 'captured-before-async', provider: 'oauth' as const,
+      baseUrl: 'https://example.invalid', apiKey: 'test-a', model: 'test-model',
+      capabilities: { contextWindow: 100_000, maxOutputTokens: 64_000, maxOutputTokensConfigured: true },
+      customHeaders: { 'ChatGPT-Account-Id': 'workspace-a' },
+    }
+    const snapshot = { ...credentials, sourceId: 'account-a', credentialsGeneration: 'captured-before-async', apiCredentials }
+    for (const build of [buildUserSessionSdkOptions, buildInternalTaskSdkOptions]) {
+      const options = await build({ ...params(), credentials: snapshot })
+      expect(options.env.HALO_AI_SOURCE_ID).toBe('account-a')
+      expect(options.credentialsGeneration).toBe('captured-before-async')
+      expect(options.apiCredentials).toBe(apiCredentials)
+    }
+  })
+
   it('reads the user AI settings itself', async () => {
     state.config.agent = { maxTurns: 12, disabledTools: ['Foo'], promptProfile: 'official', enableDigitalHumans: false }
     const options = await buildUserSessionSdkOptions(params())
@@ -105,6 +126,21 @@ describe('buildUserSessionSdkOptions', () => {
     expect(options.maxTurns).toBe(DEFAULT_MAX_TURNS)
     for (const tool of DEFAULT_DISABLED_TOOLS) expect(options.disallowedTools).toContain(tool)
     expect(options.systemPrompt).toContain(DIGITAL_HUMANS_LINE)
+  })
+
+  it('carries the memory instructions and native write guards without a memory MCP server', async () => {
+    const layout = resolveMemoryLayout({ type: 'user', spaceId: 's', spacePath: workDir }, 'space')
+    const memoryInstructions = generatePromptInstructions('session', { owner: 'space', layout, authorTag: 'chat#ab12' })
+    const options = await buildUserSessionSdkOptions({
+      ...params(), memoryInstructions, memoryGuard: { writable: [layout], label: 'test' },
+    })
+    const prompt = typeof options.systemPrompt === 'string' ? options.systemPrompt : options.systemPrompt.append
+    expect(prompt).toContain(memoryInstructions)
+    expect(options.mcpServers ?? {}).not.toHaveProperty('halo-memory')
+    for (const tool of ['Write', 'Edit', 'MultiEdit', 'NotebookEdit']) {
+      expect(options.hooks.PreToolUse.some((hook: { matcher: string }) => hook.matcher === tool)).toBe(true)
+      expect(options.hooks.PostToolUse.some((hook: { matcher: string }) => hook.matcher === tool)).toBe(true)
+    }
   })
 
   it('always withholds the native team tools, whatever the user disabled', async () => {
