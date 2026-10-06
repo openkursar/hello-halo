@@ -211,6 +211,8 @@ interface AppsPageState {
   loadStoreApps: (query?: StoreQuery) => Promise<void>
   seedStoreApps: (items: RegistryEntry[], hasMore: boolean) => void
   revalidateStore: () => Promise<void>
+  /** The enabled store sources changed: drop what was read from the old set and read the catalog again. */
+  reloadStoreCatalog: () => Promise<void>
   loadMoreStoreApps: () => Promise<void>
   setStoreSearch: (query: string) => void
   setStoreCategory: (category: string | null) => void
@@ -404,6 +406,13 @@ export const useAppsPageStore = create<AppsPageState>()(
     } finally {
       revalidateInFlight = false
     }
+  },
+
+  reloadStoreCatalog: async () => {
+    storeListCache.clear()
+    discoverPageResource.invalidate()
+    // A store not visited yet loads on its first visit.
+    if (get().storeApps.length > 0) await get().loadStoreApps()
   },
 
   /**

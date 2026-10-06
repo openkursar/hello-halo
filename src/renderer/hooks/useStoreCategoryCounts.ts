@@ -41,6 +41,11 @@ const PROBE_CONCURRENCY = 3
 const EMPTY: StoreCategoryCounts = { byCategory: {} }
 const cache = new Map<string, StoreCategoryCounts>()
 
+/** Forget every count: the enabled sources changed, so each one is stale. */
+export function clearStoreCategoryCounts(): void {
+  cache.clear()
+}
+
 async function countOf(type: AppType, category?: string): Promise<number> {
   const res = await api.storeQuery({ type, category, page: 1, pageSize: 1 })
   if (!res.success) throw new Error(res.error ?? 'store query failed')

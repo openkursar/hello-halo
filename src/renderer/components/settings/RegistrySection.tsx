@@ -8,6 +8,14 @@ import { Plus, Trash2, Loader2, Key } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
 import type { RegistrySource } from '../../../shared/store/store-types'
+import { useAppsPageStore } from '../../stores/apps-page.store'
+import { clearStoreCategoryCounts } from '../../hooks/useStoreCategoryCounts'
+
+/** What the store shows comes from the enabled sources: read it again. */
+function reloadStore(): void {
+  clearStoreCategoryCounts()
+  void useAppsPageStore.getState().reloadStoreCatalog()
+}
 
 const SOURCE_TYPE_LABELS: Record<string, string> = {
   'halo': 'Halo',
@@ -84,6 +92,7 @@ export function RegistrySection() {
         setNewName('')
         setNewUrl('')
         setShowAddForm(false)
+        reloadStore()
         await loadRegistries()
       } else {
         setAddError(result.error || t('Failed to add registry'))
@@ -101,6 +110,7 @@ export function RegistrySection() {
       setError(null)
       const result = await api.storeRemoveRegistry(registryId)
       if (result.success) {
+        reloadStore()
         await loadRegistries()
       } else {
         setError(result.error || t('Failed to remove registry'))
@@ -119,6 +129,7 @@ export function RegistrySection() {
         setRegistries((prev) =>
           prev.map((r) => (r.id === registryId ? { ...r, enabled } : r))
         )
+        reloadStore()
       } else {
         setError(result.error || t('Failed to update registry'))
       }
