@@ -1221,9 +1221,11 @@ create a digital human for a reminder.
   late. An IM chat gets the framing and file sending dispatch-inbound gives it,
   the asker's `<msg-sender>` in a group (and as the subject of any push), the
   asker's standing re-resolved under the channel's current settings
-  (`im-sender-standing.ts`), and the reply pushed to the chat. A one-off still
-  waiting when Halo quits is not delivered: the scheduler disabled it when it
-  came due.
+  (`im-sender-standing.ts`), and the reply pushed to the chat. A chat where the
+  channel would refuse a message now — outside its reply scope, or a group
+  while permission control has no owner bound — gets no turn: the same rules
+  dispatch-inbound applies (`instanceTakesChat`). A one-off still waiting when
+  Halo quits is not delivered: the scheduler disabled it when it came due.
 - **Guests do not get it.** The server is not in the capability toggle table,
   and the guest filter keeps no server an owner was never offered a switch for:
   a guest may only query, and every reminder is a future turn someone pays for.
@@ -1349,7 +1351,7 @@ src/main/apps/runtime/
   dispatch-inbound.ts        -- Route IM inbound messages into app-chat
   chat-reset.ts              -- Clear all of a digital human's chats at once (default, local, IM), each as /clear does; API sessions, team chats, memory and reminders untouched; nothing posted into chats
   im-permission-registry.ts  -- The IM chat's last sender and their standing, for a turn with no sender of its own (a message's own turn carries its sender in `AppChatRequest.imPermission`)
-  im-sender-standing.ts      -- resolveImPermission(): owner or guest under an instance's current settings; shared by inbound messages and reminders
+  im-sender-standing.ts      -- Under an instance's current settings: owner or guest (resolveImPermission), and which chats it answers (isOwnerUnbound, replyScopeCovers, instanceTakesChat); shared by inbound messages and reminders
   reminders/                 -- Reminders a digital human sets in a conversation (§2.27)
     index.ts                 -- the scheduler-backed service (set / list / cancel / sweep / cascades) and the turn text
     tool.ts                  -- halo-reminders MCP server, bound to one conversation

@@ -207,4 +207,28 @@ describe('deliverReminder', () => {
     env.app = null
     expect(deliverReminder(reminder(`app-chat:${APP}`), NOW)).toBe('gone')
   })
+
+  it('does not speak where the channel would refuse a message now: outside its reply scope, or a group with no owner bound', async () => {
+    env.instances.set('inst-1', { providerType: 'wecom-bot', pushToChat: vi.fn() })
+    env.sessions.set('wecom-bot:u-1', { instanceId: 'inst-1', chatId: 'u-1', displayName: 'Li' })
+    env.sessions.set('wecom-bot:g-1', { instanceId: 'inst-1', chatId: 'g-1', displayName: 'g-1' })
+    const direct = `app-chat:${APP}:wecom-bot:direct:u-1`
+    const group = `app-chat:${APP}:wecom-bot:group:g-1`
+    const setBy = { id: 'u-1', name: 'Li' }
+
+    // Set in a private chat before the channel was limited to group chats, and the other way round.
+    env.configs.set('inst-1', { appId: APP, replyScope: 'group' })
+    expect(deliverReminder(reminder(direct, { setBy }), NOW)).toBe('unavailable')
+    env.configs.set('inst-1', { appId: APP, replyScope: 'direct' })
+    expect(deliverReminder(reminder(group, { setBy }), NOW)).toBe('unavailable')
+
+    // Permission control on with no owner bound: every group message is refused.
+    env.configs.set('inst-1', { appId: APP, permissionEnabled: true, owners: [] })
+    expect(deliverReminder(reminder(group, { setBy }), NOW)).toBe('unavailable')
+    // A private chat still takes it, as it takes a message there, its sender a guest.
+    expect(deliverReminder(reminder(direct, { setBy }), NOW)).toBe('started')
+    await settle()
+    expect(sent()).toHaveLength(1)
+    expect((sent()[0] as Record<string, any>).imPermission.isOwner).toBe(false)
+  })
 })
