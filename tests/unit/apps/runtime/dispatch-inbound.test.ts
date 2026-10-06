@@ -146,7 +146,6 @@ vi.mock('../../../../src/main/apps/runtime/im-escalation', async (importOriginal
 
 import {
   dispatchInboundMessage,
-  flushSupplementBuffer,
   releaseSupplementsWhenIdle,
   withdrawProcessingNotice,
 } from '../../../../src/main/apps/runtime/dispatch-inbound'
@@ -163,7 +162,7 @@ import type { InboundMessage, ReplyHandle } from '../../../../src/shared/types/i
 
 const trackMock = analytics.track as ReturnType<typeof vi.fn>
 
-/** Wait for the flushSupplementBuffer's setImmediate re-dispatch to run. */
+/** Wait for the deferred release of buffered messages to run. */
 function flushSetImmediate(): Promise<void> {
   return new Promise(resolve => setImmediate(resolve))
 }
@@ -1078,8 +1077,10 @@ describe('dispatchInboundMessage — message.received arrival telemetry', () => 
     // internally with skipBusyCheck. That re-entry must not add a second
     // arrival for the same original message.
     conversationGenerating = false
-    flushSupplementBuffer('app-chat:app-1:wecom-bot:direct:chat-1')
+    const stopReleasing = releaseSupplementsWhenIdle()
+    conversationChanged?.('app-chat:app-1:wecom-bot:direct:chat-1')
     await flushSetImmediate()
+    stopReleasing()
 
     expect(sendAppChatMessageMock).toHaveBeenCalledTimes(1)
     expect(receivedCalls()).toHaveLength(1)
@@ -1137,7 +1138,14 @@ describe('dispatchInboundMessage — buffered messages', () => {
     expect(maybeClaimOwner).toHaveBeenCalledTimes(1)
 
     conversationGenerating = false
-    flushSupplementBuffer(CONV)
+    vi.useFakeTimers({ toFake: ['setImmediate'] })
+    try {
+      conversationChanged?.(CONV)
+      // The deferred release runs here, and the merged turn starts within it.
+      vi.runOnlyPendingTimers()
+    } finally {
+      vi.useRealTimers()
+    }
 
     expect(sendAppChatMessageMock).toHaveBeenCalledTimes(1)
     expect(maybeClaimOwner).toHaveBeenCalledTimes(1)

@@ -576,9 +576,13 @@ Consequences that matter:
   spinning. A cut with nothing written fails the round as
   `AppChatTurnInterrupted`, so a team still records a failure while the IM exit
   can tell it from a model error. Every IM exit — the person's reply
-  (`dispatch-inbound`), a teammate-woken front-desk turn (`team/index.ts`), an
-  autonomous turn's push — adds the same note (`withTurnEndingNote`: after the
-  text, or alone), naming the step limit the person can raise. The number is
+  (`dispatch-inbound`), a teammate-woken front-desk turn (`team/index.ts`), a
+  reminder, an autonomous turn's push — adds the same note after the text it
+  wrote (`withTurnEndingNote`), naming the step limit the person can raise.
+  Where somebody waits on the answer (all but the autonomous push) the note also
+  comes alone when nothing was written, and a cut-off or a failure is told
+  (`imErrorReply`, below); an autonomous turn that wrote nothing pushes nothing,
+  having no round to answer. The number is
   the one the engine reported (`StreamResult.maxTurnsLimit`): the session was
   built with it, and the setting may have changed since; an engine that names
   none gets the note without a number. Halo's chat page needs nothing of this:
@@ -586,9 +590,11 @@ Consequences that matter:
   limit with or without text. A reply cut at the output-token ceiling is not
   the step limit and gets no note on any engine (services/agent DESIGN §3).
 - **A failed turn is told without this computer** (`im-error-reply.ts`). Every
-  IM path that runs a turn — the person's message (`dispatch-inbound`), a
-  reminder (`reminders/delivery`) — tells the chat of a failure with
-  `imErrorReply`: the cut-off note for `AppChatTurnInterrupted`; for a working
+  IM path where somebody waits on the answer — the person's message
+  (`dispatch-inbound`), a front-desk turn woken by a teammate (`team/index.ts`;
+  the team still gets the failure), a reminder (`reminders/delivery`) — tells the
+  chat of a failure with `imErrorReply`: the cut-off note for
+  `AppChatTurnInterrupted`; for a working
   folder that is missing or was changed while the message was prepared (by the
   error's name, services/agent `working-dir`), what can be done — the owner
   sees to it in Halo, or the message is sent again — never the folder; for a
