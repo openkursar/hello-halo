@@ -320,8 +320,10 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
   }, [draftKey, content, images])
   const [isDragOver, setIsDragOver] = useState(false)
   const [isProcessingImages, setIsProcessingImages] = useState(false)
-  // Files a remote client is still uploading into the space (see uploadFiles)
+  // Files a remote client is still uploading into the space (see uploadFiles).
+  // Their cards are not in the message yet, so no way of sending goes out until they land.
   const [uploadingCount, setUploadingCount] = useState(0)
+  const uploading = uploadingCount > 0
   const [imageError, setImageError] = useState<ImageError | null>(null)
   const [showAttachMenu, setShowAttachMenu] = useState(false)  // Attachment menu visibility
   // Slash-command autocomplete
@@ -1041,6 +1043,7 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
 
   // Handle send — routes to inject path when generation is in progress
   const handleSend = () => {
+    if (uploading) return
     const textToSend = isOnboardingSendStep ? onboardingPrompt : content.trim()
     // Sending means the writing is done: comments still open in the content go in as written.
     commitCommentEdits(referenceKey)
@@ -1236,10 +1239,10 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
   const hasReferences = references.length > 0 || writingComment
   const canSend = isOnboardingSendStep ||
     (goalMode
-      ? (goal!.canSubmit(content) && !isProcessingImages)
+      ? (goal!.canSubmit(content) && !isProcessingImages && !uploading)
       : isGenerating
-        ? ((content.trim().length > 0 || hasReferences) && !!onInject && uploadingCount === 0)
-        : ((content.trim().length > 0 || images.length > 0 || hasReferences) && !isProcessingImages && uploadingCount === 0)
+        ? ((content.trim().length > 0 || hasReferences) && !!onInject && !uploading)
+        : ((content.trim().length > 0 || images.length > 0 || hasReferences) && !isProcessingImages && !uploading)
     )
   const hasImages = images.length > 0
   const cardRadius = standalone ? 'rounded-[22px]' : 'rounded-[18px]'
@@ -1489,7 +1492,7 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
               <span>{t('Processing image...')}</span>
             </div>
           )}
-          {uploadingCount > 0 && (
+          {uploading && (
             <div className="px-4 py-2 flex items-center gap-2 text-xs text-muted-foreground border-b border-border/30">
               <Loader2 size={14} className="animate-spin" />
               <span>{t('Uploading {{count}} file(s)...', { count: uploadingCount })}</span>

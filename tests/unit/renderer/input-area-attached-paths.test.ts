@@ -325,21 +325,33 @@ it('on a remote client a file is uploaded into the space and attached by the pat
   expect(errorText(tree)).toBe('{{count}} folder(s) could not be attached: only files can be uploaded from this device')
 })
 
+const pressEnter = (tree: any) => textarea(tree).props.onKeyDown({
+  key: 'Enter', shiftKey: false, ctrlKey: false, nativeEvent: { isComposing: false }, preventDefault: vi.fn(), stopPropagation: vi.fn(),
+})
+
 it.each([
-  ['a new message', false],
-  ['a message added mid-reply', true],
-])('on a remote client %s waits for its uploads before it can be sent', async (_case, isGenerating) => {
+  ['a new message', () => {}, () => props.onSend, (call: any[]) => call[3].references],
+  ['a message added mid-reply', () => { props.isGenerating = true }, () => props.onInject, (call: any[]) => call[1]],
+  ['a goal', () => { goal.active = true }, () => goal.submit, (call: any[]) => call[3]],
+])('on a remote client %s waits for its uploads, whether sent by button or by Enter', async (_case, arrange, sender, sentReferences) => {
   env.electron = false
+  arrange()
   let finish!: (result: unknown) => void
   env.upload = vi.fn(() => new Promise(resolve => { finish = resolve }))
-  const { render, type } = mount({ ...props, isGenerating })
+  const { render, type } = mount()
   const dropping = drop(render(), [PDF])
-  expect(toolbar(type('Read this')).props.canSend).toBe(false)
+  const typed = type('Read this')
+  expect(toolbar(typed).props.canSend).toBe(false)
+  pressEnter(typed)
+  expect(sender()).not.toHaveBeenCalled()
+
   finish({ success: true, data: { path: '/srv/space/q3 report.pdf', name: 'q3 report.pdf', size: 10 } })
   await dropping
-  const tree = render()
-  expect(toolbar(tree).props.canSend).toBe(true)
-  expect(paths(cards(tree))).toEqual([{ path: '/srv/space/q3 report.pdf', isDirectory: false }])
+  const ready = render()
+  expect(toolbar(ready).props.canSend).toBe(true)
+  pressEnter(ready)
+  expect(sender()).toHaveBeenCalledTimes(1)
+  expect(paths(sentReferences(sender().mock.calls[0]))).toEqual([{ path: '/srv/space/q3 report.pdf', isDirectory: false }])
 })
 
 it('on a remote client a file over the upload limit, or one the server refuses, is not attached and the user is told', async () => {

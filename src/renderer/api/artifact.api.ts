@@ -173,7 +173,9 @@ export const artifactApi = {
       })
       const body = await res.json().catch(() => null)
       if (!res.ok || !body?.success || !body.data) {
-        return { success: false, error: body?.error || `Upload failed (${res.status})`, ...(body?.code ? { code: body.code } : {}) }
+        // A proxy or tunnel in between answers 413 with a page of its own.
+        const code = body?.code ?? (res.status === 413 ? 'TOO_LARGE' : undefined)
+        return { success: false, error: body?.error || `Upload failed (${res.status})`, ...(code ? { code } : {}) }
       }
       return { success: true, data: body.data }
     } catch (error) {
