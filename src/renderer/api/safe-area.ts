@@ -2,19 +2,18 @@
  * Capacitor Mobile Shell — Status Bar & Safe Area
  *
  * Initializes edge-to-edge display and safe-area inset variables for the
- * Capacitor (Android) build. The page renders behind the status bar; the
+ * Capacitor build. The page renders behind the status bar; the
  * `--safe-area-inset-top` CSS variable carries the real status bar height
  * so layouts using `var(--sat)` (see `globals.css`) push content below it.
  *
- * Source-of-truth strategy (single layer, no JS polling):
- *   1. Native `MainActivity` writes `--safe-area-inset-top` once on app
- *      start via `WebView.evaluateJavascript`. This is deterministic and
- *      runs before React mounts.
- *   2. Capacitor 8's built-in SystemBars plugin writes the same variable on
- *      Android 16+ (no-op on older versions). Either source is fine — both
- *      target the same custom property.
- *   3. A `visualViewport.resize` listener keeps the variable in sync when
- *      the keyboard opens / device rotates.
+ * Who writes the variable on Android (no JS polling):
+ *   1. Below Android 15, the app's native SafeArea plugin, whenever a page
+ *      finishes loading, the app returns to the foreground or the insets
+ *      change (rotation, split screen).
+ *   2. From Android 15 on, Capacitor 8's built-in SystemBars plugin.
+ *   Native code writes once the page has loaded, after this module first
+ *   runs, so a page that starts without the value asks for it once.
+ * iOS reports env(safe-area-inset-*) itself, which the CSS falls back to.
  *
  * No-ops in Electron/Web: Capacitor checks short-circuit before any work.
  */
@@ -22,6 +21,14 @@
 import { isCapacitor } from './transport'
 
 type StatusBarStyle = 'DARK' | 'LIGHT'
+
+const TOP_INSET = '--safe-area-inset-top'
+
+/** The app's native SafeArea plugin (Android only). */
+interface SafeAreaPlugin {
+  /** `top` in CSS pixels; absent from Android 15 on, where SystemBars writes it. */
+  getInsets(): Promise<{ top?: number }>
+}
 
 let _statusBarPlugin: typeof import('@capacitor/status-bar').StatusBar | null = null
 let _statusBarLoadAttempted = false
@@ -43,9 +50,9 @@ async function loadStatusBar(): Promise<typeof import('@capacitor/status-bar').S
 
 /**
  * One-time mobile shell init. Safe to call before React mounts.
+ * - Lets the layout keep clear of the system bars at any width (`globals.css`)
+ * - Asks for the status bar height if the page starts without it
  * - Enables edge-to-edge (overlay WebView)
- * - Wires the `visualViewport.resize` listener that re-syncs `--safe-area-inset-top`
- *   when the keyboard opens or the device rotates.
  *
  * Status bar text style (DARK/LIGHT) is intentionally NOT set here — the
  * theme effect in `App.tsx` calls `syncStatusBarStyle()` once the theme
@@ -55,6 +62,9 @@ async function loadStatusBar(): Promise<typeof import('@capacitor/status-bar').S
 export async function initCapacitorMobileShell(): Promise<void> {
   if (!isCapacitor()) return
 
+  document.documentElement.classList.add('platform-capacitor')
+  void askForMissingTopInset()
+
   const StatusBar = await loadStatusBar()
   if (!StatusBar) return
 
@@ -63,8 +73,6 @@ export async function initCapacitorMobileShell(): Promise<void> {
   } catch (err) {
     console.warn('[SafeArea] setOverlaysWebView failed:', err)
   }
-
-  installViewportResizeListener()
 }
 
 /**
@@ -85,22 +93,18 @@ export async function syncStatusBarStyle(isDark: boolean): Promise<void> {
   }
 }
 
-let _viewportListenerInstalled = false
-
-function installViewportResizeListener(): void {
-  if (_viewportListenerInstalled) return
-  if (typeof window === 'undefined' || !window.visualViewport) return
-  _viewportListenerInstalled = true
-
-  const sync = () => {
-    const offsetTop = window.visualViewport?.offsetTop ?? 0
-    if (offsetTop > 0) {
-      document.documentElement.style.setProperty(
-        '--safe-area-inset-top',
-        offsetTop + 'px'
-      )
+async function askForMissingTopInset(): Promise<void> {
+  const root = document.documentElement
+  if (root.style.getPropertyValue(TOP_INSET)) return
+  try {
+    const { Capacitor, registerPlugin } = await import('@capacitor/core')
+    if (Capacitor.getPlatform() !== 'android') return
+    const { top } = await registerPlugin<SafeAreaPlugin>('SafeArea').getInsets()
+    // Native code may have written it while the answer was on its way; that value stands.
+    if (typeof top === 'number' && !root.style.getPropertyValue(TOP_INSET)) {
+      root.style.setProperty(TOP_INSET, `${top}px`)
     }
+  } catch (err) {
+    console.warn('[SafeArea] Could not ask for the status bar height:', err)
   }
-
-  window.visualViewport.addEventListener('resize', sync)
 }
