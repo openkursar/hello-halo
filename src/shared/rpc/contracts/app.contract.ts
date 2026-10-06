@@ -64,6 +64,8 @@ export const appRpc = {
   appClearMemory: rawRpcMethod('app:clear-memory'),
   appGetMemoryStatus: rawRpcMethod('app:memory-status'),
   appConsolidateMemory: rawRpcMethod('app:memory-consolidate'),
+  appListReminders: rawRpcMethod('app:reminders-list'),
+  appCancelReminder: rawRpcMethod('app:reminder-cancel'),
   appMoveSpace: rawRpcMethod('app:move-space'),
 
   // App Chat

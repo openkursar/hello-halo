@@ -693,6 +693,16 @@
     "group": "digital-human"
   },
   {
+    "method": "GET",
+    "path": "/api/apps/:appId/reminders",
+    "group": "digital-human"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/apps/:appId/reminders/:reminderId",
+    "group": "digital-human"
+  },
+  {
     "method": "DELETE",
     "path": "/api/apps/:appId/permanent",
     "group": "digital-human"

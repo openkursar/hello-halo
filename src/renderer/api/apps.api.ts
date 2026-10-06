@@ -21,6 +21,7 @@ import type { CanvasContext } from '../../shared/types/canvas-context'
 import type { ContentReference } from '../../shared/types/content-reference'
 import type { ReasoningEffortLevel } from '../../shared/constants/reasoning-effort'
 import type { MemoryStatus } from '../../shared/types/memory'
+import type { ConversationReminderView } from '../../shared/apps/conversation-reminders'
 import type { Thought, TranscriptPage } from '../../shared/types/transcript'
 import { ensureExtendedServicesReady } from './bootstrap-ready'
 
@@ -401,6 +402,20 @@ export const appsApi = {
       return window.halo.appConsolidateMemory(appId)
     }
     return httpRequest('POST', `/api/apps/${appId}/memory/consolidate`)
+  },
+
+  appListReminders: async (appId: string): Promise<ApiResponse<ConversationReminderView[]>> => {
+    if (isElectron()) {
+      return window.halo.appListReminders(appId)
+    }
+    return httpRequest('GET', `/api/apps/${appId}/reminders`)
+  },
+
+  appCancelReminder: async (appId: string, reminderId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appCancelReminder({ appId, reminderId })
+    }
+    return httpRequest('DELETE', `/api/apps/${appId}/reminders/${encodeURIComponent(reminderId)}`)
   },
 
   appMoveSpace: async (appId: string, newSpaceId: string | null): Promise<ApiResponse> => {

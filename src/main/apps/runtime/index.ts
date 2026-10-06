@@ -55,6 +55,8 @@ import { WebhookSource, type WebhookSecretResolver } from './sources/webhook.sou
 import { ImChannelManager, WecomBotProvider, WeixinIlinkBotProvider, FeishuBotProvider, setActiveImChannelManager } from './im-channels'
 import { ImSessionRegistry, setImSessionRegistry } from './im-session-registry'
 import { PendingRelayStore, setPendingRelayStore, getPendingRelayStore } from './pending-relays'
+import { createConversationReminders, setConversationReminders } from './reminders'
+import { deliverReminder } from './reminders/delivery'
 import { restoreLegacyDefaultChats } from './legacy-default-chats'
 import { dispatchInboundMessage, clearSupplementBuffersForInstance, releaseSupplementsWhenIdle } from './dispatch-inbound'
 import { clearAllImPermissionContexts } from './im-permission-registry'
@@ -174,6 +176,9 @@ export { ImSessionRegistry } from './im-session-registry'
 
 // Digital-human memory as its owner sees it from settings (called by IPC/HTTP)
 export { getDigitalHumanMemoryStatus, consolidateDigitalHumanMemoryNow } from './memory-control'
+
+// Reminders a digital human set in its conversations, as its page lists them (called by IPC/HTTP)
+export { listAppReminders, cancelAppReminder } from './reminders/view'
 
 // Re-export IM session invalidation (called by IPC reload handler)
 export { invalidateImSessions } from '../../services/agent/session-manager'
@@ -348,6 +353,24 @@ export async function initAppRuntime(
   // Records notify_bot pushes against their target sessions so the target's
   // AI regains awareness of them on its next inbound message.
   setPendingRelayStore(new PendingRelayStore(join(haloDir, 'im-pending-relays.json')))
+
+  // ── Conversation reminders ──────────────────────────────────────────
+  // Their handler is registered here, before bootstrap starts the scheduler,
+  // and what a previous run left behind is swept while nothing can fire.
+  const reminders = createConversationReminders({
+    scheduler: deps.scheduler,
+    deliver: deliverReminder,
+    appExists: (appId) => {
+      const app = deps.appManager.getApp(appId)
+      return !!app && app.status !== 'uninstalled'
+    },
+  })
+  reminders.registerHandler()
+  reminders.sweep()
+  setConversationReminders(reminders)
+  deps.appManager.onAppUninstalled((app) => {
+    reminders.removeForApp(app.id)
+  })
 
   // ── IM Channel Manager (multi-instance) ─────────────────────────────
   // Manages all IM channel instances (WeCom Bot, Feishu Bot, DingTalk Bot, etc.)
@@ -564,6 +587,7 @@ export async function shutdownAppRuntime(): Promise<void> {
   // since its target may not send another message for weeks.
   getPendingRelayStore()?.flush()
   setPendingRelayStore(null)
+  setConversationReminders(null)
 
   // Clear all IM permission contexts (in-memory only, no persistence needed)
   clearAllImPermissionContexts()

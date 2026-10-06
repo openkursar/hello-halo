@@ -328,6 +328,14 @@
     "path": "/api/apps/:appId/memory/consolidate"
   },
   {
+    "method": "GET",
+    "path": "/api/apps/:appId/reminders"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/apps/:appId/reminders/:reminderId"
+  },
+  {
     "method": "POST",
     "path": "/api/apps/:appId/pause"
   },

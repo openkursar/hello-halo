@@ -136,6 +136,9 @@ function buildTools(spaceId: string, guideConsulted: () => boolean) {
     'It holds the current authoring guide — interview checklist, real trigger mechanics, and the ' +
     'full field reference — and is updated independently of this Halo version.\n\n' +
     'Rules that hold even when that guide cannot be reached:\n' +
+    '  - Never create a digital human for a one-off or temporary reminder ("remind me in an hour", "tell the group at 3pm"). ' +
+    'In a digital human\'s own conversation, use set_reminder; anywhere else, say that such reminders are set by asking a digital human in its chat. ' +
+    'A digital human is for standing, independent work.\n' +
     '  - Ask the user for the schedule interval or cron expression. Never assume one.\n' +
     '  - A digital human triggered by WeCom/IM messages needs NO subscriptions: inbound routing comes from binding a channel instance to the app in Settings, not from the spec.\n' +
     '  - Never create config_schema fields for passwords, cookies, or session tokens. Declare login-gated sites in browser_login instead; the app runs in the user\'s own browser session.\n' +

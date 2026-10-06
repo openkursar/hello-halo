@@ -119,6 +119,7 @@ import { createFileSendMcpServer } from './im-channels/file-send-mcp'
 import { mergeConfigWithDefaults } from './config-defaults'
 import { tmpdir as osTmpdir } from 'os'
 import { createNotifyToolServer } from './notify-tool'
+import { createRemindersMcpServer } from './reminders/tool'
 import { buildQuoteFromMessage } from './pending-relays'
 import { resolveNotifyAvailability } from './notify-availability'
 import { FileExportGate } from './file-export-gate'
@@ -808,6 +809,21 @@ async function runAppChatTurn(
       omitPersonContext: true,
     }),
     'ocr': createOcrMcpServer(),
+    // A reminder returns to the conversation it was set in. A team turn has its
+    // periodic checks instead; IM guests lose it to the guest filter below,
+    // which keeps no server the owner was never offered a switch for.
+    ...(!teamContext
+      ? {
+          'halo-reminders': createRemindersMcpServer({
+            appId: app.id,
+            conversationId,
+            currentSetter: () => {
+              const sender = getImPermissionContext(conversationId)
+              return sender ? { id: sender.senderId, name: sender.senderName } : undefined
+            },
+          }),
+        }
+      : {}),
     ...(usesAIBrowser ? { 'ai-browser': createAIBrowserMcpServer(scopedBrowserCtx, workDir) } : {}),
     ...(usesTerminal
       ? { 'ai-terminal': createTerminalMcpServer(getGlobalTerminalContext(workDir), { spaceId, workDir }) }
