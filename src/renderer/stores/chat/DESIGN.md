@@ -62,7 +62,9 @@ it. A selected id alone does not mean the user is viewing it. Completion trackin
 and foreground reads share `selectViewedConversationId`: the reported id must
 match the active selection, and the document must be visible and focused.
 Mounting, switching conversation and foregrounding read only that conversation's
-unseen completion; plain errors remain pending until explicitly opened.
+unseen completion; plain errors remain pending until explicitly opened. A space
+conversation missing from its space's freshly read list is not tracked: it is an
+ephemeral one backing another view (the knowledge base chat) or already deleted.
 
 ## Turn lifecycle (digital human)
 

@@ -80,6 +80,7 @@ POST   /api/spaces/$HALO_SPACE_ID/conversations                    Create an emp
      # body: {"title":"Weekly report"}
      # out: {"success":true,"data":{"id":"<uuid>","title":"Weekly report"}}
      # note: Optional body field: reasoningEffort (off|minimal|low|medium|high|xhigh|max) — how hard it thinks; omit to follow the model's configured effort. Creates it empty. Make Halo reply in it with POST /api/agent/message — a conversation you made yourself is the safe target for that, since a turn you start there cannot interrupt one the user is having.
+     # note: Optional body field: ephemeral (boolean) — for a view that shows the transcript itself (the knowledge base chat): it is left out of every conversation list and search, and deleted at the next start of Halo unless deleted before. Leave it out for a conversation the user should see.
 
 GET    /api/spaces/$HALO_SPACE_ID/conversations/<conversationId>   Read a conversation with its messages
      curl -s "$HALO_API_URL/api/spaces/$HALO_SPACE_ID/conversations/<conversationId>" -H "Authorization: Bearer $HALO_API_TOKEN"

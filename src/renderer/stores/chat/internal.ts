@@ -215,7 +215,8 @@ export interface ChatState {
   setCurrentSpace: (spaceId: string) => void
 
   // Conversation actions
-  loadConversations: (spaceId: string) => Promise<void>
+  /** Resolves whether the list was read. */
+  loadConversations: (spaceId: string) => Promise<boolean>
   preloadAllSpaceConversations: (spaceIds: string[]) => void
   createConversation: (spaceId: string) => Promise<Conversation | null>
   selectConversation: (conversationId: string) => void

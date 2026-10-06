@@ -135,6 +135,23 @@ describe('space conversations', () => {
     expect(results[0]).toMatchObject({ spaceId: 'halo-temp', spaceName: 'Halo' })
   })
 
+  it('leaves out an ephemeral conversation (the knowledge base chat), in every scope', async () => {
+    const dir = join(env.tempPath, 'conversations')
+    writeConversation(dir, 'mine', 'halo-temp', 'Mine', [message('m1', 'refund policy', 1)])
+    writeFileSync(join(dir, 'kb-chat.json'), JSON.stringify({
+      id: 'kb-chat', spaceId: 'halo-temp', title: 'Ask: Docs', createdAt: '', updatedAt: '', messageCount: 1,
+      ephemeral: true, messages: [message('m2', 'refund policy?', 2)],
+    }))
+
+    for (const results of [
+      await service.search('refund', 'global'),
+      await service.search('refund', 'space', undefined, 'halo-temp'),
+    ]) {
+      expect(results.map((r) => r.conversationId)).toEqual(['mine'])
+    }
+    expect(await service.search('refund', 'conversation', 'kb-chat', 'halo-temp')).toEqual([])
+  })
+
   it('ignores an empty query', async () => {
     expect(await service.search('   ', 'global')).toEqual([])
   })

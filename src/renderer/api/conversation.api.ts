@@ -20,15 +20,17 @@ export const conversationApi = {
     return httpRequest('GET', `/api/spaces/${spaceId}/conversations`)
   },
 
+  /** `ephemeral`: for a view that shows its own transcript — never listed, deleted with the view. */
   createConversation: async (
     spaceId: string,
     title?: string,
-    reasoningEffort?: ReasoningEffortLevel
+    reasoningEffort?: ReasoningEffortLevel,
+    options?: { ephemeral?: boolean }
   ): Promise<ApiResponse> => {
     if (isElectron()) {
-      return window.halo.createConversation(spaceId, title, reasoningEffort)
+      return window.halo.createConversation(spaceId, title, reasoningEffort, options)
     }
-    return httpRequest('POST', `/api/spaces/${spaceId}/conversations`, { title, reasoningEffort })
+    return httpRequest('POST', `/api/spaces/${spaceId}/conversations`, { title, reasoningEffort, ...options })
   },
 
   /** `fromMessageId`: return messages from that one on, marked with `messagesFrom` (whole list if unknown). */
