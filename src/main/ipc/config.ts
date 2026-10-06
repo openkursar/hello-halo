@@ -7,7 +7,12 @@ import { getAISourceManager } from '../services/ai-sources'
 import { decryptString } from '../foundation/secure-storage.service'
 import { unmaskSentinels, maskOAuthFields } from '../foundation/config-encryption'
 import { validateApiConnection } from '../services/api-validator.service'
-import { fetchModels as controllerFetchModels, preserveManagedSources } from '../controllers/config.controller'
+import {
+  fetchModels as controllerFetchModels,
+  getConfigReadFailure as controllerGetConfigReadFailure,
+  notSavedWhileConfigUnreadable,
+  preserveManagedSources,
+} from '../controllers/config.controller'
 import { runConfigProbe, emitConfigChange } from '../services/health'
 import type { AISourcesConfig, AISource } from '../../shared/types'
 import { configRpc } from '../../shared/rpc/contracts/config.contract'
@@ -54,6 +59,8 @@ export function registerConfigHandlers(): void {
       }
     },
 
+    getConfigReadFailure: async () => controllerGetConfigReadFailure(),
+
     // Save configuration
     setConfig: async (updates: Record<string, unknown>) => {
       // Log what's being updated (without sensitive data)
@@ -88,6 +95,11 @@ export function registerConfigHandlers(): void {
         preserveManagedSources(processedUpdates, existing)
 
         const config = saveConfig(processedUpdates)
+        const notSaved = notSavedWhileConfigUnreadable()
+        if (notSaved) {
+          console.warn('[Settings] config:set - Not saved: config.json is unreadable')
+          return notSaved
+        }
         console.log('[Settings] config:set - Saved successfully')
 
         // Check if aiSources changed - run config validation
@@ -170,6 +182,8 @@ export function registerConfigHandlers(): void {
       try {
         const manager = getAISourceManager()
         const result = manager.switchCurrentSource(sourceId)
+        const notSaved = notSavedWhileConfigUnreadable()
+        if (notSaved) return notSaved
         if (result.currentId !== sourceId) {
           return { success: false, error: `Source not found: ${sourceId}` }
         }
@@ -189,6 +203,8 @@ export function registerConfigHandlers(): void {
       try {
         const manager = getAISourceManager()
         const result = manager.switchCurrentModel(modelId)
+        const notSaved = notSavedWhileConfigUnreadable()
+        if (notSaved) return notSaved
         emitConfigChange(['aiSources.model'])
         return { success: true, data: maskOAuthFields({ aiSources: result }).aiSources }
       } catch (error: unknown) {
@@ -204,6 +220,8 @@ export function registerConfigHandlers(): void {
       try {
         const manager = getAISourceManager()
         const result = manager.addSource(source)
+        const notSaved = notSavedWhileConfigUnreadable()
+        if (notSaved) return notSaved
         emitConfigChange(['aiSources.sources'])
         runConfigProbe().catch(err => console.error('[Settings] ai-sources:add-source - Probe failed:', err))
         return { success: true, data: maskOAuthFields({ aiSources: result }).aiSources }
@@ -220,6 +238,8 @@ export function registerConfigHandlers(): void {
       try {
         const manager = getAISourceManager()
         const result = manager.updateSource(sourceId, updates)
+        const notSaved = notSavedWhileConfigUnreadable()
+        if (notSaved) return notSaved
         emitConfigChange(['aiSources.sources'])
         runConfigProbe().catch(err => console.error('[Settings] ai-sources:update-source - Probe failed:', err))
         return { success: true, data: maskOAuthFields({ aiSources: result }).aiSources }
@@ -236,6 +256,8 @@ export function registerConfigHandlers(): void {
       try {
         const manager = getAISourceManager()
         const result = manager.deleteSource(sourceId)
+        const notSaved = notSavedWhileConfigUnreadable()
+        if (notSaved) return notSaved
         emitConfigChange(['aiSources.sources'])
         return { success: true, data: maskOAuthFields({ aiSources: result }).aiSources }
       } catch (error: unknown) {

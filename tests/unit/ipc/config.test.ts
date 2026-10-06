@@ -17,7 +17,9 @@ vi.mock('../../../src/main/controllers/config.controller', async (importOriginal
 
 vi.mock('../../../src/main/foundation/config.service', () => ({
   getConfig: vi.fn(),
-  saveConfig: vi.fn()
+  saveConfig: vi.fn(),
+  isConfigUnreadable: vi.fn(() => false),
+  getConfigPath: vi.fn(() => '/home/user/.halo/config.json')
 }))
 
 vi.mock('../../../src/main/services/ai-sources', () => ({
@@ -49,7 +51,8 @@ vi.mock('../../../src/main/services/health', () => ({
 }))
 
 vi.mock('../../../src/shared/rpc/contracts/config.contract', () => ({
-  configRpc: {}
+  configRpc: {},
+  CONFIG_UNREADABLE_CODE: 'CONFIG_UNREADABLE'
 }))
 
 vi.mock('../../../src/main/ipc/rpc', () => ({
@@ -57,7 +60,7 @@ vi.mock('../../../src/main/ipc/rpc', () => ({
 }))
 
 import { registerConfigHandlers } from '../../../src/main/ipc/config'
-import { getConfig, saveConfig } from '../../../src/main/foundation/config.service'
+import { getConfig, isConfigUnreadable, saveConfig } from '../../../src/main/foundation/config.service'
 import { getAISourceManager } from '../../../src/main/services/ai-sources'
 
 describe('config IPC model fetching', () => {
@@ -113,6 +116,26 @@ describe('config IPC model fetching', () => {
     const handlers = registerRawRpcHandlersMock.mock.calls[0][1]
     await handlers.setConfig({ aiSources: { version: 2, currentId: 'a', sources: [{ ...live, accessToken: 'stale' }] } })
     expect(saveConfig).toHaveBeenLastCalledWith({ aiSources: { version: 2, currentId: 'a', sources: [live] } })
+  })
+
+  it('answers "not saved" while the config file cannot be read, for settings and model sources alike', async () => {
+    vi.mocked(getConfig).mockReturnValue({} as any)
+    vi.mocked(getAISourceManager).mockReturnValue({
+      updateSource: vi.fn(() => ({ version: 2, currentId: null, sources: [] })),
+    } as any)
+    vi.mocked(isConfigUnreadable).mockReturnValue(true)
+    try {
+      registerConfigHandlers()
+      const handlers = registerRawRpcHandlersMock.mock.calls[0][1]
+
+      // The renderer shows whatever it sent as saved unless told otherwise.
+      await expect(handlers.setConfig({ appearance: { theme: 'dark' } }))
+        .resolves.toMatchObject({ success: false, code: 'CONFIG_UNREADABLE' })
+      await expect(handlers.aiSourcesUpdateSource('a', { name: 'Renamed' }))
+        .resolves.toMatchObject({ success: false, code: 'CONFIG_UNREADABLE' })
+    } finally {
+      vi.mocked(isConfigUnreadable).mockReturnValue(false)
+    }
   })
 
   it('delegates to the config controller so structured errors reach Electron', async () => {

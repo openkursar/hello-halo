@@ -1393,6 +1393,25 @@ export function getConfig(): HaloConfig {
 }
 
 /**
+ * Whether the last read found config.json present but unreadable. While it
+ * is, saveConfig keeps changes in memory only, so a save reported to the user
+ * must be reported as not saved.
+ */
+export function isConfigUnreadable(): boolean {
+  return configReadFailed
+}
+
+/**
+ * The unreadable config file, for the warning shown to the user; null when it
+ * reads fine or does not exist yet. Reads it again, so a repaired file clears
+ * the warning on the next call.
+ */
+export function getConfigReadFailure(): { path: string } | null {
+  getConfig()
+  return configReadFailed ? { path: getConfigPath() } : null
+}
+
+/**
  * Patch accepted by `saveConfig`. `api` is deep-merged onto the stored value,
  * so a caller may send only the credential fields it is changing.
  */

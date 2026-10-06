@@ -39,6 +39,10 @@ export function registerConfigRoutes(app: Express): void {
     res.json(configController.getCredentialFailures())
   })
 
+  app.get('/api/config/read-failure', async (_req: Request, res: Response) => {
+    res.json(configController.getConfigReadFailure())
+  })
+
   app.post('/api/config/validate', async (req: Request, res: Response) => {
     const { apiKey, apiUrl, provider, model } = req.body
     const result = await configController.validateApi(apiKey, apiUrl, provider, model)

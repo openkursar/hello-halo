@@ -7,7 +7,9 @@ const { fetchModelsFromApiMock } = vi.hoisted(() => ({
 
 vi.mock('../../../src/main/foundation/config.service', () => ({
   getConfig: vi.fn(),
-  saveConfig: vi.fn()
+  saveConfig: vi.fn(),
+  isConfigUnreadable: vi.fn(() => false),
+  getConfigPath: vi.fn(() => '/home/user/.halo/config.json')
 }))
 
 vi.mock('../../../src/main/foundation/config-encryption', () => ({
@@ -21,7 +23,7 @@ vi.mock('../../../src/main/services/api-validator.service', () => ({
 }))
 
 import { fetchModels, preserveManagedSources, setConfig } from '../../../src/main/controllers/config.controller'
-import { getConfig, saveConfig } from '../../../src/main/foundation/config.service'
+import { getConfig, isConfigUnreadable, saveConfig } from '../../../src/main/foundation/config.service'
 
 describe('managed account configuration writes', () => {
   const live = {
@@ -73,6 +75,16 @@ describe('managed account configuration writes', () => {
     vi.mocked(getConfig).mockReturnValue({ aiSources: { version: 2, currentId: 'a', sources: [live] } } as any)
     setConfig({ aiSources: { version: 2, currentId: 'a', sources: [{ ...live, accessToken: 'stale' }] } })
     expect(saveConfig).toHaveBeenLastCalledWith({ aiSources: { version: 2, currentId: 'a', sources: [live] } })
+  })
+
+  it('reports a save that an unreadable config file kept off disk as not saved', () => {
+    vi.mocked(getConfig).mockReturnValue({} as any)
+    vi.mocked(isConfigUnreadable).mockReturnValueOnce(true)
+
+    const result = setConfig({ appearance: { theme: 'dark' } })
+
+    expect(result).toMatchObject({ success: false, code: 'CONFIG_UNREADABLE' })
+    expect(result.error).toContain('/home/user/.halo/config.json')
   })
 })
 

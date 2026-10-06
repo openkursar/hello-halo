@@ -31,6 +31,7 @@ import { OnboardingOverlay } from './components/onboarding'
 import { UpdateNotification } from './components/updater/UpdateNotification'
 import { NotificationToast } from './components/notification/NotificationToast'
 import { CredentialAlertBanner } from './components/settings/CredentialAlertBanner'
+import { ConfigUnreadableBanner } from './components/settings/ConfigUnreadableBanner'
 import { NavRail } from './components/layout/NavRail'
 import { HeaderShell, usePlatform } from './components/layout/Header'
 import { MAC_TRAFFIC_LIGHT_BOTTOM, MAC_TRAFFIC_LIGHT_POSITION } from '../shared/constants/mac-traffic-lights'
@@ -1195,6 +1196,9 @@ export default function App() {
       {/* At-rest credential decode failure alert (enterprise builds only).
           Offset below the reconnection bar when it is showing so they stack. */}
       <CredentialAlertBanner topOffset={showReconnectBanner ? 32 : 0} />
+      {/* Config file present but unreadable: saving is paused. Rendered last so
+          it stays on top in the rare case both alerts are up. */}
+      <ConfigUnreadableBanner topOffset={showReconnectBanner ? 32 : 0} />
     </div>
   )
 }

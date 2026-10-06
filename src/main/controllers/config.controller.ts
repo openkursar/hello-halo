@@ -6,11 +6,15 @@
 import {
   getConfig as serviceGetConfig,
   saveConfig as serviceSaveConfig,
-  getCredentialDecodeFailures as serviceGetCredentialDecodeFailures
+  getCredentialDecodeFailures as serviceGetCredentialDecodeFailures,
+  getConfigPath as serviceGetConfigPath,
+  getConfigReadFailure as serviceGetConfigReadFailure,
+  isConfigUnreadable as serviceIsConfigUnreadable
 } from '../foundation/config.service'
 import { maskConfigFields, unmaskSentinels } from '../foundation/config-encryption'
 import { validateApiConnection, fetchModelsFromApi } from '../services/api-validator.service'
 import { ModelFetchError } from '../../shared/model-fetch-error'
+import { CONFIG_UNREADABLE_CODE } from '../../shared/rpc/contracts/config.contract'
 import type { AISourcesConfig } from '../../shared/types/ai-sources'
 
 export interface ControllerResponse<T = unknown> {
@@ -45,6 +49,30 @@ export function getCredentialFailures(): ControllerResponse {
   } catch (error: unknown) {
     const err = error as Error
     return { success: false, error: err.message }
+  }
+}
+
+/** The config file that cannot be read, or null — for the warning shown at the top of the app. */
+export function getConfigReadFailure(): ControllerResponse {
+  try {
+    return { success: true, data: serviceGetConfigReadFailure() }
+  } catch (error: unknown) {
+    const err = error as Error
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * The answer to a write that saveConfig kept in memory only because
+ * config.json cannot be read; null when the write went through. Reporting
+ * success here would have the user re-enter settings that are then dropped.
+ */
+export function notSavedWhileConfigUnreadable(): ControllerResponse | null {
+  if (!serviceIsConfigUnreadable()) return null
+  return {
+    success: false,
+    code: CONFIG_UNREADABLE_CODE,
+    error: `Not saved: ${serviceGetConfigPath()} cannot be read, so saving is paused to protect its contents`,
   }
 }
 
@@ -84,6 +112,8 @@ export function setConfig(updates: Record<string, unknown>): ControllerResponse 
     unmaskSentinels(updates, existing)
     preserveManagedSources(updates, existing)
     const config = serviceSaveConfig(updates as any)
+    const notSaved = notSavedWhileConfigUnreadable()
+    if (notSaved) return notSaved
     return { success: true, data: maskConfigFields(config as unknown as Record<string, unknown>) }
   } catch (error: unknown) {
     const err = error as Error

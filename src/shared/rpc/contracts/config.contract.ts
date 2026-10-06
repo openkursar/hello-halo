@@ -5,10 +5,14 @@
  */
 import { rawRpcMethod } from '../define'
 
+/** `code` of a write declined because config.json cannot be read: nothing was saved. */
+export const CONFIG_UNREADABLE_CODE = 'CONFIG_UNREADABLE'
+
 export const configRpc = {
   getConfig: rawRpcMethod('config:get'),
   setConfig: rawRpcMethod('config:set'),
   getCredentialFailures: rawRpcMethod('config:get-credential-failures'),
+  getConfigReadFailure: rawRpcMethod('config:get-read-failure'),
   validateApi: rawRpcMethod('config:validate-api'),
   fetchModels: rawRpcMethod('config:fetch-models'),
   refreshAISourcesConfig: rawRpcMethod('config:refresh-ai-sources'),

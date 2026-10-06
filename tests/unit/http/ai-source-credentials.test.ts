@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { manager } = vi.hoisted(() => ({ manager: {
+const { manager, writeOutcome } = vi.hoisted(() => ({ manager: {
   switchCurrentSource: vi.fn(), switchCurrentModel: vi.fn(), addSource: vi.fn(),
   updateSource: vi.fn(), deleteSource: vi.fn()
-} }))
+}, writeOutcome: { notSaved: null as Record<string, unknown> | null } }))
 vi.mock('../../../src/main/http/routes/_shared', () => ({
-  getAISourceManager: () => manager, modelCapabilitiesService: {}
+  getAISourceManager: () => manager, modelCapabilitiesService: {},
+  configController: { notSavedWhileConfigUnreadable: () => writeOutcome.notSaved }
 }))
 import { registerAiSourcesRoutes } from '../../../src/main/http/routes/ai-sources.routes'
 
@@ -38,5 +39,26 @@ describe('AI source HTTP credential boundary', () => {
     ] } })
     expect(JSON.stringify(result)).not.toContain('private-')
     expect(config.sources[0].accessToken).toBe('private-access')
+  })
+
+  it.each([
+    ['post', '/api/ai-sources/switch-source'],
+    ['post', '/api/ai-sources/set-model'],
+    ['post', '/api/ai-sources/sources'],
+    ['put', '/api/ai-sources/sources/:sourceId'],
+    ['delete', '/api/ai-sources/sources/:sourceId']
+  ])('reports %s %s as not saved while the config file cannot be read', async (method, path) => {
+    const notSaved = { success: false, code: 'CONFIG_UNREADABLE', error: 'Not saved' }
+    writeOutcome.notSaved = notSaved
+    try {
+      const routes = new Map<string, any>()
+      const app = Object.fromEntries(['get', 'post', 'put', 'delete'].map(verb => [verb, (url: string, handler: any) => routes.set(`${verb} ${url}`, handler)]))
+      registerAiSourcesRoutes(app as any)
+      const res = { json: vi.fn() }
+      await routes.get(`${method} ${path}`)({ body: { sourceId: 'a' }, params: { sourceId: 'a' } }, res)
+      expect(res.json).toHaveBeenCalledWith(notSaved)
+    } finally {
+      writeOutcome.notSaved = null
+    }
   })
 })

@@ -27,6 +27,9 @@ export const MODULE: RouteModuleMeta = {
       notes: 'Path and label only, never ciphertext. Non-empty means the user must re-enter that credential in the Halo app.',
     },
 
+    // Feeds the app's own warning banner.
+    'GET /api/config/read-failure': { expose: 'internal' },
+
     // Not atomic: `saveConfig` shallow-merges the top level and deep-merges
     // only a fixed list of branches, which notificationChannels and imChannels
     // are not on — so sending one of those replaces it wholesale. The renderer
