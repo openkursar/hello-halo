@@ -1131,6 +1131,42 @@ describe('dispatchInboundMessage — /answer', () => {
     expect(sendAppChatMessageMock).not.toHaveBeenCalled()
   })
 
+  it('takes it in a group whose bot name holds ordinary spaces, as /stop is taken there', async () => {
+    instanceCfg = { permissionEnabled: true, owners: ['u1'] }
+
+    await dispatchInboundMessage(makeMsg({ chatType: 'group', chatId: 'g-1', body: '@Halo AI Team /answer 12 B' }), makeReply(false), 'app-1', 'inst-1')
+
+    expect(answerDeps.respond).toHaveBeenCalledWith('app-1', 'q-1', expect.objectContaining({ choice: 'No' }))
+    expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+  })
+
+  it('takes the owner\'s answer in the direct chat of a bot that replies in groups only', async () => {
+    // The question is asked there, and the notice in a group points there.
+    instanceCfg = { replyScope: 'group', permissionEnabled: true, owners: ['u1'] }
+    const reply = makeReply(false)
+
+    await dispatchInboundMessage(makeMsg({ body: '/answer 12 A' }), reply, 'app-1', 'inst-1')
+
+    expect(answerDeps.respond).toHaveBeenCalledWith('app-1', 'q-1', expect.objectContaining({ choice: 'Yes' }))
+    expect(reply.send).toHaveBeenCalledWith('已收到，任务继续。（编号 12 的问题）')
+    expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+  })
+
+  it('still turns away the rest of that direct chat, and an answer in a group of a bot that replies in direct chats only', async () => {
+    instanceCfg = { replyScope: 'group', permissionEnabled: true, owners: ['u1'] }
+    const direct = makeReply(false)
+    await dispatchInboundMessage(makeMsg({ body: 'Ship it?' }), direct, 'app-1', 'inst-1')
+    expect((direct.send as ReturnType<typeof vi.fn>).mock.calls[0][0]).toContain('group chats')
+
+    instanceCfg = { replyScope: 'direct', permissionEnabled: true, owners: ['u1'] }
+    const group = makeReply(false)
+    await dispatchInboundMessage(makeMsg({ chatType: 'group', chatId: 'g-1', body: '@Halo\u2005/answer 12 A' }), group, 'app-1', 'inst-1')
+    expect((group.send as ReturnType<typeof vi.fn>).mock.calls[0][0]).toContain('direct messages')
+
+    expect(answerDeps.respond).not.toHaveBeenCalled()
+    expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+  })
+
   it('leaves a group message that only uses the word later in the sentence to the digital human', async () => {
     instanceCfg = { permissionEnabled: true, owners: ['u1'] }
 

@@ -237,10 +237,13 @@ describe('what counts as an answer command', () => {
     expect(parseAnswerCommand('the answer is 7', 'direct')).toBeNull()
   })
 
-  it('reads a mention typed by hand as ending at its first space', () => {
-    // A real WeCom mention ends with U+2005; without it a name with spaces
-    // cannot be told from the words after it, so nothing is taken as an answer.
-    expect(parseAnswerCommand('@Halo AI 团队 /answer 7 A', 'group')).toBeNull()
+  it('reads a bot name with ordinary spaces the way /stop does, once the answer names its question', () => {
+    // Where such a name ends cannot be told from the text. "/stop" counts when
+    // it ends the message; "/answer" counts when a question number follows it.
+    expect(parseAnswerCommand('@Halo AI Team /answer 3 A', 'group')).toBe('3 A')
+    expect(parseAnswerCommand('@Halo AI 团队 /answer 7\nA\nB', 'group')).toBe('7\nA\nB')
+    // Without a number it may as well be a sentence about answering.
+    expect(parseAnswerCommand('@Halo AI Team /answer A', 'group')).toBeNull()
   })
 })
 
