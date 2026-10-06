@@ -31,8 +31,13 @@ vi.mock('../../../../src/main/apps/runtime/app-chat-sink', () => ({
 }))
 
 import {
+  beginAppChatTurnStart,
+  cancelAppChatTurnStarts,
+  getStartingAppChatConversations,
   injectIntoAppChat,
+  injectIntoAppChatWhenLive,
   isAppChatConversationGenerating,
+  isAppChatTurnDispatched,
 } from '../../../../src/main/apps/runtime/app-chat-live-turn'
 
 const CONVO = 'convo-with-sink'
@@ -184,5 +189,91 @@ describe('injectIntoAppChat', () => {
 
     expect(injectIntoAppChat('convo-no-sink', 'x')).toBe(true)
     expect(send).toHaveBeenCalledWith('x')
+  })
+})
+
+describe('a message on its way to the engine', () => {
+  beforeEach(() => {
+    rounds.clear()
+    consumers.clear()
+    v2Sessions.clear()
+  })
+
+  it('holds the conversation from the moment it is accepted until its round is queued', () => {
+    const start = beginAppChatTurnStart(CONVO)
+    expect(isAppChatConversationGenerating(CONVO)).toBe(true)
+    // The engine does not know about it yet.
+    expect(isAppChatTurnDispatched(CONVO)).toBe(false)
+    expect(getStartingAppChatConversations()).toContain(CONVO)
+
+    rounds.add(CONVO)
+    start.end()
+    expect(isAppChatConversationGenerating(CONVO)).toBe(true)
+    rounds.delete(CONVO)
+    expect(isAppChatConversationGenerating(CONVO)).toBe(false)
+  })
+
+  it('lets go only when the last of two overlapping starts ends, and ending twice changes nothing', () => {
+    const first = beginAppChatTurnStart(CONVO)
+    const second = beginAppChatTurnStart(CONVO)
+    first.end()
+    first.end()
+    expect(isAppChatConversationGenerating(CONVO)).toBe(true)
+    second.end()
+    expect(isAppChatConversationGenerating(CONVO)).toBe(false)
+    expect(getStartingAppChatConversations()).not.toContain(CONVO)
+  })
+
+  it('is told to send nothing when stopped, and keeps holding the conversation until it unwinds', () => {
+    const start = beginAppChatTurnStart(CONVO)
+    expect(cancelAppChatTurnStarts(CONVO)).toBe(true)
+    expect(start.cancelled).toBe(true)
+    // Whatever arrives meanwhile waits behind it instead of starting beside it.
+    expect(isAppChatConversationGenerating(CONVO)).toBe(true)
+    start.end()
+    expect(isAppChatConversationGenerating(CONVO)).toBe(false)
+    expect(cancelAppChatTurnStarts(CONVO)).toBe(false)
+  })
+})
+
+describe('injectIntoAppChatWhenLive — a person adding to a turn that may not have begun', () => {
+  beforeEach(() => {
+    rounds.clear()
+    consumers.clear()
+    v2Sessions.clear()
+    writeTrigger.mockClear()
+  })
+
+  it('waits for a starting turn to begin, then adds to it', async () => {
+    const start = beginAppChatTurnStart(CONVO)
+    const send = vi.fn()
+    const delivered = injectIntoAppChatWhenLive(CONVO, 'also check the totals')
+
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(send).not.toHaveBeenCalled()
+
+    rounds.add(CONVO)
+    start.end()
+    liveTurn(CONVO, send)
+
+    expect(await delivered).toBe(true)
+    expect(send).toHaveBeenCalledWith('also check the totals')
+  })
+
+  it('answers false once nothing is in flight, so the text becomes a turn of its own', async () => {
+    const start = beginAppChatTurnStart(CONVO)
+    const delivered = injectIntoAppChatWhenLive(CONVO, 'also check the totals')
+    start.end()
+
+    expect(await delivered).toBe(false)
+    expect(writeTrigger).not.toHaveBeenCalled()
+  })
+
+  it('adds to a turn that is already running without waiting', async () => {
+    const send = vi.fn()
+    liveTurn(CONVO, send)
+
+    expect(await injectIntoAppChatWhenLive(CONVO, 'one more thing')).toBe(true)
+    expect(send).toHaveBeenCalledWith('one more thing')
   })
 })

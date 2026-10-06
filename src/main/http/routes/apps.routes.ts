@@ -33,7 +33,7 @@ import {
   patchTouchesMcp,
   rejectIfRemoteMcpForbidden,
   restartAppChat,
-  injectIntoAppChat,
+  injectIntoAppChatWhenLive,
   sendAppChatMessage,
   stopAppChat,
   stopAppChatConversation,
@@ -1034,8 +1034,9 @@ export function registerAppsRoutes(app: Express): void {
   })
 
   // POST /api/apps/:appId/chat/inject — the user adds a message to the turn a
-  // digital human is running. Only the user's own chats (default and local
-  // sessions) accept it: an HTTP, IM or team session is not theirs to interject in.
+  // digital human is running, or is about to run (a starting turn is waited for).
+  // Only the user's own chats (default and local sessions) accept it: an HTTP,
+  // IM or team session is not theirs to interject in.
   app.post('/api/apps/:appId/chat/inject', async (req: Request, res: Response) => {
     try {
       const { appId } = req.params
@@ -1054,7 +1055,7 @@ export function registerAppsRoutes(app: Express): void {
         res.status(target.status).json({ success: false, error: target.error })
         return
       }
-      const delivered = injectIntoAppChat(target.conversationId, message.trim(), { source: 'injection' }, references.references)
+      const delivered = await injectIntoAppChatWhenLive(target.conversationId, message.trim(), { source: 'injection' }, references.references)
       console.log('[HTTP] POST /api/apps/%s/chat/inject (conversationId=%s, delivered=%s)', appId, conversationId, delivered)
       res.json({ success: true, data: { delivered } })
     } catch (error) {

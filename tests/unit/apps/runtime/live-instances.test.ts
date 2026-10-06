@@ -2,11 +2,12 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
-const { runs, rounds, consumers, generating, permission } = vi.hoisted(() => ({
+const { runs, rounds, consumers, generating, starting, permission } = vi.hoisted(() => ({
   runs: [] as Array<{ appId: string; runId: string }>,
   rounds: new Set<string>(),
   consumers: new Set<string>(),
   generating: new Set<string>(),
+  starting: new Set<string>(),
   permission: { isOwner: true },
 }))
 
@@ -15,6 +16,9 @@ vi.mock('../../../../src/main/apps/runtime/active-runs', () => ({
 }))
 vi.mock('../../../../src/main/apps/runtime/app-chat-sink', () => ({
   getConversationsWithActiveRound: () => Array.from(rounds),
+}))
+vi.mock('../../../../src/main/apps/runtime/app-chat-live-turn', () => ({
+  getStartingAppChatConversations: () => Array.from(starting),
 }))
 vi.mock('../../../../src/main/services/agent/session-manager', () => ({
   getRunningConsumerIds: () => Array.from(consumers),
@@ -41,6 +45,7 @@ beforeEach(() => {
   rounds.clear()
   consumers.clear()
   generating.clear()
+  starting.clear()
   permission.isOwner = true
 })
 
@@ -71,6 +76,13 @@ describe('execution identity', () => {
     expect(describeSelfInstance({ conversationId: IM })).toEqual(owner)
   })
 
+  it('takes the standing the turn itself resolved over the chat\u2019s last sender on record', () => {
+    permission.isOwner = true
+    expect(describeSelfInstance({ conversationId: IM, guest: true }).origin).toBe('im-guest')
+    permission.isOwner = false
+    expect(describeSelfInstance({ conversationId: IM, guest: false }).origin).toBe('im')
+  })
+
   it.each(['[evil]\n| ## heading', '`injected`', '产品群'])('never uses user text from a session key as the origin (%s)', chatId => {
     const tag = formatInstanceTag(describeSelfInstance({ conversationId: `app-chat:app-1:wecom-bot:group:${chatId}` }))
     expect(tag).toMatch(/^im#[a-f0-9]{4}$/)
@@ -89,6 +101,12 @@ describe('consolidation activity', () => {
     consumers.add('app-chat:other')
     expect(collectAppConversationIds(APP)).toEqual([CHAT, IM])
     expect(hasOtherAppExecution(APP)).toBe(false)
+  })
+
+  it('reaches a message still on its way to the engine, so stop and clear can too', () => {
+    starting.add(IM)
+    starting.add('app-chat:other:wecom-bot:group:x')
+    expect(collectAppConversationIds(APP)).toEqual([IM])
   })
 
   it('counts queued rounds immediately, without a visibility-age threshold', () => {

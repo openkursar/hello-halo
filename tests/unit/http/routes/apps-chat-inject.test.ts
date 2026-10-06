@@ -18,7 +18,7 @@ vi.mock('../../../../src/main/http/routes/_shared', () => ({
   broadcastToAll: vi.fn(),
   getAppRuntime: () => ({}),
   getAppChatConversationId: (appId: string) => `app-chat:${appId}`,
-  injectIntoAppChat: (...args: unknown[]) => injectIntoAppChat(...args),
+  injectIntoAppChatWhenLive: async (...args: unknown[]) => injectIntoAppChat(...args),
   sendAppChatMessage: (...args: unknown[]) => sendAppChatMessage(...args),
 }))
 vi.mock('../../../../src/main/apps/team', () => ({ getTeamStore: () => null }))

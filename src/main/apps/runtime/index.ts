@@ -136,7 +136,7 @@ export {
   renameChatSession,
 } from './app-chat'
 export type { AppChatRequest, NativeSessionResult } from './app-chat'
-export { injectIntoAppChat } from './app-chat-live-turn'
+export { injectIntoAppChatWhenLive } from './app-chat-live-turn'
 export { createDigitalHumanConversationSource } from './conversation-source'
 export { createRunConversationSource } from './run-conversation-source'
 

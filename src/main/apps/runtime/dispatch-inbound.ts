@@ -30,14 +30,14 @@ import {
   buildImSessionKey,
   clearImSession,
   isAppChatConversationGenerating,
+  abortAppChatTurn,
 } from './app-chat'
 import type { ImSessionContext } from './im-channels/im-prompt'
 import { getImSessionRegistry } from './im-session-registry'
 import { getActiveImChannelManager } from './im-channels'
 import { sendToRenderer } from '../../foundation/window.service'
 import { broadcastToAll } from '../../http/websocket'
-import { stopGeneration } from '../../services/agent/control'
-import { setImPermissionContext, clearImPermissionContext } from './im-permission-registry'
+import { setImPermissionContext, clearImPermissionContext, type ImPermissionContext } from './im-permission-registry'
 import { setImStreamHandle } from './im-stream-registry'
 import { analytics } from '../../services/analytics/analytics.service'
 import { AnalyticsEvents } from '../../services/analytics/types'
@@ -413,7 +413,7 @@ function buildMergedMessageText(
 /**
  * Drain the supplement buffer and dispatch a merged round. No-op if empty.
  * Re-checks the busy lock to avoid racing with a newly-arrived message;
- * if busy, defers — the next round's finally will retry.
+ * if busy, defers — the next turn's end will retry.
  */
 export function flushSupplementBuffer(conversationId: string): void {
   const entries = supplementBuffers.get(conversationId)
@@ -505,14 +505,15 @@ export function flushSupplementBuffer(conversationId: string): void {
     `images=${mergedImages.length}`
   )
 
-  setImmediate(() => {
-    dispatchInboundMessage(merged, last.reply, last.appId, last.instanceId, {
-      skipBusyCheck: true,
-      preBuiltMessageText: messageText,
-      preBuiltSenderIdentity: senderIdentity,
-    }).catch((err) => {
-      console.error(`${LOG_TAG} Supplement flush dispatch failed:`, err)
-    })
+  // Dispatched in the same tick as the busy check above, which the merged round
+  // skips: the turn holds the conversation from its first synchronous step, so a
+  // message arriving in between waits behind it instead of starting beside it.
+  dispatchInboundMessage(merged, last.reply, last.appId, last.instanceId, {
+    skipBusyCheck: true,
+    preBuiltMessageText: messageText,
+    preBuiltSenderIdentity: senderIdentity,
+  }).catch((err) => {
+    console.error(`${LOG_TAG} Supplement flush dispatch failed:`, err)
   })
 }
 
@@ -728,7 +729,9 @@ export async function dispatchInboundMessage(
         `session=${conversationId}, droppedSupplements=${dropped.length}`
       )
       try {
-        await stopGeneration(conversationId)
+        // Reaches a message still on its way to the engine as well as a turn
+        // already running: both read as busy above, so both must be stoppable.
+        await abortAppChatTurn(conversationId)
         await reply.send('Generation stopped.')
       } catch (err) {
         console.error(`${LOG_TAG} Failed to stop generation: session=${conversationId}`, err)
@@ -847,8 +850,10 @@ export async function dispatchInboundMessage(
       : body
   }
 
-  // Resolve owner status and write permission context to the registry.
-  // app-chat.ts reads this to enforce tool restrictions for guests.
+  // Resolve the sender's standing. It travels with this message to app-chat,
+  // which holds the turn to it; the registry keeps it as the chat's last sender
+  // for turns that have none of their own (a team-fronted chat woken by a
+  // teammate).
   //
   // Three cases:
   //   permissionEnabled=false            → everyone is owner (no restrictions, personal use default)
@@ -860,13 +865,14 @@ export async function dispatchInboundMessage(
   const owners = permissionEnabled ? instanceCfg?.owners : undefined
   const hasOwnerRestriction = Array.isArray(owners) && owners.length > 0
   const isOwner = !permissionEnabled || (hasOwnerRestriction && owners!.includes(msg.from))
-  setImPermissionContext(conversationId, {
+  const imPermission: ImPermissionContext = {
     senderId: msg.from,
     senderName,
     isOwner,
     guestPolicy: permissionEnabled ? instanceCfg?.guestPolicy : undefined,
     ownerIds: hasOwnerRestriction ? owners! : undefined,
-  })
+  }
+  setImPermissionContext(conversationId, imPermission)
 
   // Register the active round's streaming handle ONLY on the start-of-round
   // path — never on the supplement-buffer branch above (which returns early).
@@ -987,6 +993,7 @@ export async function dispatchInboundMessage(
       imFileSend,
       senderIdentity,
       imSession,
+      imPermission,
       // Team-backed chat: hand the member its team context (tools + Entry + the
       // long-lived conversation epoch). Absent for single-human chats. A guest
       // is someone nobody here vouched for, so their request is stamped as

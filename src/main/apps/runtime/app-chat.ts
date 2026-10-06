@@ -51,7 +51,7 @@ import { getEngineCapabilities } from '../../services/agent/resolved-sdk'
 import { applyReasoningEffort, pickReasoningEffort } from '../../services/agent/reasoning-effort'
 import type { ReasoningEffortLevel } from '../../../shared/constants/reasoning-effort'
 import { createCanUseTool } from '../../services/agent/permission-handler'
-import { getImPermissionContext } from './im-permission-registry'
+import { getImPermissionContext, type ImPermissionContext } from './im-permission-registry'
 import { createAIBrowserMcpServer } from '../../services/ai-browser'
 import { createTerminalMcpServer, getGlobalTerminalContext, isTerminalAvailable } from '../../services/ai-terminal'
 import { acquireChatBrowserContext, endChatBrowserTurn, destroyChatBrowserContext } from './app-chat-browser'
@@ -72,12 +72,17 @@ import { stopGeneration, getSessionState } from '../../services/agent/control'
 import {
   getAppChatSink,
   peekAppChatSink,
-  hasActiveAppChatRound,
   getConversationsWithActiveRound,
   disposeAppChatSink,
   type AppChatRoundHandle,
 } from './app-chat-sink'
-import { isAppChatConversationGenerating } from './app-chat-live-turn'
+import {
+  beginAppChatTurnStart,
+  cancelAppChatTurnStarts,
+  isAppChatConversationGenerating,
+  isAppChatTurnDispatched,
+  type AppChatTurnStart,
+} from './app-chat-live-turn'
 // Re-exported, not defined here: the team runtime needs the same answer
 // synchronously and cannot import this module (app-chat imports the team
 // runtime accessor, so the edge back would close a cycle).
@@ -253,6 +258,14 @@ export interface AppChatRequest {
    * Absent for native Halo chat UI.
    */
   imSession?: ImSessionContext
+  /**
+   * The IM sender's standing for this message, resolved by whoever received it
+   * and carried with it — never looked up later, when a message that arrived in
+   * between may have replaced the chat's last sender. Absent for a turn with no
+   * sender of its own (a team-fronted chat woken by a teammate), which takes the
+   * chat's last sender as the turn begins.
+   */
+  imPermission?: ImPermissionContext
   /** Callers MUST set conversationId = buildTeamSessionKey(appId, teamId). */
   teamContext?: TeamTriggerContext
   /**
@@ -418,11 +431,18 @@ function registerExternalChatSession(
 interface ChatTurnContext {
   browserHeld: boolean
   failureHandled: boolean
+  /** This message's hold on the conversation until its round is queued. */
+  start: AppChatTurnStart
 }
 
 export async function sendAppChatMessage(request: AppChatRequest): Promise<void> {
   const conversationId = request.conversationId ?? getAppChatConversationId(request.appId)
-  const turnContext: ChatTurnContext = { browserHeld: false, failureHandled: false }
+  // Taken before the first await: from here the conversation reads busy.
+  const turnContext: ChatTurnContext = {
+    browserHeld: false,
+    failureHandled: false,
+    start: beginAppChatTurnStart(conversationId),
+  }
   try {
     await runAppChatTurn(request, turnContext)
   } catch (error: unknown) {
@@ -438,6 +458,20 @@ export async function sendAppChatMessage(request: AppChatRequest): Promise<void>
       emitAgentEvent('agent:error', request.spaceId, conversationId, { type: 'error', error: message })
     }
     throw error
+  } finally {
+    turnContext.start.end()
+    // IM messages that arrived while this turn held the conversation go next,
+    // however it ended — answered, failed, or stopped before it reached the
+    // engine. Deferred so the conversation reads idle by then.
+    if (conversationId !== getAppChatConversationId(request.appId)) {
+      setImmediate(() => {
+        try {
+          flushSupplementBuffer(conversationId)
+        } catch (err) {
+          console.error(`[AppChat][${request.appId}] flushSupplementBuffer failed:`, err)
+        }
+      })
+    }
   }
 }
 
@@ -464,6 +498,27 @@ async function runAppChatTurn(
   const imStreamHandle = getImStreamHandle(conversationId)
 
   console.log(`[AppChat][${appId}] sendMessage: "${message.substring(0, 100)}"`)
+
+  // Who this turn answers to — fixed here, before the first await, and never
+  // read again. A message from an IM chat carries its sender with it. A turn with
+  // no sender of its own (a team-fronted chat woken by a teammate) takes the
+  // chat's last one, while this turn's hold on the conversation keeps any newer
+  // message from replacing it. A team session also serves its owner's own Halo
+  // window, whose turns carry no IM framing and are never the chat's sender.
+  const permCtx = request.imPermission
+    ?? (!teamContext || imSession ? getImPermissionContext(conversationId) : undefined)
+
+  // The person's own message in a team-fronted chat is decided by the channel's
+  // rules alone, so what dispatch-inbound hands over must agree with itself: a
+  // sender it stamped as coming from outside is never one this turn reads as an
+  // owner. Refused rather than run with the reach of whichever reading is wrong.
+  if (imSession && teamContext?.kind === 'human_message' && teamContext.external && permCtx?.isOwner !== false) {
+    console.error(
+      `[AppChat][${appId}] Refused a turn whose sender reads both as outside and as an owner: ` +
+      `conversation=${conversationId}, sender=${permCtx?.senderId ?? 'none on record'}`
+    )
+    throw new Error('This message could not be matched to its sender’s permissions, so it was not run.')
+  }
 
   // ── 1. Resolve app + credentials ─────────────────────
   const manager = getAppManager()
@@ -547,7 +602,7 @@ async function runAppChatTurn(
   const memoryActive = !disposableMember && memorySettings.enabled
 
   // ── 3. Build system prompt for interactive chat ──────
-  const selfInstance = describeSelfInstance({ conversationId })
+  const selfInstance = describeSelfInstance({ conversationId, guest: permCtx?.isOwner === false })
   const memoryInstructions = !memoryActive
     ? ''
     : memory.getPromptInstructions('session', {
@@ -572,11 +627,8 @@ async function runAppChatTurn(
   // ── Merge config_schema defaults into userConfig ────
   const mergedConfig = mergeConfigWithDefaults(app.userConfig, app.spec.config_schema)
 
-  // Read IM permission context early — needed for both system prompt (ownerIds)
-  // and SDK options (guest tool restrictions). null for native Halo chat.
-  // A team session also serves its owner's own Halo window, whose turns carry
-  // no IM framing and must never be read as the chat's last sender.
-  const permCtx = !teamContext || imSession ? getImPermissionContext(conversationId) : undefined
+  // permCtx (fixed at the top) shapes both the system prompt (ownerIds) and the
+  // SDK options (guest tool restrictions); undefined for native Halo chat.
   const personCaller: PersonContextCaller = {
     appId,
     capabilityMode: 'chat',
@@ -1002,6 +1054,7 @@ async function runAppChatTurn(
   // reported: the block runs for every exit, but only the catch knows which one.
   let turnFailure: string | null = null
   let finalReply: string | undefined
+  let stoppedOnTheWay = false
   let dispatchAttempted = false
   let dispatchAccepted = false
   let userMessageRecorded = false
@@ -1142,13 +1195,25 @@ async function runAppChatTurn(
 
     if (!sessionLease.isCurrent) throw new Error('The acquired session is no longer available')
 
+    // Stopped while still on its way: the last moment it can be held back. It
+    // sends nothing, so nothing is owed — a stop means send nothing.
+    if (turnContext.start.cancelled) {
+      stoppedOnTheWay = true
+      console.log(`[AppChat][${appId}] Stopped before reaching the engine: ${conversationId}`)
+      imStreamHandle?.dispose?.()
+      emitAgentEvent('agent:complete', spaceId, conversationId, { type: 'complete', duration: 0 })
+      return
+    }
+
     // Claim the next turn for this message. Enqueued immediately before send so
     // the window in which an autonomous turn could start first — and therefore
-    // claim this round — is as narrow as the SDK allows.
+    // claim this round — is as narrow as the SDK allows. From here the queued
+    // round, not the start, is what holds the conversation.
     round = sink.beginRound({
       onProgress, onMessageAccepted,
       onReply: content => { finalReply = content; onReply?.(content) },
     })
+    turnContext.start.end()
 
     dispatchAttempted = true
     try {
@@ -1236,7 +1301,7 @@ async function runAppChatTurn(
             ? consumeIntentionalStop(conversationId)
               ? { kind: 'stopped' }
               : { kind: 'error', message: turnFailure }
-            : { kind: 'ended' },
+            : stoppedOnTheWay ? { kind: 'stopped' } : { kind: 'ended' },
           ...(teamContext?.correlationId ? { correlationId: teamContext.correlationId } : {}),
           triggerKind: teamContext?.kind ?? 'human_message',
           ...(externalOrigin ? { external: true } : {}),
@@ -1275,17 +1340,6 @@ async function runAppChatTurn(
         isBusy: () => hasOtherAppExecution(appId),
       }, chatRunId)
     }
-
-    // Flush buffered IM supplements (deferred so busy lock is released first)
-    if (conversationId !== defaultConvId) {
-      setImmediate(() => {
-        try {
-          flushSupplementBuffer(conversationId)
-        } catch (err) {
-          console.error(`[AppChat][${appId}] flushSupplementBuffer failed:`, err)
-        }
-      })
-    }
   }
 }
 
@@ -1308,8 +1362,6 @@ async function runAppChatTurn(
  * @returns whether a generation was actually running
  */
 async function stopConversation(conversationId: string): Promise<boolean> {
-  const wasActive = isAppChatConversationGenerating(conversationId)
-
   clearSupplementBuffer(conversationId)
 
   const streamHandle = getImStreamHandle(conversationId)
@@ -1322,8 +1374,22 @@ async function stopConversation(conversationId: string): Promise<boolean> {
   }
   clearImStreamHandle(conversationId)
 
-  if (wasActive) await stopGeneration(conversationId)
-  return wasActive
+  return abortAppChatTurn(conversationId)
+}
+
+/**
+ * Stop whatever turn this conversation has in flight, wherever it is: a message
+ * still on its way is held back before it reaches the engine, and a turn the
+ * engine already has is stopped there. Nothing else — callers decide what
+ * happens to buffered messages and open streams.
+ *
+ * @returns whether anything was in flight
+ */
+export async function abortAppChatTurn(conversationId: string): Promise<boolean> {
+  const starting = cancelAppChatTurnStarts(conversationId)
+  const dispatched = isAppChatTurnDispatched(conversationId)
+  if (dispatched) await stopGeneration(conversationId)
+  return starting || dispatched
 }
 
 /**
@@ -1507,9 +1573,9 @@ export function getAppChatSessionState(appId: string, conversationId?: string): 
   const convId = conversationId ?? getAppChatConversationId(appId)
   const state = getSessionState(convId)
   return {
-    // A queued round has no turn state yet, but the client is already waiting
-    // on it and must not be told the session went idle.
-    isActive: state.isActive || hasActiveAppChatRound(convId),
+    // A message still starting or a queued round has no turn state yet, but the
+    // client is already waiting on it and must not be told the session went idle.
+    isActive: state.isActive || isAppChatConversationGenerating(convId),
     thoughts: state.thoughts,
     spaceId: state.spaceId,
   }
@@ -1540,7 +1606,7 @@ async function clearSessionByConversationId(
   // 1. Abort active generation (if any) before closing
   if (isAppChatConversationGenerating(conversationId)) {
     console.log(`[AppChat][${appId}] Session is generating, aborting first...`)
-    await stopGeneration(conversationId)
+    await abortAppChatTurn(conversationId)
   }
 
   // Drop the IM stream handle so subsequent stop() calls are idempotent;
@@ -1668,7 +1734,7 @@ export function renameChatSession(appId: string, channel: string, chatId: string
  *     changed, so the very next message rebuilds it with the new wiring. Only
  *     idle sessions are torn down eagerly.
  *   - true (manual "Restart agent" only): a mid-generation session is aborted
- *     via `stopGeneration()` first — the UI banner warns that work in progress
+ *     via `abortAppChatTurn()` first — the UI banner warns that work in progress
  *     is stopped.
  *
  * Idempotent: returns `sessionsClosed: 0` when nothing is active.
@@ -1707,7 +1773,7 @@ export async function restartAppChat(
 
       // 1. Abort any in-flight generation before closing the underlying session.
       if (isActive) {
-        await stopGeneration(convId)
+        await abortAppChatTurn(convId)
       }
 
       // 2. Close the V2 session — next message will create a fresh CC process
@@ -1800,7 +1866,7 @@ export async function closeTeamSession(
 
   // Abort any in-flight generation before tearing down the underlying session.
   if (isAppChatConversationGenerating(conversationId)) {
-    try { await stopGeneration(conversationId) } catch { /* best-effort */ }
+    try { await abortAppChatTurn(conversationId) } catch { /* best-effort */ }
   }
   // Close the V2 process; the saved sessionId on disk allows SDK resume later.
   closeV2Session(conversationId)

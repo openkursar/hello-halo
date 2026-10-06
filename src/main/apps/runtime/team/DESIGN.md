@@ -998,8 +998,13 @@ machine, so nothing here could run it — the picker offers only `localMembers`
 **Owners and guests are the channel's, exactly as for a digital human.** Who is
 an owner is answered per message by `dispatch-inbound` from the channel's
 permission control — the same three cases, the same owner auto-claim and
-no-owner gate — and written to the IM permission context under the member's
-team session key. From there it is the one guest path, not a second one:
+no-owner gate. The answer travels with the message to `app-chat`
+(`AppChatRequest.imPermission`) and is also kept as the chat's last sender under
+the member's team session key, for the woken turns below. Because the person's
+own message is decided by the channel's rules alone, its two halves must agree:
+a message stamped as coming from outside whose standing reads as an owner (or is
+missing) is refused, with a log, rather than run under whichever half is wrong.
+From there it is the one guest path, not a second one:
 `app-chat` holds a guest to the channel's guest policy through
 `applyCapabilityPolicy`, the per-call gate and the turn's file boundary, and the
 prompt carries the same IM security rules. The team's own coordination servers
@@ -1022,7 +1027,9 @@ its origin.
   front desk — and the thread stays external across wakes (`external-origin.ts`)
   until an owner's own message ends it.
 - **A turn woken in the chat keeps the standing of whoever started the work.**
-  While the permission context still names a guest it runs under that guest's
+  It has no sender of its own, so it reads the chat's last sender — once, as it
+  begins, while its hold on the session keeps any newer message from replacing
+  it. While that names a guest it runs under that guest's
   policy — the same tool set as the guest's own turn, so the session is not
   rebuilt between them. Otherwise what the wake itself carries decides. Every
   wake that continues outside work carries its origin: a teammate's
@@ -1036,7 +1043,7 @@ its origin.
   the work in motion. A turn woken by work started here is unchanged. So is the
   person's own message, which only the channel's rules decide.
 - **The session is shared with the owner's own Halo window.** Only turns framed
-  for the chat (`imSession`) read the IM permission context; the owner typing
+  for the chat (`imSession`) answer to a chat sender; the owner typing
   into the same session from Halo is never taken for the chat's last guest, and,
   being the owner at their own keyboard, ends the external thread.
 
