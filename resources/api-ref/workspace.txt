@@ -222,7 +222,7 @@ PUT    /api/spaces/$HALO_SPACE_ID/working-dir                      Point a space
           -d '{"workingDir":"/absolute/path/to/existing/folder"}'
      # body: {"workingDir":"/absolute/path/to/existing/folder"}
      # out: {"success":true,"data":{...updated space}} | {"success":false,"error":"That folder does not exist."}
-     # note: The folder must already exist; nothing is moved, created or deleted. Conversations keep their history, and running ones switch after their current turn. The default space cannot be changed.
+     # note: Confirm with the user first, saying which space’s folder you are changing: its digital humans work in the new folder too, and the files they may send come from there. The folder must already exist, given by its full path, outside Halo’s and the engine’s own data folders; nothing is moved, created or deleted. Conversations keep their history. Refused while a reply, run or background task is going in the space, or while another change of it is under way. The default space cannot be changed.
 
 GET    /api/spaces/default-path                                    Read the directory new spaces are created under
      curl -s "$HALO_API_URL/api/spaces/default-path" -H "Authorization: Bearer $HALO_API_TOKEN"

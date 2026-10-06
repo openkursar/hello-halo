@@ -154,6 +154,7 @@ import { analytics } from '../../../../src/main/services/analytics/analytics.ser
 import { setImPermissionContext, clearImPermissionContext } from '../../../../src/main/apps/runtime/im-permission-registry'
 import { maybeClaimOwner } from '../../../../src/main/apps/runtime/im-channels/owner-claim'
 import { AppChatTurnInterrupted, type AppChatTurnEnding } from '../../../../src/main/apps/runtime/turn-ending'
+import { WorkingDirectoryUnavailableError } from '../../../../src/main/services/agent/working-dir'
 import type { InboundMessage, ReplyHandle } from '../../../../src/shared/types/inbound-message'
 
 const trackMock = analytics.track as ReturnType<typeof vi.fn>
@@ -490,6 +491,17 @@ describe('dispatchInboundMessage — a turn that stopped short', () => {
     await dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
 
     expect(reply.send).toHaveBeenLastCalledWith('⚠️ Error: API Error: 529 overloaded')
+  })
+
+  it('says a missing working folder needs the owner, without the owner’s local path', async () => {
+    sendAppChatMessageMock.mockRejectedValueOnce(new WorkingDirectoryUnavailableError('/Users/owner/Private Projects/halo', 'space-1'))
+    const reply = makeReply(false)
+
+    await dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
+
+    expect(reply.send).toHaveBeenLastCalledWith('⚠️ 这个数字人的工作目录暂时不可用，请主人在 Halo 里处理。')
+    const sent = (reply.send as ReturnType<typeof vi.fn>).mock.calls.map(([text]) => String(text)).join('\n')
+    expect(sent).not.toContain('/Users/owner')
   })
 })
 

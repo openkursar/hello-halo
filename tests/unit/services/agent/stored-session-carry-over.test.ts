@@ -6,11 +6,26 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
 vi.mock('../../../../src/main/foundation/config.service', () => ({ resolveClaudeConfigDir: () => '/nonexistent-config' }))
+
+/** When set, the next file copy writes part of the file and then fails, as on a full disk. */
+const diskFull = vi.hoisted(() => ({ next: false }))
+vi.mock('fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('fs/promises')>()
+  return {
+    ...actual,
+    copyFile: async (from: string, to: string) => {
+      if (!diskFull.next) return actual.copyFile(from, to)
+      diskFull.next = false
+      await actual.writeFile(to, '{"tu')
+      throw new Error('ENOSPC: no space left on device')
+    },
+  }
+})
 
 import { copyStoredSessions, projectDirName } from '../../../../src/main/services/agent/stored-session'
 
@@ -98,6 +113,24 @@ describe('copyStoredSessions', () => {
     await copyStoredSessions(oldDir, link, configDir)
 
     expect(existsSync(join(projectsOf(real), 'session-1.jsonl'))).toBe(true)
+  })
+
+  it('leaves the session it would replace whole when a copy fails partway, so the next attempt still replaces it', async () => {
+    const a = join(root, 'a')
+    const b = join(root, 'b')
+    mkdirSync(a)
+    mkdirSync(b)
+    const inA = storedSession(a, 'session-1', '{"turn":1}\n')
+    storedSession(b, 'session-1', '{"turn":1}\n{"turn":2}\n')
+    utimesSync(inA, new Date(1_000_000), new Date(1_000_000))
+
+    diskFull.next = true
+    await expect(copyStoredSessions(b, a, configDir)).rejects.toThrow('ENOSPC')
+    expect(readFileSync(inA, 'utf8')).toBe('{"turn":1}\n')
+    expect(readdirSync(projectsOf(a)).sort()).toEqual(['session-1', 'session-1.jsonl'])
+
+    expect(await copyStoredSessions(b, a, configDir)).toBe(1)
+    expect(readFileSync(inA, 'utf8')).toBe('{"turn":1}\n{"turn":2}\n')
   })
 
   it('copies nothing when the old folder has no stored sessions', async () => {

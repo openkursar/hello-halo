@@ -528,7 +528,8 @@ export async function destroySpaceCache(spaceId: string): Promise<void> {
  * The space's folder changed. The cache keeps its client holds but forgets the
  * old folder's tree, so the next listing reads the new one; the watcher itself
  * is moved by the watcher host (`rerootSpaceWatcher`). A disk root is never
- * watched, as when a cache starts there.
+ * watched, as when a cache starts there. A scan of the old folder still under
+ * way is let finish but not kept, and a refresh does not join it.
  */
 export function rerootSpaceCache(spaceId: string, rootPath: string): void {
   const cache = cacheMap.get(spaceId)
@@ -538,6 +539,7 @@ export function rerootSpaceCache(spaceId: string, rootPath: string): void {
   cache.loadedDirs.clear()
   pendingBroadcasts.delete(spaceId)
   lastReconcileTime.delete(spaceId)
+  reconcileInFlight.delete(spaceId)
   if (cache.watcherInitialized && isDiskRoot(rootPath)) {
     cache.watcherInitialized = false
     releaseSpaceWatcher(spaceId, WATCHER_HOLDER)
@@ -568,7 +570,10 @@ export async function listArtifactsTree(
 
   // Cache miss: scan via worker
   console.debug(`[ArtifactCache] listArtifactsTree CACHE MISS, scanning: ${rootPath}`)
+  const scannedRoot = cache.rootPath
   const nodes = await scanTreeViaWorker(spaceId, rootPath, rootPath, 0)
+  // The space moved to another folder during the scan; this listing is the old one's.
+  if (cache.rootPath !== scannedRoot) return nodes
 
   // Store in cache
   cache.treeNodes.set(rootPath, nodes)
@@ -603,8 +608,10 @@ export async function loadDirectoryChildren(
 
   // Cache miss: scan via worker
   console.debug(`[ArtifactCache] loadDirectoryChildren CACHE MISS, scanning: ${dirPath} (depth=${depth + 1}, rootPath=${rootPath})`)
+  const scannedRoot = cache.rootPath
   const children = await scanTreeViaWorker(spaceId, dirPath, rootPath, depth + 1)
   console.debug(`[ArtifactCache] loadDirectoryChildren scan result: ${children.length} nodes for ${dirPath}`)
+  if (cache.rootPath !== scannedRoot) return children
 
   // Race condition guard: watcher may have populated the cache during the await.
   // Prefer watcher's version since it's more up-to-date.
@@ -709,6 +716,7 @@ export async function reconcileLoadedDirs(spaceId: string, reason = 'manual'): P
 
 async function runReconcile(spaceId: string, cache: SpaceCache, reason: string): Promise<void> {
   const dirsToCheck = Array.from(cache.loadedDirs)
+  const rootPath = cache.rootPath
   let changedDirCount = 0
   const updatedDirs: Array<{ dirPath: string; children: CachedTreeNode[] }> = []
 
@@ -717,12 +725,16 @@ async function runReconcile(spaceId: string, cache: SpaceCache, reason: string):
   // Scan all loaded directories in parallel via worker (off main thread)
   const scanResults = await Promise.allSettled(
     dirsToCheck.map(async (dirPath) => {
-      const relPath = dirPath === cache.rootPath ? '' : relative(cache.rootPath, dirPath)
+      const relPath = dirPath === rootPath ? '' : relative(rootPath, dirPath)
       const depth = relPath ? relPath.split(/[\\/]/).length : 0
-      const freshNodes = await scanTreeViaWorker(spaceId, dirPath, cache.rootPath, depth + 1)
+      const freshNodes = await scanTreeViaWorker(spaceId, dirPath, rootPath, depth + 1)
       return { dirPath, freshNodes }
     })
   )
+  if (cache.rootPath !== rootPath) {
+    console.log(`[ArtifactCache] Reconcile dropped: space ${spaceId} moved to another folder during the scan`)
+    return
+  }
 
   for (let i = 0; i < scanResults.length; i++) {
     const result = scanResults[i]

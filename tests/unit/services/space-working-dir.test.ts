@@ -1,7 +1,9 @@
 /**
  * A space's working directory can be pointed at another existing folder: the
  * record and meta.json change and survive a reload, the space's own data stays
- * put, and Halo never creates a folder or touches the default space.
+ * put, and Halo never creates a folder or touches the default space. A write
+ * that fails changes nothing, and the folders Halo and the engine keep their
+ * own data in are refused.
  */
 
 import { beforeEach, describe, expect, it } from 'vitest'
@@ -15,10 +17,11 @@ import {
   getSpaceDir,
   setSpaceWorkingDir,
   workingDirProblem,
+  workingDirChangeProblem,
   _resetSpaceRegistry,
   _resetActivityState,
 } from '../../../src/main/services/space.service'
-import { initializeApp, getHaloDir } from '../../../src/main/foundation/config.service'
+import { initializeApp, getHaloDir, getSpacesDir, resolveClaudeConfigDir } from '../../../src/main/foundation/config.service'
 
 function folder(name: string): string {
   const dir = path.join(getHaloDir(), '..', `workdir-${name}`)
@@ -82,5 +85,44 @@ describe('setSpaceWorkingDir', () => {
     expect(setSpaceWorkingDir(halo.id, folder('elsewhere'))).toBeNull()
     expect(setSpaceWorkingDir('no-such-space', folder('elsewhere'))).toBeNull()
     expect(getSpaceDir(halo.id)).not.toBe(folder('elsewhere'))
+  })
+
+  it('changes nothing when meta.json cannot be written', () => {
+    const before = folder('before')
+    const space = createSpace({ name: 'Project', icon: 'folder', customPath: before })
+    const metaPath = path.join(space.path, '.halo', 'meta.json')
+    const metaBefore = fs.readFileSync(metaPath, 'utf8')
+    // A folder where the new meta.json is staged makes the write fail.
+    fs.mkdirSync(`${metaPath}.tmp`)
+
+    expect(() => setSpaceWorkingDir(space.id, folder('after'))).toThrow()
+
+    expect(getSpaceDir(space.id)).toBe(before)
+    expect(fs.readFileSync(metaPath, 'utf8')).toBe(metaBefore)
+    _resetSpaceRegistry()
+    expect(getSpaceDir(space.id)).toBe(before)
+  })
+
+  it('refuses a space whose own data went with its folder, saying why', () => {
+    const before = folder('before')
+    const space = createSpace({ name: 'Project', icon: 'folder', customPath: before })
+    fs.rmSync(path.join(space.path, '.halo'), { recursive: true })
+
+    expect(workingDirChangeProblem(space.id, folder('after'))).toMatch(/no longer there/)
+    expect(() => setSpaceWorkingDir(space.id, folder('after'))).toThrow(/no longer there/)
+    expect(getSpaceDir(space.id)).toBe(before)
+  })
+
+  it('refuses folders where Halo and the engine keep their data, but takes the space’s own data folder', () => {
+    const space = createSpace({ name: 'Project', icon: 'folder', customPath: folder('before') })
+    const engineFolder = path.join(resolveClaudeConfigDir(), 'projects')
+    fs.mkdirSync(engineFolder, { recursive: true })
+
+    expect(workingDirProblem(getHaloDir())).toBe('That folder holds Halo’s own data. Choose a project folder.')
+    expect(() => setSpaceWorkingDir(space.id, getSpacesDir())).toThrow('That folder holds Halo’s own data.')
+    expect(() => setSpaceWorkingDir(space.id, engineFolder)).toThrow('That folder holds Halo’s own data.')
+
+    setSpaceWorkingDir(space.id, space.path)
+    expect(getSpaceDir(space.id)).toBe(space.path)
   })
 })

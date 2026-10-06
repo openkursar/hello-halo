@@ -44,6 +44,7 @@ import { applyGoalDraft } from './goal/draft'
 import { HALO_API_TOOLSET_ID } from '../api-ref'
 import { resolveConversationKnowledgeBases, resolveConversationKnowledgeBaseIds } from './knowledge-context'
 import { appendToSystemPrompt, buildKnowledgeSection } from './system-prompt'
+import { assertWorkingDirCurrent } from './working-dir'
 import type { KBReference } from '../../../shared/types/tlon'
 
 /**
@@ -943,6 +944,8 @@ async function getOrCreateSessionResult(
   gates?: SessionGates,
   leaseRequest?: SessionLeaseRequest
 ): Promise<V2SessionInfo['session']> {
+  assertWorkingDirCurrent(spaceId, workDir ?? sdkOptions.cwd)
+
   // Concurrent calls for the same conversation (a fire-and-forget
   // ensureSessionWarm racing the first sendMessage) must not both reach
   // createSession: the loser's v2Sessions.set/registerProcess would overwrite
@@ -1000,6 +1003,7 @@ async function getOrCreateSessionResult(
     return session
   })
   const record: InFlightSessionCreation = {
+    spaceId,
     promise,
     leaseRequests,
     // Same opt-out as the fingerprint stored on the session: a lazy-MCP caller
@@ -1020,6 +1024,7 @@ async function getOrCreateSessionResult(
 }
 
 interface InFlightSessionCreation {
+  spaceId: string
   promise: Promise<V2SessionInfo['session']>
   leaseRequests: Set<SessionLeaseRequest>
   session?: V2SDKSession
@@ -1645,16 +1650,18 @@ export function invalidateAllSessions(): void {
 }
 
 /**
- * Invalidate sessions belonging to a specific space.
- * Called when an MCP is installed/uninstalled/paused/resumed in a space.
+ * Invalidate sessions belonging to a specific space: an MCP installed,
+ * uninstalled, paused or resumed in it, or its working directory changed.
  *
  * Global MCP changes (spaceId=null) affect all spaces → use invalidateAllSessions() instead.
  * Space-scoped MCP changes only affect that space's sessions.
  *
  * Active (in-flight) sessions are deferred via pendingInvalidations,
  * consistent with invalidateAllSessions() behavior.
+ *
+ * @param reason - What changed, for the log
  */
-export function invalidateSessionsForSpace(spaceId: string): void {
+export function invalidateSessionsForSpace(spaceId: string, reason = 'MCP change'): void {
   let count = 0
   for (const [convId, info] of Array.from(v2Sessions.entries())) {
     if (info.spaceId !== spaceId) continue
@@ -1662,7 +1669,7 @@ export function invalidateSessionsForSpace(spaceId: string): void {
     // Legacy path (app-chat/execute): defer closing until unregisterActiveSession
     if (activeSessions.has(convId)) {
       pendingInvalidations.add(convId)
-      console.log(`[Agent][${convId}] MCP changed, deferring session close until legacy turn idle`)
+      console.log(`[Agent][${convId}] ${reason}: deferring session close until legacy turn idle`)
       count++
       continue
     }
@@ -1677,18 +1684,40 @@ export function invalidateSessionsForSpace(spaceId: string): void {
     const consumer = consumers.get(convId)
     if (consumer && consumer.isRunning) {
       pendingConsumerRebuilds.add(convId)
-      console.log(`[Agent][${convId}] MCP changed, marking consumer session for rebuild`)
+      console.log(`[Agent][${convId}] ${reason}: marking consumer session for rebuild`)
       count++
       continue
     }
 
-    cleanupSession(convId, 'MCP config change')
+    cleanupSession(convId, reason)
     count++
   }
 
   if (count > 0) {
-    console.log(`[Agent] Invalidated ${count} session(s) in space ${spaceId} due to MCP change`)
+    console.log(`[Agent] Invalidated ${count} session(s) in space ${spaceId} due to ${reason}`)
   }
+}
+
+/**
+ * Whether anything in the space is running or about to: a turn being created,
+ * prepared, dispatched or answered, or background work whose results come back
+ * as later turns. Synchronous, so a caller can act on a "no" before anything
+ * else starts.
+ */
+export function isSpaceBusy(spaceId: string): boolean {
+  for (const state of activeSessions.values()) {
+    if (state.spaceId === spaceId) return true
+  }
+  for (const creation of inFlightSessionCreations.values()) {
+    if (creation.spaceId === spaceId) return true
+  }
+  for (const [conversationId, info] of v2Sessions) {
+    if (info.spaceId !== spaceId) continue
+    if (isSessionBusy(conversationId) || turnsAwaitingInit.has(conversationId)) return true
+    const consumer = consumers.get(conversationId)
+    if (consumer?.isRunning && consumer.hasRunningTasks()) return true
+  }
+  return false
 }
 
 /**

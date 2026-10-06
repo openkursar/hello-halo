@@ -1247,9 +1247,16 @@ then the record, the pins, resident sessions and the file panel) is
 A pinned folder that is gone fails `validateExecutionEnvironment` with
 `WorkingDirectoryUnavailableError` (folder + space), which a chat reports as
 `errorType: 'working_dir_unavailable'` so the person can change the folder
-there; missing history or memory keeps its plain error. A turn running in the
-old folder while it changes finishes there; what it writes after the session
-copy is not carried over.
+there; an IM chat is told only that the folder needs its owner in Halo, never
+the path. Missing history or memory keeps its plain error.
+
+Nothing may write to the old folder after its sessions are copied, or the
+next resume in the new folder would miss it. So the change is refused while
+anything in the space is running — a chat turn, a run, background work
+(services/agent `isSpaceBusy`) — and checked again after the copy, with no
+await between that check and the last step. A turn that had already read the
+old folder but not yet started its session is refused when it does
+(`WorkingDirectoryChangedError`, "send it again") instead of running there.
 
 ---
 

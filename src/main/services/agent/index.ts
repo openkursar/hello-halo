@@ -94,15 +94,17 @@ export {
   closeAllV2Sessions,
   invalidateAllSessions
 } from './session-manager'
-// A space's sessions rebuild after their current turn, e.g. once its working directory moved
-export { invalidateSessionsForSpace } from './session-manager'
+// A space's sessions rebuild after their current turn, e.g. once its working directory moved;
+// whether anything in a space is running or about to
+export { invalidateSessionsForSpace, isSpaceBusy } from './session-manager'
 
 // Delete a stored session that will never be resumed (CC-protocol engines);
 // copy a working directory's stored sessions to the one a space moved to
 export { deleteStoredSession, copyStoredSessions } from './stored-session'
 
-// A session's working directory is missing; the chat offers to choose another
-export { WorkingDirectoryUnavailableError, workingDirErrorDetail } from './working-dir'
+// A session's working directory is missing; the chat offers to choose another.
+// Once a space moves, no session starts in the folders it left.
+export { WorkingDirectoryUnavailableError, workingDirErrorDetail, retireWorkingDirs } from './working-dir'
 
 // Conversation goal (engines with features.goal)
 export { getConversationGoal, setConversationGoal } from './goal'

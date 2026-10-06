@@ -1,7 +1,8 @@
 /**
  * A space pointed at another folder: its file-tree cache keeps the clients
  * that hold it but forgets the old folder's tree, so the next listing reads
- * the new folder; a disk root is still never watched.
+ * the new folder; a disk root is still never watched, and a scan of the old
+ * folder still under way puts nothing back.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -26,6 +27,7 @@ import {
   destroySpaceCache,
   getCacheStats,
   listArtifactsTree,
+  reconcileLoadedDirs,
   rerootSpaceCache,
   retainSpaceCache,
 } from '../../../src/main/services/artifact-cache.service'
@@ -78,5 +80,41 @@ describe('rerootSpaceCache', () => {
   it('does nothing for a space with no cache', () => {
     rerootSpaceCache('nobody-shows-it', '/new')
     expect(getCacheStats('nobody-shows-it')).toBeNull()
+  })
+
+  it('keeps nothing of a listing of the old folder that finishes after the move', async () => {
+    await retainSpaceCache(SPACE, '/old', 'window-1')
+    let finishScan!: (nodes: unknown[]) => void
+    scanTreeViaWorker.mockImplementationOnce(() => new Promise(resolve => { finishScan = resolve }))
+    const oldListing = listArtifactsTree(SPACE, '/old')
+    await vi.waitFor(() => expect(scanTreeViaWorker).toHaveBeenCalled())
+
+    rerootSpaceCache(SPACE, '/new')
+    finishScan([{ path: '/old/a.txt', name: 'a.txt', type: 'file', size: 1 }])
+    await oldListing
+
+    expect(getCacheStats(SPACE)).toMatchObject({ treeNodes: 0, loadedDirs: 0 })
+  })
+
+  it('refreshes the new folder after the move instead of joining a check of the old one, which then changes nothing', async () => {
+    await retainSpaceCache(SPACE, '/old', 'window-1')
+    await listArtifactsTree(SPACE, '/old')
+    let finishOldCheck!: (nodes: unknown[]) => void
+    scanTreeViaWorker.mockImplementationOnce(() => new Promise(resolve => { finishOldCheck = resolve }))
+    const oldCheck = reconcileLoadedDirs(SPACE, 'worker-restart')
+    await vi.waitFor(() => expect(scanTreeViaWorker).toHaveBeenLastCalledWith(SPACE, '/old', '/old', 1))
+
+    rerootSpaceCache(SPACE, '/new')
+    const newTree = [{ path: '/new/b.txt', name: 'b.txt', type: 'file', size: 1 }]
+    scanTreeViaWorker.mockResolvedValueOnce(newTree)
+    await listArtifactsTree(SPACE, '/new')
+    scanTreeViaWorker.mockResolvedValueOnce(newTree)
+    await reconcileLoadedDirs(SPACE, 'manual')
+    expect(scanTreeViaWorker).toHaveBeenLastCalledWith(SPACE, '/new', '/new', 1)
+
+    finishOldCheck([{ path: '/old/a.txt', name: 'a.txt', type: 'file', size: 1 }])
+    await oldCheck
+    expect(await listArtifactsTree(SPACE, '/new')).toEqual(newTree)
+    expect(getCacheStats(SPACE)).toMatchObject({ treeNodes: 1, loadedDirs: 1 })
   })
 })

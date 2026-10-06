@@ -758,11 +758,16 @@ Changing `workingDir` (Edit Workspace, or the chat's "change working
 directory" when a turn cannot start because the folder is gone) goes through
 `controllers/space.controller.ts` `changeSpaceWorkingDir`, which only re-points:
 the engine's stored sessions are copied to the new folder's project-dir name
-first (`services/agent/stored-session.ts`, newer copy wins), then the record,
-the digital humans' pinned environments (apps/runtime DESIGN §2.28), resident
-sessions (rebuilt after their current turn) and the file panel and file
-triggers (`rerootSpaceWatcher`, `rerootSpaceCache`). Nothing in either folder
-is moved, created or deleted; the default space's folder cannot be changed.
+first (`services/agent/stored-session.ts`, newer copy wins), then the record
+(meta.json before the index, so a failed write changes nothing), the digital
+humans' pinned environments (apps/runtime DESIGN §2.28), resident sessions and
+the file panel and file triggers (`rerootSpaceWatcher`, `rerootSpaceCache`).
+It is refused while anything in the space runs and checked again after the
+copy, and no session of the space starts in a folder it left afterwards, so
+nothing is written to the old folder once its sessions are copied. One change
+per space at a time. Nothing in either folder is moved, created or deleted;
+Halo's and the engine's own data folders cannot be chosen, and the default
+space's folder cannot be changed.
 
 Notes:
 - **Legacy custom-path spaces**: Created before centralized storage, `path` points to the project directory with `.halo/` inside it. These continue to work without migration.

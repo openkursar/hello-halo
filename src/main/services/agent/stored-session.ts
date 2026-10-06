@@ -18,8 +18,9 @@
  * sessions elsewhere and are not covered.
  */
 
+import { randomUUID } from 'crypto'
 import { existsSync, readdirSync, realpathSync, rmSync } from 'fs'
-import { copyFile, cp, mkdir, readdir, stat } from 'fs/promises'
+import { copyFile, cp, mkdir, readdir, rename, rm, stat } from 'fs/promises'
 import { join } from 'path'
 import { resolveClaudeConfigDir } from '../../foundation/config.service'
 
@@ -74,7 +75,8 @@ function projectDirs(projects: string, workDir: string): Set<string> {
  * (another space may still run in the old directory). A session file already
  * there is replaced only by a newer one — after a change back and forth, the
  * conversation resumes from where it last ran — and session folders are
- * merged. `toWorkDir` must exist.
+ * merged. A copy carries the time it was made, so it counts as newer than its
+ * source until the source is written again. `toWorkDir` must exist.
  *
  * @returns how many session files were copied
  */
@@ -92,12 +94,27 @@ export async function copyStoredSessions(fromWorkDir: string, toWorkDir: string,
       if (entry.isDirectory()) {
         await cp(from, to, { recursive: true, force: false, errorOnExist: false })
       } else if (entry.isFile() && (await mtimeOf(to)) < (await stat(from)).mtimeMs) {
-        await copyFile(from, to)
+        await replaceWithCopy(from, to)
         copied += 1
       }
     }
   }
   return copied
+}
+
+/**
+ * Copied beside `to` and renamed over it: a copy cut short (a full disk) never
+ * leaves a truncated session that, being newer, no later copy would replace.
+ */
+async function replaceWithCopy(from: string, to: string): Promise<void> {
+  const staged = `${to}.${randomUUID()}.tmp`
+  try {
+    await copyFile(from, staged)
+    await rename(staged, to)
+  } catch (error) {
+    await rm(staged, { force: true })
+    throw error
+  }
 }
 
 async function mtimeOf(path: string): Promise<number> {
