@@ -10,8 +10,10 @@
 
 import { describe, it, expect } from 'vitest'
 import {
+  MAX_PARTS,
   messageHead,
   sendAsMessages,
+  sendAsMessagesOrThrow,
   splitIntoMessages,
 } from '../../../../../src/main/apps/runtime/im-channels/message-parts'
 
@@ -71,7 +73,7 @@ describe('splitIntoMessages', () => {
 
   it('ends a part at a paragraph break near the limit, else at a line break', () => {
     const paragraph = `${'word '.repeat(150).trim()}\n${'more '.repeat(150).trim()}`
-    const text = Array.from({ length: 40 }, () => paragraph).join('\n\n')
+    const text = Array.from({ length: 12 }, () => paragraph).join('\n\n')
 
     const parts = bodies(splitIntoMessages(text, { maxBytes: 4000 }))
 
@@ -115,11 +117,77 @@ describe('splitIntoMessages', () => {
     expect(rejoined).toBe(text)
   })
 
-  it('always makes progress, even with a limit barely above the label', () => {
+  it('always makes progress, even with a limit too small to be useful', () => {
     const parts = splitIntoMessages('x'.repeat(100), { maxChars: 30 })
 
-    for (const part of parts) expect(part.length).toBeLessThanOrEqual(30)
-    expect(bodies(parts).join('')).toBe('x'.repeat(100))
+    expect(parts.length).toBeGreaterThan(1)
+    expect(parts.length).toBeLessThanOrEqual(MAX_PARTS)
+  })
+
+  it(`sends at most ${MAX_PARTS} parts, the last saying where to read the rest`, () => {
+    const text = '一段很长的内容。\n'.repeat(4000)
+
+    const parts = splitIntoMessages(text, { maxBytes: 4000 })
+
+    expect(parts).toHaveLength(MAX_PARTS)
+    for (const part of parts) expect(bytes(part)).toBeLessThanOrEqual(4000)
+    const sent = bodies(parts)
+    expect(sent[MAX_PARTS - 1].endsWith('（内容过长，其余部分请在 Halo 里查看）')).toBe(true)
+    const shown = sent.join('').replace('\n\n（内容过长，其余部分请在 Halo 里查看）', '')
+    expect(text.startsWith(shown)).toBe(true)
+  })
+
+  it('sends no part that is only whitespace', () => {
+    const text = `${'a'.repeat(3990)}\n${' '.repeat(20)}\n\n   `
+
+    const parts = splitIntoMessages(text, { maxBytes: 4000 })
+
+    for (const body of bodies(parts)) expect(body.trim()).not.toBe('')
+  })
+
+  it('treats ~~~ and longer fences as code blocks too, closing each with its own run', () => {
+    const code = Array.from({ length: 300 }, (_, i) => `step ${i}: run the task`).join('\n')
+    const text = `Notes:\n\n~~~text\n${code}\n~~~\n\n\`\`\`\`md\n\`\`\`js\nnested()\n\`\`\`\n\`\`\`\`\n`
+
+    const parts = bodies(splitIntoMessages(text, { maxBytes: 3000 }))
+
+    expect(parts.length).toBeGreaterThan(2)
+    for (const part of parts.slice(1, -1)) {
+      expect(part.startsWith('~~~text\n')).toBe(true)
+      expect(part.endsWith('\n~~~')).toBe(true)
+    }
+  })
+
+  it('does not take ```inline``` code for the start of a block', () => {
+    const text = `Use \`\`\`npm test\`\`\` to check.\n${'plain line of prose\n'.repeat(400)}`
+
+    const parts = bodies(splitIntoMessages(text, { maxBytes: 3000 }))
+
+    for (const part of parts) expect(part).not.toMatch(/^```$/m)
+  })
+
+  it('does not end a part on the line that opens a code block', () => {
+    // The only line break in reach is the one after the opening line.
+    const before = 'x'.repeat(2900)
+    const text = `${before}\n\`\`\`py\n${'y'.repeat(5000)}\n\`\`\`\n`
+
+    const parts = bodies(splitIntoMessages(text, { maxBytes: 3000 }))
+
+    expect(parts[0]).not.toContain('```py')
+    expect(parts[1].startsWith('```py\n')).toBe(true)
+  })
+
+  it('never cuts an emoji sequence in two', () => {
+    const family = '👨‍👩‍👧'
+    const text = `${family}👍🏽`.repeat(200)
+
+    const parts = splitIntoMessages(text, { maxChars: 300 })
+
+    for (const body of bodies(parts)) {
+      const clusters = [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(body)].map(s => s.segment)
+      for (const cluster of clusters) expect([family, '👍🏽']).toContain(cluster)
+    }
+    expect(bodies(parts).join('')).toBe(text)
   })
 })
 
@@ -170,16 +238,68 @@ describe('sendAsMessages', () => {
     expect(order).toEqual(Array.from({ length: n }, (_, i) => `${i}:(${i + 1}/${n})`))
   })
 
-  it('still sends the rest after a part fails, and says not everything went out', async () => {
-    const sent: number[] = []
+  it('holds back the rest after a part fails and tells the chat where to read the reply', async () => {
+    // A reply with a hole in it reads as whole; the note says it is not.
+    const sent: string[] = []
 
-    const allSent = await sendAsMessages('x'.repeat(10000), { maxBytes: 4000 }, async (_message, index) => {
-      sent.push(index)
-      return index !== 1
+    const allSent = await sendAsMessages('x'.repeat(10000), { maxBytes: 4000 }, async (message, index) => {
+      sent.push(message)
+      return index !== 1 || message.startsWith('回复')
     })
 
     expect(allSent).toBe(false)
-    expect(sent).toEqual([0, 1, 2])
+    expect(sent).toHaveLength(3)
+    expect(sent[0].startsWith('(1/3)')).toBe(true)
+    expect(sent[1].startsWith('(2/3)')).toBe(true)
+    expect(sent[2]).toBe('回复的第 2 条发送失败，完整内容请在 Halo 里查看')
+  })
+
+  it('says nothing more when the note itself does not go out, and when a single message fails', async () => {
+    const attempts: string[] = []
+
+    expect(await sendAsMessages('x'.repeat(10000), { maxBytes: 4000 }, async (message) => {
+      attempts.push(message)
+      return false
+    })).toBe(false)
+    expect(attempts).toHaveLength(2)
+
+    attempts.length = 0
+    expect(await sendAsMessages('short', { maxBytes: 4000 }, async (message) => {
+      attempts.push(message)
+      return false
+    })).toBe(false)
+    expect(attempts).toEqual(['short'])
+  })
+
+  it('sends a second reply to the same chat only after the first, and others alongside', async () => {
+    const order: string[] = []
+    const send = (tag: string) => async (message: string) => {
+      await new Promise((resolve) => setTimeout(resolve, 1))
+      order.push(`${tag}${message.slice(0, message.indexOf(')') + 1)}`)
+      return true
+    }
+    const long = 'x'.repeat(10000)
+
+    await Promise.all([
+      sendAsMessages(long, { maxBytes: 4000 }, send('A'), { chat: 'bot:chat-1' }),
+      sendAsMessages(long, { maxBytes: 4000 }, send('B'), { chat: 'bot:chat-1' }),
+      sendAsMessages(long, { maxBytes: 4000 }, send('C'), { chat: 'bot:chat-2' }),
+    ])
+
+    const sameChat = order.filter((entry) => !entry.startsWith('C'))
+    expect(sameChat).toEqual(['A(1/3)', 'A(2/3)', 'A(3/3)', 'B(1/3)', 'B(2/3)', 'B(3/3)'])
+    // Another chat does not wait for this one.
+    expect(order.indexOf('C(1/3)')).toBeLessThan(order.indexOf('A(3/3)'))
+  })
+
+  it('rethrows the first failure once the chat has been told', async () => {
+    const sent: string[] = []
+
+    await expect(sendAsMessagesOrThrow('x'.repeat(10000), { maxBytes: 4000 }, async (message, index) => {
+      if (index === 1 && !message.startsWith('回复')) throw new Error('rate limited')
+      sent.push(message)
+    })).rejects.toThrow('rate limited')
+    expect(sent).toEqual([expect.stringMatching(/^\(1\/3\)/), '回复的第 2 条发送失败，完整内容请在 Halo 里查看'])
   })
 
   it('sends a message that fits as it is', async () => {
