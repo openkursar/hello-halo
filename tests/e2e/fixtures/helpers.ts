@@ -5,7 +5,7 @@
  * Centralized to avoid duplication and ensure consistency.
  */
 
-import type { Page } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
 
 /**
  * Wait for the app to finish loading and show its shell.
@@ -15,7 +15,10 @@ import type { Page } from '@playwright/test'
  */
 export async function waitForHomePage(window: Page) {
   await window.waitForSelector('#root', { timeout: 15000 })
-  await window.waitForLoadState('networkidle')
+  await window.waitForLoadState('domcontentloaded')
+  const skip = window.getByRole('button', { name: 'Skip for now', exact: true })
+  await skip.or(window.locator('nav button').first()).first().waitFor({ state: 'visible', timeout: 15000 })
+  if (await skip.isVisible()) await skip.click()
   await window.waitForSelector('nav button', { timeout: 15000 })
 }
 
@@ -32,23 +35,18 @@ export async function navigateToChat(window: Page) {
   await window.waitForSelector('textarea', { timeout: 15000 })
 }
 
-/**
- * Navigate from Home Page to Settings Page.
- * Settings button is in the header (gear icon).
- */
+/** Navigate through the persistent rail and wait for the settings content. */
 export async function navigateToSettings(window: Page) {
   await waitForHomePage(window)
+  await window.getByRole('button', { name: 'Settings', exact: true }).first().click()
+  await expect(window.locator('#ai-model').getByRole('heading', { name: 'AI Model', exact: true })).toBeVisible()
+}
 
-  // Find settings button in header - it's the button with a gear/settings SVG
-  // The header uses a Settings icon from lucide-react
-  const settingsButton = await window.waitForSelector(
-    'button:has(svg)',
-    { timeout: 10000 }
-  )
-  await settingsButton.click()
-
-  // Wait for Settings page to render
-  await window.waitForSelector('text=/Settings|设置/i', { timeout: 10000 })
+/** Workspace management is reached from the shared header selector. */
+export async function navigateToWorkspaces(window: Page) {
+  await waitForHomePage(window)
+  await window.getByTitle('Manage workspaces', { exact: true }).click()
+  await expect(window.getByRole('heading', { name: 'Workspace', exact: true, level: 1 })).toBeVisible()
 }
 
 /** Navigate to the Apps page through the rail's Digital Humans entry. */
@@ -64,52 +62,20 @@ export async function navigateToApps(window: Page) {
   )
 }
 
-/**
- * Navigate to Remote Access settings section.
- * Goes through Settings page and scrolls to find Remote Access.
- */
+/** The section sits inside Settings' scrollable main content. */
 export async function navigateToRemoteSettings(window: Page) {
-  await waitForHomePage(window)
-
-  // Navigate to Settings
-  const settingsButton = await window.waitForSelector(
-    'button:has(svg)',
-    { timeout: 10000 }
-  )
-  await settingsButton.click()
-  await window.waitForTimeout(500)
-
-  // Scroll to bottom to find remote access section. `globalThis`, not
-  // `window`: this callback runs in the page, but the enclosing parameter has
-  // the same name and would win in this scope.
-  await window.evaluate(() => globalThis.scrollTo(0, document.body.scrollHeight))
-  await window.waitForTimeout(500)
-
-  // Wait for remote access section (supports both EN and CN)
-  await window.waitForSelector('text=/Remote Access|远程访问/i', { timeout: 10000 })
+  await navigateToSettings(window)
+  await window.locator('#remote').scrollIntoViewIfNeeded()
+  await expect(window.locator('#remote').getByRole('heading', { name: 'Remote Access', exact: true })).toBeVisible()
 }
 
-/**
- * Click the remote access toggle.
- * Finds the toggle near the "Enable Remote Access" text.
- */
+/** Click the visible switch label and verify its asynchronous state change. */
 export async function clickRemoteToggle(window: Page) {
-  await window.evaluate(() => {
-    const labels = document.querySelectorAll('label')
-    for (const label of labels) {
-      const checkbox = label.querySelector('input[type="checkbox"]')
-      if (checkbox) {
-        const parent = label.closest('div')
-        if (parent && (
-          parent.textContent?.includes('启用远程访问') ||
-          parent.textContent?.includes('Enable Remote Access')
-        )) {
-          label.click()
-          break
-        }
-      }
-    }
-  })
+  const checkbox = window.locator('#remote input[type="checkbox"]')
+  const enabled = await checkbox.isChecked()
+  await expect(checkbox).toBeEnabled()
+  await window.locator('#remote label').filter({ has: window.locator('input[type="checkbox"]') }).click()
+  await expect(checkbox).toBeChecked({ checked: !enabled })
 }
 
 /**

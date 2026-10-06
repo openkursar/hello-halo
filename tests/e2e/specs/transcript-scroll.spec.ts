@@ -16,6 +16,7 @@ import {
 } from '../fixtures/electron'
 import { seedLongConversation } from '../fixtures/seed-conversation'
 import { seedDigitalHumanChat } from '../fixtures/seed-digital-human-chat'
+import { navigateToChat } from '../fixtures/helpers'
 
 const MESSAGE_COUNT = 300
 
@@ -79,6 +80,7 @@ for (const viewport of VIEWPORTS) {
     try {
       const window = await app.firstWindow()
       await window.waitForLoadState('domcontentloaded')
+      await navigateToChat(window)
       const cdp = await window.context().newCDPSession(window)
       await cdp.send('Emulation.setDeviceMetricsOverride', {
         width: viewport.width,
@@ -103,6 +105,7 @@ for (const viewport of VIEWPORTS) {
       expect(await distanceToEnd(scroller)).toBeLessThanOrEqual(1)
       await removeGrowth(scroller)
       await settle(window)
+      await expect.poll(() => distanceToEnd(scroller), { timeout: 1000, intervals: [16] }).toBeLessThanOrEqual(1)
 
       // A live turn streams in: the view follows every chunk to the end.
       const turn = { spaceId: 'halo-temp', conversationId: seeded.conversationId }
@@ -110,7 +113,7 @@ for (const viewport of VIEWPORTS) {
       for (let i = 0; i < 12; i++) {
         await sendAgentEvent(app, 'agent:message', { ...turn, delta: STREAM_LINE.repeat(3) + '\n\n', isStreaming: true, isComplete: false })
         await settle(window, 60)
-        expect(await distanceToEnd(scroller)).toBeLessThanOrEqual(1)
+        await expect.poll(() => distanceToEnd(scroller), { timeout: 1000, intervals: [16] }).toBeLessThanOrEqual(1)
       }
       await expect(scroller.getByText('Streaming line', { exact: false }).first()).toBeVisible()
 
@@ -133,7 +136,7 @@ for (const viewport of VIEWPORTS) {
       for (let i = 0; i < 4; i++) {
         await sendAgentEvent(app, 'agent:message', { ...turn, delta: STREAM_LINE.repeat(3) + '\n\n', isStreaming: true, isComplete: false })
         await settle(window, 60)
-        expect(await distanceToEnd(scroller)).toBeLessThanOrEqual(1)
+        await expect.poll(() => distanceToEnd(scroller), { timeout: 1000, intervals: [16] }).toBeLessThanOrEqual(1)
       }
       await sendAgentEvent(app, 'agent:error', { ...turn, error: 'stopped by test', errorType: 'interrupted' })
       await settle(window, 400)
@@ -299,6 +302,7 @@ test('transcript scrolling — digital-human conversation, paged', async () => {
   try {
     const window = await app.firstWindow()
     await window.waitForLoadState('domcontentloaded')
+    await navigateToChat(window)
     const cdp = await window.context().newCDPSession(window)
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false })
     await window.getByText(seeded.turns[TURNS - 1].reply.slice(0, 24)).first().click()
@@ -319,7 +323,7 @@ test('transcript scrolling — digital-human conversation, paged', async () => {
     for (let i = 0; i < 6; i++) {
       await sendAgentEvent(app, 'agent:message', { ...turn, delta: STREAM_LINE.repeat(3) + '\n\n', isStreaming: true, isComplete: false })
       await settle(window, 60)
-      expect(await distanceToEnd(scroller)).toBeLessThanOrEqual(1)
+      await expect.poll(() => distanceToEnd(scroller), { timeout: 1000, intervals: [16] }).toBeLessThanOrEqual(1)
     }
     await sendAgentEvent(app, 'agent:error', { ...turn, error: 'stopped by test', errorType: 'interrupted' })
     await settle(window, 300)

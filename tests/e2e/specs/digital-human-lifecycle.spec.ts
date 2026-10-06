@@ -26,7 +26,7 @@ async function openSeededApp(window: Page, name: string) {
   await appEntry.click()
 }
 
-const RUN_ONCE_NAME = /^(Run once|执行一次)$/
+const RUN_ONCE_NAME = /^(Run now|立即运行)$/
 
 async function runNow(window: Page) {
   const runNowButton = window.getByRole('button', { name: RUN_ONCE_NAME })

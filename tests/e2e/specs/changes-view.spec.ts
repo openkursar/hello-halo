@@ -68,7 +68,13 @@ test.describe('changes view', () => {
     await clickRowAction(window, 'src/app.ts', 'Discard')
     await expect(window.getByText('Discard changes to app.ts?')).toBeVisible()
     await window.getByRole('alertdialog').getByRole('button', { name: 'Discard', exact: true }).click()
-    await expect.poll(() => workspace.readFile('src/app.ts')).toBe(BASELINE['src/app.ts'])
+    await expect.poll(() => {
+      try { return workspace.readFile('src/app.ts') }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+        throw error
+      }
+    }).toBe(BASELINE['src/app.ts'])
     await expect(fileRow(window, 'src/app.ts')).toHaveCount(0)
 
     // Commit what is staged: the rename and the modification.

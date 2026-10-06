@@ -17,8 +17,8 @@ test.describe('Apps Page', () => {
     await expect(window.getByRole('button', { name: /My Digital Humans|我的数字人/i }).first()).toBeVisible()
     await expect(window.getByRole('button', { name: /Capability library|能力库/i })).toBeVisible()
 
-    const storeTab = await window.$('text=/Marketplace|市场/i')
-    expect(storeTab).toBeTruthy()
+    await expect(window.getByRole('button', { name: 'Teams', exact: true })).toBeVisible()
+    await expect(window.getByRole('button', { name: 'Store', exact: true })).toBeVisible()
 
     await window.screenshot({ path: 'tests/e2e/results/apps-tabs.png' })
   })
@@ -26,26 +26,28 @@ test.describe('Apps Page', () => {
   test('capability library exposes skill and MCP categories', async ({ window }) => {
     await navigateToApps(window)
     await window.getByRole('button', { name: /Capability library|能力库/i }).click()
-    await expect(window.getByRole('heading', { name: /Skills|技能/i })).toBeVisible()
-    await window.getByRole('button', { name: /MCP connections|MCP连接|MCP 连接/i, exact: true }).click()
-    await expect(window.getByRole('heading', { name: /MCP connections|MCP连接|MCP 连接/i })).toBeVisible()
-    await window.getByRole('button', { name: /Skills|技能/i, exact: true }).click()
-    await expect(window.getByRole('heading', { name: /Skills|技能/i })).toBeVisible()
+    const skills = window.getByRole('button', { name: 'Skills', exact: true })
+    const mcp = window.getByRole('button', { name: 'MCP connections', exact: true })
+    await expect(skills).toBeVisible()
+    await expect(skills).toHaveAttribute('aria-pressed', 'true')
+    await expect(window.getByRole('button', { name: 'Manual Add Skill', exact: true })).toBeVisible()
+    await mcp.click()
+    await expect(mcp).toHaveAttribute('aria-pressed', 'true')
+    await expect(window.getByRole('button', { name: 'Manual Add MCP', exact: true })).toBeVisible()
+    await skills.click()
+    await expect(skills).toHaveAttribute('aria-pressed', 'true')
+    await expect(window.getByRole('button', { name: 'Manual Add Skill', exact: true })).toBeVisible()
     await window.screenshot({ path: 'tests/e2e/results/apps-capability-library.png' })
   })
 
-  test('can switch to Marketplace tab', async ({ window }) => {
+  test('can open Store from Apps page', async ({ window }) => {
     await navigateToApps(window)
 
-    // Click Marketplace tab (renamed from "App Store")
-    const storeTab = await window.waitForSelector(
-      'button:has-text("Marketplace"), button:has-text("市场")',
-      { timeout: 5000 }
-    )
-    await storeTab.click()
-    await window.waitForTimeout(500)
+    const store = window.getByRole('button', { name: 'Store', exact: true })
+    await store.click()
+    await expect(store).toHaveAttribute('aria-current', 'page')
+    await expect(window.getByRole('heading', { name: 'Explore · Store', exact: true, level: 1 })).toBeVisible()
 
-    // StoreView should render
     await window.screenshot({ path: 'tests/e2e/results/apps-marketplace-tab.png' })
   })
 
@@ -60,45 +62,29 @@ test.describe('Apps Page', () => {
   test('can navigate back from Apps page', async ({ window }) => {
     await navigateToApps(window)
 
-    // Find back button (ChevronLeft + text)
-    const backButton = await window.waitForSelector(
-      'button:has-text("Back"), button:has-text("返回")',
-      { timeout: 5000 }
-    )
-    await backButton.click()
-
-    // Should return to Home Page
-    await window.waitForSelector('[data-onboarding="halo-space"]', { timeout: 10000 })
+    await window.getByRole('button', { name: 'Conversation', exact: true }).click()
+    await expect(window.locator('textarea')).toBeVisible()
+    await expect(window.getByRole('textbox', { name: 'Search digital humans', exact: true })).toHaveCount(0)
   })
 
   test('settings button is accessible from Apps page', async ({ window }) => {
     await navigateToApps(window)
 
-    // Settings button should be in the header (gear icon)
-    const settingsButton = await window.waitForSelector(
-      'button[title="Settings"], button[title="设置"]',
-      { timeout: 5000 }
-    ).catch(() => null)
-
-    expect(settingsButton).toBeTruthy()
+    const settings = window.getByRole('button', { name: 'Settings', exact: true })
+    await expect(settings).toBeVisible()
+    await settings.click()
+    await expect(window.locator('#ai-model').getByRole('heading', { name: 'AI Model', exact: true })).toBeVisible()
   })
 })
 
-test.describe('Apps Page - Store Tab', () => {
+test.describe('Apps Page - Store navigation', () => {
   test.setTimeout(30000)
 
   test('app store shows content', async ({ window }) => {
     await navigateToApps(window)
 
-    // Switch to Marketplace tab (renamed from "App Store")
-    const storeTab = await window.waitForSelector(
-      'button:has-text("Marketplace"), button:has-text("市场")',
-      { timeout: 5000 }
-    )
-    await storeTab.click()
-
-    // Wait for store content to load
-    await window.waitForTimeout(1000)
+    await window.getByRole('button', { name: 'Store', exact: true }).click()
+    await expect(window.getByRole('heading', { name: 'Explore · Store', exact: true, level: 1 })).toBeVisible()
 
     // Store should show some content (cards, grid, or loading state)
     const bodyText = await window.evaluate(() => document.body.innerText)
