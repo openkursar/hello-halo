@@ -7,7 +7,8 @@
  * further collapses bursts before re-scanning.
  *
  * Subscriptions are keyed so they can be started/stopped per-KB (used by
- * createKB/deleteKB/addLinkedDir/removeLinkedDir).
+ * createKB/deleteKB/addLinkedDir/removeLinkedDir, and updateKB when a KB is
+ * paused or resumed).
  */
 
 import parcelWatcher from '@parcel/watcher'
@@ -90,12 +91,15 @@ async function subscribe(key: string, dir: string, kbId: string): Promise<void> 
 async function unsubscribe(key: string): Promise<void> {
   const handle = handles.get(key)
   if (!handle) return
+  // Dropped before the native unsubscribe settles, so a start right after a
+  // stop (paused and straight back on) subscribes afresh instead of finding
+  // the old handle and skipping.
+  handles.delete(key)
   try {
     await handle.subscription.unsubscribe()
   } catch (error) {
     console.error(`[Tlon] Failed to unsubscribe ${key}:`, error)
   }
-  handles.delete(key)
 }
 
 // ============================================================================
@@ -119,14 +123,22 @@ export async function stopWatchersForKB(kbId: string): Promise<void> {
   const keys = Array.from(handles.keys()).filter(
     k => k === `${kbId}:raw` || k.startsWith(`${kbId}:linked:`)
   )
-  for (const key of keys) {
-    await unsubscribe(key)
-  }
   const timer = debounceTimers.get(kbId)
   if (timer) {
     clearTimeout(timer)
     debounceTimers.delete(kbId)
   }
+  // Every handle is dropped before the first await (see unsubscribe).
+  await Promise.all(keys.map(unsubscribe))
+}
+
+/**
+ * A paused KB turned back on: watch it again, and scan once for what changed
+ * while it was paused — nothing was watching then, so no event will report it.
+ */
+export async function resumeWatchersForKB(kbId: string): Promise<void> {
+  await startWatchersForKB(kbId)
+  scheduleScan(kbId)
 }
 
 export async function startLinkedDirWatch(kbId: string, linked: LinkedDirectory): Promise<void> {

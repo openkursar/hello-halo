@@ -393,11 +393,21 @@ function persistEntry(entry: KnowledgeBaseEntry): void {
 export function updateKB(kbId: string, updates: UpdateKBInput): KnowledgeBaseEntry | null {
   const entry = getRegistry().get(kbId)
   if (!entry) return null
+  const wasActive = entry.status === 'active'
   if (updates.name !== undefined) entry.name = updates.name
   if (updates.icon !== undefined) entry.icon = updates.icon
   if (updates.description !== undefined) entry.description = updates.description
   if (updates.status !== undefined) entry.status = updates.status
   saveEntry(entry)
+
+  // Paused stops learning: nothing watches the KB until it is turned back on.
+  const isActive = entry.status === 'active'
+  if (isActive !== wasActive) {
+    import('./watcher')
+      .then(({ resumeWatchersForKB, stopWatchersForKB }) =>
+        isActive ? resumeWatchersForKB(kbId) : stopWatchersForKB(kbId))
+      .catch(err => console.error(`[Tlon] updateKB ${isActive ? 'resume' : 'pause'} watch failed:`, err))
+  }
   return entry
 }
 
