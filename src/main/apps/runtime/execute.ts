@@ -771,30 +771,40 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       )
     }
 
-    // Insert an error activity entry when AI never called report_to_user,
-    // so the failure is visible in the Activity Thread.
-    if (outcome === 'error' && !streamResult.reportToolCalled && !escalationEntryId) {
-      const noReportEntry: ActivityEntry = {
+    // Every run recorded as failed gets a failure entry that says why — also one
+    // that reported before the engine failed, whose report alone reads as success.
+    if (outcome === 'error' && !escalationEntryId) {
+      const reason = finalErrorMessage ?? 'No reason was given'
+      const failureEntry: ActivityEntry = {
         id: randomUUID(),
         appId: app.id,
         runId,
         type: 'run_error',
         ts: finishedAt,
         sessionKey,
-        content: stopped
-          ? { summary: 'Stopped before it reported results.', status: 'error', durationMs }
-          : {
-            summary: `AI ended without reporting results after ${autoContinueCount} auto-continue attempt(s). ` +
-              'The model may have encountered an issue or exhausted its context.',
+        content: streamResult.aiReportedError
+          ? {
+            summary: streamResult.reportToolCalled
+              ? `This run finally ended with an error: ${reason}`
+              : `Run failed: ${reason}`,
             status: 'error',
             durationMs,
-            error: 'report_to_user not called',
-          },
+            error: reason,
+          }
+          : stopped
+            ? { summary: 'Stopped before it reported results.', status: 'error', durationMs }
+            : {
+              summary: `AI ended without reporting results after ${autoContinueCount} auto-continue attempt(s). ` +
+                'The model may have encountered an issue or exhausted its context.',
+              status: 'error',
+              durationMs,
+              error: 'report_to_user not called',
+            },
       }
       try {
-        emitEntry ? emitEntry(noReportEntry) : store.insertEntry(noReportEntry)
+        emitEntry ? emitEntry(failureEntry) : store.insertEntry(failureEntry)
       } catch (insertErr) {
-        console.error('[Runtime] Failed to insert no-report error entry:', insertErr)
+        console.error('[Runtime] Failed to insert run failure entry:', insertErr)
       }
     }
 

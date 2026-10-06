@@ -2578,6 +2578,32 @@ describe('AppRuntimeService', () => {
     })
   })
 
+  describe('pausing a person after repeated failures', () => {
+    it('names the latest failure in the note it leaves', async () => {
+      const appId = randomUUID()
+      mockAppManager.getApp.mockReturnValue({ id: appId, status: 'active', spec: createTestSpec(), userConfig: {}, userOverrides: {}, spaceId: 'space-001' })
+      dbManager.getAppDatabase().prepare(`
+        INSERT INTO installed_apps (id, spec_id, space_id, spec_json, status, user_config_json, user_overrides_json, permissions_json, installed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(appId, 'test-app', 'space-001', JSON.stringify(createTestSpec()), 'active', '{}', '{}', '{"granted":[],"denied":[]}', Date.now())
+      for (let n = 0; n < 4; n++) {
+        store.insertRun({ runId: `failed-${n}`, appId, sessionKey: `sk-${n}`, status: 'running', triggerType: 'schedule', startedAt: 1000 + n })
+        store.completeRun(`failed-${n}`, { status: 'error', finishedAt: 1000 + n, durationMs: 1, errorMessage: 'earlier failure' })
+      }
+      vi.mocked(executeRun).mockImplementationOnce(async () => {
+        store.insertRun({ runId: 'failed-latest', appId, sessionKey: 'sk-latest', status: 'running', triggerType: 'manual', startedAt: 2000 })
+        store.completeRun('failed-latest', { status: 'error', finishedAt: 2001, durationMs: 1, errorMessage: 'API Error: 529 overloaded' })
+        return { appId, runId: 'failed-latest', sessionKey: 'sk-latest', outcome: 'error', startedAt: 2000, finishedAt: 2001, durationMs: 1, errorMessage: 'API Error: 529 overloaded' }
+      })
+
+      await createService().triggerManually(appId)
+
+      expect(mockAppManager.updateStatus).toHaveBeenCalledWith(appId, 'error', {
+        errorMessage: 'Auto-disabled after 5 consecutive failed runs. Latest: API Error: 529 overloaded',
+      })
+    })
+  })
+
   describe('runs past the transcript retention', () => {
     let testAppId: string
     let spacePath: string

@@ -447,6 +447,26 @@ describe('executeRun — completion branches', () => {
     )
   })
 
+  it('leaves a failure entry with the reason when the engine fails after the run reported', async () => {
+    nextSession = new FakeSession({
+      script: [assistantReport(), { type: 'result', is_error: true, result: 'model rate-limited' }],
+    })
+    const emitEntry = vi.fn()
+
+    const result = await executeRun({ app: makeApp(), trigger: baseTrigger, store: makeStore(), memory: makeMemory(), emitEntry })
+
+    expect(result.outcome).toBe('error')
+    // The report alone would read as success; the timeline also says it failed, and why.
+    expect(emitEntry).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'run_error',
+      content: expect.objectContaining({
+        summary: 'This run finally ended with an error: model rate-limited',
+        error: 'model rate-limited',
+        status: 'error',
+      }),
+    }))
+  })
+
   it('auto-continues then errors when report_to_user is never called', async () => {
     // Empty stream on every cycle → the auto-continue loop runs to its cap.
     nextSession = new FakeSession({ script: [] })

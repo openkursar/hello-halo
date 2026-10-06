@@ -610,7 +610,8 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
           )
           try {
             appManager.updateStatus(app.id, 'error', {
-              errorMessage: `Auto-disabled after ${consecutiveErrors} consecutive errors`,
+              errorMessage: `Auto-disabled after ${consecutiveErrors} consecutive failed runs. ` +
+                `Latest: ${result.errorMessage ?? 'no reason was recorded'}`,
             })
             // Deactivate to stop scheduling
             await service.deactivate(app.id)
