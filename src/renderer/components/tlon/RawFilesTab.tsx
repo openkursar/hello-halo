@@ -312,7 +312,7 @@ export function RawFilesTab({ kb }: RawFilesTabProps) {
               <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs">
                 <div className="flex items-start justify-between gap-2">
                   <p className="font-medium text-destructive">
-                    {t("Couldn't remove {{count}} file(s). They stay selected so you can try again.", { count: notRemoved.length })}
+                    {t('Could not remove {{count}} file(s). They stay selected so you can try again.', { count: notRemoved.length })}
                   </p>
                   <button
                     onClick={() => setNotRemoved([])}

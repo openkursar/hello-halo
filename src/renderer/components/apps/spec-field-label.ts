@@ -47,9 +47,8 @@ export function upgradedMessage(
 ): string {
   const kept = outcome.kept ?? []
   if (kept.length === 0) return t('Upgraded to v{{version}}', { version })
-  const message = t('Upgraded to v{{version}}. These differ from the author’s new version and kept your current version: {{items}}', {
-    version,
-    items: specFieldList(kept, t, language),
-  })
-  return outcome.editsKnown === false ? `${message} ${t('Halo cannot tell which of them you changed.')}` : message
+  const values = { version, items: specFieldList(kept, t, language) }
+  return outcome.editsKnown === false
+    ? t('Upgraded to v{{version}}. These differ from the author’s new version and kept your current version: {{items}}. Halo cannot tell which of them you changed.', values)
+    : t('Upgraded to v{{version}}. These differ from the author’s new version and kept your current version: {{items}}', values)
 }

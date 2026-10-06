@@ -12,7 +12,8 @@
  * IM Sessions are NOT shown here — they live in the digital human config.
  */
 
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
+import type { TFunction } from 'i18next'
 import {
   Mail, MessageSquare, Bell, Webhook, Loader2,
   CheckCircle, XCircle, ChevronDown, RefreshCw,
@@ -97,7 +98,8 @@ interface NotifyChannelDef {
 // Notification Channel Definitions
 // ============================================
 
-function buildNotifyChannelDefs(): NotifyChannelDef[] {
+/** Labels are literal t() calls so the translation extractor finds them; sample values stay as typed. */
+function buildNotifyChannelDefs(t: TFunction): NotifyChannelDef[] {
   return [
     {
       id: 'email',
@@ -106,14 +108,14 @@ function buildNotifyChannelDefs(): NotifyChannelDef[] {
       labelKey: NOTIFICATION_CHANNEL_META.email.labelKey,
       descriptionKey: NOTIFICATION_CHANNEL_META.email.descriptionKey,
       fields: [
-        { key: 'smtp.host', label: 'SMTP Host', type: 'text', placeholder: 'smtp.gmail.com', required: true, nested: 'smtp.host' },
-        { key: 'smtp.port', label: 'SMTP Port', type: 'number', required: true, nested: 'smtp.port' },
-        { key: 'smtp.secure', label: 'Use SSL/TLS', type: 'toggle', nested: 'smtp.secure' },
-        { key: 'smtp.user', label: 'Username', type: 'text', placeholder: 'user@example.com', required: true, nested: 'smtp.user' },
-        { key: 'smtp.password', label: 'Password', type: 'password', placeholder: 'App password', required: true, nested: 'smtp.password' },
-        { key: 'defaultTo', label: 'Default Recipient', type: 'text', placeholder: 'recipient@example.com', required: true },
-        { key: 'caldavUrl', label: 'CalDAV URL', type: 'text', placeholder: 'https://{host}/dav/users/{email}/calendars/default/', group: 'advanced' },
-        { key: 'tlsCiphers', label: 'TLS Ciphers', type: 'text', placeholder: 'Auto (system default)', group: 'advanced' },
+        { key: 'smtp.host', label: t('SMTP Host'), type: 'text', placeholder: 'smtp.gmail.com', required: true, nested: 'smtp.host' },
+        { key: 'smtp.port', label: t('SMTP Port'), type: 'number', required: true, nested: 'smtp.port' },
+        { key: 'smtp.secure', label: t('Use SSL/TLS'), type: 'toggle', nested: 'smtp.secure' },
+        { key: 'smtp.user', label: t('Username'), type: 'text', placeholder: 'user@example.com', required: true, nested: 'smtp.user' },
+        { key: 'smtp.password', label: t('Password'), type: 'password', placeholder: t('App password'), required: true, nested: 'smtp.password' },
+        { key: 'defaultTo', label: t('Default Recipient'), type: 'text', placeholder: 'recipient@example.com', required: true },
+        { key: 'caldavUrl', label: t('CalDAV URL'), type: 'text', placeholder: 'https://{host}/dav/users/{email}/calendars/default/', group: 'advanced' },
+        { key: 'tlsCiphers', label: t('TLS Ciphers'), type: 'text', placeholder: t('Auto (system default)'), group: 'advanced' },
       ],
     },
     {
@@ -123,11 +125,11 @@ function buildNotifyChannelDefs(): NotifyChannelDef[] {
       labelKey: NOTIFICATION_CHANNEL_META.wecom.labelKey,
       descriptionKey: NOTIFICATION_CHANNEL_META.wecom.descriptionKey,
       fields: [
-        { key: 'corpId', label: 'Corp ID', type: 'text', placeholder: 'ww...', required: true },
-        { key: 'agentId', label: 'Agent ID', type: 'number', placeholder: '1000002', required: true },
-        { key: 'secret', label: 'Secret', type: 'password', required: true },
-        { key: 'defaultToUser', label: 'Default User ID', type: 'text', placeholder: 'userid (optional)' },
-        { key: 'defaultToParty', label: 'Default Party ID', type: 'text', placeholder: 'party id (optional)' },
+        { key: 'corpId', label: t('Corp ID'), type: 'text', placeholder: 'ww...', required: true },
+        { key: 'agentId', label: t('Agent ID'), type: 'number', placeholder: '1000002', required: true },
+        { key: 'secret', label: t('Secret'), type: 'password', required: true },
+        { key: 'defaultToUser', label: t('Default User ID'), type: 'text', placeholder: t('userid (optional)') },
+        { key: 'defaultToParty', label: t('Default Party ID'), type: 'text', placeholder: t('party id (optional)') },
       ],
     },
     {
@@ -137,11 +139,11 @@ function buildNotifyChannelDefs(): NotifyChannelDef[] {
       labelKey: NOTIFICATION_CHANNEL_META.dingtalk.labelKey,
       descriptionKey: NOTIFICATION_CHANNEL_META.dingtalk.descriptionKey,
       fields: [
-        { key: 'appKey', label: 'App Key', type: 'text', required: true },
-        { key: 'appSecret', label: 'App Secret', type: 'password', required: true },
-        { key: 'agentId', label: 'Agent ID', type: 'number', placeholder: '0', required: true },
-        { key: 'robotCode', label: 'Robot Code', type: 'text', placeholder: 'Robot code (optional)' },
-        { key: 'defaultChatId', label: 'Default Chat ID', type: 'text', placeholder: 'Chat ID (optional)' },
+        { key: 'appKey', label: t('App Key'), type: 'text', required: true },
+        { key: 'appSecret', label: t('App Secret'), type: 'password', required: true },
+        { key: 'agentId', label: t('Agent ID'), type: 'number', placeholder: '0', required: true },
+        { key: 'robotCode', label: t('Robot Code'), type: 'text', placeholder: t('Robot code (optional)') },
+        { key: 'defaultChatId', label: t('Default Chat ID'), type: 'text', placeholder: t('Chat ID (optional)') },
       ],
     },
     {
@@ -151,10 +153,10 @@ function buildNotifyChannelDefs(): NotifyChannelDef[] {
       labelKey: NOTIFICATION_CHANNEL_META.feishu.labelKey,
       descriptionKey: NOTIFICATION_CHANNEL_META.feishu.descriptionKey,
       fields: [
-        { key: 'appId', label: 'App ID', type: 'text', required: true },
-        { key: 'appSecret', label: 'App Secret', type: 'password', required: true },
-        { key: 'defaultChatId', label: 'Default Chat ID', type: 'text', placeholder: 'Chat ID (optional)' },
-        { key: 'defaultUserId', label: 'Default User ID', type: 'text', placeholder: 'User open_id (optional)' },
+        { key: 'appId', label: t('App ID'), type: 'text', required: true },
+        { key: 'appSecret', label: t('App Secret'), type: 'password', required: true },
+        { key: 'defaultChatId', label: t('Default Chat ID'), type: 'text', placeholder: t('Chat ID (optional)') },
+        { key: 'defaultUserId', label: t('Default User ID'), type: 'text', placeholder: t('User open_id (optional)') },
       ],
     },
     {
@@ -164,19 +166,17 @@ function buildNotifyChannelDefs(): NotifyChannelDef[] {
       labelKey: NOTIFICATION_CHANNEL_META.webhook.labelKey,
       descriptionKey: NOTIFICATION_CHANNEL_META.webhook.descriptionKey,
       fields: [
-        { key: 'url', label: 'URL', type: 'text', placeholder: 'https://example.com/webhook', required: true },
+        { key: 'url', label: t('URL'), type: 'text', placeholder: 'https://example.com/webhook', required: true },
         {
-          key: 'method', label: 'Method', type: 'select',
+          key: 'method', label: t('Method'), type: 'select',
           options: [{ value: 'POST', label: 'POST' }, { value: 'PUT', label: 'PUT' }],
         },
-        { key: 'headers', label: 'Headers (JSON)', type: 'text', placeholder: '{"Authorization": "Bearer ..."}' },
-        { key: 'secret', label: 'HMAC Secret', type: 'password', placeholder: 'Signing secret (optional)' },
+        { key: 'headers', label: t('Headers (JSON)'), type: 'text', placeholder: '{"Authorization": "Bearer ..."}' },
+        { key: 'secret', label: t('HMAC Secret'), type: 'password', placeholder: t('Signing secret (optional)') },
       ],
     },
   ]
 }
-
-const NOTIFY_CHANNEL_DEFS = buildNotifyChannelDefs()
 
 // ============================================
 // Helpers
@@ -230,7 +230,7 @@ function ChannelField({ field, value, onChange, docs }: ChannelFieldProps) {
     const checked = Boolean(value)
     return (
       <div className="flex items-center justify-between">
-        <label className="text-sm text-muted-foreground">{t(field.label)}</label>
+        <label className="text-sm text-muted-foreground">{field.label}</label>
         <label className="relative inline-flex items-center cursor-pointer">
           <input
             type="checkbox"
@@ -253,7 +253,7 @@ function ChannelField({ field, value, onChange, docs }: ChannelFieldProps) {
   if (field.type === 'select') {
     return (
       <div className="space-y-1">
-        <label className="text-sm text-muted-foreground">{t(field.label)}</label>
+        <label className="text-sm text-muted-foreground">{field.label}</label>
         <select
           value={(value as string) || field.options?.[0]?.value || ''}
           onChange={(e) => onChange(e.target.value)}
@@ -302,7 +302,7 @@ function ChannelField({ field, value, onChange, docs }: ChannelFieldProps) {
   return (
     <div className="space-y-1">
       <label className="text-sm text-muted-foreground">
-        {t(field.label)}
+        {field.label}
         {field.required && <span className="text-red-400 ml-0.5">*</span>}
       </label>
       <input
@@ -310,7 +310,7 @@ function ChannelField({ field, value, onChange, docs }: ChannelFieldProps) {
         value={displayValue}
         onChange={(e) => handleChange(e.target.value)}
         onBlur={handleBlur}
-        placeholder={field.placeholder ? t(field.placeholder) : undefined}
+        placeholder={field.placeholder}
         className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
       />
       {docs && (
@@ -343,7 +343,7 @@ function SmtpPortField({ label, value, invalid, onChange, onBlur }: SmtpPortFiel
   return (
     <div className="space-y-1">
       <label className="text-sm text-muted-foreground">
-        {t(label)}
+        {label}
         <span className="text-red-400 ml-0.5">*</span>
       </label>
       <input
@@ -1118,6 +1118,7 @@ function NotifyChannelCard({
 
 export function MessageChannelsSection({ config, setConfig }: MessageChannelsSectionProps) {
   const { t } = useTranslation()
+  const notifyChannelDefs = useMemo(() => buildNotifyChannelDefs(t), [t])
 
   const [expandedChannels, setExpandedChannels] = useState<Set<string>>(new Set())
   const [expandedInstances, setExpandedInstances] = useState<Set<string>>(new Set())
@@ -1758,7 +1759,7 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
         </div>
 
         {/* ── Notification channels (one-way) ───────────────────────── */}
-        {NOTIFY_CHANNEL_DEFS.map((def) => (
+        {notifyChannelDefs.map((def) => (
           <NotifyChannelCard
             key={def.id}
             def={def}

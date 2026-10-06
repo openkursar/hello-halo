@@ -552,7 +552,7 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
     if (files.length === 0) return
     const spaceId = mentionSpaceId ?? currentSpaceId
     if (!spaceId) {
-      showError(t('Open a space to attach files'))
+      showError(t('Open a workspace to attach files'))
       return
     }
     const tooLarge = (name: string) =>
@@ -1272,7 +1272,7 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
         label: canAttachLocalPaths ? t('Files and folders') : t('Files'),
         description: canAttachLocalPaths
           ? t('Attach from this computer; AI reads them where they are')
-          : t('Upload from this device into the space; images go to the AI directly'),
+          : t('Upload from this device into the workspace; images go to the AI directly'),
         meta: attachedCount > 0 ? String(attachedCount) : undefined,
         disabledReason: isProcessingImages ? t('Processing image...') : null,
         onSelect: () => void handleAttachClick(),
@@ -1495,7 +1495,7 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
           {uploading && (
             <div className="px-4 py-2 flex items-center gap-2 text-xs text-muted-foreground border-b border-border/30">
               <Loader2 size={14} className="animate-spin" />
-              <span>{t('Uploading {{count}} file(s)...', { count: uploadingCount })}</span>
+              <span>{t('Uploading {{count}} file(s)…', { count: uploadingCount })}</span>
             </div>
           )}
 
