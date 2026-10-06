@@ -252,6 +252,12 @@ context (what triggered this run, when, user config values).
 - For escalation follow-ups: includes the original question + user's response
 - User config values are included so the AI can use them (e.g., product URLs).
 
+**Not included: IM chats.** A scheduled or manual run starts from its trigger
+and the digital human's own memory. Excerpts of every IM chat used to be pasted
+in; with hundreds of chats that cost hundreds of thousands of tokens per run,
+read every chat file at start, and crowded the task out. What a chat taught that
+is worth keeping belongs in memory, written during the chat.
+
 ### 2.9 No IPC/HTTP Routes in This Module
 
 **Decision**: Runtime module exposes only a TypeScript service interface.
@@ -1217,7 +1223,7 @@ Canonical entries returned after answer acceptance and emitted activity upserts
 include the durable continuation status. A stopped attempt may expose
 `resumeAvailable` only when the original session exists and no unresolved or
 expired authorization blocks it. Task closure remains terminal and distinct from
-stopping an attempt. IM trigger history also reads the pinned session environment.
+stopping an attempt.
 
 After an unexpected shutdown, startup settles interrupted attempts and requeues
 persisted running continuations. Queued decisions remain durable if dependencies

@@ -243,8 +243,6 @@ export interface AppRuntimeDeps {
     retain(spaceId: string, holder: string): void
     release(spaceId: string, holder: string): void
   }
-  /** IM session registry for proactive push routing (null if not initialized) */
-  imSessionRegistry?: import('./im-session-registry').ImSessionRegistry | null
   /**
    * @deprecated IM forwarding is now AI-driven via notify_bot tool.
    * Retained for backward compatibility — no longer used at runtime.

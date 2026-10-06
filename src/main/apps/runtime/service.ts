@@ -49,14 +49,9 @@ import { AppNotRunnableError, EscalationNotFoundError, ConcurrencyLimitError } f
 import { Semaphore } from './concurrency'
 import { executeRun } from './execute'
 import { injectIntoActiveRun, isRunActive } from './active-runs'
-import { readSessionMessages } from './session-store'
-import { legacySessionEnvironmentKey } from './execution-environment'
 import { automaticEnabled, blockedReason, deriveRuntimeStatus } from './app-state'
 import { getActiveTeamRuntime } from './team'
-import { truncateUtf16Safe } from './text-truncate'
-import { getSpace } from '../../services/space.service'
 import { getEscalationQuestions, formatEscalationAnswer } from '../../../shared/apps/app-types'
-import type { ImSessionRecord } from '../../../shared/types/im-channel'
 import type { ContentReference } from '../../../shared/types/content-reference'
 import { broadcastToAll } from '../../http/websocket'
 import { destroyChatBrowserContextsForApp } from './app-chat-browser'
@@ -114,7 +109,6 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
   let shuttingDown = false
   let drainingContinuations = false
   const { store, appManager, scheduler, eventRouter, memory, background } = deps
-  const imSessionRegistry = deps.imSessionRegistry ?? null
 
   // ── Internal State ──────────────────────────────────
   const activations = new Map<string, ActivationState>()
@@ -219,122 +213,6 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       description: `Manually triggered run for "${app.spec.name}". ` +
         `Time: ${new Date().toISOString()}`,
     }
-  }
-
-  /** Max recent conversation turns (user + bot reply) to include per IM session */
-  const IM_HISTORY_TURN_LIMIT = 15
-
-  /** Max total characters for the IM context section (keeps trigger concise) */
-  const IM_HISTORY_MAX_CHARS = 3000
-
-  /** Max characters per individual message line (truncate long bot responses) */
-  const IM_MESSAGE_TRUNCATE = 500
-
-  /**
-   * Prefixes written by the old proactive push path (buildTriggerMessage).
-   * These are internal trigger signals, not real user messages — skip them.
-   */
-  const IM_TRIGGER_PREFIXES = ['[schedule]', '[event]', '[manual]']
-
-  /**
-   * Build an IM conversation history section for injection into trigger context.
-   *
-   * Groups raw JSONL messages into clean conversation turns: each turn is one
-   * user message paired with the bot's FINAL reply (intermediate tool-call
-   * narration is collapsed away, matching what IM users actually see).
-   *
-   * Internal trigger messages ([schedule]/[event]/[manual]) are filtered out.
-   * Returns null if no usable history exists.
-   */
-  function buildImContextForTrigger(
-    app: InstalledApp,
-    sessions: ImSessionRecord[]
-  ): string | null {
-    const space = app.spaceId ? getSpace(app.spaceId) : null
-    const sections: string[] = []
-
-    for (const session of sessions) {
-      // Derive JSONL runId — mirrors deriveRunId() in app-chat.ts
-      const chatRunId = `chat-${session.channel}-${session.chatType}-${session.chatId}`
-      const sessionKey = `app-chat:${app.id}:${session.channel}:${session.chatType}:${session.chatId}`
-      const environment = store.getSessionEnvironment(sessionKey)
-        ?? store.getSessionEnvironment(legacySessionEnvironmentKey(app.id, chatRunId))
-      const spacePath = environment?.spacePath ?? space?.path
-      if (!spacePath) {
-        console.warn('[Runtime] IM trigger history unavailable: missing session environment', { appId: app.id, sessionKey })
-        continue
-      }
-      // Only recent turns are used; several messages per turn (tool narration) leave headroom.
-      const messages = readSessionMessages(spacePath, app.id, chatRunId, { limit: IM_HISTORY_TURN_LIMIT * 8 })
-      if (messages.length === 0) continue
-
-      // ── Group into turns ──────────────────────────────────────────────────
-      // Each turn = one real user message + the bot's last reply for that turn.
-      // Multiple consecutive bot messages (tool-call narration) are collapsed
-      // to the final one — that's what the IM user actually received.
-      const turns: Array<{ user: string; botFinal: string }> = []
-      let pendingUser: string | null = null
-      let pendingBotFinal: string | null = null
-
-      for (const m of messages) {
-        if (m.role === 'user') {
-          // Flush completed turn before starting a new one
-          if (pendingUser !== null && pendingBotFinal !== null) {
-            turns.push({ user: pendingUser, botFinal: pendingBotFinal })
-          }
-          // Skip internal trigger signals — not real user messages
-          if (IM_TRIGGER_PREFIXES.some(p => m.content.startsWith(p))) {
-            pendingUser = null
-            pendingBotFinal = null
-            continue
-          }
-          pendingUser = m.content
-          pendingBotFinal = null
-        } else {
-          // Bot message — keep overwriting so we always have the last one
-          if (pendingUser !== null) {
-            pendingBotFinal = m.content
-          }
-        }
-      }
-      // Flush the last turn
-      if (pendingUser !== null && pendingBotFinal !== null) {
-        turns.push({ user: pendingUser, botFinal: pendingBotFinal })
-      }
-
-      if (turns.length === 0) continue
-
-      // ── Format recent turns ───────────────────────────────────────────────
-      const recentTurns = turns.slice(-IM_HISTORY_TURN_LIMIT)
-      let totalChars = 0
-      const lines: string[] = []
-
-      for (const turn of recentTurns) {
-        const userLine = truncateUtf16Safe(turn.user, IM_MESSAGE_TRUNCATE)
-        const botLine = `[bot] ${truncateUtf16Safe(turn.botFinal, IM_MESSAGE_TRUNCATE)}`
-        const turnText = `${userLine}\n${botLine}`
-        totalChars += turnText.length
-        if (totalChars > IM_HISTORY_MAX_CHARS) break
-        lines.push(turnText)
-      }
-
-      if (lines.length > 0) {
-        const header = session.displayName || session.chatId
-        sections.push(
-          `#### ${header} (recent ${lines.length} exchanges)\n\n${lines.join('\n\n')}`
-        )
-      }
-    }
-
-    if (sections.length === 0) return null
-
-    return (
-      `### IM Conversation History\n\n` +
-      `Recent exchanges from IM channels where this App is active.\n` +
-      `Each entry: a user message followed by the bot's final reply.\n` +
-      `Use this to understand what users have been asking about and tailor your output accordingly.\n\n` +
-      sections.join('\n\n')
-    )
   }
 
   function buildEscalationTriggerContext(
@@ -486,17 +364,6 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     }
 
     const trigger = buildManualTriggerContext(app)
-
-    // ── Inject IM conversation history into trigger ─────
-    // Use getAllSessions (not the deprecated getProactiveSessions which
-    // filters by the removed `proactive` flag and always returns empty).
-    const imSessions = imSessionRegistry?.getAllSessions(appId)
-    if (imSessions && imSessions.length > 0) {
-      const imContext = buildImContextForTrigger(app, imSessions)
-      if (imContext) {
-        trigger.description += '\n\n' + imContext
-      }
-    }
 
     return { app, trigger }
   }
@@ -1701,8 +1568,6 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
 
   // ── Register scheduler handler ──────────────────────
   // This connects the scheduler's onJobDue to our execution logic.
-  // IM conversation history from proactive sessions is injected into the
-  // trigger context, and the run result is forwarded to IM after completion.
   scheduler.onJobDue('app', async (job: SchedulerJob): Promise<RunOutcome> => {
     const appId = (job.metadata as any)?.appId
     if (!appId) {
@@ -1718,15 +1583,6 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     const app = admission.app
 
     const trigger = buildScheduleTriggerContext(job, app)
-
-    // ── Inject IM conversation history into trigger ─────
-    const imSessions = imSessionRegistry?.getAllSessions(appId)
-    if (imSessions && imSessions.length > 0) {
-      const imContext = buildImContextForTrigger(app, imSessions)
-      if (imContext) {
-        trigger.description += '\n\n' + imContext
-      }
-    }
 
     try {
       const result = await executeWithConcurrency(app, trigger)

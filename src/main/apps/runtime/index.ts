@@ -399,7 +399,6 @@ export async function initAppRuntime(
       },
       release: releaseSpaceWatcher,
     },
-    imSessionRegistry: registry,
     getChannelAdapter: (channel: string) => {
       // For backward compatibility, look up by instance ID first (new path)
       // then fall back to channel type scan (for legacy sessions without instanceId)
