@@ -12,6 +12,8 @@
  *               and writable, the space's topics readable when offered —
  *               whether or not the policy grants file tools at all
  *   attached    files handed to this turn (what the guest sent) are readable
+ *   skills      the folders of the skills granted to this turn are readable:
+ *               a skill reads its own instructions and references as it runs
  *   workspace   a GRANTED tool reaches the workspace folder, never beyond it
  *   closed      the space's `.halo/` data folder — every conversation's record
  *               lives there — stays closed except for the memory above
@@ -47,6 +49,8 @@ export interface TurnFileAccess {
   memoryReadable: string[]
   /** Exact files handed to this turn */
   attachedFiles: string[]
+  /** Folders of the skills granted to this turn, readable only */
+  skillFolders?: string[]
   /** Where a granted file tool may reach */
   workspaceRoots: string[]
   /** Folders inside the workspace that stay closed except for memory */
@@ -72,6 +76,7 @@ interface Canonical {
   writable: string[]
   readable: string[]
   attached: Set<string>
+  skills: string[]
   workspace: string[]
   closed: string[]
 }
@@ -85,6 +90,7 @@ function canonicalOf(access: TurnFileAccess): Canonical {
       writable: access.memoryWritable.map(canonicalPath),
       readable: [...access.memoryWritable, ...access.memoryReadable].map(canonicalPath),
       attached: new Set(access.attachedFiles.map(canonicalPath)),
+      skills: (access.skillFolders ?? []).map(canonicalPath),
       workspace: access.workspaceRoots.map(canonicalPath),
       closed: access.closed.map(canonicalPath),
     }
@@ -141,7 +147,9 @@ export function decideFileAccess(
 
   for (const raw of targets) {
     const target = canonicalPath(raw)
-    if (withinAny(target, memory) || (reading && c.attached.has(target))) continue
+    if (withinAny(target, memory)) continue
+    if (reading && c.attached.has(target)) continue
+    if (reading && withinAny(target, c.skills) && !withinAny(target, c.closed)) continue
     if (!granted) {
       return {
         allow: false,

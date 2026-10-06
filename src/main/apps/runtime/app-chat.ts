@@ -110,10 +110,14 @@ import {
   beginDelegatedTurn,
   clearDelegation,
   createDelegationAuditHooks,
+  createSkillGateHooks,
   createTurnFileAccessHooks,
   decideDelegatedTool,
   turnFileExportRefusal,
 } from './delegation-gate'
+import { grantedSkillFolders, inertCommandText, turnSkillAccess, type TurnSkillAccess } from './turn-skills'
+import { listAvailableSkills } from '../skill-discovery'
+import { allowsBuiltin, SKILL_TOOL } from '../../../shared/apps/capability-policy'
 import type { CapabilityMode, CapabilityPolicy } from '../../../shared/apps/capability-policy'
 import type { TeamTriggerContext } from '../../../shared/apps/team-types'
 import { createFileSendMcpServer } from './im-channels/file-send-mcp'
@@ -152,7 +156,7 @@ import {
   appMemorySettings,
   appTurnFileAccess,
 } from './turn/memory-lifecycle'
-import { closedFolderDenyRules } from './turn-file-access'
+import { closedFolderDenyRules, FILE_TOOLS } from './turn-file-access'
 import { buildMemorySection } from './prompt'
 import { createReportToolServer, type ReportToolContext } from './report-tool'
 // Key builders live in shared/ so the renderer can import them without
@@ -968,6 +972,7 @@ async function runAppChatTurn(
   })
 
   let applied: ReturnType<typeof applyCapabilityPolicy> | null = null
+  let turnSkills: TurnSkillAccess | undefined
   if (delegation) {
     applied = applyCapabilityPolicy(sdkOptions, {
       policy: delegation.policy,
@@ -996,9 +1001,19 @@ async function runAppChatTurn(
         )
       }
       addSdkHooks(sdkOptions, createDelegationAuditHooks(conversationId))
+      addSdkHooks(sdkOptions, createSkillGateHooks(conversationId))
       if (strictFiles) {
         addSdkHooks(sdkOptions, createTurnFileAccessHooks(conversationId))
         sdkOptions.disallowedTools = [...(sdkOptions.disallowedTools ?? []), ...closedFolderDenyRules(turnFileAccess)]
+      }
+      // Which skills this turn may load, measured against what the engine now
+      // settles without asking — only where the skill tool exists for it at all.
+      if (allowsBuiltin(delegation.policy, SKILL_TOOL, delegation.mode)) {
+        turnSkills = turnSkillAccess(listAvailableSkills(spaceId), delegation.policy, delegation.mode, {
+          allowedRules: sdkOptions.allowedTools ?? [],
+          disallowed: sdkOptions.disallowedTools ?? [],
+          hooked: strictFiles ? [SKILL_TOOL, ...FILE_TOOLS] : [SKILL_TOOL],
+        })
       }
     }
     console.log(
@@ -1039,7 +1054,10 @@ async function runAppChatTurn(
     beginDelegatedTurn(conversationId, {
       policy: applied?.enforced ? delegation?.policy : undefined,
       mode: applied?.enforced ? delegation!.mode : 'permissive',
-      ...(applied?.enforced && strictFiles ? { files: turnFileAccess } : {}),
+      ...(applied?.enforced && strictFiles
+        ? { files: { ...turnFileAccess, skillFolders: grantedSkillFolders(turnSkills) } }
+        : {}),
+      ...(applied?.enforced && turnSkills ? { skills: turnSkills } : {}),
       ...(applied?.enforced && borrowedTeamTurn && teamContext
         ? {
             audit: {
@@ -1198,10 +1216,12 @@ async function runAppChatTurn(
 
     // With the non-vision fallback active, image blocks are replaced by the
     // injected attachment-paths block.
+    const messageText = memoryPreamble + formatCanvasContext(request.canvasContext)
+      + formatTurnAttachments({ references: request.references, workDir })
+      + (imageFallback?.contextBlock ?? '') + message
+    // A borrowed turn's message never runs as a command (turn-skills).
     const messageContent = buildMessageContent(
-      memoryPreamble + formatCanvasContext(request.canvasContext)
-        + formatTurnAttachments({ references: request.references, workDir })
-        + (imageFallback?.contextBlock ?? '') + message,
+      applied?.enforced ? inertCommandText(messageText) : messageText,
       imageFallback ? undefined : images
     )
 

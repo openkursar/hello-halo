@@ -11,10 +11,12 @@
  * do what.
  */
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { MessageSquare } from 'lucide-react'
 import { useTranslation } from '../../i18n'
+import { api } from '../../api'
 import type { ImChannelInstanceConfig } from '../../../shared/types/im-channel'
+import type { AvailableSkill } from '../../../shared/apps/app-types'
 import { CapabilityPolicyFields } from '../capability/CapabilityPolicyFields'
 import { Switch } from '../ui/Switch'
 import { withGuestAccess } from '../../../shared/apps/capability-policy'
@@ -54,6 +56,19 @@ export function ImInstancePermissionSection({
   const [ownersDraft, setOwnersDraft] = useState<string | null>(null)
 
   const ownersDisplay = ownersDraft ?? owners.join(', ')
+
+  // The skills the bound digital human can load, for the guest skill switches.
+  // Unknown until loaded (or when loading fails): the group stays hidden rather
+  // than claim the digital human has none.
+  const [skills, setSkills] = useState<AvailableSkill[] | undefined>(undefined)
+  useEffect(() => {
+    if (!guestAccessEnabled || !instance.appId) return
+    let cancelled = false
+    api.appListAvailableSkills(instance.appId)
+      .then(res => { if (!cancelled && res.success && Array.isArray(res.data)) setSkills(res.data) })
+      .catch(() => { /* the group stays hidden */ })
+    return () => { cancelled = true }
+  }, [guestAccessEnabled, instance.appId])
 
   // ── Handlers ──
 
@@ -187,6 +202,7 @@ export function ImInstancePermissionSection({
                     policy={guestPolicy}
                     mode="strict"
                     audience="guest"
+                    skills={skills?.map(s => ({ dirName: s.dirName, name: s.name, description: s.description }))}
                     onChange={(next) => onChange({ ...instance, guestPolicy: next })}
                   />
                 </div>

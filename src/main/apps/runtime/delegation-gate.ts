@@ -22,9 +22,14 @@ import {
   FILE_TOOLS,
   type TurnFileAccess,
 } from './turn-file-access'
+import { decideSkillCall, type TurnSkillAccess } from './turn-skills'
 import {
+  allowsBuiltin,
   allowsBuiltinAtCallTime,
+  canonicalBuiltinTool,
+  isRestrictivePolicy,
   resolveBashAccess,
+  SKILL_TOOL,
 } from '../../../shared/apps/capability-policy'
 import type { CapabilityMode, CapabilityPolicy } from '../../../shared/apps/capability-policy'
 import { TEAM_AUDIT_DETAIL_MAX } from '../../../shared/apps/team-types'
@@ -41,6 +46,8 @@ export interface ActiveDelegation {
   mode: CapabilityMode
   /** Where this turn's file tools may reach; see turn-file-access. */
   files?: TurnFileAccess
+  /** Which skills this turn may load; see turn-skills. */
+  skills?: TurnSkillAccess
   /** Identifies the turn in the owner's record. */
   audit?: {
     teamId: string
@@ -156,12 +163,24 @@ function judge(delegation: ActiveDelegation, toolName: string, input: Record<str
     }
   }
 
+  if (canonicalBuiltinTool(toolName) === SKILL_TOOL) return judgeSkill(delegation, input)
+
   if (delegation.files) {
     const decision = decideFileAccess(delegation.files, toolName, input, allowsBuiltinAtCallTime(policy, toolName, mode))
     if (decision) return decision.allow ? { allow: true } : { allow: false, reason: decision.reason }
   }
   if (allowsBuiltinAtCallTime(policy, toolName, mode)) return { allow: true }
   return { allow: false, reason: `"${toolName}" was not granted for this request.` }
+}
+
+/** A skill is decided by name, and only under a policy that withholds anything at all. */
+function judgeSkill(delegation: ActiveDelegation, input: Record<string, unknown>): ToolDecision {
+  const { policy, mode, skills } = delegation
+  if (!isRestrictivePolicy(policy, mode)) return { allow: true }
+  if (!skills || !allowsBuiltin(policy, SKILL_TOOL, mode)) {
+    return { allow: false, reason: 'Skills were not granted for this request.' }
+  }
+  return decideSkillCall(skills, input)
 }
 
 /**
@@ -228,6 +247,35 @@ export function createTurnFileAccessHooks(conversationId: string): Record<string
     PreToolUse: FILE_TOOLS.map(matcher => ({ matcher, hooks: [pre] })),
     PostToolUse: ['Grep', 'Glob'].map(matcher => ({ matcher, hooks: [post] })),
   }
+}
+
+/**
+ * The skill decision, as an engine hook. Needed besides the gate: the engine
+ * loads a skill that brings no pre-approvals of its own without asking the
+ * gate, and only a pre-tool hook sees every call. Read at call time, like the
+ * gate, because the session outlives the turn that registered its terms.
+ */
+export function createSkillGateHooks(conversationId: string): Record<string, unknown[]> {
+  const pre = async (hookInput: unknown): Promise<Record<string, unknown>> => {
+    const event = hookInput as { tool_name?: string; tool_input?: unknown }
+    const delegation = active.get(conversationId)
+    if (!delegation || !event?.tool_name || canonicalBuiltinTool(event.tool_name) !== SKILL_TOOL) return {}
+    const input = event.tool_input && typeof event.tool_input === 'object'
+      ? (event.tool_input as Record<string, unknown>)
+      : {}
+    const decision = judgeSkill(delegation, input)
+    if (decision.allow) return {}
+    record(delegation, event.tool_name, input, 'denied', decision.reason ?? null)
+    console.warn(`${LOG_TAG} refused ${event.tool_name} on ${conversationId}: ${decision.reason}`)
+    return {
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: decision.reason,
+      },
+    }
+  }
+  return { PreToolUse: [{ matcher: SKILL_TOOL, hooks: [pre] }] }
 }
 
 function record(
@@ -304,6 +352,7 @@ const DETAIL_FIELDS: readonly string[] = [
   'pattern',
   'url',
   'query',
+  'skill',
   'prompt',
   'description',
 ]

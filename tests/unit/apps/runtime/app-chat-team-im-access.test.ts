@@ -286,6 +286,13 @@ vi.mock('../../../../src/main/apps/runtime/turn/memory-lifecycle', () => ({
 vi.mock('../../../../src/main/services/memory-consolidation', () => ({
   requestConsolidation: vi.fn(),
 }))
+// The skills the digital human can load: one a guest may be allowed, one not.
+vi.mock('../../../../src/main/apps/skill-discovery', () => ({
+  listAvailableSkills: () => ['weekly-report', 'place-order'].map(dirName => ({
+    name: dirName, description: '', scope: 'global', dirName,
+    path: `/tmp/halo-test/skills/${dirName}`, content: `---\nname: ${dirName}\n---\nDo it.\n`,
+  })),
+}))
 
 // ============================================
 // Imports (after all mocks)
@@ -668,5 +675,55 @@ describe('a person\u2019s message whose two halves disagree is refused', () => {
     const chat = teamChat()
     await sendAppChatMessage({ ...imTurn(chat, true), imPermission: guest })
     expect(runsCommands(chat.conversationId)).toBe(false)
+  })
+})
+
+describe('a guest of a digital human\u2019s own IM chat, and its skills', () => {
+  /** What the session was handed as this turn's message. */
+  const sentText = (): string => String(send.mock.calls.at(-1)![0])
+
+  it('never has a message run as a command, where an owner\u2019s does', async () => {
+    // The engine runs a message starting with "/" as the command it names,
+    // loading any skill with no call the gate could judge.
+    const asGuest = { ...plainImTurn('g-slash-guest'), message: '/place-order two coffees' }
+    setImPermissionContext(asGuest.conversationId!, guest)
+    await sendAppChatMessage(asGuest)
+    expect(sentText()).toBe('[Sent as text: commands are not run directly in this conversation.]\n/place-order two coffees')
+
+    const asOwner = { ...plainImTurn('g-slash-owner'), message: '/place-order two coffees' }
+    setImPermissionContext(asOwner.conversationId!, listedOwner)
+    await sendAppChatMessage(asOwner)
+    expect(sentText()).toBe('/place-order two coffees')
+  })
+
+  it('gets the skill tool for the skills it was allowed, and only those load', async () => {
+    const turn = plainImTurn('g-skills')
+    setImPermissionContext(turn.conversationId!, { ...guest, guestPolicy: { allowedTools: [], allowedSkills: ['weekly-report'] } })
+    await sendAppChatMessage(turn)
+
+    expect(lastOptions().disallowedTools).not.toContain('Skill')
+    expect((lastOptions().hooks.PreToolUse as Array<{ matcher?: string }>).map(h => h.matcher)).toContain('Skill')
+    expect(decideDelegatedTool(turn.conversationId!, 'Skill', { skill: 'weekly-report' }).allow).toBe(true)
+    expect(decideDelegatedTool(turn.conversationId!, 'Skill', { skill: 'place-order' }).allow).toBe(false)
+    // Its own folder is readable for the turn; another skill's is not.
+    expect(decideDelegatedTool(turn.conversationId!, 'Read', { file_path: '/tmp/halo-test/skills/weekly-report/notes.md' }).allow).toBe(true)
+    expect(decideDelegatedTool(turn.conversationId!, 'Read', { file_path: '/tmp/halo-test/skills/place-order/SKILL.md' }).allow).toBe(false)
+  })
+
+  it('keeps the skill tool from a guest allowed no skill', async () => {
+    const turn = plainImTurn('g-no-skills')
+    setImPermissionContext(turn.conversationId!, guest)
+    await sendAppChatMessage(turn)
+
+    expect(lastOptions().disallowedTools).toContain('Skill')
+  })
+
+  it('gets sub-agents when allowed them, under both names the engine knows the tool by', async () => {
+    const turn = plainImTurn('g-agents')
+    setImPermissionContext(turn.conversationId!, { ...guest, guestPolicy: { allowedTools: ['Read', 'Agent'] } })
+    await sendAppChatMessage(turn)
+
+    expect(lastOptions().disallowedTools).not.toContain('Agent')
+    expect(lastOptions().disallowedTools).not.toContain('Task')
   })
 })

@@ -689,3 +689,112 @@ describe('a restricted turn is held to its file boundary', () => {
     expect(result.decision).toBeUndefined()
   })
 })
+
+import { createSkillGateHooks } from '../../../../src/main/apps/runtime/delegation-gate'
+import { grantedSkillFolders, turnSkillAccess } from '../../../../src/main/apps/runtime/turn-skills'
+import { FILE_TOOLS } from '../../../../src/main/apps/runtime/turn-file-access'
+import type { AvailableSkill } from '../../../../src/shared/apps/app-types'
+
+describe('a borrowed turn loads only the skills its owner allowed', () => {
+  const conv = 'conv-skills'
+  let root = ''
+  let skills: AvailableSkill[] = []
+
+  const skillAt = (dirName: string, frontmatter = ''): AvailableSkill => ({
+    name: dirName, description: '', scope: 'global', dirName,
+    path: join(root, 'skills', dirName),
+    content: `---\nname: ${dirName}\n${frontmatter}---\n\nDo the thing.\n`,
+  })
+
+  /** Register a guest turn the way app-chat does: the skill view, and the folders it opens. */
+  const guestTurn = (policy: { allowedTools: string[]; allowedSkills?: string[] }, audit?: (entry: TeamToolAudit) => void) => {
+    const access = turnSkillAccess(skills, policy, 'strict', {
+      allowedRules: ['TodoWrite', ...policy.allowedTools], disallowed: ['Bash', 'WebFetch'], hooked: ['Skill', ...FILE_TOOLS],
+    })
+    const files = appTurnFileAccess(
+      { type: 'app', spaceId: 's', spacePath: join(root, 'space'), appId: 'dh' },
+      { memoryActive: false, spaceMemoryOffered: false, workDir: join(root, 'space'), attachedFiles: [] }
+    )
+    beginDelegatedTurn(conv, {
+      policy, mode: 'strict', skills: access, files: { ...files, skillFolders: grantedSkillFolders(access) },
+      ...(audit ? { audit: { teamId: 't1', epochId: 'e1', appId: 'dh', actorAppId: null, external: true, sink: audit } } : {}),
+    })
+  }
+
+  /** The skill hook as the engine runs it on every Skill call. */
+  const hookSays = async (skill: string) => {
+    const hooks = createSkillGateHooks(conv) as { PreToolUse: Array<{ matcher: string; hooks: Array<(input: unknown) => Promise<any>> }> }
+    expect(hooks.PreToolUse.map(h => h.matcher)).toEqual(['Skill'])
+    const out = await hooks.PreToolUse[0].hooks[0]({ tool_name: 'Skill', tool_input: { skill } })
+    return out.hookSpecificOutput?.permissionDecision ?? 'no objection'
+  }
+
+  beforeEach(() => {
+    root = realpathSync(mkdtempSync(join(tmpdir(), 'turn-skills-')))
+    mkdirSync(join(root, 'space'), { recursive: true })
+    skills = [
+      skillAt('weekly-report'),
+      skillAt('place-order'),
+      skillAt('deploy', 'hooks:\n  Stop:\n    - hooks:\n        - type: command\n          command: ./deploy.sh\n'),
+    ]
+    for (const s of skills) {
+      mkdirSync(s.path, { recursive: true })
+      writeFileSync(join(s.path, 'SKILL.md'), s.content)
+      writeFileSync(join(s.path, 'reference.md'), 'facts')
+    }
+  })
+
+  afterEach(() => rmSync(root, { recursive: true, force: true }))
+
+  it('refuses a skill the owner did not allow, on every call — even one the engine would load unasked', async () => {
+    // The engine loads a skill without pre-approvals of its own without asking
+    // the gate; only the hook sees that call.
+    guestTurn({ allowedTools: [], allowedSkills: ['weekly-report'] })
+
+    expect(await hookSays('weekly-report')).toBe('no objection')
+    expect(await hookSays('place-order')).toBe('deny')
+    expect(decideDelegatedTool(conv, 'Skill', { skill: 'weekly-report' }).allow).toBe(true)
+    expect(decideDelegatedTool(conv, 'Skill', { skill: 'place-order' }).allow).toBe(false)
+  })
+
+  it('refuses every skill when none was allowed', async () => {
+    guestTurn({ allowedTools: ['Read'] })
+
+    expect(await hookSays('weekly-report')).toBe('deny')
+    expect(decideDelegatedTool(conv, 'Skill', { skill: 'weekly-report' }))
+      .toEqual({ allow: false, reason: 'Skills were not granted for this request.' })
+  })
+
+  it('refuses an allowed skill whose own pre-approvals reach past the request', async () => {
+    guestTurn({ allowedTools: [], allowedSkills: ['deploy'] })
+
+    expect(await hookSays('deploy')).toBe('deny')
+  })
+
+  it('stays out of the way of a turn that is not restricted', async () => {
+    beginDelegatedTurn(conv, { policy: undefined, mode: 'permissive' })
+
+    expect(await hookSays('place-order')).toBe('no objection')
+    expect(decideDelegatedTool(conv, 'Skill', { skill: 'place-order' }).allow).toBe(true)
+  })
+
+  it('lets an allowed skill read its own folder, without opening file reading in general', () => {
+    guestTurn({ allowedTools: [], allowedSkills: ['weekly-report'] })
+
+    expect(decideDelegatedTool(conv, 'Read', { file_path: join(root, 'skills/weekly-report/reference.md') }).allow).toBe(true)
+    expect(decideDelegatedTool(conv, 'Grep', { pattern: 'facts', path: join(root, 'skills/weekly-report') }).allow).toBe(true)
+    // Reading only, and only that skill's folder.
+    expect(decideDelegatedTool(conv, 'Write', { file_path: join(root, 'skills/weekly-report/reference.md') }).allow).toBe(false)
+    expect(decideDelegatedTool(conv, 'Read', { file_path: join(root, 'skills/place-order/reference.md') }).allow).toBe(false)
+    expect(decideDelegatedTool(conv, 'Read', { file_path: join(root, 'skills/deploy/reference.md') }).allow).toBe(false)
+  })
+
+  it('files a refused skill in the owner\'s record under its name', () => {
+    const filed: TeamToolAudit[] = []
+    guestTurn({ allowedTools: [], allowedSkills: ['weekly-report'] }, entry => filed.push(entry))
+
+    decideDelegatedTool(conv, 'Skill', { skill: 'place-order', args: 'two coffees' })
+
+    expect(filed.map(e => [e.toolName, e.decision, e.detail])).toEqual([['Skill', 'denied', 'place-order']])
+  })
+})

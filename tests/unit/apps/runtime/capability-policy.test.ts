@@ -10,8 +10,12 @@
 import { describe, it, expect } from 'vitest'
 import {
   ALL_BUILTIN_TOOLS,
+  ALWAYS_AVAILABLE_BUILTIN_TOOLS,
   DEFAULT_GUEST_ALLOWED_TOOLS,
+  SKILL_TOOL,
   allowsBuiltinAtCallTime,
+  allowsSkill,
+  canonicalBuiltinTool,
   capabilityPolicyFromPreset,
   defaultGuestPolicy,
   withGuestAccess,
@@ -379,5 +383,73 @@ describe('always-available tools', () => {
     expect(capabilityPolicyFromPreset('read_only').allowedTools).toEqual(
       DELEGABLE_BUILTIN_TOOLS.filter(t => t.group === 'file' || t.group === 'network').map(t => t.name)
     )
+  })
+})
+
+describe('the sub-agent switch', () => {
+  // The engine still answers to the tool's old name, "Task", and a rule naming
+  // it acts on the sub-agent tool. Left without a switch, "Task" stayed withheld
+  // and took the tool away whatever the owner ticked.
+  it('grants the tool under both of its names once a guest is allowed sub-agents', () => {
+    const withheld = computeDisallowedBuiltins({ allowedTools: ['Read', 'Agent'] }, 'strict')
+
+    expect(withheld).not.toContain('Agent')
+    expect(withheld).not.toContain('Task')
+    expect(allowsBuiltinAtCallTime({ allowedTools: ['Agent'] }, 'Task', 'strict')).toBe(true)
+  })
+
+  it('withholds both names while the switch is off', () => {
+    const withheld = computeDisallowedBuiltins({ allowedTools: ['Read'] }, 'strict')
+
+    expect(withheld).toEqual(expect.arrayContaining(['Agent', 'Task']))
+    expect(allowsBuiltinAtCallTime({ allowedTools: ['Read'] }, 'Task', 'strict')).toBe(false)
+  })
+})
+
+describe('skills', () => {
+  it('gives a guest the skill tool only once some skill was allowed', () => {
+    // It was withheld from every guest whatever the owner did: there was no
+    // switch for it, and a strict policy withholds what no switch grants.
+    expect(computeDisallowedBuiltins({ allowedTools: ['Read'], allowedSkills: ['weekly-report'] }, 'strict'))
+      .not.toContain('Skill')
+    expect(computeDisallowedBuiltins({ allowedTools: ['Read'] }, 'strict')).toContain('Skill')
+    expect(computeDisallowedBuiltins({ allowedTools: ['Read'], allowedSkills: [] }, 'strict')).toContain('Skill')
+  })
+
+  it('reads silence like the other lists: none for a guest, all for a teammate', () => {
+    expect(allowsSkill(undefined, 'weekly-report', 'strict')).toBe(false)
+    expect(allowsSkill({ allowedSkills: ['weekly-report'] }, 'weekly-report', 'strict')).toBe(true)
+    expect(allowsSkill({ allowedSkills: ['weekly-report'] }, 'place-order', 'strict')).toBe(false)
+    expect(allowsSkill(undefined, 'place-order', 'permissive')).toBe(true)
+    expect(allowsSkill({ allowedSkills: [] }, 'place-order', 'permissive')).toBe(false)
+  })
+
+  it('leaves a teammate with every skill until skills are listed, and enforces a list once there is one', () => {
+    expect(computeDisallowedBuiltins(fullCapabilityPolicy(), 'permissive')).toEqual([])
+    expect(computeDisallowedBuiltins({ allowedSkills: [] }, 'permissive')).toEqual(['Skill'])
+    expect(isRestrictivePolicy({ ...fullCapabilityPolicy(), allowedSkills: ['weekly-report'] }, 'permissive')).toBe(true)
+  })
+
+  it('is never auto-allowed: each call is decided per skill by the gate', () => {
+    const policy = { allowedTools: ['Read'], allowedSkills: ['weekly-report'] }
+
+    expect(buildAllowedToolRules(policy, 'strict').some(rule => rule.startsWith(SKILL_TOOL))).toBe(false)
+    expect(allowsBuiltinAtCallTime(policy, SKILL_TOOL, 'strict')).toBe(false)
+  })
+})
+
+describe('the switches and the withheld list are one definition', () => {
+  it('a guest with every switch on is withheld only the tools no switch offers', () => {
+    const everySwitch = { ...fullCapabilityPolicy(), allowedSkills: ['weekly-report'] }
+    const offered = (name: string) =>
+      ALWAYS_AVAILABLE_BUILTIN_TOOLS.includes(name) ||
+      name === SKILL_TOOL ||
+      DELEGABLE_BUILTIN_TOOLS.some(t => t.name === canonicalBuiltinTool(name))
+
+    const withheld = computeDisallowedBuiltins(everySwitch, 'strict')
+
+    expect(withheld.sort()).toEqual(ALL_BUILTIN_TOOLS.filter(name => !offered(name)).sort())
+    expect(withheld).not.toContain('Task')
+    expect(withheld).not.toContain('Skill')
   })
 })
