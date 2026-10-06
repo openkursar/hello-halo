@@ -17,6 +17,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { randomUUID } from 'crypto'
 import path from 'path'
+import fs from 'fs'
 
 // ============================================
 // Mocks for transitive dependencies
@@ -71,6 +72,7 @@ vi.mock('../../../../src/main/foundation/config.service', () => ({
   getConfig: vi.fn().mockReturnValue({}),
   getTempSpacePath: vi.fn().mockReturnValue('/tmp/halo-test/temp'),
   getHaloDir: vi.fn(() => path.join(globalThis.__HALO_TEST_DIR__, '.halo')),
+  resolveClaudeConfigDir: vi.fn(() => path.join(globalThis.__HALO_TEST_DIR__, 'claude-config')),
   onNetworkConfigChange: vi.fn(),
   onAgentConfigChange: vi.fn(),
 }))
@@ -2573,6 +2575,68 @@ describe('AppRuntimeService', () => {
 
       expect(firstMessage()).toMatch(/^Scheduled run for "test-automation" \(every 1h\)\. Time: \S+$/)
       expect(firstMessage()).not.toContain(chatText)
+    })
+  })
+
+  describe('runs past the transcript retention', () => {
+    let testAppId: string
+    let spacePath: string
+
+    beforeEach(() => {
+      vi.mocked(executeRun).mockClear()
+      testAppId = randomUUID()
+      spacePath = path.join(globalThis.__HALO_TEST_DIR__, `space-retention-${testAppId}`)
+      mockAppManager.getApp.mockReturnValue({
+        id: testAppId, status: 'active', spec: createTestSpec(), userConfig: {}, userOverrides: {}, spaceId: 'space-001',
+      })
+      dbManager.getAppDatabase().prepare(`
+        INSERT INTO installed_apps (id, spec_id, space_id, spec_json, status, user_config_json, user_overrides_json, permissions_json, installed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(testAppId, 'test-app', 'space-001', JSON.stringify(createTestSpec()), 'active', '{}', '{}', '{"granted":[],"denied":[]}', Date.now())
+    })
+
+    /** `count` finished runs, oldest first, each with a transcript written through the session store. */
+    function seedFinishedRuns(count: number): string[] {
+      const ids: string[] = []
+      for (let n = 0; n < count; n++) {
+        const runId = `old-run-${n}`
+        store.insertRun({
+          runId, appId: testAppId, sessionKey: `sk-${n}`, status: 'running', triggerType: 'schedule', startedAt: 1_000_000 + n,
+          environment: { spaceId: 'space-001', spacePath, workDir: spacePath, memoryDir: spacePath },
+        })
+        store.completeRun(runId, { status: 'error', finishedAt: 1_000_000 + n, durationMs: 1 })
+        store.updateRunSessionId(runId, `engine-${n}`)
+        openSessionWriter(spacePath, testAppId, runId).writeTrigger('go')
+        ids.push(runId)
+      }
+      return ids
+    }
+
+    const transcriptOf = (runId: string) => path.join(spacePath, '.halo', 'apps', testAppId, 'runs', `${runId}.jsonl`)
+
+    it('clears the oldest run’s process and engine session when one of the person’s runs ends', async () => {
+      const [oldest, next] = seedFinishedRuns(201)
+      const engineSession = path.join(globalThis.__HALO_TEST_DIR__, 'claude-config', 'projects', spacePath.replace(/[^a-zA-Z0-9]/g, '-'), 'engine-0.jsonl')
+      fs.mkdirSync(path.dirname(engineSession), { recursive: true })
+      fs.writeFileSync(engineSession, '{}\n')
+      const service = createService()
+
+      await service.triggerManually(testAppId)
+
+      expect(fs.existsSync(transcriptOf(oldest))).toBe(false)
+      expect(fs.existsSync(engineSession)).toBe(false)
+      expect(store.getRun(oldest)?.transcriptClearedAt).toEqual(expect.any(Number))
+      expect(fs.existsSync(transcriptOf(next))).toBe(true)
+    })
+
+    it('refuses to continue a run whose process was cleared, by Continue or by a follow-up', async () => {
+      const [oldest] = seedFinishedRuns(1)
+      store.markTranscriptCleared(oldest)
+      const service = createService()
+
+      await expect(service.continueFailedRun(testAppId, oldest)).rejects.toThrow('cleared under the retention rule')
+      await expect(service.injectIntoRun(testAppId, oldest, 'try again')).rejects.toThrow('cleared under the retention rule')
+      expect(executeRun).not.toHaveBeenCalled()
     })
   })
 

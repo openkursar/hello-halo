@@ -58,6 +58,7 @@ import { destroyChatBrowserContextsForApp } from './app-chat-browser'
 import { sendToRenderer } from '../../foundation/window.service'
 import { notifyAppEvent } from '../../services/notification.service'
 import { RunningRuns } from './running-runs'
+import { clearOldRunTranscripts } from './run-retention'
 
 // ============================================
 // Constants
@@ -86,6 +87,9 @@ const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000
 
 /** Recorded on runs whose process died before they could finish. */
 const INTERRUPTED_RUN_MESSAGE = 'Interrupted — Halo stopped while this run was in progress.'
+
+/** Refusal to continue a run whose transcript and engine session the retention rule deleted. */
+const RUN_PROCESS_CLEARED_MESSAGE = 'This execution can no longer be continued: its process was cleared under the retention rule'
 
 // ============================================
 // Service Factory
@@ -584,6 +588,12 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         noteSkippedSchedules(app.id, result.runId, busySince)
       } catch (skipErr) {
         console.error(`[Runtime][${runTag}] Failed to note skipped scheduled times:`, skipErr)
+      }
+
+      try {
+        clearOldRunTranscripts(store, app.id, app.spaceId ? deps.getSpacePath(app.spaceId) : null)
+      } catch (retentionErr) {
+        console.error(`[Runtime][${runTag}] Failed to clear old run transcripts:`, retentionErr)
       }
 
       // Update manager with run outcome
@@ -1387,6 +1397,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         throw new Error(`Run not found: ${runId}`)
       }
       if (store.isRunClosed(runId)) throw new Error('This task is closed')
+      if (run.transcriptClearedAt) throw new Error(RUN_PROCESS_CLEARED_MESSAGE)
       if (run.status !== 'error') {
         throw new Error(`Run ${runId} is not in error state (status: ${run.status})`)
       }
@@ -1441,6 +1452,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         throw new Error(`Run not found: ${runId}`)
       }
       if (store.isRunClosed(runId)) throw new Error('This task is closed')
+      if (run.transcriptClearedAt) throw new Error(RUN_PROCESS_CLEARED_MESSAGE)
       const appIsRunning = isAppBusy(appId) || store.hasQueuedSoloContinuation(appId)
       if (appIsRunning) {
         throw new Error(`App ${appId} is busy with another run — try again once it finishes`)

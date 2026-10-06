@@ -316,6 +316,8 @@ export interface AutomationRun {
   tokensUsed?: number
   errorMessage?: string
   sessionId?: string
+  /** When the retention rule deleted its process transcript and engine session; it can no longer be continued. */
+  transcriptClearedAt?: number
 }
 
 /**

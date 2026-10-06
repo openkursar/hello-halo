@@ -83,6 +83,11 @@ card is shown) and, for a person with schedules, that scheduled times coming due
 meanwhile are skipped. When the run ends, its latest entry says how many were
 (`content.skippedSchedules`) — one line, not an entry per skipped time.
 
+Only a person's newest 200 runs keep their process. `SessionDetailView` shows an
+older run's as cleared under the retention rule (`RUN_PROCESS_CLEARED`), with no
+Continue and no reply box; its timeline entry stays and no longer offers
+Continue either.
+
 Desktop and HTTP clients use the same APIs. Layout is mobile-first; long source
 names, selected answers, loading failures and unavailable teams remain readable
 without hover. Errors are explicit and retain the last useful records and drafts.

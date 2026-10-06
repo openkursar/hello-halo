@@ -14,7 +14,7 @@
  * derived from file content (see convertEventsToMessages).
  */
 
-import { existsSync, mkdirSync, appendFileSync, readFileSync, writeFileSync, fstatSync, statSync, copyFileSync, readSync } from 'fs'
+import { existsSync, mkdirSync, appendFileSync, readFileSync, writeFileSync, fstatSync, statSync, copyFileSync, readSync, rmSync } from 'fs'
 import { join } from 'path'
 import type { TeamTriggerContext } from '../../../shared/apps/team-types'
 import type { ImageAttachment } from '../../../shared/types/image-attachment'
@@ -410,6 +410,17 @@ export function readSessionMessageThoughts(
     message = loadParsedSession(filePath)?.messages.find(m => m.id === messageId)
   }
   return message?.thoughts ? [...message.thoughts] : []
+}
+
+/**
+ * Delete a run's transcript and its line index. Only that run's files: the
+ * same folder holds the person's chat transcripts.
+ */
+export function deleteRunTranscript(spacePath: string, appId: string, runId: string): void {
+  const filePath = getSessionFilePath(spacePath, appId, runId)
+  rmSync(filePath, { force: true })
+  rmSync(lineIndexPath(filePath), { force: true })
+  parsedSessions.delete(filePath)
 }
 
 /**

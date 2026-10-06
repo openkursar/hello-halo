@@ -35,6 +35,7 @@ import type { DatabaseManager } from '../../platform/store'
 import { getAppManager, type AppManagerService } from '../manager'
 import { previewAppSpaceChange, changeAppDefaultSpace, retainAppEnvironments } from './space-change'
 import { readSessionMessages } from './session-store'
+import { RunProcessClearedError } from './errors'
 import { buildAppCapabilityInventory } from './capability-inventory'
 import { buildPeopleDirectory } from './people-directory'
 import { getTeamStore } from '../team'
@@ -104,6 +105,7 @@ export {
   ConcurrencyLimitError,
   EscalationNotFoundError,
   RunExecutionError,
+  RunProcessClearedError,
 } from './errors'
 
 // Re-export concurrency for testing
@@ -498,6 +500,7 @@ export async function moveAppDefaultSpace(appId: string, newSpaceId: string): Pr
 export function readAppRunMessages(appId: string, runId: string) {
   const run = activityStoreRef?.getRun(runId)
   if (!run || run.appId !== appId) throw new Error('Execution is unavailable for this digital human')
+  if (run.transcriptClearedAt) throw new RunProcessClearedError(runId)
   const spacePath = run.environment?.spacePath
   if (!spacePath) throw new Error('The original execution environment is unavailable')
   return readSessionMessages(spacePath, appId, runId)

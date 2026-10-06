@@ -193,6 +193,7 @@ export const MODULE: RouteModuleMeta = {
         'The transcript behind the "View process" panel — same shape as chat/messages, but for one automation run. It is the only way to see why a run did what it did rather than what it reported.',
         'Get the runId from GET /api/apps/<appId>/activity. Read this when a run went wrong; for what it concluded, its activity entry is shorter and enough.',
         '404 when the app or its space is gone. An empty array means that run left no transcript, not that the ids were wrong.',
+        'Only a person\'s newest 200 runs keep their transcript. An older run answers {success:false,code:"RUN_PROCESS_CLEARED"}; its activity entry still says what it did, and it can no longer be continued.',
       ].join('\n'),
     },
     'GET /api/apps/:appId/state': {

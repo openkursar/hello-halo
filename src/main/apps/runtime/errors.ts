@@ -77,3 +77,18 @@ export class RunExecutionError extends Error {
     this.runId = runId
   }
 }
+
+/**
+ * Thrown when asked for the process of a run whose transcript the retention
+ * rule cleared. `code` lets a client say so in the user's language.
+ */
+export class RunProcessClearedError extends Error {
+  readonly name = 'RunProcessClearedError'
+  readonly code = 'RUN_PROCESS_CLEARED'
+  readonly runId: string
+
+  constructor(runId: string) {
+    super('The detailed process of this execution was cleared under the retention rule')
+    this.runId = runId
+  }
+}
