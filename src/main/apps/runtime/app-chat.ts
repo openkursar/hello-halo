@@ -1645,6 +1645,10 @@ export function getAppChatSessionState(appId: string, conversationId?: string): 
  * 5. Drop the sink so the next message starts with a fresh transcript writer
  * 6. Zero the registry's message-activity summary, if any
  *
+ * From the abort to the last step the conversation is held, so it reads busy:
+ * a reminder waiting for it, or a message, starts once the clear is complete,
+ * in the fresh conversation, not between its steps (they await).
+ *
  * Idempotent: safe to call even if the session doesn't exist.
  */
 async function clearSessionByConversationId(
@@ -1657,7 +1661,17 @@ async function clearSessionByConversationId(
     console.log(`[AppChat][${appId}] Session is generating, aborting first...`)
     await abortAppChatTurn(conversationId)
   }
+  // Taken after the abort, which would mark it stopped as well.
+  const hold = beginAppChatTurnStart(conversationId)
+  try {
+    await clearHeldSession(conversationId, appId, spaceId)
+  } finally {
+    hold.end()
+  }
+}
 
+/** The steps of {@link clearSessionByConversationId} after the abort, while the conversation is held. */
+async function clearHeldSession(conversationId: string, appId: string, spaceId: string): Promise<void> {
   // Drop the IM stream handle so subsequent stop() calls are idempotent;
   // the stream itself is finalized by clearImSession's tear-down below.
   clearImStreamHandle(conversationId)

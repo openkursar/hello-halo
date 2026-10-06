@@ -1310,8 +1310,10 @@ create a digital human for a reminder.
   chat starts its turn as soon as the stopped turn has wound down — it is due,
   and nobody cancelled it. `/clear` and "Clear all conversations" empty the
   chat's history and keep its reminders (cancelled on the page, or by asking in
-  the chat); one coming due afterwards starts in the fresh conversation, its
-  text saying on its own what it is about.
+  the chat). The clear holds the chat from its abort to its last step, so one
+  that was waiting, like one coming due later, starts in the fresh
+  conversation once the clear is complete, its text saying on its own what it
+  is about.
 
 ### 2.28 Pinned Environments Follow a Space's Working Directory
 
