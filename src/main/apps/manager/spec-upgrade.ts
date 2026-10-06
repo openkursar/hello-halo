@@ -6,8 +6,8 @@
  * the author last shipped it, recorded at install and at every upgrade: a field
  * still equal to the original was never edited and takes the new version; any
  * other field is the user's and stays. Run triggers are compared one by one, so
- * an edit to one schedule does not hold back a trigger the author adds. Values
- * are never merged inside a field.
+ * an edit to one schedule neither holds back a trigger the author adds nor
+ * brings back the one it replaced. Values are never merged inside a field.
  *
  * Pure: the caller validates the result and persists it.
  */
@@ -60,49 +60,97 @@ export function mergeAuthorUpgrade(
 }
 
 /**
- * A trigger is identified the way the scheduler keys its job: by id, else by
- * position — so an id-less trigger is matched by where it sits in the list.
+ * Which trigger of `other` each trigger of `base` became (index to index).
+ *
+ * Triggers with an id are the same trigger when their ids match. Id-less ones,
+ * the way authors usually write them, are paired first by identical content,
+ * so a trigger inserted or removed elsewhere cannot shift the rest; what is
+ * left is paired in order as the same trigger edited. A trigger still unpaired
+ * was added (in `other`) or removed (from `base`).
  */
-function keyed(subscriptions: SubscriptionDef[] | undefined): Map<string, SubscriptionDef> {
-  return new Map((subscriptions ?? []).map((sub, index) => [sub.id ?? String(index), sub]))
+function pairTriggers(base: SubscriptionDef[], other: SubscriptionDef[]): Map<number, number> {
+  const pairs = new Map<number, number>()
+  const taken = new Set<number>()
+  const pair = (i: number, j: number): void => {
+    pairs.set(i, j)
+    taken.add(j)
+  }
+
+  base.forEach((sub, i) => {
+    if (sub.id === undefined) return
+    const j = other.findIndex(candidate => candidate.id === sub.id)
+    if (j !== -1) pair(i, j)
+  })
+
+  const unnamed = base.flatMap((sub, i) => (sub.id === undefined ? [i] : []))
+  const free = (): number[] => other.flatMap((sub, j) => (sub.id === undefined && !taken.has(j) ? [j] : []))
+  for (const i of unnamed) {
+    const j = free().find(candidate => sameValue(base[i], other[candidate]))
+    if (j !== undefined) pair(i, j)
+  }
+  const rest = free()
+  unnamed.filter(i => !pairs.has(i)).forEach((i, k) => {
+    if (k < rest.length) pair(i, rest[k])
+  })
+  return pairs
 }
 
+function invert(pairs: Map<number, number>): Map<number, number> {
+  return new Map([...pairs].map(([from, to]) => [to, from]))
+}
+
+/**
+ * Each trigger of the original follows the user's side first: edited stays
+ * edited, deleted stays deleted, untouched follows the author (including the
+ * author removing it). Triggers new on either side are added, in the author's
+ * order, with the user's own after them.
+ */
 function mergeSubscriptions(
   current: SubscriptionDef[] | undefined,
   original: SubscriptionDef[] | undefined,
   next: SubscriptionDef[] | undefined,
 ): SubscriptionDef[] | undefined {
-  const mine = keyed(current)
-  const base = keyed(original)
+  const mine = current ?? []
+  const base = original ?? []
+  const theirs = next ?? []
+  const toMine = pairTriggers(base, mine)
+  const toTheirs = pairTriggers(base, theirs)
+  const fromMine = invert(toMine)
+  const fromTheirs = invert(toTheirs)
+
+  // A trigger both sides added independently is one trigger, not two: the
+  // same id, or for id-less ones the same content.
+  const addedByUser = mine.flatMap((_, m) => (fromMine.has(m) ? [] : [m]))
+  const addedByBoth = new Map<number, number>()
+  theirs.forEach((sub, t) => {
+    if (fromTheirs.has(t)) return
+    const m = addedByUser.find(candidate => ![...addedByBoth.values()].includes(candidate)
+      && (sub.id !== undefined ? mine[candidate].id === sub.id : sameValue(mine[candidate], sub)))
+    if (m !== undefined) addedByBoth.set(t, m)
+  })
+
   const merged: SubscriptionDef[] = []
-  const placed = new Set<string>()
-
-  for (const [key, sub] of keyed(next)) {
-    const own = mine.get(key)
-    const was = base.get(key)
-    if (!was) {
-      // New from the author — unless the user already gave a trigger this id,
-      // which makes it theirs.
-      if (own?.id === key) continue
-      merged.push(sub)
-      if (own && sameValue(own, sub)) placed.add(key)
-      continue
+  const placed = new Set<number>()
+  theirs.forEach((sub, t) => {
+    const b = fromTheirs.get(t)
+    const m = b === undefined ? addedByBoth.get(t) : toMine.get(b)
+    if (m === undefined) {
+      // New from the author; or, paired with the original, deleted by the user.
+      if (b === undefined) merged.push(sub)
+      return
     }
-    // Deleted by the user: it stays deleted.
-    if (!own) continue
-    merged.push(sameValue(own, was) ? sub : own)
-    placed.add(key)
-  }
-
-  for (const [key, own] of mine) {
-    if (placed.has(key)) continue
-    const was = base.get(key)
+    placed.add(m)
+    merged.push(b !== undefined && sameValue(mine[m], base[b]) ? sub : mine[m])
+  })
+  mine.forEach((own, m) => {
+    if (placed.has(m)) return
+    const b = fromMine.get(m)
     // Removed by the author and never edited: it goes with the author's version.
-    if (was && sameValue(own, was)) continue
+    if (b !== undefined && sameValue(own, base[b])) return
     merged.push(own)
-  }
+  })
 
-  return sameValue(merged, next ?? []) ? next : merged
+  return sameValue(merged, theirs) ? next : merged
 }
 
 /** Structural equality over JSON values; a missing key equals an undefined one. */

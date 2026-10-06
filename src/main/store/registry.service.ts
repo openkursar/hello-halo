@@ -956,12 +956,21 @@ export async function recordStoreOriginals(): Promise<number> {
 
   let recorded = 0
   let unavailable = 0
+  let ambiguous = 0
   for (const appId of pending) {
     const app = manager.getApp(appId)
     const slug = app?.spec.store?.slug
     if (!app || !slug) continue
-    const found = queryService.findEntry(slug, app.spec.store?.registry_id)
-    if (!found || isNewerVersion(found.entry.version, app.spec.version) || isNewerVersion(app.spec.version, found.entry.version)) {
+    const registryId = app.spec.store?.registry_id
+    // Another source's app under the same slug would be recorded as this one's
+    // original: without a recorded source, only a slug one source lists is safe.
+    if (!registryId && queryService.countSourcesListing(slug) !== 1) {
+      ambiguous++
+      continue
+    }
+    const found = queryService.findEntry(slug, registryId)
+    if (!found || (registryId && found.registryId !== registryId)
+      || isNewerVersion(found.entry.version, app.spec.version) || isNewerVersion(app.spec.version, found.entry.version)) {
       unavailable++
       continue
     }
@@ -972,9 +981,13 @@ export async function recordStoreOriginals(): Promise<number> {
       console.warn(`[RegistryService] Could not record the original of ${slug}@${app.spec.version} for ${appId}: ${(err as Error).message}`)
     }
   }
-  // Those whose installed version the store no longer serves can only be
-  // upgraded with every difference presumed to be the user's.
-  console.log(`[RegistryService] recordStoreOriginals: recorded=${recorded} unavailable=${unavailable} of ${pending.length}`)
+  // Those whose installed version the store no longer serves, or whose source
+  // is not known, can only be upgraded with every difference presumed to be
+  // the user's.
+  console.log(
+    `[RegistryService] recordStoreOriginals: recorded=${recorded} unavailable=${unavailable} ` +
+    `ambiguous=${ambiguous} of ${pending.length}`
+  )
   return recorded
 }
 

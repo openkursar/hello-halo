@@ -151,6 +151,75 @@ describe('mergeAuthorUpgrade', () => {
     })
   })
 
+  // Authors and the AI guides usually leave ids out, so a trigger is told apart
+  // by its content; pairing by position would let an insertion or a removal
+  // elsewhere drop the author's new trigger or revive one the user replaced.
+  describe('run triggers without ids', () => {
+    const at = (cron: string): SubscriptionDef => ({ source: { type: 'schedule', config: { cron } } })
+    const A = at('0 8 * * *')
+    const B = at('0 12 * * *')
+
+    it('adds the author’s trigger inserted in front and keeps the user’s edited time', () => {
+      const weekly = at('0 9 * * 1')
+      const edited = at('0 9 * * *')
+      const { spec, kept } = mergeAuthorUpgrade(
+        v12({ subscriptions: [edited] }),
+        v12({ subscriptions: [A] }),
+        v13({ subscriptions: [weekly, A] }),
+      )
+
+      expect(spec.subscriptions).toEqual([weekly, edited])
+      expect(kept).toContain('subscriptions')
+      expect(() => validateAppSpec(spec)).not.toThrow()
+    })
+
+    it('does not run an edited trigger twice when the author removes another one', () => {
+      const editedB = at('0 13 * * *')
+      const { spec } = mergeAuthorUpgrade(
+        v12({ subscriptions: [A, editedB] }),
+        v12({ subscriptions: [A, B] }),
+        v13({ subscriptions: [B] }),
+      )
+
+      expect(spec.subscriptions).toEqual([editedB])
+    })
+
+    it('gives an untouched trigger the author’s update after the user deleted the one before it', () => {
+      const updatedB = at('0 14 * * *')
+      const original = v12({ subscriptions: [A, B] })
+      const { spec } = mergeAuthorUpgrade(v12({ subscriptions: [B] }), original, v13({ subscriptions: [A, updatedB] }))
+
+      expect(spec.subscriptions).toEqual([updatedB])
+
+      // Nothing is left mismatched for the next release to trip over.
+      const following = v13({ version: '1.4.0', subscriptions: [A, at('0 15 * * *')] })
+      const again = mergeAuthorUpgrade(v13({ subscriptions: spec.subscriptions as SubscriptionDef[] }), v13({ subscriptions: [A, updatedB] }), following)
+      expect(again.spec.subscriptions).toEqual([at('0 15 * * *')])
+    })
+
+    it('keeps a trigger once when the user already added the one the author adds', () => {
+      const hourly: SubscriptionDef = { source: { type: 'schedule', config: { every: '1h' } } }
+      const { spec } = mergeAuthorUpgrade(
+        v12({ subscriptions: [A, hourly] }),
+        v12({ subscriptions: [A] }),
+        v13({ subscriptions: [hourly, A] }),
+      )
+
+      expect(spec.subscriptions).toEqual([hourly, A])
+    })
+
+    it('keeps a trigger the user edited even when the author removed it', () => {
+      const editedA = at('0 7 * * *')
+      const { spec } = mergeAuthorUpgrade(
+        v12({ subscriptions: [editedA, B] }),
+        v12({ subscriptions: [A, B] }),
+        v13({ subscriptions: [B] }),
+      )
+
+      expect(spec.subscriptions).toEqual([B, editedA])
+    })
+  })
+
   describe('without the author’s original', () => {
     it('keeps every difference, adds nothing the user might have removed, and still moves the version', () => {
       const { spec, kept } = mergeAuthorUpgrade(edited, null, v13())

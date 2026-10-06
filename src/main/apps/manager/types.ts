@@ -418,6 +418,9 @@ export interface AppManagerService {
    */
   recordAuthorSpec(appId: string, authorSpec: AppSpec): boolean
 
+  /** The author's original that upgrades compare against, or null when none is recorded. */
+  getAuthorSpec(appId: string): AppSpec | null
+
   /** Store-installed digital humans that have no author's original recorded yet. */
   listStoreInstallsWithoutAuthorSpec(): string[]
 

@@ -213,6 +213,14 @@ export class QueryService {
     return this.findEntryInQueryCache(slug)
   }
 
+  /** How many mirrored sources list this slug; proxy caches are not counted. */
+  countSourcesListing(slug: string): number {
+    const row = this.db.prepare(
+      `SELECT COUNT(DISTINCT registry_id) AS sources FROM registry_items WHERE slug = ?`
+    ).get(slug) as { sources: number }
+    return row.sources
+  }
+
   /**
    * Search through proxy query cache results for a matching slug.
    * Used when the entry isn't in registry_items (proxy sources).

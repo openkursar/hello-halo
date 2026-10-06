@@ -956,6 +956,10 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       return recorded
     },
 
+    getAuthorSpec(appId: string): AppSpec | null {
+      return store.getAuthorSpec(appId)
+    },
+
     listStoreInstallsWithoutAuthorSpec(): string[] {
       return store.listStoreInstallsWithoutAuthorSpec()
     },

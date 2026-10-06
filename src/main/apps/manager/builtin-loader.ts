@@ -510,7 +510,7 @@ async function processEntry(
       processed.failures++
       console.warn(`[BuiltinLoader] Failed to upgrade "${stampedSpec.name}":`, err)
     }
-  } else if (versionOrder === 0) {
+  } else if (versionOrder === 0 && !appManager.getAuthorSpec(existing.id)) {
     // The bundle still carries the installed version, so it is that version's
     // original: record it for a row installed before originals were kept.
     try {

@@ -324,10 +324,15 @@ written at install and replaced at every upgrade (`spec-upgrade.ts`).
   new version (including its removal); any other field keeps the user's value.
 - Release fields — `type`, `spec_version`, `version`, `author`, `store` — always
   follow the author.
-- Run triggers are compared one by one, identified as the scheduler keys their
-  jobs (`id`, else position): an edited trigger stays, a deleted one stays
-  deleted, an untouched one takes the new version, the author's new ones are
-  added and the ones the author dropped go unless the user edited them.
+- Run triggers are compared one by one: an edited trigger stays (whatever the
+  author did to it), a deleted one stays deleted, an untouched one takes the new
+  version or goes with the author's removal, the author's new ones are added
+  and the user's own are kept. A trigger with an `id` is identified by it.
+  Id-less triggers — how authors and the AI guides usually write them — are
+  paired by identical content first, then the rest in order as the same trigger
+  edited; pairing by position alone would let a trigger inserted or removed
+  elsewhere drop the author's new one and revive the one the user replaced.
+  The same trigger added by both sides is kept once.
 - Nothing is merged inside a field: a prompt is the user's or the author's.
 
 The outcome (`SpecUpgradeOutcome`, shared) names the fields left different from
@@ -355,10 +360,20 @@ copying the current spec would pass the user's edits off as the author's. The
 original exists only while its source still serves the installed version, so it
 is recorded then: by the store's update check (`recordStoreOriginals`) and by
 the built-in loader when the bundled version equals the installed one
-(`recordAuthorSpec`, which accepts no other version and never replaces one). An
-upgrade that finds none presumes every difference to be the user's: nothing is
-overwritten, and the outcome says the kept fields are undetermined
-(`editsKnown: false`). From then on the new version is the original.
+(`recordAuthorSpec`, which accepts no other version and never replaces one).
+The store check only trusts the source the app was installed from; an install
+that recorded none is matched only when a single source lists its slug, since
+another source's app under the same slug may be someone else's.
+
+An upgrade that finds no original presumes every difference to be the user's:
+nothing is overwritten, the author's new triggers are not added (the user
+might have removed them), and the outcome says the kept fields are
+undetermined (`editsKnown: false`). From then on the new version is the
+original, so the fields kept that time differ from it at every later upgrade
+and stay at the user's current version until the user switches them to the
+author's version. Nothing records that they were undetermined: the activity
+note says only that these fields differ from the author's new version, which
+stays true either way, never that the user changed them.
 
 **When the merge is invalid**: fields from two versions can break a rule that
 spans fields (a kept `config_schema` lacking a key the author's new trigger

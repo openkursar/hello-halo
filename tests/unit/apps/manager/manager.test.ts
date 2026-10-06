@@ -1774,6 +1774,17 @@ describe('AppManager', () => {
       expect(store.getAuthorSpec(appId)?.version).toBe('1.3.0')
     })
 
+    // Acceptance as authors usually write triggers: without ids.
+    it('adds the author’s new trigger and keeps the user’s edited one when triggers carry no id', async () => {
+      const at = (cron: string) => ({ source: { type: 'schedule', config: { cron } } })
+      const appId = await service.install(TEST_SPACE_ID, storeSpec({ subscriptions: [at('0 8 * * *')] }))
+      service.updateSpec(appId, { subscriptions: [at('0 9 * * *')] })
+
+      service.upgradeSpec(appId, nextVersion({ subscriptions: [at('0 9 * * 1'), at('0 8 * * *')] }))
+
+      expect(automationSpec(appId).subscriptions).toEqual([at('0 9 * * 1'), at('0 9 * * *')])
+    })
+
     it('upgrades a digital human the user never edited exactly as before', async () => {
       const appId = await service.install(TEST_SPACE_ID, storeSpec())
 

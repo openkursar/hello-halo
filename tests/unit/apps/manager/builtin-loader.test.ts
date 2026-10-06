@@ -66,11 +66,12 @@ function installedBuiltin(version: string): InstalledApp {
   } as InstalledApp
 }
 
-function managerWith(app: InstalledApp) {
+function managerWith(app: InstalledApp, original: InstalledApp['spec'] | null = null) {
   return {
     listApps: vi.fn(() => [app]),
     upgradeSpec: vi.fn(() => ({ fromVersion: app.spec.version, toVersion: '1.1.0', kept: ['system_prompt'], editsKnown: true })),
     updateSpec: vi.fn(),
+    getAuthorSpec: vi.fn(() => original),
     recordAuthorSpec: vi.fn(() => true),
     install: vi.fn(),
   }
@@ -105,5 +106,15 @@ describe('loadBuiltinApps upgrades', () => {
 
     expect(manager.recordAuthorSpec).toHaveBeenCalledWith('app-1', expect.objectContaining({ version: '1.0.0' }))
     expect(manager.upgradeSpec).not.toHaveBeenCalled()
+  })
+
+  it('leaves an original already recorded alone', async () => {
+    writeBundle('1.0.0')
+    const app = installedBuiltin('1.0.0')
+    const manager = managerWith(app, app.spec)
+
+    await loadBuiltinApps(manager as unknown as AppManagerService)
+
+    expect(manager.recordAuthorSpec).not.toHaveBeenCalled()
   })
 })
