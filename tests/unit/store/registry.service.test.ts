@@ -49,6 +49,7 @@ import {
   listApps,
   installFromStore,
   applyUpgrade,
+  recordStoreOriginals,
   getRegistries,
   onSyncStatusChanged,
 } from "../../../src/main/store/registry.service"
@@ -566,7 +567,7 @@ ${requiresSkill ? `requires:\n  skills:\n    - ${requiresSkill}\n` : ""}store:
       }
       getAppManagerMock.mockReturnValue({
         getApp: vi.fn(() => installed),
-        updateSpec: vi.fn(),
+        upgradeSpec: vi.fn(() => ({ fromVersion: "1.0.0", toVersion: "1.1.0", kept: [], editsKnown: true })),
         listApps: vi.fn(() => []),
       })
       await serve([{ ...APP, version: "1.1.0" }], {
@@ -579,6 +580,132 @@ ${requiresSkill ? `requires:\n  skills:\n    - ${requiresSkill}\n` : ""}store:
         expect.objectContaining({ id: "official" }),
         { slug: "ledger-app", version: "1.1.0" },
       )
+    })
+
+    // Every upgrade path ends in the manager's merge, which is what keeps the
+    // user's edits; replacing the spec here would bypass it.
+    it("hands the author's new version to the manager's upgrade merge", async () => {
+      const installed = {
+        id: "app-1",
+        specId: "Ledger App",
+        status: "active",
+        spec: { name: "Ledger App", version: "1.0.0", store: { slug: "ledger-app", registry_id: "official" } },
+      }
+      const manager = {
+        getApp: vi.fn(() => installed),
+        upgradeSpec: vi.fn(() => ({ fromVersion: "1.0.0", toVersion: "1.1.0", kept: ["system_prompt"], editsKnown: true })),
+        updateSpec: vi.fn(),
+        listApps: vi.fn(() => []),
+      }
+      getAppManagerMock.mockReturnValue(manager)
+      await serve([{ ...APP, version: "1.1.0" }], {
+        "packages/digital-humans/ledger-app/spec.yaml": specYaml("1.1.0"),
+      })
+
+      const result = await applyUpgrade("app-1", "patch_minor")
+
+      expect(manager.upgradeSpec).toHaveBeenCalledWith("app-1", expect.objectContaining({
+        version: "1.1.0",
+        store: expect.objectContaining({ slug: "ledger-app", registry_id: "official", install_source: "store" }),
+      }))
+      expect(manager.updateSpec).not.toHaveBeenCalled()
+      expect(result).toMatchObject({ from: "1.0.0", to: "1.1.0", kept: ["system_prompt"], editsKnown: true })
+    })
+
+    describe("recording the originals of earlier installs", () => {
+      /** `registryId: null` is an install that recorded no source. */
+      function legacyManager(installedVersion: string, registryId: string | null = "official") {
+        const installed = {
+          id: "app-1",
+          specId: "Ledger App",
+          status: "active",
+          spec: { name: "Ledger App", version: installedVersion, store: { slug: "ledger-app", registry_id: registryId ?? undefined } },
+        }
+        return {
+          getApp: vi.fn(() => installed),
+          listApps: vi.fn(() => []),
+          listStoreInstallsWithoutAuthorSpec: vi.fn(() => ["app-1"]),
+          recordAuthorSpec: vi.fn(() => true),
+        }
+      }
+
+      it("records the store's copy of the installed version without opening an install order", async () => {
+        const manager = legacyManager("1.0.0")
+        getAppManagerMock.mockReturnValue(manager)
+        await serve([{ ...APP, version: "1.0.0" }], {
+          "packages/digital-humans/ledger-app/spec.yaml": specYaml("1.0.0"),
+        })
+
+        await expect(recordStoreOriginals()).resolves.toBe(1)
+
+        expect(manager.recordAuthorSpec).toHaveBeenCalledWith("app-1", expect.objectContaining({
+          version: "1.0.0",
+          store: expect.objectContaining({ slug: "ledger-app", registry_id: "official" }),
+        }))
+        expect(authorizeInstallMock).not.toHaveBeenCalled()
+      })
+
+      it("leaves an install alone once the store has moved past its version", async () => {
+        const manager = legacyManager("1.0.0")
+        getAppManagerMock.mockReturnValue(manager)
+        await serve([{ ...APP, version: "1.1.0" }], {
+          "packages/digital-humans/ledger-app/spec.yaml": specYaml("1.1.0"),
+        })
+        fetchMock.mockClear()
+
+        await expect(recordStoreOriginals()).resolves.toBe(0)
+
+        expect(manager.recordAuthorSpec).not.toHaveBeenCalled()
+        expect(fetchMock).not.toHaveBeenCalled()
+      })
+
+      it("records an install with no recorded source when only one source lists its slug", async () => {
+        const manager = legacyManager("1.0.0", null)
+        getAppManagerMock.mockReturnValue(manager)
+        await serve([{ ...APP, version: "1.0.0" }], {
+          "packages/digital-humans/ledger-app/spec.yaml": specYaml("1.0.0"),
+        })
+
+        await expect(recordStoreOriginals()).resolves.toBe(1)
+      })
+
+      // The same slug in another source can be another author's app entirely.
+      it("skips an install with no recorded source when several sources list its slug", async () => {
+        const manager = legacyManager("1.0.0", null)
+        getAppManagerMock.mockReturnValue(manager)
+        const OTHER = "https://example.com/registry"
+        fetchMock.mockImplementation(async (input) => {
+          const url = String(input)
+          const index = (source: string) => jsonResponse({
+            version: 1, generated_at: "2026-02-24T00:00:00.000Z", source, apps: [{ ...APP, version: "1.0.0" }],
+          } as RegistryIndex)
+          if (url === `${BASE}/index.json`) return index(BASE)
+          if (url === `${OTHER}/index.json`) return index(OTHER)
+          if (url.endsWith("/spec.yaml")) return textResponse(specYaml("1.0.0"))
+          return notFoundResponse()
+        })
+        const settled = trackSyncSettled()
+        initRegistryService({ db })
+        addRegistry({ name: "Other", url: OTHER, enabled: true })
+        await vi.waitFor(() => expect(settled).toContain("official"))
+        await refreshIndex()
+
+        await expect(recordStoreOriginals()).resolves.toBe(0)
+
+        expect(manager.recordAuthorSpec).not.toHaveBeenCalled()
+      })
+
+      it("skips an install whose recorded source no longer lists it", async () => {
+        const manager = legacyManager("1.0.0", "removed-source")
+        getAppManagerMock.mockReturnValue(manager)
+        await serve([{ ...APP, version: "1.0.0" }], {
+          "packages/digital-humans/ledger-app/spec.yaml": specYaml("1.0.0"),
+        })
+
+        await expect(recordStoreOriginals()).resolves.toBe(0)
+
+        expect(manager.recordAuthorSpec).not.toHaveBeenCalled()
+      })
     })
 
     it("settles the intent only once the bytes have arrived", async () => {

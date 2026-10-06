@@ -12,6 +12,9 @@
  *       - 'notify'  + any         → emit 'store:upgrade-available'
  *       - 'manual'  + any         → emit 'store:upgrade-available' (badge only)
  *   - Errors are isolated per-app — one failure must not block other upgrades.
+ *   - Each tick then records the author's original of store-installed digital
+ *     humans that predate recorded originals, while the store still serves the
+ *     installed version (`recordStoreOriginals`).
  *
  * Why this module owns the loop (not platform/scheduler):
  *   - The scheduler is for user-defined automation jobs; coupling system
@@ -21,7 +24,7 @@
  */
 
 import { getAppManager } from '../apps/manager'
-import { checkUpdates, applyUpgrade, emitUpgradeAvailable } from './registry.service'
+import { checkUpdates, applyUpgrade, emitUpgradeAvailable, recordStoreOriginals } from './registry.service'
 import type { UpdateInfo } from '../../shared/store/store-types'
 
 /** Default check interval: 6 hours. Override via `appStore.upgradeCheckIntervalMs` in HaloConfig. */
@@ -136,6 +139,14 @@ export async function checkNow(): Promise<{
           err instanceof Error ? err.message : String(err)
         )
       }
+    }
+
+    // After dispatch: an app upgraded above already has its new version
+    // recorded as the original.
+    try {
+      await recordStoreOriginals()
+    } catch (err) {
+      console.warn('[UpgradeService] Failed to record store originals:', err instanceof Error ? err.message : String(err))
     }
 
     console.log(

@@ -135,6 +135,22 @@ export interface InstalledApp {
 /** User-controlled per-app upgrade strategy. */
 export type UpgradeStrategy = 'auto' | 'notify' | 'manual'
 
+/**
+ * What an author's upgrade left on the user's version. `kept` names top-level
+ * spec fields; `subscriptions` stands for the run schedule as a whole.
+ */
+export interface SpecUpgradeOutcome {
+  fromVersion: string
+  toVersion: string
+  /** Fields that keep the user's value and therefore differ from the author's new version. */
+  kept: string[]
+  /**
+   * False when there was no author's original to compare with, so every
+   * difference was presumed to be the user's rather than known to be.
+   */
+  editsKnown: boolean
+}
+
 /** Filter criteria for listing Apps */
 export interface AppListFilter {
   /** Filter by space: string = specific space, null = global only, undefined = all */

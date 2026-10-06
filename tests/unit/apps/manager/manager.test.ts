@@ -1648,6 +1648,30 @@ describe('AppManager', () => {
 
       newManager.closeAll()
     })
+
+    // An existing row's original cannot be recovered from the row itself; a
+    // copy of its current spec would make the user's edits look like the
+    // author's and hand them to the next upgrade to overwrite.
+    it('migration v10 adds an empty author original and leaves existing rows untouched', () => {
+      const newManager = createDatabaseManager(':memory:')
+      const db = newManager.getAppDatabase()
+      newManager.runMigrations(db, MIGRATION_NAMESPACE, migrations.filter(m => m.version < 10))
+      const specJson = JSON.stringify(createTestSpec({ name: 'legacy-dh', store: { slug: 'legacy-dh', tags: [] } } as Partial<AppSpec>))
+      db.prepare(`
+        INSERT INTO installed_apps (id, spec_id, space_id, spec_json, status, installed_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run('legacy-app', 'legacy-dh', 'space-1', specJson, 'active', 1)
+
+      newManager.runMigrations(db, MIGRATION_NAMESPACE, migrations)
+
+      const row = db.prepare('SELECT spec_json, author_spec_json FROM installed_apps WHERE id = ?')
+        .get('legacy-app') as { spec_json: string; author_spec_json: string | null }
+      expect(row.spec_json).toBe(specJson)
+      expect(row.author_spec_json).toBeNull()
+      expect(new AppManagerStore(db).listStoreInstallsWithoutAuthorSpec()).toEqual(['legacy-app'])
+
+      newManager.closeAll()
+    })
   })
 
   // ===========================================================================
@@ -1676,6 +1700,232 @@ describe('AppManager', () => {
 
     it('throws AppNotFoundError when target app does not exist', () => {
       expect(() => service.setUpgradeStrategy('missing', 'auto')).toThrow(AppNotFoundError)
+    })
+  })
+
+  // ===========================================================================
+  // Author upgrades over the user's edits
+  // ===========================================================================
+
+  describe('author upgrades', () => {
+    const DAILY_8 = { id: 'daily', source: { type: 'schedule', config: { cron: '0 8 * * *' } } }
+    const DAILY_9 = { id: 'daily', source: { type: 'schedule', config: { cron: '0 9 * * *' } } }
+    const WEEKLY = { id: 'weekly', source: { type: 'schedule', config: { cron: '0 9 * * 1' } } }
+
+    function storeSpec(overrides: Record<string, unknown> = {}): AppSpec {
+      return createTestSpec({
+        name: 'daily-report',
+        version: '1.2.0',
+        description: 'Daily sales',
+        system_prompt: 'Summarize sales.',
+        subscriptions: [DAILY_8],
+        store: { slug: 'daily-report', tags: [], registry_id: 'official', install_source: 'store' },
+        ...overrides,
+      } as Partial<AppSpec>)
+    }
+
+    function nextVersion(overrides: Record<string, unknown> = {}): AppSpec {
+      return storeSpec({
+        version: '1.3.0',
+        description: 'Daily sales by region',
+        system_prompt: 'Summarize sales and flag anomalies.',
+        subscriptions: [DAILY_8, WEEKLY],
+        ...overrides,
+      })
+    }
+
+    function automationSpec(appId: string) {
+      const spec = service.getApp(appId)!.spec
+      if (spec.type !== 'automation') throw new Error('expected a digital human')
+      return spec
+    }
+
+    it('records the author’s original for store and bundled installs only', async () => {
+      const fromStore = await service.install(TEST_SPACE_ID, storeSpec())
+      const bundled = await service.install(TEST_SPACE_ID, createTestSpec({
+        name: 'bundled-dh',
+        store: { tags: [], install_source: 'builtin' },
+      } as Partial<AppSpec>))
+      const local = await service.install(TEST_SPACE_ID, createTestSpec({ name: 'local-dh' }))
+
+      expect(store.getAuthorSpec(fromStore)).toEqual(service.getApp(fromStore)!.spec)
+      expect(store.getAuthorSpec(bundled)).not.toBeNull()
+      expect(store.getAuthorSpec(local)).toBeNull()
+    })
+
+    it('keeps the user’s schedule and prompt edits and takes the rest of the new version', async () => {
+      const appId = await service.install(TEST_SPACE_ID, storeSpec())
+      service.updateSpec(appId, { system_prompt: 'Summarize sales. Only East China.', subscriptions: [DAILY_9] })
+
+      const outcome = service.upgradeSpec(appId, nextVersion())
+
+      const spec = automationSpec(appId)
+      expect(spec.version).toBe('1.3.0')
+      expect(spec.system_prompt).toBe('Summarize sales. Only East China.')
+      expect(spec.subscriptions).toEqual([DAILY_9, WEEKLY])
+      expect(spec.description).toBe('Daily sales by region')
+      expect(outcome).toEqual({
+        fromVersion: '1.2.0',
+        toVersion: '1.3.0',
+        kept: expect.arrayContaining(['system_prompt', 'subscriptions']),
+        editsKnown: true,
+      })
+      expect(outcome.kept).toHaveLength(2)
+      expect(store.getAuthorSpec(appId)?.version).toBe('1.3.0')
+    })
+
+    // Acceptance as authors usually write triggers: without ids.
+    it('adds the author’s new trigger and keeps the user’s edited one when triggers carry no id', async () => {
+      const at = (cron: string) => ({ source: { type: 'schedule', config: { cron } } })
+      const appId = await service.install(TEST_SPACE_ID, storeSpec({ subscriptions: [at('0 8 * * *')] }))
+      service.updateSpec(appId, { subscriptions: [at('0 9 * * *')] })
+
+      service.upgradeSpec(appId, nextVersion({ subscriptions: [at('0 9 * * 1'), at('0 8 * * *')] }))
+
+      expect(automationSpec(appId).subscriptions).toEqual([at('0 9 * * 1'), at('0 9 * * *')])
+    })
+
+    it('upgrades a digital human the user never edited exactly as before', async () => {
+      const appId = await service.install(TEST_SPACE_ID, storeSpec())
+
+      const outcome = service.upgradeSpec(appId, nextVersion())
+
+      expect(service.getApp(appId)!.spec).toEqual(store.getAuthorSpec(appId))
+      expect(automationSpec(appId).system_prompt).toBe('Summarize sales and flag anomalies.')
+      expect(outcome.kept).toEqual([])
+    })
+
+    it('follows the author again once the user goes back to the author’s version', async () => {
+      const appId = await service.install(TEST_SPACE_ID, storeSpec())
+      service.updateSpec(appId, { system_prompt: 'Mine.' })
+      service.upgradeSpec(appId, nextVersion())
+
+      service.updateSpec(appId, { system_prompt: 'Summarize sales and flag anomalies.' })
+      const outcome = service.upgradeSpec(appId, nextVersion({ version: '1.4.0', system_prompt: 'Even better.' }))
+
+      expect(automationSpec(appId).system_prompt).toBe('Even better.')
+      expect(outcome.kept).toEqual([])
+    })
+
+    it('changes nothing when the same upgrade lands twice', async () => {
+      const appId = await service.install(TEST_SPACE_ID, storeSpec())
+      service.updateSpec(appId, { system_prompt: 'Mine.' })
+      service.upgradeSpec(appId, nextVersion())
+      const afterFirst = service.getApp(appId)!.spec
+
+      const outcome = service.upgradeSpec(appId, nextVersion())
+
+      expect(service.getApp(appId)!.spec).toEqual(afterFirst)
+      expect(outcome.kept).toEqual(['system_prompt'])
+    })
+
+    it('keeps every difference of an install that predates recorded originals, then compares precisely', async () => {
+      const appId = await service.install(TEST_SPACE_ID, storeSpec())
+      service.updateSpec(appId, { system_prompt: 'Mine.' })
+      dbManager.getAppDatabase().prepare('UPDATE installed_apps SET author_spec_json = NULL WHERE id = ?').run(appId)
+
+      const outcome = service.upgradeSpec(appId, nextVersion())
+
+      const spec = automationSpec(appId)
+      expect(spec.version).toBe('1.3.0')
+      expect(spec.system_prompt).toBe('Mine.')
+      expect(spec.description).toBe('Daily sales')
+      expect(spec.subscriptions).toEqual([DAILY_8])
+      expect(outcome.editsKnown).toBe(false)
+      expect([...outcome.kept].sort()).toEqual(['description', 'subscriptions', 'system_prompt'])
+      expect(store.getAuthorSpec(appId)?.version).toBe('1.3.0')
+
+      // Taking the author's description makes it the author's again: the next
+      // release changes it without asking.
+      service.updateSpec(appId, { description: 'Daily sales by region' })
+      service.upgradeSpec(appId, nextVersion({ version: '1.4.0', description: 'Daily sales, all regions' }))
+      expect(automationSpec(appId).description).toBe('Daily sales, all regions')
+    })
+
+    it('keeps every differing field when combining the two versions breaks a cross-field rule', async () => {
+      const appId = await service.install(TEST_SPACE_ID, storeSpec({
+        config_schema: [{ key: 'city', label: 'City', type: 'text' }],
+      }))
+      service.updateSpec(appId, { config_schema: [{ key: 'city', label: 'Your city', type: 'text' }] })
+      const regional = { id: 'regional', source: { type: 'schedule', config: { every: '1d' } }, config_key: 'region' }
+
+      const outcome = service.upgradeSpec(appId, nextVersion({
+        config_schema: [{ key: 'city', label: 'City', type: 'text' }, { key: 'region', label: 'Region', type: 'text' }],
+        subscriptions: [DAILY_8, regional],
+      }))
+
+      const spec = automationSpec(appId)
+      expect(spec.version).toBe('1.3.0')
+      expect(spec.config_schema).toEqual([{ key: 'city', label: 'Your city', type: 'text' }])
+      expect(spec.subscriptions).toEqual([DAILY_8])
+      expect(outcome.editsKnown).toBe(false)
+      expect(outcome.kept).toEqual(expect.arrayContaining(['config_schema', 'subscriptions']))
+    })
+
+    it('replaces other app types as updateSpec does', async () => {
+      const mcp = {
+        spec_version: '1',
+        name: 'crm-mcp',
+        version: '1.0.0',
+        author: 'author',
+        description: 'CRM',
+        type: 'mcp',
+        mcp_server: { command: 'crm', args: ['--v1'] },
+        store: { slug: 'crm-mcp', tags: [] },
+      } as unknown as AppSpec
+      const appId = await service.install(null, mcp)
+
+      const outcome = service.upgradeSpec(appId, { ...mcp, version: '1.1.0', mcp_server: { command: 'crm', args: ['--v2'] } } as AppSpec)
+
+      const spec = service.getApp(appId)!.spec
+      expect(spec.type === 'mcp' && spec.mcp_server.args).toEqual(['--v2'])
+      expect(outcome).toEqual({ fromVersion: '1.0.0', toVersion: '1.1.0', kept: [], editsKnown: true })
+      expect(store.getAuthorSpec(appId)).toBeNull()
+    })
+
+    it('resets the original when a removed digital human is installed again', async () => {
+      const appId = await service.install(TEST_SPACE_ID, storeSpec())
+      service.updateSpec(appId, { system_prompt: 'Mine.' })
+      await service.uninstall(appId)
+
+      await service.install(TEST_SPACE_ID, nextVersion())
+
+      expect(automationSpec(appId).system_prompt).toBe('Summarize sales and flag anomalies.')
+      expect(store.getAuthorSpec(appId)?.version).toBe('1.3.0')
+    })
+
+    describe('recordAuthorSpec', () => {
+      async function legacyInstall(): Promise<string> {
+        const appId = await service.install(TEST_SPACE_ID, storeSpec())
+        dbManager.getAppDatabase().prepare('UPDATE installed_apps SET author_spec_json = NULL WHERE id = ?').run(appId)
+        return appId
+      }
+
+      it('records the installed version’s spec once and never replaces it', async () => {
+        const appId = await legacyInstall()
+        expect(service.listStoreInstallsWithoutAuthorSpec()).toEqual([appId])
+
+        expect(service.recordAuthorSpec(appId, storeSpec())).toBe(true)
+        expect(service.recordAuthorSpec(appId, storeSpec({ description: 'Changed' }))).toBe(false)
+
+        expect(store.getAuthorSpec(appId)?.description).toBe('Daily sales')
+        expect(service.listStoreInstallsWithoutAuthorSpec()).toEqual([])
+      })
+
+      it('refuses the spec of another version', async () => {
+        const appId = await legacyInstall()
+
+        expect(service.recordAuthorSpec(appId, nextVersion())).toBe(false)
+        expect(store.getAuthorSpec(appId)).toBeNull()
+      })
+
+      it('does not list digital humans created locally or removed', async () => {
+        await service.install(TEST_SPACE_ID, createTestSpec({ name: 'local-dh' }))
+        const removed = await legacyInstall()
+        await service.uninstall(removed)
+
+        expect(service.listStoreInstallsWithoutAuthorSpec()).toEqual([])
+      })
     })
   })
 
