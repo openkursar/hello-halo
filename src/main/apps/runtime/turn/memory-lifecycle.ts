@@ -36,6 +36,7 @@ import {
   type ConsolidationRequest,
 } from '../../../services/memory-consolidation'
 import { isSpaceMemoryEnabled } from '../../../services/space.service'
+import { resolveClaudeConfigDir } from '../../../foundation/config.service'
 import type { ResolvedSdkCredentials } from '../../../services/agent/sdk-config'
 import type { AppSpec } from '../../spec'
 import { getTeamStore } from '../../team'
@@ -182,6 +183,9 @@ export function appTurnFileAccess(
     // Where images for a text-only model are persisted (services/agent image-attachments).
     hookGuarded: [...new Set([join(opts.workDir, '.halo', 'attachments'), join(scope.spacePath, '.halo', 'attachments')])],
     memorySystemPaths: [...systemPaths(own), ...systemPaths(space)],
+    // Where the engines read the owner's settings and global skills; it can sit
+    // inside a workspace (a space at the home folder, a custom location).
+    engineConfigDirs: [resolveClaudeConfigDir()],
   }
 }
 

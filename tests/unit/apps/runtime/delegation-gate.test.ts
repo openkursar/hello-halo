@@ -348,12 +348,49 @@ describe('a restricted turn is held to its file boundary', () => {
     }
     // Reading them is unchanged, and so is writing anything else.
     expect(allow('Read', { file_path: join(space, 'CLAUDE.md') })).toBe(true)
+    expect(allow('Read', { file_path: join(space, '.git/config') })).toBe(true)
     expect(allow('Read', { file_path: join(space, '.claude/skills/report/SKILL.md') })).toBe(true)
     expect(allow('Write', { file_path: join(space, 'src/new.ts') })).toBe(true)
     // Not even as memory.
     withAccess({ allowedTools: [] })
     expect(allow('Write', { file_path: join(space, '.halo/apps/dh/memory/topics/faq.md') })).toBe(true)
     expect(allow('Write', { file_path: join(space, '.halo/apps/dh/memory/topics/CLAUDE.md') })).toBe(false)
+  })
+
+  it('never writes what git reads: the engine runs git in the workspace as every session starts', () => {
+    // A config or hook there runs a command with the owner's authority the
+    // next time git runs here — a repository the turn assembles itself included.
+    withAccess({ allowedTools: ['Read', 'Write', 'Edit'] })
+    for (const path of ['.git/config', '.git/hooks/pre-commit', 'sub/.git/config', 'vendor/lib/.git/hooks/post-checkout', '.git']) {
+      expect(allow('Write', { file_path: join(space, path) }), path).toBe(false)
+      expect(allow('Edit', { file_path: join(space, path) }), path).toBe(false)
+    }
+    // A name that only starts like it is an ordinary file.
+    expect(allow('Write', { file_path: join(space, '.gitignore') })).toBe(true)
+    expect(allow('Write', { file_path: join(space, 'notes.git/readme.md') })).toBe(true)
+  })
+
+  it('reads a name the way Windows does: a stream suffix and trailing dots or spaces name the same file', () => {
+    // `CLAUDE.md::$DATA` and `CLAUDE.md.` are written to CLAUDE.md there.
+    withAccess({ allowedTools: ['Read', 'Write'] })
+    for (const path of [
+      'CLAUDE.md::$DATA', 'CLAUDE.md.', 'CLAUDE.md ', 'AGENTS.md:$DATA', '.mcp.json...',
+      '.git./config', '.git::$INDEX_ALLOCATION/config', '.claude /settings.json',
+    ]) {
+      expect(allow('Write', { file_path: join(space, path) }), path).toBe(false)
+    }
+    expect(allow('Write', { file_path: join(space, 'notes.md.') })).toBe(true)
+  })
+
+  it('never writes the engine\'s configuration folder, under whatever name it sits in the workspace', () => {
+    // The owner's settings and global skills; a space at the home folder, or a
+    // custom configuration folder, puts it inside the workspace.
+    const configDir = join(space, 'halo-config')
+    withAccess({ allowedTools: ['Read', 'Write'] }, { engineConfigDirs: [configDir] })
+    expect(allow('Write', { file_path: join(configDir, 'settings.json') })).toBe(false)
+    expect(allow('Write', { file_path: join(configDir, 'skills/report/SKILL.md') })).toBe(false)
+    expect(allow('Read', { file_path: join(configDir, 'skills/report/SKILL.md') })).toBe(true)
+    expect(allow('Write', { file_path: join(space, 'halo-config-notes.md') })).toBe(true)
   })
 
   it('reads engine folders below the workspace only, never above it', () => {

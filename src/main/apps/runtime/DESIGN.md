@@ -1569,14 +1569,21 @@ for external integrations. Both paths share admission and concurrency checks.
   - the folder of each skill the turn may load is readable, read only, whatever
     the reading switches say: a skill reads its own instructions and references
     as it runs, and a global skill lives outside the workspace.
-  - what an engine reads as its own settings or standing instructions is never
-    written, granted Write or not, memory included: `.claude/`, `.agents/` and
-    `.codex/` anywhere below the workspace, and `CLAUDE.md`, `CLAUDE.local.md`,
-    `AGENTS.md`, `AGENTS.override.md` and `.mcp.json` by name anywhere
-    (`ENGINE_CONTROL_FOLDERS` / `ENGINE_CONTROL_FILES`, each entry with the engine
-    that reads it). A write there would outlive the turn and act with the
-    owner's authority — settings and hooks run commands, instructions speak
-    into every later session, a skill's files are reloaded while a turn runs.
+  - a file tool (Write, Edit, MultiEdit, NotebookEdit) never writes what an
+    engine, or git that it runs, reads as settings, hooks or standing
+    instructions, granted Write or not, memory included: `.claude/`,
+    `.agents/`, `.codex/` and `.git` anywhere below the workspace, the engines'
+    configuration folder under whatever name it has (it can sit inside a
+    workspace), and `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`,
+    `AGENTS.override.md` and `.mcp.json` by name anywhere
+    (`ENGINE_CONTROL_FOLDERS` / `ENGINE_CONTROL_FILES` / `engineConfigDirs`,
+    each entry with what reads it). A name is read the way Windows writes it: a
+    `:stream` suffix and trailing dots or spaces name the same file. A write
+    there would outlive the turn and act with the owner's authority — settings,
+    hooks and git's config run commands (Claude Code runs git as every session
+    starts), instructions speak into every later session, a skill's files are
+    reloaded while a turn runs. This holds for the file tools; what else can
+    write is held as the next lines say.
   - Bash and the terminal cannot be held to paths; they follow the policy only.
   - Codex runs no restricted turn at all (it cannot enforce a policy).
 - TodoWrite is available to every caller (`ALWAYS_AVAILABLE_BUILTIN_TOOLS`).

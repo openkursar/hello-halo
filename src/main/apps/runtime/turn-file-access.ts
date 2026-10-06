@@ -17,8 +17,9 @@
  *   workspace   a GRANTED tool reaches the workspace folder, never beyond it
  *   closed      the space's `.halo/` data folder — every conversation's record
  *               lives there — stays closed except for the memory above
- *   engine      what an engine reads as its own settings or standing
- *               instructions is never written ({@link ENGINE_CONTROL_FOLDERS})
+ *   engine      a file tool never writes what an engine, or git that it runs,
+ *               reads as settings, hooks or standing instructions
+ *               ({@link ENGINE_CONTROL_FOLDERS})
  *
  * Paths are read the way the engines read them when they run the tool
  * (foundation/path-containment `resolveToolPath`: `~` expanded, no environment
@@ -65,6 +66,12 @@ export interface TurnFileAccess {
   hookGuarded: string[]
   /** System records inside the memory folders, closed even to recursion */
   memorySystemPaths: string[]
+  /**
+   * An engine's own configuration folders, under whatever name they have — a
+   * configuration folder set by the owner may sit inside the workspace. Never
+   * written by a file tool, like {@link ENGINE_CONTROL_FOLDERS}.
+   */
+  engineConfigDirs?: string[]
 }
 
 export const READ_FILE_TOOLS: readonly string[] = ['Read', 'Glob', 'Grep']
@@ -74,19 +81,23 @@ export const FILE_TOOLS: readonly string[] = [...READ_FILE_TOOLS, ...WRITE_FILE_
 export type FileAccessDecision = { allow: true } | { allow: false; reason: string }
 
 /**
- * Folders an engine reads as its own settings, skills, commands or standing
- * instructions, wherever they sit in the workspace (engines walk into
- * subfolders for them). A strict turn may read them but never write them: what
- * is written there outlives the turn and acts with the owner's authority —
- * settings and hooks run commands, instructions speak into every later session,
- * a skill's files are reloaded while the turn runs.
+ * Folders an engine, or git that it runs, reads as settings, hooks, skills,
+ * commands or standing instructions, wherever they sit in the workspace
+ * (engines walk into subfolders for them). A strict turn's file tools may read
+ * them but never write them: what is written there outlives the turn and acts
+ * with the owner's authority — settings and hooks run commands, instructions
+ * speak into every later session, a skill's files are reloaded while the turn
+ * runs.
  *
  *   .claude   Claude Code: settings (hooks, permissions), skills, commands,
  *             agents, instructions; Halo SDK: skills, commands, instructions
  *   .agents   Halo SDK: skills, commands, instructions
  *   .codex    Codex: project configuration
+ *   .git      git, which Claude Code runs in the workspace as every session
+ *             starts: its config and hooks run commands. A `.git` file (a
+ *             pointer to another git folder) is caught by the same name.
  */
-export const ENGINE_CONTROL_FOLDERS: readonly string[] = ['.claude', '.agents', '.codex']
+export const ENGINE_CONTROL_FOLDERS: readonly string[] = ['.claude', '.agents', '.codex', '.git']
 
 /**
  * Files an engine reads as its own, by name, in any folder.
@@ -101,11 +112,25 @@ export const ENGINE_CONTROL_FILES: readonly string[] = ['CLAUDE.md', 'CLAUDE.loc
 const ENGINE_FOLDERS = new Set(ENGINE_CONTROL_FOLDERS.map(name => name.toLowerCase()))
 const ENGINE_FILES = new Set(ENGINE_CONTROL_FILES.map(name => name.toLowerCase()))
 
-/** Whether an engine reads this path as its own; folders count below a root only, never above it. */
-function readByEngine(target: string, roots: string[]): boolean {
-  if (ENGINE_FILES.has(basename(target).toLowerCase())) return true
+/**
+ * A path segment as the file it names: Windows writes `CLAUDE.md::$DATA` and
+ * `CLAUDE.md.` to `CLAUDE.md`, ignoring a stream suffix and trailing dots and
+ * spaces. Read that way everywhere — refusing such a name elsewhere costs nothing.
+ */
+function fileNameOf(segment: string): string {
+  const colon = segment.indexOf(':')
+  return (colon === -1 ? segment : segment.slice(0, colon)).replace(/[. ]+$/, '').toLowerCase()
+}
+
+/**
+ * Whether an engine reads this path as its own: a configuration folder, or a
+ * folder or file by name — names count below a root only, never above it.
+ */
+function readByEngine(target: string, roots: string[], configDirs: string[]): boolean {
+  if (withinAny(target, configDirs)) return true
+  if (ENGINE_FILES.has(fileNameOf(basename(target)))) return true
   return roots.some(root => isCanonicalWithin(target, root) &&
-    relative(root, target).split(sep).some(segment => ENGINE_FOLDERS.has(segment.toLowerCase())))
+    relative(root, target).split(sep).some(segment => ENGINE_FOLDERS.has(fileNameOf(segment))))
 }
 
 /** Canonical forms of an access's roots, computed once per access. */
@@ -116,6 +141,7 @@ interface Canonical {
   skills: string[]
   workspace: string[]
   closed: string[]
+  engineConfig: string[]
 }
 
 const canonicalCache = new WeakMap<TurnFileAccess, Canonical>()
@@ -130,6 +156,7 @@ function canonicalOf(access: TurnFileAccess): Canonical {
       skills: (access.skillFolders ?? []).map(canonicalPath),
       workspace: access.workspaceRoots.map(canonicalPath),
       closed: access.closed.map(canonicalPath),
+      engineConfig: (access.engineConfigDirs ?? []).map(canonicalPath),
     }
     canonicalCache.set(access, c)
   }
@@ -184,10 +211,10 @@ export function decideFileAccess(
 
   for (const raw of targets) {
     const target = canonicalPath(raw)
-    if (!reading && readByEngine(target, [...c.workspace, ...c.writable])) {
+    if (!reading && readByEngine(target, [...c.workspace, ...c.writable], c.engineConfig)) {
       return {
         allow: false,
-        reason: "An engine's own settings and instructions (.claude, .agents, .codex, CLAUDE.md, AGENTS.md, .mcp.json) cannot be changed here.",
+        reason: "An engine's own settings and instructions (.claude, .agents, .codex, .git, CLAUDE.md, AGENTS.md, .mcp.json) cannot be changed here.",
       }
     }
     if (withinAny(target, memory)) continue
