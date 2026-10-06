@@ -12,7 +12,7 @@ import { loadBuiltinApps } from '../../../../src/main/apps/manager/builtin-loade
 import type { AppManagerService, InstalledApp } from '../../../../src/main/apps/manager/types'
 
 /** Bundle one built-in digital human at `version`, where the loader looks for it. */
-function writeBundle(version: string): void {
+function writeBundle(version: string, slug?: string): void {
   const root = join(globalThis.__HALO_TEST_DIR__, 'app', 'resources', 'builtin-apps')
   mkdirSync(join(root, 'daily-report'), { recursive: true })
   writeFileSync(join(root, 'manifest.json'), JSON.stringify({
@@ -34,24 +34,25 @@ function writeBundle(version: string): void {
     '      type: schedule',
     '      config:',
     '        cron: "0 8 * * *"',
+    ...(slug ? ['store:', `  slug: ${slug}`] : []),
   ].join('\n'))
 }
 
-function installedBuiltin(version: string): InstalledApp {
+function installedBuiltin(version: string, name = 'daily-report', slug?: string): InstalledApp {
   return {
     id: 'app-1',
-    specId: 'daily-report',
+    specId: name,
     spaceId: 'space-1',
     status: 'active',
     spec: {
       spec_version: '1',
-      name: 'daily-report',
+      name,
       version,
       author: 'halo',
       description: 'Daily sales',
       type: 'automation',
       system_prompt: 'Mine.',
-      store: { tags: [], install_source: 'builtin' },
+      store: { tags: [], install_source: 'builtin', ...(slug ? { slug } : {}) },
     },
     userConfig: {},
     userOverrides: {},
@@ -70,6 +71,8 @@ function managerWith(app: InstalledApp, original: InstalledApp['spec'] | null = 
     getAuthorSpec: vi.fn(() => original),
     recordAuthorSpec: vi.fn(() => true),
     install: vi.fn(),
+    uninstall: vi.fn(),
+    deleteApp: vi.fn(),
   }
 }
 
@@ -107,5 +110,46 @@ describe('loadBuiltinApps upgrades', () => {
     await loadBuiltinApps(manager as unknown as AppManagerService)
 
     expect(manager.recordAuthorSpec).not.toHaveBeenCalled()
+  })
+})
+
+// Renaming a digital human changes its spec id. Matched by name alone, the
+// bundle's next change installed a second copy and garbage-collected the
+// renamed one, memory and all.
+describe('loadBuiltinApps with a built-in the user renamed', () => {
+  function expectUpgradedInPlace(manager: ReturnType<typeof managerWith>): void {
+    expect(manager.upgradeSpec).toHaveBeenCalledWith('app-1', expect.objectContaining({ version: '1.1.0' }))
+    expect(manager.install).not.toHaveBeenCalled()
+    expect(manager.uninstall).not.toHaveBeenCalled()
+    expect(manager.deleteApp).not.toHaveBeenCalled()
+  }
+
+  it('finds it by the bundle’s slug', async () => {
+    writeBundle('1.1.0', 'daily-report')
+    const manager = managerWith(installedBuiltin('1.0.0', 'My Report', 'daily-report'))
+
+    await loadBuiltinApps(manager as unknown as AppManagerService)
+
+    expectUpgradedInPlace(manager)
+  })
+
+  it('finds it by its original’s name when the bundle has no slug', async () => {
+    writeBundle('1.1.0')
+    const app = installedBuiltin('1.0.0', 'My Report')
+    const manager = managerWith(app, { ...app.spec, name: 'daily-report' })
+
+    await loadBuiltinApps(manager as unknown as AppManagerService)
+
+    expectUpgradedInPlace(manager)
+  })
+
+  it('still removes a built-in the bundle no longer ships', async () => {
+    writeBundle('1.1.0', 'daily-report')
+    const app = installedBuiltin('1.0.0', 'retired-report', 'retired-report')
+    const manager = managerWith(app, app.spec)
+
+    await loadBuiltinApps(manager as unknown as AppManagerService)
+
+    expect(manager.deleteApp).toHaveBeenCalledWith('app-1', { allowBuiltin: true })
   })
 })
