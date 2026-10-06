@@ -14,9 +14,18 @@ import {
   updateSpace as serviceUpdateSpace,
   reorderSpaces as serviceReorderSpaces,
   getSpacePreferences as serviceGetSpacePreferences,
-  updateSpacePreferences as serviceUpdateSpacePreferences
+  updateSpacePreferences as serviceUpdateSpacePreferences,
+  getSpace as serviceGetSpace,
+  getSpaceDir,
+  setSpaceWorkingDir,
+  workingDirProblem,
 } from '../services/space.service'
 import { getSpaceMemoryStatus as serviceGetSpaceMemoryStatus, consolidateSpaceMemoryNow } from '../services/memory-consolidation'
+import { copyStoredSessions, invalidateSessionsForSpace } from '../services/agent'
+import { rerootSpaceWatcher } from '../services/watcher-host.service'
+import { rerootSpaceCache } from '../services/artifact-cache.service'
+import { listPinnedWorkDirs, repointSpaceEnvironments } from '../apps/runtime'
+import { resolve } from 'path'
 import type { MemorySettings } from '../../shared/types/memory'
 
 export interface ControllerResponse<T = unknown> {
@@ -127,6 +136,48 @@ export function updateSpace(
   } catch (error: unknown) {
     const err = error as Error
     return { success: false, error: err.message }
+  }
+}
+
+/**
+ * Point a space at another working directory — its folder was moved, deleted,
+ * or chosen wrongly. What depends on the folder follows, in this order:
+ *   1. the engine's stored sessions are copied to the new folder's name, so
+ *      conversations keep their memory — before anything points there;
+ *   2. the space record, then every environment its digital humans pinned;
+ *   3. resident sessions rebuild after their current turn; none is cut off;
+ *   4. the file panel and file triggers watch the new folder.
+ * Nothing in either folder is moved, created or deleted, and Halo's own data
+ * for the space stays where it is. The default space keeps its folder.
+ */
+export async function changeSpaceWorkingDir(spaceId: string, workingDir: unknown): Promise<ControllerResponse> {
+  try {
+    const space = serviceGetSpace(spaceId)
+    if (!space || space.isTemp) return { success: false, error: 'This workspace’s folder cannot be changed.' }
+    if (typeof workingDir !== 'string' || !workingDir.trim()) return { success: false, error: 'Choose a folder by its full path.' }
+    const target = resolve(workingDir.trim())
+    const problem = workingDirProblem(target)
+    if (problem) return { success: false, error: problem }
+
+    const previous = new Set([getSpaceDir(spaceId), ...listPinnedWorkDirs(spaceId)])
+    previous.delete(target)
+    let carried = 0
+    for (const dir of previous) carried += await copyStoredSessions(dir, target)
+
+    const updated = setSpaceWorkingDir(spaceId, target)
+    if (!updated) return { success: false, error: 'Space not found' }
+    const repointed = repointSpaceEnvironments(spaceId, target)
+    invalidateSessionsForSpace(spaceId)
+    rerootSpaceWatcher(spaceId, target)
+    rerootSpaceCache(spaceId, target)
+    console.log(
+      `[SpaceController] ${spaceId} works in ${target} now (was ${[...previous].join(', ') || 'the same'}): ` +
+      `${carried} stored session file(s) carried over, ${repointed} pinned environment(s) moved`
+    )
+    return { success: true, data: updated }
+  } catch (error: unknown) {
+    console.error(`[SpaceController] Changing the working directory of ${spaceId} failed:`, error)
+    return { success: false, error: (error as Error).message }
   }
 }
 

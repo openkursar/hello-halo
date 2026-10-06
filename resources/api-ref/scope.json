@@ -72,6 +72,10 @@
     "path": "/api/spaces/:spaceId"
   },
   {
+    "method": "PUT",
+    "path": "/api/spaces/:spaceId/working-dir"
+  },
+  {
     "method": "GET",
     "path": "/api/spaces/:spaceId/preferences"
   },

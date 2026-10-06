@@ -76,7 +76,7 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
 
   // Handle error for a specific conversation
   handleAgentError: (data) => {
-    const { conversationId, error, errorType } = data
+    const { conversationId, error, errorType, workDirIssue } = data
     console.log(`[ChatStore] handleAgentError [${conversationId}]:`, error, errorType ? `(type: ${errorType})` : '')
     // A user stop is recorded when requested, so any interruption reaching here is a failure.
     noteTurnEnded(conversationId, 'error')
@@ -98,6 +98,7 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
         ...session,
         error,
         errorType: errorType || null,
+        workDirIssue: workDirIssue ?? null,
         errorSeen: false,
         isGenerating: false,
         isThinking: false,

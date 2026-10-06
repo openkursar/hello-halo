@@ -15,7 +15,7 @@
  */
 
 import { shell } from 'electron'
-import { join } from 'path'
+import { isAbsolute, join } from 'path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, rmSync, renameSync } from 'fs'
 import { getHaloDir, getTempSpacePath, getSpacesDir } from '../foundation/config.service'
 import { v4 as uuidv4 } from 'uuid'
@@ -649,26 +649,66 @@ export function updateSpace(spaceId: string, updates: { name?: string; icon?: st
 
     // Persist index
     persistIndex(getRegistry())
-
-    // Write meta.json — read existing to preserve preferences
-    const existingMeta = tryReadMeta(entry.path)
-    const meta: SpaceMeta = {
-      id: spaceId,
-      name: entry.name,
-      icon: entry.icon,
-      color: entry.color,
-      createdAt: entry.createdAt,
-      updatedAt: entry.updatedAt,
-      preferences: existingMeta?.preferences,
-      workingDir: entry.workingDir
-    }
-    writeFileSync(join(entry.path, '.halo', 'meta.json'), JSON.stringify(meta, null, 2))
+    writeMeta(spaceId, entry)
 
     return entryToSpaceWithPreferences(spaceId, entry)
   } catch (error) {
     console.error('[Space] Failed to update space:', error)
     return null
   }
+}
+
+/** Write meta.json from the registry entry, keeping the preferences already stored there. */
+function writeMeta(spaceId: string, entry: SpaceIndexEntry): void {
+  const existingMeta = tryReadMeta(entry.path)
+  const meta: SpaceMeta = {
+    id: spaceId,
+    name: entry.name,
+    icon: entry.icon,
+    color: entry.color,
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt,
+    preferences: existingMeta?.preferences,
+    workingDir: entry.workingDir
+  }
+  writeFileSync(join(entry.path, '.halo', 'meta.json'), JSON.stringify(meta, null, 2))
+}
+
+/**
+ * Why `workingDir` cannot be a space's working directory, or null when it can:
+ * an existing folder, given by its full path. Nothing is created here — Halo
+ * neither makes nor removes the user's folders.
+ */
+export function workingDirProblem(workingDir: string): string | null {
+  if (!workingDir || !isAbsolute(workingDir)) return 'Choose a folder by its full path.'
+  try {
+    if (!statSync(workingDir).isDirectory()) return 'That is not a folder.'
+  } catch {
+    return 'That folder does not exist.'
+  }
+  return null
+}
+
+/**
+ * Point a space at another working directory. Only the record changes: the
+ * agent, the file panel and the space's digital humans follow it, and Halo's
+ * own data for the space stays where it is. The default space keeps its own.
+ *
+ * @returns the updated space, or null for an unknown or default space
+ * @throws Error with a readable reason when the folder cannot be used
+ */
+export function setSpaceWorkingDir(spaceId: string, workingDir: string): Space | null {
+  const entry = getRegistry().get(spaceId)
+  if (!entry || entry.isTemp) return null
+  const problem = workingDirProblem(workingDir)
+  if (problem) throw new Error(problem)
+
+  entry.workingDir = workingDir
+  entry.updatedAt = new Date().toISOString()
+  persistIndex(getRegistry())
+  writeMeta(spaceId, entry)
+  console.log(`[Space] Working directory of ${spaceId} is now ${workingDir}`)
+  return entryToSpaceWithPreferences(spaceId, entry)
 }
 
 /**

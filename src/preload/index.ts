@@ -143,6 +143,7 @@ export interface HaloAPI extends BrowserHostBridge {
   getSpace: (spaceId: string) => Promise<IpcResponse>
   openSpaceFolder: (spaceId: string) => Promise<IpcResponse>
   updateSpace: (spaceId: string, updates: { name?: string; icon?: string; color?: string }) => Promise<IpcResponse>
+  setSpaceWorkingDir: (spaceId: string, workingDir: string) => Promise<IpcResponse>
   getDefaultSpacePath: () => Promise<IpcResponse>
   selectFolder: () => Promise<IpcResponse>
   updateSpacePreferences: (spaceId: string, preferences: {

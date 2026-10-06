@@ -128,6 +128,9 @@ function rowToEntry(row: EntryRow): ActivityEntry {
 /** Default retention period: 1 year in milliseconds */
 const DEFAULT_RETENTION_MS = 365 * 24 * 60 * 60 * 1000
 
+/** Rows whose pinned environment belongs to the space bound as `@spaceId`. */
+const PINNED_IN_SPACE = `json_extract(environment_json, '$.spaceId') = @spaceId`
+
 /**
  * SQLite store for automation runs and activity entries.
  *
@@ -903,6 +906,30 @@ export class ActivityStore {
     const rows = this.db.prepare('SELECT session_key, environment_json FROM app_session_environments WHERE app_id = ?')
       .all(appId) as Array<{ session_key: string; environment_json: string }>
     return rows.map(row => ({ sessionKey: row.session_key, environment: JSON.parse(row.environment_json) }))
+  }
+
+  /** The working directories named by environments pinned in this space (chat sessions, team seats, runs). */
+  listSpaceWorkDirs(spaceId: string): string[] {
+    const rows = this.db.prepare(`
+      SELECT json_extract(environment_json, '$.workDir') AS work_dir FROM app_session_environments WHERE ${PINNED_IN_SPACE}
+      UNION SELECT json_extract(environment_json, '$.workDir') FROM automation_runs WHERE environment_json IS NOT NULL AND ${PINNED_IN_SPACE}
+    `).all({ spaceId }) as Array<{ work_dir: string | null }>
+    return rows.map(row => row.work_dir).filter((dir): dir is string => !!dir)
+  }
+
+  /**
+   * The space's working directory was changed: every environment pinned in it —
+   * chat sessions, team seats and runs a person may continue — names the new
+   * folder from now on. Its storage and memory paths are Halo's and stay.
+   *
+   * @returns how many environments were re-pointed
+   */
+  repointSpaceWorkDir(spaceId: string, workDir: string): number {
+    const moved = `environment_json = json_set(environment_json, '$.workDir', @workDir)`
+    return this.db.transaction(() =>
+      this.db.prepare(`UPDATE app_session_environments SET ${moved} WHERE ${PINNED_IN_SPACE}`).run({ spaceId, workDir }).changes
+      + this.db.prepare(`UPDATE automation_runs SET ${moved} WHERE environment_json IS NOT NULL AND ${PINNED_IN_SPACE}`).run({ spaceId, workDir }).changes
+    )()
   }
 
   // ── Data Lifecycle ──────────────────────────

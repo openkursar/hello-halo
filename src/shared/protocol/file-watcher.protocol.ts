@@ -23,6 +23,12 @@ export type MainToWorkerMessage =
       spaceId: string
     }
   | {
+      /** The space's folder changed: stop watching the old one, then watch this one (in that order). */
+      type: 'reroot-space'
+      spaceId: string
+      rootPath: string
+    }
+  | {
       type: 'scan-dir'
       requestId: string
       spaceId: string

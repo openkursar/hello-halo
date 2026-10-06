@@ -1197,6 +1197,24 @@ create a digital human for a reminder.
   digital human still answers its chats, and a reminder it promised must not
   fall silent. Its page lists every reminder (Trigger group) with a cancel.
 
+### 2.28 Pinned Environments Follow a Space's Working Directory
+
+Pinned environments keep a session or run in the space it began in, but the
+space's folder itself can be changed (its folder was moved or deleted). When it
+is, `repointSpaceEnvironments` rewrites `workDir` in every environment pinned
+in that space — chat sessions, team seats and runs that can be continued — so
+they follow the space instead of failing on the old folder; `spacePath` and
+`memoryDir` are Halo's and stay. The orchestration (stored sessions first,
+then the record, the pins, resident sessions and the file panel) is
+`controllers/space.controller.ts`; see ARCHITECTURE "Space Path Architecture".
+
+A pinned folder that is gone fails `validateExecutionEnvironment` with
+`WorkingDirectoryUnavailableError` (folder + space), which a chat reports as
+`errorType: 'working_dir_unavailable'` so the person can change the folder
+there; missing history or memory keeps its plain error. A turn running in the
+old folder while it changes finishes there; what it writes after the session
+copy is not carried over.
+
 ---
 
 ## 3. SQLite Schema

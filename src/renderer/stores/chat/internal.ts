@@ -8,7 +8,7 @@
  */
 import { create } from 'zustand'
 import { api } from '../../api'
-import type { Conversation, ConversationMeta, Message, ToolCall, Artifact, Thought, AgentEventBase, ImageAttachment, CompactInfo, ApiRetryNotice, CanvasContext, AgentErrorType, PendingQuestion, Question, TaskStatus, PulseItem, PulseReadInfo, TaskProgress } from '../../types'
+import type { Conversation, ConversationMeta, Message, ToolCall, Artifact, Thought, AgentEventBase, ImageAttachment, CompactInfo, ApiRetryNotice, CanvasContext, AgentErrorType, WorkDirIssue, PendingQuestion, Question, TaskStatus, PulseItem, PulseReadInfo, TaskProgress } from '../../types'
 import type { SessionInitInfo } from '../../types/slash-command'
 import { PULSE_READ_GRACE_PERIOD_MS } from '../../types'
 import type { ReasoningEffortLevel } from '../../../shared/constants/reasoning-effort'
@@ -61,6 +61,8 @@ export interface SessionState {
   pendingToolApproval: ToolCall | null
   error: string | null
   errorType: AgentErrorType | null  // Special error type for custom UI handling
+  // The folder a turn could not start in; set with 'working_dir_unavailable'
+  workDirIssue?: WorkDirIssue | null
   // The user has opened this error; it stays on screen but no longer needs
   // them. Set instead of clearing where the error lives only in this session.
   errorSeen?: boolean
@@ -269,7 +271,7 @@ export interface ChatState {
   handleAgentMessage: (data: AgentEventBase & { content: string; isComplete: boolean }) => void
   handleAgentToolCall: (data: AgentEventBase & ToolCall) => void
   handleAgentToolResult: (data: AgentEventBase & { toolId: string; result: string; isError: boolean }) => void
-  handleAgentError: (data: AgentEventBase & { error: string; errorType?: AgentErrorType }) => void
+  handleAgentError: (data: AgentEventBase & { error: string; errorType?: AgentErrorType; workDirIssue?: WorkDirIssue }) => void
   handleAgentComplete: (data: AgentEventBase) => void
   handleAgentThought: (data: AgentEventBase & { thought: Thought }) => void
   handleAgentThoughtDelta: (data: AgentEventBase & {

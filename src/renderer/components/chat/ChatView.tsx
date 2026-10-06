@@ -259,7 +259,7 @@ export function ChatView({ isCompact = false, isVisible = true }: ChatViewProps)
   )
   const isLoadingConversation = useChatStore(s => s.isLoadingConversation)
   const loadError = useChatStore(s => activeConversationId ? s.conversationLoadErrors.get(activeConversationId) ?? null : null)
-  const { isGenerating, isThinking, compactInfo, error, errorType, pendingQuestion, hasStreamingContent } = useChatStore(
+  const { isGenerating, isThinking, compactInfo, error, errorType, workDirIssue, pendingQuestion, hasStreamingContent } = useChatStore(
     useShallow(s => {
       const live = s.sessions.get(activeConversationId ?? '')
       return {
@@ -268,6 +268,7 @@ export function ChatView({ isCompact = false, isVisible = true }: ChatViewProps)
         compactInfo: live?.compactInfo ?? null,
         error: live?.error ?? null,
         errorType: live?.errorType ?? null,
+        workDirIssue: live?.workDirIssue ?? null,
         pendingQuestion: live?.pendingQuestion ?? null,
         hasStreamingContent: !!live?.streamingContent,
       }
@@ -630,6 +631,7 @@ export function ChatView({ isCompact = false, isVisible = true }: ChatViewProps)
                 compactInfo={compactInfo}
                 error={error}
                 errorType={errorType}
+                workDirIssue={workDirIssue}
                 onContinue={activeConversationId ? () => continueAfterInterrupt(activeConversationId) : undefined}
                 onStop={handleStop}
                 isCompact={isCompact}

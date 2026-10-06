@@ -70,6 +70,16 @@ export const MODULE: RouteModuleMeta = {
       impact: 'reversible',
     },
 
+    'PUT /api/spaces/:spaceId/working-dir': {
+      expose: 'ai',
+      group: 'workspace',
+      summary: 'Point a space at another working directory',
+      body: '{"workingDir":"/absolute/path/to/existing/folder"}',
+      returns: '{"success":true,"data":{...updated space}} | {"success":false,"error":"That folder does not exist."}',
+      impact: 'reversible',
+      notes: 'The folder must already exist; nothing is moved, created or deleted. Conversations keep their history, and running ones switch after their current turn. The default space cannot be changed.',
+    },
+
     'GET /api/spaces/:spaceId/preferences': {
       expose: 'ai',
       group: 'workspace',

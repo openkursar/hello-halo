@@ -731,12 +731,19 @@ export interface AgentToolResultEvent extends AgentEventBase {
 }
 
 // Error type for special handling (e.g., interrupted response)
-export type AgentErrorType = 'interrupted';
+export type AgentErrorType = 'interrupted' | 'working_dir_unavailable';
+
+/** The space whose working directory a turn could not start in, and that folder. */
+export interface WorkDirIssue {
+  spaceId: string;
+  workDir: string;
+}
 
 export interface AgentErrorEvent extends AgentEventBase {
   type: 'error';
   error: string;
   errorType?: AgentErrorType;  // Special error type for custom UI handling
+  workDirIssue?: WorkDirIssue;  // Set with 'working_dir_unavailable'
 }
 
 // Token usage statistics from SDK result message

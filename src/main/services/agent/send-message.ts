@@ -53,6 +53,7 @@ import { applyReasoningEffort, pickReasoningEffort } from './reasoning-effort'
 import { createConversationSink } from './conversation-sink'
 import { prepareGoalInput, setGoalForTurn } from './goal'
 import { flushToolStats } from './stream-processor'
+import { workingDirErrorDetail } from './working-dir'
 import { onAgentError, runPpidScanAndCleanup } from '../health'
 import { analytics } from '../analytics/analytics.service'
 import { AnalyticsEvents } from '../analytics/types'
@@ -184,7 +185,7 @@ export async function sendMessage(
       })
     }
 
-    emitAgentEvent('agent:error', spaceId, conversationId, { type: 'error', error: errorMessage })
+    emitAgentEvent('agent:error', spaceId, conversationId, { type: 'error', error: errorMessage, ...workingDirErrorDetail(error, spaceId) })
     try {
       addMessage(spaceId, conversationId, {
         role: 'assistant', content: '', error: errorMessage, toolCalls: [],

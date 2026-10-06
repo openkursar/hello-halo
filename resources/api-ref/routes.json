@@ -106,6 +106,11 @@
     "group": "workspace"
   },
   {
+    "method": "PUT",
+    "path": "/api/spaces/:spaceId/working-dir",
+    "group": "workspace"
+  },
+  {
     "method": "GET",
     "path": "/api/spaces/:spaceId/preferences",
     "group": "workspace"

@@ -1,5 +1,6 @@
 /**
- * Removing a session the engine stored on disk.
+ * Removing a session the engine stored on disk, and carrying a working
+ * directory's stored sessions over to the directory a space moved to.
  *
  * The default engine keeps each session under `<config dir>/projects/<project dir>/`:
  * `<session id>.jsonl`, and a `<session id>/` folder for its sub-agents and
@@ -18,6 +19,7 @@
  */
 
 import { existsSync, readdirSync, realpathSync, rmSync } from 'fs'
+import { copyFile, cp, mkdir, readdir, stat } from 'fs/promises'
 import { join } from 'path'
 import { resolveClaudeConfigDir } from '../../foundation/config.service'
 
@@ -62,4 +64,60 @@ function projectDirs(projects: string, workDir: string): Set<string> {
     for (const entry of listing) if (entry === name || entry.startsWith(prefix)) dirs.add(entry)
   }
   return dirs
+}
+
+/**
+ * Make the sessions stored while running in `fromWorkDir` resumable from
+ * `toWorkDir`, which a space's working directory was just changed to: the
+ * engine looks a session up under the project dir of the directory it runs
+ * in, so every conversation would otherwise start afresh. Copies, never moves
+ * (another space may still run in the old directory). A session file already
+ * there is replaced only by a newer one — after a change back and forth, the
+ * conversation resumes from where it last ran — and session folders are
+ * merged. `toWorkDir` must exist.
+ *
+ * @returns how many session files were copied
+ */
+export async function copyStoredSessions(fromWorkDir: string, toWorkDir: string, configDir = resolveClaudeConfigDir()): Promise<number> {
+  const projects = join(configDir, 'projects')
+  const target = join(projects, projectDirName(realpathSync(toWorkDir).normalize('NFC')))
+  let copied = 0
+  for (const dir of projectDirs(projects, fromWorkDir)) {
+    const source = join(projects, dir)
+    if (source === target || !existsSync(source)) continue
+    await mkdir(target, { recursive: true })
+    for (const entry of await readdir(source, { withFileTypes: true })) {
+      const from = join(source, entry.name)
+      const to = join(target, entry.name)
+      if (entry.isDirectory()) {
+        await cp(from, to, { recursive: true, force: false, errorOnExist: false })
+      } else if (entry.isFile() && (await mtimeOf(to)) < (await stat(from)).mtimeMs) {
+        await copyFile(from, to)
+        copied += 1
+      }
+    }
+  }
+  return copied
+}
+
+async function mtimeOf(path: string): Promise<number> {
+  try {
+    return (await stat(path)).mtimeMs
+  } catch {
+    return -Infinity
+  }
+}
+
+/**
+ * The engine's own name for the project dir of `path` (already resolved and
+ * NFC-normalized): past the length limit, the 31-multiplier string hash it
+ * uses when running on Node, not Bun. Exported for its test, which pins it to
+ * the engine's output.
+ */
+export function projectDirName(path: string): string {
+  const name = path.replace(/[^a-zA-Z0-9]/g, '-')
+  if (name.length <= PROJECT_DIR_MAX_LENGTH) return name
+  let hash = 0
+  for (let i = 0; i < path.length; i++) hash = ((hash << 5) - hash + path.charCodeAt(i)) | 0
+  return `${name.slice(0, PROJECT_DIR_MAX_LENGTH)}-${Math.abs(hash).toString(36)}`
 }

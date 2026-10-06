@@ -54,6 +54,11 @@ export function registerSpaceRoutes(app: Express): void {
     res.json(result)
   })
 
+  // Point the space at another working directory — mirrors space:set-working-dir
+  app.put('/api/spaces/:spaceId/working-dir', async (req: Request, res: Response) => {
+    res.json(await spaceController.changeSpaceWorkingDir(req.params.spaceId, req.body?.workingDir))
+  })
+
   // Preferences (layout, memory settings) — mirrors space:get/update-preferences
   app.get('/api/spaces/:spaceId/preferences', async (req: Request, res: Response) => {
     res.json(spaceController.getSpacePreferences(req.params.spaceId))

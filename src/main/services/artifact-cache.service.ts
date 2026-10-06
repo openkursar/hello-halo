@@ -524,6 +524,30 @@ export async function destroySpaceCache(spaceId: string): Promise<void> {
 }
 
 /**
+ * The space's folder changed. The cache keeps its client holds but forgets the
+ * old folder's tree, so the next listing reads the new one; the watcher itself
+ * is moved by the watcher host (`rerootSpaceWatcher`). A disk root is never
+ * watched, as when a cache starts there.
+ */
+export function rerootSpaceCache(spaceId: string, rootPath: string): void {
+  const cache = cacheMap.get(spaceId)
+  if (!cache || cache.rootPath === rootPath) return
+  cache.rootPath = rootPath
+  cache.treeNodes.clear()
+  cache.loadedDirs.clear()
+  pendingBroadcasts.delete(spaceId)
+  lastReconcileTime.delete(spaceId)
+  if (cache.watcherInitialized && isDiskRoot(rootPath)) {
+    cache.watcherInitialized = false
+    releaseSpaceWatcher(spaceId, WATCHER_HOLDER)
+  } else if (!cache.watcherInitialized && !isDiskRoot(rootPath)) {
+    cache.watcherInitialized = true
+    retainSpaceWatcher(spaceId, rootPath, WATCHER_HOLDER)
+  }
+  console.log(`[ArtifactCache] Space ${spaceId} now lists ${rootPath}`)
+}
+
+/**
  * Get artifacts as tree structure (lazy loading).
  * Returns cached children for rootPath on cache hit (Map.get, O(1)).
  * On miss, scans via worker and populates the cache.

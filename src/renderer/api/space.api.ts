@@ -87,6 +87,13 @@ export const spaceApi = {
     return httpRequest('PUT', `/api/spaces/${spaceId}`, updates)
   },
 
+  setSpaceWorkingDir: async (spaceId: string, workingDir: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.setSpaceWorkingDir(spaceId, workingDir)
+    }
+    return httpRequest('PUT', `/api/spaces/${spaceId}/working-dir`, { workingDir })
+  },
+
   // Update space preferences (layout settings)
   updateSpacePreferences: async (
     spaceId: string,

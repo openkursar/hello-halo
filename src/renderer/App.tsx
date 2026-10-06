@@ -43,7 +43,7 @@ import { isCapacitor, isElectron, onEvent } from './api/transport'
 import { useTelemetry } from './hooks/useTelemetry'
 import type { WsConnectionState } from './api/transport'
 import { useTranslation } from './i18n'
-import type { AgentEventBase, Thought, ToolCall, HaloConfig, AgentErrorType, Question, McpServerStatus, AppView } from './types'
+import type { AgentEventBase, Thought, ToolCall, HaloConfig, AgentErrorType, WorkDirIssue, Question, McpServerStatus, AppView } from './types'
 import type { SessionInitInfo } from './types/slash-command'
 import type { IngestProgressEvent } from '../shared/types/tlon'
 import type { ToastPayload } from '../shared/types/notification'
@@ -642,7 +642,7 @@ export default function App() {
     })
 
     const unsubError = api.onAgentError((data) => {
-      handleAgentError(data as AgentEventBase & { error: string; errorType?: AgentErrorType })
+      handleAgentError(data as AgentEventBase & { error: string; errorType?: AgentErrorType; workDirIssue?: WorkDirIssue })
     })
 
     const unsubComplete = api.onAgentComplete((data) => {
