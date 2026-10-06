@@ -1284,17 +1284,25 @@ create a digital human for a reminder.
   §2.12a); nobody waits on it, so a push the chat does not take is logged, not
   retried. A chat where the channel would refuse a message now — outside its
   reply scope, or a group while permission control has no owner bound — gets
-  no turn: the same rules dispatch-inbound applies (`instanceTakesChat`). A
-  one-off still waiting when Halo quits is not delivered: the scheduler
-  disabled it when it came due.
+  no turn: the same rules dispatch-inbound applies (`instanceTakesChat`). As
+  when its channel is not running, that coming-due is skipped: a one-off is not
+  delivered, a repeating one tries again when next due. A one-off still waiting
+  when Halo quits is not delivered: the scheduler disabled it when it came due.
 - **Guests do not get it.** The server is not in the capability toggle table,
   and the guest filter keeps no server an owner was never offered a switch for:
   a guest may only query, and every reminder is a future turn someone pays for.
 - **It belongs to the conversation**: it goes with a removed or evicted chat
   (the session registry cascades, as for pending relays) or an uninstalled digital human,
-  survives `/clear`, and is not stopped by "Pause automatic tasks" — the paused
-  digital human still answers its chats, and a reminder it promised must not
-  fall silent. Its page lists every reminder (Trigger group) with a cancel.
+  and is not stopped by "Pause automatic tasks" — the paused digital human
+  still answers its chats, and a reminder it promised must not fall silent.
+  Its page lists every reminder (Trigger group) with a cancel.
+- **Stopping or clearing a chat leaves its reminders.** `/stop` stops the turn
+  that is running, not a reminder: one that came due and was waiting for the
+  chat starts its turn as soon as the stopped turn has wound down — it is due,
+  and nobody cancelled it. `/clear` and "Clear all conversations" empty the
+  chat's history and keep its reminders (cancelled on the page, or by asking in
+  the chat); one coming due afterwards starts in the fresh conversation, its
+  text saying on its own what it is about.
 
 ### 2.28 Pinned Environments Follow a Space's Working Directory
 
