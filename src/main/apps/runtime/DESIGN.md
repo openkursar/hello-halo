@@ -347,8 +347,9 @@ via the "Continue" button (in the Activity Thread or Session Detail view).
   session can be restored on user-initiated continue.
 
 **User-initiated continue** (`trigger_type = 'continue_followup'`):
-- Triggered by the "Continue" button on `run_error` activity entries where
-  `content.error === 'report_to_user not called'`.
+- Triggered by the "Continue" button on `run_error` activity entries that offer
+  it (`content.resumeAvailable`: the run has a session to resume, is not closed
+  and holds no unanswered decision).
 - Uses the same session restore pattern as `escalation_followup`:
   `getOrCreateV2Session(resumeSessionId)` preserves full conversation history.
 - Same `runId` is reopened (`store.reopenRun()` resets status `error → running`)
@@ -776,6 +777,13 @@ carry the way out of it.
 status ladder in both derivations, so an unmapped status was indistinguishable
 from a person the runtime had stopped — an uninstalled person read as one that
 had failed. Every status is now mapped explicitly and the ladder exists once.
+
+**A failed run always says why.** Every run `executeRun` records as `error`
+leaves a `run_error` entry with its reason — including one that called
+`report_to_user` before the engine failed, whose report alone reads as success.
+The pause after `MAX_CONSECUTIVE_ERRORS` failed runs records `Auto-disabled
+after N consecutive failed runs. Latest: <reason>` as the person's error
+message, which the stop's card, the inbox and the task panel show.
 
 ### 2.18 Transcript Read Model (Stable Ids, Pages, On-Demand Thoughts)
 
