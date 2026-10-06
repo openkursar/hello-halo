@@ -37,6 +37,10 @@ function mixedConversation(): AnthropicMessage[] {
 }
 
 const mixedToolText = JSON.stringify([{ type: 'text', text: 'before' }, { type: 'text', text: 'after' }])
+const oneImageMoved = 'Image attached in the following user message.'
+
+// Arrives from transcripts written by other clients; must not break conversion.
+const sourceless = { type: 'image' } as unknown as AnthropicImageBlock
 
 describe('Chat tool-result images', () => {
   it('uses the vision channel for an image-only tool result', () => {
@@ -46,7 +50,26 @@ describe('Chat tool-result images', () => {
 
     expect(result.hasImages).toBe(true)
     expect(result.messages.slice(1)).toEqual([
-      { role: 'tool', tool_call_id: 'capture', content: '[]' },
+      { role: 'tool', tool_call_id: 'capture', content: oneImageMoved },
+      { role: 'user', content: [{ type: 'image_url', image_url: { url: imageUrl } }] }
+    ])
+  })
+
+  it('counts the images an image-only tool result moved', () => {
+    const result = convertAnthropicMessagesToOpenAIChat(toolConversation([image, remoteImage]), undefined)
+
+    expect(result.messages[1]).toEqual({
+      role: 'tool', tool_call_id: 'capture', content: '2 images attached in the following user message.'
+    })
+  })
+
+  it('skips an image without a source instead of failing the request', () => {
+    const onlySourceless = convertAnthropicMessagesToOpenAIChat(toolConversation([sourceless]), undefined)
+    expect(onlySourceless.messages.slice(1)).toEqual([{ role: 'tool', tool_call_id: 'capture', content: '[]' }])
+
+    const withOther = convertAnthropicMessagesToOpenAIChat(toolConversation([sourceless, image]), undefined)
+    expect(withOther.messages.slice(1)).toEqual([
+      { role: 'tool', tool_call_id: 'capture', content: oneImageMoved },
       { role: 'user', content: [{ type: 'image_url', image_url: { url: imageUrl } }] }
     ])
   })
@@ -57,7 +80,7 @@ describe('Chat tool-result images', () => {
     expect(result.messages.map(message => message.role)).toEqual(['assistant', 'tool', 'tool', 'user', 'assistant'])
     expect(result.messages.slice(1, 3)).toEqual([
       { role: 'tool', tool_call_id: 'first', content: mixedToolText },
-      { role: 'tool', tool_call_id: 'second', content: '[]' }
+      { role: 'tool', tool_call_id: 'second', content: oneImageMoved }
     ])
     expect(result.messages[3]).toEqual({ role: 'user', content: [
       { type: 'image_url', image_url: { url: imageUrl } },
@@ -127,9 +150,31 @@ describe('Responses tool-result images', () => {
 
     expect(result).toEqual([
       callOf,
-      { type: 'function_call_output', call_id: 'capture', output: '[]' },
+      { type: 'function_call_output', call_id: 'capture', output: oneImageMoved },
       { type: 'message', role: 'user', content: [{ type: 'input_image', image_url: imageUrl }] }
     ])
+  })
+
+  it('counts the images an image-only tool result moved', () => {
+    const result = convertAnthropicMessagesToResponsesInput(toolConversation([image, remoteImage]), undefined)
+
+    expect(result[1]).toEqual({
+      type: 'function_call_output', call_id: 'capture', output: '2 images attached in the following user message.'
+    })
+  })
+
+  it('skips an image without a source instead of failing the request', () => {
+    const onlySourceless = convertAnthropicMessagesToResponsesInput(toolConversation([sourceless]), undefined)
+    expect(onlySourceless).toEqual([callOf, { type: 'function_call_output', call_id: 'capture', output: '[]' }])
+
+    const withOther = convertAnthropicMessagesToResponsesInput(toolConversation([sourceless, image]), undefined)
+    expect(withOther.slice(1)).toEqual([
+      { type: 'function_call_output', call_id: 'capture', output: oneImageMoved },
+      { type: 'message', role: 'user', content: [{ type: 'input_image', image_url: imageUrl }] }
+    ])
+
+    const direct = convertAnthropicMessagesToResponsesInput([{ role: 'user', content: [{ type: 'text', text: 'look' }, sourceless] }], undefined)
+    expect(direct).toEqual([{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'look' }] }])
   })
 
   it('answers every tool call first, then sends tool images and user content as one user message', () => {
@@ -140,7 +185,7 @@ describe('Responses tool-result images', () => {
     ])
     expect(result.slice(2, 4)).toEqual([
       { type: 'function_call_output', call_id: 'first', output: mixedToolText },
-      { type: 'function_call_output', call_id: 'second', output: '[]' }
+      { type: 'function_call_output', call_id: 'second', output: oneImageMoved }
     ])
     expect(result[4]).toEqual({ type: 'message', role: 'user', content: [
       { type: 'input_image', image_url: imageUrl },

@@ -78,6 +78,17 @@ function stripImagesFromToolResultContent(
 }
 
 /**
+ * Output of a tool result whose only content was images, now in the user
+ * message that follows. Left empty it would read as the tool having returned
+ * nothing.
+ */
+function movedImagesNote(count: number): string {
+  return count === 1
+    ? 'Image attached in the following user message.'
+    : `${count} images attached in the following user message.`
+}
+
+/**
  * Convert Anthropic system prompt to OpenAI Chat system message
  */
 export function convertAnthropicSystemToOpenAIChat(
@@ -161,13 +172,15 @@ export function convertAnthropicMessagesToOpenAIChat(
         // Detect images in tool_result.content array before any stripping
         // so `hasImages` reflects the original input regardless of stripImages.
         let toolResultContent = toolResult.content
+        let movedImages = 0
         if (Array.isArray(toolResultContent)) {
           if (toolResultContent.some((b) => b.type === 'image')) {
             hasImages = true
             if (!stripImages) {
               for (const block of toolResultContent) {
-                if (block.type === 'image') {
+                if (block.type === 'image' && block.source) {
                   openaiContent.push(anthropicImageToOpenAIChatImage(block))
+                  movedImages++
                 }
               }
             }
@@ -175,9 +188,11 @@ export function convertAnthropicMessagesToOpenAIChat(
           }
         }
 
-        const content = typeof toolResultContent === 'string'
-          ? toolResultContent
-          : JSON.stringify(toolResultContent)
+        const content = movedImages > 0 && Array.isArray(toolResultContent) && toolResultContent.length === 0
+          ? movedImagesNote(movedImages)
+          : typeof toolResultContent === 'string'
+            ? toolResultContent
+            : JSON.stringify(toolResultContent)
 
         const toolMessage: OpenAIChatToolMessage = {
           role: 'tool',
@@ -334,14 +349,17 @@ export function convertAnthropicMessagesToResponsesInput(
       for (const toolResult of toolResults) {
         let output = toolResult
         if (Array.isArray(toolResult.content) && toolResult.content.some((b) => b.type === 'image')) {
+          let movedImages = 0
           if (!stripImages) {
             for (const block of toolResult.content) {
-              if (block.type === 'image') {
+              if (block.type === 'image' && block.source) {
                 contentParts.push(anthropicImageToResponsesInputImage(block))
+                movedImages++
               }
             }
           }
-          output = { ...toolResult, content: stripImagesFromToolResultContent(toolResult.content) }
+          const rest = stripImagesFromToolResultContent(toolResult.content)
+          output = { ...toolResult, content: movedImages > 0 && rest.length === 0 ? movedImagesNote(movedImages) : rest }
         }
         result.push(anthropicToolResultToResponsesFunctionCallOutput(output))
       }
@@ -349,8 +367,8 @@ export function convertAnthropicMessagesToResponsesInput(
       // Convert other content blocks
       for (const block of blocks) {
         if (block.type === 'tool_result') continue
-        // Skip image blocks for non-vision targets; preserves text/thinking parts.
-        if (stripImages && block.type === 'image') continue
+        // Skip image blocks for non-vision targets, and any without a source to convert.
+        if (block.type === 'image' && (stripImages || !block.source)) continue
         const converted = anthropicBlockToResponsesInputPart(block, 'user')
         if (converted) {
           contentParts.push(converted)
