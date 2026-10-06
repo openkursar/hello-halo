@@ -15,7 +15,7 @@
  */
 
 import { buildImSessionKey } from '../../../shared/apps/im-keys'
-import { buildTeamSessionKey } from '../../../shared/apps/team-types'
+import { buildTeamSessionKey, TEAM_EVENTS } from '../../../shared/apps/team-types'
 import { sendToRenderer } from '../../foundation/window.service'
 import { broadcastToAll } from '../../http/websocket'
 import { getSpace } from '../../services/space.service'
@@ -75,4 +75,10 @@ export function writeChatPush(push: ChatPush): void {
   }
   sendToRenderer('app:im-session-updated', update)
   broadcastToAll('app:im-session-updated', update)
+  if (session?.teamContext) {
+    // What an open view of the team's conversation reloads on.
+    const history = { teamId: session.teamContext.teamId, appId: push.appId, epochId: session.teamContext.epochId }
+    sendToRenderer(TEAM_EVENTS.memberHistory, history)
+    broadcastToAll(TEAM_EVENTS.memberHistory, history)
+  }
 }

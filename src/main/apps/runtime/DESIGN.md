@@ -785,6 +785,10 @@ moves to the top of the session list (`ImSessionRegistry.notePush`, then
   (`getAppChatSink`), the record's one writer, in the space the chat's session was
   pinned to (`chat-record.chatRecordPath`, which `app-chat` reads from as well). A
   chat a team fronts is recorded in the team's conversation with it.
+- **Seen while open**: no turn starts, so an open view reads the record again on
+  the announcement instead — the chat's view (`ImChatView`) on
+  `app:im-session-updated` for that chat while no turn of it runs, the team's
+  conversation (`TeamSessionChat`) on `team:member-history`.
 - **A turn stays whole**: a push that comes while a turn of that chat is running is
   held by the sink and written when the turn ends, with the time it was sent. A
   large file is paged by the line a message starts on (§2.18), which a line in the

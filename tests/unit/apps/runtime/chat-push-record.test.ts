@@ -129,6 +129,8 @@ describe('a push in the record of the chat it went to', () => {
     const team = readChat(spaceDir(), buildTeamSessionKey('dh', 'team-1', 'epoch-1'))
     expect(team.map(m => [m.content, m.metadata?.pushVia])).toEqual([['A question waits for the owner', 'question']])
     expect(readChat(spaceDir(), buildImSessionKey('dh', 'wecom-bot', 'group', 'ops-group'))).toEqual([])
+    // The team's conversation open in Halo reads its record again on this.
+    expect(sentToRenderer).toHaveBeenCalledWith('team:member-history', { teamId: 'team-1', appId: 'dh', epochId: 'epoch-1' })
   })
 })
 

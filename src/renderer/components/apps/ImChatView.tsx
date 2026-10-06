@@ -125,6 +125,31 @@ export function ImChatView({ appId, spaceId, session, clearKey, footerAction }: 
     return () => { cancelled = true }
   }, [isGenerating, appId, spaceId, session.channel, session.chatType, session.chatId])
 
+  // A message the digital human pushes to this chat is written outside any turn,
+  // so the session update announcing it is the cue to read the record again.
+  useEffect(() => {
+    let cancelled = false
+    const unsubscribe = api.onImSessionUpdated?.((data: unknown) => {
+      const update = data as { appId?: string; channel?: string; chatId?: string }
+      if (update.appId !== appId || update.channel !== session.channel || update.chatId !== session.chatId) return
+      if (session.teamContext || useChatStore.getState().getSession(conversationId).isGenerating) return
+      api.appImChatMessages(appId, spaceId, session.channel, session.chatType, session.chatId)
+        .then(res => {
+          if (cancelled) return
+          if (res.success && res.data) {
+            const msgs = (res.data as Message[]) ?? []
+            setMessages(msgs)
+            setLoadState(msgs.length > 0 ? 'loaded' : 'empty')
+          }
+        })
+        .catch(err => { if (!cancelled) console.error('[ImChatView] Reload error:', err) })
+    })
+    return () => {
+      cancelled = true
+      unsubscribe?.()
+    }
+  }, [appId, spaceId, conversationId, session.channel, session.chatType, session.chatId])
+
   // ── WebSocket reconnect recovery (remote/Capacitor only) ──
   // Same pattern as the main chat page — reload messages and reconcile session state
   // after a WebSocket reconnect to recover any events lost during the gap.
