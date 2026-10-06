@@ -38,7 +38,7 @@ Two rules hold across every guide here:
 | Knowledge bases (知识库): which files work, why a file is not learned, making the AI or a digital human use one, watched folders | `knowledge-base/index.md` |
 | The AI Terminal (AI 终端): turning it on, logging in over SSH and handing over, terminals that keep running | `ai-terminal/index.md` |
 | Controlling Halo from a phone or another machine; the HTTP API; internet access | `remote-access/index.md` |
-| Installing Halo; first launch; updates; "where is my config / log file?" | `getting-started/index.md` |
+| Installing Halo; first launch; updates; "where is my config / log file?"; moving Halo to another computer | `getting-started/index.md` |
 
 If a question spans two topics, read both — these documents are deliberately small.
 
@@ -49,7 +49,7 @@ document opens with a table of its companion documents; read the entry first and
 
 | Entry document | Covers |
 |---|---|
-| `getting-started/index.md` | Installing Halo, first launch, updates, and where configuration, data, and logs actually live on each platform. |
+| `getting-started/index.md` | Installing Halo, first launch, updates, where configuration, data, and logs actually live on each platform, and moving an install to another computer. |
 | `ai-model-setup/index.md` | How Settings → AI Model works: sources, the four auth methods, adding a key, OAuth, the CLI-delegated source, switching the active source, and model capability overrides. Companion: `ai-model-setup/troubleshooting.md`. |
 | `spaces-and-agents/index.md` | Spaces, working directories, and the real difference between a space conversation and a digital human — memory, skills, MCP access, and when creating a digital human is actually warranted. |
 | `create-digital-human/SKILL.md` | Authoring and updating digital humans: the interview checklist, how triggers actually work, the App Spec field reference, and worked examples. **Read before calling `create_automation_app` or `update_automation_app`.** Companions: `create-digital-human/interview-checklist.md`, `create-digital-human/im-triggers.md`, `create-digital-human/spec-reference.md`, `create-digital-human/examples.md`. |
