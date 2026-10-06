@@ -585,6 +585,10 @@
   },
   {
     "method": "POST",
+    "path": "/api/tlon/:kbId/linked-dirs/:linkId/retry"
+  },
+  {
+    "method": "POST",
     "path": "/api/tlon/:kbId/files"
   },
   {

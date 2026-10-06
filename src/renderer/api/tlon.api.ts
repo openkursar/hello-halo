@@ -66,6 +66,10 @@ export const tlonApi = {
       if (isElectron()) return window.halo.tlonRemoveLinkedDir(kbId, linkId)
       return httpRequest('DELETE', `/api/tlon/${kbId}/linked-dirs/${linkId}`)
     },
+    retryLinkedDir: async (kbId: string, linkId: string): Promise<ApiResponse> => {
+      if (isElectron()) return window.halo.tlonRetryLinkedDir(kbId, linkId)
+      return httpRequest('POST', `/api/tlon/${kbId}/linked-dirs/${linkId}/retry`)
+    },
     addFiles: async (kbId: string, filePaths: string[]): Promise<ApiResponse> => {
       if (isElectron()) return window.halo.tlonAddFiles(kbId, filePaths)
       return httpRequest('POST', `/api/tlon/${kbId}/files`, { filePaths })

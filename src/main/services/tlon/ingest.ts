@@ -70,6 +70,11 @@ function emitStatsUpdated(kbId: string): void {
   broadcastToAll('tlon:stats-updated', payload as unknown as Record<string, unknown>)
 }
 
+/** Tell the views a KB changed outside an ingest run (a watched folder paused or resumed). */
+export function notifyStatsUpdated(kbId: string): void {
+  emitStatsUpdated(kbId)
+}
+
 export function getIngestProgress(kbId: string): IngestProgressEvent {
   return (
     progress.get(kbId) || {

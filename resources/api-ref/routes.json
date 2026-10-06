@@ -1210,6 +1210,11 @@
   },
   {
     "method": "POST",
+    "path": "/api/tlon/:kbId/linked-dirs/:linkId/retry",
+    "group": "knowledge-base"
+  },
+  {
+    "method": "POST",
     "path": "/api/tlon/:kbId/files",
     "group": "knowledge-base"
   },

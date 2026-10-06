@@ -18,7 +18,7 @@ import { CPP_LEVEL_IGNORE_DIRS } from '../../../shared/constants/ignore-patterns
 import { isDiskRoot } from '../../../shared/disk-paths'
 import type { LinkedDirectory } from '../../../shared/types/tlon'
 import { getKBRawDir } from './paths'
-import { listKBs, getKB, collectIngestCandidates } from './service'
+import { listKBs, getKB, collectIngestCandidates, checkLinkedDirAvailable } from './service'
 import { enqueueFiles, processQueue, rebuildIndexMd } from './ingest'
 
 interface WatchHandle {
@@ -107,9 +107,10 @@ export async function startWatchersForKB(kbId: string): Promise<void> {
   if (!kb || kb.status !== 'active') return
   await subscribe(`${kbId}:raw`, getKBRawDir(kbId), kbId)
   for (const linked of kb.linkedDirs) {
-    // `watching === false` marks a link recorded but not watchable (e.g. the
-    // path was missing at creation); the settings UI shows it as unavailable.
-    if (!linked.watching) continue
+    // Looked for again on every start, so a folder missing when it was added
+    // (or since) is watched once it is back; one still missing shows as
+    // unavailable in the settings, with a Retry.
+    if (!checkLinkedDirAvailable(kbId, linked.id)) continue
     await startLinkedDirWatch(kbId, linked)
   }
 }

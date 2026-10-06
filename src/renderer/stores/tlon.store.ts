@@ -142,6 +142,8 @@ interface TlonState {
   // ── Linked dirs ───────────────────────────
   addLinkedDir: (kbId: string, dir: { path: string; label: string }) => Promise<boolean>
   removeLinkedDir: (kbId: string, linkId: string) => Promise<boolean>
+  /** Look for an unavailable watched folder again; resumes learning it if it is back. */
+  retryLinkedDir: (kbId: string, linkId: string) => Promise<boolean>
 
   // ── Raw files ─────────────────────────────
   loadRawFiles: (kbId: string) => Promise<void>
@@ -419,6 +421,25 @@ export const useTlonStore = create<TlonState>((set, get) => ({
       return false
     } catch (err) {
       console.error('[TlonStore] removeLinkedDir error:', err)
+      return false
+    }
+  },
+
+  retryLinkedDir: async (kbId, linkId) => {
+    try {
+      const res = await api.tlon.retryLinkedDir(kbId, linkId)
+      await get().refreshKB(kbId)
+      if (res.success) return true
+      useNotificationStore.getState().show({
+        title: res.code === 'PATH_NOT_FOUND'
+          ? i18n.t('The folder is still unavailable. Connect the drive or network location it is on, then retry.')
+          : i18n.t('Could not check the folder. Please try again.'),
+        variant: 'warning',
+        duration: 6000,
+      })
+      return false
+    } catch (err) {
+      console.error('[TlonStore] retryLinkedDir error:', err)
       return false
     }
   },

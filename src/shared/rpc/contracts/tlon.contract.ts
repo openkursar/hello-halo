@@ -18,6 +18,7 @@ export const tlonRpc = {
   tlonUnbindApp: rawRpcMethod('tlon:unbind-app'),
   tlonAddLinkedDir: rawRpcMethod('tlon:add-linked-dir'),
   tlonRemoveLinkedDir: rawRpcMethod('tlon:remove-linked-dir'),
+  tlonRetryLinkedDir: rawRpcMethod('tlon:retry-linked-dir'),
   tlonAddFiles: rawRpcMethod('tlon:add-files'),
   tlonListRaw: rawRpcMethod('tlon:list-raw'),
   tlonRemoveRaw: rawRpcMethod('tlon:remove-raw'),
