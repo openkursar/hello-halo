@@ -13,6 +13,7 @@ import { useAppsStore } from '../../stores/apps.store'
 import { useAppStore } from '../../stores/app.store'
 import { useSpaceStore } from '../../stores/space.store'
 import { useChatStore } from '../../stores/chat.store'
+import { resolveStoreTargetSpace } from '../../lib/store-target-space'
 import { useStoreCategories, categoryDisplay } from '../../hooks/useStoreCategories'
 import { getEntryVersions, getEntryInstalls } from '../../../shared/store/store-meta'
 import { useStoreEntryInstallState } from '../../hooks/useStoreEntryInstallState'
@@ -80,6 +81,7 @@ export function StoreDetail() {
   const checkUpdates = useAppsPageStore(state => state.checkUpdates)
   const setView = useAppStore(state => state.setView)
   const spaces = useSpaceStore(state => state.spaces)
+  const haloSpace = useSpaceStore(state => state.haloSpace)
   const currentSpace = useSpaceStore(state => state.currentSpace)
   const setCurrentSpace = useSpaceStore(state => state.setCurrentSpace)
   const refreshCurrentSpace = useSpaceStore(state => state.refreshCurrentSpace)
@@ -187,11 +189,7 @@ export function StoreDetail() {
   const handleUse = useCallback(() => {
     if (!installedApp || !entry) return
     if (entry.type === 'skill') {
-      const target =
-        (installedApp.spaceId ? spaces.find(s => s.id === installedApp.spaceId) : null) ??
-        currentSpace ??
-        spaces[0] ??
-        null
+      const target = resolveStoreTargetSpace(installedApp.spaceId, { spaces, currentSpace, haloSpace })
       if (target) {
         setCurrentSpace(target)
         void refreshCurrentSpace()
@@ -210,6 +208,7 @@ export function StoreDetail() {
     installedApp,
     entry,
     spaces,
+    haloSpace,
     currentSpace,
     setCurrentSpace,
     refreshCurrentSpace,
