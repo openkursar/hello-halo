@@ -158,7 +158,7 @@ BrowserWindow + remote WebSocket clients:
 | conversation-released | `ai-browser:conversation-released` | a UI context ended (`release()` or `destroy()`); payload `{conversationId}` | store drops that conversation's views, operating state and owned pages, so a page it only selected (now the user's) is not left listed or stoppable as its own |
 
 Payload types live in `shared/types/ai-browser.ts`. The renderer filters by the
-active conversation; events go out with `broadcastToAll` (BrowserViews are
+active conversation; events go out with `broadcastToAll` (browser pages are
 desktop-only, so remote clients ignore them). An event only fires on change, so a
 renderer that starts late (reload) seeds itself with the request
 `ai-browser:list-live-pages` (`listLivePages()`: every owned or active page of a
@@ -171,7 +171,7 @@ with its own stop — not only the on-screen conversation's page. Never listed: 
 page the conversation only selected (the user's own tab, another conversation's
 page), and a page another conversation is currently on (`isPageInUseByOthers`,
 re-checked at stop time) — stopping either would close it under someone else.
-Remote clients get no stop control (no BrowserViews there); a refused stop is
+Remote clients get no stop control (no browser pages there); a refused stop is
 reported, not swallowed. The decision is the main process's: the tray stop goes
 through `ai-browser:stop-page` (`stopLivePage(viewId, conversationId)`), which
 refuses `not-owned` unless that conversation's context opened the page and
@@ -191,7 +191,7 @@ at module load, so whichever path destroyed the view (canvas-tab close, tray
 This keeps `activeViewId` from dangling on a dead WebContents — essential once a
 context outlives a turn.
 
-The renderer reveals the AI's view by **viewId identity** (`attachAIBrowserView`),
+The renderer reveals the AI's view by **viewId identity** (`attachAIbrowser page`),
 never by re-opening the URL — so the user sees and can take over the exact page
 the AI drives (shared `persist:browser` session across all views).
 
@@ -206,31 +206,43 @@ the AI drives (shared `persist:browser` session across all views).
   toolset broker's per-conversation teardown — leaves the user's tabs open
 - **Cleanup (singleton)**: `cleanupAIBrowser()` called by `bootstrap/extended.ts` on app shutdown
 
-## Live View of a Hidden Page (Digital-Human Chat)
+## Live View and Guest Ownership
 
-A chat's pages are created on the **offscreen host window** (`offscreen: ctx.isScoped`)
-so the AI keeps a compositing surface (CDP screenshots) with no user-visible
-window. To let the user watch and take over, the "View live feed" button attaches
-the *exact* view (same WebContents) through the ordinary `browser:show` path,
-which `BrowserViewManager` now supports for offscreen-home views:
+Pages that a user can watch are created in a permanent main-renderer webview
+host, including digital-human chat pages. Pure unattended runs and temporary
+search pages use the lazy hidden renderer host (`offscreen: !ctx.hasUi`).
+In explicit server mode every page uses that hidden host, including remote
+conversations, because a chat UI does not imply a local main renderer exists.
+A guest never moves between hosts. Showing, hiding, switching tabs and leaving
+Canvas change presentation only, preserving the same WebContents, DOM, form
+state, CDP target and download route. `ctx.hasRevealedView()` still protects a
+watched page from idle reaping.
 
-- `show(viewId)` on an offscreen-home view **reveals** it: removed from the host
-  window, `setBackgroundThrottling(true)`, added to the main window
-  (`revealedViewIds`).
-- `hide(viewId)` on a revealed view **re-homes** it: removed from the main window,
-  added back to the host window, throttling disabled again. Every canvas tab
-  switch is a `hide`/`show` pair, so a revealed view is on the main window only
-  while it is on screen and never lingers detached (which would starve the AI's
-  screenshots).
-- Throttling must be re-enabled BEFORE the view sits on the main window and
-  disabled AFTER it is back on the host: with it disabled on the main window the
-  remove/add round trip evicts the compositor frame for good (see the comment in
-  `create()` and `tests/e2e/specs/browser-view-frame.spec.ts`;
-  `browser-view-reveal.spec.ts` covers the offscreen round trip).
-- `ctx.hasRevealedView()` lets an owner avoid destroying pages the user is
-  watching (idle reaping).
-- Bounds/zoom/policy-block logic uses `isHostedOffscreen` (home-offscreen AND not
-  revealed), not raw membership of `offscreenViewIds`.
+The browser manager delegates DOM attachment to `services/browser-host` through
+its public surface. Initial attachment is inert and authorized; policy, UA and
+CDP setup precede external navigation. Canvas budgets and AI ownership contracts
+continue to determine actual page destruction. A main-renderer reload loses its
+guests: the manager announces destruction, unregisters download routing and
+rejects pending waits; the next navigation creates a new page. Hidden-host pages
+remain independent of a main-renderer reload.
+
+Keyboard input uses the guest-targeted adapter in `services/browser-input`:
+CDP keyboard dispatch and generic WebContents editing helpers can reach the
+focused host composer. Native `sendInputEvent` / `insertText` target the guest;
+editing shortcuts must operate on that guest's editable DOM. Frame leases cover
+the complete input operation. `sendCDPCommand` routes `Input.*` commands to the
+operation's `BrowserInputOperation`, which records what the page saw pressed and
+releases it on the original page before the lease ends, including cancellation.
+See the browser-host design for targeting and cleanup constraints.
+
+Element helpers in `snapshot.ts` (scroll, box, focus) tolerate only a
+`PageCommandRejectedError`: the operation's still-current page refused that one
+command, as before, so a hidden element degrades to a full screenshot. Any other
+error (cancellation, deadline, page loss) propagates unchanged.
+On macOS the editing adapter respects the guest's trusted Meta-key handler and
+its `preventDefault`. Its paste fallback delivers a synthetic clipboard event
+and guest-local DOM insertion, including rich HTML; it does not provide a
+trusted native paste event. The browser-host design records this distinction.
 
 ## File Map
 

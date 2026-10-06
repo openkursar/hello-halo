@@ -23,7 +23,6 @@ import { test, expect } from '@playwright/test'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { fileURLToPath } from 'url'
 import {
   getAppEntryPath,
   createTestConfigDir,
@@ -37,11 +36,8 @@ import { installUnresponsiveTracker, readUnresponsiveCount, readCrashCount } fro
 import { installReloadGuard } from '../lib/reload-guard'
 import { seedArtifact, beginOpenObservation, clickArtifactByName, waitForCanvasLoaded } from '../lib/open-artifact'
 import { fixturePath } from '../lib/fixture-store'
-import { beginScenario, currentLabel } from '../lib/result-writer'
+import { beginScenario, currentLabel, writeResult } from '../lib/result-writer'
 import { getBuildIdentity } from '../lib/build-identity'
-
-const __filename = fileURLToPath(import.meta.url)
-const RESULTS_ROOT = path.resolve(path.dirname(__filename), '../results')
 
 const SWITCHES = Number(process.env.S12_SWITCHES || 20)
 const FIXTURE = process.env.S12_FIXTURE || 'code-extreme-20000lines.ts'
@@ -150,9 +146,7 @@ test('S12 canvas tab switch', async () => {
       samples
     }
 
-    const resultPath = path.join(RESULTS_ROOT, result.label, 's12-canvas-tab-switch.json')
-    fs.mkdirSync(path.dirname(resultPath), { recursive: true })
-    fs.writeFileSync(resultPath, JSON.stringify(result, null, 2))
+    const resultPath = writeResult(result)
     console.log(`[perf] S12 result written to ${resultPath} (valid=${result.valid})`)
     console.log(`[perf] S12 settle p50=${result.settleMs.p50?.toFixed(0) ?? 'n/a'}ms p90=${result.settleMs.p90?.toFixed(0) ?? 'n/a'}ms (load ${result.loadAverage[0].toFixed(2)})`)
     console.log(`[perf] S12 same-tab drift nodes=${JSON.stringify(result.nodesDriftSameTab)} listeners=${JSON.stringify(result.listenersDriftSameTab)}`)

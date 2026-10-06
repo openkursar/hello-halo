@@ -1,3 +1,5 @@
+import type { BrowserPageGone } from '../../shared/types/browser-host'
+import { ensureExtendedServicesReady } from './bootstrap-ready'
 /**
  * browserApi — browser domain slice of the unified api object.
  * Split from the monolithic api/index.ts; transport branch (IPC vs HTTP) preserved.
@@ -151,6 +153,9 @@ export const browserApi = {
   onBrowserStateChange: (callback: (data: unknown) => void) =>
     onEvent('browser:state-change', callback),
 
+  onBrowserPageGone: (callback: (data: BrowserPageGone) => void) =>
+    onEvent('browser:page-gone', callback as (data: unknown) => void),
+
   onBrowserZoomChanged: (callback: (data: { viewId: string; zoomLevel: number }) => void) =>
     onEvent('browser:zoom-changed', callback as (data: unknown) => void),
 
@@ -192,7 +197,7 @@ export const browserApi = {
     onEvent('ai-browser:conversation-released', callback as (data: unknown) => void),
 
   // Tray stop: main refuses unless the page is still this conversation's alone.
-  // Desktop only: remote clients have no BrowserViews to close.
+  // Desktop only: remote clients do not own browser guests.
   stopAIBrowserPage: async (viewId: string, conversationId: string): Promise<AIBrowserStopResult> => {
     if (!isElectron()) return { stopped: false }
     const result = await window.halo.stopAIBrowserPage(viewId, conversationId)
@@ -200,9 +205,10 @@ export const browserApi = {
   },
 
   // Every page AI conversations hold, for a renderer that missed the live
-  // events (reload). Desktop only: remote clients cannot show BrowserViews.
+  // events (reload). Desktop only: remote clients cannot present browser guests.
   listAIBrowserLivePages: async (): Promise<AIBrowserLivePage[]> => {
     if (!isElectron()) return []
+    await ensureExtendedServicesReady()
     const result = await window.halo.listAIBrowserLivePages()
     return result.success && result.data ? result.data : []
   },

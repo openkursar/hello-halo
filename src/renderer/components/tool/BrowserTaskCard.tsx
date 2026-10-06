@@ -42,7 +42,7 @@ interface BrowserTaskCardProps {
   /** Whether currently executing */
   isActive: boolean
   /** Whether to show the "View live feed" button (default: true).
-   *  Set to false in contexts where the Canvas/BrowserView is not available (e.g. automation apps). */
+   *  Set to false in contexts where the Canvas browser is not available (e.g. automation apps). */
   showViewButton?: boolean
 }
 
@@ -391,7 +391,7 @@ export function BrowserTaskCard({ browserToolCalls, isActive, showViewButton = t
             )}
           </div>
 
-          {/* View button — hidden in contexts without Canvas/BrowserView (e.g. automation apps).
+          {/* View button — hidden in contexts without the Canvas browser (e.g. automation apps).
               Enabled only once the AI's live view id is known, so it always reveals the
               exact view the AI drives (never a divergent copy). */}
           {showViewButton && (

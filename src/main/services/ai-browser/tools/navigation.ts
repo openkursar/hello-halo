@@ -12,10 +12,11 @@
  * The original standalone tools remain in their source files for future extension.
  *
  * browser_handle_dialog — Removed from registration. Native JS dialogs (alert/confirm/prompt)
- *   cannot be reliably intercepted in Electron BrowserView. Code preserved below for reference.
+ *   cannot be reliably intercepted in an embedded browser page. Code preserved below for reference.
  */
 
 import { z } from 'zod'
+import { randomUUID } from 'node:crypto'
 import { tool } from '../../agent/resolved-sdk'
 import type { BrowserContext } from '../context'
 import { browserViewManager, type DeviceMode } from '../../browser-view.service'
@@ -60,11 +61,10 @@ Use device: "h5" only when the target site is mobile-only or the user explicitly
 
     if (shouldCreatePage) {
       try {
-        const viewId = `ai-browser-${Date.now()}`
-        // Scoped (automation) contexts use the offscreen host window to isolate
-        // view lifecycle from the user's mainWindow.
+        const viewId = `ai-browser-${randomUUID()}`
+        // Watchable pages keep one main-host attachment for their whole lifetime.
         await browserViewManager.create(viewId, args.url, {
-          offscreen: ctx.isScoped,
+          offscreen: !ctx.hasUi,
           deviceMode: requestedDevice,
         })
         ctx.trackView(viewId)
@@ -83,7 +83,11 @@ Use device: "h5" only when the target site is mobile-only or the user explicitly
     }
 
     try {
-      await browserViewManager.navigate(activeViewId, args.url)
+      const navigated = await browserViewManager.navigate(activeViewId, args.url)
+      if (!navigated) {
+        const state = browserViewManager.getState(activeViewId)
+        return textResult(state?.error || 'Navigation was cancelled or the page was closed', true)
+      }
       await ctx.waitForNavigation(timeout)
 
       const finalState = browserViewManager.getState(activeViewId)

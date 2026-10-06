@@ -3,7 +3,8 @@
  * file/folder picker
  */
 
-import { app, BrowserWindow, dialog, shell, type OpenDialogOptions } from 'electron'
+import { app, BrowserWindow, shell, type OpenDialogOptions } from 'electron'
+import { showOpenDialog } from '../foundation/file-dialog'
 import { dirname, extname } from 'path'
 import { readFile, stat } from 'fs/promises'
 import log from 'electron-log/main.js'
@@ -218,8 +219,8 @@ export function registerSystemHandlers(): void {
             : ['openFile', 'multiSelections'],
         }
         const result = mainWindow && !mainWindow.isDestroyed()
-          ? await dialog.showOpenDialog(mainWindow, options)
-          : await dialog.showOpenDialog(options)
+          ? await showOpenDialog(mainWindow, options)
+          : await showOpenDialog(options)
         if (result.canceled) return { success: true, data: [] }
         const entries: PickedLocalEntry[] = []
         for (const path of result.filePaths) {

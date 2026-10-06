@@ -26,6 +26,7 @@ import { ArtifactRail } from '../components/artifact/ArtifactRail'
 import { ConversationList } from '../components/chat/ConversationList'
 import { ChatHistoryPanel } from '../components/chat/ChatHistoryPanel'
 import { Header } from '../components/layout/Header'
+import { ChatCapsule } from '../components/layout/ChatCapsule'
 import { SpaceSelector } from '../components/layout/SpaceSelector'
 import { MobileOverflowMenu } from '../components/layout/MobileOverflowMenu'
 import { HeaderMoreMenu } from '../components/layout/HeaderMoreMenu'
@@ -226,10 +227,7 @@ export function SpacePage() {
     }
   }, [currentSpace?.id])
 
-  // Showing a native BrowserView requires the canvas container's bounds, so it
-  // belongs to BrowserViewer, which owns that ref and remounts with the canvas.
-  // SpacePage owns only the teardown: leaving the page or switching space must
-  // not leave a native view floating over whatever renders next.
+  // The guest outlives this route; leaving it releases only its presentation.
   useEffect(() => {
     if (!currentSpace) return
 
@@ -335,22 +333,14 @@ export function SpacePage() {
       if (effectiveRailExpanded) {
         setRailExpanded(false)
       }
-      // Show overlay chat capsule (renders above BrowserView)
-      if (!isMobile) {
-        api.showChatCapsuleOverlay()
-      }
     } else if (!isCanvasMaximized && prevMaximizedRef.current) {
       // Exiting maximized mode - restore previous state
       if (railExpandedBeforeMaximize.current) {
         setRailExpanded(true)
       }
-      // Hide overlay chat capsule
-      if (!isMobile) {
-        api.hideChatCapsuleOverlay()
-      }
     }
     prevMaximizedRef.current = isCanvasMaximized
-  }, [isCanvasMaximized, effectiveRailExpanded, setRailExpanded, isMobile])
+  }, [isCanvasMaximized, effectiveRailExpanded, setRailExpanded])
 
   // Auto-open the artifact rail the moment the AI writes or edits a file in
   // the conversation you're actively watching, so a closed rail doesn't
@@ -381,15 +371,6 @@ export function SpacePage() {
     setRailByUser(true)
     useSpaceStore.getState().setPendingArtifactRailTab(null)
   }, [pendingArtifactRailTab, setRailByUser])
-
-  // Listen for exit-maximized event from overlay
-  useEffect(() => {
-    const cleanup = api.onCanvasExitMaximized(() => {
-      console.log('[SpacePage] Received exit-maximized from overlay')
-      setCanvasMaximized(false)
-    })
-    return cleanup
-  }, [setCanvasMaximized])
 
   // Setup search shortcuts
   useSearchShortcuts({
@@ -422,11 +403,7 @@ export function SpacePage() {
           onRevealComposer={revealComposer}
         />
 
-        {/*
-          ChatCapsule overlay is now managed via IPC to render above BrowserView.
-          The overlay SPA is a separate WebContentsView that appears above all views.
-          Show/hide is controlled by api.showChatCapsuleOverlay() / api.hideChatCapsuleOverlay()
-        */}
+        {isCanvasMaximized && !isMobile && <ChatCapsule />}
 
         {/* Header — hidden (bare drag strip) when the canvas is maximized, since
             there's no chrome to show and the strip still needs to be draggable
@@ -565,7 +542,7 @@ export function SpacePage() {
 
           {/* Mobile Layout */}
           {isMobile && (
-            <div className="flex-1 flex flex-col min-w-0">
+            <div className="flex-1 flex flex-col min-w-0 isolate">
               <ChatView isCompact={false} isVisible={!isCanvasOpen} />
             </div>
           )}
@@ -591,7 +568,7 @@ export function SpacePage() {
 
         {/* Mobile Canvas Overlay */}
         {isMobile && isCanvasOpen && (
-          <div className="fixed inset-0 z-50 flex flex-col bg-background animate-slide-in-right-full">
+          <div className="fixed inset-0 flex flex-col bg-background animate-slide-in-right-full">
             {/* Mobile Canvas Header */}
             <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-card/80 backdrop-blur-sm">
               <button

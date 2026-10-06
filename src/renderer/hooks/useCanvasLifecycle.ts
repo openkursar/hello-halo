@@ -67,6 +67,7 @@ export function useTabCount(): number {
 const canvasActions = {
   openFile: (path: string, titleOrOptions?: string | OpenFileOptions) => canvasLifecycle.openFile(path, titleOrOptions),
   openUrl: (url: string, title?: string) => canvasLifecycle.openUrl(url, title),
+  navigateBrowserTab: (tabId: string, url: string) => canvasLifecycle.navigateBrowserTab(tabId, url),
   attachAIBrowserView: (viewId: string, url: string, title?: string) =>
     canvasLifecycle.attachAIBrowserView(viewId, url, title),
   openContent: (content: string, title: string, type: ContentType, language?: string) =>
@@ -97,7 +98,7 @@ const canvasActions = {
   consumeReveal: (tabId: string, seq: number) => canvasLifecycle.consumeReveal(tabId, seq),
   setOpen: (open: boolean) => canvasLifecycle.setOpen(open),
   toggleOpen: () => canvasLifecycle.toggleOpen(),
-  // Native browser view placement, driven by the viewer that owns the container.
+  // Browser page presentation, borrowed by the viewer that owns the container.
   setContainerBoundsGetter: (getter: () => DOMRect | null) => canvasLifecycle.setContainerBoundsGetter(getter),
   ensureActiveBrowserViewShown: () => canvasLifecycle.ensureActiveBrowserViewShown(),
   updateActiveBounds: () => canvasLifecycle.updateActiveBounds(),

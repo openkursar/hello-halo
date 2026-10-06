@@ -313,14 +313,14 @@ export function ArtifactRail({
   if (isMobile) {
     return (
       <>
-        {/* Floating trigger button - z-[60] to stay above Canvas overlay (z-50) */}
+        {/* The resource trigger stays above the mobile canvas and browser guest. */}
         <button
           onClick={() => {
             trackHome('home.rail.toggle', { open: true, surface: 'mobile_fab' })
             setMobileOverlayOpen(true)
           }}
           className="
-            fixed right-0 top-1/3 z-[60]
+            fixed right-0 top-1/3 z-[var(--layer-workspace-trigger)]
             w-10 h-14
             bg-card
             border-l border-y border-border
@@ -336,9 +336,9 @@ export function ArtifactRail({
           <ChevronRight className="w-4 h-4 text-muted-foreground rotate-180" />
         </button>
 
-        {/* Overlay backdrop + panel - z-[70] to stay above Canvas overlay (z-50) */}
+        {/* The resource sheet covers both the canvas and its browser guest. */}
         {mobileOverlayOpen && (
-          <div className="fixed z-[70] flex justify-end" style={{ top: 'var(--sat, 0px)', right: 0, bottom: 0, left: 0 }}>
+          <div className="fixed z-[var(--layer-workspace-sheet)] flex justify-end" style={{ top: 'var(--sat, 0px)', right: 0, bottom: 0, left: 0 }}>
             {/* Backdrop */}
             <div
               className="absolute inset-0 bg-background/70 animate-fade-in"

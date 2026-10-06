@@ -32,9 +32,11 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
-import { execSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import engineRuntimes from '../../scripts/engine-runtimes.cjs'
+import { BETTER_SQLITE3_TARGETS, getBetterSqlite3PrebuildPath, validateBetterSqlite3Prebuild } from '../../scripts/lib/better-sqlite3-prebuilds.mjs'
+import { CLOUDFLARED_MINIMUM_MACOS } from '../../scripts/lib/cloudflared.mjs'
+import deployment from '../../scripts/lib/macho-deployment-target.cjs'
 
 const { ENGINE_RUNTIMES, VALID_ENGINES, resolveEngineEntry, engineArtifactPaths } = engineRuntimes
 
@@ -65,38 +67,24 @@ const log = {
  * - platform: Which platform needs this binary (mac-arm64, mac-x64, win, linux, all)
  * - fix: Command to fix if missing
  * - validate: Optional function to validate the binary
+ * - macOSFloor: Deployment floor of a separately launched helper, when newer than the app's
  */
 const BINARY_DEPENDENCIES = [
   {
     name: 'Mac arm64 cloudflared',
     path: 'node_modules/cloudflared/bin/cloudflared',
     platform: 'mac-arm64',
-    fix: 'npm install (triggers postinstall) or npm run prepare:mac-arm64',
-    validate: (filePath) => {
-      try {
-        const output = execSync(`file "${filePath}"`, { encoding: 'utf-8' })
-        const arch = output.includes('arm64') ? 'arm64' : output.includes('x86_64') ? 'x64' : 'unknown'
-        return { valid: true, info: arch }
-      } catch {
-        return { valid: false, info: 'cannot read file type' }
-      }
-    }
+    fix: 'node scripts/prepare-binaries.mjs --platform mac-arm64',
+    macOSFloor: CLOUDFLARED_MINIMUM_MACOS,
+    validate: (filePath) => describeMachO(filePath, 'arm64')
   },
   {
     name: 'Mac x64 cloudflared',
     path: 'node_modules/cloudflared/bin/cloudflared-darwin-x64',
     platform: 'mac-x64',
-    fix: 'npm run prepare:mac-x64',
-    validate: (filePath) => {
-      try {
-        const stats = fs.statSync(filePath)
-        const sizeMB = (stats.size / 1024 / 1024).toFixed(1)
-        // Mac x64 binary should be > 30MB
-        return { valid: stats.size > 30 * 1024 * 1024, info: `${sizeMB} MB` }
-      } catch {
-        return { valid: false, info: 'cannot read file' }
-      }
-    }
+    fix: 'node scripts/prepare-binaries.mjs --platform mac-x64',
+    macOSFloor: CLOUDFLARED_MINIMUM_MACOS,
+    validate: (filePath) => describeMachO(filePath, 'x64')
   },
   {
     name: 'Windows x64 cloudflared',
@@ -265,69 +253,20 @@ const BINARY_DEPENDENCIES = [
   // node-pty Linux: terminal panel is not supported on Linux (no public prebuilds available).
   // Linux users get Halo without the terminal feature. Platform check at runtime handles this.
 
-  // better-sqlite3 - Native SQLite database driver
-  // Prebuilt .node binaries are downloaded from GitHub releases by prepare-binaries.mjs
-  // and swapped into the packaged app by afterPack.cjs during electron-builder packaging.
-  {
-    name: 'Mac arm64 better-sqlite3',
-    path: 'node_modules/better-sqlite3/prebuilds/darwin-arm64/better_sqlite3.node',
-    platform: 'mac-arm64',
+  ...Object.entries(BETTER_SQLITE3_TARGETS).map(([platform, target]) => ({
+    name: `${platform} better-sqlite3`,
+    path: path.relative(PROJECT_ROOT, getBetterSqlite3PrebuildPath(PROJECT_ROOT, target)),
+    platform,
     fix: 'npm run prepare:all',
-    validate: (filePath) => {
+    validate: filePath => {
       try {
-        const stats = fs.statSync(filePath)
-        const sizeMB = (stats.size / 1024 / 1024).toFixed(1)
-        return { valid: stats.size > 500 * 1024, info: `${sizeMB} MB` }
-      } catch {
-        return { valid: false, info: 'cannot read file' }
+        const result = validateBetterSqlite3Prebuild(filePath, target)
+        return { valid: result.valid, info: result.valid ? `${(result.size / 1024 / 1024).toFixed(1)} MB` : result.reason }
+      } catch (error) {
+        return { valid: false, info: `cannot validate prebuild (${error.message})` }
       }
-    }
-  },
-  {
-    name: 'Mac x64 better-sqlite3',
-    path: 'node_modules/better-sqlite3/prebuilds/darwin-x64/better_sqlite3.node',
-    platform: 'mac-x64',
-    fix: 'npm run prepare:all',
-    validate: (filePath) => {
-      try {
-        const stats = fs.statSync(filePath)
-        const sizeMB = (stats.size / 1024 / 1024).toFixed(1)
-        return { valid: stats.size > 500 * 1024, info: `${sizeMB} MB` }
-      } catch {
-        return { valid: false, info: 'cannot read file' }
-      }
-    }
-  },
-  {
-    name: 'Windows x64 better-sqlite3',
-    path: 'node_modules/better-sqlite3/prebuilds/win32-x64/better_sqlite3.node',
-    platform: 'win',
-    fix: 'npm run prepare:all',
-    validate: (filePath) => {
-      try {
-        const stats = fs.statSync(filePath)
-        const sizeMB = (stats.size / 1024 / 1024).toFixed(1)
-        return { valid: stats.size > 500 * 1024, info: `${sizeMB} MB` }
-      } catch {
-        return { valid: false, info: 'cannot read file' }
-      }
-    }
-  },
-  {
-    name: 'Linux x64 better-sqlite3',
-    path: 'node_modules/better-sqlite3/prebuilds/linux-x64/better_sqlite3.node',
-    platform: 'linux',
-    fix: 'npm run prepare:all',
-    validate: (filePath) => {
-      try {
-        const stats = fs.statSync(filePath)
-        const sizeMB = (stats.size / 1024 / 1024).toFixed(1)
-        return { valid: stats.size > 500 * 1024, info: `${sizeMB} MB` }
-      } catch {
-        return { valid: false, info: 'cannot read file' }
-      }
-    }
-  }
+    },
+  }))
 ]
 
 // ============================================================================
@@ -386,6 +325,19 @@ function checkEngine(engineId) {
   }
 }
 
+/** Reports a thin Mach-O executable's architecture and deployment target. */
+function describeMachO(filePath, architecture) {
+  try {
+    const { slices } = deployment.inspectMachO(filePath)
+    if (slices.length !== 1 || slices[0].architecture !== architecture) {
+      return { valid: false, info: `expected ${architecture}, found ${slices.map(slice => slice.architecture).join('+') || 'no Mach-O slices'}` }
+    }
+    return { valid: true, info: `${architecture}, macOS ${slices[0].minimumMacOS}` }
+  } catch (error) {
+    return { valid: false, info: `cannot read Mach-O (${error.message})` }
+  }
+}
+
 /**
  * Check a single binary dependency
  */
@@ -398,6 +350,20 @@ function checkBinary(dep) {
       status: 'missing',
       path: dep.path,
       fix: dep.fix
+    }
+  }
+
+  if (dep.platform.startsWith('mac-')) {
+    try {
+      const files = fs.statSync(fullPath).isDirectory() ? deployment.findMachOFiles(fullPath) : [fullPath]
+      for (const file of files) {
+        const native = deployment.inspectMachO(file)
+        if (!native.isMachO) continue
+        const target = deployment.validateMacOSDeploymentTarget(file, dep.macOSFloor)
+        if (!target.valid) return { name: dep.name, status: 'invalid', path: dep.path, info: target.reason, fix: dep.fix }
+      }
+    } catch (error) {
+      return { name: dep.name, status: 'invalid', path: dep.path, info: error.message, fix: dep.fix }
     }
   }
 

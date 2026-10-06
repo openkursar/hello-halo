@@ -39,7 +39,8 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -62,6 +63,7 @@ const BUILD_ARTIFACT = ['index.cjs', 'index.mjs']
   .map((name) => join(PROJECT_ROOT, 'out/main', name))
   .find((candidate) => existsSync(candidate))
 const SOURCE_DIR = join(PROJECT_ROOT, 'src')
+const HTML_FIXTURE = JSON.parse(readFileSync(join(PROJECT_ROOT, 'tests/perf/fixtures/manifest.json'), 'utf8')).fixtures['html-extreme-2mb.html']
 
 const FROZEN_PASS = join(PROJECT_ROOT, 'tests/perf/results/final-frozen')
 const FROZEN_FAIL = join(PROJECT_ROOT, 'tests/perf/results/report-snapshot')
@@ -71,6 +73,48 @@ const DISCIPLINE = `
   Fix the criterion or fix the code. See scripts/perf-gate/thresholds.mjs.`
 
 class GateError extends Error {}
+
+function gatedNodes(scenario, data) {
+  return NODE_CEILINGS[scenario]?.metric === 'htmlPreview.rendererNodes' ? data.htmlPreview?.rendererNodes : data.nodes
+}
+
+function assertHtmlPreview(data, fail) {
+  const evidence = data.htmlPreview
+  if (!evidence) return fail('A', 'no HTML frame evidence — parent counters cannot measure an isolated renderer')
+  const { baseline, frame, fixture, served, document, pixels, rendererNodes, rawParent } = evidence
+  if (!baseline || !frame || !rendererNodes || !rawParent || !fixture || !served || !document || !pixels) return fail('A', 'HTML frame evidence is incomplete')
+  const processes = rendererNodes.processes
+  if (rendererNodes.counter !== 'Performance.Nodes' || rendererNodes.scope !== 'distinct-owned-renderer-processes' || !Array.isArray(processes) || !processes.length) return fail('A', 'HTML must report renderer-wide CDP Node instance counters')
+  const positive = value => Number.isSafeInteger(value) && value > 0
+  const identity = process => positive(process?.pid) && Number.isFinite(process.creationTime) && process.creationTime > 0 && typeof process.targetId === 'string' && process.targetId.length > 0
+  if (baseline.previewFrameCount !== 0 || !identity(baseline.parent) || !identity(frame) || !Array.isArray(baseline.rendererPids)) return fail('A', 'HTML lacks a verified empty-preview baseline and native process identity')
+  const frameIdentity = value => positive(value.contentsId) && Number.isSafeInteger(value.frameTreeNodeId) && Number.isSafeInteger(value.processId) && Number.isSafeInteger(value.routingId) && (value.frameToken === null || (typeof value.frameToken === 'string' && value.frameToken.length > 0))
+  if (!frameIdentity(frame) || !frameIdentity(baseline.parent)) return fail('A', 'HTML frame routing identity is incomplete')
+  if (processes.some(process => !identity(process) || !positive(process.nodes)) || new Set(processes.map(process => process.pid)).size !== processes.length || new Set(processes.map(process => process.targetId)).size !== processes.length) return fail('A', 'HTML renderer identities are unknown or counted more than once')
+  const parent = processes.filter(process => process.role === 'parent')
+  const child = processes.filter(process => process.role === 'preview')
+  if (parent.length !== 1 || parent[0].pid !== baseline.parent?.pid || parent[0].creationTime !== baseline.parent?.creationTime || parent[0].targetId !== baseline.parent?.targetId || parent[0].nodes !== rawParent.end) return fail('A', 'HTML parent counter does not match the original renderer')
+  const independent = frame.pid !== baseline.parent?.pid
+  if (independent === (frame.processId === baseline.parent.processId)) return fail('A', 'HTML native and Chromium process identities disagree')
+  if (independent) {
+    if (processes.length !== 2 || child.length !== 1 || child[0].pid !== frame.pid || child[0].creationTime !== frame.creationTime || child[0].targetId !== frame.targetId || baseline.rendererPids.includes(frame.pid)) return fail('A', 'HTML child lacks an exclusive newly-owned renderer counter')
+    const session = evidence.session
+    if (!session || session.frameTreeId !== frame.targetId || session.frameTreeUrl !== frame.url || session.runtimeUrl !== frame.url || typeof session.targetInfoUrl !== 'string' || session.targetInfoUrlAvailable !== (session.targetInfoUrl.length > 0) || (session.targetInfoUrlAvailable && session.targetInfoUrl !== frame.url)) return fail('A', 'HTML child session frame tree and runtime do not identify the actual native document')
+  } else if (processes.length !== 1 || child.length !== 0 || frame.targetId !== baseline.parent?.targetId) return fail('A', 'An in-process HTML frame must use the parent counter exactly once')
+  if (rawParent.start !== data.nodes?.start || rawParent.end !== data.nodes?.end || rawParent.delta !== data.nodes?.delta || rendererNodes.start !== rawParent.start || rendererNodes.end !== processes.reduce((sum, process) => sum + process.nodes, 0) || rendererNodes.delta !== rendererNodes.end - rendererNodes.start) fail('A', 'HTML combined counter arithmetic does not preserve the raw parent measurement')
+  const owner = independent ? child[0] : parent[0]
+  if (!positive(document.attachedNodes) || document.attachedNodes < document.elements || owner?.nodes < document.attachedNodes) fail('A', 'HTML renderer counter does not cover its actual attached DOM')
+  if (fixture.name !== 'html-extreme-2mb.html' || fixture.bytes !== HTML_FIXTURE.bytes || fixture.sha256 !== HTML_FIXTURE.sha256 || served.status !== 200 || served.bytes !== fixture.bytes || served.sha256 !== fixture.sha256) fail('B', 'HTML served bytes/hash do not match the complete registered fixture')
+  if (served.requestUrl !== frame.url || typeof served.responseUrl !== 'string' || served.responseUrlAvailable !== (served.responseUrl.length > 0) || served.redirected !== false || (served.responseUrlAvailable && served.responseUrl !== frame.url)) fail('B', 'HTML served request/response identity is inconsistent with the owned frame')
+  let url
+  let fileName
+  try { url = new URL(frame.url); fileName = decodeURIComponent(url.pathname).slice(1) } catch { fail('B', 'HTML frame URL is invalid') }
+  if (url?.protocol !== 'halo-preview:' || fileName !== fixture.name || document.url !== frame.url || frame.contentsId !== baseline.parent?.contentsId || frame.frameTreeNodeId === baseline.parent?.frameTreeNodeId) fail('B', 'HTML content is not the owned active preview frame')
+  if (document.readyState !== 'complete' || document.title !== 'Perf Fixture' || document.heading !== 'Perf Fixture HTML' || !positive(fixture.elements) || document.elements !== fixture.elements || !positive(fixture.sections) || document.sections !== fixture.sections || document.lastSection !== fixture.lastSection) fail('B', 'HTML complete document structure was not verified')
+  const area = pixels.width * pixels.height
+  if (!(pixels.width > 100 && pixels.height > 100 && pixels.opaquePixels === area && pixels.inkPixels > 100 && pixels.inkPixels <= area && pixels.bytes > 0) || !/^[0-9a-f]{64}$/.test(pixels.sha256 ?? '') || typeof pixels.artifact !== 'string' || !pixels.artifact.endsWith('.png')) fail('B', 'HTML has no nonempty opaque compositor image containing fixture ink')
+  if (!(evidence.pixelReadyMsFromOpen >= data.durationMs && evidence.evidenceVerificationMs > 0 && evidence.verificationAfterSampling === true)) fail('B', 'HTML pixel checkpoint and verification overhead were not recorded with their actual timing scope')
+}
 
 function readResult(dir, scenario) {
   const file = join(dir, `${scenario}.json`)
@@ -108,7 +152,8 @@ function registeredSkip(scenario, data) {
 
 /** Class A — the collector ran. Null is the harness's contract for a failed probe. */
 function assertCollected(scenario, data, fail) {
-  const nodes = data.nodes
+  if (NODE_CEILINGS[scenario]?.metric === 'htmlPreview.rendererNodes') assertHtmlPreview(data, fail)
+  const nodes = gatedNodes(scenario, data)
   if (!nodes) return fail('A', `no 'nodes' block — the CDP metrics probe never reported`)
   if (nodes.end === null || nodes.end === undefined) fail('A', `nodes.end is null — the probe failed`)
   if (nodes.delta === null || nodes.delta === undefined) fail('A', `nodes.delta is null — the probe failed`)
@@ -132,7 +177,7 @@ function assertActed(scenario, data, fail) {
   if (data.status !== 'ok') {
     fail('B', `status is ${JSON.stringify(data.status)}, expected 'ok'`)
   }
-  const delta = data.nodes?.delta
+  const delta = gatedNodes(scenario, data)?.delta
   if (typeof delta === 'number' && delta < MIN_NODE_DELTA) {
     fail(
       'B',
@@ -257,7 +302,7 @@ export function runGate(resultDir, { requireFreshBuild = false } = {}) {
   // would hide exactly the regression this gate exists to catch.
   for (const [scenario, data] of measured) {
     const { ceiling, anchor } = NODE_CEILINGS[scenario]
-    const delta = data.nodes.delta
+    const delta = gatedNodes(scenario, data).delta
     if (delta > ceiling) {
       failures.push({
         scenario,
@@ -299,7 +344,7 @@ function report(resultDir, { failures, skipped, measured }) {
     const flag = NON_VIRTUALIZED[scenario] ? '  (not virtualized — see thresholds.mjs)' : ''
     console.log(
       `  ${overCeiling.has(scenario) ? 'OVER' : 'ok  '}  ${scenario.padEnd(22)}` +
-        ` nodes +${String(data.nodes.delta).padStart(7)} / ${ceiling}` +
+        ` nodes +${String(gatedNodes(scenario, data).delta).padStart(7)} / ${ceiling}` +
         `   ${String(data.durationMs).padStart(6)}ms  load ${load}${flag}`
     )
   }
@@ -338,7 +383,34 @@ function selfTest() {
     return 2
   }
 
-  const post = runGate(FROZEN_PASS)
+  // The historical HTML record predates frame evidence. A synthetic control
+  // exercises the new schema without modifying or certifying that old result.
+  const htmlControl = JSON.parse(readFileSync(join(FROZEN_PASS, 's5-html.json'), 'utf8'))
+  htmlControl.nodes = { start: 542, end: 515, delta: -27 }
+  const previewUrl = 'halo-preview://controlled/html-extreme-2mb.html'
+  const parentIdentity = { pid: 101, creationTime: 1000, contentsId: 1, frameTreeNodeId: 1, processId: 1, routingId: 1, frameToken: 'parent-frame', url: 'file:///controlled/index.html', targetId: 'parent-target' }
+  const childIdentity = { pid: 102, creationTime: 2000, contentsId: 1, frameTreeNodeId: 2, processId: 2, routingId: 1, frameToken: 'preview-frame', url: previewUrl, targetId: 'preview-target' }
+  htmlControl.htmlPreview = {
+    baseline: { previewFrameCount: 0, parent: parentIdentity, rendererPids: [101] }, frame: childIdentity,
+    session: { targetInfoUrl: previewUrl, targetInfoUrlAvailable: true, frameTreeId: 'preview-target', frameTreeUrl: previewUrl, runtimeUrl: previewUrl },
+    fixture: { name: 'html-extreme-2mb.html', ...HTML_FIXTURE, elements: 125955, sections: 2548, lastSection: 'Section 2548' },
+    served: { ...HTML_FIXTURE, status: 200, requestUrl: previewUrl, responseUrl: previewUrl, responseUrlAvailable: true, redirected: false },
+    document: { url: previewUrl, title: 'Perf Fixture', readyState: 'complete', elements: 125955, attachedNodes: 262900, sections: 2548, lastSection: 'Section 2548', heading: 'Perf Fixture HTML' },
+    pixels: { width: 400, height: 320, opaquePixels: 128000, inkPixels: 1000, bytes: 1000, sha256: 'a'.repeat(64), artifact: 'synthetic-preview.png' },
+    pixelReadyMsFromOpen: 5000, evidenceVerificationMs: 100, verificationAfterSampling: true,
+    rawParent: { ...htmlControl.nodes },
+    rendererNodes: { counter: 'Performance.Nodes', scope: 'distinct-owned-renderer-processes', start: 542, end: 263495, delta: 262953, processes: [
+      { role: 'parent', pid: 101, creationTime: 1000, targetId: 'parent-target', nodes: 515 },
+      { role: 'preview', pid: 102, creationTime: 2000, targetId: 'preview-target', nodes: 262980 },
+    ] },
+  }
+  const controlled = mkdtempSync(join(tmpdir(), 'halo-perf-gate-control-'))
+  let post
+  try {
+    cpSync(FROZEN_PASS, controlled, { recursive: true })
+    writeFileSync(join(controlled, 's5-html.json'), JSON.stringify(htmlControl))
+    post = runGate(controlled)
+  } finally { rmSync(controlled, { recursive: true, force: true }) }
   if (post.failures.length > 0) {
     problems.push(`post-fix corpus should pass but reported: ${post.failures.map((f) => `${f.scenario}: ${f.message}`).join('; ')}`)
   }
@@ -383,6 +455,55 @@ function selfTest() {
     if (failures.length === 0) problems.push(`class ${cls} does not catch "${label}" — that criterion is decorative`)
   }
 
+  const htmlMutants = [
+    ['missing frame evidence', data => { delete data.htmlPreview }],
+    ['double-counted renderer', data => { data.htmlPreview.rendererNodes.processes.push({ ...data.htmlPreview.rendererNodes.processes[1] }) }],
+    ['unknown process identity', data => { data.htmlPreview.frame.pid = null }],
+    ['unmeasured prior child counter', data => { data.htmlPreview.baseline.rendererPids.push(102) }],
+    ['wrong served bytes', data => { data.htmlPreview.served.bytes = 10 }],
+    ['wrong served request', data => { data.htmlPreview.served.requestUrl = 'halo-preview://foreign/other.html' }],
+    ['wrong nonempty response URL', data => { data.htmlPreview.served.responseUrl = 'halo-preview://foreign/other.html' }],
+    ['incomplete document', data => { data.htmlPreview.document.elements = 10 }],
+    ['empty compositor image', data => { data.htmlPreview.pixels.inkPixels = 0 }],
+    ['counter omits child', data => { data.htmlPreview.rendererNodes.end = 515 }],
+    ['missing child session identity', data => { data.htmlPreview.session = null }],
+    ['session bound to parent target', data => { data.htmlPreview.session.frameTreeId = 'parent-target' }],
+    ['session executes the wrong document', data => { data.htmlPreview.session.runtimeUrl = 'file:///controlled/index.html' }],
+  ]
+  for (const [label, mutate] of htmlMutants) {
+    const data = structuredClone(htmlControl)
+    mutate(data)
+    const failures = []
+    const fail = (cls, message) => failures.push({ cls, message })
+    assertCollected('s5-html', data, fail)
+    assertActed('s5-html', data, fail)
+    if (!failures.length) problems.push(`HTML gate accepted ${label}`)
+  }
+  const inProcess = structuredClone(htmlControl)
+  const shared = inProcess.htmlPreview
+  shared.frame = { ...shared.frame, pid: 101, processId: 1, creationTime: 1000, targetId: 'parent-target' }
+  shared.session = null
+  shared.rawParent = inProcess.nodes = { start: 542, end: 263495, delta: 262953 }
+  shared.rendererNodes.processes = [{ role: 'parent', pid: 101, creationTime: 1000, targetId: 'parent-target', nodes: 263495 }]
+  const inProcessFailures = []
+  assertCollected('s5-html', inProcess, (_cls, message) => inProcessFailures.push(message))
+  assertActed('s5-html', inProcess, (_cls, message) => inProcessFailures.push(message))
+  if (inProcessFailures.length) problems.push(`HTML same-process control failed: ${inProcessFailures.join('; ')}`)
+  const unavailableTargetUrl = structuredClone(htmlControl)
+  unavailableTargetUrl.htmlPreview.session.targetInfoUrl = ''
+  unavailableTargetUrl.htmlPreview.session.targetInfoUrlAvailable = false
+  const unavailableFailures = []
+  assertCollected('s5-html', unavailableTargetUrl, (_cls, message) => unavailableFailures.push(message))
+  assertActed('s5-html', unavailableTargetUrl, (_cls, message) => unavailableFailures.push(message))
+  if (unavailableFailures.length) problems.push(`HTML verified child session with an unavailable target-info URL failed: ${unavailableFailures.join('; ')}`)
+  const syntheticResponse = structuredClone(htmlControl)
+  syntheticResponse.htmlPreview.served.responseUrl = ''
+  syntheticResponse.htmlPreview.served.responseUrlAvailable = false
+  const syntheticResponseFailures = []
+  assertCollected('s5-html', syntheticResponse, (_cls, message) => syntheticResponseFailures.push(message))
+  assertActed('s5-html', syntheticResponse, (_cls, message) => syntheticResponseFailures.push(message))
+  if (syntheticResponseFailures.length) problems.push(`HTML verified synthetic response with an unavailable response URL failed: ${syntheticResponseFailures.join('; ')}`)
+
   // The skip contract, checked against what `writeSkipResult` actually writes
   // rather than against what this file assumes it writes.
   const [skipScenario, skipReasons] = Object.entries(ALLOWED_SKIPS)[0]
@@ -408,7 +529,7 @@ function selfTest() {
     return 1
   }
   console.log(
-    `perf-gate self-test: PASS (both frozen corpora + ${mutants.length} criterion mutants + the skip contract)`
+    `perf-gate self-test: PASS (frozen corpora, explicit synthetic HTML controls, ${mutants.length + htmlMutants.length} criterion mutants and the skip contract)`
   )
   return 0
 }

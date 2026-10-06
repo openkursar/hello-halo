@@ -16,7 +16,7 @@
 # 的 Gatekeeper/XProtect 拦下 (见 docs/mac-signing-and-notarization.md)。
 #
 # 调用方仍需给 electron-builder 传:
-#   -c.mac.hardenedRuntime=true -c.mac.notarize.teamId="$APPLE_TEAM_ID"
+#   -c.mac.hardenedRuntime=true -c.mac.notarize=true
 # package.json 里这两项默认关闭，以便没有 Apple 凭据的贡献者也能构建。
 # ============================================================================
 

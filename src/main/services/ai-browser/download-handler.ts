@@ -51,7 +51,7 @@ export function installDownloadHandler(): void {
     // Step 1: Determine if this is an AI download
     const viewId = browserViewManager.findViewIdByWebContentsId(webContents.id)
 
-    // Not from a managed BrowserView, or not an AI view -> let native dialog show
+    // Not from a managed browser page, or not an AI view -> let native dialog show
     if (!viewId || !browserViewManager.isAIView(viewId)) {
       return
     }

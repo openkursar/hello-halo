@@ -6,6 +6,7 @@ import {
   isElectron,
 } from './_shared'
 import { onEvent } from './_shared'
+import { ensureExtendedServicesReady } from './bootstrap-ready'
 import type { MemoryPressureEvent, MemoryPressureLevel } from '../../shared/types/memory-pressure'
 import type {
   ApiResponse,
@@ -75,6 +76,7 @@ export const healthApi = {
    */
   getMemoryPressure: async (): Promise<MemoryPressureLevel> => {
     if (!isElectron()) return 'normal'
+    await ensureExtendedServicesReady()
     const response = await window.halo.getMemoryPressure()
     return response.success && response.data ? response.data.level : 'normal'
   },

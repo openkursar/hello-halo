@@ -10,7 +10,7 @@ const releaseArtifactSpace = vi.fn(async (_spaceId: string, _clientId: string) =
 
 vi.mock('../../../../src/renderer/api', () => ({
   api: {
-    onBrowserStateChange: () => () => {},
+    onBrowserPageGone: () => () => {}, onBrowserStateChange: () => () => {},
     onArtifactChangedBatch: () => () => {},
     onMemoryPressure: () => () => {},
     getMemoryPressure: async () => 'normal',

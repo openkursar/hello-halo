@@ -103,24 +103,16 @@ const STRUCTURAL_ROLES = new Set([
  */
 export async function createAccessibilitySnapshot(
   webContents: WebContents,
+  send: SnapshotCommandSender,
   verbose: boolean = false
 ): Promise<AccessibilitySnapshot> {
   const snapshotId = `snap_${++snapshotCounter}`
   const idToNode = new Map<string, AccessibilityNode>()
   let nodeIndex = 0
 
-  // Ensure debugger is attached
-  try {
-    webContents.debugger.attach('1.3')
-  } catch (e) {
-    // Already attached
-  }
-
   try {
     // Get the full accessibility tree via CDP
-    const response = await webContents.debugger.sendCommand(
-      'Accessibility.getFullAXTree'
-    ) as CDPAXTreeResponse
+    const response = await send<CDPAXTreeResponse>('Accessibility.getFullAXTree')
 
     if (!response?.nodes || response.nodes.length === 0) {
       throw new Error('Empty accessibility tree')
@@ -390,25 +382,34 @@ function formatSnapshot(snapshot: AccessibilitySnapshot, verbose: boolean = fals
   return lines.join('\n')
 }
 
+/** Sends one CDP command within the caller's page operation, cancellation and deadline. */
+export type SnapshotCommandSender = <T = unknown>(method: string, params?: Record<string, unknown>) => Promise<T>
+
 /**
- * Get element bounding box by backend node ID
+ * A sender's signal that the page itself rejected one command (a detached node,
+ * no layout box). Element helpers tolerate only this; any other error means the
+ * operation was cancelled, timed out or lost its page, and must propagate.
  */
+export class PageCommandRejectedError extends Error {
+  constructor(readonly method: string, cause: unknown) {
+    super(`${method} was rejected by the page: ${cause instanceof Error ? cause.message : String(cause)}`, { cause })
+    this.name = 'PageCommandRejectedError'
+  }
+}
+
+function toleratePageRejection(error: unknown, action: string): void {
+  if (!(error instanceof PageCommandRejectedError)) throw error
+  console.warn(`[Snapshot] Could not ${action}; continuing without it:`, error.message)
+}
+
 export async function getElementBoundingBox(
-  webContents: WebContents,
+  send: SnapshotCommandSender,
   backendNodeId: number
 ): Promise<{ x: number; y: number; width: number; height: number } | null> {
   try {
-    // Ensure debugger is attached
-    try {
-      webContents.debugger.attach('1.3')
-    } catch (e) {
-      // Already attached
-    }
-
-    // Get the box model for the element
-    const response = await webContents.debugger.sendCommand('DOM.getBoxModel', {
+    const response = await send<{ model?: { content: number[] } }>('DOM.getBoxModel', {
       backendNodeId
-    }) as { model?: { content: number[] } }
+    })
 
     if (!response?.model?.content) {
       return null
@@ -428,7 +429,7 @@ export async function getElementBoundingBox(
       height: maxY - y
     }
   } catch (error) {
-    console.error('[Snapshot] Failed to get bounding box:', error)
+    toleratePageRejection(error, 'get the element bounding box')
     return null
   }
 }
@@ -437,25 +438,16 @@ export async function getElementBoundingBox(
  * Scroll element into view
  */
 export async function scrollIntoView(
-  webContents: WebContents,
+  send: SnapshotCommandSender,
   backendNodeId: number
 ): Promise<void> {
   try {
-    // Ensure debugger is attached
-    try {
-      webContents.debugger.attach('1.3')
-    } catch (e) {
-      // Already attached
-    }
-
-    // Resolve to a RemoteObjectId for scrolling
-    const resolveResponse = await webContents.debugger.sendCommand('DOM.resolveNode', {
+    const resolveResponse = await send<{ object?: { objectId?: string } }>('DOM.resolveNode', {
       backendNodeId
-    }) as { object?: { objectId?: string } }
+    })
 
     if (resolveResponse?.object?.objectId) {
-      // Scroll into view using Runtime.callFunctionOn
-      await webContents.debugger.sendCommand('Runtime.callFunctionOn', {
+      await send('Runtime.callFunctionOn', {
         objectId: resolveResponse.object.objectId,
         functionDeclaration: `function() {
           this.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
@@ -464,7 +456,7 @@ export async function scrollIntoView(
       })
     }
   } catch (error) {
-    console.error('[Snapshot] Failed to scroll into view:', error)
+    toleratePageRejection(error, 'scroll the element into view')
   }
 }
 
@@ -472,21 +464,14 @@ export async function scrollIntoView(
  * Focus an element by backend node ID
  */
 export async function focusElement(
-  webContents: WebContents,
+  send: SnapshotCommandSender,
   backendNodeId: number
 ): Promise<void> {
   try {
-    // Ensure debugger is attached
-    try {
-      webContents.debugger.attach('1.3')
-    } catch (e) {
-      // Already attached
-    }
-
-    await webContents.debugger.sendCommand('DOM.focus', {
+    await send('DOM.focus', {
       backendNodeId
     })
   } catch (error) {
-    console.error('[Snapshot] Failed to focus element:', error)
+    toleratePageRejection(error, 'focus the element')
   }
 }

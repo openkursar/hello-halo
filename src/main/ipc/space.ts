@@ -2,7 +2,7 @@
  * Space IPC Handlers
  */
 
-import { dialog } from 'electron'
+import { showOpenDialog } from '../foundation/file-dialog'
 import {
   getHaloSpace,
   listSpaces,
@@ -128,7 +128,7 @@ export function registerSpaceHandlers(): void {
     // Select folder dialog (for custom space location)
     selectFolder: async () => {
       try {
-        const result = await dialog.showOpenDialog({
+        const result = await showOpenDialog({
           title: 'Select Space Location',
           properties: ['openDirectory', 'createDirectory'],
           buttonLabel: 'Select Folder'

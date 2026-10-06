@@ -31,7 +31,7 @@ const canvas = vi.hoisted(() => {
         cb([...state.tabs.values()])
         return () => state.tabsListeners.delete(cb)
       },
-      onBrowserStateChange: (cb: (tabId: string, s: { isLoading: boolean }) => void) => {
+      onBrowserPageGone: () => () => {}, onBrowserStateChange: (cb: (tabId: string, s: { isLoading: boolean }) => void) => {
         state.browserListeners.add(cb)
         return () => state.browserListeners.delete(cb)
       },

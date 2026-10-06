@@ -765,7 +765,7 @@ export function detectFileType(filePath: string): FileTypeInfo {
     }
   }
 
-  // PDF → BrowserView
+  // PDF uses the embedded Chromium viewer.
   if (ext === 'pdf') {
     return {
       isText: false,

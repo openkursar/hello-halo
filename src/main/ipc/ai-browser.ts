@@ -24,7 +24,7 @@ import { broadcastToAll } from '../http/websocket'
 const subscriptions: Array<() => void> = []
 
 export function registerAIBrowserHandlers(): void {
-  // The BrowserView registry is process-global; events carry the owning
+  // The browser page registry is process-global; events carry the owning
   // conversationId in their payload and the renderer filters on it, so they go
   // out with broadcastToAll rather than the conversation-scoped WebSocket path.
   const forward = (channel: string, data: Record<string, unknown>): void => {

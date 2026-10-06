@@ -66,7 +66,7 @@ export const NODE_CEILINGS = {
   's5-json': { ceiling: 8000, anchor: 1651, broken: null },
   's5-code': { ceiling: 8000, anchor: 1810, broken: null },
   's5-text': { ceiling: 4000, anchor: 397, broken: null },
-  's5-html': { ceiling: 400000, anchor: 262937, broken: null }
+  's5-html': { ceiling: 400000, anchor: 262937, broken: null, metric: 'htmlPreview.rendererNodes' }
 }
 
 /**
@@ -76,7 +76,7 @@ export const NODE_CEILINGS = {
  * further blow-up.
  */
 export const NON_VIRTUALIZED = {
-  's5-html': 'HTML preview still renders in-process; unchanged by the viewer work.'
+  's5-html': 'HTML renders its complete document. CDP Node instance counters are summed once per owning renderer process, including an isolated preview.'
 }
 
 /**

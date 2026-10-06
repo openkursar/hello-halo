@@ -130,29 +130,6 @@ export const systemApi = {
     return window.halo.onWindowMaximizeChange(callback)
   },
 
-  // ===== Overlay (Electron only) =====
-  // Used for floating UI elements that need to render above BrowserViews
-  showChatCapsuleOverlay: async (): Promise<ApiResponse> => {
-    if (!isElectron()) {
-      return { success: false, error: 'Only available in desktop app' }
-    }
-    return window.halo.showChatCapsuleOverlay()
-  },
-
-  hideChatCapsuleOverlay: async (): Promise<ApiResponse> => {
-    if (!isElectron()) {
-      return { success: false, error: 'Only available in desktop app' }
-    }
-    return window.halo.hideChatCapsuleOverlay()
-  },
-
-  onCanvasExitMaximized: (callback: () => void) => {
-    if (!isElectron()) {
-      return () => { } // No-op in remote mode
-    }
-    return window.halo.onCanvasExitMaximized(callback)
-  },
-
   // ===== Git Bash (Windows only, Electron only) =====
   getGitBashStatus: async (): Promise<ApiResponse<{
     found: boolean

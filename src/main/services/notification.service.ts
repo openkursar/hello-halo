@@ -107,6 +107,11 @@ export function notifyTaskComplete(conversationTitle: string): void {
       }
     })
 
+    notification.once('failed', (_event, error) => {
+      console.warn('[Notification] Task notification rejected by the system; falling back to in-app toast:', error)
+      pushToast({ title: 'Halo', body: `Task complete: ${conversationTitle}` })
+    })
+
     notification.show()
   } catch (error) {
     console.error('[Notification] Failed to show notification:', error)
@@ -180,6 +185,11 @@ export function notifyAppEvent(title: string, body: string, options?: AppNotific
               sendToRenderer('app:navigate', target)
             }
           }
+        })
+
+        notification.once('failed', (_event, error) => {
+          console.warn('[Notification] App notification rejected by the system; falling back to in-app toast:', error)
+          pushToast({ title, body, ...target })
         })
 
         notification.show()

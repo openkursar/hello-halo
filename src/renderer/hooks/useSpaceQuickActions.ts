@@ -22,7 +22,7 @@ const isMac = typeof navigator !== 'undefined' && navigator.platform.toUpperCase
 export const CHANGES_SHORTCUT_LABEL = isMac ? '⌃⇧G' : 'Ctrl+Shift+G'
 
 interface SpaceQuickActions {
-  /** Browser opens a local BrowserView — unavailable in Web mode. */
+  /** Browser opens a local browser page — unavailable in Web mode. */
   canOpenBrowser: boolean
   /** Resolves with the id of the tab the browser opened in. */
   openBrowser: () => Promise<string>

@@ -159,7 +159,7 @@ export interface DownloadInfo {
 
 /**
  * Browser context interface
- * Provides access to the BrowserView and CDP commands
+ * Provides access to the active browser page and CDP commands
  */
 export interface BrowserContextInterface {
   // Working directory for resolving relative paths (e.g. browser_run scripts).

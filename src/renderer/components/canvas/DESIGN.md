@@ -2,14 +2,15 @@
 
 The tabbed pane beside the chat that shows files, web pages, terminals, teams,
 goals and code changes. One `canvasLifecycle` (`services/canvas-lifecycle.ts`) owns every
-tab and every native resource behind one (BrowserViews, file content, pty
+tab and every resource behind one (browser pages, file content, pty
 attachment); React renders what it says.
 
 ## Parts
 
 | Part | File | Owns |
 |---|---|---|
-| Lifecycle manager | `services/canvas-lifecycle.ts` | tabs (`TabState`), active tab, open state, BrowserView create/show/hide/destroy, file reads, disk-change handling, budgets |
+| Lifecycle manager | `services/canvas-lifecycle.ts` | tabs (`TabState`), active tab, open state, browser page create/show/hide/destroy requests, file reads, disk-change handling, budgets |
+| Browser host | `browser-host/index.ts` | permanent guest DOM attachment, CSS presentation, and the visible viewer's borrowed surface; mounted outside routes by `App` |
 | Budget planner | `services/canvas-budget.ts` + `shared/constants/canvas-budget.ts` | which hidden tabs give up content, views, or close |
 | React bindings | `hooks/useCanvasLifecycle.ts` | `useTabList`, `useActiveTab`, `useActiveTabId`, `useCanvasIsOpen`, `useTabCount`, `useBrowserState`, `useCanvasActions` |
 | Legacy store proxy | `stores/canvas.store.ts` | open/maximized state for pages outside the canvas; budget-eviction toast |
@@ -32,7 +33,7 @@ for what it shows:
 |---|---|---|
 | `onTabListChange` | add / remove / reorder, or a field in `TAB_LIST_FIELDS` (type, title, path, url, dirty, loading, error) | tab strip, tab count, telemetry, goal titles |
 | `onTabChange(tab)` | any change to one tab | `useActiveTab` (re-renders only when the active tab's object changed) |
-| `onBrowserStateChange(tabId)` | a BrowserView's navigation state | `useBrowserState(tab.id)` |
+| `onBrowserStateChange(tabId)` | a browser page's navigation state | `useBrowserState(tab.id)` |
 | `onActiveTabChange`, `onOpenStateChange` | active tab / open state | host |
 
 `getTabs()` is always current; `getTabListSnapshot()` is the tab strip's stable
@@ -151,15 +152,87 @@ as diffs. `openChanges(source, { reveal })` keeps one tab per source:
   shows the last one at once. Report links to files of the list open a detail
   page walked through the files the report names; Esc returns to the link.
 
+## Browser page lifetime and presentation
+
+The browser manager in main owns page identity, navigation, policy, CDP and
+destruction. `browserViewId` and the existing browser API names remain the
+public identifiers; their carrier is now an Electron `webview` guest.
+
+`App` mounts one `browser-host` outside routed React pages. Its public
+`mountBrowserHost(container, bridge)` also powers the minimal hidden-host
+entry for pages that can never be shown. Each guest is appended once with its
+immutable creation URL, partition and attachment token. Show/hide and resize
+only change CSS. No tab switch, route change, budget calculation or DOM portal
+may reparent the node. A remove command with its current token is the only
+page-level detach. The initial snapshot cannot overwrite commands received
+while it was in flight.
+
+`BrowserViewer` borrows a presentation surface through `bindBrowserSurface`.
+Unmounting or blocking the surface immediately parks its guest off-screen,
+without waiting for IPC; the last viewport stays nonzero so background work
+can still produce frames. Resize, scroll and active layout animations update
+the guest locally. A temporary frame lease for a screenshot or an AI input
+operation places that same guest at the viewport origin with zero opacity and
+pointer input disabled, preserving its size. Main waits for a token-matched
+acknowledgement after two animation frames. The entire input operation holds the
+lease so intermediate focus, clicks and keystrokes share one presented surface.
+Ending the lease restores off-screen parking. Removing a page or disposing the
+host cancels its pending acknowledgement. Main still receives the existing layout calls and supplies
+the optional H5 viewport width. Guests use CSS pixels, including when the app
+is zoomed.
+
+Guest nodes sit at z-index 1. Menus, dialogs, toasts and the maximized canvas's
+chat capsule share the host DOM and can cover them. The mobile canvas does not
+create a higher z-index group around its background; the browser surface is
+therefore visible above it while the existing global overlays remain above the
+guest. The underlying mobile chat has its own isolated stacking context, so its
+scroll button and composer menus cannot appear through the canvas; global
+portal dialogs still cover both. Native browser context menus retain their behavior. Closing a menu only
+returns focus to a visible guest when the invoking button still has focus.
+
+The shared layer tokens in `globals.css` keep resource-sheet interactions below
+blocking portal dialogs, including a file deletion confirmed while the resource
+sheet remains open:
+
+| Surface | Layer |
+|---|---|
+| Browser guest | 1 |
+| Resource trigger (`--layer-workspace-trigger`) | 60 |
+| Resource sheet (`--layer-workspace-sheet`) | 70 |
+| Global search backdrop / panel | 100 / 101 |
+| Blocking portal dialog (`--layer-global-modal`, used by `ConfirmDialog`) | 120 |
+
+Global dialogs opened from a sheet use the shared modal layer and a body portal;
+raising only the dialog's inner content cannot escape a parent stacking context.
+
+Address-bar and Home navigation belong to the tab lifecycle. A request made
+before guest attachment waits for that tab's creation, survives switching away,
+and is cancelled if the tab closes before the guest becomes ready.
+
+Canvas-owned pages are destroyed on tab close and released by the existing
+budgets. AI-owned pages only lose their presentation on tab close or a space
+switch: their owner keeps them alive and eventually sends the remove command.
+Possible-to-show AI pages live in the main host from creation; they never move
+from a hidden window to the main window. Renderer reload destroys that host's
+guests, and main reports the lost pages through the existing lifecycle events.
+`browser:page-gone` also invalidates owned Canvas attachments: a visible tab
+recreates its page from its last URL; a hidden tab waits for activation or
+canvas expansion. Explicit tab close and budget eviction suppress recovery.
+An AI-attached tab continues to follow its owner's existing loss event.
+
+Desktop PDFs use Chromium's native PDF viewer in the same guest host. Remote
+PDFs still use pdfjs, and remote browser tabs still show the desktop-client
+fallback; neither path initializes an Electron host.
+
 ## Budgets
 
-Applied after every activation and every new BrowserView
+Applied after every activation and every new browser page
 (`shared/constants/canvas-budget.ts`), least recently activated first:
 
 | Budget | Default | Over it |
 |---|---|---|
 | `MAX_OPEN_TABS` | 30 | close the tab; the user sees a toast |
-| `MAX_LIVE_BROWSER_VIEWS` | 6 | destroy an owned hidden BrowserView, keep its url; recreated when shown |
+| `MAX_LIVE_BROWSER_VIEWS` | 6 | destroy an owned hidden browser page, keep its url; recreated when shown |
 | `HIDDEN_CONTENT_BUDGET_BYTES` | 64 MB | drop a hidden file tab's content/bytes (`contentUnloaded`); re-read when shown |
 
 Never touched: the active tab, tabs with unsaved edits, terminals (closing
@@ -199,7 +272,9 @@ Rules marked ⚙ are enforced by `tests/unit/architecture/canvas-viewers.guard.t
    remount (copied, saving, hover).
 7. ⚙ **The host owns boundaries.** Every viewer renders inside `ViewerHost`
    (per-tab `ErrorBoundary` + `Suspense`); viewers do not add their own.
-8. **Hidden = unmounted.** No viewer stays mounted while hidden. Keep-alive
+8. **Hidden = unmounted.** No viewer stays mounted while hidden. Browser guests
+   are resources in the separate permanent host, not kept-alive viewers; their
+   existing ownership and budgets govern release. Any other viewer keep-alive
    needs a registry flag bounded by a small cap, added together with its first
    real consumer — not before.
 9. ⚙ **Registry, not switch.** `VIEWERS` is `Record<ContentType, ViewerSpec>`;
@@ -262,7 +337,7 @@ Rules:
 - [ ] Every imperative resource through `useViewerResources()`.
 - [ ] Derivations memoized; lists over ~128k chars virtualized (chunk Virtuoso / TableVirtuoso / CodeMirror viewport).
 - [ ] Scroll/view memory in `tab.view`, not component state.
-- [ ] Native resources (BrowserView, pty, worker pool) get a single release point in the lifecycle and a budget entry.
+- [ ] Native resources (browser guest, pty, worker pool) get a single release point in the lifecycle and a budget entry.
 - [ ] Third-party renderer: count `createObjectURL`/`revokeObjectURL` and listener add/remove; unpaired ones get a `patches/` fix plus a guard (docx-preview, xterm).
 - [ ] Text the user can point at goes through a `components/references` adapter (CodeMirror extension — it also draws pending comments as cards under their lines —, `useTextReferences`, terminal), and the viewer consumes `tab.reveal`, `commentId` included (see "Going back to a place").
 - [ ] Unit tests for its pure logic; a `tests/perf` scenario if it can hold large content.

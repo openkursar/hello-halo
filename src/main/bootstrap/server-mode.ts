@@ -1,7 +1,7 @@
 /**
  * Headless server-mode boot path.
  *
- * Runs the Electron main process without a window/menu/tray and serves the
+ * Runs the Electron main process without a main window/menu/tray and serves the
  * existing Remote Access HTTP+WebSocket stack, so the same React UI is reachable
  * from a browser. The desktop path is untouched — this only runs when
  * isServerMode() is true (container / serverless deployment).
@@ -15,6 +15,7 @@ import { initializeEssentialServices, initializeExtendedServices } from './index
 import { enableRemoteAccess } from '../services/remote'
 import { getServerPort } from '../foundation/runtime-mode'
 import { applyEnvConfig } from '../foundation/env-config'
+import { registerBrowserHostHandlers } from '../ipc/browser-host'
 
 /**
  * Chromium/Electron switches required to start without a display, as root,
@@ -59,6 +60,9 @@ export async function bootServerMode(): Promise<void> {
   try {
     // Env-driven config (service token + LLM source) before anything reads it.
     applyEnvConfig()
+
+    // Lazy hidden browser hosts need their bridge even without a desktop window.
+    registerBrowserHostHandlers()
 
     initializeEssentialServices()
     console.log('[ServerMode] essential services ready')

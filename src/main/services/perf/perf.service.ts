@@ -7,7 +7,7 @@
  * Features:
  * - Memory monitoring (heap, RSS, external)
  * - CPU usage tracking
- * - BrowserView instance counting
+ * - Live browser page counting
  * - IPC call frequency tracking
  * - Threshold-based warnings
  * - Data export for analysis
@@ -17,7 +17,7 @@
  *   await perfService.start()
  */
 
-import { BrowserWindow } from 'electron'
+import type { BrowserWindow } from 'electron'
 import * as v8 from 'v8'
 import type {
   PerfConfig,
@@ -31,6 +31,7 @@ import type {
   RendererMetrics,
 } from './types'
 import { DEFAULT_PERF_CONFIG, DEFAULT_THRESHOLDS } from './types'
+import { browserViewManager } from '../browser-view.service'
 
 class PerformanceService {
   private static instance: PerformanceService | null = null
@@ -331,22 +332,13 @@ class PerformanceService {
   }
 
   private collectBrowserViewMetrics(): BrowserViewMetrics {
-    const viewIds: string[] = []
-    let count = 0
-
-    try {
-      const windows = BrowserWindow.getAllWindows()
-      for (const win of windows) {
-        const views = win.getBrowserViews()
-        count += views.length
-        // We don't have direct access to view IDs from here
-        // This would need integration with browserViewManager
-      }
-    } catch (e) {
-      // Ignore errors
-    }
-
-    return { count, viewIds }
+    const viewIds = browserViewManager.getAllStates()
+      .filter(state => {
+        const contents = browserViewManager.getWebContents(state.id)
+        return contents && !contents.isDestroyed()
+      })
+      .map(state => state.id)
+    return { count: viewIds.length, viewIds }
   }
 
   private checkThresholds(snapshot: PerfSnapshot): void {

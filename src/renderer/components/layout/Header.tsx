@@ -6,7 +6,8 @@
  *   above the whole NavRail+Header row (App.tsx) — that's a separate concern
  *   from this header's own horizontal breathing room, so it still gets the
  *   same pl-3 as every other platform (prototype: `.header{padding:0 6px 0 12px}`)
- * - Windows/Linux Electron: titleBarOverlay buttons on the right (pr-36)
+ * - Windows Electron: titleBarOverlay buttons on the right
+ * - Linux Electron: native titleBarOverlay placement determines the safe area
  * - Capacitor: safe area padding on top (status bar)
  * - Browser/Mobile: no extra padding needed (pl-3 pr-1.5)
  *
@@ -135,7 +136,7 @@ export function HeaderShell({ children }: HeaderShellProps) {
 
   // Platform-specific padding classes
   // macOS: traffic lights now live over the NavRail, Header needs no left inset
-  // Windows/Linux: titleBarOverlay buttons overlay on the right
+  // Windows: caption buttons on the right; Linux follows the native layout
   // Capacitor: safe area left/right padding, no drag region
   // Browser/Mobile: no overlay, use normal padding
   //
@@ -152,7 +153,13 @@ export function HeaderShell({ children }: HeaderShellProps) {
       : 'pl-3 pr-1.5'    // Browser/Mobile: normal padding
 
   const chromeInset: CSSProperties = isInElectron && !platform.isMac
-    ? { paddingRight: 'calc(9rem / var(--display-scale, 1))' }  // 144px for titleBarOverlay buttons
+    ? platform.isLinux
+      ? {
+          // The header may start after the rail or task panel; only inset the overlap.
+          paddingLeft: 'max(.75rem, calc(env(titlebar-area-x, 0px) - (100vw - 100%)))',
+          paddingRight: 'max(.375rem, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100vw - 9rem / var(--display-scale, 1)))))',
+        }
+      : { paddingRight: 'calc(9rem / var(--display-scale, 1))' }
     : {}
 
   // Capacitor: disable drag region (no window chrome)

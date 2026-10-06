@@ -166,7 +166,7 @@ export function HtmlViewer({ tab }: HtmlViewerProps) {
         </div>
 
         <div className="flex items-center gap-1">
-          {/* Open in Browser - full rendering with BrowserView */}
+          {/* Open in Browser - full rendering in an embedded browser page */}
           {canOpenInBrowser && (
             <button
               onClick={handleOpenInBrowser}

@@ -22,6 +22,27 @@ By default, only the host architecture is prepared and packaged. Use
 specific target. `install:mac` installs the host architecture. Distribution signing
 remains a separate workflow: `npm run build:mac-signed`.
 
+## macOS 12 native resource baseline
+
+Preparation and packaging validate deployment targets in the actual Mach-O load
+commands. Every architecture in a universal file must meet the macOS 12 baseline;
+missing targets, malformed commands and newer requirements fail the build. The
+final gate scans the entire app, including Electron frameworks and native files
+under `Contents/Resources`, before signing.
+
+cloudflared is the one declared exception. Every platform downloads the pinned
+upstream release asset and checks its SHA-256. Its Darwin builds target macOS 15,
+so only the remote tunnel needs macOS 15; the app keeps its macOS 12 floor. The
+gate checks cloudflared against `CLOUDFLARED_MINIMUM_MACOS` in
+`scripts/lib/cloudflared.mjs` instead of exempting it, so a release that raises
+the floor again fails until that value is reviewed.
+
+```sh
+node scripts/prepare-binaries.mjs --platform mac-arm64
+node tests/check/binaries.mjs --platform mac-arm64
+npm run test:check:native
+```
+
 ## Why the local signing step is explicit
 
 Native executables inside `Contents/Resources/app.asar.unpacked` can retain their

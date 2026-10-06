@@ -21,6 +21,7 @@ import type { ContentReference } from '../../shared/types/content-reference'
 import type { ReasoningEffortLevel } from '../../shared/constants/reasoning-effort'
 import type { MemoryStatus } from '../../shared/types/memory'
 import type { Thought, TranscriptPage } from '../../shared/types/transcript'
+import { ensureExtendedServicesReady } from './bootstrap-ready'
 
 export const appsApi = {
   appStartRun: async (appId: string): Promise<ApiResponse<import('../../shared/apps/app-types').AppRunStartInfo>> => {
@@ -28,7 +29,10 @@ export const appsApi = {
     return httpRequest('POST', `/api/apps/${encodeURIComponent(appId)}/runs/start`)
   },
   appGetAllStates: async (): Promise<ApiResponse<Record<string, AutomationAppState>>> => {
-    if (isElectron()) return window.halo.appGetAllStates()
+    if (isElectron()) {
+      await ensureExtendedServicesReady()
+      return window.halo.appGetAllStates()
+    }
     return httpRequest('GET', '/api/apps/states')
   },
   appGetPendingInbox: async (options?: PendingDecisionQuery): Promise<ApiResponse<import('../../shared/apps/app-types').PendingDecisionInbox>> => {

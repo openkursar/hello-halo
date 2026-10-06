@@ -1,26 +1,9 @@
 /**
- * BrowserViewer - Embedded browser component using Electron BrowserView
- *
- * This component provides a true browser experience within the Content Canvas,
- * featuring:
- * - Full Chromium rendering (same as Chrome)
- * - Navigation controls (back, forward, reload)
- * - Address bar with smart URL/search detection (Bing search)
- * - Loading indicators
- * - PC / H5 device mode toggle (viewport + UA + touch emulation via CDP)
- * - AI operation indicator when AI is controlling the browser
- * - Native context menu for screenshot, zoom and DevTools (uses Electron Menu)
- * - Page zoom controls via native menu
- *
- * The actual browser rendering is done by Electron's BrowserView in the main
- * process. This component manages the UI chrome and delegates lifecycle
- * management to CanvasLifecycle.
- *
- * IMPORTANT: BrowserView lifecycle (create, show, hide, destroy) is managed
- * by CanvasLifecycle, NOT by this component's useEffects.
+ * Browser controls and a borrowed presentation surface. The guest lives outside
+ * this viewer, so switching tabs never detaches or recreates its document.
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react'
 import {
   ArrowLeft,
   ArrowRight,
@@ -47,6 +30,7 @@ import { useAIBrowserStore, selectViewOwner } from '../../../stores/ai-browser.s
 import { useTranslation } from '../../../i18n'
 import { useSecurityPolicy } from '../../../hooks/useSecurityPolicy'
 import { getBrowserHomepage } from '../../../utils/browser-homepage'
+import { bindBrowserSurface, focusBrowserPage } from '../../../browser-host'
 
 interface BrowserViewerProps {
   tab: TabState
@@ -176,51 +160,28 @@ export function BrowserViewer({ tab }: BrowserViewerProps) {
     }
   }, [blockedUrl, blockedHost, tab.browserViewId, tab.id, t])
 
-  // AI Browser state — identity by viewId is exact: this tab is an AI's live
-  // view iff its BrowserView is some conversation's current active view. No
-  // URL/hostname or title-emoji heuristics (which misfire when tabs share a host).
+  // Ownership follows page identity; unrelated tabs can share a URL or title.
   const aiOwnerId = useAIBrowserStore(state => selectViewOwner(state, tab.browserViewId))
   const isAIOperating = useAIBrowserStore(state => !!aiOwnerId && !!state.operating[aiOwnerId])
   const isThisAIBrowser = aiOwnerId !== null
 
-  // ============================================
-  // Container Bounds Registration
-  // ============================================
-
-  // Register container bounds getter with CanvasLifecycle
-  // This allows CanvasLifecycle to position BrowserViews correctly
-  useEffect(() => {
-    const getBounds = () => containerRef.current?.getBoundingClientRect() || null
-    canvasActions.setContainerBoundsGetter(getBounds)
-
-    // When container becomes available, ensure BrowserView is shown
-    // This handles the case where the BrowserView was created before this
-    // component mounted (e.g., switching from a non-browser tab to a new browser tab)
-    if (containerRef.current && tab.browserViewId) {
-      // Use ensureActiveBrowserViewShown instead of updateActiveBounds
-      // because the view may not have been added to the window yet
-      canvasActions.ensureActiveBrowserViewShown()
-    }
-  }, [tab.browserViewId])
-
-  // ============================================
-  // Resize Observer
-  // ============================================
-
-  // Monitor container size changes and update BrowserView bounds
-  useEffect(() => {
-    if (!containerRef.current) return
-
+  useLayoutEffect(() => {
+    const container = containerRef.current
+    if (!container) return
     const scope = resources.scope()
-    const resizeObserver = scope.add(new ResizeObserver(() => {
-      if (tab.browserViewId) {
-        canvasActions.updateActiveBounds()
-      }
-    }))
-
-    resizeObserver.observe(containerRef.current)
+    scope.add(canvasActions.setContainerBoundsGetter(() => container.getBoundingClientRect()))
+    if (tab.browserViewId) {
+      scope.add(bindBrowserSurface(tab.browserViewId, container, !browserState.blockedByPolicy, () => {
+        void canvasActions.updateActiveBounds().catch(error => {
+          console.error('[BrowserViewer] Updating browser layout failed:', tab.browserViewId, error)
+        })
+      }))
+      void canvasActions.ensureActiveBrowserViewShown().catch(error => {
+        console.error('[BrowserViewer] Showing browser page failed:', tab.browserViewId, error)
+      })
+    }
     return () => scope.dispose()
-  }, [resources, canvasActions, tab.browserViewId])
+  }, [resources, canvasActions, tab.browserViewId, browserState.blockedByPolicy])
 
   // ============================================
   // Address Bar Sync
@@ -239,12 +200,10 @@ export function BrowserViewer({ tab }: BrowserViewerProps) {
 
   const handleNavigate = useCallback(async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!tab.browserViewId) return
-
     let url = inputToUrl(addressBarValue)
     if (!url) url = await getBrowserHomepage()
-    await api.navigateBrowserView(tab.browserViewId, url)
-  }, [tab.browserViewId, addressBarValue])
+    await canvasActions.navigateBrowserTab(tab.id, url)
+  }, [canvasActions, tab.id, addressBarValue])
 
   const handleBack = useCallback(async () => {
     if (tab.browserViewId && browserState.canGoBack) {
@@ -269,11 +228,9 @@ export function BrowserViewer({ tab }: BrowserViewerProps) {
   }, [tab.browserViewId, browserState.isLoading])
 
   const handleHome = useCallback(async () => {
-    if (tab.browserViewId) {
-      const homepage = await getBrowserHomepage()
-      await api.navigateBrowserView(tab.browserViewId, homepage)
-    }
-  }, [tab.browserViewId])
+    const homepage = await getBrowserHomepage()
+    await canvasActions.navigateBrowserTab(tab.id, homepage)
+  }, [canvasActions, tab.id])
 
   const handleToggleDeviceMode = useCallback(async () => {
     if (!tab.browserViewId) return
@@ -320,14 +277,18 @@ export function BrowserViewer({ tab }: BrowserViewerProps) {
   // Native Menu Handler
   // ============================================
 
-  // Show native context menu (renders above BrowserView)
-  const handleShowMenu = useCallback(async () => {
+  const handleShowMenu = useCallback(async (event: React.MouseEvent<HTMLButtonElement>) => {
     if (!tab.browserViewId) return
+    const trigger = event.currentTarget
+    const restoreGuestFocus = event.detail > 0
     await api.showBrowserContextMenu({
       viewId: tab.browserViewId,
       url: tab.url,
       zoomLevel
     })
+    if (restoreGuestFocus && document.activeElement === trigger && !document.querySelector('[aria-modal="true"], dialog[open]')) {
+      focusBrowserPage(tab.browserViewId)
+    }
   }, [tab.browserViewId, tab.url, zoomLevel])
 
   // Listen for zoom changes from native menu
@@ -525,15 +486,13 @@ export function BrowserViewer({ tab }: BrowserViewerProps) {
         </div>
       )}
 
-      {/* Browser Content Area - BrowserView renders here */}
+      {/* The fixed guest follows this surface without moving in the DOM. */}
       <div
         ref={containerRef}
-        className="flex-1 relative bg-white"
+        className="flex-1 relative bg-[hsl(var(--browser-background))]"
         style={{ minHeight: '200px' }}
       >
-        {/* Policy Block Overlay — shown whenever a browser policy error is active,
-            whether the BrowserView exists (navigate block) or not (create block).
-            The native BrowserView is kept offscreen by applyBounds() so this overlay is visible. */}
+        {/* A blocked surface parks its guest before the policy notice is painted. */}
         {tab.browserState?.blockedByPolicy ? (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-background">
             <div className="flex flex-col items-center gap-3 text-center max-w-sm px-4">
@@ -567,7 +526,7 @@ export function BrowserViewer({ tab }: BrowserViewerProps) {
             </div>
           </div>
         ) : !tab.browserViewId ? (
-          /* Loading Overlay (only shown during initial load before BrowserView is ready) */
+          /* The guest is not attached yet; later navigation retains the existing page. */
           <div className="absolute inset-0 flex items-center justify-center bg-background">
             <div className="flex flex-col items-center gap-3">
               <div className="w-8 h-8 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
@@ -575,9 +534,6 @@ export function BrowserViewer({ tab }: BrowserViewerProps) {
             </div>
           </div>
         ) : null}
-
-        {/* The actual BrowserView is rendered by Electron main process */}
-        {/* This div serves as the positioning target */}
       </div>
     </div>
   )

@@ -4,8 +4,8 @@
  * Runs after `npm install` to set up the development environment:
  * 1. patch-package  — apply SDK patches
  * 2. SDK cli dedup  — symlink agent-sdk/cli.js → claude-code/cli.js (save ~13MB)
- * 3. electron-builder install-app-deps
- * 4. electron-rebuild for better-sqlite3
+ * 3. Download the Electron runtime
+ * 4. Rebuild native modules for Electron
  */
 
 import { execSync } from 'child_process'
@@ -13,6 +13,10 @@ import { copyFileSync, unlinkSync, symlinkSync, lstatSync } from 'fs'
 import { dirname, join } from 'path'
 
 const run = (cmd) => execSync(cmd, { stdio: 'inherit' })
+
+if (Number(process.versions.napi) < 10) {
+  throw new Error('Halo requires a Node runtime with N-API 10 (Node 22.14.0+ or 24+) for its native dependencies.')
+}
 
 // 1. Apply patches to @anthropic-ai/claude-agent-sdk
 run('patch-package')
@@ -37,12 +41,12 @@ try {
   console.log(`  ✔ ${sdkCli} copied from ${target} (symlinks not permitted)`)
 }
 
-// 3. Rebuild native modules for Electron. Only needed to run Electron from this
-//    checkout: packaging swaps in prebuilt binaries (afterPack), so a packaging-
-//    only machine without a C++ toolchain sets HALO_SKIP_NATIVE_REBUILD=1.
+// 3. Prepare Electron and native dependencies. Packaging-only machines can
+//    skip the host runtime with HALO_SKIP_NATIVE_REBUILD=1.
 if (process.env.HALO_SKIP_NATIVE_REBUILD === '1') {
   console.log('  - native rebuild skipped (HALO_SKIP_NATIVE_REBUILD=1)')
 } else {
+  // Electron 42+ downloads on first CLI use; Node API consumers need it now.
+  run('install-electron')
   run('electron-builder install-app-deps')
-  run('electron-rebuild -f -w better-sqlite3')
 }

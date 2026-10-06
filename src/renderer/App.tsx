@@ -53,6 +53,7 @@ import { openWorkNotification, type WorkNavigationTarget } from './utils/people-
 import { openSearchResultConversation } from './utils/conversation-navigation'
 import { useTeamStore } from './stores/team.store'
 import { canvasLifecycle } from './services/canvas-lifecycle'
+import { mountBrowserHost } from './browser-host'
 import { trackNavigate } from './services/home-telemetry'
 import type { TeamUpdatedEvent, TeamBlackboardEvent, TeamMessageEvent, TeamPresenceEvent, TeamOfficeStatusEvent } from '../shared/apps/team-types'
 
@@ -135,6 +136,13 @@ function applyTheme(theme: 'light' | 'dark' | 'system') {
 const MAC_WINDOW_CONTROLS_BAND_PX = MAC_TRAFFIC_LIGHT_BOTTOM + MAC_TRAFFIC_LIGHT_POSITION.y
 
 export default function App() {
+  const browserHostRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!window.halo?.browserHostReady || !browserHostRef.current) return
+    const host = mountBrowserHost(browserHostRef.current, window.halo)
+    return () => host.dispose()
+  }, [])
+
   const { t } = useTranslation()
   const { view, config, initialize, setMcpStatus, navigate, enterApp, setConfig, completeDeferredGitBashCheck } = useAppStore()
   const isTaskPanelOpen = useTaskPanelStore(s => s.isOpen)
@@ -1132,6 +1140,7 @@ export default function App() {
 
   return (
     <div className="h-full w-full overflow-hidden bg-background flex flex-col">
+      <div ref={browserHostRef} className="contents" />
       {/* WebSocket reconnection banner */}
       {showReconnectBanner && (
         <div className="fixed top-0 inset-x-0 z-50 flex items-center justify-center gap-2 py-1.5 bg-halo-warning/90 text-sm font-medium animate-slide-down safe-area-top"

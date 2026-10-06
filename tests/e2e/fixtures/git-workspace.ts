@@ -329,6 +329,7 @@ function seedWorker(): string {
     bundle: true,
     platform: 'node',
     format: 'cjs',
+    packages: 'external',
     outfile,
     external: ['better-sqlite3', 'electron', '@parcel/watcher'],
     logLevel: 'silent',

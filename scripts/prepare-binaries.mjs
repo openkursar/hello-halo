@@ -16,6 +16,15 @@ import path from 'node:path'
 import { execSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
+import { BETTER_SQLITE3_TARGETS, getBetterSqlite3PrebuildPath, validateBetterSqlite3Prebuild } from './lib/better-sqlite3-prebuilds.mjs'
+import {
+  CLOUDFLARED_ASSETS,
+  CLOUDFLARED_MINIMUM_MACOS,
+  CLOUDFLARED_PATHS,
+  CLOUDFLARED_URLS,
+  CLOUDFLARED_VERSION,
+} from './lib/cloudflared.mjs'
+import deployment from './lib/macho-deployment-target.cjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PROJECT_ROOT = path.resolve(__dirname, '..')
@@ -34,27 +43,6 @@ const log = {
   success: (msg) => console.log(`${colors.green}[OK]${colors.reset} ${msg}`),
   warn: (msg) => console.log(`${colors.yellow}[WARN]${colors.reset} ${msg}`),
   error: (msg) => console.log(`${colors.red}[ERROR]${colors.reset} ${msg}`)
-}
-
-// Cloudflared is pinned to one release and every download is checked against
-// the SHA-256 GitHub records for that asset, so a new upstream release never changes
-// what ships without someone bumping these values.
-const CLOUDFLARED_VERSION = '2026.9.3'
-const CLOUDFLARED_ASSETS = {
-  'mac-arm64': { file: 'cloudflared-darwin-arm64.tgz', sha256: '587c2cfb1c230fe36c7fa7727da78be459dae028cabe8c001291999350f07095' },
-  'mac-x64': { file: 'cloudflared-darwin-amd64.tgz', sha256: 'd1155d0837487f261183b15c1eab6c4ebcad9dc49b94675f1524c3564cea3977' },
-  'win': { file: 'cloudflared-windows-amd64.exe', sha256: 'f096265ec2fcbe9bb6e2d64268db167ced3fcbb83d894bdb9e2fcdb26f2ea7e2' },
-  'linux': { file: 'cloudflared-linux-amd64', sha256: '77e26d8d900e0b8469f416239d14b5f296525fdf79fee6f511ef55609e3fbac2' }
-}
-const CLOUDFLARED_URLS = Object.fromEntries(Object.entries(CLOUDFLARED_ASSETS).map(([platform, asset]) =>
-  [platform, `https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/${asset.file}`]))
-
-// Cloudflared output paths
-const CLOUDFLARED_PATHS = {
-  'mac-arm64': 'node_modules/cloudflared/bin/cloudflared',
-  'mac-x64': 'node_modules/cloudflared/bin/cloudflared-darwin-x64',
-  'win': 'node_modules/cloudflared/bin/cloudflared.exe',
-  'linux': 'node_modules/cloudflared/bin/cloudflared-linux-x64'
 }
 
 // Portable Git self-extracting archive, bundled into the Windows build so
@@ -99,18 +87,6 @@ const SHARP_PACKAGES = {
   'mac-x64': '@img/sharp-darwin-x64',
   'win': '@img/sharp-win32-x64',
   'linux': '@img/sharp-linux-x64'
-}
-
-// better-sqlite3 prebuild configuration
-// Prebuilds are platform-specific .node binaries downloaded from GitHub releases.
-// They are stored in node_modules/better-sqlite3/prebuilds/{os}-{arch}/ and
-// swapped into the packaged app by afterPack.cjs during electron-builder packaging.
-const BETTER_SQLITE3_PREBUILDS_DIR = 'node_modules/better-sqlite3/prebuilds'
-const BETTER_SQLITE3_PLATFORMS = {
-  'mac-arm64': { platform: 'darwin', arch: 'arm64' },
-  'mac-x64': { platform: 'darwin', arch: 'x64' },
-  'win': { platform: 'win32', arch: 'x64' },
-  'linux': { platform: 'linux', arch: 'x64' }
 }
 
 /**
@@ -190,6 +166,11 @@ function validateCloudflaredBinary(filePath, platform) {
     return { valid: false, size: stats.size, detected, reason: `format mismatch (detected: ${detected || 'unknown'})` }
   }
 
+  if (platform.startsWith('mac-')) {
+    const target = deployment.validateMacOSDeploymentTarget(filePath, CLOUDFLARED_MINIMUM_MACOS)
+    if (!target.valid) return { valid: false, size: stats.size, detected, reason: target.reason }
+  }
+
   return { valid: true, size: stats.size, detected }
 }
 
@@ -251,20 +232,20 @@ function downloadCloudflared(platform) {
   }
 
   if (url.endsWith('.tgz')) {
-    // Mac: download and extract tgz
+    // Both Darwin archives contain a file named `cloudflared`, the arm64 output
+    // name, so extract outside the shared bin directory.
     const tgzPath = outputPath + '.tgz'
-    curlDownload(url, tgzPath)
-    verifyAssetHash(platform, tgzPath)
-    execSync(`tar -xzf "${tgzPath}" -C "${outputDir}"`, { stdio: 'pipe' })
-
-    // Rename extracted file if needed (for mac-x64)
-    const extractedPath = path.join(outputDir, 'cloudflared')
-    if (platform === 'mac-x64' && fs.existsSync(extractedPath)) {
-      fs.renameSync(extractedPath, outputPath)
+    const extractDir = fs.mkdtempSync(path.join(outputDir, `.cloudflared-${platform}-`))
+    try {
+      curlDownload(url, tgzPath)
+      verifyAssetHash(platform, tgzPath)
+      execSync(`tar -xzf "${tgzPath}" -C "${extractDir}"`, { stdio: 'pipe' })
+      fs.renameSync(path.join(extractDir, 'cloudflared'), outputPath)
+      fs.chmodSync(outputPath, 0o755)
+    } finally {
+      fs.rmSync(tgzPath, { force: true })
+      fs.rmSync(extractDir, { recursive: true, force: true })
     }
-
-    fs.unlinkSync(tgzPath)
-    fs.chmodSync(outputPath, 0o755)
   } else if (url.endsWith('.exe')) {
     // Windows: direct download
     curlDownload(url, outputPath)
@@ -344,97 +325,9 @@ function curlDownload(url, dest) {
   }
 }
 
-/**
- * Get better-sqlite3 version and Electron ABI for constructing prebuild download URLs.
- *
- * Reads installed package versions and uses node-abi to map the Electron version
- * to the correct native module ABI number. This ABI is embedded in the prebuild
- * tarball filename on GitHub releases.
- */
-function getBetterSqlite3Info() {
-  const bsPkg = JSON.parse(fs.readFileSync(
-    path.join(PROJECT_ROOT, 'node_modules/better-sqlite3/package.json'), 'utf8'
-  ))
-  const electronPkg = JSON.parse(fs.readFileSync(
-    path.join(PROJECT_ROOT, 'node_modules/electron/package.json'), 'utf8'
-  ))
-  const abi = execSync(
-    `node -e "console.log(require('node-abi').getAbi('${electronPkg.version}', 'electron'))"`,
-    { encoding: 'utf8', cwd: PROJECT_ROOT }
-  ).trim()
-
-  return { version: bsPkg.version, electronVersion: electronPkg.version, abi }
-}
-
-/**
- * Check if better-sqlite3 prebuild exists and is valid for platform
- */
 function checkBetterSqlite3(platform) {
-  const { platform: os, arch } = BETTER_SQLITE3_PLATFORMS[platform]
-  const prebuildPath = path.join(
-    PROJECT_ROOT, BETTER_SQLITE3_PREBUILDS_DIR, `${os}-${arch}`, 'better_sqlite3.node'
-  )
-  if (!fs.existsSync(prebuildPath)) {
-    return { exists: false }
-  }
-  const stats = fs.statSync(prebuildPath)
-  // Compiled .node binary should be > 500 KB
-  return { exists: true, valid: stats.size > 500 * 1024, size: stats.size }
-}
-
-/**
- * Download better-sqlite3 prebuild for a target platform.
- *
- * Downloads the prebuilt .node binary from better-sqlite3 GitHub releases.
- * The tarball naming convention is:
- *   better-sqlite3-v{version}-electron-v{abi}-{platform}-{arch}.tar.gz
- *
- * The tarball contains: build/Release/better_sqlite3.node
- * We extract it to: node_modules/better-sqlite3/prebuilds/{platform}-{arch}/
- */
-function downloadBetterSqlite3(platform) {
-  const { platform: targetPlatform, arch: targetArch } = BETTER_SQLITE3_PLATFORMS[platform]
-  const { version, abi } = getBetterSqlite3Info()
-  const prebuildDir = path.join(PROJECT_ROOT, BETTER_SQLITE3_PREBUILDS_DIR, `${targetPlatform}-${targetArch}`)
-  const outputPath = path.join(prebuildDir, 'better_sqlite3.node')
-
-  const tarballName = `better-sqlite3-v${version}-electron-v${abi}-${targetPlatform}-${targetArch}.tar.gz`
-  const url = `https://github.com/WiseLibs/better-sqlite3/releases/download/v${version}/${tarballName}`
-  const tmpTgz = path.join(PROJECT_ROOT, `node_modules/.better-sqlite3-${targetPlatform}-${targetArch}.tgz`)
-
-  log.info(`Downloading better-sqlite3 prebuild for ${platform}...`)
-
-  fs.mkdirSync(prebuildDir, { recursive: true })
-
-  try {
-    curlDownload(url, tmpTgz)
-
-    // Extract .node file from tarball (contains build/Release/better_sqlite3.node)
-    const tmpExtract = path.join(PROJECT_ROOT, `node_modules/.better-sqlite3-extract-${targetPlatform}-${targetArch}`)
-    if (fs.existsSync(tmpExtract)) fs.rmSync(tmpExtract, { recursive: true })
-    fs.mkdirSync(tmpExtract, { recursive: true })
-    execSync(`tar -xzf "${tmpTgz}" -C "${tmpExtract}"`, { stdio: 'pipe' })
-
-    const extractedNode = path.join(tmpExtract, 'build', 'Release', 'better_sqlite3.node')
-    if (!fs.existsSync(extractedNode)) {
-      throw new Error('Tarball does not contain build/Release/better_sqlite3.node')
-    }
-
-    fs.copyFileSync(extractedNode, outputPath)
-
-    // Cleanup temp files
-    fs.unlinkSync(tmpTgz)
-    fs.rmSync(tmpExtract, { recursive: true })
-
-    const sizeMB = (fs.statSync(outputPath).size / 1024 / 1024).toFixed(1)
-    log.success(`Downloaded better-sqlite3 prebuild for ${platform} (${sizeMB} MB)`)
-  } catch (err) {
-    if (fs.existsSync(tmpTgz)) fs.unlinkSync(tmpTgz)
-    const tmpExtractCleanup = path.join(PROJECT_ROOT, `node_modules/.better-sqlite3-extract-${targetPlatform}-${targetArch}`)
-    if (fs.existsSync(tmpExtractCleanup)) fs.rmSync(tmpExtractCleanup, { recursive: true })
-    log.error(`Failed to download better-sqlite3 prebuild for ${platform}: ${err.message}`)
-    throw err
-  }
+  const target = BETTER_SQLITE3_TARGETS[platform]
+  return validateBetterSqlite3Prebuild(getBetterSqlite3PrebuildPath(PROJECT_ROOT, target), target)
 }
 
 /**
@@ -707,13 +600,12 @@ function preparePlatform(platform) {
     log.success(`@parcel/watcher already exists for ${platform}`)
   }
 
-  // Check and download better-sqlite3 prebuild
+  // N-API prebuilds ship in the versioned npm package and need no ABI rebuild.
   const sqliteStatus = checkBetterSqlite3(platform)
-  if (!sqliteStatus.exists || !sqliteStatus.valid) {
-    downloadBetterSqlite3(platform)
-  } else {
-    log.success(`better-sqlite3 prebuild already exists for ${platform}`)
+  if (!sqliteStatus.valid) {
+    throw new Error(`Invalid bundled better-sqlite3 prebuild for ${platform}: ${sqliteStatus.reason}. Reinstall dependencies with npm ci.`)
   }
+  log.success(`better-sqlite3 prebuild already exists for ${platform}`)
 
   // Check and install @openai/codex native package
   const codexStatus = checkCodex(platform)
@@ -744,6 +636,28 @@ function preparePlatform(platform) {
   // node-pty: mac/win prebuilds ship with the npm package automatically.
   // Linux terminal is not yet supported (no public prebuilds available);
   // the terminal panel feature is disabled on Linux at runtime.
+
+  // cloudflared was checked above against its own, newer floor.
+  if (platform.startsWith('mac-')) {
+    const arch = platform === 'mac-arm64' ? 'arm64' : 'x64'
+    const nativePaths = [
+      `node_modules/${WATCHER_PACKAGES[platform]}`,
+      `node_modules/${CODEX_PACKAGES[platform].pkg}`, `node_modules/${SHARP_PACKAGES[platform]}`,
+      `node_modules/@img/sharp-libvips-darwin-${arch}`, `node_modules/node-pty/prebuilds/darwin-${arch}`,
+    ]
+    let count = 0
+    for (const relative of nativePaths) {
+      const file = path.join(PROJECT_ROOT, relative)
+      if (!fs.existsSync(file)) throw new Error(`Missing native resource before macOS deployment validation: ${file}`)
+      if (fs.statSync(file).isDirectory()) count += deployment.assertMacOSDeploymentTargets(file).length
+      else {
+        const validation = deployment.validateMacOSDeploymentTarget(file)
+        if (!validation.valid) throw new Error(`${file}: ${validation.reason}`)
+        count++
+      }
+    }
+    log.success(`Verified macOS 12 deployment targets for ${count} native resources (${platform})`)
+  }
 }
 
 /**

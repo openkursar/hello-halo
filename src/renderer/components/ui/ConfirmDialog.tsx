@@ -105,7 +105,7 @@ export function ConfirmDialog({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/45"
+      className="fixed inset-0 z-[var(--layer-global-modal)] flex items-center justify-center bg-black/45"
       onMouseDown={onCancel}
     >
       <div

@@ -26,8 +26,8 @@
  *   https: CDN scripts/styles/images/fonts, no network connections, never
  *   halo-file:, other previews, or the app.
  *
- * A BrowserView is not subject to those restrictions and loads file:// itself,
- * so nothing it renders (the PDF viewer) goes through here.
+ * An embedded browser page is not subject to those restrictions and loads
+ * file:// itself, so nothing it renders (the PDF viewer) goes through here.
  *
  * Security (halo-file):
  * - Only file:// URLs are allowed, no remote URLs pass through.
@@ -74,7 +74,7 @@ export const PREVIEW_DOCUMENT_POLICY = [
 ].join('; ')
 
 /** What a previewed page can have stored under its origin. */
-const PREVIEW_STORAGES = ['cookies', 'filesystem', 'indexdb', 'localstorage', 'websql', 'serviceworkers', 'cachestorage'] as const
+const PREVIEW_STORAGES = ['cookies', 'filesystem', 'indexdb', 'localstorage', 'serviceworkers', 'cachestorage'] as const
 
 /** Open previews kept at once; the oldest is forgotten past this (its tab has long been closed). */
 const MAX_PREVIEW_ROOTS = 64

@@ -10,6 +10,7 @@
  */
 
 import { z } from 'zod'
+import { randomUUID } from 'node:crypto'
 import { tool } from '../../agent/resolved-sdk'
 import type { BrowserContext } from '../context'
 import { browserViewManager, type DeviceMode } from '../../browser-view.service'
@@ -78,9 +79,9 @@ The last remaining tab cannot be closed.`,
         const deviceMode: DeviceMode = args.device ?? 'pc'
 
         try {
-          const viewId = `ai-browser-${Date.now()}`
+          const viewId = `ai-browser-${randomUUID()}`
           await browserViewManager.create(viewId, args.url, {
-            offscreen: ctx.isScoped,
+            offscreen: !ctx.hasUi,
             deviceMode,
           })
           ctx.trackView(viewId)

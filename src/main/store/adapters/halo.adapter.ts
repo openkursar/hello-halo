@@ -442,8 +442,8 @@ export async function fetchWithTimeout(url: string, init?: RequestInit): Promise
   // Keeps the abort controller / timeout alive until the body is consumed.
   const keepAliveDuringBody = (response: Response): Response =>
     new Proxy(response, {
-      get(target, prop, receiver) {
-        const value = Reflect.get(target, prop, receiver)
+      get(target, prop) {
+        const value = Reflect.get(target, prop, target)
         if (typeof value === 'function' && (prop === 'json' || prop === 'text' || prop === 'arrayBuffer' || prop === 'blob')) {
           return async (...args: unknown[]) => {
             try {
@@ -453,7 +453,7 @@ export async function fetchWithTimeout(url: string, init?: RequestInit): Promise
             }
           }
         }
-        return value
+        return typeof value === 'function' ? value.bind(target) : value
       },
     })
 
