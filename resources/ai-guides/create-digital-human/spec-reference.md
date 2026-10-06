@@ -131,7 +131,7 @@ rules). Not useful for `schedule` triggers — put that logic in `system_prompt`
 documentation.** Its effect depends entirely on what `id` refers to:
 
 - **Built-in capabilities** (`ai-browser`, `ai-terminal`, `halo-email`, and the always-on
-  `halo-memory`/`halo-report`/`halo-notify`/`web-search`/`ocr`) are injected based on
+  `halo-report`/`halo-notify`/`web-search`/`ocr`) are injected based on
   `permissions[]` and other conditions (`resolvePermission()`), in *both* `execute.ts` (scheduled/
   webhook/file-triggered runs) and `app-chat.ts` (chatting with the digital human directly) —
   `requires.mcps` has **zero effect** on them either way. Listing `ai-browser` here (as a real

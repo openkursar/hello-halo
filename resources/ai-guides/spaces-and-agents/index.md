@@ -52,12 +52,12 @@ different chat engine:
 | Backing entity | No DB row — just a conversation/session keyed to the space | A row in `installed_apps`, unique on `(spec_id, space_id)` (`src/main/apps/manager/DESIGN.md` §3) |
 | Handler | `src/main/services/agent/send-message.ts` | `src/main/apps/runtime/app-chat.ts` (its own chat window) or `execute.ts` (scheduled/triggered/manual runs) |
 | `cwd` | `getWorkingDir(spaceId)` | Same function, same space — **identical cwd to the space conversation it lives in** |
-| Persistent memory (`memory.md`) | **None.** `send-message.ts` never constructs a `MemoryCallerScope` or the `memory_status` MCP tool — there is nothing for "remember this across sessions" to attach to | Yes — `{space.path}/.halo/apps/{appId}/memory.md`, always keyed by `space.path` (not `workingDir`, even if one is set) so it matches `AppManager`'s directory layout regardless of cwd |
+| Persistent memory (`memory.md`) | Yes, **shared by every conversation in the space** — `{space.path}/.halo/memory.md`, topics under `{space.path}/.halo/memory/topics/`. On unless memory is turned off for the space | Yes, **its own** — `{space.path}/.halo/apps/{appId}/memory.md`, always keyed by `space.path` (not `workingDir`, even if one is set) so it matches `AppManager`'s directory layout regardless of cwd. It reads the space's topics (read-only) only when its owner allows it |
 | Skills available | Global skills + this space's skills (`.claude/skills/` under `workingDir||path`) | **Identical set** — skills are scoped to global-or-space, never to an individual app |
 | MCP servers available (interactive chat) | All effective MCP servers for the space (`getDbMcpServers`, global + space-scoped) | **Same as the space conversation** when you chat with the digital human directly (`app-chat.ts` also calls `getDbMcpServers`) |
-| MCP servers available (scheduled/triggered run) | n/a | **Same built-in capabilities** (`ai-browser`, `ai-terminal`, `halo-email`, plus the always-on `halo-memory`/`halo-report`/`halo-notify`/`web-search`/`ocr`) — those are gated by `permissions[]` only, identically in `execute.ts` and `app-chat.ts`. **Different for user-installed MCP servers**: a scheduled/webhook/file-triggered run only gets ones explicitly listed in `requires.mcps` (`execute.ts` → `getMcpServersForRequires`, a hard allowlist), while chatting with the digital human directly gets *all* of the space's installed MCP servers minus any `requires.mcps` entry with `enabled: false` (`app-chat.ts` → `getDbMcpServers`, the opposite direction — a denylist). See `create-digital-human/spec-reference.md`'s `requires` section for the full mechanics |
+| MCP servers available (scheduled/triggered run) | n/a | **Same built-in capabilities** (`ai-browser`, `ai-terminal`, `halo-email`, plus the always-on `halo-report`/`halo-notify`/`web-search`/`ocr`) — those are gated by `permissions[]` only, identically in `execute.ts` and `app-chat.ts`. **Different for user-installed MCP servers**: a scheduled/webhook/file-triggered run only gets ones explicitly listed in `requires.mcps` (`execute.ts` → `getMcpServersForRequires`, a hard allowlist), while chatting with the digital human directly gets *all* of the space's installed MCP servers minus any `requires.mcps` entry with `enabled: false` (`app-chat.ts` → `getDbMcpServers`, the opposite direction — a denylist). See `create-digital-human/spec-reference.md`'s `requires` section for the full mechanics |
 | Can run without you present | No — only responds when you type | Yes — schedule / webhook / file-watch subscriptions, or IM messages (see `create-digital-human/im-triggers.md`) |
-| Survives being closed | Conversation history persists, but there is no working-memory file that gets *updated* by the AI itself | Memory is actively maintained by the AI (`# now` / `# History` structure) across every run — see `src/main/platform/memory/DESIGN.md` |
+| Survives being closed | Conversation history persists, and the space's conversations keep its shared memory up to date | Memory is actively maintained by the AI (`# now` / `# History` structure) across every run — see `src/main/platform/memory/DESIGN.md` |
 
 **The practical rule of thumb**: if the user just wants to get something done right now in this
 session, the space conversation already has the same files, same skills, and same MCP tools as
@@ -123,26 +123,25 @@ don't make the same mistake when explaining this to a user or writing code that 
   (Settings, or the space's file explorer panel) resolves to a real, accessible folder.
 - **A digital human is correctly scoped to a space** — check its detail page; the space it's
   installed into is shown there, and moving it is an explicit action, never implicit.
-- **Memory is actually being used** — only digital humans have this. Ask the AI (via
-  `memory_status`, when running as that digital human) or look at
-  `{space.path}/.halo/apps/{appId}/memory.md` on disk. A plain space conversation has no such
-  file to check — if a user asks "why doesn't the assistant remember our last conversation" in
-  the plain space chat, the answer is that this chat has no persistent memory by design; only a
-  digital human does.
+- **Memory is actually being used** — look at the file on disk: `{space.path}/.halo/memory.md`
+  for the space's conversations, `{space.path}/.halo/apps/{appId}/memory.md` for a digital human.
+  There is no memory tool; the AI reads and edits these files with its normal file tools. If a
+  user asks "why doesn't the assistant remember our last conversation" in the space chat, first
+  check whether memory is turned off for the space, then whether anything was worth recording —
+  most conversations record nothing.
 
 ## 6. Do not ask / do not assume
 
-- **Do not assume a plain space conversation has any persistent memory.** It doesn't — memory is
-  exclusively a digital-human (app) feature. Don't tell a user their space chat "remembers" things
-  across sessions in the way a digital human's memory.md does; conversation history persists, but
-  nothing is actively curated by the AI the way `# now`/`# History` memory is.
+- **Do not mix up the two memories.** A space conversation uses the space's shared memory
+  (unless memory is turned off for the space); a digital human keeps its own, separate one and
+  sees the space's topics only read-only, and only when its owner allows it.
 - **Do not tell a user they can move a digital human to another space later.** There is no UI
   path to do this (§3) — only skill apps have a "move to space" action. Make sure they pick the
   right space at creation time.
 - **Do not offer to create a digital human just to get access to more tools or skills in the
   current session** — a space conversation already has the same skills and the same MCP servers
   as any digital human's own interactive chat in that space (§2). The only real reasons to create
-  one are autonomy (schedules/triggers) and self-maintained cross-session memory.
+  one are autonomy (schedules/triggers) and a memory of its own, separate from the space's.
 - **Do not confuse `space.path` with the AI's working directory.** They're the same only when the
   user never set a custom `workingDir`. Always resolve through `getSpaceDir()`/`getWorkingDir()`
   logic, never assume `space.path` is where project files live.

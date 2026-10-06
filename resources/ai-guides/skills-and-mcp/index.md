@@ -29,7 +29,7 @@ thin wrappers `listEffectiveMcpApps()`/`listEffectiveSkillApps()` at lines 944-9
 servers is least-privilege and declared for scheduled/triggered automation runs (only the ones
 listed in the app's own `requires.mcps` are injected, §3). This does **not** apply to Halo's
 built-in capability toolsets (`ai-browser`, `ai-terminal`, `halo-email`, plus the always-on
-`halo-memory`/`halo-report`/`halo-notify`/web-search/OCR) — those are gated purely by permission
+`halo-report`/`halo-notify`/web-search/OCR) — those are gated purely by permission
 flags in `execute.ts:443-457`, entirely independent of `requires.mcps`. Don't tell a user their
 automation "has no browser/terminal/email tools because it's not declared in `requires.mcps`" —
 that's only true for third-party MCP servers the user installed; built-in capabilities are a

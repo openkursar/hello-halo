@@ -53,7 +53,7 @@ the WeCom side: workspace admin console → the bot → API 配置 → switch to
 A duplicate `botId` across two *enabled* instances triggers an inline warning
 (`getDuplicateWarning` in `MessageChannelsSection.tsx`) — each real bot can only be bound to one
 digital human at a time; the second instance simply won't be able to claim the WebSocket slot
-(see §5 standby behavior).
+(see §6 standby behavior).
 
 ## 2. Reply scope, quote reply, streaming
 
@@ -143,7 +143,30 @@ This grant **expires 7 days after authorization** and must be re-copied — the 
 an `expired` status (amber, "re-copy the link from WeCom and paste it here"). Absence of this
 field simply means chat IDs display as-is; it is fully optional and never blocks messaging.
 
-## 5. Multi-device standby (informational, not a failure)
+## 5. Bot Name — removing the bot's own @mention from group text (optional)
+
+WeCom delivers a group message only when the bot is mentioned, and the mention arrives as
+**plain text at the start of the body**: `@Halo AI 团队 这个群的 ID 是什么`. The callback carries
+no structured mention data and no separator marking where the name ends, so a bot name containing
+spaces cannot be recognized unless Halo is told what the name is.
+
+The **Bot Name** field (`botNames`, optional, one name per line) supplies it. When the leading
+`@name` matches in full, it is removed before the digital human reads the message; nothing else in
+the text is touched (`im-channels/mention-prefix.ts`). Leave it empty and the body passes through
+exactly as typed — which is always safe, just noisier for the model.
+
+- Matching is **exact**: a wrong or outdated name simply does not match, and the message is
+  delivered unchanged. It never truncates or garbles text.
+- Several lines are allowed, for a bot that has been renamed. The longest match wins.
+- Takes effect on the next inbound message — editing it never drops the WebSocket connection
+  (`hotUpdatableConfigKeys` in `wecom-bot.provider.ts`).
+- Direct messages carry no mention prefix and are never touched.
+
+Practical consequence: without this field, `@bot /clear` is not a command — the body is
+`@bot /clear`, which does not equal `/clear`. Commands are matched against the whole message, so
+in groups they only work once the mention has been removed.
+
+## 6. Multi-device standby (informational, not a failure)
 
 WeCom's protocol grants the live bot slot to whichever device connected most recently. If the
 same `botId`/`secret` pair is configured on two Halo installs, `ConnectionArbiter`
@@ -154,19 +177,20 @@ The user can force-reclaim immediately via **Use on this device** (calls `reconn
 resets the arbiter and always wins). This is expected behavior for a shared credential, not a
 bug — do not diagnose it as a connection failure.
 
-## 6. Diagnosis
+## 7. Diagnosis
 
 | Symptom | Likely cause | Where to check |
 |---|---|---|
 | Instance stuck "Disconnected", never goes green | Missing/invalid `botId` or `secret`; `start_skip` logged | Console: `event=start_skip reason="missing botId or secret"`; re-check the two fields |
 | Instance stuck "Disconnected" despite correct `botId`/`secret` | WeCom-side bot is configured for "使用 URL 回调" (webhook) instead of "使用长连接" — Halo only speaks the persistent-connection protocol | Have the user check WeCom admin console → the bot → API 配置, switch to 使用长连接 (see §1B) |
 | Instance stuck "Disconnected", network-adjacent | Outbound access to `openws.work.weixin.qq.com:443` is blocked (corporate firewall/proxy) | Ask the user to confirm the machine can reach general internet sites; if behind a strict corporate firewall, IT needs to allow outbound HTTPS to that host |
-| Instance shows sky-blue "Standby" | Same bot credential is live on another device | Normal — see §5. "Use on this device" to reclaim |
+| Instance shows sky-blue "Standby" | Same bot credential is live on another device | Normal — see §6. "Use on this device" to reclaim |
 | Bot connects but never replies to DMs | No owner claimed yet + `permissionEnabled: true` | Have the user DM the bot once (auto-claims); or check `owners` in the instance config |
 | Bot replies in DM but ignores group messages (or vice versa) | `replyScope` mismatch | Check the instance's Reply Scope setting; user gets an explicit rejection message, not silence, when scoped out |
 | Group replies show as plain text, no quote bubble | Quote Reply toggled off for that instance | `quoteReply: false` in config — expected, not a bug |
 | Streaming toggle greyed out / won't turn on | Quote Reply is off | Turn Quote Reply on first — Streaming requires it (§2) |
 | Sender shows an opaque ID instead of a real name | No Name Resolution URL configured, or it expired | §4 — check `identityResolution.status` in instance status; `expired` needs a fresh 7-day grant |
+| In groups the bot answers as if the question included its own name, or a `/clear`-style command is ignored | Bot Name not configured, so the `@name` prefix is still part of the body | §5 — fill in Bot Name exactly as WeCom shows it; the `inbound_parsed` log line carries `mentionStripped=true` once it matches |
 | "This Bot ID is already in use" warning | Same `botId` configured on two enabled instances | Only one instance can hold the WebSocket slot per real bot — delete or disable the duplicate |
 | Owner claimed the wrong user | First DM sender ≠ intended owner | Manually edit **Owner User IDs** in the Permission Control section; replaces the auto-claimed value |
 | `notify_bot` / scheduled push to a chat never delivers | That chat has never messaged the bot before | A chat only becomes a known, pushable session after at least one real inbound message (`ImSessionRegistry`, registered in `dispatch-inbound.ts`) — have the target person or group `@`-mention the bot once first; see `create-digital-human/im-triggers.md` §B |
@@ -177,5 +201,8 @@ bug — do not diagnose it as a connection failure.
   available at scan time; the first-DM auto-claim (§3) obtains it without ever having to ask.
 - **Do not offer to configure per-message @-mention filtering.** WeCom's platform itself only
   forwards `@`-mentioned messages to the bot in groups — Halo never even receives the rest. See
-  `create-digital-human/im-triggers.md`.
-- **Do not treat `standby` as an error requiring troubleshooting** — see §5.
+  `create-digital-human/im-triggers.md`. The Bot Name field (§5) is not a filter: it decides
+  whether the mention is removed from text the bot already received.
+- **Do not treat `standby` as an error requiring troubleshooting** — see §6.
+- **Do not guess the bot's display name into the Bot Name field.** A wrong value is harmless but
+  useless; the user has to read the real name off the bot in WeCom.

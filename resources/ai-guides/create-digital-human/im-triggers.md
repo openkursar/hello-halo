@@ -84,6 +84,10 @@ These behaviors are real but live on the IM channel *instance*, not the App Spec
   group chats never auto-claim.
 - `/halo-stop` (also `/stop`, `/halo-cancel`) aborts the running generation for that chat;
   `/halo-clear` (also `/clear`, `/halo-reset`) resets its context. Both are handled before the
-  message reaches the AI.
+  message reaches the AI, and are matched against the **whole** message — a command works only
+  when it is the entire text. In a WeCom group that means the bot's `@name` prefix has to be
+  removed first, which requires the instance's Bot Name field
+  (`message-channels/wecom-bot.md` §5); without it, group commands simply read as normal
+  messages.
 - A message arriving while the app is still answering is buffered and merged into the next
   round — never dropped, never run concurrently.
