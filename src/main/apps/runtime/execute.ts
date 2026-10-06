@@ -971,6 +971,12 @@ async function processStream(
     reportToolCalled: false,
   }
 
+  // Stopped before this turn was sent (e.g. while the engine was starting): do not start it.
+  if (abortController.signal.aborted) {
+    console.log(`[Runtime][${runTag}] Run stopped before its turn was sent`)
+    return result
+  }
+
   session.send(message)
 
   let messageCount = 0

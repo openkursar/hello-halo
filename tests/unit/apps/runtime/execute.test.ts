@@ -524,7 +524,7 @@ describe('executeRun — a run that asks the user', () => {
 })
 
 describe('executeRun — abort handling', () => {
-  it('short-circuits the auto-continue loop when aborted', async () => {
+  it('sends nothing and does not auto-continue when stopped before its first turn', async () => {
     const controller = new AbortController()
     controller.abort()
     nextSession = new FakeSession({ script: [] })
@@ -536,10 +536,12 @@ describe('executeRun — abort handling', () => {
       abortSignal: controller.signal,
     })
 
-    // Aborted before dispatch: the stream loop breaks immediately and the
-    // auto-continue while-loop never iterates (its guard checks aborted).
-    expect(nextSession.streamCalls).toBe(1)
+    // Stopped while the engine was starting: no turn is sent, so none is paid
+    // for, and the auto-continue loop never iterates (its guard checks aborted).
+    expect(nextSession.send).not.toHaveBeenCalled()
+    expect(nextSession.streamCalls).toBe(0)
     expect(result.outcome).toBe('error')
+    expect(result.errorMessage).toBe('Stopped before reporting results')
   })
 })
 
@@ -873,6 +875,43 @@ describe('executeRun — managed follow-up lifecycle', () => {
     expect(unregisterActiveSession).toHaveBeenCalledTimes(1)
     expect(unregisterActiveSession).toHaveBeenCalledWith('old-thread')
     expect(nextSession.close).toHaveBeenCalledTimes(1)
+  })
+
+  it('stops a continued run through its lease and records it as stopped', async () => {
+    const session = new SilentSession()
+    nextSession = session as unknown as FakeSession
+    vi.mocked(acquireV2Session).mockResolvedValueOnce(managedLease(nextSession))
+    const store = makeStore()
+    store.getRun.mockReturnValue({ environment: {
+      spaceId: 'space-1', spacePath: '/tmp/space-1', workDir: '/tmp/space-1', memoryDir: '/tmp/app-1',
+    } })
+    const controller = new AbortController()
+    const running = executeRun({
+      app: makeApp(), trigger: { type: 'continue_followup', description: 'Continue', continue: { sessionId: 'saved-session' } },
+      store, memory: makeMemory(), abortSignal: controller.signal,
+      existingRunId: 'old-run', existingSessionKey: 'old-thread',
+    })
+    await vi.waitFor(() => expect(session.send).toHaveBeenCalled())
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+
+    try {
+      controller.abort()
+      await vi.advanceTimersByTimeAsync(ENGINE_STOP_GRACE_MS)
+      const result = await running
+
+      expect(session.interrupt).toHaveBeenCalledTimes(1)
+      // Closed once, through the manager, never behind its back.
+      expect(closeManagedSession).toHaveBeenCalledTimes(1)
+      expect(session.close).toHaveBeenCalledTimes(1)
+      expect(releaseManagedSession).toHaveBeenCalledTimes(1)
+      expect(unregisterActiveSession).toHaveBeenCalledWith('old-thread')
+      expect(result.errorMessage).toBe('Stopped before reporting results')
+      expect(store.completeRun).toHaveBeenCalledWith('old-run', expect.objectContaining({
+        status: 'error', errorMessage: 'Stopped before reporting results',
+      }))
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('keeps fresh transient runs outside the managed-session registry', async () => {

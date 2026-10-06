@@ -1018,8 +1018,9 @@ is left to run until it ends or the user stops it. Pause keeps its meaning
   turn is interrupted, and the session is closed (through its lease when it has
   one, and only once) when the run is still going 3 s later or the engine cannot
   interrupt. Closing ends the stream, so a run whose engine went silent (a hung
-  tool, MCP server or model request) still ends within about 10 s. A stopped run
-  that reported nothing ends `error` as "Stopped before it reported results".
+  tool, MCP server or model request) still ends within about 10 s. A run stopped
+  while its engine was starting sends no turn at all. A stopped run that
+  reported nothing ends `error` as "Stopped before it reported results".
 - **Schedule after a stop**: the scheduler handler reports a stopped or closed
   run as `noop`, so the scheduler neither backs off the next time nor counts the
   stop toward disabling the job. The runtime's own consecutive-error count
