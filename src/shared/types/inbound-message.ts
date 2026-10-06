@@ -110,9 +110,12 @@ export interface InboundAttachment {
  * - Webhook/Schedule: no TTL — reply path is always available
  *
  * Adapters are responsible for TTL fallback internally; callers use `send()` uniformly.
+ * The same holds for length: callers hand over text of any length, and an
+ * adapter whose platform caps one message sends a longer text as ordered
+ * `(i/n)` parts (`im-channels/message-parts.ts`).
  */
 export interface ReplyHandle {
-  /** Send a text reply to the originating conversation. */
+  /** Send a text reply, of any length, to the originating conversation. */
   send(text: string): Promise<void>
   /** Optional: send a "typing" indicator. */
   sendTyping?(): Promise<void>
@@ -169,7 +172,7 @@ export interface StreamingHandle {
   update(event: ProgressEvent): Promise<void>
 
   /**
-   * Finalize the stream with the AI's response.
+   * Finalize the stream with the AI's response, of any length (see ReplyHandle).
    * After this call, no more update() calls should be made.
    */
   finish(finalText: string): Promise<void>

@@ -58,10 +58,17 @@ import {
   type IlinkMediaItem,
 } from './ilink-media'
 import { stageMediaFile, pruneMediaTempDir } from './media-temp-files'
+import { sendAsMessagesOrThrow, type MessageLimit } from './message-parts'
 
 // ============================================
 // Constants
 // ============================================
+
+/**
+ * One WeChat message's text capacity: the platform's own bot plugin sends
+ * replies in pieces of this many characters, and so does this channel.
+ */
+const ILINK_MESSAGE_LIMIT: MessageLimit = { maxChars: 4000 }
 
 const RECONNECT_BASE_DELAY_MS = 2_000
 const RECONNECT_MAX_DELAY_MS = 30_000
@@ -307,7 +314,7 @@ class WeixinIlinkBotInstance implements ImChannelInstance {
       )
       return false
     }
-    this.sendMessage(chatId, text, contextToken).catch((err) => {
+    this.sendText(chatId, text, contextToken).catch((err) => {
       console.error(`[WeixinIlink:${this.instanceId}] pushToChat failed for ${chatId}:`, err)
     })
     return true
@@ -532,7 +539,7 @@ class WeixinIlinkBotInstance implements ImChannelInstance {
             `[WeixinIlink:${this.instanceId}] Cannot reply to ${userId}: missing context_token`
           )
         }
-        await this.sendMessage(userId, replyText, contextToken)
+        await this.sendText(userId, replyText, contextToken)
       },
     }
 
@@ -663,8 +670,11 @@ class WeixinIlinkBotInstance implements ImChannelInstance {
 
   // ── Send message ──────────────────────────────────────────────
 
-  private sendMessage(toUserId: string, text: string, contextToken: string): Promise<void> {
-    return this.sendItems(toUserId, [{ type: 1, text_item: { text } }], contextToken)
+  /** Text of any length: longer than one message, it goes out as ordered `(i/n)` parts. */
+  private sendText(toUserId: string, text: string, contextToken: string): Promise<void> {
+    return sendAsMessagesOrThrow(text, ILINK_MESSAGE_LIMIT, (message) =>
+      this.sendItems(toUserId, [{ type: 1, text_item: { text: message } }], contextToken),
+    )
   }
 
   private async sendItems(

@@ -107,6 +107,7 @@
     - Never modify `ImChannelManager`, `dispatch-inbound.ts`, or any existing provider when adding support.
     - Never introduce provider-specific branches (`if (type === 'xxx')`) in generic code paths — put the logic in a provider method.
     - Never bypass the `InboundMessage` / `ReplyHandle` contract; providers must normalize all upward traffic to it.
+    - Outbound text arrives at any length. A provider whose platform caps one message states that cap once and sends through `im-channels/message-parts.ts` (ordered `(i/n)` parts); generic code never shortens a reply for it.
     - Brand-specific IPC files (`ipc/wecom-bot.ts`, etc.) only expose unique setup/auth flows (QR login, token refresh). Generic channel operations go in `ipc/im-channels.ts` / `ipc/im-sessions.ts`.
     - See `ARCHITECTURE.md §22` for the full contract and recipe.
 
