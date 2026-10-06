@@ -56,7 +56,7 @@ Do **not** ask the user things like "should the bot respond to every message, or
 mentioned / only messages with a certain prefix?" for a WeCom digital human. In WeCom **group
 chats**, the WeCom platform itself only forwards a message to the bot when the bot is
 `@`-mentioned — Halo never receives the other messages, so there is nothing to filter and
-nothing to configure (`src/main/apps/runtime/dispatch-inbound.ts`, `LEADING_GROUP_MENTION`).
+nothing to configure (`src/main/apps/runtime/dispatch-inbound.ts`).
 Direct 1:1 chats deliver every message, also not configurable per app.
 
 Full detail — including what *is* configurable and where — in `create-digital-human/im-triggers.md`.
