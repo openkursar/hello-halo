@@ -90,6 +90,8 @@ Behavior by element type:
 - <textarea>: clears and types.
 - <select> / combobox: selects the option matching the value text.
 
+Typed text is read back from the field. When the field ends up holding something else (reformatted, cut short, refused, or appended to old text), the result reports what it holds instead of success.
+
 After filling, the form is NOT automatically submitted. Use browser_click on the submit button, or browser_press_key with "Enter" if the form supports it.
 
 If filling doesn't work (e.g., custom dropdowns that aren't real <select> elements):
@@ -118,24 +120,31 @@ If filling doesn't work (e.g., custom dropdowns that aren't real <select> elemen
     // --- Batch mode ---
     if (args.elements && args.elements.length > 0) {
       const errors: string[] = []
+      const unconfirmed: string[] = []
 
       for (const elem of args.elements) {
         try {
-          await withTimeout(
+          const check = await withTimeout(
             fillFormElement(ctx, elem.uid, elem.value),
             TOOL_TIMEOUT,
             'browser_fill(batch)'
           )
+          if (check.status === 'different') errors.push(`${elem.uid}: ${check.detail}`)
+          else if (check.status === 'unreadable') unconfirmed.push(`${elem.uid}: ${check.detail}`)
         } catch (error) {
           errors.push(`${elem.uid}: ${(error as Error).message}`)
         }
       }
 
+      const unconfirmedNote = unconfirmed.length > 0 ? `\n\nUnconfirmed:\n${unconfirmed.join('\n')}` : ''
       if (errors.length > 0) {
         return textResult(
-          `Partially filled form (${args.elements.length - errors.length}/${args.elements.length} succeeded).\n\nErrors:\n${errors.join('\n')}`,
+          `Partially filled form (${args.elements.length - errors.length}/${args.elements.length} succeeded).\n\nErrors:\n${errors.join('\n')}${unconfirmedNote}`,
           errors.length === args.elements.length // isError only if ALL failed
         )
+      }
+      if (unconfirmed.length > 0) {
+        return textResult(`Filled ${args.elements.length} form fields; ${unconfirmed.length} could not be read back.${unconfirmedNote}`)
       }
 
       return textResult(`Successfully filled ${args.elements.length} form fields.`)
@@ -153,11 +162,13 @@ If filling doesn't work (e.g., custom dropdowns that aren't real <select> elemen
     }
 
     try {
-      await withTimeout(
+      const check = await withTimeout(
         fillFormElement(ctx, args.uid, args.value),
         TOOL_TIMEOUT,
         'browser_fill'
       )
+      if (check.status === 'different') return textResult(`Filled ${args.uid}, but ${check.detail}`, true)
+      if (check.status === 'unreadable') return textResult(`Typed into ${args.uid}, but ${check.detail}`)
       return textResult('Successfully filled the element.')
     } catch (error) {
       return textResult(`Fill failed on ${args.uid}: ${(error as Error).message}`, true)

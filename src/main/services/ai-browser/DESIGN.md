@@ -239,6 +239,17 @@ Element helpers in `snapshot.ts` (scroll, box, focus) tolerate only a
 `PageCommandRejectedError`: the operation's still-current page refused that one
 command, as before, so a hidden element degrades to a full screenshot. Any other
 error (cancellation, deadline, page loss) propagates unchanged.
+
+`browser_fill` clears a field with the page's own select-all and types the
+text, then reads back what the element holds one task later (`fill-check.ts`).
+It types only while focus is on the element, inside it, or on the editing host
+or shadow host around it: focus that stayed elsewhere would put the text into
+another field, so that fill fails with nothing typed. Only a match is reported
+as filled. A field holding anything else (reformatted, cut short, refused, or
+appended to old text) is reported with what it holds, a password field by
+length only; an element with nothing to read back is reported as unconfirmed.
+An option chosen from a list is not read back.
+
 On macOS the editing adapter respects the guest's trusted Meta-key handler and
 its `preventDefault`. Its paste fallback delivers a synthetic clipboard event
 and guest-local DOM insertion, including rich HTML; it does not provide a
@@ -253,6 +264,7 @@ trusted native paste event. The browser-host design records this distinction.
 | `events.ts` | Process-global view-lifecycle bus (active-view / gone); transport subscribes here. Payload types: `shared/types/ai-browser.ts` |
 | `context.ts` | BrowserContext class (state, CDP, element ops, downloads); emits view lifecycle |
 | `snapshot.ts` | Accessibility tree snapshot creation |
+| `fill-check.ts` | Reads back what a fill left in the field and compares it with the requested text |
 | `download-handler.ts` | Session-level `will-download` handler for silent AI downloads |
 | `download-utils.ts` | Shared filename sanitization / unique path resolution |
 | `types.ts` | Type definitions |
