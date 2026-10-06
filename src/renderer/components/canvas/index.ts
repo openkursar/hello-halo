@@ -5,7 +5,10 @@
  */
 
 // Main canvas component
-export { ContentCanvas, CollapsibleCanvas, CanvasToggleButton } from './ContentCanvas'
+export { ContentCanvas, CollapsibleCanvas } from './ContentCanvas'
+
+// Collapses the canvas, or brings a collapsed one back (shows the tab count)
+export { CanvasToggleButton } from './CanvasToggleButton'
 
 // Terminal pty close policy (mounted once at the space level, always active)
 export { TerminalCloseGuard } from './TerminalCloseGuard'
