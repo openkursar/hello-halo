@@ -178,7 +178,7 @@ export function SettingsTab({ kb, onDeleted }: SettingsTabProps) {
           <div className="min-w-0">
             <p className="text-sm">{t('Keep learning')}</p>
             <p className="text-xs text-muted-foreground mt-0.5">
-              {t('Halo keeps learning new and changed files inside watched folders.')}
+              {t('Halo learns new and changed files in watched folders. Turning this off pauses the knowledge base: it stops learning, and conversations and digital humans stop using it until you turn it back on.')}
             </p>
           </div>
           <Switch
