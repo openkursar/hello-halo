@@ -333,6 +333,79 @@ describe('a restricted turn is held to its file boundary', () => {
     expect(allow('Write', { file_path: join(space, '.halo/meta.json') })).toBe(false)
   })
 
+  it('never writes what an engine reads as its own settings or instructions, wherever it sits', () => {
+    // A write there outlives the turn and acts with the owner's authority:
+    // settings and hooks run commands, instructions speak into later sessions,
+    // a skill's files are reloaded while the turn runs.
+    withAccess({ allowedTools: ['Read', 'Write', 'Edit'] })
+    for (const path of [
+      '.claude/settings.json', '.claude/settings.local.json', '.claude/skills/report/SKILL.md',
+      'sub/.claude/skills/x/SKILL.md', '.agents/skills/y/SKILL.md', '.codex/config.toml',
+      'CLAUDE.md', 'CLAUDE.local.md', 'docs/AGENTS.md', 'AGENTS.override.md', '.mcp.json', 'claude.md',
+    ]) {
+      expect(allow('Write', { file_path: join(space, path) }), path).toBe(false)
+      expect(allow('Edit', { file_path: join(space, path) }), path).toBe(false)
+    }
+    // Reading them is unchanged, and so is writing anything else.
+    expect(allow('Read', { file_path: join(space, 'CLAUDE.md') })).toBe(true)
+    expect(allow('Read', { file_path: join(space, '.git/config') })).toBe(true)
+    expect(allow('Read', { file_path: join(space, '.claude/skills/report/SKILL.md') })).toBe(true)
+    expect(allow('Write', { file_path: join(space, 'src/new.ts') })).toBe(true)
+    // Not even as memory.
+    withAccess({ allowedTools: [] })
+    expect(allow('Write', { file_path: join(space, '.halo/apps/dh/memory/topics/faq.md') })).toBe(true)
+    expect(allow('Write', { file_path: join(space, '.halo/apps/dh/memory/topics/CLAUDE.md') })).toBe(false)
+  })
+
+  it('never writes what git reads: the engine runs git in the workspace as every session starts', () => {
+    // A config or hook there runs a command with the owner's authority the
+    // next time git runs here — a repository the turn assembles itself included.
+    withAccess({ allowedTools: ['Read', 'Write', 'Edit'] })
+    for (const path of ['.git/config', '.git/hooks/pre-commit', 'sub/.git/config', 'vendor/lib/.git/hooks/post-checkout', '.git']) {
+      expect(allow('Write', { file_path: join(space, path) }), path).toBe(false)
+      expect(allow('Edit', { file_path: join(space, path) }), path).toBe(false)
+    }
+    // A name that only starts like it is an ordinary file.
+    expect(allow('Write', { file_path: join(space, '.gitignore') })).toBe(true)
+    expect(allow('Write', { file_path: join(space, 'notes.git/readme.md') })).toBe(true)
+  })
+
+  it('reads a name the way Windows does: a stream suffix and trailing dots or spaces name the same file', () => {
+    // `CLAUDE.md::$DATA` and `CLAUDE.md.` are written to CLAUDE.md there.
+    withAccess({ allowedTools: ['Read', 'Write'] })
+    for (const path of [
+      'CLAUDE.md::$DATA', 'CLAUDE.md.', 'CLAUDE.md ', 'AGENTS.md:$DATA', '.mcp.json...',
+      '.git./config', '.git::$INDEX_ALLOCATION/config', '.claude /settings.json',
+    ]) {
+      expect(allow('Write', { file_path: join(space, path) }), path).toBe(false)
+    }
+    expect(allow('Write', { file_path: join(space, 'notes.md.') })).toBe(true)
+  })
+
+  it('never writes the engine\'s configuration folder, under whatever name it sits in the workspace', () => {
+    // The owner's settings and global skills; a space at the home folder, or a
+    // custom configuration folder, puts it inside the workspace.
+    const configDir = join(space, 'halo-config')
+    withAccess({ allowedTools: ['Read', 'Write'] }, { engineConfigDirs: [configDir] })
+    expect(allow('Write', { file_path: join(configDir, 'settings.json') })).toBe(false)
+    expect(allow('Write', { file_path: join(configDir, 'skills/report/SKILL.md') })).toBe(false)
+    expect(allow('Read', { file_path: join(configDir, 'skills/report/SKILL.md') })).toBe(true)
+    expect(allow('Write', { file_path: join(space, 'halo-config-notes.md') })).toBe(true)
+  })
+
+  it('reads engine folders below the workspace only, never above it', () => {
+    // A workspace that itself lives inside such a folder is still writable.
+    const nested = join(space, '.agents', 'workspace')
+    mkdirSync(nested, { recursive: true })
+    access = appTurnFileAccess(
+      { type: 'app', spaceId: 's', spacePath: nested, appId: 'dh' },
+      { memoryActive: true, spaceMemoryOffered: false, workDir: nested, attachedFiles: [] }
+    )
+    withAccess({ allowedTools: ['Write'] })
+    expect(allow('Write', { file_path: join(nested, 'notes.md') })).toBe(true)
+    expect(allow('Write', { file_path: join(nested, '.agents/skills/z/SKILL.md') })).toBe(false)
+  })
+
   it('follows links: a link inside memory pointing outside is outside', () => {
     symlinkSync('/etc', join(space, '.halo/apps/dh/memory/topics/escape'))
     withAccess({ allowedTools: [] })
@@ -687,5 +760,114 @@ describe('a restricted turn is held to its file boundary', () => {
     const hooks = createTurnFileAccessHooks(conv) as never
     const result = await runPreToolUseHooks(hooks, 'Read', { file_path: '/etc/passwd' }, 'tu', 'session', space, signal)
     expect(result.decision).toBeUndefined()
+  })
+})
+
+import { createSkillGateHooks } from '../../../../src/main/apps/runtime/delegation-gate'
+import { grantedSkillFolders, turnSkillAccess } from '../../../../src/main/apps/runtime/turn-skills'
+import { FILE_TOOLS } from '../../../../src/main/apps/runtime/turn-file-access'
+import type { AvailableSkill } from '../../../../src/shared/apps/app-types'
+
+describe('a borrowed turn loads only the skills its owner allowed', () => {
+  const conv = 'conv-skills'
+  let root = ''
+  let skills: AvailableSkill[] = []
+
+  const skillAt = (dirName: string, frontmatter = ''): AvailableSkill => ({
+    name: dirName, description: '', scope: 'global', dirName,
+    path: join(root, 'skills', dirName),
+    content: `---\nname: ${dirName}\n${frontmatter}---\n\nDo the thing.\n`,
+  })
+
+  /** Register a guest turn the way app-chat does: the skill view, and the folders it opens. */
+  const guestTurn = (policy: { allowedTools: string[]; allowedSkills?: string[] }, audit?: (entry: TeamToolAudit) => void) => {
+    const access = turnSkillAccess(skills, policy, 'strict', {
+      allowedRules: ['TodoWrite', ...policy.allowedTools], disallowed: ['Bash', 'WebFetch'], hooked: ['Skill', ...FILE_TOOLS],
+    })
+    const files = appTurnFileAccess(
+      { type: 'app', spaceId: 's', spacePath: join(root, 'space'), appId: 'dh' },
+      { memoryActive: false, spaceMemoryOffered: false, workDir: join(root, 'space'), attachedFiles: [] }
+    )
+    beginDelegatedTurn(conv, {
+      policy, mode: 'strict', skills: access, files: { ...files, skillFolders: grantedSkillFolders(access) },
+      ...(audit ? { audit: { teamId: 't1', epochId: 'e1', appId: 'dh', actorAppId: null, external: true, sink: audit } } : {}),
+    })
+  }
+
+  /** The skill hook as the engine runs it on every Skill call. */
+  const hookSays = async (skill: string) => {
+    const hooks = createSkillGateHooks(conv) as { PreToolUse: Array<{ matcher: string; hooks: Array<(input: unknown) => Promise<any>> }> }
+    expect(hooks.PreToolUse.map(h => h.matcher)).toEqual(['Skill'])
+    const out = await hooks.PreToolUse[0].hooks[0]({ tool_name: 'Skill', tool_input: { skill } })
+    return out.hookSpecificOutput?.permissionDecision ?? 'no objection'
+  }
+
+  beforeEach(() => {
+    root = realpathSync(mkdtempSync(join(tmpdir(), 'turn-skills-')))
+    mkdirSync(join(root, 'space'), { recursive: true })
+    skills = [
+      skillAt('weekly-report'),
+      skillAt('place-order'),
+      skillAt('deploy', 'hooks:\n  Stop:\n    - hooks:\n        - type: command\n          command: ./deploy.sh\n'),
+    ]
+    for (const s of skills) {
+      mkdirSync(s.path, { recursive: true })
+      writeFileSync(join(s.path, 'SKILL.md'), s.content)
+      writeFileSync(join(s.path, 'reference.md'), 'facts')
+    }
+  })
+
+  afterEach(() => rmSync(root, { recursive: true, force: true }))
+
+  it('refuses a skill the owner did not allow, on every call — even one the engine would load unasked', async () => {
+    // The engine loads a skill without pre-approvals of its own without asking
+    // the gate; only the hook sees that call.
+    guestTurn({ allowedTools: [], allowedSkills: ['weekly-report'] })
+
+    expect(await hookSays('weekly-report')).toBe('no objection')
+    expect(await hookSays('place-order')).toBe('deny')
+    expect(decideDelegatedTool(conv, 'Skill', { skill: 'weekly-report' }).allow).toBe(true)
+    expect(decideDelegatedTool(conv, 'Skill', { skill: 'place-order' }).allow).toBe(false)
+  })
+
+  it('refuses every skill when none was allowed', async () => {
+    guestTurn({ allowedTools: ['Read'] })
+
+    expect(await hookSays('weekly-report')).toBe('deny')
+    expect(decideDelegatedTool(conv, 'Skill', { skill: 'weekly-report' }))
+      .toEqual({ allow: false, reason: 'Skills were not granted for this request.' })
+  })
+
+  it('refuses an allowed skill whose own pre-approvals reach past the request', async () => {
+    guestTurn({ allowedTools: [], allowedSkills: ['deploy'] })
+
+    expect(await hookSays('deploy')).toBe('deny')
+  })
+
+  it('stays out of the way of a turn that is not restricted', async () => {
+    beginDelegatedTurn(conv, { policy: undefined, mode: 'permissive' })
+
+    expect(await hookSays('place-order')).toBe('no objection')
+    expect(decideDelegatedTool(conv, 'Skill', { skill: 'place-order' }).allow).toBe(true)
+  })
+
+  it('lets an allowed skill read its own folder, without opening file reading in general', () => {
+    guestTurn({ allowedTools: [], allowedSkills: ['weekly-report'] })
+
+    expect(decideDelegatedTool(conv, 'Read', { file_path: join(root, 'skills/weekly-report/reference.md') }).allow).toBe(true)
+    expect(decideDelegatedTool(conv, 'Grep', { pattern: 'facts', path: join(root, 'skills/weekly-report') }).allow).toBe(true)
+    // Reading only, and only that skill's folder.
+    expect(decideDelegatedTool(conv, 'Write', { file_path: join(root, 'skills/weekly-report/reference.md') }).allow).toBe(false)
+    expect(decideDelegatedTool(conv, 'Read', { file_path: join(root, 'skills/place-order/reference.md') }).allow).toBe(false)
+    expect(decideDelegatedTool(conv, 'Read', { file_path: join(root, 'skills/deploy/reference.md') }).allow).toBe(false)
+  })
+
+  it('files a refused skill in the owner\'s record under its name', () => {
+    const filed: TeamToolAudit[] = []
+    guestTurn({ allowedTools: [], allowedSkills: ['weekly-report'] }, entry => filed.push(entry))
+
+    decideDelegatedTool(conv, 'Skill', { skill: 'place-order', args: 'two coffees' })
+
+    expect(filed.map(e => [e.toolName, e.decision, e.detail])).toEqual([['Skill', 'denied', 'place-order']])
   })
 })

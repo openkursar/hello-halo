@@ -154,6 +154,28 @@ Two consequences follow:
   the authority (`hasPendingSoloEscalation`). Open questions are
   closed only by their own deadline or explicit task closure, never by a person-level status change.
 
+**A question reaches IM, and is answered there** (`im-escalation.ts`). A person who works
+with a digital human only through an IM bot would otherwise never see that it stopped to
+ask. When the question is saved, `report-tool` hands it to `deliverEscalationToIm`, for
+every bot serving that digital human or fronting its team:
+- The full question goes only to owners' direct chats — a decision may carry private
+  details. An owner is read by who is on the other side of the chat
+  (`ImSessionRecord.contactId`, recorded as they write; some platforms give a direct chat
+  an ID of its own). With permission control off there is no owner list, so the direct
+  chats chosen to receive results stand for it, never every contact.
+- A group that receives results, and the group a team's work came from, is told only that
+  a question waits for the owner.
+- `/answer <number> <answer>` takes the path an answer given in Halo takes
+  (`respondToEscalation`), so the first answer wins wherever it was given. It is handled in
+  `dispatch-inbound` and never reaches the model. Only an owner answers (any chat); with
+  permission control off, only a direct chat does. The answer is read as a choice letter, a
+  choice's words or free text, one line per decision when several were asked.
+- Every escalation carries `content.number`, unique and never reused (`nextEscalationNumber`),
+  so a late answer cannot land on a newer question. A number that names another bot's
+  question is "not found", not the one question this bot has open. With one question open
+  the number may be left out. Answered, closed and expired questions only get an
+  explanation.
+
 ### 2.4 report_to_user as SDK MCP Server
 
 **Decision**: `report_to_user` is implemented as an SDK MCP server using
@@ -673,7 +695,14 @@ inbound message; rides into whatever history the engine keeps).
   earlier anyway.
 - **Appended, never prefixed**: position 0 belongs to `<msg-sender>` — the IM
   identity rules define authority by position — and a prefix would also break
-  slash commands and skills, which must start the message.
+  an owner's slash commands and skills, which must start the message. (A
+  borrowed turn's message never runs as a command at all; see "Skills on a
+  borrowed turn".)
+- **Never to the chat being answered**: a turn's reply reaches the chat it
+  answers anyway, so `notify_bot` refuses that chat (`relay.contact`) and tells
+  the model to write the message as its reply; a push there was a second copy.
+  The IM entry says which text is the reply — what follows the turn's last tool
+  call — so finishing work comes before the answer, not after it.
 - **Sender side needs nothing**: the notify_bot call + result already live in
   the calling session's history.
 - **Peek/commit, not drain**: events are removed only when the engine accepts
@@ -1254,6 +1283,7 @@ src/main/apps/runtime/
   people-directory.ts        -- bounded directory page projection
   prompt.ts                  -- buildAppSystemPrompt() for automation (headless) sessions
   report-tool.ts             -- report_to_user SDK MCP tool
+  im-escalation.ts           -- A question asked over IM: who is asked, who is told, and `/answer` (§2.3)
   escalation-cut.ts          -- when a turn that asked the user may be ended (§2.3); applied by execute.ts and app-chat-sink.ts
   notify-tool.ts             -- halo-notify SDK MCP tool (notify_channel + notify_bot)
   notify-availability.ts     -- resolveNotifyAvailability() — single source of truth for whether notify tools are actually loaded (mirrors notify-tool injection rules; consumed by chat + automation prompts)
@@ -1268,6 +1298,7 @@ src/main/apps/runtime/
   app-chat.ts                -- sendAppChatMessage() and chat session lifecycle
   app-chat-sink.ts           -- TurnSink for chat: run JSONL + round/autonomous delivery (§2.12a)
   turn-ending.ts             -- A turn that stopped short (step limit, cut off): how it is recognized and the note an IM chat gets (§2.12a)
+  turn-skills.ts             -- Which skills a borrowed turn may load, what a granted skill may not bring with it, and why its message never runs as a command ("Skills on a borrowed turn")
   app-chat-browser.ts        -- The AI browser context each chat drives: resident for native chats, per-turn for IM/HTTP/team, idle/cap reaping, teardown by reason (§2.19)
   conversation-source.ts     -- The digital-human `ConversationSource` registered with services/conversation-interop (default + local sessions only; §2.20)
   run-conversation-source.ts -- A scheduled run's one-way sender identity for cross-conversation messages (§2.20)
@@ -1393,8 +1424,22 @@ addresses is part of it. (Feishu's SDK already removes the bot's own mention fro
 structured mention list; WeCom names nobody, and where a bot name ends cannot
 be told from the text, since names may contain spaces.) Commands are
 recognized in `dispatch-inbound.ts`: exact in a direct chat; in a group also
-when the command ends a message that starts with a mention. There is no "bot
-name" setting, and none is needed.
+when the command ends a message that starts with a mention. `/answer` carries
+its answer after it, so it starts a direct message, or follows the mention in a
+group (`im-escalation.parseAnswerCommand`, §2.3). There is no "bot name"
+setting, and none is needed.
+
+### 4.4 The processing notice
+
+A stream shows at once, in the reply itself, that a message is being worked on.
+A reply sent as one message (streaming off, or stripped in a group without quote
+reply) has nothing to show until it is done, so `dispatch-inbound` sends
+"✅ 已收到，正在处理…" first — but only once the answer has taken
+`PROCESSING_NOTICE_DELAY_MS` (5 s): a quick answer needs nothing before it, and a
+notice on every message is noise in a group. The timer is cleared by the reply,
+by a failure and when the dispatch ends. Owners can turn the notice off per
+instance (`ImChannelInstanceConfig.processingNotice`, on unless `false`; the
+settings card greys it out while streaming is on).
 
 Tests live in `tests/unit/apps/runtime/` mirroring the source layout.
 
@@ -1613,6 +1658,24 @@ Remote, tool-started and scheduled runs keep their pages in the hidden host.
   - a file in the closed folder cannot be sent out either (`turnFileExportRefusal`,
     checked by the notify tool's export gate, the IM file-send tool and email
     attachments).
+  - the folder of each skill the turn may load is readable, read only, whatever
+    the reading switches say: a skill reads its own instructions and references
+    as it runs, and a global skill lives outside the workspace.
+  - a file tool (Write, Edit, MultiEdit, NotebookEdit) never writes what an
+    engine, or git that it runs, reads as settings, hooks or standing
+    instructions, granted Write or not, memory included: `.claude/`,
+    `.agents/`, `.codex/` and `.git` anywhere below the workspace, the engines'
+    configuration folder under whatever name it has (it can sit inside a
+    workspace), and `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`,
+    `AGENTS.override.md` and `.mcp.json` by name anywhere
+    (`ENGINE_CONTROL_FOLDERS` / `ENGINE_CONTROL_FILES` / `engineConfigDirs`,
+    each entry with what reads it). A name is read the way Windows writes it: a
+    `:stream` suffix and trailing dots or spaces name the same file. A write
+    there would outlive the turn and act with the owner's authority — settings,
+    hooks and git's config run commands (Claude Code runs git as every session
+    starts), instructions speak into every later session, a skill's files are
+    reloaded while a turn runs. This holds for the file tools; what else can
+    write is held as the next lines say.
   - Bash and the terminal cannot be held to paths; they follow the policy only.
   - Codex runs no restricted turn at all (it cannot enforce a policy).
 - TodoWrite is available to every caller (`ALWAYS_AVAILABLE_BUILTIN_TOOLS`).
@@ -1628,3 +1691,54 @@ Remote, tool-started and scheduled runs keep their pages in the hidden host.
   consolidation's busy probe counts queued rounds, active generation/subagents and
   active runs, not idle sessions; its existing repeated-deferral limit and the
   manual "consolidate now" override remain unchanged.
+
+
+## Skills on a borrowed turn
+
+An owner allows skills one by one (`CapabilityPolicy.allowedSkills`, folder
+names): an IM guest gets none until listed, a teammate keeps all until a list
+is written. The panel offers one switch per skill the digital human can load
+(`skill-discovery`, global + space), next to the tool switches. The skill tool
+itself has no switch: it exists for a caller exactly when some skill does.
+
+- **Every call is decided by name** (`turn-skills.decideSkillCall`), by a
+  pre-tool hook on `Skill` (`createSkillGateHooks`) and by the per-call gate
+  alike. The hook is the one that matters: the engine loads a skill that brings
+  no pre-approvals of its own without asking the gate. A name resolves as the
+  engine resolves it — folder or frontmatter name, a leading "/" ignored — and
+  every skill it could mean must be allowed. A skill Halo does not list (built
+  into the engine, from a plugin) has no switch, so only a teammate whose skills
+  were never listed may load one.
+- **A skill grants nothing beyond itself.** Each tool call it makes is judged by
+  the policy like any other. What the engine lets a loaded skill do without
+  asking — run the tools its `allowed-tools` pre-approve for the rest of the
+  turn (and in its inline `!` commands), run its own hooks, run itself as a
+  sub-agent — is measured against what the turn already settles without the
+  gate: the session's auto-allow rules, its withheld tools (a withheld tool
+  stays withheld whatever a skill pre-approves), and the tools a hook judges on
+  every call (the file tools of a strict turn). A skill reaching past that does
+  not load, and the refusal says what it reached for. Hooks need "any
+  command"; running as a sub-agent needs the sub-agent switch. A frontmatter is
+  read as the engine reads it, its second reading included; one that cannot be
+  read does not load.
+- **A borrowed turn's message never runs as a command.** The engine runs a
+  message starting with "/" as the command it names — any skill, with its
+  pre-approvals and no call anything could judge — and an IM guest's direct
+  message reaches the engine as typed. Such a message gets a line in front
+  (`inertCommandText`); a granted skill is still reached through the skill tool.
+  Words from outside this machine get the same treatment when they would join a
+  running turn (`team/orchestration.renderMidTurnEnvelope`), though the bus keeps
+  them out of one in the first place.
+- **Every copy of a name is checked.** A global and a space skill may share a
+  folder name, and which one the engine loads for it is the engine's own order;
+  the check runs over every copy (`skill-discovery.listLoadableSkillCopies`), and
+  a name with any copy that may not load does not load and opens no folder.
+  A skill built into the engine that shares a name with the owner's is the one
+  the engine loads; those bring only read tools, or tools a strict turn already
+  withholds, so they reach no further than the policy.
+- **The sub-agent switch covers both names** the engine knows the tool by
+  (`Agent`, and the older `Task` a rule still acts on). `Task` used to stay in a
+  strict turn's withheld list with no switch of its own, which took the tool away
+  whatever the owner chose. Aliases live in `shared/apps/capability-policy`, so
+  the withheld list is exactly the tools no switch offers.
+

@@ -26,6 +26,8 @@ import type {
 import { ImInstancePermissionSection } from './ImInstancePermissionSection'
 import type { ImPermissionDefaults } from './ImInstancePermissionSection'
 import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
+import { HelpHint } from '../ui/HelpHint'
+import { ImProcessingNoticeRow } from './ImProcessingNoticeRow'
 import { Switch } from '../ui/Switch'
 
 export interface FeishuInstanceCardProps {
@@ -337,7 +339,10 @@ export function FeishuInstanceCard({
 
           {/* Reply scope */}
           <div className="space-y-1">
-            <label className="text-sm text-muted-foreground">{t('Reply Scope')}</label>
+            <div className="flex items-center gap-1">
+              <label className="text-sm text-muted-foreground">{t('Reply Scope')}</label>
+              <HelpHint label={t('About this setting')} text={t('Decides where the digital human replies. All messages: it replies when @mentioned in groups and to direct messages. Group chats only: direct messages are declined. Direct messages only: group messages get no reply.')} />
+            </div>
             <select
               value={replyScope}
               onChange={(e) => commit({
@@ -365,7 +370,10 @@ export function FeishuInstanceCard({
           {/* Require @mention in group chats */}
           <div className="flex items-center justify-between gap-3">
             <div className="space-y-0.5 min-w-0">
-              <p className="text-sm text-muted-foreground">{t('Require @mention in groups')}</p>
+              <div className="flex items-center gap-1">
+                <p className="text-sm text-muted-foreground">{t('Require @mention in groups')}</p>
+                <HelpHint label={t('About this setting')} text={t('On: in group chats it answers only messages that @mention it. Off: it answers every group message it receives, which Feishu delivers only with the "all group messages" permission.')} />
+              </div>
               <p className="text-xs text-muted-foreground/70">
                 {requireMention
                   ? t('Only answers group messages that @ the bot')
@@ -389,7 +397,10 @@ export function FeishuInstanceCard({
           {/* Quote reply in group chats */}
           <div className="flex items-center justify-between gap-3">
             <div className="space-y-0.5 min-w-0">
-              <p className="text-sm text-muted-foreground">{t('Quote Reply (Group)')}</p>
+              <div className="flex items-center gap-1">
+                <p className="text-sm text-muted-foreground">{t('Quote Reply (Group)')}</p>
+                <HelpHint label={t('About this setting')} text={t('On: a reply in a group quotes the message it answers, so it is clear whom it answers. Off: replies are sent as plain messages.')} />
+              </div>
               <p className="text-xs text-muted-foreground/70">
                 {quoteReply
                   ? t('Group replies quote the original message')
@@ -408,7 +419,10 @@ export function FeishuInstanceCard({
           {/* Streaming */}
           <div className="flex items-center justify-between gap-3">
             <div className="space-y-0.5 min-w-0">
-              <p className="text-sm text-muted-foreground">{t('Streaming')}</p>
+              <div className="flex items-center gap-1">
+                <p className="text-sm text-muted-foreground">{t('Streaming')}</p>
+                <HelpHint label={t('About this setting')} text={t('On: the reply is written into one message as it is produced. Off: one complete reply is sent when it is done.')} />
+              </div>
               <p className="text-xs text-muted-foreground/70">
                 {isStreamingEnabled
                   ? t('Shows progress live in a Feishu card, replaced by the final answer')
@@ -423,6 +437,15 @@ export function FeishuInstanceCard({
               })}
             />
           </div>
+
+          <ImProcessingNoticeRow
+            on={instance.processingNotice !== false}
+            streaming={isStreamingEnabled}
+            onToggle={() => commit({
+              ...instance,
+              processingNotice: instance.processingNotice === false ? undefined : false,
+            })}
+          />
 
           {/* ── Permission Control ── */}
           <ImInstancePermissionSection

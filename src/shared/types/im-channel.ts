@@ -186,6 +186,13 @@ export interface ImChannelInstanceConfig {
    */
   streaming?: boolean
   /**
+   * Whether a reply sent as one message (streaming off) is preceded by a
+   * "received, working on it" notice when it has not come within a few
+   * seconds. Undefined = on; only an explicit false turns it off. A stream
+   * shows the same status in the reply itself, so this does not apply to it.
+   */
+  processingNotice?: boolean
+  /**
    * Reply scope — controls which chat types this instance responds to.
    *   'all'    — respond to both group and direct messages
    *   'group'  — only respond in group chats (secure)
@@ -629,6 +636,12 @@ export interface ImSessionRecord {
   chatId: string
   /** Conversation type */
   chatType: 'direct' | 'group'
+  /**
+   * Direct chats: the person on the other side, by the platform user ID an
+   * owner list holds. Some platforms give a direct chat an ID of its own, so
+   * `chatId` cannot stand in for it there. Absent until they next write.
+   */
+  contactId?: string
   /** Human-readable name for UI display (set once on first registration, never overwritten) */
   displayName: string
   /** User-assigned custom name — highest display priority */

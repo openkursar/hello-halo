@@ -165,6 +165,8 @@ vi.mock('../../../../src/main/services/agent/helpers', () => ({
   getDbMcpServers: vi.fn(() => null),
 }))
 vi.mock('../../../../src/main/services/agent/events', () => ({ emitAgentEvent: vi.fn() }))
+// A borrowed turn lists the skills it could load; none here.
+vi.mock('../../../../src/main/apps/skill-discovery', () => ({ listLoadableSkillCopies: () => [] }))
 vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
   analytics: { track: vi.fn(), trackErrorSurface: vi.fn() },
 }))
@@ -575,12 +577,12 @@ describe('a restricted borrowed turn keeps every tool-call watcher', () => {
 
   const fileBoundaryMatchers = ['Read', 'Glob', 'Grep', 'Edit', 'MultiEdit', 'NotebookEdit']
 
-  it('a teammate from this machine gets the audit and the memory guard, but no path boundary', async () => {
+  it('a teammate from this machine gets the audit, the skill gate and the memory guard, but no path boundary', async () => {
     await sendAppChatMessage(memberTurn())
     const options = buildUserSessionSdkOptions.mock.results.at(-1)!.value as {
       hooks: Record<string, Array<{ matcher?: string }>>
     }
-    expect(options.hooks.PreToolUse).toEqual([guardSentinel])
+    expect(options.hooks.PreToolUse).toEqual([guardSentinel, expect.objectContaining({ matcher: 'Skill' })])
     expect(options.hooks.PostToolUse).toHaveLength(1)
     expect(options.hooks.PostToolUse[0].matcher).toBeUndefined()
   })

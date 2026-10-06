@@ -121,6 +121,23 @@ vi.mock('../../../../src/main/apps/team', () => ({
 vi.mock('../../../../src/main/apps/runtime/team', () => ({
   getActiveTeamRuntime: () => teamRuntime,
 }))
+// ── The runtime's answer path, behind /answer ──
+const { answerDeps } = vi.hoisted(() => ({
+  answerDeps: {
+    pending: [] as Array<Record<string, unknown>>,
+    respond: vi.fn(async () => undefined),
+  },
+}))
+vi.mock('../../../../src/main/apps/runtime/im-escalation', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  runtimeAnswerDeps: async () => ({
+    pendingEscalations: () => answerDeps.pending,
+    escalationByNumber: (number: number) =>
+      answerDeps.pending.find(e => (e.content as { number?: number }).number === number) ?? null,
+    isRunClosed: () => false,
+    respond: answerDeps.respond,
+  }),
+}))
 
 import {
   dispatchInboundMessage,
@@ -272,10 +289,82 @@ describe('dispatchInboundMessage — streaming selection', () => {
     expect(arg.onProgress).toBeUndefined()
   })
 
-  it('sends the processing ack via reply.send when streaming is absent', async () => {
+})
+
+// ============================================
+// The processing notice
+//
+// A quick answer needs nothing before it; a slow one tells the sender their
+// message arrived. An owner who finds even that too much turns it off.
+// ============================================
+
+describe('dispatchInboundMessage — the processing notice', () => {
+  const NOTICE = '✅ 已收到，正在处理…'
+
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  /** A turn that answers only when told to. */
+  function slowTurn(): { answer: (text: string) => void } {
+    let answer: (text: string) => void = () => {}
+    sendAppChatMessageMock.mockImplementationOnce(request => new Promise<undefined>(resolve => {
+      answer = text => {
+        (request.onReply as (t: string) => void)(text)
+        resolve(undefined)
+      }
+    }))
+    return { answer: text => answer(text) }
+  }
+
+  it('says the message is being worked on only once the answer has taken 5 seconds', async () => {
     const reply = makeReply(false)
+    const turn = slowTurn()
+    const dispatched = dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
+
+    await vi.advanceTimersByTimeAsync(4_999)
+    expect(reply.send).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(reply.send).toHaveBeenCalledWith(NOTICE)
+
+    turn.answer('the answer')
+    await dispatched
+    expect((reply.send as ReturnType<typeof vi.fn>).mock.calls.map(([text]) => text)).toEqual([NOTICE, 'the answer'])
+  })
+
+  it('sends nothing before an answer that comes sooner', async () => {
+    const reply = makeReply(false)
+    const turn = slowTurn()
+    const dispatched = dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
+
+    await vi.advanceTimersByTimeAsync(2_000)
+    turn.answer('quick answer')
+    await dispatched
+    await vi.advanceTimersByTimeAsync(10_000)
+
+    expect((reply.send as ReturnType<typeof vi.fn>).mock.calls.map(([text]) => text)).toEqual(['quick answer'])
+  })
+
+  it('never sends it where the owner turned it off', async () => {
+    instanceCfg = { processingNotice: false }
+    const reply = makeReply(false)
+    const turn = slowTurn()
+    const dispatched = dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    turn.answer('late answer')
+    await dispatched
+
+    expect((reply.send as ReturnType<typeof vi.fn>).mock.calls.map(([text]) => text)).toEqual(['late answer'])
+  })
+
+  it('leaves a stream showing its status at once, as before', async () => {
+    instanceCfg = { streaming: true, processingNotice: false }
+    const reply = makeReply(true)
+
     await dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
-    expect(reply.send).toHaveBeenCalledWith('✅ 已收到，正在处理…')
+
+    expect(reply.streaming!.update).toHaveBeenCalledWith({ type: 'status', text: NOTICE })
+    expect(reply.send).not.toHaveBeenCalled()
   })
 })
 
@@ -981,3 +1070,61 @@ describe('dispatchInboundMessage — buffered messages', () => {
     expect(setImPermissionContext).toHaveBeenLastCalledWith(CONV, expect.objectContaining({ isOwner: false }))
   })
 })
+
+// ============================================
+// /answer — an owner answers a question from the chat
+// ============================================
+
+describe('dispatchInboundMessage — /answer', () => {
+  const QUESTION = {
+    id: 'q-1', appId: 'app-1', runId: 'run-1', type: 'escalation', ts: 1,
+    content: { summary: 'Ship tonight?', choices: ['Yes', 'No'], number: 12 },
+  }
+
+  beforeEach(() => {
+    answerDeps.pending = [QUESTION]
+    answerDeps.respond.mockClear()
+  })
+
+  it('takes an owner\'s answer the way Halo does, and never hands it to the digital human', async () => {
+    instanceCfg = { permissionEnabled: true, owners: ['u1'] }
+    const reply = makeReply(false)
+
+    await dispatchInboundMessage(makeMsg({ body: '/answer 12 A' }), reply, 'app-1', 'inst-1')
+
+    expect(answerDeps.respond).toHaveBeenCalledWith('app-1', 'q-1', expect.objectContaining({ choice: 'Yes' }))
+    expect(reply.send).toHaveBeenCalledWith('已收到，任务继续。（编号 12 的问题）')
+    expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+  })
+
+  it('takes it from an owner in a group too, after the mention', async () => {
+    instanceCfg = { permissionEnabled: true, owners: ['u1'] }
+    const reply = makeReply(false)
+
+    await dispatchInboundMessage(makeMsg({ chatType: 'group', chatId: 'g-1', body: '@Halo AI 团队 /answer 12 B' }), reply, 'app-1', 'inst-1')
+
+    expect(answerDeps.respond).toHaveBeenCalledWith('app-1', 'q-1', expect.objectContaining({ choice: 'No' }))
+    expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+  })
+
+  it('tells anyone else it is the owner\'s to answer, and approves nothing', async () => {
+    instanceCfg = { permissionEnabled: true, owners: ['boss'] }
+    const reply = makeReply(false)
+
+    await dispatchInboundMessage(makeMsg({ body: '/answer 12 A' }), reply, 'app-1', 'inst-1')
+
+    expect(answerDeps.respond).not.toHaveBeenCalled()
+    expect(reply.send).toHaveBeenCalledWith('只有主人可以回答这个问题。')
+    expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+  })
+
+  it('leaves an ordinary message that only mentions answering to the digital human', async () => {
+    instanceCfg = { permissionEnabled: true, owners: ['u1'] }
+
+    await dispatchInboundMessage(makeMsg({ body: 'what should I /answer here?' }), makeReply(false), 'app-1', 'inst-1')
+
+    expect(answerDeps.respond).not.toHaveBeenCalled()
+    expect(sendAppChatMessageMock).toHaveBeenCalledTimes(1)
+  })
+})
+

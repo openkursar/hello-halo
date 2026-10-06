@@ -12,9 +12,14 @@
  *               and writable, the space's topics readable when offered —
  *               whether or not the policy grants file tools at all
  *   attached    files handed to this turn (what the guest sent) are readable
+ *   skills      the folders of the skills granted to this turn are readable:
+ *               a skill reads its own instructions and references as it runs
  *   workspace   a GRANTED tool reaches the workspace folder, never beyond it
  *   closed      the space's `.halo/` data folder — every conversation's record
  *               lives there — stays closed except for the memory above
+ *   engine      a file tool never writes what an engine, or git that it runs,
+ *               reads as settings, hooks or standing instructions
+ *               ({@link ENGINE_CONTROL_FOLDERS})
  *
  * Paths are read the way the engines read them when they run the tool
  * (foundation/path-containment `resolveToolPath`: `~` expanded, no environment
@@ -29,7 +34,7 @@
  */
 
 import { existsSync, readdirSync } from 'fs'
-import { isAbsolute, join, normalize, resolve, sep } from 'path'
+import { basename, isAbsolute, join, normalize, relative, resolve, sep } from 'path'
 import {
   canonicalPath,
   globSearchRoot,
@@ -47,6 +52,8 @@ export interface TurnFileAccess {
   memoryReadable: string[]
   /** Exact files handed to this turn */
   attachedFiles: string[]
+  /** Folders of the skills granted to this turn, readable only */
+  skillFolders?: string[]
   /** Where a granted file tool may reach */
   workspaceRoots: string[]
   /** Folders inside the workspace that stay closed except for memory */
@@ -59,6 +66,12 @@ export interface TurnFileAccess {
   hookGuarded: string[]
   /** System records inside the memory folders, closed even to recursion */
   memorySystemPaths: string[]
+  /**
+   * An engine's own configuration folders, under whatever name they have — a
+   * configuration folder set by the owner may sit inside the workspace. Never
+   * written by a file tool, like {@link ENGINE_CONTROL_FOLDERS}.
+   */
+  engineConfigDirs?: string[]
 }
 
 export const READ_FILE_TOOLS: readonly string[] = ['Read', 'Glob', 'Grep']
@@ -67,13 +80,68 @@ export const FILE_TOOLS: readonly string[] = [...READ_FILE_TOOLS, ...WRITE_FILE_
 
 export type FileAccessDecision = { allow: true } | { allow: false; reason: string }
 
+/**
+ * Folders an engine, or git that it runs, reads as settings, hooks, skills,
+ * commands or standing instructions, wherever they sit in the workspace
+ * (engines walk into subfolders for them). A strict turn's file tools may read
+ * them but never write them: what is written there outlives the turn and acts
+ * with the owner's authority — settings and hooks run commands, instructions
+ * speak into every later session, a skill's files are reloaded while the turn
+ * runs.
+ *
+ *   .claude   Claude Code: settings (hooks, permissions), skills, commands,
+ *             agents, instructions; Halo SDK: skills, commands, instructions
+ *   .agents   Halo SDK: skills, commands, instructions
+ *   .codex    Codex: project configuration
+ *   .git      git, which Claude Code runs in the workspace as every session
+ *             starts: its config and hooks run commands. A `.git` file (a
+ *             pointer to another git folder) is caught by the same name.
+ */
+export const ENGINE_CONTROL_FOLDERS: readonly string[] = ['.claude', '.agents', '.codex', '.git']
+
+/**
+ * Files an engine reads as its own, by name, in any folder.
+ *
+ *   CLAUDE.md, CLAUDE.local.md    Claude Code (and Halo SDK) instructions
+ *   AGENTS.md, AGENTS.override.md Halo SDK and Codex instructions
+ *   .mcp.json                     MCP servers a project declares
+ */
+export const ENGINE_CONTROL_FILES: readonly string[] = ['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', 'AGENTS.override.md', '.mcp.json']
+
+// Compared without case: case-insensitive file systems are the common ones.
+const ENGINE_FOLDERS = new Set(ENGINE_CONTROL_FOLDERS.map(name => name.toLowerCase()))
+const ENGINE_FILES = new Set(ENGINE_CONTROL_FILES.map(name => name.toLowerCase()))
+
+/**
+ * A path segment as the file it names: Windows writes `CLAUDE.md::$DATA` and
+ * `CLAUDE.md.` to `CLAUDE.md`, ignoring a stream suffix and trailing dots and
+ * spaces. Read that way everywhere — refusing such a name elsewhere costs nothing.
+ */
+function fileNameOf(segment: string): string {
+  const colon = segment.indexOf(':')
+  return (colon === -1 ? segment : segment.slice(0, colon)).replace(/[. ]+$/, '').toLowerCase()
+}
+
+/**
+ * Whether an engine reads this path as its own: a configuration folder, or a
+ * folder or file by name — names count below a root only, never above it.
+ */
+function readByEngine(target: string, roots: string[], configDirs: string[]): boolean {
+  if (withinAny(target, configDirs)) return true
+  if (ENGINE_FILES.has(fileNameOf(basename(target)))) return true
+  return roots.some(root => isCanonicalWithin(target, root) &&
+    relative(root, target).split(sep).some(segment => ENGINE_FOLDERS.has(fileNameOf(segment))))
+}
+
 /** Canonical forms of an access's roots, computed once per access. */
 interface Canonical {
   writable: string[]
   readable: string[]
   attached: Set<string>
+  skills: string[]
   workspace: string[]
   closed: string[]
+  engineConfig: string[]
 }
 
 const canonicalCache = new WeakMap<TurnFileAccess, Canonical>()
@@ -85,8 +153,10 @@ function canonicalOf(access: TurnFileAccess): Canonical {
       writable: access.memoryWritable.map(canonicalPath),
       readable: [...access.memoryWritable, ...access.memoryReadable].map(canonicalPath),
       attached: new Set(access.attachedFiles.map(canonicalPath)),
+      skills: (access.skillFolders ?? []).map(canonicalPath),
       workspace: access.workspaceRoots.map(canonicalPath),
       closed: access.closed.map(canonicalPath),
+      engineConfig: (access.engineConfigDirs ?? []).map(canonicalPath),
     }
     canonicalCache.set(access, c)
   }
@@ -141,7 +211,15 @@ export function decideFileAccess(
 
   for (const raw of targets) {
     const target = canonicalPath(raw)
-    if (withinAny(target, memory) || (reading && c.attached.has(target))) continue
+    if (!reading && readByEngine(target, [...c.workspace, ...c.writable], c.engineConfig)) {
+      return {
+        allow: false,
+        reason: "An engine's own settings and instructions (.claude, .agents, .codex, .git, CLAUDE.md, AGENTS.md, .mcp.json) cannot be changed here.",
+      }
+    }
+    if (withinAny(target, memory)) continue
+    if (reading && c.attached.has(target)) continue
+    if (reading && withinAny(target, c.skills) && !withinAny(target, c.closed)) continue
     if (!granted) {
       return {
         allow: false,
