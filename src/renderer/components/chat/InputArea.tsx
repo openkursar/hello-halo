@@ -368,7 +368,6 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
   }, [])
   const toolsets = useComposerToolsets({
     enabled: !hideToolsetControls,
-    canOpen: !isGenerating,
     panelOpen: showAttachMenu,
     onRequested: openAttachMenu,
   })
@@ -377,7 +376,7 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
     if (goalMode) textareaRef.current?.focus()
   }, [goalMode])
 
-  // The "+" button leaves while a turn runs; its panel goes with it rather than reappearing later.
+  // A starting turn takes the panel's Add and Context rows away: close it rather than reshape it under the pointer.
   useEffect(() => {
     if (isGenerating) setShowAttachMenu(false)
   }, [isGenerating])
@@ -1263,6 +1262,8 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
       })),
     }] : []),
   ]
+  // While a turn runs nothing can be attached; capabilities can change, from the next message on.
+  const panelSections = isGenerating ? menuSections.filter(section => section.id === 'capabilities') : menuSections
 
   return (
     <div className={`
@@ -1315,9 +1316,11 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
         >
           {/* Slash-command autocomplete menu — floats above the input box.
               Only rendered when there are actual matches; no empty-state UI. */}
-          {showAttachMenu && !isGenerating && !isOnboardingSendStep && (
+          {showAttachMenu && !isOnboardingSendStep && panelSections.length > 0 && (
             <ComposerMenu
-              sections={menuSections}
+              // Rows come and go when a turn ends; a fresh panel keeps the keyboard highlight on the right row.
+              key={isGenerating ? 'turn-running' : 'idle'}
+              sections={panelSections}
               anchorRef={cardRef}
               triggerRef={plusTriggerRef}
               onClose={closeAttachMenu}
@@ -1534,6 +1537,7 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
           <InputToolbar
             isGenerating={isGenerating}
             isOnboarding={isOnboardingSendStep}
+            canOpenMenu={panelSections.length > 0}
             showAttachMenu={showAttachMenu}
             onAttachMenuToggle={handleAttachMenuToggle}
             plusTriggerRef={plusTriggerRef}
@@ -1564,6 +1568,8 @@ interface InputToolbarProps {
   sendSlot?: React.ReactNode
   isGenerating: boolean
   isOnboarding: boolean
+  /** Whether the "+" panel has rows now: while a turn runs, only capability switches. */
+  canOpenMenu: boolean
   showAttachMenu: boolean
   onAttachMenuToggle: () => void
   plusTriggerRef: React.RefObject<HTMLButtonElement>
@@ -1584,6 +1590,7 @@ function InputToolbar({
   sendSlot,
   isGenerating,
   isOnboarding,
+  canOpenMenu,
   showAttachMenu,
   onAttachMenuToggle,
   plusTriggerRef,
@@ -1610,15 +1617,15 @@ function InputToolbar({
           <DigitalHumanSelector {...digitalHumanSelector} />
         )}
 
-        {!isGenerating && !isOnboarding && (
+        {canOpenMenu && !isOnboarding && (
           <button
             ref={plusTriggerRef}
             type="button"
             onClick={onAttachMenuToggle}
-            aria-label={t('Add files, context and capabilities')}
+            aria-label={isGenerating ? t('Capabilities') : t('Add files, context and capabilities')}
             aria-haspopup="menu"
             aria-expanded={showAttachMenu}
-            title={t('Add files, context and capabilities')}
+            title={isGenerating ? t('Capabilities') : t('Add files, context and capabilities')}
             className={`w-8 h-8 shrink-0 flex items-center justify-center rounded-full transition-colors duration-150
               ${showAttachMenu
                 ? 'bg-secondary text-foreground'

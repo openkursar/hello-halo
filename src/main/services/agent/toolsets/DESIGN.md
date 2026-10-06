@@ -98,6 +98,10 @@ reads the same constant: the composer's "+" button surfaces only toolsets enable
 `requestToolset` (broker) emits `toolsets:requested`; the renderer
 (`App.tsx` → `toolsets.store.applyRequestedEvent` → `useComposerToolsets`) opens the
 composer's "+" panel and highlights the requested switch in its Capabilities group.
+It does so at once, also while the turn that asked is still running: the panel then
+holds only the Capabilities group, and a switch flipped there takes effect from the
+user's next message, since the session rebuild waits for the turn to end. Nothing
+is added to the running turn.
 The meta-server tool returns guidance so the AI tells the user which toolset to
 enable, then stops.
 
