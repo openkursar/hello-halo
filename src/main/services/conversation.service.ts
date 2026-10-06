@@ -1035,28 +1035,35 @@ export function updateLastMessage(
   return lastMessage
 }
 
+/** What `removeEmptyReplyPlaceholder` did: removed the placeholder, or why it stayed. */
+export type ReplyPlaceholderOutcome =
+  | 'removed'
+  | 'conversation-gone'
+  /** Messages came after it — typically ones injected while the turn ran, which are shown on the reply before them. */
+  | 'followed-by-messages'
+  | 'not-empty'
+
 /**
  * Remove the reply placeholder of a turn that produced nothing: the
  * conversation's last message, only while it is still an empty assistant
- * message. A placeholder followed by injected messages stays, since those are
- * shown on the reply they follow. Returns whether it was removed.
+ * message.
  */
-export function removeEmptyReplyPlaceholder(spaceId: string, conversationId: string): boolean {
+export function removeEmptyReplyPlaceholder(spaceId: string, conversationId: string): ReplyPlaceholderOutcome {
   const result = cachedRead(spaceId, conversationId)
-  if (!result) return false
+  if (!result) return 'conversation-gone'
 
   const { conversation, filePath, conversationsDir } = result
   const last = conversation.messages[conversation.messages.length - 1]
-  if (!last || last.role !== 'assistant' || last.content || last.error || last.thoughtsSummary || last.thoughts?.length || last.images?.length) {
-    return false
-  }
+  if (!last) return 'not-empty'
+  if (last.role !== 'assistant') return 'followed-by-messages'
+  if (last.content || last.error || last.thoughtsSummary || last.thoughts?.length || last.images?.length) return 'not-empty'
 
   conversation.messages.pop()
   conversation.messageCount = conversation.messages.length
 
   cachedWrite(conversationId, conversation, filePath, conversationsDir, spaceId)
   debouncedUpdateIndexEntry(conversationsDir, spaceId, conversationId, toMeta(conversation))
-  return true
+  return 'removed'
 }
 
 /**

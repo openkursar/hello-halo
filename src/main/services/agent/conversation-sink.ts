@@ -132,6 +132,7 @@ function persistTurnResult(
     })
   } else {
     // Typically stopped before the model said anything: no blank reply is left behind.
-    removeEmptyReplyPlaceholder(spaceId, conversationId)
+    const outcome = removeEmptyReplyPlaceholder(spaceId, conversationId)
+    console.log(`[Consumer][${conversationId}] Turn produced nothing; reply placeholder ${outcome === 'removed' ? 'removed' : `kept (${outcome})`}`)
   }
 }

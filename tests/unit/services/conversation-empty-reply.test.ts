@@ -126,24 +126,41 @@ describe('a turn that produced nothing', () => {
 })
 
 describe('removeEmptyReplyPlaceholder', () => {
-  it('removes only an empty reply that is the last message', () => {
+  it('removes only an empty reply that is the last message, and says why it kept anything else', () => {
     const conversation = createConversation(SPACE)
     addMessage(SPACE, conversation.id, { role: 'user', content: 'hello' })
     addMessage(SPACE, conversation.id, { role: 'assistant', content: '', toolCalls: [] })
     addMessage(SPACE, conversation.id, { role: 'user', content: 'typed while it ran', source: 'injection' })
-    expect(removeEmptyReplyPlaceholder(SPACE, conversation.id)).toBe(false)
+    expect(removeEmptyReplyPlaceholder(SPACE, conversation.id)).toBe('followed-by-messages')
     expect(messages(conversation.id)).toHaveLength(3)
 
     const answered = createConversation(SPACE)
     addMessage(SPACE, answered.id, { role: 'user', content: 'hello' })
     addMessage(SPACE, answered.id, { role: 'assistant', content: '', toolCalls: [] })
     updateLastMessage(SPACE, answered.id, { error: 'Provider refused' })
-    expect(removeEmptyReplyPlaceholder(SPACE, answered.id)).toBe(false)
-    expect(removeEmptyReplyPlaceholder(SPACE, 'missing')).toBe(false)
+    expect(removeEmptyReplyPlaceholder(SPACE, answered.id)).toBe('not-empty')
+    expect(removeEmptyReplyPlaceholder(SPACE, 'missing')).toBe('conversation-gone')
 
-    const userLast = createConversation(SPACE)
-    addMessage(SPACE, userLast.id, { role: 'user', content: '' })
-    expect(removeEmptyReplyPlaceholder(SPACE, userLast.id)).toBe(false)
+    const empty = createConversation(SPACE)
+    addMessage(SPACE, empty.id, { role: 'user', content: 'hello' })
+    addMessage(SPACE, empty.id, { role: 'assistant', content: '', toolCalls: [] })
+    expect(removeEmptyReplyPlaceholder(SPACE, empty.id)).toBe('removed')
+    expect(messages(empty.id)).toHaveLength(1)
+  })
+
+  it('logs once per turn end whether the placeholder was removed or kept, and why', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const removed = startTurn('Stop at once')
+    removed.sink.onTurnComplete?.(streamResult())
+    const kept = startTurn('Stop after typing more')
+    addMessage(SPACE, kept.id, { role: 'user', content: 'and also this', source: 'injection' })
+    kept.sink.onTurnComplete?.(streamResult())
+    const lines = log.mock.calls.map(([line]) => String(line)).filter(line => line.includes('reply placeholder'))
+    log.mockRestore()
+    expect(lines).toEqual([
+      `[Consumer][${removed.id}] Turn produced nothing; reply placeholder removed`,
+      `[Consumer][${kept.id}] Turn produced nothing; reply placeholder kept (followed-by-messages)`,
+    ])
   })
 
   it('leaves the preview on the latest message with text even when an older blank reply remains', () => {
