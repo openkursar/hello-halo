@@ -94,6 +94,11 @@ connection with why (not installed, turned off, waiting for sign-in, failing)
 and a button to Tools & Resources, instead of the English summary and a
 "View process" with nothing behind it.
 
+An entry carrying `content.tokenUsage` shows the tokens the model processed for
+its run beside the duration, and `SessionDetailView` shows the run's total over
+its entries — cache included, in the chat's K format (`run-tokens.ts`), with
+input, output, cache read and cache write on hover.
+
 Desktop and HTTP clients use the same APIs. Layout is mobile-first; long source
 names, selected answers, loading failures and unavailable teams remain readable
 without hover. Errors are explicit and retain the last useful records and drafts.

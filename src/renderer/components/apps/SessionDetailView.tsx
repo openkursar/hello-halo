@@ -34,6 +34,8 @@ import { InputArea } from '../chat/InputArea'
 import { useTranslation } from '../../i18n'
 import type { Message } from '../../types'
 import type { ContentReference } from '../../../shared/types/content-reference'
+import { addRunTokenUsage, type RunTokenUsage } from '../../../shared/apps/app-types'
+import { runTokenBreakdown, runTokenTotal } from './run-tokens'
 
 interface SessionDetailViewProps {
   /** App ID that owns this run */
@@ -75,6 +77,9 @@ export function SessionDetailView({ appId, runId }: SessionDetailViewProps) {
     e => e.runId === runId && e.type === 'run_error' && e.content.resumeAvailable === true
   )
   const canResume = !!errorEntry
+  // Each execution of the run notes its usage on the entry that was latest then.
+  const tokenUsage = activityEntries?.filter(e => e.runId === runId)
+    .reduce<RunTokenUsage | undefined>((sum, e) => addRunTokenUsage(sum, e.content.tokenUsage), undefined)
   const isAppBusy = runtimeState?.status === 'running' || runtimeState?.status === 'queued'
 
   const handleContinue = async () => {
@@ -265,6 +270,12 @@ export function SessionDetailView({ appId, runId }: SessionDetailViewProps) {
           </span>
           <span className="text-xs text-halo-success">{t('Running — live')}</span>
         </div>
+      )}
+
+      {tokenUsage && !isLive && (
+        <p title={runTokenBreakdown(tokenUsage, t)} className="mx-4 mt-3 shrink-0 text-xs text-muted-foreground sm:mx-10">
+          {t('Tokens used by this run: {{tokens}}', { tokens: runTokenTotal(tokenUsage) })}
+        </p>
       )}
 
       <div className="flex-1 relative overflow-hidden">

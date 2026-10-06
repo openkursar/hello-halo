@@ -447,6 +447,28 @@ describe('executeRun — completion branches', () => {
     )
   })
 
+  it('adds up what the model processed over the run, cache included, beside the input and output total', async () => {
+    const usage = (input: number, output: number, cacheRead: number, cacheWrite: number) => ({
+      type: 'result',
+      usage: { input_tokens: input, output_tokens: output, cache_read_input_tokens: cacheRead, cache_creation_input_tokens: cacheWrite },
+    })
+    nextSession = new FakeSession()
+    let cycle = 0
+    vi.spyOn(nextSession, 'stream').mockImplementation(async function* () {
+      cycle++
+      // The first turn ends without a report, so the run auto-continues once.
+      if (cycle === 1) yield usage(100, 50, 4000, 300)
+      else { yield assistantReport(); yield usage(20, 30, 5000, 0) }
+    })
+
+    const result = await executeRun({ app: makeApp(), trigger: baseTrigger, store: makeStore(), memory: makeMemory() })
+
+    expect(result.outcome).toBe('useful')
+    expect(result.tokenUsage).toEqual({ inputTokens: 120, outputTokens: 80, cacheReadTokens: 9000, cacheCreationTokens: 300 })
+    // The stored figure keeps its meaning: input and output only.
+    expect(result.tokensUsed).toBe(200)
+  })
+
   it('leaves a failure entry with the reason when the engine fails after the run reported', async () => {
     nextSession = new FakeSession({
       script: [assistantReport(), { type: 'result', is_error: true, result: 'model rate-limited' }],

@@ -16,6 +16,7 @@ import { ActivitySource } from './ActivitySource'
 import { EscalationCard } from './EscalationCard'
 import { UpgradeNote } from './UpgradeNote'
 import { MissingConnectionsNote } from './MissingConnectionsNote'
+import { runTokenBreakdown, runTokenTotal } from './run-tokens'
 import { MarkdownRenderer } from '../chat/MarkdownRenderer'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useAppsStore } from '../../stores/apps.store'
@@ -170,6 +171,11 @@ export function ActivityEntryCard({ entry, appId, isLast, animationDelay }: Acti
           <span className="text-xs font-medium text-muted-foreground">{entry.type === 'escalation' && entry.content.resolution ? t(entry.content.resolution.reason === 'expired' ? 'Expired' : 'Closed') : entry.type === 'escalation' && entry.userResponse ? t('Answered') : content.stopped ? t('Execution stopped') : content.upgrade ? t('Updated') : content.missingConnections ? t('Not started') : t(entryLabel(entry.type))}</span>
           {durationMs != null && (
             <span className="font-mono text-[11px] text-muted-foreground/60">{formatDuration(durationMs)}</span>
+          )}
+          {content.tokenUsage && (
+            <span title={runTokenBreakdown(content.tokenUsage, t)} className="font-mono text-[11px] text-muted-foreground/60">
+              {t('{{tokens}} tokens', { tokens: runTokenTotal(content.tokenUsage) })}
+            </span>
           )}
           {/* "View process" link — right-aligned */}
           {canViewProcess && (

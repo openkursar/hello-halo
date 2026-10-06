@@ -24,8 +24,8 @@ import type {
 } from './types'
 import type { AppStatus } from '../manager'
 import { BLOCKED_STATUSES, blockedReason } from './app-state'
-import type { EscalationAnswer } from '../../../shared/apps/app-types'
-import { getEscalationAnswers, getEscalationQuestions } from '../../../shared/apps/app-types'
+import type { EscalationAnswer, RunTokenUsage } from '../../../shared/apps/app-types'
+import { addRunTokenUsage, getEscalationAnswers, getEscalationQuestions } from '../../../shared/apps/app-types'
 
 // ============================================
 // Internal Row Types (flat DB shape)
@@ -555,6 +555,15 @@ export class ActivityStore {
         WHERE run_id = ? AND type = 'run_error' AND json_extract(content_json, '$.resumeAvailable') IS NOT NULL
       `).run(runId)
     })()
+  }
+
+  /** Add to the token usage an entry shows for the run it closed. */
+  addTokenUsage(entryId: string, usage: RunTokenUsage): ActivityEntry | null {
+    const entry = this.getEntry(entryId)
+    if (!entry) return null
+    entry.content.tokenUsage = addRunTokenUsage(entry.content.tokenUsage, usage)
+    this.db.prepare('UPDATE activity_entries SET content_json = ? WHERE id = ?').run(JSON.stringify(entry.content), entryId)
+    return entry
   }
 
   /** Add to the scheduled times an entry says were skipped while its run went on. */

@@ -19,7 +19,7 @@ import { createSession, getEngineCapabilities } from '../../services/agent/resol
 import { getAppManager, type InstalledApp } from '../manager'
 import { missingConnections, resolveExecutionEnvironment, validateExecutionEnvironment, validateEnvironmentConnections } from './execution-environment'
 import { createPersonContextMcpServer, personContextPrompt } from './person-context-tool'
-import { resolvePermission } from '../../../shared/apps/app-types'
+import { addRunTokenUsage, resolvePermission, type RunTokenUsage } from '../../../shared/apps/app-types'
 import { resolveMemoryLayout, type MemoryService, type MemoryCallerScope } from '../../platform/memory'
 import type { ActivityStore } from './store'
 import type {
@@ -126,6 +126,8 @@ interface StreamResult {
   finalText: string
   /** Total input + output tokens consumed */
   totalTokens: number
+  /** The same turns' usage with cache reads and writes, for showing what a run processed */
+  usage?: RunTokenUsage
   /** Whether the AI reported an error via report_to_user */
   aiReportedError: boolean
   /** Error text from the SDK result message when aiReportedError was set */
@@ -695,6 +697,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       streamResult = {
         finalText: streamResult.finalText + nextResult.finalText,
         totalTokens: streamResult.totalTokens + nextResult.totalTokens,
+        usage: addRunTokenUsage(streamResult.usage, nextResult.usage),
         aiReportedError: nextResult.aiReportedError,
         aiReportedErrorDetail: nextResult.aiReportedErrorDetail,
         reportToolCalled: nextResult.reportToolCalled,
@@ -852,6 +855,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       finishedAt,
       durationMs,
       tokensUsed: streamResult.totalTokens || undefined,
+      tokenUsage: streamResult.usage,
       finalText: streamResult.finalText || undefined,
       errorMessage: finalErrorMessage,
     }
@@ -1046,6 +1050,15 @@ async function processStream(
         if (m.cumulative_usage) {
           result.totalTokens =
             (m.cumulative_usage.input_tokens || 0) + (m.cumulative_usage.output_tokens || 0)
+        }
+        const usage = m.cumulative_usage ?? m.usage
+        if (usage) {
+          result.usage = {
+            inputTokens: usage.input_tokens || 0,
+            outputTokens: usage.output_tokens || 0,
+            cacheReadTokens: usage.cache_read_input_tokens || 0,
+            cacheCreationTokens: usage.cache_creation_input_tokens || 0,
+          }
         }
         if (m.is_error || m.error_during_execution) {
           result.aiReportedError = true
