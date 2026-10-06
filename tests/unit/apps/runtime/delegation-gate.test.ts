@@ -763,6 +763,139 @@ describe('a restricted turn is held to its file boundary', () => {
   })
 })
 
+describe('a restricted turn holds the AI browser to the same file boundary', () => {
+  const conv = 'conv-browser'
+  const B = 'mcp__ai-browser__'
+  let space = ''
+  let outside = ''
+  const signal = new AbortController().signal
+
+  const restrict = () => {
+    const access = appTurnFileAccess(
+      { type: 'app', spaceId: 's', spacePath: space, appId: 'dh' },
+      { memoryActive: true, spaceMemoryOffered: false, workDir: space, attachedFiles: [] }
+    )
+    beginDelegatedTurn(conv, { policy: { allowedTools: [] }, mode: 'strict', files: access })
+  }
+  const owner = () => beginDelegatedTurn(conv, { policy: undefined, mode: 'permissive' })
+  const allow = (tool: string, input: Record<string, unknown>) => decideDelegatedTool(conv, `${B}${tool}`, input).allow
+
+  /** The pre-tool hook as the engine runs it on every call. */
+  const hookSays = async (tool: string, input: Record<string, unknown>) => {
+    const hooks = createTurnFileAccessHooks(conv) as {
+      PreToolUse: Array<{ matcher: string; hooks: Array<(input: unknown) => Promise<any>> }>
+    }
+    const entry = hooks.PreToolUse.find(h => h.matcher === `${B}${tool}`)
+    if (!entry) return 'not hooked'
+    const out = await entry.hooks[0]({ tool_name: `${B}${tool}`, tool_input: input })
+    return out.hookSpecificOutput?.permissionDecision ?? 'no objection'
+  }
+
+  beforeEach(() => {
+    space = realpathSync(mkdtempSync(join(tmpdir(), 'turn-browser-')))
+    outside = realpathSync(mkdtempSync(join(tmpdir(), 'turn-browser-out-')))
+    mkdirSync(join(space, '.halo', 'conversations'), { recursive: true })
+    mkdirSync(join(space, 'scripts'), { recursive: true })
+    writeFileSync(join(space, 'scripts', 'scrape.js'), 'async () => 1')
+    writeFileSync(join(space, 'report.pdf'), 'x')
+    writeFileSync(join(space, '.halo', 'conversations', 'c.json'), '{}')
+    writeFileSync(join(outside, 'secret.pdf'), 'x')
+    writeFileSync(join(outside, 'evil.js'), 'async () => 1')
+  })
+
+  afterEach(() => {
+    rmSync(space, { recursive: true, force: true })
+    rmSync(outside, { recursive: true, force: true })
+  })
+
+  it('judges a snapshot or screenshot file as a write', async () => {
+    restrict()
+    for (const tool of ['browser_snapshot', 'browser_screenshot']) {
+      expect(allow(tool, { filePath: join(outside, 'page.txt') }), tool).toBe(false)
+      expect(allow(tool, { filePath: join(space, '.claude', 'settings.json') }), tool).toBe(false)
+      expect(allow(tool, { filePath: join(space, 'CLAUDE.md') }), tool).toBe(false)
+      expect(allow(tool, { filePath: join(space, 'sub', 'agents.MD.') }), tool).toBe(false)
+      expect(allow(tool, { filePath: join(space, '.halo', 'conversations', 'x.txt') }), tool).toBe(false)
+      // A relative path is written from wherever the app runs, not the workspace.
+      expect(allow(tool, { filePath: 'page.txt' }), tool).toBe(false)
+      expect(allow(tool, { filePath: join(space, 'shots', 'page.png') }), tool).toBe(true)
+      expect(allow(tool, {}), tool).toBe(true)
+      expect(await hookSays(tool, { filePath: join(outside, 'page.txt') }), tool).toBe('deny')
+      expect(await hookSays(tool, { filePath: join(space, 'page.png') }), tool).toBe('no objection')
+    }
+  })
+
+  it('judges an uploaded file and a script file as a read', async () => {
+    restrict()
+    expect(allow('browser_upload_file', { uid: 'u1', filePath: join(outside, 'secret.pdf') })).toBe(false)
+    expect(allow('browser_upload_file', { uid: 'u1', filePath: [join(space, 'report.pdf'), join(outside, 'secret.pdf')] })).toBe(false)
+    expect(allow('browser_upload_file', { uid: 'u1', filePath: join(space, '.halo', 'conversations', 'c.json') })).toBe(false)
+    expect(allow('browser_upload_file', { uid: 'u1', filePath: join(space, 'report.pdf') })).toBe(true)
+    expect(allow('browser_upload_file', { uid: 'u1', filePath: [join(space, 'report.pdf')] })).toBe(true)
+    expect(allow('browser_run', { file: join(outside, 'evil.js') })).toBe(false)
+    expect(allow('browser_run', { file: join(space, 'scripts', 'scrape.js') })).toBe(true)
+    // Reading an engine's file is not writing it.
+    expect(allow('browser_upload_file', { uid: 'u1', filePath: join(space, 'CLAUDE.md') })).toBe(true)
+    expect(await hookSays('browser_upload_file', { uid: 'u1', filePath: join(outside, 'secret.pdf') })).toBe('deny')
+    expect(await hookSays('browser_run', { file: join(outside, 'evil.js') })).toBe('deny')
+    expect(await hookSays('browser_run', { file: join(space, 'scripts', 'scrape.js') })).toBe('no objection')
+  })
+
+  it('opens web addresses only', async () => {
+    restrict()
+    for (const url of [
+      'file:///etc/passwd', 'FILE:///etc/hosts', 'view-source:file:///etc/passwd', 'filesystem:http://a.test/x',
+      'chrome://settings', 'javascript:alert(1)', 'data:text/html,hi', 'about:config', '/etc/passwd', 'example.com',
+    ]) {
+      expect(allow('browser_navigate', { url }), url).toBe(false)
+      expect(allow('browser_tab', { action: 'new', url }), url).toBe(false)
+    }
+    for (const url of ['https://example.com/a?b=1', 'http://localhost:3000', 'about:blank']) {
+      expect(allow('browser_navigate', { url }), url).toBe(true)
+      expect(allow('browser_tab', { action: 'new', url }), url).toBe(true)
+    }
+    expect(allow('browser_tab', { action: 'list' })).toBe(true)
+    expect(allow('browser_tab', { action: 'select', pageIdx: 0 })).toBe(true)
+    expect(decideDelegatedTool(conv, `${B}browser_navigate`, { url: 'file:///etc/passwd' }).reason)
+      .toMatch(/web addresses/)
+    expect(await hookSays('browser_navigate', { url: 'view-source:file:///etc/passwd' })).toBe('deny')
+    expect(await hookSays('browser_tab', { action: 'new', url: 'file:///etc/passwd' })).toBe('deny')
+    expect(await hookSays('browser_navigate', { url: 'https://example.com' })).toBe('no objection')
+  })
+
+  it('leaves the owner\'s own turn as it was', async () => {
+    owner()
+    expect(allow('browser_snapshot', { filePath: join(outside, 'page.txt') })).toBe(true)
+    expect(allow('browser_screenshot', { filePath: join(space, 'CLAUDE.md') })).toBe(true)
+    expect(allow('browser_upload_file', { uid: 'u1', filePath: join(outside, 'secret.pdf') })).toBe(true)
+    expect(allow('browser_run', { file: join(outside, 'evil.js') })).toBe(true)
+    expect(allow('browser_navigate', { url: 'file:///etc/passwd' })).toBe(true)
+    expect(allow('browser_tab', { action: 'new', url: 'view-source:file:///etc/passwd' })).toBe(true)
+    expect(await hookSays('browser_snapshot', { filePath: join(outside, 'page.txt') })).toBe('no objection')
+    expect(await hookSays('browser_navigate', { url: 'file:///etc/passwd' })).toBe('no objection')
+  })
+
+  it('matches each guarded browser tool under the Claude engine\'s matcher reading too', () => {
+    const hooks = createTurnFileAccessHooks(conv) as { PreToolUse: Array<{ matcher: string }> }
+    const matches = (tool: string) => hooks.PreToolUse.some(h => new RegExp(`^(?:${h.matcher})$`).test(tool))
+    for (const tool of ['browser_snapshot', 'browser_screenshot', 'browser_upload_file', 'browser_run', 'browser_navigate', 'browser_tab']) {
+      expect(matches(`${B}${tool}`), tool).toBe(true)
+    }
+    expect(matches(`${B}browser_click`)).toBe(false)
+  })
+
+  it.skipIf(!haloHooks)('refuses through the Halo engine\'s own hook matching', async () => {
+    const { runPreToolUseHooks } = haloHooks!
+    restrict()
+    const hooks = createTurnFileAccessHooks(conv) as never
+    const run = (tool: string, input: Record<string, unknown>) =>
+      runPreToolUseHooks(hooks, `${B}${tool}`, input, `tu-${tool}`, 'session', space, signal)
+    expect((await run('browser_screenshot', { filePath: join(outside, 'a.png') })).decision).toBe('deny')
+    expect((await run('browser_navigate', { url: 'file:///etc/passwd' })).decision).toBe('deny')
+    expect((await run('browser_navigate', { url: 'https://example.com' })).decision).toBeUndefined()
+  })
+})
+
 import { createSkillGateHooks } from '../../../../src/main/apps/runtime/delegation-gate'
 import { grantedSkillFolders, turnSkillAccess } from '../../../../src/main/apps/runtime/turn-skills'
 import { FILE_TOOLS } from '../../../../src/main/apps/runtime/turn-file-access'

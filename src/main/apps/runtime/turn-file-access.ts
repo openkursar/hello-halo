@@ -19,7 +19,9 @@
  *               lives there — stays closed except for the memory above
  *   engine      a file tool never writes what an engine, or git that it runs,
  *               reads as settings, hooks or standing instructions
- *               ({@link ENGINE_CONTROL_FOLDERS})
+ *               (shared/engine-control-files)
+ *   browser     the AI browser's local file arguments are judged as the file
+ *               tools' are, and it opens web addresses only
  *
  * Paths are read the way the engines read them when they run the tool
  * (foundation/path-containment `resolveToolPath`: `~` expanded, no environment
@@ -42,6 +44,7 @@ import {
   physicalPath,
   resolveToolPath,
 } from '../../foundation/path-containment'
+import { isEngineControlFileName, isEngineControlFolderName } from '../../../shared/engine-control-files'
 
 export interface TurnFileAccess {
   /** The session's working directory; relative paths resolve against it */
@@ -69,7 +72,7 @@ export interface TurnFileAccess {
   /**
    * An engine's own configuration folders, under whatever name they have — a
    * configuration folder set by the owner may sit inside the workspace. Never
-   * written by a file tool, like {@link ENGINE_CONTROL_FOLDERS}.
+   * written by a file tool, like the engine folders by name.
    */
   engineConfigDirs?: string[]
 }
@@ -80,47 +83,22 @@ export const FILE_TOOLS: readonly string[] = [...READ_FILE_TOOLS, ...WRITE_FILE_
 
 export type FileAccessDecision = { allow: true } | { allow: false; reason: string }
 
-/**
- * Folders an engine, or git that it runs, reads as settings, hooks, skills,
- * commands or standing instructions, wherever they sit in the workspace
- * (engines walk into subfolders for them). A strict turn's file tools may read
- * them but never write them: what is written there outlives the turn and acts
- * with the owner's authority — settings and hooks run commands, instructions
- * speak into every later session, a skill's files are reloaded while the turn
- * runs.
- *
- *   .claude   Claude Code: settings (hooks, permissions), skills, commands,
- *             agents, instructions; Halo SDK: skills, commands, instructions
- *   .agents   Halo SDK: skills, commands, instructions
- *   .codex    Codex: project configuration
- *   .git      git, which Claude Code runs in the workspace as every session
- *             starts: its config and hooks run commands. A `.git` file (a
- *             pointer to another git folder) is caught by the same name.
- */
-export const ENGINE_CONTROL_FOLDERS: readonly string[] = ['.claude', '.agents', '.codex', '.git']
+/** The AI browser's tools, as an engine names them (server `ai-browser`). */
+const BROWSER_TOOL = 'mcp__ai-browser__'
 
-/**
- * Files an engine reads as its own, by name, in any folder.
- *
- *   CLAUDE.md, CLAUDE.local.md    Claude Code (and Halo SDK) instructions
- *   AGENTS.md, AGENTS.override.md Halo SDK and Codex instructions
- *   .mcp.json                     MCP servers a project declares
- */
-export const ENGINE_CONTROL_FILES: readonly string[] = ['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', 'AGENTS.override.md', '.mcp.json']
-
-// Compared without case: case-insensitive file systems are the common ones.
-const ENGINE_FOLDERS = new Set(ENGINE_CONTROL_FOLDERS.map(name => name.toLowerCase()))
-const ENGINE_FILES = new Set(ENGINE_CONTROL_FILES.map(name => name.toLowerCase()))
-
-/**
- * A path segment as the file it names: Windows writes `CLAUDE.md::$DATA` and
- * `CLAUDE.md.` to `CLAUDE.md`, ignoring a stream suffix and trailing dots and
- * spaces. Read that way everywhere — refusing such a name elsewhere costs nothing.
- */
-function fileNameOf(segment: string): string {
-  const colon = segment.indexOf(':')
-  return (colon === -1 ? segment : segment.slice(0, colon)).replace(/[. ]+$/, '').toLowerCase()
+/** The AI browser's local file arguments: a write for a saved page, a read for what goes into one. */
+const BROWSER_FILE_ARGS: Readonly<Record<string, { key: string; reading: boolean }>> = {
+  [`${BROWSER_TOOL}browser_snapshot`]: { key: 'filePath', reading: false },
+  [`${BROWSER_TOOL}browser_screenshot`]: { key: 'filePath', reading: false },
+  [`${BROWSER_TOOL}browser_upload_file`]: { key: 'filePath', reading: true },
+  [`${BROWSER_TOOL}browser_run`]: { key: 'file', reading: true },
 }
+
+/** The AI browser's tools that open an address. */
+const BROWSER_NAVIGATION_TOOLS: readonly string[] = [`${BROWSER_TOOL}browser_navigate`, `${BROWSER_TOOL}browser_tab`]
+
+/** The AI browser's tools a strict turn judges here, by full tool name. */
+export const BROWSER_GUARDED_TOOLS: readonly string[] = [...Object.keys(BROWSER_FILE_ARGS), ...BROWSER_NAVIGATION_TOOLS]
 
 /**
  * Whether an engine reads this path as its own: a configuration folder, or a
@@ -128,9 +106,9 @@ function fileNameOf(segment: string): string {
  */
 function readByEngine(target: string, roots: string[], configDirs: string[]): boolean {
   if (withinAny(target, configDirs)) return true
-  if (ENGINE_FILES.has(fileNameOf(basename(target)))) return true
+  if (isEngineControlFileName(basename(target))) return true
   return roots.some(root => isCanonicalWithin(target, root) &&
-    relative(root, target).split(sep).some(segment => ENGINE_FOLDERS.has(fileNameOf(segment))))
+    relative(root, target).split(sep).some(isEngineControlFolderName))
 }
 
 /** Canonical forms of an access's roots, computed once per access. */
@@ -189,7 +167,8 @@ export function fileToolTargets(toolName: string, input: Record<string, unknown>
 }
 
 /**
- * Judge one file tool call. null when the tool is not a file tool — the policy
+ * Judge one file tool call, or one AI browser call that reaches a local file
+ * or opens an address. null when there is nothing here to judge — the policy
  * decides as usual.
  *
  * @param granted - Whether the policy grants this tool by name
@@ -200,12 +179,68 @@ export function decideFileAccess(
   input: Record<string, unknown>,
   granted: boolean
 ): FileAccessDecision | null {
+  if (BROWSER_NAVIGATION_TOOLS.includes(toolName)) return decideBrowserAddress(input)
+  const browserArg = BROWSER_FILE_ARGS[toolName]
+  if (browserArg) return decideBrowserFiles(access, toolName, input[browserArg.key], browserArg.reading)
+
   const reading = READ_FILE_TOOLS.includes(toolName)
   if (!reading && !WRITE_FILE_TOOLS.includes(toolName)) return null
 
   const targets = fileToolTargets(toolName, input, access.cwd)
   if (targets.length === 0) return { allow: false, reason: `"${toolName}" needs a path.` }
+  return judgeTargets(access, toolName, targets, reading, granted)
+}
 
+/**
+ * The browser's file arguments, judged as a file tool's. Its tools hand a path
+ * to the filesystem as written, so only an absolute path without `..` is
+ * judged as the very file it reaches. The browser's tools exist for a turn
+ * only when its server was granted.
+ */
+function decideBrowserFiles(
+  access: TurnFileAccess,
+  toolName: string,
+  raw: unknown,
+  reading: boolean
+): FileAccessDecision | null {
+  const paths = (Array.isArray(raw) ? raw : [raw]).filter((p): p is string => typeof p === 'string' && p.length > 0)
+  if (paths.length === 0) return null
+  if (paths.some(p => !isAbsolute(p) || p.split(/[\\/]/).includes('..'))) {
+    return {
+      allow: false,
+      reason: `"${toolName.slice(BROWSER_TOOL.length)}" needs a full path inside this workspace, without "..".`,
+    }
+  }
+  return judgeTargets(access, toolName, paths.map(p => resolve(p)), reading, true)
+}
+
+/** Only a web page: a local address would show the computer's files through the page. */
+function decideBrowserAddress(input: Record<string, unknown>): FileAccessDecision | null {
+  if (input.action !== undefined && input.action !== 'new') return null
+  const raw = input.url
+  if (typeof raw !== 'string') return null
+  let url: URL | null = null
+  try {
+    url = new URL(raw.trim())
+  } catch {
+    // Not an address at all; refused below like any other non-web address.
+  }
+  if (url && (url.protocol === 'http:' || url.protocol === 'https:' || url.href === 'about:blank')) {
+    return { allow: true }
+  }
+  return {
+    allow: false,
+    reason: 'In this conversation the browser can only open web addresses (starting with http:// or https://).',
+  }
+}
+
+function judgeTargets(
+  access: TurnFileAccess,
+  toolName: string,
+  targets: string[],
+  reading: boolean,
+  granted: boolean
+): FileAccessDecision {
   const c = canonicalOf(access)
   const memory = reading ? c.readable : c.writable
 
