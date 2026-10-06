@@ -1,9 +1,10 @@
 /**
  * What a working directory change needs from the engine: whether anything in
- * the space is running or about to (so the change can wait for it), and that
- * once the space has left a folder no session of the space starts there — a
- * turn that read the old folder just before the change is refused, not run in
- * a folder nothing will read again.
+ * the space is running or about to (so the change can wait for it), whether
+ * anything started since a given moment (even if it is over), and that once
+ * the space has left a folder no session of the space starts there — a turn
+ * that read the old folder just before the change is refused, not run in a
+ * folder nothing will read again.
  */
 
 import { describe, it, expect, vi, afterEach, afterAll } from 'vitest'
@@ -52,6 +53,7 @@ import {
   stopSessionCleanup,
   activeSessions,
   isSpaceBusy,
+  countSessionAcquisitions,
 } from '../../../../src/main/services/agent/session-manager'
 import { retireWorkingDirs } from '../../../../src/main/services/agent/working-dir'
 
@@ -132,6 +134,19 @@ describe('isSpaceBusy', () => {
     finish(fakeSession())
     await creating
     expect(isSpaceBusy('space-a')).toBe(false)
+  })
+})
+
+describe('countSessionAcquisitions', () => {
+  it('goes up every time a session of the space is asked for, reused or new, and for that space only', async () => {
+    expect(countSessionAcquisitions('space-counted')).toBe(0)
+
+    await open('space-counted', 'conv-counted', '/work/counted')
+    // The turn is over and the session idle again; the count keeps it.
+    await open('space-counted', 'conv-counted', '/work/counted')
+
+    expect(countSessionAcquisitions('space-counted')).toBe(2)
+    expect(countSessionAcquisitions('space-elsewhere')).toBe(0)
   })
 })
 

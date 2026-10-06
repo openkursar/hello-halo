@@ -4,11 +4,13 @@ import { resolve } from 'path'
  * A working directory a session cannot start in — moved, deleted, or on a
  * drive that is not there. Its own type, carrying the folder and the space it
  * belongs to, so a chat can offer to point the space somewhere else instead
- * of only reporting the failure.
+ * of only reporting the failure. The folder is kept out of the message, which
+ * travels further than the owner's own window (a team lead's report, a run's
+ * memory summary) and must not carry their local path.
  */
 export class WorkingDirectoryUnavailableError extends Error {
   constructor(readonly workDir: string, readonly spaceId?: string) {
-    super(`Working directory does not exist: "${workDir}". Choose another folder for this workspace, or restore this one.`)
+    super('Working directory does not exist: it was moved, deleted or is on a drive that is not connected. Choose another folder for this workspace, or restore it.')
     this.name = 'WorkingDirectoryUnavailableError'
   }
 }

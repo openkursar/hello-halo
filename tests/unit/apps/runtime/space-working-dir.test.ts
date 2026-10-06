@@ -95,6 +95,9 @@ describe('a digital human chat whose folder is gone', () => {
       errorType: 'working_dir_unavailable',
       workDirIssue: { spaceId: 'space-a', workDir: missing },
     })
+    // The message travels on (a team lead's report, a run's memory summary);
+    // the owner's local path stays in the field and the log.
+    expect((thrown as Error).message).not.toContain('redirected-desktop')
   })
 
   it('keeps the plain message when what is missing is Halo’s own history or memory', () => {

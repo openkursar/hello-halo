@@ -1245,18 +1245,27 @@ then the record, the pins, resident sessions and the file panel) is
 `controllers/space.controller.ts`; see ARCHITECTURE "Space Path Architecture".
 
 A pinned folder that is gone fails `validateExecutionEnvironment` with
-`WorkingDirectoryUnavailableError` (folder + space), which a chat reports as
+`WorkingDirectoryUnavailableError`, which carries the folder and space in its
+fields (and the log) but not in its message — the message also reaches a team
+lead's report and a run's memory summary. A chat reports it as
 `errorType: 'working_dir_unavailable'` so the person can change the folder
-there; an IM chat is told only that the folder needs its owner in Halo, never
-the path. Missing history or memory keeps its plain error.
+there; an IM chat is told only that the folder needs its owner in Halo. Missing
+history or memory keeps its plain error.
 
-Nothing may write to the old folder after its sessions are copied, or the
-next resume in the new folder would miss it. So the change is refused while
-anything in the space is running — a chat turn, a run, background work
-(services/agent `isSpaceBusy`) — and checked again after the copy, with no
-await between that check and the last step. A turn that had already read the
-old folder but not yet started its session is refused when it does
-(`WorkingDirectoryChangedError`, "send it again") instead of running there.
+Whatever is written to the old folder after its sessions are copied would be
+missing from the next resume in the new folder, so the change only goes
+through if nothing could have written there:
+- refused while anything in the space runs — a chat turn, a run, background
+  work (services/agent `isSpaceBusy`);
+- refused if any session of the space was asked for while the sessions were
+  copied (`countSessionAcquisitions` read before and after), even by a turn
+  that has finished again; every turn, run and warm-up asks first. The owner
+  tries again; nobody who wrote meanwhile is turned away;
+- from that check to the last step nothing awaits, and afterwards a turn that
+  read the old folder but had not yet asked for its session is refused when it
+  does (`WorkingDirectoryChangedError`, "send it again"). A scheduled run
+  refused this way counts as a failed run; it takes a run that read the folder
+  in the instant of the change.
 
 ---
 

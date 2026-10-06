@@ -125,7 +125,10 @@ export function validateExecutionEnvironment(environment: ExecutionEnvironment):
   if (!environment.spaceId || !getSpace(environment.spaceId)) {
     throw new Error('The original work space is unavailable. Restore it before continuing.')
   }
-  if (!isDirectory(environment.workDir)) throw new WorkingDirectoryUnavailableError(environment.workDir, environment.spaceId)
+  if (!isDirectory(environment.workDir)) {
+    console.warn(`[Runtime] Working directory does not exist: "${environment.workDir}" (space ${environment.spaceId})`)
+    throw new WorkingDirectoryUnavailableError(environment.workDir, environment.spaceId)
+  }
   for (const path of [environment.spacePath, environment.memoryDir]) {
     if (!isDirectory(path)) {
       throw new Error('The original history or memory is unavailable. Restore it before continuing.')

@@ -762,12 +762,14 @@ first (`services/agent/stored-session.ts`, newer copy wins), then the record
 (meta.json before the index, so a failed write changes nothing), the digital
 humans' pinned environments (apps/runtime DESIGN §2.28), resident sessions and
 the file panel and file triggers (`rerootSpaceWatcher`, `rerootSpaceCache`).
-It is refused while anything in the space runs and checked again after the
-copy, and no session of the space starts in a folder it left afterwards, so
-nothing is written to the old folder once its sessions are copied. One change
-per space at a time. Nothing in either folder is moved, created or deleted;
-Halo's and the engine's own data folders cannot be chosen, and the default
-space's folder cannot be changed.
+What is written to the old folder after the copy would be lost to the new one,
+so the change is refused while anything in the space runs, and again if any
+session of the space was asked for during the copy (even one finished by
+then); after it, no session of the space starts in a folder it left (apps/runtime
+DESIGN §2.28). One change per space at a time. Nothing in either folder is
+moved, created or deleted; folders inside Halo's and the engine's own data
+cannot be chosen, except the space's own data folder (where a space without a
+project folder works), and the default space's folder cannot be changed.
 
 Notes:
 - **Legacy custom-path spaces**: Created before centralized storage, `path` points to the project directory with `.halo/` inside it. These continue to work without migration.

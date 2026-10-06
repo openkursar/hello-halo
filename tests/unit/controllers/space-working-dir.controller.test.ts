@@ -3,8 +3,8 @@
  * stored sessions of every folder the space used are copied before anything
  * points at the new one, then the record, the pinned environments, the folders
  * left behind, resident sessions and the file panel follow — and a failure
- * early on changes nothing. Nothing may run in the space meanwhile, and one
- * change of a space at a time.
+ * early on changes nothing. Nothing may run in the space meanwhile, nor start
+ * and finish while the sessions are copied, and one change of a space at a time.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -14,6 +14,8 @@ const m = vi.hoisted(() => ({
   problem: null as string | null,
   checked: [] as string[],
   busy: vi.fn((_spaceId: string) => false),
+  /** Sessions of the space asked for so far, as the engine counts them. */
+  acquisitions: 0,
   copy: vi.fn(async (_from: string, _to: string) => 0),
 }))
 
@@ -46,6 +48,7 @@ vi.mock('../../../src/main/services/agent', () => ({
     return m.copy(from, to)
   },
   isSpaceBusy: (id: string) => m.busy(id),
+  countSessionAcquisitions: () => m.acquisitions,
   retireWorkingDirs: (id: string, dirs: Iterable<string>, current: string) => calls.push(`retire ${id} ${[...dirs].join(', ')} for ${current}`),
   invalidateSessionsForSpace: (id: string, reason: string) => calls.push(`sessions ${id} (${reason})`),
 }))
@@ -67,6 +70,7 @@ beforeEach(() => {
   calls.length = 0
   m.problem = null
   m.checked = []
+  m.acquisitions = 0
   m.busy.mockReset().mockReturnValue(false)
   m.copy.mockReset().mockResolvedValue(1)
   vi.spyOn(console, 'log').mockImplementation(() => {})
@@ -90,12 +94,13 @@ describe('changeSpaceWorkingDir', () => {
     ])
   })
 
-  it('changes nothing when the sessions cannot be copied', async () => {
+  it('changes nothing when the sessions cannot be copied, leaving the old folder in use', async () => {
     m.copy.mockRejectedValueOnce(new Error('ENOSPC: no space left on device'))
 
     const result = await changeSpaceWorkingDir('space-1', '/work/new')
 
     expect(result).toEqual({ success: false, error: 'ENOSPC: no space left on device' })
+    // Nothing recorded, and no folder retired: sessions keep starting in the old one.
     expect(calls).toEqual(['copy /work/old -> /work/new'])
   })
 
@@ -123,6 +128,31 @@ describe('changeSpaceWorkingDir', () => {
 
     expect(await changeSpaceWorkingDir('space-1', '/work/new')).toEqual({ success: false, error: BUSY })
     expect(calls).toEqual(['copy /work/old -> /work/new', 'copy /work/older -> /work/new'])
+  })
+
+  it('refuses when a turn both started and finished in the old folder while the sessions were being copied', async () => {
+    // An IM message arrives during the copy, takes a session in the old folder
+    // and is done before the copy is: the space looks idle again afterwards.
+    m.copy.mockImplementationOnce(async () => {
+      m.acquisitions += 1
+      return 1
+    })
+
+    expect(await changeSpaceWorkingDir('space-1', '/work/new')).toEqual({
+      success: false,
+      error: 'A reply or run started in this workspace while its conversations were being copied. Try again.',
+    })
+    expect(calls).toEqual(['copy /work/old -> /work/new', 'copy /work/older -> /work/new'])
+
+    // Once it is quiet, the change goes through.
+    expect((await changeSpaceWorkingDir('space-1', '/work/new')).success).toBe(true)
+  })
+
+  it('counts from the moment it found the space idle, not from before', async () => {
+    // Sessions asked for long before the change do not count against it.
+    m.acquisitions = 41
+
+    expect((await changeSpaceWorkingDir('space-1', '/work/new')).success).toBe(true)
   })
 
   it('takes one change of a space at a time, and the next once it is over', async () => {

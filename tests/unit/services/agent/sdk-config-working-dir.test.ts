@@ -1,7 +1,7 @@
 /**
  * A session cannot be spawned in a working directory that is gone; the error
- * says which folder and which space, so the chat can offer to change it
- * instead of only reporting a failure.
+ * carries which folder and which space, so the chat can offer to change it
+ * instead of only reporting a failure — in its fields, not its message.
  */
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
@@ -52,5 +52,7 @@ describe('spawning in a missing working directory', () => {
 
     expect(failure).toBeInstanceOf(WorkingDirectoryUnavailableError)
     expect(failure).toMatchObject({ workDir: missing, spaceId: 'space-1' })
+    // Only the field carries the folder; the message may be passed on.
+    expect((failure as Error).message).not.toContain('halo-no-such-folder')
   })
 })

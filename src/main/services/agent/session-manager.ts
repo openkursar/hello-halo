@@ -945,6 +945,7 @@ async function getOrCreateSessionResult(
   leaseRequest?: SessionLeaseRequest
 ): Promise<V2SessionInfo['session']> {
   assertWorkingDirCurrent(spaceId, workDir ?? sdkOptions.cwd)
+  sessionAcquisitions.set(spaceId, (sessionAcquisitions.get(spaceId) ?? 0) + 1)
 
   // Concurrent calls for the same conversation (a fire-and-forget
   // ensureSessionWarm racing the first sendMessage) must not both reach
@@ -1035,6 +1036,18 @@ interface InFlightSessionCreation {
 
 /** conversationId -> in-flight getOrCreateV2Session creation. */
 const inFlightSessionCreations = new Map<string, InFlightSessionCreation>()
+
+/** spaceId -> how many times a session of the space has been asked for. */
+const sessionAcquisitions = new Map<string, number>()
+
+/**
+ * How many times a session of the space has been asked for so far. Every turn,
+ * run and warm-up asks first, so two equal readings mean none started in
+ * between — even one that has finished again by the second.
+ */
+export function countSessionAcquisitions(spaceId: string): number {
+  return sessionAcquisitions.get(spaceId) ?? 0
+}
 
 /**
  * Consumer wiring for a newly created session. Grouped rather than passed as
