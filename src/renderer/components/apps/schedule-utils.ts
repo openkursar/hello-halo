@@ -37,6 +37,7 @@ export const FREQUENCY_PRESETS = [
 
 // Re-export from renderer types layer (single source of truth)
 export type { ScheduleValue } from '../../types'
+import type { ScheduleValue } from '../../types'
 
 /** State representation for the cron visual picker */
 export interface CronPickerState {
@@ -63,12 +64,27 @@ export function extractScheduleValue(sub: SubscriptionDef): ScheduleValue | null
 /** Apply a ScheduleValue back to a SubscriptionDef (returns a new copy) */
 export function applyScheduleValue(sub: SubscriptionDef, value: ScheduleValue): SubscriptionDef {
   if (sub.source.type !== 'schedule') return sub
-  const newConfig = value.type === 'every'
+  const timing = value.type === 'every'
     ? { every: value.every }
     : { cron: value.cron }
+  const { workday_calendar } = sub.source.config
   return {
     ...sub,
-    source: { type: 'schedule' as const, config: newConfig },
+    source: { type: 'schedule' as const, config: workday_calendar ? { ...timing, workday_calendar } : timing },
+  }
+}
+
+export function usesWorkdayCalendar(sub: SubscriptionDef): boolean {
+  return sub.source.type === 'schedule' && sub.source.config.workday_calendar === true
+}
+
+/** Limit a schedule to mainland China working days, or lift the limit (returns a new copy). */
+export function applyWorkdayCalendar(sub: SubscriptionDef, enabled: boolean): SubscriptionDef {
+  if (sub.source.type !== 'schedule') return sub
+  const { workday_calendar: _previous, ...timing } = sub.source.config
+  return {
+    ...sub,
+    source: { type: 'schedule' as const, config: enabled ? { ...timing, workday_calendar: true } : timing },
   }
 }
 

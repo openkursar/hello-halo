@@ -78,8 +78,9 @@ not raw inputs. Aliasing `inputs` ensures YAML written against earlier drafts st
 plus a generic `Record<string, unknown>` escape hatch.
 
 ```typescript
-// schedule source
-{ type: 'schedule', config: { every?: string; cron?: string; ... } }
+// schedule source; workday_calendar: only on mainland China working days
+// (apps/runtime DESIGN §2.26), so the schedule itself fires every day
+{ type: 'schedule', config: { every?: string; cron?: string; workday_calendar?: boolean } }
 // webpage source
 { type: 'webpage', config: { watch?: string; selector?: string; ... } }
 ```

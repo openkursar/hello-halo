@@ -138,7 +138,9 @@ export const ScheduleSourceConfigSchema = z.object({
   /** Interval duration, e.g. "30m", "2h" */
   every: durationString.optional(),
   /** Cron expression, e.g. "0 8 * * *" */
-  cron: cronString.optional()
+  cron: cronString.optional(),
+  /** Run only on mainland China working days (holidays and make-up workdays included) */
+  workday_calendar: z.boolean().optional()
 }).refine(
   (data) => Boolean(data.every) || Boolean(data.cron),
   { message: 'Schedule source requires either "every" or "cron"' }

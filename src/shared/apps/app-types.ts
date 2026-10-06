@@ -256,6 +256,8 @@ export interface ActivityEntryContent {
   missingConnections?: MissingConnection[]
   /** Tokens the model processed for the run this entry closed, cache included. */
   tokenUsage?: RunTokenUsage
+  /** Set on the skip a working-days-only schedule leaves when the holiday calendar does not cover the day. */
+  workdayCalendarGap?: boolean
 }
 
 /** Tokens the model processed for a run, summed over its turns. */

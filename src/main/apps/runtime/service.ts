@@ -59,6 +59,7 @@ import { sendToRenderer } from '../../foundation/window.service'
 import { notifyAppEvent } from '../../services/notification.service'
 import { RunningRuns } from './running-runs'
 import { clearOldRunTranscripts } from './run-retention'
+import { refreshWorkdayCalendar, workdayStatusOn } from '../../services/workday-calendar'
 
 // ============================================
 // Constants
@@ -107,6 +108,8 @@ const RUN_PROCESS_CLEARED_MESSAGE = 'This execution can no longer be continued: 
 export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService {
   const queuedAutomatic = new Map<string, Set<AbortController>>()
   const intentionallyStoppedRuns = new Set<string>()
+  // appId → the day (toDateString) a calendar gap was last put on its timeline.
+  const calendarGapNotedOn = new Map<string, string>()
   // By run id. `startedAt` is this execution's own start: a continued run keeps
   // its first start in the database.
   const activeExecutions = new Map<string, { controller: AbortController; startedAt: number }>()
@@ -188,13 +191,19 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     return sub.id ? `subscription "${sub.id}"` : `subscription #${index + 1}`
   }
 
-  function buildScheduleTriggerContext(job: SchedulerJob, app: InstalledApp): TriggerContext {
+  /** The subscription a schedule job was made from: jobs carry its id, or its index when unnamed. */
+  function subscriptionForJob(job: SchedulerJob, app: InstalledApp): { sub: SubscriptionDef; index: number } | null {
     const subId: unknown = (job.metadata as { subscriptionId?: unknown } | undefined)?.subscriptionId
     const subscriptions = app.spec.type === 'automation' ? app.spec.subscriptions ?? [] : []
-    // Jobs carry the author's id, or the index for an unnamed subscription.
     const index = subscriptions.findIndex((sub, i) => (sub.id ?? String(i)) === subId)
-    const subscription = index >= 0
-      ? ` — ${describeSubscription(subscriptions[index], index)}`
+    return index >= 0 ? { sub: subscriptions[index], index } : null
+  }
+
+  function buildScheduleTriggerContext(job: SchedulerJob, app: InstalledApp): TriggerContext {
+    const subId: unknown = (job.metadata as { subscriptionId?: unknown } | undefined)?.subscriptionId
+    const found = subscriptionForJob(job, app)
+    const subscription = found
+      ? ` — ${describeSubscription(found.sub, found.index)}`
       : typeof subId === 'string' && subId ? ` — subscription "${subId}"` : ''
     const schedule = job.schedule
     let scheduleDesc: string
@@ -391,13 +400,18 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     return { app, trigger }
   }
 
-  function recordSkippedAutomatic(app: InstalledApp, trigger: TriggerContext, reason: string): AppRunResult {
+  function recordSkippedAutomatic(
+    app: InstalledApp,
+    trigger: TriggerContext,
+    reason: string,
+    details?: Partial<ActivityEntry['content']>,
+  ): AppRunResult {
     const now = Date.now()
     const runId = randomUUID()
     const sessionKey = `${app.id}:${runId}`
     store.insertRun({ runId, appId: app.id, sessionKey, status: 'skipped', triggerType: trigger.type, startedAt: now })
     store.completeRun(runId, { status: 'skipped', finishedAt: now, durationMs: 0 })
-    emitActivityEntry({ id: randomUUID(), appId: app.id, runId, sessionKey, type: 'run_skipped', ts: now, content: { summary: reason, status: 'skipped' } })
+    emitActivityEntry({ id: randomUUID(), appId: app.id, runId, sessionKey, type: 'run_skipped', ts: now, content: { ...details, summary: reason, status: 'skipped' } })
     console.log('[Runtime] Queued automatic execution skipped', { appId: app.id, runId, reason })
     return { appId: app.id, runId, sessionKey, outcome: 'noop', startedAt: now, finishedAt: now, durationMs: 0 }
   }
@@ -426,6 +440,36 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     const latest = store.getEntriesForRun(runId)[0]
     const updated = latest ? store.addTokenUsage(latest.id, usage) : null
     if (updated) publishEntry(updated)
+  }
+
+  /**
+   * A schedule limited to mainland China working days. On a day off nothing
+   * starts; on a day the calendar does not cover nothing starts either, and the
+   * timeline says so once a day rather than at every due time.
+   */
+  async function workdayAllows(job: SchedulerJob, appId: string): Promise<boolean> {
+    const app = appManager.getApp(appId)
+    const found = app ? subscriptionForJob(job, app) : null
+    if (!app || found?.sub.source.type !== 'schedule' || !found.sub.source.config.workday_calendar) return true
+    // A broken calendar must not read as a failing schedule, which the scheduler would back off and disable.
+    const status = await workdayStatusOn(new Date()).catch((error: unknown) => {
+      console.error(`[Runtime] Holiday calendar check failed, app=${appId}:`, error)
+      return 'not_covered' as const
+    })
+    if (status === 'workday') return true
+    if (status === 'day_off') {
+      console.log(`[Runtime] Scheduled run not started: not a working day, app=${appId}`)
+      return false
+    }
+    console.warn(`[Runtime] Scheduled run not started: the holiday calendar does not cover today, app=${appId}`)
+    const today = new Date().toDateString()
+    if (calendarGapNotedOn.get(appId) !== today) {
+      calendarGapNotedOn.set(appId, today)
+      recordSkippedAutomatic(app, buildScheduleTriggerContext(job, app),
+        'The holiday calendar does not cover today, so this scheduled run was skipped. Run it manually if needed.',
+        { workdayCalendarGap: true })
+    }
+    return false
   }
 
   // ── Helper: Execute with concurrency control ────────
@@ -921,6 +965,10 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     return null
   }
 
+  function usesWorkdayCalendar(subscriptions: SubscriptionDef[]): boolean {
+    return subscriptions.some(sub => sub.source.type === 'schedule' && sub.source.config.workday_calendar)
+  }
+
   // ── Helper: Map subscription to event filter ────────
   // Delegates to the shared source→filter mapping so the app runtime and the
   // team trigger scheduler derive identical filters from the same semantics.
@@ -1004,6 +1052,8 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
           console.log(`[Runtime] Registered scheduler job: ${jobCreate.id}`)
         }
       }
+
+      if (usesWorkdayCalendar(subscriptions)) void refreshWorkdayCalendar()
 
       // Register event router subscriptions for event-type subscriptions
       for (let i = 0; i < subscriptions.length; i++) {
@@ -1123,6 +1173,8 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
           console.log(`[Runtime] New scheduler job added: ${jobCreate.id}`)
         }
       }
+
+      if (usesWorkdayCalendar(subscriptions)) void refreshWorkdayCalendar()
 
       // Remove stale jobs that are no longer in the subscription list
       for (const jobId of [...state.schedulerJobIds]) {
@@ -1646,6 +1698,16 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       console.warn(`[Runtime] Scheduler job ${job.id} has no appId in metadata`)
       return 'skipped'
     }
+
+    // Admission is checked on both sides of the calendar: before it, so a person
+    // who would not run anyway gets no calendar note; after it, because the
+    // calendar may wait for its first download and the answer can change.
+    const precheck = admitAutomaticRun(appId)
+    if ('skipReason' in precheck) {
+      console.log(`[Runtime] Skipping scheduled run: app=${appId}, ${precheck.skipReason}`)
+      return 'skipped'
+    }
+    if (!await workdayAllows(job, appId)) return 'skipped'
 
     const admission = admitAutomaticRun(appId)
     if ('skipReason' in admission) {
