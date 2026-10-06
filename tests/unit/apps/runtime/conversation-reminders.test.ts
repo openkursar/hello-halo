@@ -32,6 +32,7 @@ let reminders: ConversationReminders
 let due: (job: SchedulerJob) => Promise<string>
 const deliver = vi.fn()
 const installed = new Set([APP])
+const conversations = new Set<string>()
 
 beforeEach(async () => {
   vi.useFakeTimers({ now: NOW, toFake: ['Date'] })
@@ -40,7 +41,13 @@ beforeEach(async () => {
   scheduler = await initScheduler({ db: createDatabaseManager(':memory:') })
   const onJobDue = vi.spyOn(scheduler, 'onJobDue')
   deliver.mockReset().mockReturnValue('started')
-  reminders = createConversationReminders({ scheduler, deliver, appExists: appId => installed.has(appId) })
+  conversations.clear()
+  for (const id of [MAIN, GROUP, 'app-chat:app-2', 'app-chat:removed-app']) conversations.add(id)
+  reminders = createConversationReminders({
+    scheduler, deliver,
+    appExists: appId => installed.has(appId),
+    conversationExists: (_appId, conversationId) => conversations.has(conversationId),
+  })
   reminders.registerHandler()
   due = onJobDue.mock.calls[0][1] as unknown as typeof due
 })
@@ -94,6 +101,17 @@ describe('setting a reminder', () => {
     expect(() => reminders.set({ appId: APP, conversationId: MAIN, message: 'one more', when: { afterMinutes: 90 } })).toThrow('already has 20')
     expect(() => reminders.set({ appId: APP, conversationId: GROUP, message: 'elsewhere', when: { afterMinutes: 90 } })).not.toThrow()
   })
+
+  it('holds a digital human to a hundred across its conversations', () => {
+    for (let chat = 0; chat < 5; chat++) {
+      for (let i = 0; i < 20; i++) {
+        reminders.set({ appId: APP, conversationId: `app-chat:${APP}:http:direct:c-${chat}`, message: `r${i}`, when: { afterMinutes: 10 + i } })
+      }
+    }
+
+    expect(() => reminders.set({ appId: APP, conversationId: MAIN, message: 'one more', when: { afterMinutes: 90 } })).toThrow('already has 100')
+    expect(() => reminders.set({ appId: 'app-2', conversationId: 'app-chat:app-2', message: 'another digital human', when: { afterMinutes: 90 } })).not.toThrow()
+  })
 })
 
 describe('a reminder coming due', () => {
@@ -106,15 +124,24 @@ describe('a reminder coming due', () => {
 
   it('is left in place, not failed, when its conversation is gone; the next start sweeps it', async () => {
     const reminder = reminders.set({ appId: APP, conversationId: GROUP, message: 'Every morning.', when: { every: '1d' } })
+    const elsewhere = reminders.set({ appId: APP, conversationId: MAIN, message: 'Still here.', when: { every: '1d' } })
     deliver.mockReturnValue('gone')
 
     expect(await due(jobOf(reminder.id))).toBe('skipped')
     expect(scheduler.getJob(`app-reminder:${reminder.id}`)).not.toBeNull()
 
-    installed.delete(APP)
+    // The digital human is still installed; only the chat went (lost or evicted without a removal reaching here).
+    conversations.delete(GROUP)
     reminders.sweep()
-    installed.add(APP)
     expect(scheduler.getJob(`app-reminder:${reminder.id}`)).toBeNull()
+    expect(reminders.isStillSet(elsewhere.id)).toBe(true)
+  })
+
+  it('folds a coming-due into the one still waiting, without failing the schedule', async () => {
+    const reminder = reminders.set({ appId: APP, conversationId: GROUP, message: 'Water.', when: { every: '5m' } })
+    deliver.mockReturnValue('merged')
+
+    expect(await due(jobOf(reminder.id))).toBe('skipped')
   })
 
   it('reads as the digital human’s own reminder: who asked, when it was set and due, and when it is late', () => {
@@ -122,7 +149,8 @@ describe('a reminder coming due', () => {
 
     const onTime = renderReminderTurn(reminder, NOW + 60 * MIN, NOW + 60 * MIN)
     expect(onTime).toBe('[Reminder you set in this conversation at the request of Li on 2026-10-06 10:30 · due 2026-10-06 11:30]\n\nTell the group the hour is up.')
-    expect(renderReminderTurn(reminder, NOW + 60 * MIN, NOW + 200 * MIN)).toContain('delivered late at 2026-10-06 13:50 because Halo was not running')
+    expect(renderReminderTurn(reminder, NOW + 60 * MIN, NOW + 200 * MIN)).toContain('due 2026-10-06 11:30, delivered late at 2026-10-06 13:50]')
+    expect(renderReminderTurn(reminder, NOW + 60 * MIN, NOW + 60 * MIN, 3)).toContain('; it came due 3 more times while this conversation was busy]')
   })
 })
 
@@ -132,8 +160,17 @@ describe('cancelling and cleaning up', () => {
 
     expect(reminders.cancel(APP, inGroup.id, MAIN)).toBe(false)
     expect(reminders.cancel('other-app', inGroup.id)).toBe(false)
+    expect(reminders.isStillSet(inGroup.id)).toBe(true)
     expect(reminders.cancel(APP, inGroup.id)).toBe(true)
     expect(reminders.listForApp(APP)).toEqual([])
+    expect(reminders.isStillSet(inGroup.id)).toBe(false)
+  })
+
+  it('counts a one-off that came due but was not cancelled as still set until it is delivered', () => {
+    const once = reminders.set({ appId: APP, conversationId: MAIN, message: 'once', when: { afterMinutes: 30 } })
+    scheduler.updateJob(`app-reminder:${once.id}`, { enabled: false })
+
+    expect(reminders.isStillSet(once.id)).toBe(true)
   })
 
   it('drops a fired one-off and the reminders of a removed digital human at the next start', () => {
@@ -160,6 +197,25 @@ describe('cancelling and cleaning up', () => {
 
       expect(reminders.listForApp(APP).map(r => r.id)).toEqual([inMain.id])
       expect(scheduler.getJob(`app-reminder:${inGroup.id}`)).toBeNull()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('goes with an API chat the registry evicts as idle', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'halo-reminders-registry-'))
+    try {
+      const registry = new ImSessionRegistry(join(dir, 'im-sessions.json'))
+      setConversationReminders(reminders)
+      registry.register(APP, 'http', 'old-client', 'direct', 'http')
+      const idle = reminders.set({ appId: APP, conversationId: `app-chat:${APP}:http:direct:old-client`, message: 'idle', when: { every: '1d' } })
+
+      // Thirty-one days later another API chat arrives and the idle one is evicted.
+      vi.setSystemTime(NOW + 31 * 24 * 60 * MIN)
+      registry.register(APP, 'http', 'new-client', 'direct', 'http')
+
+      expect(registry.findSession(APP, 'http', 'old-client')).toBeUndefined()
+      expect(reminders.isStillSet(idle.id)).toBe(false)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

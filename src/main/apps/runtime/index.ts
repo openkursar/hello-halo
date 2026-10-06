@@ -57,6 +57,7 @@ import { ImSessionRegistry, setImSessionRegistry } from './im-session-registry'
 import { PendingRelayStore, setPendingRelayStore, getPendingRelayStore } from './pending-relays'
 import { createConversationReminders, setConversationReminders } from './reminders'
 import { deliverReminder } from './reminders/delivery'
+import { getAppChatConversationId, parseAppChatKey } from '../../../shared/apps/im-keys'
 import { restoreLegacyDefaultChats } from './legacy-default-chats'
 import { dispatchInboundMessage, clearSupplementBuffersForInstance, releaseSupplementsWhenIdle } from './dispatch-inbound'
 import { clearAllImPermissionContexts } from './im-permission-registry'
@@ -363,6 +364,11 @@ export async function initAppRuntime(
     appExists: (appId) => {
       const app = deps.appManager.getApp(appId)
       return !!app && app.status !== 'uninstalled'
+    },
+    conversationExists: (appId, conversationId) => {
+      if (conversationId === getAppChatConversationId(appId)) return true
+      const parsed = parseAppChatKey(conversationId)
+      return !!parsed && !!registry.findSession(appId, parsed.channel, parsed.chatId)
     },
   })
   reminders.registerHandler()

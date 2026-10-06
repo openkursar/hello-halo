@@ -44,13 +44,19 @@ vi.mock('../../../../src/main/apps/runtime/im-permission-registry', () => ({ set
 vi.mock('../../../../src/main/services/space.service', () => ({ getSpaceDir: () => '/work' }))
 
 const { deliverReminder } = await import('../../../../src/main/apps/runtime/reminders/delivery')
+const { setConversationReminders } = await import('../../../../src/main/apps/runtime/reminders')
 
 const APP = 'app-1'
 const NOW = new Date(2026, 9, 6, 11, 30).getTime()
 
+let nextId = 0
+const stillSet = new Set<string>()
+
 function reminder(conversationId: string, overrides: Partial<ConversationReminder> = {}): ConversationReminder {
+  const id = `r-${++nextId}`
+  stillSet.add(id)
   return {
-    id: 'r-1', appId: APP, conversationId, message: 'Tell them the hour is up.',
+    id, appId: APP, conversationId, message: 'Tell them the hour is up.',
     schedule: { kind: 'once', at: NOW }, nextAt: NOW, createdAt: NOW - 3_600_000, ...overrides,
   }
 }
@@ -74,7 +80,11 @@ beforeEach(() => {
   env.configs.clear()
   env.send.mockClear()
   env.setPermission.mockClear()
-  return () => vi.useRealTimers()
+  setConversationReminders({ isStillSet: (id: string) => stillSet.has(id) } as never)
+  return () => {
+    setConversationReminders(null)
+    vi.useRealTimers()
+  }
 })
 
 describe('deliverReminder', () => {
@@ -104,6 +114,40 @@ describe('deliverReminder', () => {
     expect(env.listeners.size).toBe(0)
   })
 
+  it('folds a reminder that comes due again while it waits into one turn, which says how many times', async () => {
+    const water = reminder(`app-chat:${APP}`, { schedule: { kind: 'every', every: '5m' }, message: 'Drink water.' })
+    env.busy.add(`app-chat:${APP}`)
+
+    expect(deliverReminder(water, NOW)).toBe('started')
+    expect(deliverReminder(water, NOW + 300_000)).toBe('merged')
+    expect(deliverReminder(water, NOW + 600_000)).toBe('merged')
+    await settle()
+    expect(env.listeners.size).toBe(1)
+
+    env.busy.clear()
+    for (const listener of [...env.listeners]) listener(`app-chat:${APP}`)
+    await settle()
+
+    expect(env.send).toHaveBeenCalledTimes(1)
+    expect((sent()[0] as Record<string, string>).message).toContain('it came due 2 more times while this conversation was busy]')
+    // Waiting is over: the next coming-due starts a turn of its own.
+    expect(deliverReminder(water, NOW + 900_000)).toBe('started')
+  })
+
+  it('does not deliver one cancelled while it waited', async () => {
+    const cancelled = reminder(`app-chat:${APP}`)
+    env.busy.add(`app-chat:${APP}`)
+    deliverReminder(cancelled, NOW)
+    await settle()
+
+    stillSet.delete(cancelled.id)
+    env.busy.clear()
+    for (const listener of [...env.listeners]) listener(`app-chat:${APP}`)
+    await settle()
+
+    expect(env.send).not.toHaveBeenCalled()
+  })
+
   it('speaks in a group as the person who asked, under their standing now, and pushes the reply there', async () => {
     const pushToChat = vi.fn()
     env.sessions.set('wecom-bot:g-1', { instanceId: 'inst-1', chatId: 'g-1', displayName: 'g-1', customName: 'Ops group' })
@@ -120,6 +164,7 @@ describe('deliverReminder', () => {
     expect(request.imPermission).toMatchObject({ senderId: 'u-1', isOwner: false, guestPolicy: { allowedTools: [] } })
     expect(request.imSession).toMatchObject({ channel: 'wecom-bot', chatType: 'group', displayName: 'Ops group', sessionId: 'inst-1:g-1' })
     expect(request.thinkingEnabled).toBe(true)
+    expect(request.relayOrigin).toEqual({ subject: { id: 'u-1', name: 'Li' } })
     expect(env.setPermission).toHaveBeenCalledWith(conversationId, request.imPermission)
 
     request.onReply('Time is up!')

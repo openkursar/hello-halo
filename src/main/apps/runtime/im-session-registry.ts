@@ -436,7 +436,7 @@ export class ImSessionRegistry {
     const survivors: { key: SessionKey; rec: ImSessionRecord }[] = []
     for (const entry of httpForApp) {
       if (!entry.rec.customName && now - entry.rec.lastActiveAt > HTTP_SESSION_TTL_MS) {
-        this.sessions.delete(entry.key)
+        this.evictHttpSession(entry.key, entry.rec)
         evicted++
       } else {
         survivors.push(entry)
@@ -450,7 +450,7 @@ export class ImSessionRegistry {
         .filter(e => !e.rec.customName)
         .sort((a, b) => a.rec.lastActiveAt - b.rec.lastActiveAt) // oldest first
       for (let i = 0; i < overflow && i < evictable.length; i++) {
-        this.sessions.delete(evictable[i].key)
+        this.evictHttpSession(evictable[i].key, evictable[i].rec)
         evicted++
       }
     }
@@ -461,6 +461,12 @@ export class ImSessionRegistry {
         `(cap=${MAX_HTTP_SESSIONS_PER_APP}, ttl=${HTTP_SESSION_TTL_MS}ms)`
       )
     }
+  }
+
+  /** An evicted session's reminders go with it, as they do on removal. */
+  private evictHttpSession(key: SessionKey, rec: ImSessionRecord): void {
+    this.sessions.delete(key)
+    getConversationReminders()?.removeForChat(rec.appId, rec.channel, rec.chatId)
   }
 
   // ── Persistence ──────────────────────────────────────
