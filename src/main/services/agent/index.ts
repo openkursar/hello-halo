@@ -18,6 +18,7 @@
  * - send-message.ts    - Main conversation message sending (send-only, consumer handles response)
  * - live-turn.ts       - Turn-in-flight probe + persistence-free mid-turn send
  * - control.ts         - Generation control (stop, status)
+ * - stored-session.ts  - Deleting a stored session that will never be resumed
  */
 
 // ============================================
@@ -93,6 +94,9 @@ export {
   closeAllV2Sessions,
   invalidateAllSessions
 } from './session-manager'
+
+// Delete a stored session that will never be resumed (CC-protocol engines)
+export { deleteStoredSession } from './stored-session'
 
 // Conversation goal (engines with features.goal)
 export { getConversationGoal, setConversationGoal } from './goal'

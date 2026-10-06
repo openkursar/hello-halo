@@ -111,6 +111,8 @@ export interface AutomationRun {
   errorMessage?: string
   /** V2 session ID for escalation context recovery */
   sessionId?: string
+  /** When the retention rule deleted its process transcript and engine session; it can no longer be continued. */
+  transcriptClearedAt?: number
 }
 
 /**

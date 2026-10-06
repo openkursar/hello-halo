@@ -45,6 +45,7 @@ interface RunRow {
   error_message: string | null
   session_id: string | null
   environment_json: string | null
+  transcript_cleared_at: number | null
 }
 
 interface RunRowWithSummary extends RunRow {
@@ -90,6 +91,7 @@ function rowToRun(row: RunRow): AutomationRun {
     errorMessage: row.error_message ?? undefined,
     sessionId: row.session_id ?? undefined,
     environment: row.environment_json ? JSON.parse(row.environment_json) : undefined,
+    transcriptClearedAt: row.transcript_cleared_at ?? undefined,
   }
 }
 
@@ -514,6 +516,45 @@ export class ActivityStore {
     entry.content.upgrade.adopted = [...new Set([...(entry.content.upgrade.adopted ?? []), ...fields])]
     this.db.prepare('UPDATE activity_entries SET content_json = ? WHERE id = ?').run(JSON.stringify(entry.content), entryId)
     return entry
+  }
+
+  /**
+   * Runs of an app beyond its newest `keep` that still have their process
+   * transcript, at most `limit`. Skipped runs never had one and do not count.
+   * A run still going, waiting on a question or holding a pending
+   * continuation is never returned.
+   */
+  listRunsPastTranscriptRetention(appId: string, keep: number, limit: number): AutomationRun[] {
+    const rows = this.db.prepare(`
+      SELECT * FROM (
+        SELECT * FROM automation_runs
+        WHERE app_id = ? AND transcript_cleared_at IS NULL AND status != 'skipped'
+        ORDER BY started_at DESC LIMIT -1 OFFSET ?
+      ) AS r
+      WHERE r.status NOT IN ('running', 'waiting_user')
+        AND NOT EXISTS (SELECT 1 FROM activity_entries e WHERE e.run_id = r.run_id AND e.type = 'escalation'
+          AND e.user_response_json IS NULL AND json_extract(e.content_json, '$.resolution') IS NULL)
+        AND NOT EXISTS (SELECT 1 FROM decision_continuations c JOIN activity_entries e ON e.id = c.entry_id
+          WHERE e.run_id = r.run_id AND c.status IN ('queued', 'running', 'failed'))
+      LIMIT ?
+    `).all(appId, keep, limit) as RunRow[]
+    return rows.map(rowToRun)
+  }
+
+  /**
+   * Record that a run's transcript and engine session are gone. Nothing is left
+   * to continue it from, so its session id goes and its failure entries stop
+   * offering to continue; the entries themselves stay on the timeline.
+   */
+  markTranscriptCleared(runId: string): void {
+    this.db.transaction(() => {
+      this.db.prepare('UPDATE automation_runs SET transcript_cleared_at = ?, session_id = NULL WHERE run_id = ?')
+        .run(Date.now(), runId)
+      this.db.prepare(`
+        UPDATE activity_entries SET content_json = json_remove(content_json, '$.resumeAvailable')
+        WHERE run_id = ? AND type = 'run_error' AND json_extract(content_json, '$.resumeAvailable') IS NOT NULL
+      `).run(runId)
+    })()
   }
 
   /** Add to the scheduled times an entry says were skipped while its run went on. */

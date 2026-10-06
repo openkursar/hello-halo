@@ -61,6 +61,7 @@ import {
   getStudioSummary,
   moveAppDefaultSpace,
   readAppRunMessages,
+  RunProcessClearedError,
   sendAppChatMessage,
   stopAppChat,
   stopAppChatConversation,
@@ -656,6 +657,7 @@ export function registerAppHandlers(): void {
         return { success: true, data: messages }
       } catch (error: unknown) {
         const err = error as Error
+        if (error instanceof RunProcessClearedError) return { success: false, error: err.message, code: error.code }
         console.error('[AppIPC] app:get-session error:', err.message)
         return { success: false, error: err.message }
       }

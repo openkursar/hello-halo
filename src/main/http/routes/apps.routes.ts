@@ -51,7 +51,7 @@ import type {
 import { resolveAppChatTarget, resolveUserInjectTarget, type AppChatTarget } from '../../controllers/app-chat-target.controller'
 import type { EscalationAnswerPayload } from '../../../shared/apps/app-types'
 import { parseTurnReferences, toAppChatRequest } from '../../controllers/chat-turn-input'
-import { getStudioSummary, listPeopleDirectory, getAppCapabilityInventory, getAppSpaceChangePreview, moveAppDefaultSpace, readAppRunMessages, getDigitalHumanMemoryStatus, consolidateDigitalHumanMemoryNow } from '../../apps/runtime'
+import { getStudioSummary, listPeopleDirectory, getAppCapabilityInventory, getAppSpaceChangePreview, moveAppDefaultSpace, readAppRunMessages, RunProcessClearedError, getDigitalHumanMemoryStatus, consolidateDigitalHumanMemoryNow } from '../../apps/runtime'
 
 async function respondOperation(res: Response, name: string, operation: () => unknown | Promise<unknown>): Promise<void> {
   try {
@@ -731,7 +731,7 @@ export function registerAppsRoutes(app: Express): void {
       const messages = readAppRunMessages(appId, runId)
       res.json({ success: true, data: messages })
     } catch (error) {
-      res.json({ success: false, error: (error as Error).message })
+      res.json({ success: false, error: (error as Error).message, ...(error instanceof RunProcessClearedError ? { code: error.code } : {}) })
     }
   })
 
