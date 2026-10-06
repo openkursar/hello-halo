@@ -44,7 +44,8 @@ import { setImStreamHandle } from './im-stream-registry'
 import { analytics } from '../../services/analytics/analytics.service'
 import { AnalyticsEvents } from '../../services/analytics/types'
 import { truncateUtf16Safe } from './text-truncate'
-import { AppChatTurnInterrupted, withTurnEndingNote, type AppChatTurnEnding } from './turn-ending'
+import { withTurnEndingNote, type AppChatTurnEnding } from './turn-ending'
+import { imErrorReply } from './im-error-reply'
 import { getSpace, getSpaceDir } from '../../services/space.service'
 import {
   getPendingRelayStore,
@@ -1133,11 +1134,7 @@ export async function dispatchInboundMessage(
     // separate one-shot reply — otherwise WeCom receives an unterminated stream
     // plus a duplicate message, garbling the user's chat.
     try {
-      // A turn cut off before writing anything is not an error the person can
-      // act on; what they can do is tell it to carry on.
-      const errorMsg = err instanceof AppChatTurnInterrupted
-        ? withTurnEndingNote('', { kind: 'interrupted' })
-        : `⚠️ Error: ${(err as Error).message?.slice(0, 200) ?? 'Unknown error'}`
+      const errorMsg = imErrorReply(err)
       if (reply.streaming) {
         await reply.streaming.finish(errorMsg)
       } else {
