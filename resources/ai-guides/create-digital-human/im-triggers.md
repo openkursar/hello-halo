@@ -45,12 +45,25 @@ The opposite direction, and this one *is* spec-controlled:
 - At runtime, if the permission is granted **and** the app already has at least one known IM
   contact, a `notify_bot` tool appears (`src/main/apps/runtime/notify-tool.ts`).
 - `notify_bot`'s description embeds a live contact directory (`instanceId:chatId` → display
-  name) built from the app's IM sessions at run time. Targets are chosen by the agent during
+  name) built at run time from the app's own IM sessions, plus — in Halo 3.0 and later — the
+  chats the user added from other bots (next point). Targets are chosen by the agent during
   the run; they are never pre-declared in the spec.
+- **Chats another bot already knows** (Halo 3.0 and later): in the digital human's settings,
+  **Reachable Contacts** (可联系的联系人) → **Add from existing chats** lists the groups and
+  direct chats that other bots on this machine already know. A ticked chat becomes a push
+  target for this digital human without having to message it first, and gets its own
+  **Auto-sync run result** (自动同步运行结果) switch, off by default. Replies in that chat still
+  go to the digital human its bot is bound to; removing the chat only stops this digital
+  human's pushes.
 - If `im-push` is granted but no contact exists yet, the tool is simply absent. The correct
   guidance is then: "connect an IM channel in Settings → Message Channels and have someone
-  message this digital human once" — not a spec change
-  (`src/main/apps/runtime/prompt/capabilities.ts`).
+  message this digital human once" — or, on 3.0 and later, add a chat another bot already
+  knows as above — not a spec change (`src/main/apps/runtime/prompt/capabilities.ts`).
+- **Delivered pushes are recorded** (Halo 3.0 and later): a message or file sent with
+  `notify_bot`, a pushed run result and a question for the owner are written into that chat's
+  history in Halo under a **Sent proactively** (主动发送) label, and become the chat's latest
+  message. Before 3.0 they were not, so a reply to a push showed up there without the message
+  it answered.
 
 A and B are independent: an app can be conversational without pushing, or push from scheduled
 runs without ever being bound to a chat.
