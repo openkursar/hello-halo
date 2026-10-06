@@ -26,6 +26,7 @@ import {
   anthropicImageToOpenAIChatImage,
   anthropicToolUseToOpenAIChatToolCall,
   anthropicBlockToResponsesInputPart,
+  anthropicImageToResponsesInputImage,
   anthropicToolUseToResponsesFunctionCall,
   anthropicToolResultToResponsesFunctionCallOutput,
   extractTextFromAnthropicBlocks,
@@ -64,10 +65,11 @@ export interface MessagesConvertOptions {
 }
 
 /**
- * Drop image blocks from a tool_result.content array. Used when the target
- * model has no vision capability — image blocks inside tool results (e.g.
- * MCP screenshot tools, Read on image files) would otherwise be stringified
- * as JSON and either rejected or confuse the model.
+ * Drop image blocks from a tool_result.content array before it is serialized
+ * as tool output text. Images inside tool results (e.g. MCP screenshot tools,
+ * Read on image files) would otherwise reach the model as base64 text — a
+ * single screenshot can exceed a provider's whole input limit. Vision targets
+ * get those images as image parts of the following user message instead.
  */
 function stripImagesFromToolResultContent(
   content: AnthropicContentBlock[]
@@ -148,9 +150,13 @@ export function convertAnthropicMessagesToOpenAIChat(
     const blocks = msg.content as AnthropicContentBlock[]
 
     if (msg.role === 'user') {
-      // Extract tool_result blocks -> convert to tool messages
+      // Tool messages come first: every tool call must be answered before user
+      // content. Images from tool results open the user message that follows,
+      // together with the turn's own content — one user message, because some
+      // strict providers reject two consecutive user messages.
+      const openaiContent: OpenAIChatContentPart[] = []
+
       const toolResults = extractToolResultBlocks(blocks)
-      const toolImages: OpenAIChatContentPart[] = []
       for (const toolResult of toolResults) {
         // Detect images in tool_result.content array before any stripping
         // so `hasImages` reflects the original input regardless of stripImages.
@@ -161,7 +167,7 @@ export function convertAnthropicMessagesToOpenAIChat(
             if (!stripImages) {
               for (const block of toolResultContent) {
                 if (block.type === 'image') {
-                  toolImages.push(anthropicImageToOpenAIChatImage(block))
+                  openaiContent.push(anthropicImageToOpenAIChatImage(block))
                 }
               }
             }
@@ -182,35 +188,26 @@ export function convertAnthropicMessagesToOpenAIChat(
         result.push(toolMessage)
       }
 
-      // All tool calls must be answered before auxiliary user image content.
-      if (toolImages.length > 0) {
-        result.push({ role: 'user', content: toolImages })
-      }
-
       // Convert remaining content blocks (text, image)
       const contentBlocks = blocks.filter(
         (b) => (b.type === 'text' && (b as any).text) || (b.type === 'image' && (b as any).source)
       )
 
-      if (contentBlocks.length > 0) {
-        const openaiContent: OpenAIChatContentPart[] = []
-
-        for (const block of contentBlocks) {
-          if (block.type === 'image') {
-            hasImages = true
-            // Skip image conversion for non-vision targets; the provider's
-            // schema does not recognize `image_url` and would reject the request.
-            if (stripImages) continue
-          }
-          const converted = anthropicBlockToOpenAIChatPart(block)
-          if (converted) {
-            openaiContent.push(converted)
-          }
+      for (const block of contentBlocks) {
+        if (block.type === 'image') {
+          hasImages = true
+          // Skip image conversion for non-vision targets; the provider's
+          // schema does not recognize `image_url` and would reject the request.
+          if (stripImages) continue
         }
-
-        if (openaiContent.length > 0) {
-          result.push({ role: 'user', content: openaiContent })
+        const converted = anthropicBlockToOpenAIChatPart(block)
+        if (converted) {
+          openaiContent.push(converted)
         }
+      }
+
+      if (openaiContent.length > 0) {
+        result.push({ role: 'user', content: openaiContent })
       }
     } else if (msg.role === 'assistant') {
       // Extract text and tool_use blocks
@@ -329,19 +326,27 @@ export function convertAnthropicMessagesToResponsesInput(
     const blocks = msg.content as AnthropicContentBlock[]
 
     if (msg.role === 'user') {
-      // Process tool_result blocks -> function_call_output items.
-      // When stripping images, drop image blocks from tool_result.content
-      // arrays before they're stringified into the function_call_output.
+      // Same layout as the Chat path: every function_call_output first, then
+      // one user message opened by the images from tool results.
+      const contentParts: OpenAIResponsesInputContentPart[] = []
+
       const toolResults = extractToolResultBlocks(blocks)
       for (const toolResult of toolResults) {
-        const sanitized = stripImages && Array.isArray(toolResult.content)
-          ? { ...toolResult, content: stripImagesFromToolResultContent(toolResult.content) }
-          : toolResult
-        result.push(anthropicToolResultToResponsesFunctionCallOutput(sanitized))
+        let output = toolResult
+        if (Array.isArray(toolResult.content) && toolResult.content.some((b) => b.type === 'image')) {
+          if (!stripImages) {
+            for (const block of toolResult.content) {
+              if (block.type === 'image') {
+                contentParts.push(anthropicImageToResponsesInputImage(block))
+              }
+            }
+          }
+          output = { ...toolResult, content: stripImagesFromToolResultContent(toolResult.content) }
+        }
+        result.push(anthropicToolResultToResponsesFunctionCallOutput(output))
       }
 
       // Convert other content blocks
-      const contentParts: OpenAIResponsesInputContentPart[] = []
       for (const block of blocks) {
         if (block.type === 'tool_result') continue
         // Skip image blocks for non-vision targets; preserves text/thinking parts.
