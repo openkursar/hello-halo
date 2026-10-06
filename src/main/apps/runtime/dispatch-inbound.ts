@@ -82,6 +82,13 @@ const PROCESSING_ACK = '✅ 已收到，正在处理…'
 const PROCESSING_NOTICE_DELAY_MS = 5_000
 
 /**
+ * The processing notice each conversation has waiting, so a stop or a clear can
+ * take it back: arriving after "Generation stopped." it would read as the work
+ * starting again.
+ */
+const pendingProcessingNotices = new Map<string, () => void>()
+
+/**
  * Commands that abort the current generation.
  * Slash-prefixed to avoid false triggers from normal conversation.
  */
@@ -742,6 +749,7 @@ export async function dispatchInboundMessage(
 
   // ── Stop command: abort generation, silently drop buffered supplements ──
   if (isStopCommand(msg.body, msg.chatType)) {
+    pendingProcessingNotices.get(conversationId)?.()
     const dropped = clearSupplementBuffer(conversationId)
     const isActive = isAppChatConversationGenerating(conversationId)
     if (isActive) {
@@ -766,6 +774,7 @@ export async function dispatchInboundMessage(
 
   // ── Clear command: reset context, silently drop buffered supplements ──
   if (isClearCommand(msg.body, msg.chatType)) {
+    pendingProcessingNotices.get(conversationId)?.()
     const dropped = clearSupplementBuffer(conversationId)
     console.log(
       `${LOG_TAG} Clear command received: channel=${msg.channel}, chatId=${msg.chatId}, ` +
@@ -1031,7 +1040,11 @@ export async function dispatchInboundMessage(
   } else if (instanceCfg?.processingNotice !== false) {
     processingNotice = setTimeout(() => { reply.send(PROCESSING_ACK).catch(() => {}) }, PROCESSING_NOTICE_DELAY_MS)
   }
-  const settleProcessingNotice = (): void => clearTimeout(processingNotice)
+  const settleProcessingNotice = (): void => {
+    clearTimeout(processingNotice)
+    if (pendingProcessingNotices.get(conversationId) === settleProcessingNotice) pendingProcessingNotices.delete(conversationId)
+  }
+  if (processingNotice) pendingProcessingNotices.set(conversationId, settleProcessingNotice)
 
   try {
     await sendAppChatMessage({

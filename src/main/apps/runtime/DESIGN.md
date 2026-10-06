@@ -1358,7 +1358,9 @@ reply) has nothing to show until it is done, so `dispatch-inbound` sends
 "✅ 已收到，正在处理…" first — but only once the answer has taken
 `PROCESSING_NOTICE_DELAY_MS` (5 s): a quick answer needs nothing before it, and a
 notice on every message is noise in a group. The timer is cleared by the reply,
-by a failure and when the dispatch ends. Owners can turn the notice off per
+by a failure and when the dispatch ends, and taken back by `/stop` or `/clear`
+in the same chat — a stopped turn can take a while to wind down, and a notice
+after "Generation stopped." reads as the work starting again. Owners can turn the notice off per
 instance (`ImChannelInstanceConfig.processingNotice`, on unless `false`; the
 settings card greys it out while streaming is on).
 
