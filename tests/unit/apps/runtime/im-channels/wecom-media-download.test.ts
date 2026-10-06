@@ -21,8 +21,7 @@ import { downloadWecomMedia } from '../../../../../src/main/apps/runtime/im-chan
 const proxyFetchMock = vi.mocked(proxyFetch)
 
 /** Encrypt like WeCom does: AES-256-CBC, IV = first 16 key bytes, PKCS#7 to 32-byte blocks. */
-function encryptLikeWecom(plaintext: Buffer): { encrypted: Buffer; aesKey: string } {
-  const key = crypto.randomBytes(32)
+function encryptLikeWecom(plaintext: Buffer, key = crypto.randomBytes(32)): { encrypted: Buffer; aesKey: string } {
   const iv = key.subarray(0, 16)
   const padLen = 32 - (plaintext.length % 32)
   const padded = Buffer.concat([plaintext, Buffer.alloc(padLen, padLen)])
@@ -30,6 +29,20 @@ function encryptLikeWecom(plaintext: Buffer): { encrypted: Buffer; aesKey: strin
   cipher.setAutoPadding(false)
   const encrypted = Buffer.concat([cipher.update(padded), cipher.final()])
   return { encrypted, aesKey: key.toString('base64') }
+}
+
+/** Decrypt the way WeCom encrypts, leaving the padding in place. */
+function decryptKeepingPadding(encrypted: Buffer, key: Buffer): Buffer {
+  const decipher = crypto.createDecipheriv('aes-256-cbc', key, key.subarray(0, 16))
+  decipher.setAutoPadding(false)
+  return Buffer.concat([decipher.update(encrypted), decipher.final()])
+}
+
+/** Whether a decrypted buffer ends in valid PKCS#7 padding to 32-byte blocks. */
+function endsInValidPadding(decrypted: Buffer): boolean {
+  const padLen = decrypted[decrypted.length - 1]
+  if (padLen < 1 || padLen > 32 || padLen > decrypted.length) return false
+  return decrypted.subarray(decrypted.length - padLen).every(byte => byte === padLen)
 }
 
 function mockResponse(body: Buffer, headers: Record<string, string> = {}, status = 200): Response {
@@ -93,12 +106,16 @@ describe('downloadWecomMedia', () => {
   })
 
   it('throws when the key cannot decrypt the payload', async () => {
-    const { encrypted } = encryptLikeWecom(Buffer.from('secret'))
+    // Fixed keys: a random wrong key decrypts to valid padding about once in 256 runs.
+    const key = Buffer.alloc(32, 0x11)
+    const wrongKey = Buffer.alloc(32, 0x22)
+    const { encrypted } = encryptLikeWecom(Buffer.from('secret'), key)
+    expect(endsInValidPadding(decryptKeepingPadding(encrypted, key))).toBe(true)
+    expect(endsInValidPadding(decryptKeepingPadding(encrypted, wrongKey))).toBe(false)
     proxyFetchMock.mockResolvedValue(mockResponse(encrypted))
-    const wrongKey = crypto.randomBytes(32).toString('base64')
 
     await expect(
-      downloadWecomMedia('https://wwcdn.example/media/6', wrongKey),
+      downloadWecomMedia('https://wwcdn.example/media/6', wrongKey.toString('base64')),
     ).rejects.toThrow()
   })
 })
