@@ -9,11 +9,13 @@ import type { FieldReadBack } from './types'
 
 /**
  * Runs on the element to fill (`this`): selects its text for replacement and
- * returns true, but only while focus is on it, inside it (a label's control, a
+ * returns 'ok', but only while focus is on it, inside it (a label's control, a
  * shadow root's input) or on the editing host or shadow host around it, and,
  * for an element in a frame, while every enclosing document has focus on the
  * frame that holds it: a frame nobody focused still reports its editable body
- * as active. Anywhere else the typed text would land in some other field.
+ * as active. Anywhere else ('elsewhere') the typed text would land in some
+ * other field; under a frame from another site ('cross-origin-frame') that
+ * cannot even be checked, so it is refused too.
  */
 export const SELECT_IF_FOCUSED = `function () {
   var target = this;
@@ -27,15 +29,22 @@ export const SELECT_IF_FOCUSED = `function () {
     for (var node = inner; node; node = node.parentNode || node.host) if (node === outer) return true;
     return false;
   }
-  for (var win = doc.defaultView; win && win.frameElement; win = win.parent) {
-    if (deepActive(win.frameElement.ownerDocument) !== win.frameElement) return false;
+  for (var win = doc.defaultView; win && win.parent && win.parent !== win; win = win.parent) {
+    var frame = win.frameElement;
+    if (!frame) return 'cross-origin-frame';
+    if (deepActive(frame.ownerDocument) !== frame) return 'elsewhere';
   }
   var active = deepActive(doc);
   var focused = !!active && (contains(target, active)
     || (contains(active, target) && (active.isContentEditable || target.getRootNode() !== doc)));
-  if (focused) doc.execCommand('selectAll');
-  return focused;
+  if (!focused) return 'elsewhere';
+  doc.execCommand('selectAll');
+  return 'ok';
 }`
+
+/** Why a fill under a frame from another site typed nothing, and what to do instead. */
+export const CROSS_ORIGIN_FRAME_REFUSED =
+  'this field sits in a frame from another site, where its focus cannot be confirmed, so nothing was typed. Take a browser_snapshot and use an input that is not inside such a frame.'
 
 /** Why a fill typed nothing, and how to find the field that does take the text. */
 export const FOCUS_REFUSED =

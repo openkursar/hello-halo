@@ -34,7 +34,7 @@ import {
   unregisterWebContentsForDownload
 } from './download-handler'
 import { emitBrowserActiveView, emitBrowserViewGone, emitBrowserConversationReleased } from './events'
-import { FOCUS_REFUSED, READ_FILLED_VALUE, SELECT_IF_FOCUSED } from './fill-check'
+import { CROSS_ORIGIN_FRAME_REFUSED, FOCUS_REFUSED, READ_FILLED_VALUE, SELECT_IF_FOCUSED } from './fill-check'
 import type { AIBrowserLivePage, AIBrowserStopResult } from '../../../shared/types/ai-browser'
 import { sanitizeFilename, resolveUniquePath } from '../../foundation/file-naming'
 import type {
@@ -1243,13 +1243,13 @@ export class BrowserContext implements BrowserContextInterface {
     const resolved = await this.sendCDPCommand<{ object?: { objectId?: string } }>('DOM.resolveNode', { backendNodeId: element.backendNodeId })
     if (!resolved.object?.objectId) throw new Error(`Input element is unavailable: ${uid}`)
     try {
-      const focused = await this.sendCDPCommand<{ result?: { value?: boolean } }>('Runtime.callFunctionOn', {
+      const focused = await this.sendCDPCommand<{ result?: { value?: string } }>('Runtime.callFunctionOn', {
         objectId: resolved.object.objectId,
         functionDeclaration: SELECT_IF_FOCUSED,
         returnByValue: true,
       })
-      if (focused.result?.value !== true) {
-        throw new Error(FOCUS_REFUSED)
+      if (focused.result?.value !== 'ok') {
+        throw new Error(focused.result?.value === 'cross-origin-frame' ? CROSS_ORIGIN_FRAME_REFUSED : FOCUS_REFUSED)
       }
       await this.sendCDPCommand('Input.insertText', { text: value })
       const filled = await this.sendCDPCommand<{ result?: { value?: FieldReadBack } }>('Runtime.callFunctionOn', {

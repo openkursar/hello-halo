@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest'
-import { FOCUS_REFUSED, READ_FILLED_VALUE, SELECT_IF_FOCUSED, checkFill } from '../../../../src/main/services/ai-browser/fill-check'
+import { CROSS_ORIGIN_FRAME_REFUSED, FOCUS_REFUSED, READ_FILLED_VALUE, SELECT_IF_FOCUSED, checkFill } from '../../../../src/main/services/ai-browser/fill-check'
 import type { FieldReadBack } from '../../../../src/main/services/ai-browser/types'
 import type { BrowserContext } from '../../../../src/main/services/ai-browser/context'
 
@@ -21,7 +21,7 @@ const { buildInputTools } = await import('../../../../src/main/services/ai-brows
 
 // The page-side functions, run against stand-ins for DOM elements.
 const readFilled = new Function(`return (${READ_FILLED_VALUE})`)() as (this: object) => Promise<FieldReadBack>
-const selectIfFocused = new Function(`return (${SELECT_IF_FOCUSED})`)() as (this: object) => boolean
+const selectIfFocused = new Function(`return (${SELECT_IF_FOCUSED})`)() as (this: object) => 'ok' | 'elsewhere' | 'cross-origin-frame'
 
 function field(value: string, type = 'text'): Record<string, unknown> {
   return { value, type, isContentEditable: false, ownerDocument: { activeElement: null } }
@@ -43,7 +43,7 @@ describe('typing only where focus is', () => {
     const { doc, body, execCommand } = page()
     const input = element(doc, body)
     doc.activeElement = input
-    expect(selectIfFocused.call(input)).toBe(true)
+    expect(selectIfFocused.call(input)).toBe('ok')
     expect(execCommand).toHaveBeenCalledWith('selectAll')
   })
 
@@ -55,19 +55,19 @@ describe('typing only where focus is', () => {
     shadowRoot.activeElement = inner
     wrapper.shadowRoot = shadowRoot
     doc.activeElement = wrapper
-    expect(selectIfFocused.call(wrapper)).toBe(true)
+    expect(selectIfFocused.call(wrapper)).toBe('ok')
 
     const editor = element(doc, body, { isContentEditable: true })
     const paragraph = element(doc, editor, { isContentEditable: true })
     doc.activeElement = editor
-    expect(selectIfFocused.call(paragraph)).toBe(true)
+    expect(selectIfFocused.call(paragraph)).toBe('ok')
 
     // A closed shadow root hides its focused input: focus shows as its host.
     const host = element(doc, body)
     const closedRoot = { parentNode: null, host }
     const field = element(doc, closedRoot, { getRootNode: () => closedRoot })
     doc.activeElement = host
-    expect(selectIfFocused.call(field)).toBe(true)
+    expect(selectIfFocused.call(field)).toBe('ok')
   })
 
   it('types into a rich-text editor in a frame only while the page has focus on that frame', () => {
@@ -75,7 +75,8 @@ describe('typing only where focus is', () => {
     const { doc: topDoc, body: topBody } = page()
     const password = element(topDoc, topBody, { type: 'password' })
     const frame = element(topDoc, topBody)
-    const topWindow = { frameElement: null }
+    const topWindow: Record<string, unknown> = { frameElement: null }
+    topWindow.parent = topWindow
     // Inside the frame nothing is focused, so its editable body reports itself as active.
     const execCommand = vi.fn()
     const frameDoc: Record<string, unknown> = { execCommand, parentNode: null, defaultView: { frameElement: frame, parent: topWindow } }
@@ -84,12 +85,25 @@ describe('typing only where focus is', () => {
     frameDoc.activeElement = editorBody
 
     topDoc.activeElement = password
-    expect(selectIfFocused.call(paragraph)).toBe(false)
+    expect(selectIfFocused.call(paragraph)).toBe('elsewhere')
     expect(execCommand).not.toHaveBeenCalled()
 
     topDoc.activeElement = frame
-    expect(selectIfFocused.call(paragraph)).toBe(true)
+    expect(selectIfFocused.call(paragraph)).toBe('ok')
     expect(execCommand).toHaveBeenCalledWith('selectAll')
+  })
+
+  it('types nothing under a frame from another site, where focus cannot be checked', () => {
+    // The page around the frame is out of reach: frameElement reads null across sites.
+    const pageWindow: Record<string, unknown> = { frameElement: null }
+    pageWindow.parent = pageWindow
+    const execCommand = vi.fn()
+    const frameDoc: Record<string, unknown> = { execCommand, parentNode: null, defaultView: { frameElement: null, parent: pageWindow } }
+    const editorBody = element(frameDoc, frameDoc, { isContentEditable: true })
+    frameDoc.activeElement = editorBody
+    expect(selectIfFocused.call(element(frameDoc, editorBody, { isContentEditable: true }))).toBe('cross-origin-frame')
+    expect(execCommand).not.toHaveBeenCalled()
+    expect(CROSS_ORIGIN_FRAME_REFUSED).toMatch(/nothing was typed\. Take a browser_snapshot/)
   })
 
   it('points to a snapshot when it types nothing, so a field that hands focus to a popup is not retried in a loop', () => {
@@ -101,10 +115,10 @@ describe('typing only where focus is', () => {
     const editor = element(doc, body, { isContentEditable: true })
     const paragraph = element(doc, editor, { isContentEditable: true })
     doc.activeElement = element(doc, body, { type: 'password' })
-    expect(selectIfFocused.call(paragraph)).toBe(false)
+    expect(selectIfFocused.call(paragraph)).toBe('elsewhere')
 
     doc.activeElement = body
-    expect(selectIfFocused.call(element(doc, body))).toBe(false)
+    expect(selectIfFocused.call(element(doc, body))).toBe('elsewhere')
     expect(execCommand).not.toHaveBeenCalled()
   })
 })
