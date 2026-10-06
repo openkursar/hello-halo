@@ -1008,7 +1008,8 @@ of each person:
   person's chat transcripts — in the space its environment names, or the
   person's current space for a run older than environments. Then, best effort,
   the engine's stored session through `services/agent`'s `deleteStoredSession`
-  (CC-protocol engines; the engine that ran it is not recorded).
+  (the default engine's; the engine that ran it is not recorded, and the other
+  engines' sessions are not covered — see that module).
 - **After**: `markTranscriptCleared` sets `transcript_cleared_at`, drops the
   run's session id and the `resumeAvailable` of its failure entries. The
   timeline keeps its entries (the one-year `pruneOldData` still removes them).

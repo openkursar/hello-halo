@@ -1,14 +1,20 @@
 /**
  * Removing a session the engine stored on disk.
  *
- * The CC-protocol engines (the default engine and the halo engine) keep each
- * session under `<config dir>/projects/<project dir>/`: `<session id>.jsonl`,
- * and a `<session id>/` folder for its sub-agents and large tool results. The
- * project dir is the working directory with every non-alphanumeric character
- * turned into '-' — as given for the halo engine, resolved and NFC-normalized
- * for the default engine. Past 200 characters the default engine cuts it and
- * appends a hash of the full path, so a long one is found by that prefix. Other
- * engines store sessions elsewhere and are not covered here.
+ * The default engine keeps each session under `<config dir>/projects/<project dir>/`:
+ * `<session id>.jsonl`, and a `<session id>/` folder for its sub-agents and
+ * large tool results. The project dir is the working directory, resolved and
+ * NFC-normalized, with every non-alphanumeric character turned into '-'; past
+ * 200 characters it is cut and a hash of the full path appended, so a long one
+ * is found by that prefix.
+ *
+ * The halo engine uses the same layout (its project dir is the path as given,
+ * which is tried too), but running in-process it currently takes its config dir
+ * from the process environment instead of the session's, so its sessions land
+ * in `~/.claude` whatever Halo configures. Only the configured config dir is
+ * looked in, so with the default setting they are not reached; they are covered
+ * once the engine stores them in the session's config dir. Codex and dsh store
+ * sessions elsewhere and are not covered.
  */
 
 import { existsSync, readdirSync, realpathSync, rmSync } from 'fs'
