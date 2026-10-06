@@ -26,6 +26,7 @@ import type {
 } from './types'
 import type { Goal, GoalChangeSource } from '../../../shared/types/goal'
 import { emitAgentEvent } from './events'
+import { createDeltaCoalescer, type DeltaCoalescer } from './delta-coalescer'
 import { parseSDKMessage } from './message-utils'
 import {
   extractRealAssistantUsage,
@@ -306,6 +307,21 @@ export interface ProcessStreamParams {
  * @returns StreamResult with final content, thoughts, token usage, and status flags
  */
 export async function processStream(params: ProcessStreamParams): Promise<StreamResult> {
+  const deltas = createDeltaCoalescer(params.spaceId, params.conversationId)
+  // A stop shows at once what streamed before it; a retired stream publishes nothing more.
+  const settle = () => (params.sessionSignal?.aborted ? deltas.discard() : deltas.flush())
+  params.abortController.signal.addEventListener('abort', settle)
+  params.sessionSignal?.addEventListener('abort', settle)
+  try {
+    return await consumeStream(params, deltas)
+  } finally {
+    params.abortController.signal.removeEventListener('abort', settle)
+    params.sessionSignal?.removeEventListener('abort', settle)
+    settle()
+  }
+}
+
+async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer): Promise<StreamResult> {
   const {
     v2Session,
     sessionState,
@@ -407,7 +423,6 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
   let streamingTextBlockIndex: number | undefined
   // The aggregate for a streamed response still adds a thought, but not its text twice.
   let streamedTextResponse: { messageId: string | undefined } | null = null
-  const STREAM_THROTTLE_MS = 30  // Throttle updates to ~33fps
 
   // Track if SDK reported error_during_execution (for interrupted detection)
   let hadErrorDuringExecution = false
@@ -651,6 +666,11 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
       continue
     }
 
+    // Whatever this frame publishes goes out after the deltas streamed before it.
+    if (sdkMessage.type !== 'stream_event' || (sdkMessage as any).event?.type !== 'content_block_delta') {
+      deltas.flush()
+    }
+
     // The SDK keeps emitting after `result`; how long it does so and what it
     // sends is the only visibility into that tail.
     if (resultReceivedAt !== null) {
@@ -784,10 +804,7 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
           blockState.content += delta
 
           // Delta only: the accumulated text goes out once, with isComplete at block stop.
-          emitAgentEvent('agent:thought-delta', spaceId, conversationId, {
-            thoughtId: blockState.thoughtId,
-            delta
-          })
+          deltas.thought(blockState.thoughtId, delta)
         }
       }
 
@@ -795,14 +812,7 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
       if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta' && isStreamingTextBlock) {
         const delta = event.delta.text || ''
         currentStreamingText += delta
-
-        // Send delta immediately without throttling
-        emitAgentEvent('agent:message', spaceId, conversationId, {
-          type: 'message',
-          delta,
-          isComplete: false,
-          isStreaming: true
-        })
+        deltas.text(delta)
       }
 
       // ========== Tool use block streaming ==========
@@ -861,12 +871,8 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
           const partialJson = event.delta.partial_json || ''
           blockState.content += partialJson
 
-          // Send delta to renderer (for progress indication, not for parsing)
-          emitAgentEvent('agent:thought-delta', spaceId, conversationId, {
-            thoughtId: blockState.thoughtId,
-            delta: partialJson,
-            isToolInput: true  // Flag: this is tool input JSON, not thinking text
-          })
+          // For progress indication only; the parsed input goes out at block stop.
+          deltas.thought(blockState.thoughtId, partialJson, true)
         }
       }
 
@@ -1318,6 +1324,7 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
   }
 
   assertSessionActive()
+  deltas.flush()
 
   // A retry still pending here never got its answer: the turn ended on the
   // final failure or on a stop.
