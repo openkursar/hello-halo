@@ -217,6 +217,21 @@ export class ImSessionRegistry {
   }
 
   /**
+   * Note a message the digital human pushed to a chat (chat-record): it is the
+   * chat's latest message now, so the chat moves to the top of the list. No-op
+   * for unknown sessions.
+   */
+  notePush(appId: string, channel: string, chatId: string, opts: { lastSender?: string; lastMessage: string }): void {
+    const session = this.sessions.get(this.buildKey(appId, channel, chatId))
+    if (!session) return
+    session.lastActiveAt = Date.now()
+    session.messageCount = (session.messageCount ?? 0) + 1
+    if (opts.lastSender !== undefined) session.lastSender = opts.lastSender
+    session.lastMessage = truncateUtf16Safe(opts.lastMessage, 50)
+    this.requestPersist(false)
+  }
+
+  /**
    * Reset a session's message-activity summary after its transcript has been
    * wiped (see app-chat.ts's clearSessionByConversationId, shared by
    * clearAppChat/clearImSession/deleteNativeChatSession's own removal path).

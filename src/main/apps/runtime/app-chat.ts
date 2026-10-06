@@ -158,6 +158,7 @@ import {
   appTurnFileAccess,
 } from './turn/memory-lifecycle'
 import { closedFolderDenyRules, FILE_TOOLS } from './turn-file-access'
+import { chatRecordPath } from './chat-record'
 import { buildMemorySection } from './prompt'
 import { createReportToolServer, type ReportToolContext } from './report-tool'
 // Key builders live in shared/ so the renderer can import them without
@@ -1496,15 +1497,8 @@ export function isAppChatGenerating(appId: string): boolean {
  * @param spacePath - Space directory path
  * @param appId - App ID
  */
-function sessionStoragePath(appId: string, conversationId: string, fallback: string): string {
-  const store = getActivityStore()
-  return store?.getSessionEnvironment(conversationId)?.spacePath
-    ?? store?.getSessionEnvironment(legacySessionEnvironmentKey(appId, deriveRunId(conversationId, appId)))?.spacePath
-    ?? fallback
-}
-
 export function loadAppChatMessages(spacePath: string, appId: string): any[] {
-  const path = sessionStoragePath(appId, getAppChatConversationId(appId), spacePath)
+  const path = chatRecordPath(appId, getAppChatConversationId(appId), spacePath)
   return readSessionMessages(path, appId, CHAT_RUN_ID)
 }
 
@@ -1529,7 +1523,7 @@ export function loadImChatMessages(
 ): any[] {
   const conversationId = buildImSessionKey(appId, channel, chatType, chatId)
   const runId = deriveRunId(conversationId, appId)
-  const path = sessionStoragePath(appId, conversationId, spacePath)
+  const path = chatRecordPath(appId, conversationId, spacePath)
   return readSessionMessages(path, appId, runId)
 }
 
@@ -1548,7 +1542,7 @@ export function readTeamMemberMessages(appId: string, teamId: string, epochId: s
   const spaceId = getAppManager()?.getApp(appId)?.spaceId ?? null
   if (!spaceId) return []
   const conversationId = buildTeamSessionKey(appId, teamId, epochId)
-  const spacePath = sessionStoragePath(appId, conversationId, getSpace(spaceId)?.path ?? '')
+  const spacePath = chatRecordPath(appId, conversationId, getSpace(spaceId)?.path ?? '')
   if (!spacePath) return []
   const runId = deriveRunId(conversationId, appId)
   return readSessionMessages(spacePath, appId, runId)
@@ -1585,7 +1579,7 @@ export function loadChatMessagesForConversation(
   appId: string,
   conversationId: string
 ): any[] {
-  const path = sessionStoragePath(appId, conversationId, spacePath)
+  const path = chatRecordPath(appId, conversationId, spacePath)
   return readSessionMessages(path, appId, deriveRunId(conversationId, appId))
 }
 
@@ -1599,7 +1593,7 @@ export function loadChatTranscriptForConversation(
   conversationId: string,
   request?: TranscriptPageRequest
 ): TranscriptPage {
-  const path = sessionStoragePath(appId, conversationId, spacePath)
+  const path = chatRecordPath(appId, conversationId, spacePath)
   return readSessionTranscript(path, appId, deriveRunId(conversationId, appId), request)
 }
 
@@ -1610,7 +1604,7 @@ export function loadChatMessageThoughts(
   conversationId: string,
   messageId: string
 ): Thought[] {
-  const path = sessionStoragePath(appId, conversationId, spacePath)
+  const path = chatRecordPath(appId, conversationId, spacePath)
   return readSessionMessageThoughts(path, appId, deriveRunId(conversationId, appId), messageId)
 }
 
@@ -1677,7 +1671,7 @@ async function clearSessionByConversationId(
   destroyChatBrowserContext(conversationId, 'session-cleared')
 
   // 4. Clear the JSONL file and saved sessionId
-  const spacePath = sessionStoragePath(appId, conversationId, getSpace(spaceId)?.path ?? '')
+  const spacePath = chatRecordPath(appId, conversationId, getSpace(spaceId)?.path ?? '')
   if (spacePath) {
     const runId = deriveRunId(conversationId, appId)
     const filePath = join(spacePath, '.halo', 'apps', appId, 'runs', `${runId}.jsonl`)
