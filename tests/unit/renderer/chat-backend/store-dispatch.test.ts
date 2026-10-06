@@ -699,6 +699,28 @@ describe('space conversations through the same verbs', () => {
     expect(apiMock.taskMarkRead).toHaveBeenCalledWith('c1', SPACE, 'T', 'completed-unseen')
   })
 
+  it('does not track a finished turn of a conversation its space does not list (the knowledge base chat)', async () => {
+    const store = spaceStore()
+    apiMock.listConversations.mockResolvedValue({ success: true, data: [{ id: 'c1', spaceId: SPACE, title: 'T', createdAt: 't', updatedAt: 't', messageCount: 0 }] })
+
+    await store.getState().handleAgentComplete({ spaceId: SPACE, conversationId: 'kb-chat' } as never)
+
+    expect(apiMock.listConversations).toHaveBeenCalledWith(SPACE)
+    expect(store.getState().unseenCompletions.has('kb-chat')).toBe(false)
+    expect(apiMock.taskMarkUnseen).not.toHaveBeenCalled()
+  })
+
+  it.each(['failed', 'rejected'] as const)('still tracks a finished turn it cannot look up when the list does not load: %s', async outcome => {
+    const store = spaceStore()
+    if (outcome === 'rejected') apiMock.listConversations.mockRejectedValue(new Error('offline'))
+    else apiMock.listConversations.mockResolvedValue({ success: false, error: 'offline' })
+
+    await store.getState().handleAgentComplete({ spaceId: SPACE, conversationId: 'c2' } as never)
+
+    expect(store.getState().unseenCompletions.has('c2')).toBe(true)
+    expect(apiMock.taskMarkUnseen).toHaveBeenCalledWith('c2', SPACE, 'Conversation')
+  })
+
   it('requires explicit selection to acknowledge a failed background turn', async () => {
     const store = spaceStore()
     let resolveRead!: (value: unknown) => void

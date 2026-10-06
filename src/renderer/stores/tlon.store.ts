@@ -19,6 +19,7 @@
 import { create } from 'zustand'
 import { api } from '../api'
 import { useNotificationStore } from './notification.store'
+import { useChatStore } from './chat.store'
 import i18n from '../i18n'
 import type {
   KnowledgeBaseEntry,
@@ -52,7 +53,11 @@ interface TlonChatSession {
   readPaths?: string[]
 }
 
-/** KB chats run as ephemeral conversations under the Halo temp space. */
+/**
+ * KB chats run on ephemeral conversations in the Halo temp space: never listed
+ * or searched, deleted when the chat ends (Clear chat, or leaving the KB), and
+ * swept at the next start if Halo quits first.
+ */
 const TLON_CHAT_SPACE = 'halo-temp'
 
 /**
@@ -160,6 +165,7 @@ interface TlonState {
 
   // ── KB chat (ephemeral) ───────────────────
   sendChatMessage: (kbId: string, text: string) => Promise<void>
+  /** End a KB's chat: its transcript goes and its backing conversation is deleted. */
   clearChat: (kbId: string) => Promise<void>
   /** Subscribe to agent events for KB chats. Returns an unsubscribe fn. */
   subscribeChatEvents: () => () => void
@@ -591,7 +597,7 @@ export const useTlonStore = create<TlonState>((set, get) => ({
     if (!conversationId) {
       const kbName = get().kbs.find(k => k.id === kbId)?.name || 'Knowledge base'
       try {
-        const res = await api.createConversation(TLON_CHAT_SPACE, i18n.t('Ask: {{name}}', { name: kbName }))
+        const res = await api.createConversation(TLON_CHAT_SPACE, i18n.t('Ask: {{name}}', { name: kbName }), undefined, { ephemeral: true })
         conversationId = (res.success && res.data) ? (res.data as Conversation).id : undefined
       } catch (err) {
         console.error('[TlonStore] sendChatMessage createConversation error:', err)
@@ -650,19 +656,22 @@ export const useTlonStore = create<TlonState>((set, get) => ({
   },
 
   clearChat: async (kbId) => {
+    const session = get().chatSessions[kbId]
+    if (!session?.conversationId && !session?.messages.length) return
     clearChatWatchdog(kbId)
     releaseKbChatDetail(kbId)
-    const conversationId = get().chatSessions[kbId]?.conversationId
+    const conversationId = session?.conversationId
     set(state => ({
       chatSessions: { ...state.chatSessions, [kbId]: { messages: [], generating: false } },
     }))
-    // Drop the backend conversation so it doesn't linger in the temp space.
     if (conversationId) {
       try {
         await api.deleteConversation(TLON_CHAT_SPACE, conversationId)
       } catch (err) {
         console.error('[TlonStore] clearChat error:', err)
       }
+      // The chat view mirrored this conversation's turns from the shared agent events.
+      useChatStore.getState().forgetConversation(conversationId)
     }
   },
 

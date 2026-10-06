@@ -5,8 +5,9 @@
  * followed by three tabs: Chat (ChatTab) · Files (RawFilesTab) · Settings (SettingsTab).
  */
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from '../../i18n'
+import { useTlonStore } from '../../stores/tlon.store'
 import type { KnowledgeBaseEntry } from '../../../shared/types/tlon'
 import { KbAvatar } from './KbAvatar'
 import { ChatTab } from './ChatTab'
@@ -48,6 +49,12 @@ function formatTimeAgo(dateStr: string | undefined): string | null {
 export function KBDetail({ kb, onDeleted }: KBDetailProps) {
   const { t } = useTranslation()
   const [tab, setTab] = useState<KBTab>('files')
+  const clearChat = useTlonStore(s => s.clearChat)
+
+  // The chat is temporary: it survives switching tabs, and ends — its backing
+  // conversation deleted — once the user leaves this knowledge base (another
+  // one, the list, or another page).
+  useEffect(() => () => { void clearChat(kb.id) }, [kb.id, clearChat])
 
   const tabs: Array<{ id: KBTab; label: string }> = [
     { id: 'chat', label: t('Chat') },

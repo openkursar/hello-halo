@@ -16,7 +16,7 @@
 import { join } from 'path'
 import { existsSync, statSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, renameSync } from 'fs'
 import { isReasoningEffortLevel, type ReasoningEffortLevel } from '../../shared/constants/reasoning-effort'
-import { getSpace, touchSpaceActivity } from './space.service'
+import { getHaloSpace, getSpace, listSpaces, touchSpaceActivity } from './space.service'
 import { getSeedKBIds } from './tlon'
 import { getConfig } from '../foundation/config.service'
 import { v4 as uuidv4 } from 'uuid'
@@ -63,6 +63,12 @@ export interface ConversationMeta {
    * optimistically.
    */
   titleCustomized?: boolean
+  /**
+   * Backs a view that shows its own transcript (the knowledge base chat): kept
+   * in the index but left out of every list and search, deleted when that view
+   * lets go of it, and swept at the next start if Halo quit first.
+   */
+  ephemeral?: boolean
 }
 
 export interface Conversation extends ConversationMeta {
@@ -469,6 +475,10 @@ function toMeta(conversation: Conversation): ConversationMeta {
     meta.titleCustomized = true
   }
 
+  if (conversation.ephemeral) {
+    meta.ephemeral = true
+  }
+
   return meta
 }
 
@@ -608,7 +618,7 @@ export function listConversations(spaceId: string): ConversationMeta[] {
 
   const index = readIndex(conversationsDir)
   if (index) {
-    return index.conversations
+    return index.conversations.filter(meta => !meta.ephemeral)
   }
 
   const metas = fullScanConversations(conversationsDir, spaceId)
@@ -617,7 +627,31 @@ export function listConversations(spaceId: string): ConversationMeta[] {
     writeIndex(conversationsDir, metas)
   }
 
-  return metas
+  return metas.filter(meta => !meta.ephemeral)
+}
+
+/**
+ * Delete the ephemeral conversations a previous run left behind (Halo quit
+ * before the view using one let go of it). Only those created before
+ * `createdBefore` go — later ones belong to this run and may be in use. Reads
+ * each space's index only; a space without one is left for a later start.
+ */
+export function deleteEphemeralConversations(createdBefore: number): number {
+  let deleted = 0
+  for (const space of [getHaloSpace(), ...listSpaces()]) {
+    const index = readIndex(conversationsDirOf(space))
+    if (!index) continue
+    for (const meta of index.conversations) {
+      if (!meta.ephemeral || !(Date.parse(meta.createdAt) < createdBefore)) continue
+      try {
+        if (deleteConversation(space.id, meta.id)) deleted++
+      } catch (error) {
+        console.error(`[Conversation] Failed to delete ephemeral conversation ${meta.id}:`, error)
+      }
+    }
+  }
+  if (deleted > 0) console.log(`[Conversation] Deleted ${deleted} ephemeral conversation(s) left by an earlier run`)
+  return deleted
 }
 
 /**
@@ -628,12 +662,13 @@ export function listConversations(spaceId: string): ConversationMeta[] {
  *        session at this level; anything that is not a ladder level is dropped.
  * @param options.keepTitle The given title stays: the first message does not
  *        replace it.
+ * @param options.ephemeral See `ConversationMeta.ephemeral`.
  */
 export function createConversation(
   spaceId: string,
   title?: string,
   reasoningEffort?: unknown,
-  options?: { keepTitle?: boolean }
+  options?: { keepTitle?: boolean; ephemeral?: boolean }
 ): Conversation {
   const id = uuidv4()
   const now = new Date().toISOString()
@@ -705,6 +740,7 @@ export function createConversation(
     ...(knowledgeBaseIds.length > 0 ? { knowledgeBaseIds: [...knowledgeBaseIds] } : {}),
     ...(isReasoningEffortLevel(reasoningEffort) ? { reasoningEffort } : {}),
     ...(title && options?.keepTitle ? { titleCustomized: true } : {}),
+    ...(options?.ephemeral ? { ephemeral: true } : {}),
   }
 
   const conversationsDir = getConversationsDir(spaceId)
@@ -719,7 +755,7 @@ export function createConversation(
   updateIndexEntry(conversationsDir, spaceId, id, toMeta(conversation))
 
   // Update space activity timestamp for home page sorting
-  touchSpaceActivity(spaceId)
+  if (!conversation.ephemeral) touchSpaceActivity(spaceId)
 
   return conversation
 }
@@ -907,7 +943,7 @@ export function addMessage(spaceId: string, conversationId: string, message: Omi
   debouncedUpdateIndexEntry(conversationsDir, spaceId, conversationId, toMeta(conversation))
 
   // Update space activity timestamp (throttled — safe to call per message)
-  touchSpaceActivity(spaceId)
+  if (!conversation.ephemeral) touchSpaceActivity(spaceId)
 
   return newMessage
 }

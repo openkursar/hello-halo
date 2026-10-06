@@ -40,6 +40,8 @@ interface ConversationFile {
   createdAt: string
   updatedAt: string
   messageCount: number
+  /** Backs the knowledge base chat; never a search result (see conversation.service). */
+  ephemeral?: boolean
   messages: Array<{
     id: string
     role: TranscriptRole
@@ -157,7 +159,7 @@ export class SearchService {
     if (unit.kind === 'file') {
       const data: ConversationFile = JSON.parse(readFileSync(unit.path, 'utf-8'))
       // `messages` is an array in a conversation and an object in its thoughts file.
-      if (!Array.isArray(data.messages)) return []
+      if (!Array.isArray(data.messages) || data.ephemeral) return []
       return this.matchMessages(data.messages, pattern, queryLength, {
         kind: 'chat',
         conversationId: data.id,

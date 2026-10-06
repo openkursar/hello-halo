@@ -95,9 +95,12 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'openConver
 
           return { spaceStates: newSpaceStates }
         })
+        return true
       }
+      return false
     } catch (error) {
       console.error('Failed to load conversations:', error)
+      return false
     } finally {
       set({ isLoading: false })
     }

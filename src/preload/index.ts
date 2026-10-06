@@ -161,7 +161,7 @@ export interface HaloAPI extends BrowserHostBridge {
 
   // Conversation
   listConversations: (spaceId: string) => Promise<IpcResponse>
-  createConversation: (spaceId: string, title?: string, reasoningEffort?: ReasoningEffortLevel) => Promise<IpcResponse>
+  createConversation: (spaceId: string, title?: string, reasoningEffort?: ReasoningEffortLevel, options?: { ephemeral?: boolean }) => Promise<IpcResponse>
   getConversation: (spaceId: string, conversationId: string, options?: { fromMessageId?: string }) => Promise<IpcResponse>
   updateConversation: (
     spaceId: string,
