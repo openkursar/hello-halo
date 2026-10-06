@@ -799,7 +799,7 @@ export async function dispatchInboundMessage(
   const answerArgs = parseAnswerCommand(msg.body, msg.chatType)
   if (answerArgs !== null) {
     const deps = await runtimeAnswerDeps()
-    const answerReply = deps
+    const result = deps
       ? await answerEscalationFromIm(answerArgs, {
           appId: app.id,
           ...(instanceCfg?.teamId ? { teamId: instanceCfg.teamId } : {}),
@@ -808,9 +808,16 @@ export async function dispatchInboundMessage(
           permissionEnabled: instanceCfg?.permissionEnabled ?? false,
           owners: instanceCfg?.owners ?? [],
         }, deps)
-      : '现在无法处理回答，请稍后再试。'
-    console.log(`${LOG_TAG} Answer command: channel=${msg.channel}, chatId=${msg.chatId}, session=${conversationId}`)
-    await reply.send(answerReply).catch(() => {})
+      : { reply: '现在无法处理回答，请稍后再试。', outcome: 'runtime_unavailable' as const }
+    // The outcome, never the answer: whether an owner's answer was taken or
+    // refused, and why, has to be readable from the log alone.
+    console.log(
+      `${LOG_TAG} Answer command: instanceId=${instanceId}, chatType=${msg.chatType}, chatId=${msg.chatId}, ` +
+      `sender=${msg.from}, outcome=${result.outcome}` +
+      `${'entryId' in result && result.entryId ? `, entry=${result.entryId}` : ''}` +
+      `${'error' in result && result.error ? `, error="${result.error}"` : ''}`
+    )
+    await reply.send(result.reply).catch(() => {})
     return
   }
 

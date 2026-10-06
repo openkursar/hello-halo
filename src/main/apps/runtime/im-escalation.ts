@@ -44,42 +44,67 @@ const MAX_DATA_CHARS = 1500
  * IM is still open in Halo.
  */
 export function deliverEscalationToIm(entry: ActivityEntry, appName: string): void {
+  const tag = `Question ${entry.id} (number ${entry.content.number ?? 'none'})`
   try {
     const manager = getActiveImChannelManager()
     const registry = getImSessionRegistry()
-    if (!manager || !registry) return
+    if (!manager || !registry) {
+      console.log(`${LOG_TAG} ${tag} not sent to IM: IM channels are not running`)
+      return
+    }
 
     const team = entry.content.teamContext
     const origin = team ? teamOriginChat(team.epochId) : null
     const question = formatQuestion(entry, appName)
     const notice = formatNotice(entry, appName)
-    let asked = 0
-    let told = 0
+    // One line per question, whatever happened: "IM never got the question"
+    // has to be answerable from the log alone.
+    const counts = { bots: 0, offline: 0, ownerChats: 0, groups: 0, asked: 0, told: 0, failed: 0 }
 
     for (const cfg of getConfig().imChannels?.instances ?? []) {
       if (!cfg.enabled || !(cfg.appId === entry.appId || (team && cfg.teamId === team.teamId))) continue
+      counts.bots++
       const instance = manager.getInstance(cfg.id)
       if (!instance?.isConnected()) {
-        console.warn(`${LOG_TAG} Question ${entry.id} not sent to instance "${cfg.id}": not connected`)
+        counts.offline++
         continue
       }
       const sessions = registry.listAll().filter(s => s.instanceId === cfg.id && s.source === 'im')
+      const owners = sessions.filter(s => s.chatType === 'direct' && asksHere(cfg, s))
       const groups = new Set(sessions.filter(s => s.chatType === 'group' && s.proactive).map(s => s.chatId))
       if (origin?.instanceId === cfg.id && origin.chatType === 'group') groups.add(origin.chatId)
+      counts.ownerChats += owners.length
+      counts.groups += groups.size
 
-      for (const session of sessions) {
-        if (session.chatType === 'direct' && asksHere(cfg, session) && instance.pushToChat(session.chatId, question, 'direct')) asked++
+      for (const session of owners) {
+        if (instance.pushToChat(session.chatId, question, 'direct')) counts.asked++
+        else counts.failed++
       }
       for (const chatId of groups) {
-        if (instance.pushToChat(chatId, notice, 'group')) told++
+        if (instance.pushToChat(chatId, notice, 'group')) counts.told++
+        else counts.failed++
       }
     }
-    if (asked > 0 || told > 0) {
-      console.log(`${LOG_TAG} Question ${entry.id} (number ${entry.content.number ?? 'none'}): asked ${asked} owner chat(s), told ${told} group(s)`)
+
+    const summary = `bots=${counts.bots}, offline=${counts.offline}, ownerChats=${counts.ownerChats}, ` +
+      `groups=${counts.groups}, asked=${counts.asked}, told=${counts.told}, failed=${counts.failed}`
+    if (counts.asked + counts.told > 0) {
+      console.log(`${LOG_TAG} ${tag} sent to IM: ${summary}`)
+    } else {
+      console.log(`${LOG_TAG} ${tag} reached no IM chat (${undeliveredReason(counts)}): ${summary}`)
     }
   } catch (err) {
-    console.warn(`${LOG_TAG} Question ${entry.id} could not be sent to IM:`, err)
+    console.warn(`${LOG_TAG} ${tag} could not be sent to IM:`, err)
   }
+}
+
+function undeliveredReason(counts: { bots: number; offline: number; ownerChats: number; groups: number }): string {
+  if (counts.bots === 0) return 'no enabled IM bot serves this digital human'
+  if (counts.offline === counts.bots) return 'its IM bots are not connected'
+  if (counts.ownerChats + counts.groups === 0) {
+    return 'no owner direct chat known to its bots, and no group receives results'
+  }
+  return 'every send failed'
 }
 
 /** Whether a direct chat gets the full question: an owner's, or with no owner list one chosen to receive results. */
@@ -132,20 +157,26 @@ function formatNotice(entry: ActivityEntry, appName: string): string {
 
 // ── Answering ──
 
-const ANSWER_COMMAND = /(?:^|\s)\/answer(?=\s|$)/i
+const ANSWER_COMMAND = /^\/answer(?=\s|$)/i
 
 /**
- * The text after `/answer` when this message is one, else null. In a direct
- * chat the message must start with it; in a group, a message to the bot starts
- * with a mention and the command follows it.
+ * The mentions a group message to the bot starts with. A mention ends where
+ * WeCom ends it (U+2005, so a name may hold spaces) or, typed by hand, at the
+ * first space.
+ */
+const LEADING_MENTIONS = /^(?:@(?:[^@/\u2005\n]+\u2005|\S+\s)\s*)+/
+
+/**
+ * The text after `/answer` when this message is one, else null. A direct
+ * message must start with it; in a group it may also come right after the
+ * mentions the message starts with, and only there — "@bot I'll /answer it
+ * later" is a message, not an answer.
  */
 export function parseAnswerCommand(body: string, chatType: 'direct' | 'group'): string | null {
-  const text = body.trim()
+  let text = body.trim()
+  if (chatType === 'group') text = text.replace(LEADING_MENTIONS, '')
   const match = ANSWER_COMMAND.exec(text)
-  if (!match) return null
-  const at = match.index + match[0].indexOf('/')
-  if (at !== 0 && !(chatType === 'group' && text.startsWith('@'))) return null
-  return text.slice(at + '/answer'.length).trim()
+  return match ? text.slice(match[0].length).trim() : null
 }
 
 /** Who wrote the command, and to which bot. */
@@ -168,67 +199,119 @@ export interface AnswerDeps {
   respond: (appId: string, entryId: string, response: EscalationResponse) => Promise<unknown>
 }
 
-/** Handle `/answer`: answer a question, or say why not. Returns the reply for the chat. */
-export async function answerEscalationFromIm(args: string, sender: AnswerSender, deps: AnswerDeps): Promise<string> {
+/** How an `/answer` ended, for the log: a tag, never the answer itself. */
+export type AnswerOutcome =
+  | 'answered'
+  | 'not_owner'
+  | 'group_without_owner_list'
+  | 'no_such_number'
+  | 'number_needed'
+  | 'none_pending'
+  | 'answer_missing'
+  | 'already_answered'
+  | 'expired'
+  | 'closed'
+  | 'deadline_review'
+  | 'answer_unreadable'
+  | 'submit_failed'
+
+export interface AnswerResult {
+  /** What the chat is told */
+  reply: string
+  outcome: AnswerOutcome
+  /** The question the answer was for, once one was found */
+  entryId?: string
+  /** Why submitting failed, as the runtime said it (not for the chat) */
+  error?: string
+}
+
+/** Handle `/answer`: answer a question, or say why not. */
+export async function answerEscalationFromIm(args: string, sender: AnswerSender, deps: AnswerDeps): Promise<AnswerResult> {
   if (sender.permissionEnabled ? !sender.owners.includes(sender.senderId) : sender.chatType !== 'direct') {
-    return sender.permissionEnabled ? '只有主人可以回答这个问题。' : '请在与机器人的私聊里回答。'
+    return sender.permissionEnabled
+      ? { reply: '只有主人可以回答这个问题。', outcome: 'not_owner' }
+      : { reply: '请在与机器人的私聊里回答。', outcome: 'group_without_owner_list' }
   }
 
   const inScope = (entry: ActivityEntry) =>
     entry.appId === sender.appId || (!!sender.teamId && entry.content.teamContext?.teamId === sender.teamId)
   const pending = deps.pendingEscalations().filter(inScope)
 
-  // A leading number that names a question is that question's number — even a
-  // question this bot cannot answer, so the answer never lands on another one.
-  // Otherwise the only open question is meant, and the whole text answers it.
+  // A leading number is always a question's number, looked up as such: one this
+  // bot cannot answer, or none at all (mistyped, or a question since removed),
+  // is not found — never read as an answer to whichever question is open.
+  // Without a number the only open question is meant.
   const numbered = /^(\d+)(?:\s+([\s\S]*))?$/.exec(args)
-  const named = numbered ? deps.escalationByNumber(Number(numbered[1])) : null
   let entry: ActivityEntry
   let answer: string
-  if (named) {
-    if (!inScope(named)) return `没有找到编号 ${numbered![1]} 的问题。${listPending(pending)}`
+  if (numbered) {
+    const named = deps.escalationByNumber(Number(numbered[1]))
+    if (!named || !inScope(named)) {
+      const hint = pending.length === 1 && pending[0].content.number !== undefined
+        ? `如果要回答编号 ${pending[0].content.number} 的问题，请写「/answer ${pending[0].content.number} 你的答案」。`
+        : listPending(pending)
+      return { reply: `没有找到编号 ${numbered[1]} 的问题。${hint}`, outcome: 'no_such_number' }
+    }
     entry = named
-    answer = (numbered![2] ?? '').trim()
-    if (!answer) return `请在编号后写上你的答案，例如「/answer ${numbered![1]} A」。`
+    answer = (numbered[2] ?? '').trim()
+    if (!answer) {
+      return { reply: `请在编号后写上你的答案，例如「/answer ${numbered[1]} A」。`, outcome: 'answer_missing', entryId: entry.id }
+    }
   } else if (pending.length === 1) {
     entry = pending[0]
     answer = args
-    if (!answer) return `请写上你的答案，例如「${commandFor(entry)} A」。`
-  } else if (numbered) {
-    return `没有找到编号 ${numbered[1]} 的问题。${listPending(pending)}`
+    if (!answer) return { reply: `请写上你的答案，例如「${commandFor(entry)} A」。`, outcome: 'answer_missing', entryId: entry.id }
+  } else if (pending.length === 0) {
+    return { reply: '现在没有在等你回答的问题。', outcome: 'none_pending' }
   } else {
-    return pending.length === 0
-      ? '现在没有在等你回答的问题。'
-      : `有 ${pending.length} 个问题在等你回答，请写明编号：「/answer 编号 你的答案」。${listPending(pending)}`
+    return {
+      reply: `有 ${pending.length} 个问题在等你回答，请写明编号：「/answer 编号 你的答案」。${listPending(pending)}`,
+      outcome: 'number_needed',
+    }
   }
 
+  const found = { entryId: entry.id }
   const label = entry.content.number ? `编号 ${entry.content.number} 的问题` : '这个问题'
-  if (entry.userResponse) return `${label}已经回答过了。`
+  if (entry.userResponse) return { reply: `${label}已经回答过了。`, outcome: 'already_answered', ...found }
   if (entry.content.resolution?.reason === 'expired' || (entry.content.deadlineAt !== undefined && entry.content.deadlineAt <= Date.now())) {
-    return `${label}已过期。`
+    return { reply: `${label}已过期。`, outcome: 'expired', ...found }
   }
-  if (entry.content.resolution || deps.isRunClosed(entry.runId)) return `${label}已经关闭，不需要再回答。`
-  if (entry.content.deadlineReviewRequired) return `${label}需要先在 Halo 里确认期限，然后才能回答。`
+  if (entry.content.resolution || deps.isRunClosed(entry.runId)) {
+    return { reply: `${label}已经关闭，不需要再回答。`, outcome: 'closed', ...found }
+  }
+  if (entry.content.deadlineReviewRequired) {
+    return { reply: `${label}需要先在 Halo 里确认期限，然后才能回答。`, outcome: 'deadline_review', ...found }
+  }
 
   const questions = getEscalationQuestions(entry.content)
   const response = responseFor(questions, answer)
-  if (typeof response === 'string') return response
+  if (typeof response === 'string') return { reply: response, outcome: 'answer_unreadable', ...found }
 
   try {
     await deps.respond(entry.appId, entry.id, { ts: Date.now(), ...response })
   } catch (err) {
-    return `没能提交你的答案：${(err as Error).message}`
+    // The checks above ran a moment ago; what failed now is most likely an
+    // answer given elsewhere in between. The runtime's words go to the log.
+    return {
+      reply: `没能提交你的答案：${label}可能刚刚在别处被回答或关闭了，请在 Halo 里查看。`,
+      outcome: 'submit_failed',
+      ...found,
+      error: (err as Error).message,
+    }
   }
-  return `已收到，任务继续。（${label}）`
+  return { reply: `已收到，任务继续。（${label}）`, outcome: 'answered', ...found }
 }
 
 function commandFor(entry: ActivityEntry): string {
   return entry.content.number ? `/answer ${entry.content.number}` : '/answer'
 }
 
+/** The open questions' numbers; questions asked before numbering existed are answered in Halo. */
 function listPending(pending: ActivityEntry[]): string {
   const numbers = pending.map(entry => entry.content.number).filter((n): n is number => n !== undefined)
-  return numbers.length > 0 ? `在等回答的编号：${numbers.join('、')}。` : ''
+  const unnumbered = pending.length - numbers.length
+  return (numbers.length > 0 ? `在等回答的编号：${numbers.join('、')}。` : '') +
+    (unnumbered > 0 ? `另有 ${unnumbered} 个较早的问题没有编号，请在 Halo 里回答。` : '')
 }
 
 /** The answer as Halo's own answer path takes it, or why it cannot be read as one. */

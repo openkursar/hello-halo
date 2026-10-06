@@ -1097,14 +1097,36 @@ describe('dispatchInboundMessage — /answer', () => {
     expect(sendAppChatMessageMock).not.toHaveBeenCalled()
   })
 
-  it('takes it from an owner in a group too, after the mention', async () => {
+  it('takes it from an owner in a group too, right after the mention', async () => {
     instanceCfg = { permissionEnabled: true, owners: ['u1'] }
     const reply = makeReply(false)
 
-    await dispatchInboundMessage(makeMsg({ chatType: 'group', chatId: 'g-1', body: '@Halo AI 团队 /answer 12 B' }), reply, 'app-1', 'inst-1')
+    await dispatchInboundMessage(makeMsg({ chatType: 'group', chatId: 'g-1', body: '@Halo AI 团队\u2005/answer 12 B' }), reply, 'app-1', 'inst-1')
 
     expect(answerDeps.respond).toHaveBeenCalledWith('app-1', 'q-1', expect.objectContaining({ choice: 'No' }))
     expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+  })
+
+  it('leaves a group message that only uses the word later in the sentence to the digital human', async () => {
+    instanceCfg = { permissionEnabled: true, owners: ['u1'] }
+
+    await dispatchInboundMessage(makeMsg({ chatType: 'group', chatId: 'g-1', body: '@Halo\u2005我晚点用 /answer 回复' }), makeReply(false), 'app-1', 'inst-1')
+
+    expect(answerDeps.respond).not.toHaveBeenCalled()
+    expect(sendAppChatMessageMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('logs how every answer ended, never the answer itself', async () => {
+    instanceCfg = { permissionEnabled: true, owners: ['boss'] }
+    const log = vi.spyOn(console, 'log')
+
+    await dispatchInboundMessage(makeMsg({ body: '/answer 12 our secret plan' }), makeReply(false), 'app-1', 'inst-1')
+
+    const line = log.mock.calls.map(([text]) => String(text)).find(text => text.includes('Answer command'))
+    expect(line).toContain('outcome=not_owner')
+    expect(line).toContain('sender=u1')
+    expect(line).not.toContain('secret')
+    log.mockRestore()
   })
 
   it('tells anyone else it is the owner\'s to answer, and approves nothing', async () => {
