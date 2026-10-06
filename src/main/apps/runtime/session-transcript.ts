@@ -76,11 +76,13 @@ function createThoughtIdGenerator(): () => string {
  * New strategy:
  * 1. Text does NOT trigger a flush. User messages, terminal results, new turn
  *    initialization, terminal checkpoints and end-of-events delimit turns.
- * 2. Intermediate text blocks are demoted to 'text' type thoughts visible in the
- *    collapsed thought process (same as stream-processor.ts:586).
+ * 2. Intermediate text blocks become 'text' type thoughts visible in the
+ *    collapsed thought process, in the place they arrived — before the tools
+ *    they introduce (same as stream-processor.ts).
  * 3. Text merging follows the main-space rule:
  *    - Consecutive text (no substantive tool in between) → concatenate.
- *    - Substantive tool in between → previous text demoted to thought, replaced.
+ *    - Substantive tool in between → the next text starts a new candidate; the
+ *      last candidate of the turn is the bubble and leaves the thoughts.
  * 4. Tool-result user events merge into the corresponding tool_use thought.
  * 5. Non-tool user events (trigger, escalation) flush and start a new turn.
  *
@@ -109,11 +111,12 @@ export function convertEventsToMessages(events: StoredEvent[], lines?: readonly 
   let lastThoughtTs = ''
 
   // ── Text merge state (mirrors stream-processor.ts logic) ──
-  // lastText holds the candidate final text for the current turn.
-  // hadSubstantiveTool tracks whether a non-transparent tool appeared since lastText was set.
+  // The bubble candidate sits among the thoughts where it arrived, so narration
+  // keeps its place before the tools it introduces; flush lifts the last one
+  // out as the bubble. hadSubstantiveTool tracks whether a non-transparent tool
+  // appeared since it was set.
   let teamMetadata: TranscriptMessage['metadata']
-  let lastText = ''
-  let lastTextTs = ''
+  let lastTextThought: Thought | undefined
   let hadSubstantiveTool = false
 
   // ── Terminal result fallback ──
@@ -137,9 +140,22 @@ export function convertEventsToMessages(events: StoredEvent[], lines?: readonly 
     thought?: Thought
   }>()
 
-  /** Flush accumulated thoughts + lastText into one assistant Message, then reset state. */
+  /** Text arrived: extend the bubble candidate, or start a new one after a substantive tool. */
+  function appendText(text: string, ts: string, separator = '\n\n'): void {
+    if (!text) return
+    if (!lastTextThought || hadSubstantiveTool) {
+      lastTextThought = { id: generateThoughtId(), type: 'text', content: text, timestamp: ts }
+      pendingThoughts.push(lastTextThought)
+    } else {
+      lastTextThought.content += separator + text
+      lastTextThought.timestamp = ts
+    }
+    hadSubstantiveTool = false
+  }
+
+  /** Flush accumulated thoughts and the final text into one assistant Message, then reset state. */
   function flush(): void {
-    const content = lastText || pendingResultText
+    const content = lastTextThought?.content || pendingResultText
     if (pendingThoughts.length === 0 && !content && !pendingError) return
 
     const record: TranscriptMessage = {
@@ -149,12 +165,13 @@ export function convertEventsToMessages(events: StoredEvent[], lines?: readonly 
       content,
       ...(pendingError ? { error: pendingError } : {}),
       ...(snapshotUsage ? { tokenUsage: snapshotUsage } : {}),
-      timestamp: lastTextTs || lastThoughtTs || pendingResultTs || new Date().toISOString(),
+      timestamp: lastTextThought?.timestamp || lastThoughtTs || pendingResultTs || new Date().toISOString(),
     }
 
-    if (pendingThoughts.length > 0) {
-      record.thoughts = pendingThoughts
-      record.thoughtsSummary = summarizeThoughts(pendingThoughts)
+    const thoughts = pendingThoughts.filter(thought => thought !== lastTextThought)
+    if (thoughts.length > 0) {
+      record.thoughts = thoughts
+      record.thoughtsSummary = summarizeThoughts(thoughts)
     }
 
     messages.push(record)
@@ -162,8 +179,7 @@ export function convertEventsToMessages(events: StoredEvent[], lines?: readonly 
     // Reset all turn state
     pendingThoughts = []
     lastThoughtTs = ''
-    lastText = ''
-    lastTextTs = ''
+    lastTextThought = undefined
     hadSubstantiveTool = false
     pendingResultText = ''
     pendingResultTs = ''
@@ -174,7 +190,7 @@ export function convertEventsToMessages(events: StoredEvent[], lines?: readonly 
 
   /** Called before each event: the previous one may have started the turn. */
   function noteTurnStart(previousIndex: number): void {
-    if (turnFirstLine === null && (pendingThoughts.length > 0 || lastText || pendingResultText)) {
+    if (turnFirstLine === null && (pendingThoughts.length > 0 || lastTextThought || pendingResultText)) {
       turnFirstLine = lineOf(previousIndex)
     }
   }
@@ -194,10 +210,10 @@ export function convertEventsToMessages(events: StoredEvent[], lines?: readonly 
     // A terminal partial checkpoint replaces this turn's aggregates, not a new reply.
     if (event.type === 'turn_snapshot') {
       turnFirstLine ??= lineOf(index)
-      lastText = typeof event.content === 'string' ? event.content : ''
-      lastTextTs = ts
-      pendingResultText = ''
       pendingThoughts = Array.isArray(event.thoughts) ? event.thoughts as Thought[] : []
+      // The checkpoint's text is the bubble, not one of its thoughts.
+      lastTextThought = { id: generateThoughtId(), type: 'text', content: typeof event.content === 'string' ? event.content : '', timestamp: ts }
+      pendingResultText = ''
       pendingError = typeof event.error === 'string' ? event.error : undefined
       snapshotUsage = event.tokenUsage as TokenUsage | undefined
       flush()
@@ -341,25 +357,7 @@ export function convertEventsToMessages(events: StoredEvent[], lines?: readonly 
         if (!blockState) continue
 
         if (blockState.type === 'text' && blockState.content) {
-          if (hadSubstantiveTool) {
-            if (lastText) {
-              pendingThoughts.push({
-                id: generateThoughtId(),
-                type: 'text',
-                content: lastText,
-                timestamp: lastTextTs,
-              })
-            }
-            lastText = blockState.content
-            lastTextTs = ts
-            hadSubstantiveTool = false
-          } else if (lastText) {
-            lastText += '\n\n' + blockState.content
-            lastTextTs = ts
-          } else {
-            lastText = blockState.content
-            lastTextTs = ts
-          }
+          appendText(blockState.content, ts)
         } else if (blockState.type === 'tool_use' && blockState.thought) {
           blockState.thought.toolInput = blockState.content
             ? parseToolInput(blockState.content)
@@ -378,8 +376,18 @@ export function convertEventsToMessages(events: StoredEvent[], lines?: readonly 
       const content = event.message?.content
       if (!Array.isArray(content)) continue
 
-      // Extract thinking and tool_use blocks into the accumulator
+      // Blocks join the accumulator in their order; text blocks within one
+      // envelope concatenate without a separator.
+      let textSeparator = '\n\n'
       for (const block of content) {
+        if (block.type === 'text') {
+          const text = extractTextContent([block])
+          if (text) {
+            appendText(text, ts, textSeparator)
+            textSeparator = ''
+          }
+        }
+
         if (block.type === 'thinking' && typeof block.thinking === 'string' && block.thinking.trim()) {
           pendingThoughts.push({
             id: generateThoughtId(),
@@ -413,35 +421,6 @@ export function convertEventsToMessages(events: StoredEvent[], lines?: readonly 
         }
       }
 
-      // Handle text output — deferred flush, merge into current turn
-      const textContent = extractTextContent(content)
-      if (textContent) {
-        if (hadSubstantiveTool) {
-          // A substantive tool occurred since last text — previous text was transitional.
-          // Demote it to a 'text' type thought so it remains visible in the thought process.
-          if (lastText) {
-            pendingThoughts.push({
-              id: generateThoughtId(),
-              type: 'text',
-              content: lastText,
-              timestamp: lastTextTs,
-            })
-          }
-          // Replace with current text
-          lastText = textContent
-          lastTextTs = ts
-          hadSubstantiveTool = false
-        } else {
-          // Consecutive text (no substantive tool in between) — concatenate
-          if (lastText) {
-            lastText += '\n\n' + textContent
-          } else {
-            lastText = textContent
-          }
-          lastTextTs = ts
-        }
-      }
-
       continue
     }
 
@@ -455,7 +434,7 @@ export function convertEventsToMessages(events: StoredEvent[], lines?: readonly 
     // aggregates but no recoverable bubble text. The engine still reports the
     // turn's final text in `result.result`; adopt it when no text block was
     // reconstructed. Engine-agnostic: Claude carries text in assistant events,
-    // so `lastText` is already set and this stays inert. Error results are
+    // so `lastTextThought` is already set and this stays inert. Error results are
     // skipped — emitTerminalError already surfaces the message as assistant text.
     if (event.type === 'result') {
       if (event.is_error !== true) {
