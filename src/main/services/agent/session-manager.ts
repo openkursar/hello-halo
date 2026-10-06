@@ -1788,6 +1788,8 @@ interface McpRebuildSpent {
   stage: 'retried' | 'recovered'
   /** The session built for this stage reported the server failed again (logged once). */
   capped: boolean
+  /** Set when a tool call found the server gone: the engine had reported it connected. */
+  callFailedAt?: number
 }
 
 /**
@@ -1795,12 +1797,28 @@ interface McpRebuildSpent {
  * once its session reported the server failed, 'recovered' once the server was
  * seen connecting again after that. Kept across the rebuild it asked for and
  * dropped by any other teardown of the conversation's session, when the
- * session connects the server, and on any MCP configuration change. The cap
- * matters for a server that passes Halo's probe but never connects in the
- * engine (a proxy or PATH only the engine sees): it would otherwise rebuild the
- * session at every recovery report.
+ * session connects the server (for a failure a tool call found, only once
+ * MCP_CALL_FAILURE_WINDOW_MS has passed), and on any MCP configuration change.
+ * The cap matters for a server that passes Halo's probe but never connects in
+ * the engine (a proxy or PATH only the engine sees): it would otherwise rebuild
+ * the session at every recovery report.
  */
 const mcpRebuildsSpent = new Map<string, Map<string, McpRebuildSpent>>()
+
+/**
+ * The result of a tool call whose MCP server dropped mid-session and was not
+ * reconnected. Claude Code CLI 2.1.89 then fails every later call to that server
+ * while its status reports still say connected; the halo engine returns the
+ * same text, with a final period, while it reconnects in the background.
+ */
+const MCP_NOT_CONNECTED_RESULT = /^MCP server "(.+)" is not connected\.?$/
+
+/**
+ * A call that finds the server gone this soon after an earlier call failure
+ * counts as the same failure, so a server that connects but cannot serve calls
+ * rebuilds a conversation's session at most once in this time.
+ */
+const MCP_CALL_FAILURE_WINDOW_MS = 5 * 60_000
 
 /** Conversations whose next session teardown is a rebuild asked for by an MCP failure. */
 const mcpRebuildRequested = new Set<string>()
@@ -1812,51 +1830,99 @@ function requestMcpRebuild(conversationId: string, reason: string): void {
 
 /**
  * Engines connect MCP servers when a session starts and do not retry one that
- * failed; the session goes on without its tools. Called with every SDK message
- * a chat consumer reads, it acts only on the per-turn status report
- * (`mcp_servers`): it records the failed servers and rebuilds the session the
- * way an MCP toggle does — deferred past a running turn — so the next message
- * starts with a fresh connection attempt.
+ * failed; the session goes on without its tools. A server that drops
+ * mid-session can stay unusable the same way. Called with every SDK message a
+ * chat consumer reads, it acts only on the per-turn status report
+ * (`mcp_servers`) and on tool results saying a server is not connected: it
+ * records the failed servers and rebuilds the session the way an MCP toggle
+ * does — deferred past a running turn — so the next message starts with a
+ * fresh connection attempt.
  */
 export function noteSessionMcpStatus(conversationId: string, session: V2SDKSession, sdkMessage: unknown): void {
-  const msg = sdkMessage as { type?: unknown; mcp_servers?: unknown } | null
+  const msg = sdkMessage as { type?: unknown; mcp_servers?: unknown; message?: { content?: unknown } } | null
+  if (msg?.type === 'user') {
+    const gone = serversFoundGoneByCalls(msg.message?.content)
+    if (gone && v2Sessions.get(conversationId)?.session === session) {
+      spendMcpRebuilds(conversationId, gone, true)
+    }
+    return
+  }
   if (msg?.type !== 'system' || !Array.isArray(msg.mcp_servers)) return
   const info = v2Sessions.get(conversationId)
   if (info?.session !== session) return
 
-  const spent = mcpRebuildsSpent.get(conversationId) ?? new Map<string, McpRebuildSpent>()
+  const now = Date.now()
+  const spent = mcpRebuildsSpent.get(conversationId)
   const failed: string[] = []
   for (const server of msg.mcp_servers as Array<{ name?: unknown; status?: unknown }>) {
     if (typeof server?.name !== 'string') continue
     if (server.status === 'failed') failed.push(server.name)
-    else if (server.status === 'connected') spent.delete(server.name)
+    else if (server.status === 'connected') {
+      const entry = spent?.get(server.name)
+      if (entry && !isRecentCallFailure(entry, now)) spent?.delete(server.name)
+    }
   }
+  if (spent?.size === 0) mcpRebuildsSpent.delete(conversationId)
   info.failedMcpServers = failed.length > 0 ? failed : undefined
+  spendMcpRebuilds(conversationId, failed, false, now)
+}
 
+function isRecentCallFailure(entry: McpRebuildSpent, now: number): boolean {
+  return entry.callFailedAt !== undefined && now - entry.callFailedAt < MCP_CALL_FAILURE_WINDOW_MS
+}
+
+/** Servers that a tool result frame says are not connected. */
+function serversFoundGoneByCalls(content: unknown): string[] | undefined {
+  if (!Array.isArray(content)) return undefined
+  let names: string[] | undefined
+  for (const block of content as Array<{ type?: unknown; is_error?: unknown; content?: unknown }>) {
+    if (block?.type !== 'tool_result' || block.is_error !== true) continue
+    const parts = block.content
+    const text = typeof parts === 'string'
+      ? parts
+      : Array.isArray(parts) && parts.length === 1 ? (parts[0] as { text?: unknown } | null)?.text : undefined
+    const name = typeof text === 'string' ? MCP_NOT_CONNECTED_RESULT.exec(text)?.[1] : undefined
+    if (name && !names?.includes(name)) (names ??= []).push(name)
+  }
+  return names
+}
+
+/**
+ * Spends the rebuild budget on servers the current session found failed —
+ * at its start, or in a tool call — and asks for one rebuild if any had budget left.
+ */
+function spendMcpRebuilds(conversationId: string, failed: string[], byCall: boolean, now = Date.now()): void {
+  if (failed.length === 0) return
+  const spent = mcpRebuildsSpent.get(conversationId) ?? new Map<string, McpRebuildSpent>()
   const retry: string[] = []
   const capped: string[] = []
   for (const name of failed) {
     const entry = spent.get(name)
-    if (!entry) {
-      spent.set(name, { stage: 'retried', capped: false })
+    if (!entry || (entry.callFailedAt !== undefined && !isRecentCallFailure(entry, now))) {
+      spent.set(name, byCall ? { stage: 'retried', capped: false, callFailedAt: now } : { stage: 'retried', capped: false })
       retry.push(name)
-    } else if (!entry.capped && !isRebuildPending(conversationId)) {
+      continue
+    }
+    // Failing at the start again makes a later 'connected' report proof that it works.
+    if (!byCall) delete entry.callFailedAt
+    if (!entry.capped && !isRebuildPending(conversationId)) {
       entry.capped = true
-      capped.push(entry.stage === 'retried'
-        ? `${name} (rebuilds once more when seen connecting)`
-        : `${name} (no further automatic rebuilds)`)
+      const next = entry.callFailedAt !== undefined
+        ? `rebuilds on a call failure after ${MCP_CALL_FAILURE_WINDOW_MS / 60_000} min`
+        : entry.stage === 'retried' ? 'rebuilds once more when seen connecting' : 'no further automatic rebuilds'
+      capped.push(`${name} (${next})`)
     }
   }
-  if (spent.size > 0) mcpRebuildsSpent.set(conversationId, spent)
-  else mcpRebuildsSpent.delete(conversationId)
+  mcpRebuildsSpent.set(conversationId, spent)
 
   if (capped.length > 0) {
     console.log(`[Agent][${conversationId}] MCP server(s) still failing after a rebuild: ${capped.join(', ')}`)
   }
   if (retry.length === 0) return
 
-  console.log(`[Agent][${conversationId}] MCP server(s) failed to connect: ${retry.join(', ')} — rebuilding the session for the next message`)
-  requestMcpRebuild(conversationId, `MCP server failed to connect: ${retry.join(', ')}`)
+  const failure = byCall ? 'not connected in a tool call' : 'failed to connect'
+  console.log(`[Agent][${conversationId}] MCP server(s) ${failure}: ${retry.join(', ')} — rebuilding the session for the next message`)
+  requestMcpRebuild(conversationId, `MCP server ${failure}: ${retry.join(', ')}`)
 }
 
 /** A rebuild is already flagged for this session, or its consumer stopped for one. */
