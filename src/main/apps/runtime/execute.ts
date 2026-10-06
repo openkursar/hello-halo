@@ -49,6 +49,7 @@ import {
   createSessionState,
   registerActiveSession,
   unregisterActiveSession,
+  explainEngineError,
   type V2SessionLease,
 } from '../../services/agent'
 import { applyReasoningEffort } from '../../services/agent/reasoning-effort'
@@ -1050,7 +1051,7 @@ async function processStream(
         if (m.is_error || m.error_during_execution) {
           result.aiReportedError = true
           if (typeof m.result === 'string' && m.result.length > 0) {
-            result.aiReportedErrorDetail = m.result
+            result.aiReportedErrorDetail = explainEngineError(m.result)
           }
           console.warn(`[Runtime][${runTag}] AI reported error in result message`)
         }

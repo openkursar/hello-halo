@@ -7,7 +7,7 @@
  * Key feature: PPID scanning for accurate subprocess detection.
  */
 
-import type { HealthStatus, ImmediateCheckResult, ProcessCheckStatus, ServiceCheckStatus } from '../types'
+import type { HealthStatus, ImmediateCheckOptions, ImmediateCheckResult, ProcessCheckStatus, ServiceCheckStatus } from '../types'
 import { checkOpenAIRouter, checkHttpServer } from './probes/service-probe'
 import { getCurrentProcesses, unregisterProcess, getRegistryStats } from '../process-guardian'
 import { getPlatformOps } from '../process-guardian/platform'
@@ -193,7 +193,7 @@ async function performFallbackCheck(): Promise<void> {
  *
  * Includes debouncing to prevent rapid consecutive calls.
  */
-export async function runImmediateCheck(): Promise<ImmediateCheckResult> {
+export async function runImmediateCheck(options: ImmediateCheckOptions = {}): Promise<ImmediateCheckResult> {
   // Debounce: if check was run recently, return the last result
   const now = Date.now()
   if (lastCheckTime && (now - lastCheckTime) < MIN_CHECK_INTERVAL_MS && lastCheckPromise) {
@@ -208,14 +208,14 @@ export async function runImmediateCheck(): Promise<ImmediateCheckResult> {
   }
 
   // Start the actual check
-  lastCheckPromise = doImmediateCheck()
+  lastCheckPromise = doImmediateCheck(options)
   return lastCheckPromise
 }
 
 /**
  * Internal implementation of immediate health check
  */
-async function doImmediateCheck(): Promise<ImmediateCheckResult> {
+async function doImmediateCheck(options: ImmediateCheckOptions): Promise<ImmediateCheckResult> {
   isCheckRunning = true
   const timestamp = Date.now()
   lastCheckTime = timestamp
@@ -324,6 +324,8 @@ async function doImmediateCheck(): Promise<ImmediateCheckResult> {
       responsive: false
     }
 
+    let childLocalConnection: ImmediateCheckResult['services']['childLocalConnection']
+
     // Check OpenAI Router
     const routerInfo = getRouterInfo()
     if (routerInfo) {
@@ -340,6 +342,17 @@ async function doImmediateCheck(): Promise<ImmediateCheckResult> {
       } catch (error) {
         routerStatus.error = (error as Error).message
         issues.push(`OpenAI Router check failed: ${routerStatus.error}`)
+      }
+
+      // Security software can refuse the engine's process while this one gets through.
+      if (options.checkChildLocalConnection) {
+        childLocalConnection = await options.checkChildLocalConnection(routerInfo.port)
+        if (!childLocalConnection.reachable) {
+          issues.push(
+            `Child process cannot connect to 127.0.0.1:${routerInfo.port} (${childLocalConnection.error ?? 'unknown'})` +
+            (childLocalConnection.blocked ? ` — blocked by the system for ${childLocalConnection.program}` : '')
+          )
+        }
       }
     }
 
@@ -401,7 +414,8 @@ async function doImmediateCheck(): Promise<ImmediateCheckResult> {
 
     // Overall health: no critical issues and services are responsive (if running)
     const hasServiceIssues = (routerInfo && !routerStatus.responsive) ||
-                             (serverInfo.running && !httpServerStatus.responsive)
+                             (serverInfo.running && !httpServerStatus.responsive) ||
+                             childLocalConnection?.reachable === false
     const healthy = issues.length === 0 || (registryRemoved > 0 && issues.length === 1 && !hasServiceIssues)
 
     return {
@@ -412,7 +426,8 @@ async function doImmediateCheck(): Promise<ImmediateCheckResult> {
       },
       services: {
         openaiRouter: routerStatus,
-        httpServer: httpServerStatus
+        httpServer: httpServerStatus,
+        ...(childLocalConnection ? { childLocalConnection } : {})
       },
       issues,
       healthy,

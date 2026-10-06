@@ -133,6 +133,17 @@ export interface ServiceHealthInfo {
   error?: string
 }
 
+/** The router reached from a child process started the way engine processes start. */
+export interface ChildLocalConnectionInfo {
+  reachable: boolean
+  /** Refused by the system (EACCES/EPERM): security software, not Halo, is in the way. */
+  blocked: boolean
+  /** Error code or reason when not reachable. */
+  error?: string
+  /** The program the child ran, which an allowlist has to name. */
+  program: string
+}
+
 /**
  * Response from runHealthCheck
  */
@@ -145,6 +156,8 @@ export interface HealthCheckResponse {
   services: {
     openaiRouter: ServiceHealthInfo
     httpServer: ServiceHealthInfo
+    /** Absent when the router is not running or the check was not asked for. */
+    childLocalConnection?: ChildLocalConnectionInfo
   }
   issues: string[]
   healthy: boolean

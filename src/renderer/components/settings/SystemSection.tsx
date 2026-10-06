@@ -17,6 +17,7 @@ import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 import { useSecurityPolicy } from '../../hooks/useSecurityPolicy'
 import { BrowserAllowlistCard } from './BrowserAllowlistCard'
 import { ProxyBypassField } from './ProxyBypassField'
+import { ChildLocalConnectionRow } from './ChildLocalConnectionRow'
 
 interface SystemSectionProps {
   config: HaloConfig | null
@@ -764,6 +765,9 @@ export function SystemSection({ config, setConfig }: SystemSectionProps) {
                               )}
                             </div>
                           </div>
+                          {healthCheckResult.services.childLocalConnection && (
+                            <ChildLocalConnectionRow check={healthCheckResult.services.childLocalConnection} />
+                          )}
                         </div>
                       </div>
                     )}

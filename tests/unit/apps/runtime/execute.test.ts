@@ -153,6 +153,9 @@ vi.mock('../../../../src/main/services/agent', async () => ({
   formatReferencesBlock: (await vi.importActual<typeof import('../../../../src/main/services/agent/references')>(
     '../../../../src/main/services/agent/references',
   )).formatReferencesBlock,
+  explainEngineError: (await vi.importActual<typeof import('../../../../src/main/services/agent/local-connection')>(
+    '../../../../src/main/services/agent/local-connection',
+  )).explainEngineError,
   ...(await import('../../../../src/main/services/agent/session-manager')),
 }))
 
@@ -445,6 +448,19 @@ describe('executeRun — completion branches', () => {
       result.runId,
       expect.objectContaining({ status: 'error', errorMessage: 'model rate-limited' }),
     )
+  })
+
+  it('explains a refused local connection in the run\'s error, with the program to allow', async () => {
+    nextSession = new FakeSession({
+      script: [assistantReport(), { type: 'result', is_error: true, result: 'API Error: Unable to connect to API (EACCES)' }],
+    })
+
+    const result = await executeRun({ app: makeApp(), trigger: baseTrigger, store: makeStore(), memory: makeMemory() })
+
+    expect(result.outcome).toBe('error')
+    expect(result.errorMessage).toContain("Security software on this computer blocked Halo's internal connection")
+    expect(result.errorMessage).toContain('allow this program to make local connections: /usr/bin/electron')
+    expect(result.errorMessage).toContain('(engine error: API Error: Unable to connect to API (EACCES))')
   })
 
   it('leaves a failure entry with the reason when the engine fails after the run reported', async () => {

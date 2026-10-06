@@ -50,6 +50,7 @@ import { analytics } from '../analytics/analytics.service'
 import { AnalyticsEvents } from '../analytics/types'
 import { deriveErrorCode } from '../analytics/error-code'
 import { beginApiRetry, endApiRetry, parseApiRetryMessage } from './api-retry'
+import { explainEngineError } from './local-connection'
 
 // Unified fallback error suffix - guides user to check logs
 const FALLBACK_ERROR_HINT = 'Check logs in Settings > System > Logs.'
@@ -1031,6 +1032,7 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
     // Parse SDK message into Thought and send to renderer
     // Pass credentials.model to display the user's actual configured model
     const thought = parseSDKMessage(sdkMessage, displayModel)
+    if (thought?.type === 'error') thought.content = explainEngineError(thought.content)
 
     if (thought) {
       // Handle tool_result specially - merge into corresponding tool_use thought
