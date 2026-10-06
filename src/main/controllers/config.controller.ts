@@ -9,12 +9,13 @@ import {
   getCredentialDecodeFailures as serviceGetCredentialDecodeFailures,
   getConfigPath as serviceGetConfigPath,
   getConfigReadFailure as serviceGetConfigReadFailure,
+  getConfigReadFailureCount as serviceGetConfigReadFailureCount,
   isConfigUnreadable as serviceIsConfigUnreadable
 } from '../foundation/config.service'
 import { maskConfigFields, unmaskSentinels } from '../foundation/config-encryption'
 import { validateApiConnection, fetchModelsFromApi } from '../services/api-validator.service'
 import { ModelFetchError } from '../../shared/model-fetch-error'
-import { CONFIG_UNREADABLE_CODE } from '../../shared/rpc/contracts/config.contract'
+import { CONFIG_RELOAD_REQUIRED_CODE, CONFIG_UNREADABLE_CODE } from '../../shared/rpc/contracts/config.contract'
 import type { AISourcesConfig } from '../../shared/types/ai-sources'
 
 export interface ControllerResponse<T = unknown> {
@@ -29,13 +30,46 @@ export interface ControllerResponse<T = unknown> {
  * passwords) are replaced with '***' so the HTTP / IPC boundary never
  * leaks credentials.
  */
-export function getConfig(): ControllerResponse {
+export function getConfig(): ControllerResponse & { configEpoch?: number } {
   try {
     const config = serviceGetConfig()
-    return { success: true, data: maskConfigFields(config as unknown as Record<string, unknown>) }
+    return {
+      success: true,
+      data: maskConfigFields(config as unknown as Record<string, unknown>),
+      configEpoch: configSnapshotEpoch(),
+    }
   } catch (error: unknown) {
     const err = error as Error
     return { success: false, error: err.message }
+  }
+}
+
+/**
+ * Stamp for the settings a client loads with the read just made: how many
+ * reads had failed by then, or -1 when this read itself fell back to the
+ * defaults. Sent as `configEpoch`; a whole-settings save hands it back.
+ */
+export function configSnapshotEpoch(): number {
+  return serviceIsConfigUnreadable() ? -1 : serviceGetConfigReadFailureCount()
+}
+
+/**
+ * The answer to a whole-settings save built on settings loaded before the
+ * latest failed read, or during it; null when it may go ahead. Call it after
+ * this save's own read of the config.
+ *
+ * Such settings may be the built-in defaults, or carry changes that were
+ * refused while the file could not be read. Written back once the file reads
+ * again, they would replace what it holds — every IM channel and notification
+ * channel among them. A save that sends no stamp is not judged here.
+ */
+export function reloadRequiredBeforeSave(snapshotEpoch: number | undefined): ControllerResponse | null {
+  if (snapshotEpoch === undefined || serviceIsConfigUnreadable()) return null
+  if (snapshotEpoch === serviceGetConfigReadFailureCount()) return null
+  return {
+    success: false,
+    code: CONFIG_RELOAD_REQUIRED_CODE,
+    error: 'Not saved: these settings were loaded before the configuration file could be read; reload them and make the change again',
   }
 }
 
@@ -105,10 +139,13 @@ export function preserveManagedSources(updates: Record<string, unknown>, existin
 /**
  * Update configuration. '***' sentinels in the incoming payload are
  * replaced with the current value so unchanged secrets are preserved.
+ * `snapshotEpoch` is the stamp of the settings the client built this save on.
  */
-export function setConfig(updates: Record<string, unknown>): ControllerResponse {
+export function setConfig(updates: Record<string, unknown>, snapshotEpoch?: number): ControllerResponse {
   try {
     const existing = serviceGetConfig() as unknown as Record<string, unknown>
+    const reloadRequired = reloadRequiredBeforeSave(snapshotEpoch)
+    if (reloadRequired) return reloadRequired
     unmaskSentinels(updates, existing)
     preserveManagedSources(updates, existing)
     const config = serviceSaveConfig(updates as any)

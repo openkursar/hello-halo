@@ -9,6 +9,7 @@ vi.mock('../../../src/main/foundation/config.service', () => ({
   getConfig: vi.fn(),
   saveConfig: vi.fn(),
   isConfigUnreadable: vi.fn(() => false),
+  getConfigReadFailureCount: vi.fn(() => 0),
   getConfigPath: vi.fn(() => '/home/user/.halo/config.json')
 }))
 
@@ -22,8 +23,19 @@ vi.mock('../../../src/main/services/api-validator.service', () => ({
   fetchModelsFromApi: fetchModelsFromApiMock
 }))
 
-import { fetchModels, preserveManagedSources, setConfig } from '../../../src/main/controllers/config.controller'
-import { getConfig, isConfigUnreadable, saveConfig } from '../../../src/main/foundation/config.service'
+import {
+  configSnapshotEpoch,
+  fetchModels,
+  preserveManagedSources,
+  reloadRequiredBeforeSave,
+  setConfig
+} from '../../../src/main/controllers/config.controller'
+import {
+  getConfig,
+  getConfigReadFailureCount,
+  isConfigUnreadable,
+  saveConfig
+} from '../../../src/main/foundation/config.service'
 
 describe('managed account configuration writes', () => {
   const live = {
@@ -85,6 +97,46 @@ describe('managed account configuration writes', () => {
 
     expect(result).toMatchObject({ success: false, code: 'CONFIG_UNREADABLE' })
     expect(result.error).toContain('/home/user/.halo/config.json')
+  })
+})
+
+describe('settings snapshot stamps', () => {
+  it('stamp a good read with the failures so far, and a read that fell back to defaults with -1', () => {
+    vi.mocked(getConfigReadFailureCount).mockReturnValueOnce(3)
+    expect(configSnapshotEpoch()).toBe(3)
+
+    vi.mocked(isConfigUnreadable).mockReturnValueOnce(true)
+    expect(configSnapshotEpoch()).toBe(-1)
+  })
+
+  it('let a save through only when no read has failed since its settings were loaded', () => {
+    vi.mocked(getConfigReadFailureCount).mockReturnValue(3)
+    try {
+      expect(reloadRequiredBeforeSave(3)).toBeNull()
+      expect(reloadRequiredBeforeSave(2)).toMatchObject({ success: false, code: 'CONFIG_RELOAD_REQUIRED' })
+      expect(reloadRequiredBeforeSave(-1)).toMatchObject({ success: false, code: 'CONFIG_RELOAD_REQUIRED' })
+      // No stamp: not judged here.
+      expect(reloadRequiredBeforeSave(undefined)).toBeNull()
+    } finally {
+      vi.mocked(getConfigReadFailureCount).mockReturnValue(0)
+    }
+  })
+
+  it('leave a save made while the file is still unreadable to the not-saved answer', () => {
+    vi.mocked(isConfigUnreadable).mockReturnValueOnce(true)
+    expect(reloadRequiredBeforeSave(-1)).toBeNull()
+  })
+
+  it('refuse a stale save on the HTTP path before anything is written', () => {
+    vi.mocked(getConfig).mockReturnValue({} as any)
+    vi.mocked(saveConfig).mockClear()
+    vi.mocked(getConfigReadFailureCount).mockReturnValue(1)
+    try {
+      expect(setConfig({ imChannels: { instances: [] } }, 0)).toMatchObject({ code: 'CONFIG_RELOAD_REQUIRED' })
+      expect(saveConfig).not.toHaveBeenCalled()
+    } finally {
+      vi.mocked(getConfigReadFailureCount).mockReturnValue(0)
+    }
   })
 })
 

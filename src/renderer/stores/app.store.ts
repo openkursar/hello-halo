@@ -143,7 +143,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   // bot from a digital human's settings page) leaves every other config-backed
   // view stale until restart. Surfaces that write through main call this.
   refreshConfig: async () => {
-    const response = await api.getConfig()
+    const response = await api.getConfig({ snapshot: true })
     if (response.success && response.data) set({ config: response.data as HaloConfig })
   },
 
@@ -308,7 +308,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       // Load config from main process
       // config:get handler is registered in Essential services, so this always works.
       console.log('[Store] Loading config...')
-      const response = await api.getConfig()
+      const response = await api.getConfig({ snapshot: true })
       console.log('[Store] Config response:', response.success ? 'success' : 'failed')
 
       if (response.success && response.data) {

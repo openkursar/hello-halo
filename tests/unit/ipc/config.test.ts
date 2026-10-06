@@ -19,6 +19,7 @@ vi.mock('../../../src/main/foundation/config.service', () => ({
   getConfig: vi.fn(),
   saveConfig: vi.fn(),
   isConfigUnreadable: vi.fn(() => false),
+  getConfigReadFailureCount: vi.fn(() => 0),
   getConfigPath: vi.fn(() => '/home/user/.halo/config.json')
 }))
 
@@ -52,7 +53,8 @@ vi.mock('../../../src/main/services/health', () => ({
 
 vi.mock('../../../src/shared/rpc/contracts/config.contract', () => ({
   configRpc: {},
-  CONFIG_UNREADABLE_CODE: 'CONFIG_UNREADABLE'
+  CONFIG_UNREADABLE_CODE: 'CONFIG_UNREADABLE',
+  CONFIG_RELOAD_REQUIRED_CODE: 'CONFIG_RELOAD_REQUIRED'
 }))
 
 vi.mock('../../../src/main/ipc/rpc', () => ({
@@ -60,7 +62,12 @@ vi.mock('../../../src/main/ipc/rpc', () => ({
 }))
 
 import { registerConfigHandlers } from '../../../src/main/ipc/config'
-import { getConfig, isConfigUnreadable, saveConfig } from '../../../src/main/foundation/config.service'
+import {
+  getConfig,
+  getConfigReadFailureCount,
+  isConfigUnreadable,
+  saveConfig
+} from '../../../src/main/foundation/config.service'
 import { getAISourceManager } from '../../../src/main/services/ai-sources'
 
 describe('config IPC model fetching', () => {
@@ -135,6 +142,28 @@ describe('config IPC model fetching', () => {
         .resolves.toMatchObject({ success: false, code: 'CONFIG_UNREADABLE' })
     } finally {
       vi.mocked(isConfigUnreadable).mockReturnValue(false)
+    }
+  })
+
+  it('stamps the settings it hands out, and refuses a save built on settings from before the latest failed read', async () => {
+    vi.mocked(getConfig).mockReturnValue({} as any)
+    vi.mocked(getConfigReadFailureCount).mockReturnValue(2)
+    vi.mocked(saveConfig).mockClear()
+    try {
+      registerConfigHandlers()
+      const handlers = registerRawRpcHandlersMock.mock.calls[0][1]
+
+      await expect(handlers.getConfig()).resolves.toMatchObject({ success: true, configEpoch: 2 })
+
+      // Loaded when one read had failed; a second failure came after.
+      await expect(handlers.setConfig({ imChannels: { instances: [] } }, 1))
+        .resolves.toMatchObject({ success: false, code: 'CONFIG_RELOAD_REQUIRED' })
+      expect(saveConfig).not.toHaveBeenCalled()
+
+      await handlers.setConfig({ imChannels: { instances: [] } }, 2)
+      expect(saveConfig).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.mocked(getConfigReadFailureCount).mockReturnValue(0)
     }
   })
 

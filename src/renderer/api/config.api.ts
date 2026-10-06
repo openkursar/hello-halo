@@ -11,9 +11,13 @@ import type {
 } from './_shared'
 import type { ModelOption, ModelRefreshSummary } from '../../shared/types'
 import type { CatalogModelCapability, ModelCapabilityOverride } from '../../shared/types/model-capabilities'
-import { CONFIG_UNREADABLE_CODE } from '../../shared/rpc/contracts/config.contract'
+import { CONFIG_RELOAD_REQUIRED_CODE, CONFIG_UNREADABLE_CODE } from '../../shared/rpc/contracts/config.contract'
 
-/** Window event raised when a settings write came back unsaved because config.json cannot be read. */
+/**
+ * Window event raised when a settings write came back unsaved: config.json
+ * cannot be read, or the settings the write was built on predate a failed
+ * read of it. `detail.code` says which.
+ */
 export const CONFIG_NOT_SAVED_EVENT = 'halo:config-not-saved'
 
 /**
@@ -22,11 +26,20 @@ export const CONFIG_NOT_SAVED_EVENT = 'halo:config-not-saved'
  * saved; the event lets the app say otherwise in one place.
  */
 export function reportIfNotSaved<T extends ApiResponse>(response: T): T {
-  if (response?.code === CONFIG_UNREADABLE_CODE) {
-    window.dispatchEvent(new CustomEvent(CONFIG_NOT_SAVED_EVENT))
+  const code = response?.code
+  if (code === CONFIG_UNREADABLE_CODE || code === CONFIG_RELOAD_REQUIRED_CODE) {
+    window.dispatchEvent(new CustomEvent(CONFIG_NOT_SAVED_EVENT, { detail: { code } }))
   }
   return response
 }
+
+/**
+ * Stamp of the settings this client keeps (the app store's config), sent with
+ * every whole-settings save so main can refuse one built on the defaults it
+ * fell back to, or on changes refused, while config.json could not be read.
+ * Undefined until those settings are loaded.
+ */
+let snapshotEpoch: number | undefined
 
 /** Result payload of `validateApi` (connection test). */
 export interface ValidateApiResult {
@@ -43,18 +56,23 @@ export interface FetchModelsResult {
 
 export const configApi = {
   // ===== Config =====
-  getConfig: async (): Promise<ApiResponse> => {
-    if (isElectron()) {
-      return window.halo.getConfig()
+  /** `snapshot`: the caller keeps this read as the client's settings (the app store does). */
+  getConfig: async (options?: { snapshot?: boolean }): Promise<ApiResponse> => {
+    const response: ApiResponse & { configEpoch?: number } = isElectron()
+      ? await window.halo.getConfig()
+      : await httpRequest('GET', '/api/config')
+    if (options?.snapshot && response?.success && typeof response.configEpoch === 'number') {
+      snapshotEpoch = response.configEpoch
     }
-    return httpRequest('GET', '/api/config')
+    return response
   },
 
   setConfig: async (updates: Record<string, unknown>): Promise<ApiResponse> => {
     if (isElectron()) {
-      return reportIfNotSaved(await window.halo.setConfig(updates))
+      return reportIfNotSaved(await window.halo.setConfig(updates, snapshotEpoch))
     }
-    return reportIfNotSaved(await httpRequest('POST', '/api/config', updates))
+    const query = snapshotEpoch === undefined ? '' : `?snapshotEpoch=${snapshotEpoch}`
+    return reportIfNotSaved(await httpRequest('POST', `/api/config${query}`, updates))
   },
 
   // Credential fields that could not be decoded at rest (alert banner source).

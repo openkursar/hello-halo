@@ -1324,6 +1324,9 @@ export async function initializeApp(): Promise<void> {
  */
 let configReadFailed = false
 
+/** Failed reads of an existing config.json since startup; never decreases. */
+let configReadFailures = 0
+
 // Get configuration
 export function getConfig(): HaloConfig {
   const configPath = getConfigPath()
@@ -1387,6 +1390,7 @@ export function getConfig(): HaloConfig {
     return merged
   } catch (error) {
     configReadFailed = true
+    configReadFailures++
     console.error('Failed to read config:', error)
     return DEFAULT_CONFIG
   }
@@ -1399,6 +1403,18 @@ export function getConfig(): HaloConfig {
  */
 export function isConfigUnreadable(): boolean {
   return configReadFailed
+}
+
+/**
+ * How many reads of an existing config.json have failed since startup.
+ *
+ * A failed read clears itself on the next good one, so the flag alone cannot
+ * tell a client that the settings it loaded may be the built-in defaults: by
+ * the time it saves, the file may read fine again. Comparing this count with
+ * the one at its last load can.
+ */
+export function getConfigReadFailureCount(): number {
+  return configReadFailures
 }
 
 /**

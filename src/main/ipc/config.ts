@@ -8,10 +8,12 @@ import { decryptString } from '../foundation/secure-storage.service'
 import { unmaskSentinels, maskOAuthFields } from '../foundation/config-encryption'
 import { validateApiConnection } from '../services/api-validator.service'
 import {
+  configSnapshotEpoch,
   fetchModels as controllerFetchModels,
   getConfigReadFailure as controllerGetConfigReadFailure,
   notSavedWhileConfigUnreadable,
   preserveManagedSources,
+  reloadRequiredBeforeSave,
 } from '../controllers/config.controller'
 import { runConfigProbe, emitConfigChange } from '../services/health'
 import type { AISourcesConfig, AISource } from '../../shared/types'
@@ -41,7 +43,11 @@ export function registerConfigHandlers(): void {
         }
 
         console.log('[Settings] config:get - Loaded, aiSources v2, currentId:', config.aiSources?.currentId || 'none')
-        return { success: true, data: maskOAuthFields(config as unknown as Record<string, unknown>) }
+        return {
+          success: true,
+          data: maskOAuthFields(config as unknown as Record<string, unknown>),
+          configEpoch: configSnapshotEpoch(),
+        }
       } catch (error: unknown) {
         const err = error as Error
         console.error('[Settings] config:get - Failed:', err.message)
@@ -61,8 +67,8 @@ export function registerConfigHandlers(): void {
 
     getConfigReadFailure: async () => controllerGetConfigReadFailure(),
 
-    // Save configuration
-    setConfig: async (updates: Record<string, unknown>) => {
+    // Save configuration. `snapshotEpoch`: stamp of the settings this save was built on.
+    setConfig: async (updates: Record<string, unknown>, snapshotEpoch?: number) => {
       // Log what's being updated (without sensitive data)
       const updateKeys = Object.keys(updates)
       console.debug('[IPC] config:set keys:', updateKeys.join(', '), updates.agent ? `agent=${JSON.stringify(updates.agent)}` : '')
@@ -91,6 +97,11 @@ export function registerConfigHandlers(): void {
         const processedUpdates = { ...updates }
 
         const existing = { ...getConfig() }
+        const reloadRequired = reloadRequiredBeforeSave(snapshotEpoch)
+        if (reloadRequired) {
+          console.warn('[Settings] config:set - Not saved: built on settings loaded before a failed config read')
+          return reloadRequired
+        }
         unmaskSentinels(processedUpdates, existing)
         preserveManagedSources(processedUpdates, existing)
 
