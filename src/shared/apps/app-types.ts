@@ -250,6 +250,8 @@ export interface ActivityEntryContent {
   outputUrl?: string
   /** Set on the note an author's upgrade leaves when it kept fields at the user's version. */
   upgrade?: SpecUpgradeNote
+  /** Scheduled times that came due while this run kept the person busy, and so were skipped. */
+  skippedSchedules?: number
 }
 
 /** One decision an escalation asks the user to make. */
@@ -368,6 +370,7 @@ export interface AutomationAppState {
    */
   status: 'running' | 'queued' | 'idle' | 'paused' | 'waiting_user' | 'needs_login' | 'error'
   nextRunAtMs?: number
+  /** When the execution in progress started; a continued run counts from its continuation. */
   runningAtMs?: number
   /** Run ID of the currently executing run (only set when status === 'running') */
   runningRunId?: string

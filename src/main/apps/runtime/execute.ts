@@ -15,7 +15,7 @@
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { randomUUID } from 'crypto'
-import { createSession } from '../../services/agent/resolved-sdk'
+import { createSession, getEngineCapabilities } from '../../services/agent/resolved-sdk'
 import { getAppManager, type InstalledApp } from '../manager'
 import { resolveExecutionEnvironment, validateExecutionEnvironment, validateEnvironmentConnections } from './execution-environment'
 import { createPersonContextMcpServer, personContextPrompt } from './person-context-tool'
@@ -75,6 +75,7 @@ import {
 import { appConsolidationInputs } from './memory-control'
 import { registerActiveRun, unregisterActiveRun } from './active-runs'
 import { describeSelfInstance, formatInstanceTag } from './live-instances'
+import { stopEngineOnAbort } from './engine-stop'
 
 // ============================================
 // Types
@@ -268,6 +269,16 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
   let session: any = null
   let sessionLease: V2SessionLease | undefined
   let managedSessionActive = false
+  let releaseEngineStop: (() => void) | undefined
+  // Closed once, through its lease when it has one: by a stop the engine did
+  // not answer in time, or when the run ends.
+  let sessionClosed = false
+  const closeSession = (): void => {
+    if (sessionClosed) return
+    sessionClosed = true
+    if (sessionLease) sessionLease.close()
+    else session.close()
+  }
 
   // Sender key while the run can message other conversations (opened in try, closed in finally)
   let runSenderKey: string | undefined
@@ -588,6 +599,15 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       session = await createSession(sdkOptions)
     }
     if (sessionLease) session = sessionLease.session
+    // A stop from outside the run (stop, task closed, person removed, quit)
+    // must reach the engine, or a silent run never notices it.
+    if (abortSignal) {
+      releaseEngineStop = stopEngineOnAbort(
+        abortSignal,
+        { interrupt: session.interrupt?.bind(session), close: closeSession },
+        { canInterrupt: getEngineCapabilities()?.features.interrupt ?? false, runTag },
+      )
+    }
     if (isResuming) {
       registerActiveSession(sessionKey, createSessionState(app.spaceId!, sessionKey, abortController))
       managedSessionActive = true
@@ -685,6 +705,8 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
         `error=${streamResult.aiReportedError}`
       )
     }
+    // The engine's part is over: a stop arriving from here on has nothing to end.
+    releaseEngineStop?.()
 
     // ── 7. Record completion ───────────────────────────────
     const finishedAt = Date.now()
@@ -693,6 +715,8 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     let finalStatus: RunStatus
     let outcome: AppRunResult['outcome']
     let finalErrorMessage: string | undefined
+    // Stopped from outside: the stop, not the model, is why nothing was reported.
+    const stopped = abortSignal?.aborted === true
 
     // Escalation is detected via the onEscalation callback closure,
     // which sets escalationEntryId when report_to_user(type="escalation") is called.
@@ -710,11 +734,15 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       // a conversational reply has nothing to report, so it completes normally.
       finalStatus = 'error'
       outcome = 'error'
-      finalErrorMessage = `AI ended without reporting results after ${autoContinueCount} auto-continue attempt(s)`
-      console.warn(
-        `[Runtime][${runTag}] AI never called report_to_user after ` +
-        `${autoContinueCount} auto-continue attempt(s) — marking as error`
-      )
+      if (stopped) {
+        finalErrorMessage = 'Stopped before reporting results'
+      } else {
+        finalErrorMessage = `AI ended without reporting results after ${autoContinueCount} auto-continue attempt(s)`
+        console.warn(
+          `[Runtime][${runTag}] AI never called report_to_user after ` +
+          `${autoContinueCount} auto-continue attempt(s) — marking as error`
+        )
+      }
     } else {
       finalStatus = 'ok'
       outcome = streamResult.finalText.length > 0 ? 'useful' : 'noop'
@@ -749,13 +777,15 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
         type: 'run_error',
         ts: finishedAt,
         sessionKey,
-        content: {
-          summary: `AI ended without reporting results after ${autoContinueCount} auto-continue attempt(s). ` +
-            'The model may have encountered an issue or exhausted its context.',
-          status: 'error',
-          durationMs,
-          error: 'report_to_user not called',
-        },
+        content: stopped
+          ? { summary: 'Stopped before it reported results.', status: 'error', durationMs }
+          : {
+            summary: `AI ended without reporting results after ${autoContinueCount} auto-continue attempt(s). ` +
+              'The model may have encountered an issue or exhausted its context.',
+            status: 'error',
+            durationMs,
+            error: 'report_to_user not called',
+          },
       }
       try {
         emitEntry ? emitEntry(noReportEntry) : store.insertEntry(noReportEntry)
@@ -878,6 +908,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     //    The run-detail view detects completion from the app runtime status
     //    (broadcast separately by the service) and reloads the JSONL transcript.
     unregisterActiveRun(runId)
+    releaseEngineStop?.()
     if (runSenderKey) closeRunSender(runSenderKey)
 
     // ── 9. Close session ────────────────────────────────────
@@ -885,11 +916,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     // via CC's disk-based resume (sessionId), not process reuse.
     if (session) {
       try {
-        if (sessionLease) {
-          sessionLease.close()
-        } else {
-          session.close()
-        }
+        closeSession()
         console.log(`[Runtime][${runTag}] Session closed`)
       } catch (closeErr) {
         console.error(`[Runtime] Failed to close session: run=${runId}:`, closeErr)

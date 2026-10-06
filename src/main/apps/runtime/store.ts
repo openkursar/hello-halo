@@ -516,6 +516,15 @@ export class ActivityStore {
     return entry
   }
 
+  /** Add to the scheduled times an entry says were skipped while its run went on. */
+  addSkippedSchedules(entryId: string, count: number): ActivityEntry | null {
+    const entry = this.getEntry(entryId)
+    if (!entry) return null
+    entry.content.skippedSchedules = (entry.content.skippedSchedules ?? 0) + count
+    this.db.prepare('UPDATE activity_entries SET content_json = ? WHERE id = ?').run(JSON.stringify(entry.content), entryId)
+    return entry
+  }
+
   /** Get a pending (unanswered) escalation entry */
   getPendingEscalation(appId: string, entryId: string): ActivityEntry | null {
     const row = this.stmtGetPendingEscalation.get(appId, entryId) as EntryRow | undefined

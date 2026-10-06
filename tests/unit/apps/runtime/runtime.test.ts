@@ -221,6 +221,7 @@ import {
   RunExecutionError,
 } from '../../../../src/main/apps/runtime/errors'
 import { createAppRuntimeService } from '../../../../src/main/apps/runtime/service'
+import { initScheduler, resetSchedulerForTest } from '../../../../src/main/platform/scheduler'
 import { openSessionWriter } from '../../../../src/main/apps/runtime/session-store'
 import { getSpace } from '../../../../src/main/services/space.service'
 import { broadcastToAll } from '../../../../src/main/http/websocket'
@@ -1653,6 +1654,7 @@ describe('AppRuntimeService', () => {
       onJobDue: vi.fn(),
       start: vi.fn(),
       stop: vi.fn(),
+      countDueTimes: vi.fn().mockReturnValue(0),
     }
 
     // Mock EventRouter
@@ -2571,6 +2573,119 @@ describe('AppRuntimeService', () => {
 
       expect(firstMessage()).toMatch(/^Scheduled run for "test-automation" \(every 1h\)\. Time: \S+$/)
       expect(firstMessage()).not.toContain(chatText)
+    })
+  })
+
+  describe('a run that outlasts its scheduled times', () => {
+    const T0 = Date.UTC(2026, 9, 6, 9, 0, 0)
+    const MIN = 60_000
+    let testAppId: string
+
+    beforeEach(() => {
+      vi.mocked(executeRun).mockClear()
+      testAppId = randomUUID()
+      const spec = createTestSpec({
+        subscriptions: [{ id: 'quarter-hour', source: { type: 'schedule', config: { every: '15m' } } }],
+      })
+      mockAppManager.getApp.mockReturnValue({
+        id: testAppId, status: 'active', spec, userConfig: {}, userOverrides: {}, spaceId: 'space-001',
+      })
+      dbManager.getAppDatabase().prepare(`
+        INSERT INTO installed_apps (id, spec_id, space_id, spec_json, status, user_config_json, user_overrides_json, permissions_json, installed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(testAppId, 'test-app', 'space-001', JSON.stringify(spec), 'active', '{}', '{}', '{"granted":[],"denied":[]}', T0)
+      vi.useFakeTimers({ now: T0, toFake: ['Date'] })
+    })
+
+    afterEach(async () => {
+      await resetSchedulerForTest()
+      vi.useRealTimers()
+    })
+
+    async function activatedOnRealScheduler() {
+      const scheduler = await initScheduler({ db: dbManager })
+      const service = createAppRuntimeService({
+        store,
+        appManager: mockAppManager,
+        scheduler,
+        eventRouter: mockEventRouter,
+        memory: mockMemory,
+        background: mockBackground,
+        getSpacePath: () => '/tmp/test-space',
+      })
+      await service.activate(testAppId)
+      return service
+    }
+
+    /** The next run records its row the way executeRun does, and lasts `minutes`. */
+    function nextRunLasts(minutes: number, runId = 'run-long') {
+      vi.mocked(executeRun).mockImplementationOnce(async (opts: any) => {
+        const startedAt = Date.now()
+        store.insertRun({ runId, appId: testAppId, sessionKey: `sk-${runId}`, status: 'running', triggerType: opts.trigger.type, startedAt })
+        opts.onRunStarted?.({ runId, sessionKey: `sk-${runId}`, startedAt })
+        vi.setSystemTime(startedAt + minutes * MIN)
+        return { appId: testAppId, runId, sessionKey: `sk-${runId}`, outcome: 'useful', startedAt, finishedAt: Date.now(), durationMs: minutes * MIN }
+      })
+    }
+
+    it('says on the run’s entry how many scheduled times it ran past: 09:00–09:50 skips 09:15, 09:30 and 09:45', async () => {
+      const service = await activatedOnRealScheduler()
+      nextRunLasts(50)
+
+      await service.triggerManually(testAppId)
+
+      const [latest] = store.getEntriesForRun('run-long')
+      expect(latest.content.skippedSchedules).toBe(3)
+    })
+
+    it('says nothing when no scheduled time came due during the run', async () => {
+      const service = await activatedOnRealScheduler()
+      nextRunLasts(10)
+
+      await service.triggerManually(testAppId)
+
+      const [latest] = store.getEntriesForRun('run-long')
+      expect(latest.content.skippedSchedules).toBeUndefined()
+    })
+
+    it('tells the scheduler a stopped run did not fail, so its next time is neither backed off nor counted toward disabling it', async () => {
+      const service = createService()
+      const onJobDue = mockScheduler.onJobDue.mock.calls[0][1]
+      const job = { id: `${testAppId}:quarter-hour`, schedule: { kind: 'every', every: '15m' }, metadata: { appId: testAppId, subscriptionId: 'quarter-hour' } }
+      vi.mocked(executeRun).mockImplementationOnce(async (opts: any) => {
+        const startedAt = Date.now()
+        store.insertRun({ runId: 'run-stopped', appId: testAppId, sessionKey: 'sk-stopped', status: 'running', triggerType: 'schedule', startedAt })
+        opts.onRunStarted?.({ runId: 'run-stopped', sessionKey: 'sk-stopped', startedAt })
+        await service.stopRun(testAppId, 'run-stopped')
+        return { appId: testAppId, runId: 'run-stopped', sessionKey: 'sk-stopped', outcome: 'error', startedAt, finishedAt: startedAt, durationMs: 0, errorMessage: 'Stopped before reporting results' }
+      })
+
+      expect(await onJobDue(job)).toBe('noop')
+
+      // A run that failed on its own is still an error to the scheduler.
+      vi.mocked(executeRun).mockImplementationOnce(async () => ({
+        appId: testAppId, runId: 'run-failed', sessionKey: 'sk-failed', outcome: 'error', startedAt: T0, finishedAt: T0, durationMs: 0, errorMessage: 'model unavailable',
+      }))
+      expect(await onJobDue(job)).toBe('error')
+    })
+
+    it('counts a continued run’s running time from the continuation, not from the run’s first start', async () => {
+      const service = createService()
+      const yesterday = T0 - 24 * 60 * MIN
+      store.insertRun({ runId: 'run-old', appId: testAppId, sessionKey: 'sk-old', status: 'running', triggerType: 'schedule', startedAt: yesterday })
+      store.completeRun('run-old', { status: 'error', finishedAt: yesterday + MIN, durationMs: MIN, errorMessage: 'Stopped before reporting results' })
+      store.updateRunSessionId('run-old', 'cc-session-old')
+      let runningAtMs: number | undefined
+      vi.mocked(executeRun).mockImplementationOnce(async (opts: any) => {
+        opts.onRunStarted?.({ runId: 'run-old', sessionKey: 'sk-old', startedAt: Date.now() })
+        runningAtMs = service.getAppState(testAppId)?.runningAtMs
+        return { appId: testAppId, runId: 'run-old', sessionKey: 'sk-old', outcome: 'useful', startedAt: Date.now(), finishedAt: Date.now(), durationMs: 0 }
+      })
+
+      await service.continueFailedRun(testAppId, 'run-old')
+      await vi.waitFor(() => expect(runningAtMs).toBeDefined())
+
+      expect(runningAtMs).toBe(T0)
     })
   })
 

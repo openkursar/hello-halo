@@ -952,6 +952,38 @@ digital human is decided once:
   the note again. Both transports are user-only: whether an upgrade overrides
   the user's own edit is the user's call.
 
+### 2.22 A Stop Reaches the Engine; What a Long Run Held Up Is Shown
+
+A run has no time limit and no idle detection, and nothing reruns it: a long run
+is left to run until it ends or the user stops it. Pause keeps its meaning
+(§2.7) — it stops scheduling, not the run in progress.
+
+- **Stop**: every stop from outside a run — "Stop this execution" (`stopRun`),
+  closing the task (`closeRun`), removing the person (`abortApp`), quitting
+  (`abortAll`) — aborts the execution's controller. The stream loop sees an
+  abort only when the engine's next message arrives, so `execute.ts` also hands
+  it to `engine-stop.ts`, which stops the engine the way a chat's Stop does: the
+  turn is interrupted, and the session is closed (through its lease when it has
+  one, and only once) when the run is still going 3 s later or the engine cannot
+  interrupt. Closing ends the stream, so a run whose engine went silent (a hung
+  tool, MCP server or model request) still ends within about 10 s. A stopped run
+  that reported nothing ends `error` as "Stopped before it reported results".
+- **Schedule after a stop**: the scheduler handler reports a stopped or closed
+  run as `noop`, so the scheduler neither backs off the next time nor counts the
+  stop toward disabling the job. The runtime's own consecutive-error count
+  already ignores such runs.
+- **Skipped times**: one execution per person (§2.6) means scheduled times that
+  come due while it is queued or running are skipped (`admitAutomaticRun`; the
+  job that started the run is not even dispatched meanwhile), which leaves no
+  trace. When the execution ends, `noteSkippedSchedules` counts them from the
+  schedules (`scheduler.countDueTimes` over the activation's jobs since the
+  person became busy) and adds the count to the run's latest entry as
+  `content.skippedSchedules` — one line on the timeline, not an entry per time.
+  A job removed mid-run (pause) contributes nothing.
+- **While it runs**: `AutomationAppState.runningAtMs` is the execution's own
+  start, kept in memory by run id, because a continued run keeps its first start
+  in the database. The activity thread shows it with the running time.
+
 ---
 
 ## 3. SQLite Schema
@@ -1010,6 +1042,7 @@ src/main/apps/runtime/
   notify-availability.ts     -- resolveNotifyAvailability() — single source of truth for whether notify tools are actually loaded (mirrors notify-tool injection rules; consumed by chat + automation prompts)
   concurrency.ts              -- Counting semaphore
   execute.ts                 -- executeRun() core logic for automation runs
+  engine-stop.ts             -- makes a stop reach a run's engine: interrupt, then close after a grace period (§2.22)
   service.ts                 -- AppRuntimeService implementation
   index.ts                   -- initAppRuntime(), shutdownAppRuntime(), re-exports
 

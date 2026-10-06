@@ -1019,3 +1019,75 @@ describe('SchedulerTimer', () => {
     })
   })
 })
+
+// ============================================================================
+// countDueTimes
+// ============================================================================
+
+describe('SchedulerService.countDueTimes', () => {
+  // 09:00 UTC; the cron cases pin UTC so the grid does not depend on the machine.
+  const T0 = Date.UTC(2026, 9, 6, 9, 0, 0)
+  const MIN = 60_000
+  let manager: DatabaseManager
+
+  beforeEach(() => {
+    vi.useFakeTimers({ now: T0, toFake: ['Date'] })
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    manager = createDatabaseManager(':memory:')
+  })
+
+  afterEach(async () => {
+    await resetSchedulerForTest()
+    manager.closeAll()
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  it('counts the times an every-schedule came due within a run', async () => {
+    const service = await initScheduler({ db: manager })
+    const id = service.addJob({ id: 'every-15m', name: 'every 15m', schedule: { kind: 'every', every: '15m' }, enabled: true })
+
+    // 09:00–09:40 spans 09:15 and 09:30; the run's own start is not counted.
+    expect(service.countDueTimes(id, T0, T0 + 40 * MIN)).toBe(2)
+    // 09:00–10:00 spans four, the last one at the very end.
+    expect(service.countDueTimes(id, T0, T0 + 60 * MIN)).toBe(4)
+    expect(service.countDueTimes(id, T0, T0 + 10 * MIN)).toBe(0)
+  })
+
+  it('counts cron due times', async () => {
+    const service = await initScheduler({ db: manager })
+    const id = service.addJob({
+      id: 'quarter-hourly',
+      name: 'quarter-hourly',
+      schedule: { kind: 'cron', cron: '*/15 * * * *', timezone: 'UTC' },
+      enabled: true,
+    })
+
+    expect(service.countDueTimes(id, T0 + MIN, T0 + 50 * MIN)).toBe(3)
+  })
+
+  it('counts nothing before the job existed', async () => {
+    const service = await initScheduler({ db: manager })
+    vi.setSystemTime(T0 + 20 * MIN)
+    const id = service.addJob({ id: 'every-15m', name: 'every 15m', schedule: { kind: 'every', every: '15m' }, enabled: true })
+
+    // Re-added at 09:20 (its schedule changed mid-run): 09:35 and 09:50 only.
+    expect(service.countDueTimes(id, T0, T0 + 55 * MIN)).toBe(2)
+  })
+
+  it('counts nothing for a paused or missing job', async () => {
+    const service = await initScheduler({ db: manager })
+    const id = service.addJob({ id: 'every-15m', name: 'every 15m', schedule: { kind: 'every', every: '15m' }, enabled: true })
+    service.pauseJob(id)
+
+    expect(service.countDueTimes(id, T0, T0 + 60 * MIN)).toBe(0)
+    expect(service.countDueTimes('no-such-job', T0, T0 + 60 * MIN)).toBe(0)
+  })
+
+  it('stops counting at the limit', async () => {
+    const service = await initScheduler({ db: manager })
+    const id = service.addJob({ id: 'every-10s', name: 'every 10s', schedule: { kind: 'every', every: '10s' }, enabled: true })
+
+    expect(service.countDueTimes(id, T0, T0 + 24 * 60 * MIN, 50)).toBe(50)
+  })
+})
