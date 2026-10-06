@@ -1253,7 +1253,7 @@ describe('TeamOrchestration', () => {
      */
     function holdRecorder(deps: OrchestrationSessionDeps) {
       const held = new Map<string, number>()
-      const holds: Array<{ readonly cancelled: boolean; end(): void }> = []
+      const holds: Array<{ cancelled: boolean; end(): void }> = []
       deps.holdTurn = (sessionKey) => {
         let ended = false
         held.set(sessionKey, (held.get(sessionKey) ?? 0) + 1)
@@ -1332,6 +1332,31 @@ describe('TeamOrchestration', () => {
       } finally {
         vi.useRealTimers()
       }
+    })
+
+    it('a turn stopped while queued gives the session back on reaching a slot, without setting up', async () => {
+      // A person's stop reaches a wake still waiting for its slot. Running it
+      // anyway only to halt it at the last step would keep the chat busy — and
+      // the person's next message waiting — through a whole session setup.
+      seedTeam(store, { collabMode: 'free' })
+      const epoch = makeEpoch(store)
+      const { deps, pendings } = makeSession()
+      const { isHeld, holds } = holdRecorder(deps)
+      const orch = build(deps, undefined, 1)
+      const testerKey = buildTeamSessionKey(TESTER_APP, TEAM_ID, epoch.id)
+      const completeTurn = spyCompleteTurn(bus)
+
+      await wakeMember(orch, epoch.id, RESEARCHER_APP, 'c1')
+      await wakeMember(orch, epoch.id, TESTER_APP, 'c2')
+      await flush()
+      holds[1].cancelled = true
+
+      pendings[0].resolve('done')
+      await flush()
+
+      expect(deps.sendAppChatMessage).toHaveBeenCalledTimes(1)
+      expect(isHeld(testerKey)).toBe(false)
+      expect(lastOutcome(completeTurn, testerKey)).toEqual({ kind: 'undelivered', reason: 'Stopped before it could run' })
     })
   })
 

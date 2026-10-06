@@ -431,8 +431,9 @@ function buildMergedMessageText(
 
 /**
  * Drain the supplement buffer and dispatch a merged round. No-op if empty.
- * Re-checks the busy lock to avoid racing with a newly-arrived message;
- * if busy, defers — the next turn's end will retry.
+ * Called on every change of the chat, including ones that leave it busy (a
+ * round queued, a turn begun): while it is busy the supplements stay queued,
+ * and the change that frees it calls again.
  */
 export function flushSupplementBuffer(conversationId: string): void {
   const entries = supplementBuffers.get(conversationId)
@@ -443,9 +444,8 @@ export function flushSupplementBuffer(conversationId: string): void {
 
   if (isAppChatConversationGenerating(conversationId)) {
     console.log(
-      `${LOG_TAG} flushSupplementBuffer deferred: conv=${conversationId} is ` +
-      `busy (race with newly-arrived message), ${entries.length} supplement(s) ` +
-      `remain queued for the next idle window`
+      `${LOG_TAG} Supplements wait: conv=${conversationId} is still busy, ` +
+      `${entries.length} stay queued until it is free`
     )
     return
   }
