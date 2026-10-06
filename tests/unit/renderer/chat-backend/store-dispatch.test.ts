@@ -394,6 +394,20 @@ describe('a digital-human turn', () => {
     expect(store.getState().sessions.get(DH)!.queuedMessages).toEqual([])
   })
 
+  it('hands the text back instead of sending it when the user stopped the turn it waited for', async () => {
+    // The user added to a turn still starting, then stopped it: starting the
+    // addition as a new turn would restart the work they just halted.
+    const store = await opened()
+    await store.getState().sendMessage('go')
+    apiMock.appChatSend.mockClear()
+    apiMock.appChatInject.mockResolvedValue({ success: true, data: { delivered: false, stopped: true } })
+
+    expect(await store.getState().injectMessage(DH, 'and the totals')).toBe(false)
+
+    expect(apiMock.appChatSend).not.toHaveBeenCalled()
+    expect(store.getState().sessions.get(DH)!.queuedMessages).toEqual([])
+  })
+
   it('reports nothing sent when the turn had ended and the new message was refused', async () => {
     const store = await opened()
     apiMock.appChatInject.mockResolvedValue({ success: true, data: { delivered: false } })

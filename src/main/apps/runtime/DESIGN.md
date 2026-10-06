@@ -442,14 +442,66 @@ inputs and dispatches.
 
 ```
 sendAppChatMessage
+  ├── beginAppChatTurnStart(conversationId)   → holds the conversation, before any await
+  │                                             (or adopts request.turnStart, a hold its caller took)
+  ├── who the turn answers to (request.imPermission, or the chat's last sender), fixed now
   ├── prompt / MCP / permission envelope   (unchanged)
   ├── acquireV2Session(..., { displayModel, sink })   → protected lease + consumer
   ├── prepare thinking / memory, sink.writeUserMessage(text) → run JSONL
-  ├── sink.beginRound({ onProgress, onReply, onMessageAccepted })
+  ├── stopped on the way? → send nothing, end
+  ├── sink.beginRound({ onProgress, onReply, onMessageAccepted }); start.end()
   ├── await lease.send() → SDK acceptance, awaiting-init/consumer protection
   ├── await round.done
-  └── finally: lease.release()
+  └── finally: lease.release(); start.end()   (every exit)
 ```
+
+**A message holds the conversation from the moment it is accepted.** Between
+acceptance and `beginRound` lie credentials, tools and a session that may be
+cold — seconds — and in that window neither the sink nor the engine knows the
+message exists. Read as idle, the conversation let a second IM message start a
+turn of its own; the engine folded both inputs into one turn with one result,
+the first round claimed it (so the answer looked right), and the second round
+waited for a turn that never came — failing much later, at session teardown or
+the start deadline, with an error about a message that had in fact been answered,
+and in between shifting every later pairing by one. `beginAppChatTurnStart`
+(`app-chat-live-turn.ts`) closes the window inside the one predicate every entry
+already asks, so IM buffering, the team bus, conversation interop, the status
+endpoints and the browser reaper all see it without a change of their own. The
+hold ends when the round is queued — the round answers from there — and on every
+other exit. A caller that decides a turn before it can start it takes the hold
+itself and passes it in (`request.turnStart`): a team wake queued for a
+concurrency slot (team/DESIGN.md, "Team as an IM backend").
+
+**Whatever waits on a conversation is woken by its changes, not by a clock.**
+`app-chat-live-turn` announces every moment a conversation may have moved
+between starting, queued, running and idle — a start ended, a stop was asked
+for, and through the sink (`onAppChatRoundChange`) a turn began or a round
+settled or was dropped — to its own waiters and to `onAppChatConversationChange`
+listeners. Buffered IM supplements are released that way
+(`dispatch-inbound.releaseSupplementsWhenIdle`, wired at runtime start): a
+failed start, a stopped one, a team wake that gave its hold back and an
+autonomous turn's end all owe them their turn, and no exit path has to remember
+to say so. Their merged turn starts in the same tick as the check that found the
+chat free — it does not retry the owner claim each of its messages already
+tried, which would await in between.
+
+Stopping reaches a message on its way (`abortAppChatTurn`): it is marked, keeps
+holding the conversation until it unwinds — so nothing starts beside a turn that
+is still building its session — and at the last point before `beginRound` it
+sends nothing, disposes its IM stream ("stop means send nothing") and ends like a
+stopped turn. If the setup it is still doing fails first, that is logged, not
+reported: the stop already answered, and an error after "Generation stopped."
+would report a failure of work the person halted.
+
+A person adding to their own turn waits for a starting one to begin
+(`injectIntoAppChatWhenLive`) instead of being told "nothing to add to", which
+used to send the text as a second turn the engine folded into the first. The
+wait has no deadline of its own: it ends when the turn begins (`delivered`), when
+nothing is in flight any more (`no_turn` — the text becomes a turn of its own),
+or when a stop is asked for (`stopped` — the composer gets the text back rather
+than restarting the work just halted). A start always ends and a queued round is
+bounded by the sink's own deadline, so the wait is bounded by theirs; a clock of
+its own would answer "nothing in flight" while something still is.
 
 **Turn ownership**: the SDK stream carries no correlation between a `send()` and
 the turn it causes, so ownership is decided by order. `beginRound` enqueues
@@ -505,9 +557,9 @@ Consequences that matter:
   nothing reached the engine and no turn is owed.
 
 **Generating state moved off `activeSessions`**. App chat no longer registers
-there; `isAppChatConversationGenerating` is the single predicate (queued round OR
-consumer mid-turn) and every caller — stop, clear, restart, supplement buffering
-— goes through it.
+there; `isAppChatConversationGenerating` is the single predicate (message still
+starting OR queued round OR consumer mid-turn) and every caller — stop, clear,
+restart, supplement buffering — goes through it.
 
 **Reading `activeSessions` for an app chat is always wrong, and it fails
 silently.** App chat never registers there; the map protects only headless
@@ -1053,10 +1105,10 @@ src/main/apps/runtime/
   conversation-source.ts     -- The digital-human `ConversationSource` registered with services/conversation-interop (default + local sessions only; §2.20)
   run-conversation-source.ts -- A scheduled run's one-way sender identity for cross-conversation messages (§2.20)
   conversation-collab.ts     -- Who gets `halo-conversations` (owner's `conversation-collab` switch, owner-only, no team channel, global master switch) and the lazy server factory shared by app-chat.ts and execute.ts (§2.20)
-  app-chat-live-turn.ts      -- The turn a chat is running RIGHT NOW: whether there is one (`isAppChatConversationGenerating` — the only truthful busy probe; app chat never writes the engine's legacy `activeSessions` map) and how to add a message to it (`injectIntoAppChat`: the team bus and, through `app:chat-inject` / `POST /chat/inject`, the user adding to their own running turn — the latter passes `{ source: 'injection' }`, which the transcript reader shows as an annotation on the reply). Its own leaf module because the team layer asks both synchronously, and app-chat.ts imports the team runtime accessor — a static edge back would close that cycle
+  app-chat-live-turn.ts      -- The turn a chat is running RIGHT NOW: whether there is one (`isAppChatConversationGenerating` — the only truthful busy probe, counting a message still on its way to the engine (`beginAppChatTurnStart`, §2.12a) as well as a queued round and a live turn; app chat never writes the engine's legacy `activeSessions` map) and how to add a message to it (`injectIntoAppChat` for the team bus; `injectIntoAppChatWhenLive`, which waits for a starting turn to begin and answers delivered / no_turn / stopped, for the user adding to their own turn through `app:chat-inject` / `POST /chat/inject` — that path passes `{ source: 'injection' }`, which the transcript reader shows as an annotation on the reply), plus the change announcements everything waiting on a conversation is woken by (`onAppChatConversationChange`, §2.12a). Its own leaf module because the team layer asks both synchronously, and app-chat.ts imports the team runtime accessor — a static edge back would close that cycle
   config-defaults.ts         -- Merge App config_schema defaults into userConfig
   dispatch-inbound.ts        -- Route IM inbound messages into app-chat
-  im-permission-registry.ts  -- Per-conversation owner/guest context for SDK gating
+  im-permission-registry.ts  -- The IM chat's last sender and their standing, for a turn with no sender of its own (a message's own turn carries its sender in `AppChatRequest.imPermission`)
   im-session-registry.ts     -- Persistent IM session list (per app + channel + chatId)
   pending-relays.ts          -- Cross-session relay spool + <relay-from> rendering (§2.14)
   progress-formatter.ts      -- Format streaming progress events for IM transports

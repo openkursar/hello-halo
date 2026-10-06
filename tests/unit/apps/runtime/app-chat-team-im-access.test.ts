@@ -621,3 +621,52 @@ describe('a guest is not handed standing instructions', () => {
     expect(createTeamMcpServer.mock.calls.at(-1)![0]).not.toHaveProperty('servesGuest')
   })
 })
+
+describe('a turn answers to the sender it was sent with', () => {
+  it('follows the standing that came with the message, not the chat\u2019s last sender on record', async () => {
+    const plain = plainImTurn('g-carried')
+    setImPermissionContext(plain.conversationId!, listedOwner)
+    await sendAppChatMessage({ ...plain, imPermission: guest })
+    expect(runsCommands(plain.conversationId!)).toBe(false)
+
+    setImPermissionContext(plain.conversationId!, guest)
+    await sendAppChatMessage({ ...plain, imPermission: listedOwner })
+    expect(runsCommands(plain.conversationId!)).toBe(true)
+  })
+
+  it('a woken turn takes the chat\u2019s last sender as it begins, not whoever writes while it starts', async () => {
+    const chat = teamChat()
+    setImPermissionContext(chat.conversationId, guest)
+    const turn = sendAppChatMessage(wokenTurn(chat))
+    setImPermissionContext(chat.conversationId, listedOwner)
+    await turn
+
+    expect(runsCommands(chat.conversationId)).toBe(false)
+  })
+})
+
+describe('a person\u2019s message whose two halves disagree is refused', () => {
+  it('a sender stamped as outside but carried as an owner does not run', async () => {
+    const chat = teamChat()
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await expect(sendAppChatMessage({ ...imTurn(chat, true), imPermission: listedOwner })).rejects.toThrow(/permissions/)
+      expect(buildUserSessionSdkOptions).not.toHaveBeenCalled()
+      expect(error.mock.calls.some(([line]) => String(line).includes('Refused a turn'))).toBe(true)
+    } finally {
+      error.mockRestore()
+    }
+  })
+
+  it('a sender stamped as outside with no standing on record does not run', async () => {
+    const chat = teamChat()
+    await expect(sendAppChatMessage(imTurn(chat, true))).rejects.toThrow(/permissions/)
+    expect(buildUserSessionSdkOptions).not.toHaveBeenCalled()
+  })
+
+  it('a guest carried as a guest runs, restricted', async () => {
+    const chat = teamChat()
+    await sendAppChatMessage({ ...imTurn(chat, true), imPermission: guest })
+    expect(runsCommands(chat.conversationId)).toBe(false)
+  })
+})

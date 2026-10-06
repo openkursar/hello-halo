@@ -10,13 +10,17 @@
  * failed `team_send` instead.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 const { v2Sessions } = vi.hoisted(() => ({ v2Sessions: new Map<string, any>() }))
 const { writeTrigger } = vi.hoisted(() => ({ writeTrigger: vi.fn() }))
 const { rounds, consumers } = vi.hoisted(() => ({
   rounds: new Set<string>(),
   consumers: new Map<string, any>(),
+}))
+/** What the sink tells about its rounds: a turn began, a round settled or was dropped. */
+const { sinkEvents } = vi.hoisted(() => ({
+  sinkEvents: { emit: (_conversationId: string): void => {} },
 }))
 
 vi.mock('../../../../src/main/services/agent/session-manager', () => ({
@@ -28,11 +32,21 @@ vi.mock('../../../../src/main/apps/runtime/app-chat-sink', () => ({
   hasActiveAppChatRound: (conversationId: string) => rounds.has(conversationId),
   peekAppChatSink: (conversationId: string) =>
     conversationId === 'convo-with-sink' ? { writeUserMessage: writeTrigger } : undefined,
+  onAppChatRoundChange: (listener: (conversationId: string) => void) => {
+    sinkEvents.emit = listener
+    return () => {}
+  },
 }))
 
 import {
+  beginAppChatTurnStart,
+  cancelAppChatTurnStarts,
+  getStartingAppChatConversations,
   injectIntoAppChat,
+  injectIntoAppChatWhenLive,
   isAppChatConversationGenerating,
+  isAppChatTurnDispatched,
+  onAppChatConversationChange,
 } from '../../../../src/main/apps/runtime/app-chat-live-turn'
 
 const CONVO = 'convo-with-sink'
@@ -184,5 +198,191 @@ describe('injectIntoAppChat', () => {
 
     expect(injectIntoAppChat('convo-no-sink', 'x')).toBe(true)
     expect(send).toHaveBeenCalledWith('x')
+  })
+})
+
+describe('a message on its way to the engine', () => {
+  beforeEach(() => {
+    rounds.clear()
+    consumers.clear()
+    v2Sessions.clear()
+  })
+
+  it('holds the conversation from the moment it is accepted until its round is queued', () => {
+    const start = beginAppChatTurnStart(CONVO)
+    expect(isAppChatConversationGenerating(CONVO)).toBe(true)
+    // The engine does not know about it yet.
+    expect(isAppChatTurnDispatched(CONVO)).toBe(false)
+    expect(getStartingAppChatConversations()).toContain(CONVO)
+
+    rounds.add(CONVO)
+    start.end()
+    expect(isAppChatConversationGenerating(CONVO)).toBe(true)
+    rounds.delete(CONVO)
+    expect(isAppChatConversationGenerating(CONVO)).toBe(false)
+  })
+
+  it('lets go only when the last of two overlapping starts ends, and ending twice changes nothing', () => {
+    const first = beginAppChatTurnStart(CONVO)
+    const second = beginAppChatTurnStart(CONVO)
+    first.end()
+    first.end()
+    expect(isAppChatConversationGenerating(CONVO)).toBe(true)
+    second.end()
+    expect(isAppChatConversationGenerating(CONVO)).toBe(false)
+    expect(getStartingAppChatConversations()).not.toContain(CONVO)
+  })
+
+  it('is told to send nothing when stopped, and keeps holding the conversation until it unwinds', () => {
+    const start = beginAppChatTurnStart(CONVO)
+    expect(cancelAppChatTurnStarts(CONVO)).toBe(true)
+    expect(start.cancelled).toBe(true)
+    // Whatever arrives meanwhile waits behind it instead of starting beside it.
+    expect(isAppChatConversationGenerating(CONVO)).toBe(true)
+    start.end()
+    expect(isAppChatConversationGenerating(CONVO)).toBe(false)
+    expect(cancelAppChatTurnStarts(CONVO)).toBe(false)
+  })
+})
+
+describe('injectIntoAppChatWhenLive — a person adding to a turn that may not have begun', () => {
+  beforeEach(() => {
+    rounds.clear()
+    consumers.clear()
+    v2Sessions.clear()
+    writeTrigger.mockClear()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /** The turn the sink queued a round for begins on the engine. */
+  function turnBegins(send: (text: string) => void): void {
+    liveTurn(CONVO, send)
+    sinkEvents.emit(CONVO)
+  }
+
+  it('waits for a starting turn to begin, then adds to it', async () => {
+    const start = beginAppChatTurnStart(CONVO)
+    const send = vi.fn()
+    const outcome = injectIntoAppChatWhenLive(CONVO, 'also check the totals')
+
+    // Queued with the engine, not begun: still nothing to add to.
+    rounds.add(CONVO)
+    start.end()
+    await Promise.resolve()
+    expect(send).not.toHaveBeenCalled()
+
+    turnBegins(send)
+
+    expect(await outcome).toBe('delivered')
+    expect(send).toHaveBeenCalledWith('also check the totals')
+  })
+
+  it('never gives up on a start that takes long: no answer until the turn begins', async () => {
+    // Answering "nothing to add to" while the first message is still starting
+    // has the text sent as a second turn, which the engine folds into the first.
+    vi.useFakeTimers()
+    const start = beginAppChatTurnStart(CONVO)
+    const send = vi.fn()
+    let settled: string | null = null
+    const outcome = injectIntoAppChatWhenLive(CONVO, 'also check the totals').then((value) => {
+      settled = value
+      return value
+    })
+
+    await vi.advanceTimersByTimeAsync(30 * 60_000)
+    expect(settled).toBeNull()
+
+    rounds.add(CONVO)
+    start.end()
+    turnBegins(send)
+
+    expect(await outcome).toBe('delivered')
+    expect(send).toHaveBeenCalledTimes(1)
+  })
+
+  it('answers no_turn once nothing is in flight, so the text becomes a turn of its own', async () => {
+    const start = beginAppChatTurnStart(CONVO)
+    const outcome = injectIntoAppChatWhenLive(CONVO, 'also check the totals')
+    start.end()
+
+    expect(await outcome).toBe('no_turn')
+    expect(writeTrigger).not.toHaveBeenCalled()
+  })
+
+  it('answers no_turn when the queued round it waited for is given up on', async () => {
+    const start = beginAppChatTurnStart(CONVO)
+    const outcome = injectIntoAppChatWhenLive(CONVO, 'also check the totals')
+    rounds.add(CONVO)
+    start.end()
+
+    // The sink's own deadline settles the round; nothing is in flight any more.
+    rounds.delete(CONVO)
+    sinkEvents.emit(CONVO)
+
+    expect(await outcome).toBe('no_turn')
+  })
+
+  it('answers stopped when the turn it waited for is stopped, and sends nothing', async () => {
+    // The person just stopped this work: their addition goes back to them
+    // rather than starting it again as a turn of its own.
+    const start = beginAppChatTurnStart(CONVO)
+    const send = vi.fn()
+    const outcome = injectIntoAppChatWhenLive(CONVO, 'also check the totals')
+
+    cancelAppChatTurnStarts(CONVO)
+
+    expect(await outcome).toBe('stopped')
+    start.end()
+    turnBegins(send)
+    expect(send).not.toHaveBeenCalled()
+    expect(writeTrigger).not.toHaveBeenCalled()
+  })
+
+  it('adds to a turn that is already running without waiting', async () => {
+    const send = vi.fn()
+    liveTurn(CONVO, send)
+
+    expect(await injectIntoAppChatWhenLive(CONVO, 'one more thing')).toBe('delivered')
+    expect(send).toHaveBeenCalledWith('one more thing')
+  })
+})
+
+describe('onAppChatConversationChange', () => {
+  beforeEach(() => {
+    rounds.clear()
+    consumers.clear()
+  })
+
+  it('is told when a start ends, a stop is asked for, and the sink reports a round change', () => {
+    const changed: string[] = []
+    const unsubscribe = onAppChatConversationChange((conversationId) => changed.push(conversationId))
+
+    const start = beginAppChatTurnStart(CONVO)
+    expect(changed).toEqual([])
+    cancelAppChatTurnStarts(CONVO)
+    start.end()
+    start.end()
+    sinkEvents.emit(CONVO)
+    unsubscribe()
+    sinkEvents.emit(CONVO)
+
+    expect(changed).toEqual([CONVO, CONVO, CONVO])
+  })
+
+  it('keeps telling the others when one listener throws', () => {
+    const changed: string[] = []
+    const first = onAppChatConversationChange(() => {
+      throw new Error('broken listener')
+    })
+    const second = onAppChatConversationChange((conversationId) => changed.push(conversationId))
+
+    beginAppChatTurnStart(CONVO).end()
+    first()
+    second()
+
+    expect(changed).toEqual([CONVO])
   })
 })

@@ -998,8 +998,13 @@ machine, so nothing here could run it — the picker offers only `localMembers`
 **Owners and guests are the channel's, exactly as for a digital human.** Who is
 an owner is answered per message by `dispatch-inbound` from the channel's
 permission control — the same three cases, the same owner auto-claim and
-no-owner gate — and written to the IM permission context under the member's
-team session key. From there it is the one guest path, not a second one:
+no-owner gate. The answer travels with the message to `app-chat`
+(`AppChatRequest.imPermission`) and is also kept as the chat's last sender under
+the member's team session key, for the woken turns below. Because the person's
+own message is decided by the channel's rules alone, its two halves must agree:
+a message stamped as coming from outside whose standing reads as an owner (or is
+missing) is refused, with a log, rather than run under whichever half is wrong.
+From there it is the one guest path, not a second one:
 `app-chat` holds a guest to the channel's guest policy through
 `applyCapabilityPolicy`, the per-call gate and the turn's file boundary, and the
 prompt carries the same IM security rules. The team's own coordination servers
@@ -1022,7 +1027,9 @@ its origin.
   front desk — and the thread stays external across wakes (`external-origin.ts`)
   until an owner's own message ends it.
 - **A turn woken in the chat keeps the standing of whoever started the work.**
-  While the permission context still names a guest it runs under that guest's
+  It has no sender of its own, so it reads the chat's last sender — once, as it
+  begins, while its hold on the session keeps any newer message from replacing
+  it. While that names a guest it runs under that guest's
   policy — the same tool set as the guest's own turn, so the session is not
   rebuilt between them. Otherwise what the wake itself carries decides. Every
   wake that continues outside work carries its origin: a teammate's
@@ -1036,7 +1043,7 @@ its origin.
   the work in motion. A turn woken by work started here is unchanged. So is the
   person's own message, which only the channel's rules decide.
 - **The session is shared with the owner's own Halo window.** Only turns framed
-  for the chat (`imSession`) read the IM permission context; the owner typing
+  for the chat (`imSession`) answer to a chat sender; the owner typing
   into the same session from Halo is never taken for the chat's last guest, and,
   being the owner at their own keyboard, ends the external thread.
 
@@ -1066,6 +1073,23 @@ than left to review.
 Underneath it sits a race that outlives this fix: ANY legitimate rebuild
 mid-start-up (a model change, an MCP toggle) can settle the starting turn the
 same way. Removing the needless rebuild removes this trigger, not the race.
+
+**A woken turn holds the chat from the moment the bus decides it.** A wake first
+waits for a team concurrency slot (`runGatedTurn`), and the bus's reservation is
+invisible to `dispatch-inbound`. Read as idle in that wait, the chat let an IM
+message start a turn of its own, and the wake started a second one on the same
+session once its slot freed. So `runGatedTurn` takes the session's hold
+(`OrchestrationSessionDeps.holdTurn` → `beginAppChatTurnStart`) before awaiting
+the slot and passes it to the turn (`turnStart`), which adopts it; a wake that
+never reaches `app-chat` gives it back. A message arriving meanwhile is buffered
+and answered right after, and a stop reaches the waiting wake like any message on
+its way. A remote member is not held here — its owner holds it when the wake
+lands. The hold, rather than teaching the busy predicate the bus's reservation:
+that predicate is the leaf `app-chat-live-turn`, and the bus asks it
+(`isBusy`), so the edge back would be both an import cycle and a recursion. One
+bound to know: a wake that times out while still queued keeps its hold until it
+reaches a slot and bails, so the chat's messages wait — buffered, not lost —
+until then.
 
 **A mid-turn delivery does not reach an IM front-desk turn today, and whether it
 should is open.** The mechanism is incidental rather than a decision: an IM turn

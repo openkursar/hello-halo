@@ -436,8 +436,9 @@ export const appsApi = {
   },
 
   // Add a message to the turn a digital human is running. delivered is false when
-  // no turn was in flight to take it — the caller sends it as a new message.
-  appChatInject: async (input: { appId: string; conversationId: string; message: string; references?: ContentReference[] }): Promise<ApiResponse<{ delivered: boolean }>> => {
+  // no turn was in flight to take it — the caller sends it as a new message —
+  // and stopped says the user stopped that turn, so the text goes back to them.
+  appChatInject: async (input: { appId: string; conversationId: string; message: string; references?: ContentReference[] }): Promise<ApiResponse<{ delivered: boolean; stopped?: boolean }>> => {
     if (isElectron()) {
       return window.halo.appChatInject(input)
     }

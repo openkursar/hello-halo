@@ -44,6 +44,7 @@ import {
   getAppChatSink,
   hasActiveAppChatRound,
   disposeAppChatSink,
+  onAppChatRoundChange,
   sweepIdleAppChatSinks,
   SINK_IDLE_RELEASE_MS,
 } from '../../../../src/main/apps/runtime/app-chat-sink'
@@ -347,6 +348,44 @@ describe('app-chat sink undelivered messages', () => {
     await vi.advanceTimersByTimeAsync(90_000)
 
     await expect(round.done).rejects.toThrow(/stopped waiting/i)
+  })
+
+  it('announces every moment the conversation can stop awaiting an answer', async () => {
+    // Waiters (a person's addition, IM messages buffered behind the turn) are
+    // woken by these and nothing else: a moment left out is a wait that never ends.
+    const changes: string[] = []
+    const unsubscribe = onAppChatRoundChange((conversationId) => changes.push(conversationId))
+    const sink = makeSink()
+    const count = () => changes.length
+
+    sink.beginRound({}).cancel()
+    expect(count()).toBe(1)
+
+    const answered = sink.beginRound({})
+    sink.onTurnStart()
+    expect(count()).toBe(2)
+    sink.onTurnComplete(makeResult())
+    expect(count()).toBe(3)
+    await answered.done
+
+    const failed = sink.beginRound({})
+    sink.onTurnStart()
+    sink.onTurnError(new Error('model overloaded'))
+    expect(count()).toBe(5)
+    await expect(failed.done).rejects.toThrow('model overloaded')
+
+    const unclaimed = sink.beginRound({})
+    await vi.advanceTimersByTimeAsync(90_000)
+    expect(count()).toBe(6)
+    await expect(unclaimed.done).rejects.toThrow(/stopped waiting/i)
+
+    const dropped = sink.beginRound({})
+    sink.onConsumerStopped()
+    expect(count()).toBe(7)
+    await expect(dropped.done).rejects.toThrow(/session ended/i)
+
+    unsubscribe()
+    expect(new Set(changes)).toEqual(new Set([IM_KEY]))
   })
 
   it('leaves a message alone while a turn is running', async () => {

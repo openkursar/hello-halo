@@ -38,10 +38,18 @@ const clearImSessionMock = vi.fn(async (..._args: unknown[]) => undefined)
 // real generating session; defaults to false so every other test's message
 // takes the start-of-round path rather than being buffered.
 let conversationGenerating = false
+// What app-chat tells about a conversation that may have gone idle.
+let conversationChanged: ((conversationId: string) => void) | null = null
 vi.mock('../../../../src/main/apps/runtime/app-chat', () => ({
   sendAppChatMessage: (request: Record<string, unknown>) => sendAppChatMessageMock(request),
   clearImSession: (...a: unknown[]) => clearImSessionMock(...a),
   isAppChatConversationGenerating: () => conversationGenerating,
+  onAppChatConversationChange: (listener: (conversationId: string) => void) => {
+    conversationChanged = listener
+    return () => {
+      conversationChanged = null
+    }
+  },
   // Mirror the real deterministic joiner so we can assert derivation order.
   buildImSessionKey: (appId: string, channel: string, chatType: string, chatId: string) =>
     `app-chat:${appId}:${channel}:${chatType}:${chatId}`,
@@ -114,7 +122,11 @@ vi.mock('../../../../src/main/apps/runtime/team', () => ({
   getActiveTeamRuntime: () => teamRuntime,
 }))
 
-import { dispatchInboundMessage, flushSupplementBuffer } from '../../../../src/main/apps/runtime/dispatch-inbound'
+import {
+  dispatchInboundMessage,
+  flushSupplementBuffer,
+  releaseSupplementsWhenIdle,
+} from '../../../../src/main/apps/runtime/dispatch-inbound'
 import {
   PendingRelayStore,
   setPendingRelayStore,
@@ -777,5 +789,65 @@ describe('dispatchInboundMessage — message.received arrival telemetry', () => 
 
     expect(sendAppChatMessageMock).toHaveBeenCalledTimes(1)
     expect(receivedCalls()).toHaveLength(1)
+  })
+})
+
+// ============================================
+// Messages buffered behind a busy chat
+//
+// They go next however the chat got free again — the turn answered, failed, or
+// was stopped before it reached the engine — and the merged turn they become
+// starts in the same tick as the check that found the chat free, so a message
+// arriving meanwhile waits behind it instead of starting beside it.
+// ============================================
+
+describe('dispatchInboundMessage — buffered messages', () => {
+  const CONV = 'app-chat:app-1:wecom-bot:direct:chat-1'
+  let stopReleasing: () => void
+
+  beforeEach(() => {
+    stopReleasing = releaseSupplementsWhenIdle()
+  })
+
+  afterEach(() => {
+    stopReleasing()
+  })
+
+  it('are released once the chat reads idle, and not while it is still busy', async () => {
+    conversationGenerating = true
+    await dispatchInboundMessage(makeMsg({ body: 'part one' }), makeReply(false), 'app-1', 'inst-1')
+    expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+
+    conversationChanged?.(CONV)
+    await flushSetImmediate()
+    expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+
+    conversationGenerating = false
+    conversationChanged?.('app-chat:app-1:wecom-bot:direct:someone-else')
+    await flushSetImmediate()
+    expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+
+    conversationChanged?.(CONV)
+    await flushSetImmediate()
+    expect(sendAppChatMessageMock).toHaveBeenCalledTimes(1)
+    expect(sendAppChatMessageMock.mock.calls[0][0]).toMatchObject({ conversationId: CONV, message: 'part one' })
+  })
+
+  it('start their merged turn in the same tick, without retrying an owner claim', async () => {
+    // Each message already tried to claim on arrival. Retrying would await
+    // between the busy check and the turn start, the gap a later message used
+    // to start a turn of its own through.
+    instanceCfg = { permissionEnabled: true, owners: [] }
+    conversationGenerating = true
+    await dispatchInboundMessage(makeMsg({ body: 'part one' }), makeReply(false), 'app-1', 'inst-1')
+    expect(maybeClaimOwner).toHaveBeenCalledTimes(1)
+
+    conversationGenerating = false
+    flushSupplementBuffer(CONV)
+
+    expect(sendAppChatMessageMock).toHaveBeenCalledTimes(1)
+    expect(maybeClaimOwner).toHaveBeenCalledTimes(1)
+    // It runs as the guest a failed claim leaves behind.
+    expect(setImPermissionContext).toHaveBeenLastCalledWith(CONV, expect.objectContaining({ isOwner: false }))
   })
 })

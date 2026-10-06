@@ -40,7 +40,7 @@ import { getSpace, getAllSpacePaths } from '../../services/space.service'
 import { getTlonRoot } from '../../services/tlon'
 import { getAppManager } from '../../apps/manager'
 import { AppAlreadyInstalledError, McpCommandBlockedError } from '../../apps/manager/errors'
-import { getAppRuntime, getImChannelManager, sendAppChatMessage, stopAppChat, stopAppChatConversation, injectIntoAppChat, isAppChatGenerating, isAppChatConversationGenerating, loadAppChatMessages, loadImChatMessages, loadChatMessagesForConversation, loadChatTranscriptForConversation, loadChatMessageThoughts, getAppChatSessionState, getAppChatConversationId, clearAppChat, clearImSession, stopImSession, restartAppChat, createNativeChatSession, forkNativeChatSession, deleteNativeChatSession, renameChatSession, dispatchInboundMessage } from '../../apps/runtime'
+import { getAppRuntime, getImChannelManager, sendAppChatMessage, stopAppChat, stopAppChatConversation, injectIntoAppChatWhenLive, isAppChatGenerating, isAppChatConversationGenerating, loadAppChatMessages, loadImChatMessages, loadChatMessagesForConversation, loadChatTranscriptForConversation, loadChatMessageThoughts, getAppChatSessionState, getAppChatConversationId, clearAppChat, clearImSession, stopImSession, restartAppChat, createNativeChatSession, forkNativeChatSession, deleteNativeChatSession, renameChatSession, dispatchInboundMessage } from '../../apps/runtime'
 import { buildDefaultAssistantSpec } from '../../apps/runtime/im-channels/wecom-bot-default-spec'
 import type { AppListFilter, UninstallOptions, InstalledApp } from '../../apps/manager'
 import type { ActivityQueryOptions, EscalationResponse, AppChatRequest } from '../../apps/runtime'
@@ -255,7 +255,7 @@ export {
   loadChatTranscriptForConversation,
   loadChatMessageThoughts,
   stopAppChatConversation,
-  injectIntoAppChat,
+  injectIntoAppChatWhenLive,
   stopImSession,
   configController,
   configTouchesMcp,

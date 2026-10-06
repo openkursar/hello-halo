@@ -235,7 +235,9 @@ reconnect or election.
   right owner-resolved space. Also where "stop this member" becomes
   position-transparent: a locally-owned member is aborted in place, a remote one
   over the stop plane. Unlike `closeTeamSession`, doing nothing for a remote
-  member is not an option — someone asked for a running turn to end.
+  member is not an option — someone asked for a running turn to end. A wake's
+  hold on the session while it waits for a slot (`holdTurn`) is taken only for a
+  member this machine runs; a remote one's owner holds its own when the wake lands.
 
 **M2 authority — `authority/`**
 - `office-authority.ts` — the per-office integration root composing the pieces

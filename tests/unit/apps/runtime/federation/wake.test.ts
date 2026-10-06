@@ -61,7 +61,7 @@ import type {
   OfficeCredentialLike,
 } from '../../../../../src/main/apps/runtime/federation'
 import type { OrchestrationSessionDeps } from '../../../../../src/main/apps/runtime/team'
-import { SELF_NODE_ID } from '../../../../../src/shared/apps/team-types'
+import { SELF_NODE_ID, buildTeamSessionKey } from '../../../../../src/shared/apps/team-types'
 // `TeamTriggerContext` is coordination-runtime, not a persisted entity, so it
 // lives in the shared contract rather than apps/team's persistence surface.
 import type { TeamSendAsyncResult, TeamSendSyncResult, TeamTriggerContext } from '../../../../../src/shared/apps/team-types'
@@ -291,6 +291,32 @@ describe('federation remote wake (position transparency)', () => {
     expect(local.sendAppChatMessage).toHaveBeenCalledTimes(1)
     expect(sendWake).not.toHaveBeenCalled()
     expect(runLocalTurn).not.toHaveBeenCalled()
+  })
+
+  it('holds only a session this machine runs; a remote member is held by its owner when the wake lands', () => {
+    const hold = { cancelled: false, end: vi.fn() }
+    const local: OrchestrationSessionDeps = {
+      sendAppChatMessage: async () => ({ finalMessage: null }),
+      isSessionActive: () => false,
+      injectIntoSession: () => false,
+      closeTeamSession: async () => {},
+      stopTeamSession: async () => false,
+      getMemberSpaceId: () => 'local-space',
+      holdTurn: vi.fn(() => hold),
+    }
+    const locationAware = makeLocationAwareSessionDeps({
+      local,
+      resolveOwnerNode: (appId) => (appId === MEMBER_M ? NODE_B : SELF_NODE_ID),
+      selfNodeId: NODE_A,
+      sendWake: () => true,
+      sendStop: () => Promise.resolve(false),
+      registerTurnComplete: () => () => {},
+      getRemoteSpaceId: () => undefined,
+    })
+
+    expect(locationAware.holdTurn?.(buildTeamSessionKey('app-local', OFFICE, EPOCH_ID))).toBe(hold)
+    expect(locationAware.holdTurn?.(buildTeamSessionKey(MEMBER_M, OFFICE, EPOCH_ID))).toBeUndefined()
+    expect(local.holdTurn).toHaveBeenCalledTimes(1)
   })
 
   it('getMemberSpaceId returns a non-null sentinel synchronously for a remote member', () => {
