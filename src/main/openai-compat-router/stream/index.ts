@@ -38,6 +38,9 @@ export {
   pipeAnthropicPassthrough
 } from './anthropic-stream'
 
+// A stream handler's output folded into one message, for non-streaming clients
+export { collectAnthropicMessage, type CollectedMessage } from './message-collector'
+
 // ============================================================================
 // Backward Compatibility Aliases
 // ============================================================================
