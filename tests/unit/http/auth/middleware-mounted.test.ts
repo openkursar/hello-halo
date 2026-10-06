@@ -66,6 +66,8 @@ beforeAll(async () => {
   app.get('/api/apps/:appId', reached('app'))
   app.get('/api/agent/sessions', reached('sessions'))
   app.get('/api/teams/:teamId/epochs', reached('epochs'))
+  app.get('/api/teams/:teamId/detail', reached('detail'))
+  app.get('/api/teams/:teamId/epochs/:epochId/board', reached('board'))
   app.post('/api/teams/:teamId/members/:appId/send', reached('send'))
   app.post('/api/teams/:teamId/run', reached('run'))
   app.get('/api/artifacts/file/:ticket', reached('ticket'))
@@ -131,8 +133,10 @@ describe('office-member credentials on the mounted gate', () => {
     expect(await call('POST', `/api/teams/${OFFICE}/members/app-1/send`, token)).toEqual({ status: 200, body: { reached: 'send', office: OFFICE } })
   })
 
-  it('get 403 everywhere else', async () => {
+  it('get 403 everywhere else, including the team detail and a run\'s board', async () => {
     const { token } = issueOfficeCredential({ officeId: OFFICE, identity: 'id_x' })
+    expect((await call('GET', `/api/teams/${OFFICE}/detail`, token)).status).toBe(403)
+    expect((await call('GET', `/api/teams/${OFFICE}/epochs/e1/board`, token)).status).toBe(403)
     expect((await call('POST', `/api/teams/${OFFICE}/run`, token)).status).toBe(403)
     expect((await call('GET', '/api/agent/sessions', token)).status).toBe(403)
     expect((await call('GET', '/api/apps/x.js', token)).status).toBe(403)
