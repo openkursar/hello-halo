@@ -160,6 +160,7 @@ POST   /api/tlon/<kbId>/bind-app                                   [ai]       kn
 POST   /api/tlon/<kbId>/unbind-app                                 [ai]       knowledge-base,digital-humanUnbind a knowledge collection from a digital human
 POST   /api/tlon/<kbId>/linked-dirs                                [ai]       knowledge-base          Watch a server-local directory as a live document source
 DELETE /api/tlon/<kbId>/linked-dirs/<linkId>                       [ai]       knowledge-base          Stop watching a linked directory
+POST   /api/tlon/<kbId>/linked-dirs/<linkId>/retry                 [ai]       knowledge-base          Look for an unavailable linked directory again and resume watching it if it is back
 POST   /api/tlon/<kbId>/files                                      [ai]       knowledge-base          Add existing server-local files to a collection by absolute path
 GET    /api/tlon/<kbId>/raw                                        [ai]       knowledge-base          List the raw source files added to a collection
 POST   /api/tlon/<kbId>/remove-raw                                 [ai]       knowledge-base          Remove one document (raw source file) from a collection

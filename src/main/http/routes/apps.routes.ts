@@ -50,6 +50,7 @@ import type {
 } from './_shared'
 import { resolveAppChatTarget, resolveUserInjectTarget, type AppChatTarget } from '../../controllers/app-chat-target.controller'
 import type { EscalationAnswerPayload } from '../../../shared/apps/app-types'
+import { resolveHttpImChat } from '../../../shared/apps/im-keys'
 import { parseTurnReferences, toAppChatRequest } from '../../controllers/chat-turn-input'
 import { getStudioSummary, listPeopleDirectory, getAppCapabilityInventory, getAppSpaceChangePreview, moveAppDefaultSpace, readAppRunMessages, RunProcessClearedError, getDigitalHumanMemoryStatus, consolidateDigitalHumanMemoryNow, listAppReminders, cancelAppReminder, countClearableChats, clearAllChats } from '../../apps/runtime'
 
@@ -75,8 +76,9 @@ export function registerAppsRoutes(app: Express): void {
   }
 
   // Helper: resolve a caller-supplied conversationId, or answer with the
-  // rejection the controller chose. Every app-chat route goes through it, so
-  // there is exactly one description of what a remote caller may address.
+  // rejection the controller chose. Every chat route that takes a
+  // conversationId goes through it, so there is exactly one description of
+  // what a remote caller may address by key.
   function resolveTargetOrFail(appId: string, conversationId: unknown, res: Response): AppChatTarget | null {
     const target = resolveAppChatTarget(appId, conversationId)
     if (!target.ok) {
@@ -84,6 +86,17 @@ export function registerAppsRoutes(app: Express): void {
       return null
     }
     return target
+  }
+
+  // Helper: the IM session an im-chat route names by its parts, or a 400 when
+  // a part could not address one.
+  function resolveImChatOrFail(channel: unknown, chatType: unknown, chatId: unknown, res: Response) {
+    const chat = resolveHttpImChat(channel, chatType, chatId)
+    if (!chat.ok) {
+      res.status(400).json({ success: false, error: chat.error })
+      return null
+    }
+    return chat
   }
 
   // Helper: get runtime or return 503
@@ -1288,14 +1301,14 @@ export function registerAppsRoutes(app: Express): void {
         res.status(400).json({ success: false, error: 'Missing appId' })
         return
       }
-      const channel = typeof req.query.channel === 'string' ? req.query.channel : ''
-      const chatType = req.query.chatType === 'group' ? 'group' as const : 'direct' as const
-      const chatId = typeof req.query.chatId === 'string' ? req.query.chatId : ''
       const spaceId = typeof req.query.spaceId === 'string' ? req.query.spaceId : ''
-      if (!channel || !chatId || !spaceId) {
+      if (!req.query.channel || !req.query.chatId || !spaceId) {
         res.status(400).json({ success: false, error: 'Missing required query params: channel, chatId, spaceId' })
         return
       }
+      const chat = resolveImChatOrFail(req.query.channel, req.query.chatType, req.query.chatId, res)
+      if (!chat) return
+      const { channel, chatType, chatId } = chat
       const manager = getManagerOrFail(res)
       if (!manager) return
       const appData = manager.getApp(appId)
@@ -1402,9 +1415,10 @@ export function registerAppsRoutes(app: Express): void {
         res.status(400).json({ success: false, error: 'Missing required body params: spaceId, channel, chatType, chatId' })
         return
       }
-      const resolvedChatType = chatType === 'group' ? 'group' as const : 'direct' as const
-      await clearImSession(appId, spaceId, channel, resolvedChatType, chatId)
-      console.log('[HTTP] POST /api/apps/%s/im-chat/clear channel=%s chatId=%s', appId, channel, chatId)
+      const chat = resolveImChatOrFail(channel, chatType, chatId, res)
+      if (!chat) return
+      await clearImSession(appId, spaceId, chat.channel, chat.chatType, chat.chatId)
+      console.log('[HTTP] POST /api/apps/%s/im-chat/clear channel=%s chatId=%s', appId, chat.channel, chat.chatId)
       res.json({ success: true })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
@@ -1428,9 +1442,10 @@ export function registerAppsRoutes(app: Express): void {
         res.status(400).json({ success: false, error: 'Missing required body params: channel, chatType, chatId' })
         return
       }
-      const resolvedChatType = chatType === 'group' ? 'group' as const : 'direct' as const
-      const result = await stopImSession(appId, channel, resolvedChatType, chatId)
-      console.log('[HTTP] POST /api/apps/%s/im-chat/stop channel=%s chatId=%s stopped=%s', appId, channel, chatId, result.stopped)
+      const chat = resolveImChatOrFail(channel, chatType, chatId, res)
+      if (!chat) return
+      const result = await stopImSession(appId, chat.channel, chat.chatType, chat.chatId)
+      console.log('[HTTP] POST /api/apps/%s/im-chat/stop channel=%s chatId=%s stopped=%s', appId, chat.channel, chat.chatId, result.stopped)
       res.json({ success: true, data: result })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })

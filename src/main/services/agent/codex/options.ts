@@ -83,7 +83,7 @@ export async function resolveCodexOptions(sdkOptions: Record<string, any>): Prom
   // `model_providers.<id>.env_key` from the OS environment of the
   // app-server child — NOT from the JSON config — so the key must land
   // in `env`, not in `config.env`.
-  const preparedMcp = await prepareCodexMcpServers(sdkOptions.mcpServers)
+  const preparedMcp = await prepareCodexMcpServers(sdkOptions.mcpServers, sdkOptions.disabledMcpTools)
   try {
     // Absent for sessions that never carry a turn, such as the connectivity
     // check in api-validator.service.

@@ -31,6 +31,7 @@ import { OnboardingOverlay } from './components/onboarding'
 import { UpdateNotification } from './components/updater/UpdateNotification'
 import { NotificationToast } from './components/notification/NotificationToast'
 import { CredentialAlertBanner } from './components/settings/CredentialAlertBanner'
+import { ConfigUnreadableBanner } from './components/settings/ConfigUnreadableBanner'
 import { NavRail } from './components/layout/NavRail'
 import { HeaderShell, usePlatform } from './components/layout/Header'
 import { MAC_TRAFFIC_LIGHT_BOTTOM, MAC_TRAFFIC_LIGHT_POSITION } from '../shared/constants/mac-traffic-lights'
@@ -43,12 +44,11 @@ import { isCapacitor, isElectron, onEvent } from './api/transport'
 import { useTelemetry } from './hooks/useTelemetry'
 import type { WsConnectionState } from './api/transport'
 import { useTranslation } from './i18n'
-import type { AgentEventBase, Thought, ToolCall, HaloConfig, AgentErrorType, WorkDirIssue, Question, McpServerStatus, AppView } from './types'
+import type { AgentEventBase, Thought, ToolCall, AgentErrorType, WorkDirIssue, Question, McpServerStatus, AppView } from './types'
 import type { SessionInitInfo } from './types/slash-command'
 import type { IngestProgressEvent } from '../shared/types/tlon'
 import type { ToastPayload } from '../shared/types/notification'
 import type { ApiRetryState } from '../shared/types/api-retry'
-import { hasAnyAISource } from './types'
 import { openWorkNotification, type WorkNavigationTarget } from './utils/people-navigation'
 import { openSearchResultConversation } from './utils/conversation-navigation'
 import { useTeamStore } from './stores/team.store'
@@ -144,7 +144,7 @@ export default function App() {
   }, [])
 
   const { t } = useTranslation()
-  const { view, config, initialize, setMcpStatus, navigate, enterApp, setConfig, completeDeferredGitBashCheck } = useAppStore()
+  const { view, config, initialize, setMcpStatus, navigate, completeDeferredGitBashCheck, completeGitBashSetup } = useAppStore()
   const isTaskPanelOpen = useTaskPanelStore(s => s.isOpen)
   const platform = usePlatform()
   const isMacElectron = isElectron() && platform.isMac
@@ -967,32 +967,6 @@ export default function App() {
     return () => window.removeEventListener('search:navigate-to-result', handleNavigateToResult)
   }, [currentSpaceId, spaces, haloSpace, setSpaceStoreCurrentSpace, refreshCurrentSpace, setChatCurrentSpace])
 
-  // Handle Git Bash setup completion
-  const handleGitBashSetupComplete = async (installed: boolean) => {
-    console.log('[App] Git Bash setup completed, installed:', installed)
-
-    // Save skip preference if not installed
-    if (!installed) {
-      await api.setConfig({ gitBash: { skipped: true, installed: false, path: null } })
-    }
-
-    // Continue with normal initialization - sync config to store
-    const response = await api.getConfig()
-    if (response.success && response.data) {
-      const loadedConfig = response.data as HaloConfig
-      setConfig(loadedConfig)  // Sync config to store (was missing, causing empty apiKey in settings)
-      // Show setup if first launch or no AI source configured
-      // (modelConfigSkipped honors an explicit deferral from the first-run wizard)
-      if (loadedConfig.isFirstLaunch || (!hasAnyAISource(loadedConfig.aiSources) && !loadedConfig.modelConfigSkipped)) {
-        navigate('setup')
-      } else {
-        await enterApp()
-      }
-    } else {
-      navigate('setup')
-    }
-  }
-
   // Show reconnection banner for remote/Capacitor modes
   const showReconnectBanner = (api.isRemoteMode() || api.isCapacitorMode())
     && wsState !== 'connected'
@@ -1007,7 +981,7 @@ export default function App() {
       case 'splash':
         return <SplashPage />
       case 'gitBashSetup':
-        return <GitBashSetupPage onComplete={handleGitBashSetupComplete} />
+        return <GitBashSetupPage onComplete={completeGitBashSetup} />
       case 'setup':
         return <SetupPage />
       case 'serverConnect':
@@ -1122,6 +1096,9 @@ export default function App() {
       {/* At-rest credential decode failure alert (enterprise builds only).
           Offset below the reconnection bar when it is showing so they stack. */}
       <CredentialAlertBanner topOffset={showReconnectBanner ? 32 : 0} />
+      {/* Config file present but unreadable: saving is paused. Rendered last so
+          it stays on top in the rare case both alerts are up. */}
+      <ConfigUnreadableBanner topOffset={showReconnectBanner ? 32 : 0} />
     </div>
   )
 }

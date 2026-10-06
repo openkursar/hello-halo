@@ -186,25 +186,26 @@ POST   /api/apps/<appId>/im-chat/clear                             Clear a digit
      curl -sX POST "$HALO_API_URL/api/apps/<appId>/im-chat/clear" \
           -H "Authorization: Bearer $HALO_API_TOKEN" \
           -H "Content-Type: application/json" \
-          -d '{"spaceId":"<spaceId — the app's own spaceId from GET /api/apps>","channel":"wecom","chatType":"direct","chatId":"<chatId — from GET /api/im-sessions>"}'
-     # body: {"spaceId": "<spaceId — the app's own spaceId from GET /api/apps>", "channel": "wecom", "chatType": "direct", "chatId": "<chatId — from GET /api/im-sessions>"}
+          -d '{"spaceId":"<spaceId — the app's own spaceId from GET /api/apps>","channel":"wecom-bot","chatType":"direct","chatId":"<chatId — from GET /api/im-sessions>"}'
+     # body: {"spaceId": "<spaceId — the app's own spaceId from GET /api/apps>", "channel": "wecom-bot", "chatType": "direct", "chatId": "<chatId — from GET /api/im-sessions>"}
      # out: {success:true}
-     # note: All four body fields are required, 400 otherwise. chatType is "direct" or "group".
+     # note: All four body fields are required, 400 otherwise. channel, chatType and chatId are checked as for GET im-chat/messages; chatType is "direct" or "group".
 
 GET    /api/apps/<appId>/im-chat/messages                          Read a digital human's transcript in a bound IM chat
      curl -s "$HALO_API_URL/api/apps/<appId>/im-chat/messages?channel=wecom-bot&chatId=<chatId — from GET /api/im-sessions>&spaceId=<spaceId — the app's own spaceId from GET /api/apps>" -H "Authorization: Bearer $HALO_API_TOKEN" | head -c 4000
      # out: {success:true,data:[{id,role:"user"|"assistant",content,timestamp,thoughts?,thoughtsSummary?,images?}]}
      # note: All three query params are required, 400 otherwise. spaceId must be the app's own — a different but valid one is accepted and reads the wrong space. Optional ?chatType=group, defaults to direct.
+     # note: channel is the session's IM channel (wecom-bot, feishu-bot, dingtalk-bot, weixin-ilink-bot); chatId is taken as GET /api/im-sessions gives it. Any other channel, chatType or a chatId with whitespace, ":", "/", "\" or ".." is a 400. Read "http" and "local" sessions with GET /api/apps/:appId/chat/messages?conversationId=.
      # note: This is real correspondence with a person on the other end — read it only when the task needs it.
 
 POST   /api/apps/<appId>/im-chat/stop                              Stop a digital human's in-progress reply in a bound IM chat (keeps history)
      curl -sX POST "$HALO_API_URL/api/apps/<appId>/im-chat/stop" \
           -H "Authorization: Bearer $HALO_API_TOKEN" \
           -H "Content-Type: application/json" \
-          -d '{"channel":"wecom","chatType":"direct","chatId":"<chatId — from GET /api/im-sessions>"}'
-     # body: {"channel": "wecom", "chatType": "direct", "chatId": "<chatId — from GET /api/im-sessions>"}
+          -d '{"channel":"wecom-bot","chatType":"direct","chatId":"<chatId — from GET /api/im-sessions>"}'
+     # body: {"channel": "wecom-bot", "chatType": "direct", "chatId": "<chatId — from GET /api/im-sessions>"}
      # out: {success:true,data:{stopped:boolean}}
-     # note: chatType is "direct" or "group". Unlike im-chat/clear, this only aborts the current turn — the session and its history continue on the next inbound message.
+     # note: channel, chatType and chatId are checked as for GET im-chat/messages; chatType is "direct" or "group". Unlike im-chat/clear, this only aborts the current turn — the session and its history continue on the next inbound message.
 
 GET    /api/apps/<appId>/memory                                    Read the state of a digital human's memory
      curl -s "$HALO_API_URL/api/apps/<appId>/memory" -H "Authorization: Bearer $HALO_API_TOKEN"
@@ -234,7 +235,7 @@ PATCH  /api/apps/<appId>/overrides                                 Merge-patch p
           -d '{"notificationLevel":"important"}'
      # body: {"notificationLevel": "important"}
      # out: {success:true}
-     # note: Other fields you can set the same way: modelSourceId, modelId, spaceMemoryAccess (true lets the digital human read its space's memory topics), chatReasoningEffort (off|minimal|low|medium|high|xhigh|max — how hard it thinks everywhere: its chats, IM replies and scheduled or manual runs; unset, the model's configured effort applies), memory ({enabled, autoConsolidate, cadence: "diligent"|"balanced"|"economical"} — sent as a whole object). JSON Merge Patch semantics: send null to clear a field (e.g. {"modelSourceId":null} to fall back to the global model). The run schedule is NOT set here — use POST /:appId/frequency.
+     # note: Other fields you can set the same way: modelSourceId, modelId, spaceMemoryAccess (true lets the digital human read its space's memory topics), chatReasoningEffort (off|minimal|low|medium|high|xhigh|max — how hard it thinks everywhere: its chats, IM replies and scheduled or manual runs; unset, the model's configured effort applies), memory ({enabled, autoConsolidate, cadence: "diligent"|"balanced"|"economical"} — sent as a whole object), disabledTools (MCP servers only: tool names, as the server lists them, to leave out of every session — the whole list each time; [] or null turns them all back on). JSON Merge Patch semantics: send null to clear a field (e.g. {"modelSourceId":null} to fall back to the global model). The run schedule is NOT set here — use POST /:appId/frequency.
 
 POST   /api/apps/<appId>/pause                                     Pause a digital human (stops scheduling)
      # note: reversible — can be undone or corrected afterward.

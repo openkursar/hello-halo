@@ -19,6 +19,10 @@
     "group": "settings"
   },
   {
+    "method": "GET",
+    "path": "/api/config/read-failure"
+  },
+  {
     "method": "POST",
     "path": "/api/config/validate"
   },
@@ -357,6 +361,10 @@
     "method": "POST",
     "path": "/api/spaces/:spaceId/artifacts/file",
     "group": "workspace"
+  },
+  {
+    "method": "POST",
+    "path": "/api/spaces/:spaceId/artifacts/upload"
   },
   {
     "method": "POST",
@@ -1231,6 +1239,11 @@
   {
     "method": "DELETE",
     "path": "/api/tlon/:kbId/linked-dirs/:linkId",
+    "group": "knowledge-base"
+  },
+  {
+    "method": "POST",
+    "path": "/api/tlon/:kbId/linked-dirs/:linkId/retry",
     "group": "knowledge-base"
   },
   {

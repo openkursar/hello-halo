@@ -88,6 +88,8 @@ export interface InstalledApp {
     spaceMemoryAccess?: boolean
     /** This digital human's memory: on/off, auto-consolidation, cadence. */
     memory?: import('../../../shared/types/memory').MemorySettings
+    /** MCP servers only: tools turned off on the card; see the shared InstalledApp. */
+    disabledTools?: string[]
   }
 
   /** Permission grants and denials */

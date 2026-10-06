@@ -44,9 +44,8 @@ import AiBot, {
   type VideoMessage,
   type MixedMessage,
   type Logger as SdkLogger,
-  type WeComMediaType,
 } from '@wecom/aibot-node-sdk'
-import { readFile } from 'fs/promises'
+import { readFile, stat } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join, basename, extname } from 'path'
 import {
@@ -110,6 +109,47 @@ const TEMP_DIR = join(tmpdir(), 'halo-wecom')
 const IMAGE_EXTENSIONS = new Set([
   '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp',
 ])
+
+const MIB = 1024 * 1024
+
+/**
+ * WeCom's upload limit for each media type this channel sends.
+ *
+ * The platform refuses a larger upload only after all of it has been sent.
+ * These are read as binary megabytes, the larger reading, so no file the
+ * platform accepts is refused here; its own rejection, now passed on, covers
+ * any gap.
+ */
+const UPLOAD_LIMIT_BYTES = {
+  image: 10 * MIB,
+  file: 20 * MIB,
+} as const
+
+/** An image too big to send as one still fits as a file attachment. */
+function mediaTypeFor(ext: string, bytes: number): keyof typeof UPLOAD_LIMIT_BYTES {
+  return IMAGE_EXTENSIONS.has(ext) && bytes <= UPLOAD_LIMIT_BYTES.image ? 'image' : 'file'
+}
+
+/**
+ * A readable reason from whatever a send rejected with. A failed ack rejects
+ * with the platform's raw frame rather than an Error, which String() turned
+ * into "[object Object]" and lost its errcode and errmsg.
+ */
+function describeSendFailure(err: unknown): string {
+  if (err instanceof Error) return err.message
+  if (err && typeof err === 'object') {
+    const { errcode, errmsg } = err as { errcode?: unknown; errmsg?: unknown }
+    if (errcode !== undefined) {
+      return errmsg ? `errcode ${String(errcode)}: ${String(errmsg)}` : `errcode ${String(errcode)}`
+    }
+    try {
+      return JSON.stringify(err)
+    } catch {
+      // Not serializable; fall through.
+    }
+  }
+  return String(err)
+}
 
 // ============================================
 // Structured Logging
@@ -1403,12 +1443,31 @@ class WecomBotInstance implements ImChannelInstance {
 
   // ── File send (uploadMedia + replyMedia / sendMediaMessage) ───
 
+  /**
+   * Rejects with an Error the digital human can relay to the user — a file over
+   * the size limit, or what the platform said — and resolves false only when
+   * the connection is down.
+   */
   private async sendFileToChat(
     chatId: string,
     filePath: string,
     chatType: 'direct' | 'group',
     filename?: string,
   ): Promise<boolean> {
+    const displayName = filename || basename(filePath)
+    const { size } = await stat(filePath)
+    const mediaType = mediaTypeFor(extname(filePath).toLowerCase(), size)
+    const limit = UPLOAD_LIMIT_BYTES[mediaType]
+    if (size > limit) {
+      logEvent(this.instanceId, 'warn', 'send_file_too_large', {
+        chatId, displayName, mediaType, bytes: size, limitBytes: limit,
+      })
+      throw new Error(
+        `The file is ${(size / MIB).toFixed(1)} MB, over the ${limit / MIB} MB limit WeCom sets for ` +
+        `${mediaType === 'image' ? 'images' : 'files'}. Compress it or split it into smaller parts, then send again.`,
+      )
+    }
+
     if (!this.wsClient || !this.authenticated) {
       logEvent(this.instanceId, 'warn', 'send_file_skip_ws_not_open', {
         chatId, cat: 'network',
@@ -1416,9 +1475,6 @@ class WecomBotInstance implements ImChannelInstance {
       return false
     }
     try {
-      const displayName = filename || basename(filePath)
-      const ext = extname(filePath).toLowerCase()
-      const mediaType: WeComMediaType = IMAGE_EXTENSIONS.has(ext) ? 'image' : 'file'
       const fileBuf = await readFile(filePath)
 
       logEvent(this.instanceId, 'info', 'send_file_start', {
@@ -1458,12 +1514,15 @@ class WecomBotInstance implements ImChannelInstance {
       return true
     } catch (err) {
       this.counters.totalError++
+      const reason = describeSendFailure(err)
       logEvent(this.instanceId, 'error', 'send_file_failed', {
         chatId,
+        displayName,
+        mediaType,
         cat: 'protocol',
-        err: err instanceof Error ? err.message : String(err),
+        err: reason,
       })
-      return false
+      throw new Error(`WeCom did not deliver the file: ${reason}`)
     }
   }
 

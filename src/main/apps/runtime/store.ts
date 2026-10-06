@@ -484,6 +484,24 @@ export class ActivityStore {
     return row ? this.withContinuation(rowToEntry(row)) : null
   }
 
+  /**
+   * The number the next escalation is answered by from an IM chat: one past
+   * the highest any escalation holds, so a late answer to an earlier question
+   * can never land on a newer one.
+   */
+  nextEscalationNumber(): number {
+    const row = this.db.prepare(`SELECT MAX(CAST(json_extract(content_json, '$.number') AS INTEGER)) AS top
+      FROM activity_entries WHERE type = 'escalation'`).get() as { top: number | null }
+    return (row.top ?? 0) + 1
+  }
+
+  /** The escalation answered by this number, answered or not. */
+  getEscalationByNumber(number: number): ActivityEntry | null {
+    const row = this.db.prepare(`SELECT * FROM activity_entries WHERE type = 'escalation'
+      AND CAST(json_extract(content_json, '$.number') AS INTEGER) = ? LIMIT 1`).get(number) as EntryRow | undefined
+    return row ? this.withContinuation(rowToEntry(row)) : null
+  }
+
   /** Get entries for an App with optional filtering */
   getEntriesForApp(appId: string, options?: ActivityQueryOptions): ActivityEntry[] {
     const limit = Math.min(500, Math.max(1, Math.floor(options?.limit || 50)))

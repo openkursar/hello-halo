@@ -364,7 +364,7 @@ export function BrowserViewer({ tab }: BrowserViewerProps) {
               onClick={handleBack}
               disabled={!browserState.canGoBack}
               className="p-1.5 rounded hover:bg-secondary disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-              title={t('Back (Alt+←)')}
+              title={t('Back')}
             >
               <ArrowLeft className="w-4 h-4" />
             </button>
@@ -372,7 +372,7 @@ export function BrowserViewer({ tab }: BrowserViewerProps) {
               onClick={handleForward}
               disabled={!browserState.canGoForward}
               className="p-1.5 rounded hover:bg-secondary disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-              title={t('Forward (Alt+→)')}
+              title={t('Forward')}
             >
               <ArrowRight className="w-4 h-4" />
             </button>

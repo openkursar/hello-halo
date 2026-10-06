@@ -19,7 +19,8 @@ import {
 } from '../../openai-compat-router'
 import type { ApiCredentials, ResolvedModelCapabilities } from './types'
 import type { ReasoningEffortLevel } from '../../../shared/constants/reasoning-effort'
-import { inferOpenAIWireApi, credentialsToBackendConfig, getHeadlessElectronPath } from './helpers'
+import { inferOpenAIWireApi, credentialsToBackendConfig, getHeadlessElectronPath, getDisabledMcpTools } from './helpers'
+import { mcpToolName } from './mcp/tool-name'
 import { resolveModelId } from '../../../shared/types/ai-sources'
 import { readUserAgentSettings, INTERNAL_TASK_SETTINGS, type UserAgentSettings } from './user-agent-settings'
 import { buildSystemPrompt, DEFAULT_ALLOWED_TOOLS, hostSystemPromptText, toEngineSystemPrompt } from './system-prompt'
@@ -1123,6 +1124,17 @@ async function assembleSdkOptions(
   if (disallowedTools.length > 0) {
     sdkOptions.disallowedTools = disallowedTools
     console.log(`[SDK Config] Disallowed tools (${disallowedTools.length}): ${disallowedTools.join(', ')}`)
+  }
+
+  // Tools turned off on MCP server cards are left out of every session,
+  // whichever caller builds it. Claude Code and the halo engine drop them by
+  // name; engines that filter per server read `disabledMcpTools`.
+  const disabledMcpTools = spaceId ? getDisabledMcpTools(spaceId) : null
+  if (disabledMcpTools) {
+    const names = Object.entries(disabledMcpTools).flatMap(([server, tools]) => tools.map(tool => mcpToolName(server, tool)))
+    sdkOptions.disallowedTools = [...(sdkOptions.disallowedTools ?? []), ...names]
+    sdkOptions.disabledMcpTools = disabledMcpTools
+    console.log(`[SDK Config] MCP tools turned off: ${names.length} on ${Object.keys(disabledMcpTools).length} server(s)`)
   }
 
   // Add MCP servers if provided

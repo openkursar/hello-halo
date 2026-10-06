@@ -271,7 +271,6 @@ trusted native paste event. The browser-host design records this distinction.
 | `snapshot.ts` | Accessibility tree snapshot creation |
 | `fill-check.ts` | Reads back what a fill left in the field and compares it with the requested text |
 | `download-handler.ts` | Session-level `will-download` handler for silent AI downloads |
-| `download-utils.ts` | Shared filename sanitization / unique path resolution |
 | `types.ts` | Type definitions |
 | `tools/` | Tool implementations by category (14 active tools) |
 | `tools/index.ts` | Tool aggregation (`buildAllTools`) |
@@ -292,6 +291,17 @@ wc.downloadURL(url)
 
 The routing uses `contextsByWebContentsId` Map (webContents ID → BrowserContext),
 populated by `ctx.trackView()` when `browser_navigate` or `browser_tab` creates a view.
+
+The saved name is the server's name, sanitized (`foundation/file-naming`) and
+made unique. A name an agent engine reads as its instructions
+(`shared/engine-control-files`, compared the way Windows reads a name) is saved
+as `CLAUDE (downloaded).md` and so on, in every turn: downloads land in the
+workspace the engine works in. `browser_download` reports the name actually
+saved.
+
+In a restricted turn the browser's local file arguments and the addresses it
+opens are judged by `apps/runtime` (`turn-file-access`, through the per-call
+gate and pre-tool hook), not by the tools themselves.
 
 ## Design Principles
 

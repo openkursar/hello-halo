@@ -57,6 +57,7 @@ import { resolveImFileSend } from './im-channels/file-send-resolve'
 import { maybeClaimOwner } from './im-channels/owner-claim'
 import { resolveInboundIdentity } from './im-channels/identity-resolve'
 import { getImChannelsPermissionDefaults } from '../../foundation/product-config'
+import { answerEscalationFromIm, parseAnswerCommand, runtimeAnswerDeps } from './im-escalation'
 
 // ============================================
 // Constants
@@ -77,6 +78,16 @@ const EMPTY_RESPONSE_NOTICE = 'The model returned an empty response. Please send
  * the backend does not have renderer i18n loaded.
  */
 const PROCESSING_ACK = '✅ 已收到，正在处理…'
+
+/** How long a one-shot reply may take before the sender is told their message is being worked on. */
+const PROCESSING_NOTICE_DELAY_MS = 5_000
+
+/**
+ * The processing notice each conversation has waiting, so a stop or a clear can
+ * take it back: arriving after "Generation stopped." it would read as the work
+ * starting again.
+ */
+const pendingProcessingNotices = new Map<string, () => void>()
 
 /**
  * Commands that abort the current generation.
@@ -720,6 +731,7 @@ export async function dispatchInboundMessage(
       teamContext: teamBacking ? { teamId: teamBacking.teamId, epochId: teamBacking.teamContext.epochId } : undefined,
       lastSender: msg.fromName,
       lastMessage: truncateUtf16Safe(msg.body, 50),
+      ...(msg.chatType === 'direct' && msg.from ? { contactId: msg.from } : {}),
     })
 
     // Notify renderer of session update for real-time panel refresh
@@ -738,6 +750,7 @@ export async function dispatchInboundMessage(
 
   // ── Stop command: abort generation, silently drop buffered supplements ──
   if (isStopCommand(msg.body, msg.chatType)) {
+    pendingProcessingNotices.get(conversationId)?.()
     const dropped = clearSupplementBuffer(conversationId)
     const isActive = isAppChatConversationGenerating(conversationId)
     if (isActive) {
@@ -762,6 +775,7 @@ export async function dispatchInboundMessage(
 
   // ── Clear command: reset context, silently drop buffered supplements ──
   if (isClearCommand(msg.body, msg.chatType)) {
+    pendingProcessingNotices.get(conversationId)?.()
     const dropped = clearSupplementBuffer(conversationId)
     console.log(
       `${LOG_TAG} Clear command received: channel=${msg.channel}, chatId=${msg.chatId}, ` +
@@ -786,6 +800,34 @@ export async function dispatchInboundMessage(
       console.error(`${LOG_TAG} Failed to clear context: session=${conversationId}`, err)
       await reply.send('Failed to clear context. Please try again.').catch(() => {})
     }
+    return
+  }
+
+  // ── Answer command: a question this digital human asked, answered here ──
+  // Never reaches the model: it is the owner answering through Halo's own
+  // answer path, not a message to the digital human (im-escalation).
+  const answerArgs = parseAnswerCommand(msg.body, msg.chatType)
+  if (answerArgs !== null) {
+    const deps = await runtimeAnswerDeps()
+    const result = deps
+      ? await answerEscalationFromIm(answerArgs, {
+          appId: app.id,
+          ...(instanceCfg?.teamId ? { teamId: instanceCfg.teamId } : {}),
+          senderId: msg.from,
+          chatType: msg.chatType,
+          permissionEnabled: instanceCfg?.permissionEnabled ?? false,
+          owners: instanceCfg?.owners ?? [],
+        }, deps)
+      : { reply: '现在无法处理回答，请稍后再试。', outcome: 'runtime_unavailable' as const }
+    // The outcome, never the answer: whether an owner's answer was taken or
+    // refused, and why, has to be readable from the log alone.
+    console.log(
+      `${LOG_TAG} Answer command: instanceId=${instanceId}, chatType=${msg.chatType}, chatId=${msg.chatId}, ` +
+      `sender=${msg.from}, outcome=${result.outcome}` +
+      `${'entryId' in result && result.entryId ? `, entry=${result.entryId}` : ''}` +
+      `${'error' in result && result.error ? `, error="${result.error}"` : ''}`
+    )
+    await reply.send(result.reply).catch(() => {})
     return
   }
 
@@ -974,16 +1016,22 @@ export async function dispatchInboundMessage(
     `sender=${msg.from}(${senderName}), isOwner=${isOwner}`
   )
 
-  // Send an immediate acknowledgment so the user sees the <think> block appear
-  // right away instead of staring at silence while session + MCP servers init.
-  // On non-streaming channels the status cannot ride an existing stream — send
-  // a one-shot notice instead, so acks also work when streaming is stripped
-  // (instance streaming off, or group quoteReply disabled in the provider).
+  // A stream shows at once that the message is being worked on, in the reply
+  // itself. A one-shot reply (streaming off, or stripped in a group without
+  // quote reply) would need a message of its own: sent only once the answer
+  // has been slow to come — a quick answer needs nothing before it — and never
+  // where the owner turned the notice off.
+  let processingNotice: ReturnType<typeof setTimeout> | undefined
   if (reply.streaming) {
     reply.streaming.update({ type: 'status', text: PROCESSING_ACK }).catch(() => {})
-  } else {
-    reply.send(PROCESSING_ACK).catch(() => {})
+  } else if (instanceCfg?.processingNotice !== false) {
+    processingNotice = setTimeout(() => { reply.send(PROCESSING_ACK).catch(() => {}) }, PROCESSING_NOTICE_DELAY_MS)
   }
+  const settleProcessingNotice = (): void => {
+    clearTimeout(processingNotice)
+    if (pendingProcessingNotices.get(conversationId) === settleProcessingNotice) pendingProcessingNotices.delete(conversationId)
+  }
+  if (processingNotice) pendingProcessingNotices.set(conversationId, settleProcessingNotice)
 
   try {
     await sendAppChatMessage({
@@ -1040,6 +1088,7 @@ export async function dispatchInboundMessage(
 
       // Use streaming.finish when available, else fall back to one-shot send
       onReply: (finalContent: string, ending?: AppChatTurnEnding) => {
+        settleProcessingNotice()
         void analytics.track(AnalyticsEvents.MESSAGE_SENT, {
           source: 'im-reply',
           direction: 'outbound',
@@ -1071,6 +1120,7 @@ export async function dispatchInboundMessage(
       },
     })
   } catch (err) {
+    settleProcessingNotice()
     console.error(
       `${LOG_TAG} Execution failed: app=${app.id}, channel=${msg.channel}, chatId=${msg.chatId}`,
       err
@@ -1093,5 +1143,7 @@ export async function dispatchInboundMessage(
     } catch {
       // Reply channel may be unavailable — nothing more we can do
     }
+  } finally {
+    settleProcessingNotice()
   }
 }

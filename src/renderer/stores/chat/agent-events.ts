@@ -144,25 +144,32 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
       }
 
       // Conversation may have been created remotely (web/mobile) — sync local state
+      let unlisted = false
       if (!metaFound) {
         console.log(`[ChatStore] handleAgentComplete: conversation ${conversationId} not in local state, reloading space ${spaceId}`)
-        await get().loadConversations(spaceId)
+        const loaded = await get().loadConversations(spaceId)
         // Re-read title from freshly loaded data
         for (const [, ss] of get().spaceStates) {
           const meta = ss.conversations.find(c => c.id === conversationId)
-          if (meta) { title = meta.title; break }
+          if (meta) { title = meta.title; metaFound = true; break }
         }
+        // Not in the list just read: an ephemeral conversation backing another
+        // view (the knowledge base chat), or one deleted meanwhile — nothing to
+        // come back to. A list that did not load proves nothing.
+        unlisted = loaded && !metaFound
       }
 
-      set((s) => {
-        const newUnseenCompletions = new Map(s.unseenCompletions)
-        newUnseenCompletions.set(conversationId, { spaceId, title })
-        return { unseenCompletions: newUnseenCompletions }
-      })
-      api.taskMarkUnseen(conversationId, spaceId, title).catch(err =>
-        console.error('[ChatStore] taskMarkUnseen error:', err))
-      // Loading missing metadata may have yielded while the user returned to the chat.
-      get().readActiveCompletion()
+      if (!unlisted) {
+        set((s) => {
+          const newUnseenCompletions = new Map(s.unseenCompletions)
+          newUnseenCompletions.set(conversationId, { spaceId, title })
+          return { unseenCompletions: newUnseenCompletions }
+        })
+        api.taskMarkUnseen(conversationId, spaceId, title).catch(err =>
+          console.error('[ChatStore] taskMarkUnseen error:', err))
+        // Loading missing metadata may have yielded while the user returned to the chat.
+        get().readActiveCompletion()
+      }
     }
 
     // Captured BEFORE any async work: if a new turn starts while the backend

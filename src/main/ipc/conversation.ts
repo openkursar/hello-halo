@@ -33,9 +33,9 @@ export function registerConversationHandlers(): void {
     },
 
     // Create a new conversation
-    createConversation: async (spaceId: string, title?: string, reasoningEffort?: unknown) => {
+    createConversation: async (spaceId: string, title?: string, reasoningEffort?: unknown, options?: { ephemeral?: boolean }) => {
       try {
-        const conversation = createConversation(spaceId, title, reasoningEffort)
+        const conversation = createConversation(spaceId, title, reasoningEffort, { ephemeral: options?.ephemeral === true })
         return { success: true, data: conversation }
       } catch (error: unknown) {
         const err = error as Error

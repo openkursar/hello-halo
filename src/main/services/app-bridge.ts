@@ -27,7 +27,8 @@ import type { AppManagerService } from '../apps/manager'
 export interface McpAppChange {
   appId: string
   specId: string
-  action: 'installed' | 'uninstalled' | 'reinstalled' | 'paused' | 'resumed' | 'updated' | 'moved' | 'status'
+  /** `tools`: the server's tools turned on or off; its connection is unchanged. */
+  action: 'installed' | 'uninstalled' | 'reinstalled' | 'paused' | 'resumed' | 'updated' | 'moved' | 'status' | 'tools'
 }
 
 /**

@@ -521,6 +521,7 @@ export async function destroySpaceCache(spaceId: string): Promise<void> {
   cacheMap.delete(spaceId)
   pendingBroadcasts.delete(spaceId)
   lastReconcileTime.delete(spaceId)
+  reconcileInFlight.delete(spaceId)
 }
 
 /**
@@ -660,6 +661,9 @@ export function getCacheStats(spaceId: string): {
 // Cooldown guard: minimum interval between reconciliations (per space)
 const RECONCILE_COOLDOWN_MS = 2000
 const lastReconcileTime = new Map<string, number>()
+// The run in progress per space: a request made meanwhile joins it rather than
+// scanning again, so an older run can never finish last and restore its listing.
+const reconcileInFlight = new Map<string, Promise<void>>()
 
 /**
  * Reconcile all loaded directories against actual filesystem state.
@@ -669,15 +673,23 @@ const lastReconcileTime = new Map<string, number>()
  * corrections through the existing artifact:tree-update channel.
  *
  * Designed to recover from missed @parcel/watcher events (OS queue overflow,
- * App Nap, race conditions). Triggered on window focus and manual refresh.
+ * App Nap, race conditions). Triggered when the watcher errs or its process
+ * restarts, and on manual refresh. One run per space at a time: a request made
+ * during a run resolves when that run does.
  *
- * @param reason - Trigger source (window-focus / watcher-error / worker-restart /
- *   artifact-api / ...). Logged so the rescan frequency can be attributed to a
- *   cause when diagnosing high-frequency directory scanning.
+ * @param reason - Trigger source (watcher-error / worker-restart / artifact-api /
+ *   ...). Logged so the rescan frequency can be attributed to a cause when
+ *   diagnosing high-frequency directory scanning.
  */
 export async function reconcileLoadedDirs(spaceId: string, reason = 'manual'): Promise<void> {
   const cache = cacheMap.get(spaceId)
   if (!cache || cache.loadedDirs.size === 0) return
+
+  const running = reconcileInFlight.get(spaceId)
+  if (running) {
+    console.debug(`[ArtifactCache] Reconcile already running for ${spaceId}, joining it (reason=${reason})`)
+    return running
+  }
 
   // Cooldown guard: prevent rapid-fire reconciliation
   const now = Date.now()
@@ -688,6 +700,14 @@ export async function reconcileLoadedDirs(spaceId: string, reason = 'manual'): P
   }
   lastReconcileTime.set(spaceId, now)
 
+  const run = runReconcile(spaceId, cache, reason).finally(() => {
+    if (reconcileInFlight.get(spaceId) === run) reconcileInFlight.delete(spaceId)
+  })
+  reconcileInFlight.set(spaceId, run)
+  return run
+}
+
+async function runReconcile(spaceId: string, cache: SpaceCache, reason: string): Promise<void> {
   const dirsToCheck = Array.from(cache.loadedDirs)
   let changedDirCount = 0
   const updatedDirs: Array<{ dirPath: string; children: CachedTreeNode[] }> = []

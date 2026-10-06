@@ -19,6 +19,7 @@ import { CapabilityImpact, CapabilityChangeDialog } from './CapabilityImpact'
 import { useAppsStore } from '../../stores/apps.store'
 import { useAppStore } from '../../stores/app.store'
 import { AppStatusDot } from './AppStatusDot'
+import { McpToolSwitches, listedMcpTools } from './McpToolSwitches'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { resolveSpecI18n } from '../../utils/spec-i18n'
 import { isSessionOnlyFailure } from '../../utils/mcpStatus'
@@ -34,6 +35,8 @@ import type { McpSpec, McpServerConfig } from '../../../shared/apps/spec-types'
 interface McpStatusCardProps {
   appId: string
 }
+
+const NO_TOOLS: string[] = []
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -130,8 +133,8 @@ function ArgList({
 
 export function McpStatusCard({ appId }: McpStatusCardProps) {
   const { t } = useTranslation()
-  const { apps, pauseApp, resumeApp, uninstallApp, updateAppSpec } = useAppsStore()
-  const { mcpStatus } = useAppStore()
+  const { apps, pauseApp, resumeApp, uninstallApp, updateAppSpec, updateAppOverrides } = useAppsStore()
+  const { mcpStatus, config } = useAppStore()
   const app = apps.find(a => a.id === appId)
   const [pendingChange, setPendingChange] = useState<{ title: string; apply: () => Promise<void> } | null>(null)
 
@@ -189,6 +192,9 @@ export function McpStatusCard({ appId }: McpStatusCardProps) {
   // Editing the token would not help here — Halo clears the leftover state and
   // the next session picks the server up again.
   const sessionOnlyFailure = isSessionOnlyFailure(sdkEntry)
+
+  const disabledTools = app.userOverrides?.disabledTools ?? NO_TOOLS
+  const listedTools = listedMcpTools(sdkEntry?.tools ?? NO_TOOLS, disabledTools)
 
   // Init edit state when entering edit mode
   const startEditing = useCallback(() => {
@@ -685,21 +691,20 @@ export function McpStatusCard({ appId }: McpStatusCardProps) {
           }
           <Wrench className="w-3.5 h-3.5" />
           {t('Tools provided by this server')}
-          {sdkEntry?.tools && sdkEntry.tools.length > 0 && (
+          {listedTools.length > 0 && (
             <span className="ml-1 text-muted-foreground/70 font-normal normal-case tracking-normal">
-              ({sdkEntry.tools.length})
+              ({listedTools.length})
             </span>
           )}
         </button>
         {toolsExpanded && (
-          sdkEntry?.tools && sdkEntry.tools.length > 0 ? (
-            <ul className="pl-5 space-y-0.5">
-              {sdkEntry.tools.map(tool => (
-                <li key={tool} className="text-xs text-muted-foreground font-mono truncate" title={tool}>
-                  {tool}
-                </li>
-              ))}
-            </ul>
+          listedTools.length > 0 ? (
+            <McpToolSwitches
+              tools={sdkEntry?.tools ?? NO_TOOLS}
+              disabledTools={disabledTools}
+              onSave={next => updateAppOverrides(appId, { disabledTools: next.length > 0 ? next : null })}
+              engineIgnoresSwitches={config?.agent?.sdkEngine === 'dsh'}
+            />
           ) : (
             <p className="text-xs text-muted-foreground italic pl-5">
               {isPaused

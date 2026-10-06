@@ -40,9 +40,14 @@ export function listConversations(spaceId: string): ControllerResponse {
 /**
  * Create a new conversation
  */
-export function createConversation(spaceId: string, title?: string, reasoningEffort?: unknown): ControllerResponse {
+export function createConversation(
+  spaceId: string,
+  title?: string,
+  reasoningEffort?: unknown,
+  options?: { ephemeral?: boolean }
+): ControllerResponse {
   try {
-    const conversation = serviceCreateConversation(spaceId, title, reasoningEffort)
+    const conversation = serviceCreateConversation(spaceId, title, reasoningEffort, { ephemeral: options?.ephemeral === true })
     return { success: true, data: conversation }
   } catch (error: unknown) {
     const err = error as Error

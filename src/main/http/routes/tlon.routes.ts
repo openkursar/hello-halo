@@ -100,6 +100,11 @@ export function registerTlonRoutes(app: Express): void {
     res.json(tlonController.removeLinkedDir(req.params.kbId, req.params.linkId))
   })
 
+  // POST /api/tlon/:kbId/linked-dirs/:linkId/retry — look for an unavailable directory again
+  app.post('/api/tlon/:kbId/linked-dirs/:linkId/retry', (req: Request, res: Response) => {
+    res.json(tlonController.retryLinkedDir(req.params.kbId, req.params.linkId))
+  })
+
   // ===== Raw source files =====
 
   // POST /api/tlon/:kbId/files — add source files by absolute path (server-side)

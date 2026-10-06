@@ -21,6 +21,7 @@ import type {
   ImChannelInstanceStatus,
 } from '../../../shared/types/im-channel'
 import { ChannelBackendSelect, ChannelBackendName } from './ChannelBackendSelect'
+import { ImProcessingNoticeRow } from './ImProcessingNoticeRow'
 import type {
   ChannelBackendApp,
   ChannelBackendTeam,
@@ -375,6 +376,13 @@ export function WeixinIlinkInstanceCard({
             automationApps={automationApps}
             teams={teams}
             onChange={handleTargetChange}
+          />
+
+          {/* Replies here are sent whole, never streamed. */}
+          <ImProcessingNoticeRow
+            on={instance.processingNotice !== false}
+            streaming={false}
+            onToggle={() => onChange({ ...instance, processingNotice: instance.processingNotice === false ? undefined : false })}
           />
         </div>
       )}

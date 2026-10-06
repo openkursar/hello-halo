@@ -40,6 +40,7 @@ export {
   // linked dirs
   addLinkedDir,
   removeLinkedDir,
+  retryLinkedDir,
   // raw files
   addRawFiles,
   listRawFiles,

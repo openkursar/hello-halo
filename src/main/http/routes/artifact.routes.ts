@@ -3,6 +3,8 @@
  * Split from the monolithic routes/index.ts; mirrors the IPC API for this domain.
  */
 import type { Express, Request, Response } from 'express'
+import { randomUUID } from 'crypto'
+import { createWriteStream, mkdirSync, renameSync, unlink } from 'fs'
 import {
   basename,
   collectFiles,
@@ -12,8 +14,10 @@ import {
   createReadStream,
   detectFileType,
   existsSync,
+  getSpaceDir,
   getWorkingDir,
   isPathInside,
+  join,
   listArtifacts,
   listArtifactsTree,
   loadTreeChildren,
@@ -28,6 +32,8 @@ import {
 } from './_shared'
 import { retainArtifactSpace, releaseArtifactSpace, queryFiles, resolveArtifactPaths } from '../../services/artifact.service'
 import { issueDownloadTicket, redeemDownloadTicket } from '../auth/download-ticket'
+import { resolveUniquePath, sanitizeFilename } from '../../foundation/file-naming'
+import { MAX_UPLOAD_FILE_SIZE } from '../../../shared/constants/artifact-upload'
 
 const DOWNLOAD_TYPES: Record<string, string> = {
   html: 'text/html',
@@ -355,6 +361,103 @@ export function registerArtifactRoutes(app: Express): void {
     } catch (error) {
       res.status(500).json({ success: false, error: (error as Error).message })
     }
+  })
+
+  // One file from a remote client's device into the space's working directory.
+  // The body is the file itself, streamed into a temp dotfile beside its target
+  // and renamed once whole, so the file's own name never holds half an upload.
+  app.post('/api/spaces/:spaceId/artifacts/upload', (req: Request, res: Response) => {
+    const { spaceId } = req.params
+    const requested = typeof req.query.name === 'string' ? req.query.name.split(/[\\/]/).pop()?.trim() ?? '' : ''
+    if (!requested) {
+      res.status(400).json({ success: false, error: 'Missing file name' })
+      return
+    }
+    const declared = Number(req.headers['content-length'])
+    if (Number.isFinite(declared) && declared > MAX_UPLOAD_FILE_SIZE) {
+      console.warn('[Upload] Refused a file over the size limit', { spaceId, bytes: declared })
+      res.status(413).json({ success: false, error: 'File too large', code: 'TOO_LARGE' })
+      return
+    }
+    const workDir = getSpaceDir(spaceId)
+    if (!workDir) {
+      console.warn('[Upload] Refused an upload to an unknown space', { spaceId })
+      res.status(404).json({ success: false, error: 'Space not found' })
+      return
+    }
+    // The built-in space's folder is Halo's own and made on first use, as the agent does.
+    if (spaceId === 'halo-temp') mkdirSync(workDir, { recursive: true })
+    if (!existsSync(workDir)) {
+      console.warn('[Upload] The space has no working directory to save into', { spaceId })
+      res.status(409).json({ success: false, error: 'The working directory of this space is not available', code: 'NO_WORKING_DIR' })
+      return
+    }
+    // The directory is checked, since the file does not exist yet; the name
+    // is a single segment, so the file lands directly inside it.
+    if (!validateFilePath(res, workDir, 'write')) {
+      return
+    }
+    const name = sanitizeFilename(requested)
+
+    const partial = join(workDir, `.${randomUUID()}.upload`)
+    const out = createWriteStream(partial, { flags: 'wx' })
+    let received = 0
+    let failed = false
+    const fail = (status: number, error: string, code?: string) => {
+      if (failed) return
+      failed = true
+      req.unpipe(out)
+      out.destroy()
+      // Removed only once closed: a file still being opened would be created
+      // again after an earlier removal.
+      const discard = () => unlink(partial, () => {})
+      if (out.closed) discard()
+      else out.once('close', discard)
+      if (res.headersSent) return
+      // Stop receiving the rest once the answer is out.
+      res.setHeader('Connection', 'close')
+      res.on('finish', () => req.destroy())
+      res.status(status).json({ success: false, error, ...(code ? { code } : {}) })
+    }
+    req.on('data', (chunk: Buffer) => {
+      received += chunk.length
+      if (received > MAX_UPLOAD_FILE_SIZE && !failed) {
+        console.warn('[Upload] Stopped a file going over the size limit', { spaceId, bytes: received })
+        fail(413, 'File too large', 'TOO_LARGE')
+      }
+    })
+    req.on('close', () => {
+      if (req.complete || failed) return
+      console.warn('[Upload] The client left before the file was complete', { spaceId, bytes: received })
+      fail(400, 'Upload interrupted')
+    })
+    out.on('error', (error) => {
+      console.error('[Upload] Could not write the file:', error.message)
+      fail(500, 'Could not save the file')
+    })
+    // Moved into place once closed, so no handle is left open on the file.
+    out.on('close', () => {
+      if (failed) return
+      if (!out.writableFinished) {
+        fail(500, 'Could not save the file')
+        return
+      }
+      let target: string
+      try {
+        // A free name is picked and taken in one step, so two uploads of one
+        // name finishing together never land on the same file.
+        target = resolveUniquePath(workDir, name)
+        renameSync(partial, target)
+      } catch (error) {
+        console.error('[Upload] Could not move the file into place:', (error as Error).message)
+        unlink(partial, () => {})
+        res.status(500).json({ success: false, error: 'Could not save the file' })
+        return
+      }
+      console.log('[Upload] Saved a file from a remote client', { spaceId, name: basename(target), bytes: received })
+      res.json({ success: true, data: { path: target, name: basename(target), size: received } })
+    })
+    req.pipe(out)
   })
 
   // Create folder — frontend sends (parentPath, name), backend constructs full path

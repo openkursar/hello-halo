@@ -21,6 +21,7 @@ import {
   DELEGABLE_BUILTIN_TOOLS,
   allowsBuiltin,
   allowsCapability,
+  allowsSkill,
   allowsUserMcp,
   normalizeBashRules,
   resolveBashAccess,
@@ -49,6 +50,11 @@ interface CapabilityPolicyFieldsProps {
   audience: 'guest' | 'teammate'
   /** Extra rows rendered with the Halo capabilities (e.g. periodic checks). */
   extraToggles?: { key: string; label: string; checked: boolean; onToggle: () => void }[]
+  /**
+   * The skills the digital human can load, one switch each. Absent: the screen
+   * has no list to offer, and shows no skills group.
+   */
+  skills?: { dirName: string; name: string; description: string }[]
 }
 
 /**
@@ -237,6 +243,7 @@ export function CapabilityPolicyFields({
   mode,
   audience,
   extraToggles,
+  skills,
 }: CapabilityPolicyFieldsProps) {
   const { t } = useTranslation()
   const mcpApps = useAppsStore(s => s.apps).filter(a => a.spec.type === 'mcp')
@@ -302,6 +309,16 @@ export function CapabilityPolicyFields({
     onChange({ ...policy, allowedUserMcp: Array.from(current) })
   }
 
+  // Written as the list of skills that exist now: one that was removed keeps no
+  // standing grant a later skill of the same name would inherit.
+  const setSkill = (dirName: string, on: boolean) => {
+    const listed = skills ?? []
+    const current = new Set(listed.filter(s => allowsSkill(policy, s.dirName, mode)).map(s => s.dirName))
+    if (on) current.add(dirName)
+    else current.delete(dirName)
+    onChange({ ...policy, allowedSkills: Array.from(current) })
+  }
+
   const bash = resolveBashAccess(policy, mode)
   // On when any of its tools is: a switch must never show a granted tool as off.
   const rowOn = (row: ToolRow) => row.tools.some(name => allowsBuiltin(policy, name, mode))
@@ -334,6 +351,10 @@ export function CapabilityPolicyFields({
       // An empty list runs nothing.
       on: bash.scope === 'full' || (bash.scope === 'listed' && bash.rules.length > 0),
       label: bash.scope === 'full' ? t('run any command') : t('run the listed commands'),
+    },
+    {
+      on: !!skills?.some(s => allowsSkill(policy, s.dirName, mode)),
+      label: t('use the skills you allowed'),
     },
     ...CAPABILITY_MCP_TOGGLES.map(({ key, label }) => ({ on: allowsCapability(policy, key, mode), label: t(label) })),
   ]
@@ -389,6 +410,35 @@ export function CapabilityPolicyFields({
           </div>
         )
       })}
+
+      {skills && (
+        <div className="space-y-2 border-t border-border/40 pt-3">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs font-medium text-muted-foreground">{t('Skills')}</span>
+            <HelpToggle
+              text={t('Only the skills turned on here can be used. A skill can read its own folder; everything else it does, such as running commands, changing files or sending email, still needs the switches on this page. A skill that pre-approves more than they allow will not run.')}
+            />
+          </div>
+          {skills.length === 0 && (
+            <p className="text-xs text-muted-foreground/70">{t('This digital human has no skills yet.')}</p>
+          )}
+          {skills.map(skill => (
+            <label key={skill.dirName} className="flex items-center justify-between gap-3">
+              <span className="min-w-0">
+                <span className="block truncate text-sm text-foreground">{skill.name}</span>
+                {skill.description && (
+                  <span className="line-clamp-2 block text-xs text-muted-foreground">{skill.description}</span>
+                )}
+              </span>
+              <Switch
+                size="sm"
+                checked={allowsSkill(policy, skill.dirName, mode)}
+                onCheckedChange={next => setSkill(skill.dirName, next)}
+              />
+            </label>
+          ))}
+        </div>
+      )}
 
       <div className="space-y-1.5 border-t border-border/40 pt-3">
         {CAPABILITY_MCP_TOGGLES.map(({ key, label }) => {

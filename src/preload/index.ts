@@ -112,9 +112,10 @@ export interface HaloAPI extends BrowserHostBridge {
   authDelegatedActivate: () => Promise<IpcResponse>
 
   // Config
-  getConfig: () => Promise<IpcResponse>
-  setConfig: (updates: Record<string, unknown>) => Promise<IpcResponse>
+  getConfig: () => Promise<IpcResponse & { configEpoch?: number }>
+  setConfig: (updates: Record<string, unknown>, snapshotEpoch?: number) => Promise<IpcResponse>
   getCredentialFailures: () => Promise<IpcResponse>
+  getConfigReadFailure: () => Promise<IpcResponse>
   onCredentialDecryptFailed: (callback: (data: { failures: Array<{ path: string; label: string }> }) => void) => () => void
   validateApi: (apiKey: string, apiUrl: string, provider: string, model?: string) => Promise<IpcResponse>
   fetchModels: (apiKey: string, apiUrl: string) => Promise<IpcResponse>
@@ -161,7 +162,7 @@ export interface HaloAPI extends BrowserHostBridge {
 
   // Conversation
   listConversations: (spaceId: string) => Promise<IpcResponse>
-  createConversation: (spaceId: string, title?: string, reasoningEffort?: ReasoningEffortLevel) => Promise<IpcResponse>
+  createConversation: (spaceId: string, title?: string, reasoningEffort?: ReasoningEffortLevel, options?: { ephemeral?: boolean }) => Promise<IpcResponse>
   getConversation: (spaceId: string, conversationId: string, options?: { fromMessageId?: string }) => Promise<IpcResponse>
   updateConversation: (
     spaceId: string,
@@ -255,6 +256,7 @@ export interface HaloAPI extends BrowserHostBridge {
   tlonUnbindApp: (kbId: string, appId: string) => Promise<IpcResponse>
   tlonAddLinkedDir: (kbId: string, dir: { path: string; label: string }) => Promise<IpcResponse>
   tlonRemoveLinkedDir: (kbId: string, linkId: string) => Promise<IpcResponse>
+  tlonRetryLinkedDir: (kbId: string, linkId: string) => Promise<IpcResponse>
   tlonAddFiles: (kbId: string, filePaths: string[]) => Promise<IpcResponse>
   tlonListRaw: (kbId: string) => Promise<IpcResponse>
   tlonRemoveRaw: (kbId: string, relativePath: string) => Promise<IpcResponse>

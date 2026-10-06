@@ -10,7 +10,10 @@ in opposite directions.
    is WeCom or any IM channel, do **not** ask a frequency question — explain instead that
    creation needs no trigger config and that binding happens afterwards in Settings → Message
    Channels (`create-digital-human/im-triggers.md`). For `schedule`, get an explicit interval or
-   cron; never assume one.
+   cron; never assume one. If it should run on working days only: in mainland China, where public
+   holidays move and some weekends are working days, use `workday_calendar: true` with a schedule
+   that fires every day — never `1-5` (`create-digital-human/SKILL.md` §1); elsewhere a `1-5` cron
+   is the plain answer.
 2. **External notification.** If the task needs to reliably notify someone (email/wecom/dingtalk/
    feishu/webhook, or an IM contact via `notify_bot`), **say so explicitly in `system_prompt`** —
    e.g. "when X happens, call `notify_channel` to email the result." There is no spec field that

@@ -7,7 +7,8 @@
  * further collapses bursts before re-scanning.
  *
  * Subscriptions are keyed so they can be started/stopped per-KB (used by
- * createKB/deleteKB/addLinkedDir/removeLinkedDir).
+ * createKB/deleteKB/addLinkedDir/removeLinkedDir, and updateKB when a KB is
+ * paused or resumed).
  */
 
 import parcelWatcher from '@parcel/watcher'
@@ -18,7 +19,7 @@ import { CPP_LEVEL_IGNORE_DIRS } from '../../../shared/constants/ignore-patterns
 import { isDiskRoot } from '../../../shared/disk-paths'
 import type { LinkedDirectory } from '../../../shared/types/tlon'
 import { getKBRawDir } from './paths'
-import { listKBs, getKB, collectIngestCandidates } from './service'
+import { listKBs, getKB, collectIngestCandidates, checkLinkedDirAvailable } from './service'
 import { enqueueFiles, processQueue, rebuildIndexMd } from './ingest'
 
 interface WatchHandle {
@@ -90,12 +91,15 @@ async function subscribe(key: string, dir: string, kbId: string): Promise<void> 
 async function unsubscribe(key: string): Promise<void> {
   const handle = handles.get(key)
   if (!handle) return
+  // Dropped before the native unsubscribe settles, so a start right after a
+  // stop (paused and straight back on) subscribes afresh instead of finding
+  // the old handle and skipping.
+  handles.delete(key)
   try {
     await handle.subscription.unsubscribe()
   } catch (error) {
     console.error(`[Tlon] Failed to unsubscribe ${key}:`, error)
   }
-  handles.delete(key)
 }
 
 // ============================================================================
@@ -107,9 +111,10 @@ export async function startWatchersForKB(kbId: string): Promise<void> {
   if (!kb || kb.status !== 'active') return
   await subscribe(`${kbId}:raw`, getKBRawDir(kbId), kbId)
   for (const linked of kb.linkedDirs) {
-    // `watching === false` marks a link recorded but not watchable (e.g. the
-    // path was missing at creation); the settings UI shows it as unavailable.
-    if (!linked.watching) continue
+    // Looked for again on every start, so a folder missing when it was added
+    // (or since) is watched once it is back; one still missing shows as
+    // unavailable in the settings, with a Retry.
+    if (!checkLinkedDirAvailable(kbId, linked.id)) continue
     await startLinkedDirWatch(kbId, linked)
   }
 }
@@ -118,14 +123,22 @@ export async function stopWatchersForKB(kbId: string): Promise<void> {
   const keys = Array.from(handles.keys()).filter(
     k => k === `${kbId}:raw` || k.startsWith(`${kbId}:linked:`)
   )
-  for (const key of keys) {
-    await unsubscribe(key)
-  }
   const timer = debounceTimers.get(kbId)
   if (timer) {
     clearTimeout(timer)
     debounceTimers.delete(kbId)
   }
+  // Every handle is dropped before the first await (see unsubscribe).
+  await Promise.all(keys.map(unsubscribe))
+}
+
+/**
+ * A paused KB turned back on: watch it again, and scan once for what changed
+ * while it was paused — nothing was watching then, so no event will report it.
+ */
+export async function resumeWatchersForKB(kbId: string): Promise<void> {
+  await startWatchersForKB(kbId)
+  scheduleScan(kbId)
 }
 
 export async function startLinkedDirWatch(kbId: string, linked: LinkedDirectory): Promise<void> {

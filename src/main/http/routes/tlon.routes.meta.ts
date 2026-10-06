@@ -116,6 +116,18 @@ export const MODULE: RouteModuleMeta = {
       impact: 'reversible',
       notes: 'Only removes the watch registration — the target folder and its files are untouched, and can be re-linked.',
     },
+    'POST /api/tlon/:kbId/linked-dirs/:linkId/retry': {
+      expose: 'ai',
+      group: 'knowledge-base',
+      summary: 'Look for an unavailable linked directory again and resume watching it if it is back',
+      returns: '{success:true,data:{id,path,label,watching:true,lastScannedAt?,learningPaused?}} when the folder is there',
+      impact: 'reversible',
+      notes: [
+        'A link shows watching:false when its folder was missing at the last check (e.g. an unplugged drive). Halo looks again at every start; this asks now.',
+        'Failure carries a code: PATH_NOT_FOUND (the folder is still missing), LINK_NOT_FOUND, KB_NOT_FOUND.',
+        'learningPaused ({reason:"too-many-files",count,limit} or {reason:"too-large"}) on a link means the folder is there but over the watched-folder limits, so its files are not learned.',
+      ].join('\n'),
+    },
     'POST /api/tlon/:kbId/files': {
       expose: 'ai',
       group: 'knowledge-base',

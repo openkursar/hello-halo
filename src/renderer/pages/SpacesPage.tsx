@@ -23,11 +23,15 @@ import { CreateSpaceDialog } from '../components/space/CreateSpaceDialog'
 import { SortableSpaceList } from '../components/space/SortableSpaceList'
 import { useSpaceStore } from '../stores/space.store'
 import { useAppStore } from '../stores/app.store'
+import { api } from '../api'
 import { useTranslation } from '../i18n'
 import { capCount, takeEntry, trackHome, trackHomeThrottled } from '../services/home-telemetry'
 import type { Space, ArtifactRailTab } from '../types'
 
 const GRID_CLASSES = 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5'
+
+/** A dropped folder is a path on this machine — meaningless to a remote browser. */
+const canDropFolders = !api.isRemoteMode()
 
 export function SpacesPage() {
   const { t } = useTranslation()
@@ -46,6 +50,8 @@ export function SpacesPage() {
 
   const [searchQuery, setSearchQuery] = useState('')
   const [showCreateDialog, setShowCreateDialog] = useState(false)
+  /** Folder dropped on the new-workspace card, prefilled into the create form. */
+  const [createFromFolder, setCreateFromFolder] = useState<string | undefined>(undefined)
 
   const spaceCount = capCount((haloSpace ? 1 : 0) + spaces.length)
 
@@ -90,8 +96,9 @@ export function SpacesPage() {
     navigate('space')
   }, [currentSpace, haloSpace, spaceCount, isSearching, setCurrentSpace, refreshCurrentSpace, setPendingArtifactRailTab, navigate])
 
-  const openCreateDialog = () => {
+  const openCreateDialog = (folder?: string) => {
     trackHome('home.space.action', { action: 'create_open', surface: 'manage' })
+    setCreateFromFolder(folder)
     setShowCreateDialog(true)
   }
 
@@ -181,7 +188,7 @@ export function SpacesPage() {
           <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
         </button>
         <button
-          onClick={openCreateDialog}
+          onClick={() => openCreateDialog()}
           className="flex-shrink-0 flex items-center gap-1.5 px-3 py-2 text-[13px] border border-border/60 bg-card text-muted-foreground rounded-lg hover:text-foreground hover:border-border transition-colors"
         >
           <Plus className="w-4 h-4" />
@@ -226,7 +233,10 @@ export function SpacesPage() {
                 className="contents"
                 renderItem={renderCard}
               />
-              <NewSpaceCard onClick={openCreateDialog} />
+              <NewSpaceCard
+                onClick={() => openCreateDialog()}
+                onFolderDrop={canDropFolders ? openCreateDialog : undefined}
+              />
             </div>
           )}
         </section>
@@ -247,6 +257,7 @@ export function SpacesPage() {
         <CreateSpaceDialog
           onClose={() => setShowCreateDialog(false)}
           onCreated={handleSpaceCreated}
+          initialFolder={createFromFolder}
         />
       )}
     </div>

@@ -20,7 +20,7 @@
  */
 
 import { memo, useState, useRef, useEffect, useMemo, useCallback, KeyboardEvent, ClipboardEvent, DragEvent } from 'react'
-import { Plus, ImagePlus, Paperclip, Loader2, AlertCircle, MessagesSquare, Bot, Target } from 'lucide-react'
+import { Plus, Paperclip, Loader2, AlertCircle, MessagesSquare, Bot, Target } from 'lucide-react'
 import { useAppStore } from '../../stores/app.store'
 import { useChatStore } from '../../stores/chat.store'
 import { useOnboardingStore } from '../../stores/onboarding.store'
@@ -31,6 +31,7 @@ import { useComposerToolsets } from './composer-menu/useComposerToolsets'
 import { sortToolsets, toolsetDescription, toolsetIcon, toolsetLabel } from './composer-menu/toolset-display'
 import type { ToolsetStatus } from '../../stores/toolsets.store'
 import { canAttachPath, type AttachedPath, type PickedLocalEntry } from '../../../shared/attached-paths'
+import { MAX_UPLOAD_FILE_SIZE } from '../../../shared/constants/artifact-upload'
 import type { ContentReference } from '../../../shared/types/content-reference'
 import { useComposerReferences, useComposerReferencesStore } from '../../stores/composer-references.store'
 import { useSpaceStore } from '../../stores/space.store'
@@ -319,6 +320,10 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
   }, [draftKey, content, images])
   const [isDragOver, setIsDragOver] = useState(false)
   const [isProcessingImages, setIsProcessingImages] = useState(false)
+  // Files a remote client is still uploading into the space (see uploadFiles).
+  // Their cards are not in the message yet, so no way of sending goes out until they land.
+  const [uploadingCount, setUploadingCount] = useState(0)
+  const uploading = uploadingCount > 0
   const [imageError, setImageError] = useState<ImageError | null>(null)
   const [showAttachMenu, setShowAttachMenu] = useState(false)  // Attachment menu visibility
   // Slash-command autocomplete
@@ -523,7 +528,7 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
     console.warn('[InputArea] Items not attached', { count, reason, desktop: canAttachLocalPaths })
     showError(canAttachLocalPaths
       ? t('{{count}} item(s) could not be attached: not a file or folder on this computer', { count })
-      : t('Only images can be attached from this device'))
+      : t('{{count}} folder(s) could not be attached: only files can be uploaded from this device', { count }))
   }
 
   /** Local files and folders become path cards, numbered with the other cards. */
@@ -540,13 +545,51 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
   }
 
   /**
-   * Splits dropped or pasted files: images become image attachments (the model
-   * sees them), everything else with a local path is attached by path. Images
-   * beyond the per-message limit fall back to their path rather than vanish.
+   * A remote client has no local path to hand over, so its files go into the
+   * space's working directory first and are attached by the path they get there.
+   */
+  const uploadFiles = async (files: File[]) => {
+    if (files.length === 0) return
+    const spaceId = mentionSpaceId ?? currentSpaceId
+    if (!spaceId) {
+      showError(t('Open a space to attach files'))
+      return
+    }
+    const tooLarge = (name: string) =>
+      t('{{name}} is larger than {{limit}} and was not uploaded', { name, limit: formatFileSize(MAX_UPLOAD_FILE_SIZE) })
+    const oversized = files.find(file => file.size > MAX_UPLOAD_FILE_SIZE)
+    if (oversized) showError(tooLarge(oversized.name))
+    const accepted = files.filter(file => file.size <= MAX_UPLOAD_FILE_SIZE)
+    if (accepted.length === 0) return
+
+    const uploaded: AttachedPath[] = []
+    setUploadingCount(count => count + accepted.length)
+    try {
+      for (const file of accepted) {
+        const result = await api.uploadArtifactFile(spaceId, file)
+        if (result.success && result.data) {
+          uploaded.push({ path: result.data.path, isDirectory: false })
+        } else {
+          console.warn('[InputArea] Upload failed', { code: result.code, error: result.error })
+          showError(result.code === 'TOO_LARGE' ? tooLarge(file.name) : t('Could not upload {{name}}', { name: file.name }))
+        }
+      }
+    } finally {
+      setUploadingCount(count => count - accepted.length)
+    }
+    addPaths(uploaded)
+  }
+
+  /**
+   * Splits dropped, pasted or picked files: images become image attachments (the
+   * model sees them), everything else is attached by path — its local path on
+   * the desktop, the path it is uploaded to elsewhere. Images beyond the
+   * per-message limit go the same way rather than vanish.
    */
   const attachFiles = async (entries: Array<{ file: File; isDirectory: boolean }>) => {
     const imageFiles: File[] = []
     const byPath: AttachedPath[] = []
+    const uploads: File[] = []
     let withoutPath = 0
     for (const { file, isDirectory } of entries) {
       const path = canAttachLocalPaths ? api.getPathForFile(file) : ''
@@ -554,6 +597,8 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
         imageFiles.push(file)
       } else if (path) {
         byPath.push({ path, isDirectory })
+      } else if (!canAttachLocalPaths && !isDirectory) {
+        uploads.push(file)
       } else {
         withoutPath += 1
       }
@@ -561,6 +606,7 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
     reportUnattachable(withoutPath, 'no-local-path')
     addPaths(byPath)
     if (imageFiles.length > 0) await addImages(imageFiles)
+    await uploadFiles(uploads)
   }
 
   // Handle paste event
@@ -664,7 +710,7 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
   const handleFileInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || [])
     if (files.length > 0) {
-      await addImages(files)
+      await attachFiles(files.map(file => ({ file, isDirectory: false })))
     }
     // Reset input
     if (fileInputRef.current) {
@@ -673,7 +719,7 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
   }
 
   // "+" → Files and folders. The desktop opens the native picker; a remote
-  // client can only upload images from its own device.
+  // client picks files on its own device, which are uploaded into the space.
   const handleAttachClick = async () => {
     if (isHomeComposer) trackHome('home.composer.attach', { action: 'files' })
     if (!canAttachLocalPaths) {
@@ -997,6 +1043,7 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
 
   // Handle send — routes to inject path when generation is in progress
   const handleSend = () => {
+    if (uploading) return
     const textToSend = isOnboardingSendStep ? onboardingPrompt : content.trim()
     // Sending means the writing is done: comments still open in the content go in as written.
     commitCommentEdits(referenceKey)
@@ -1192,10 +1239,10 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
   const hasReferences = references.length > 0 || writingComment
   const canSend = isOnboardingSendStep ||
     (goalMode
-      ? (goal!.canSubmit(content) && !isProcessingImages)
+      ? (goal!.canSubmit(content) && !isProcessingImages && !uploading)
       : isGenerating
-        ? ((content.trim().length > 0 || hasReferences) && !!onInject)
-        : ((content.trim().length > 0 || images.length > 0 || hasReferences) && !isProcessingImages)
+        ? ((content.trim().length > 0 || hasReferences) && !!onInject && !uploading)
+        : ((content.trim().length > 0 || images.length > 0 || hasReferences) && !isProcessingImages && !uploading)
     )
   const hasImages = images.length > 0
   const cardRadius = standalone ? 'rounded-[22px]' : 'rounded-[18px]'
@@ -1222,10 +1269,10 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
       items: [{
         id: 'files',
         icon: <Paperclip size={16} />,
-        label: canAttachLocalPaths ? t('Files and folders') : t('Images'),
+        label: canAttachLocalPaths ? t('Files and folders') : t('Files'),
         description: canAttachLocalPaths
           ? t('Attach from this computer; AI reads them where they are')
-          : t('Upload images from this device'),
+          : t('Upload from this device into the space; images go to the AI directly'),
         meta: attachedCount > 0 ? String(attachedCount) : undefined,
         disabledReason: isProcessingImages ? t('Processing image...') : null,
         onSelect: () => void handleAttachClick(),
@@ -1296,7 +1343,6 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/jpeg,image/png,image/gif,image/webp"
           multiple
           className="hidden"
           onChange={handleFileInputChange}
@@ -1446,6 +1492,12 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
               <span>{t('Processing image...')}</span>
             </div>
           )}
+          {uploading && (
+            <div className="px-4 py-2 flex items-center gap-2 text-xs text-muted-foreground border-b border-border/30">
+              <Loader2 size={14} className="animate-spin" />
+              <span>{t('Uploading {{count}} file(s)...', { count: uploadingCount })}</span>
+            </div>
+          )}
 
           {/* Drag overlay */}
           {isDragOver && (
@@ -1453,9 +1505,9 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
               bg-primary/5 rounded-2xl border-2 border-dashed border-primary/30
               pointer-events-none z-10">
               <div className="flex flex-col items-center gap-2 text-primary/70">
-                {canAttachLocalPaths ? <Paperclip size={22} /> : <ImagePlus size={24} />}
+                <Paperclip size={22} />
                 <span className="text-sm font-medium">
-                  {canAttachLocalPaths ? t('Drop files or folders to attach') : t('Drop to add images')}
+                  {canAttachLocalPaths ? t('Drop files or folders to attach') : t('Drop files to attach')}
                 </span>
               </div>
             </div>

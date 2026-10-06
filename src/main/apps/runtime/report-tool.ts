@@ -253,6 +253,8 @@ export function createReportToolServer(
       // the framing, so a top-level `choices` has no question to belong to.
       if (input.choices && askedQuestions.length === 0) content.choices = input.choices
       if (askedQuestions.length > 0) content.questions = askedQuestions
+      // What an owner answers it by from an IM chat (im-escalation).
+      if (safeType === 'escalation') content.number = store.nextEscalationNumber()
 
       // ── Team-channel routing ────────────────────────────────────────────────
       // In a team turn, report_to_user keeps its ORIGINAL purpose: escalation
@@ -374,6 +376,15 @@ export function createReportToolServer(
       if (safeType === 'escalation') {
         if (onEscalation) {
           onEscalation(entryId)
+        }
+
+        // People who reach this digital human only through IM are asked there.
+        // Loaded on use, like the team layer loads the IM layer: the channel
+        // providers stay out of this tool's import graph.
+        if (persisted) {
+          void import('./im-escalation')
+            .then(({ deliverEscalationToIm }) => deliverEscalationToIm(entry, runContext.appName))
+            .catch((err) => console.warn('[Runtime] Question could not be sent to IM:', err))
         }
 
         // Broadcast escalation event for real-time UI update. Carry team context

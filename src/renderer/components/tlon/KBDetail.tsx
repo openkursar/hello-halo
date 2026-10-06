@@ -5,8 +5,9 @@
  * followed by three tabs: Chat (ChatTab) · Files (RawFilesTab) · Settings (SettingsTab).
  */
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from '../../i18n'
+import { useTlonStore } from '../../stores/tlon.store'
 import type { KnowledgeBaseEntry } from '../../../shared/types/tlon'
 import { KbAvatar } from './KbAvatar'
 import { ChatTab } from './ChatTab'
@@ -48,6 +49,12 @@ function formatTimeAgo(dateStr: string | undefined): string | null {
 export function KBDetail({ kb, onDeleted }: KBDetailProps) {
   const { t } = useTranslation()
   const [tab, setTab] = useState<KBTab>('files')
+  const clearChat = useTlonStore(s => s.clearChat)
+
+  // The chat is temporary: it survives switching tabs, and ends — its backing
+  // conversation deleted — once the user leaves this knowledge base (another
+  // one, the list, or another page).
+  useEffect(() => () => { void clearChat(kb.id) }, [kb.id, clearChat])
 
   const tabs: Array<{ id: KBTab; label: string }> = [
     { id: 'chat', label: t('Chat') },
@@ -57,6 +64,8 @@ export function KBDetail({ kb, onDeleted }: KBDetailProps) {
 
   const sizeStr = kb.stats.rawSizeBytes > 0 ? formatSize(kb.stats.rawSizeBytes) : null
   const lastLearnTime = formatTimeAgo(kb.stats.lastIngestAt)
+  // The counts leave these folders' files out, so say so instead of looking complete.
+  const foldersNotLearning = kb.linkedDirs.filter(dir => !dir.watching || dir.learningPaused).length
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
@@ -92,6 +101,17 @@ export function KBDetail({ kb, onDeleted }: KBDetailProps) {
                     })
                   : t('No documents')}
               </span>
+              {foldersNotLearning > 0 && (
+                <>
+                  <span className="text-muted-foreground/40">·</span>
+                  <button
+                    onClick={() => setTab('settings')}
+                    className="text-amber-600 dark:text-amber-400 hover:underline"
+                  >
+                    {t('{{count}} watched folder(s) not learning', { count: foldersNotLearning })}
+                  </button>
+                </>
+              )}
               {sizeStr && (
                 <>
                   <span className="text-muted-foreground/40">·</span>
@@ -146,7 +166,8 @@ export function KBDetail({ kb, onDeleted }: KBDetailProps) {
           <ChatTab kb={kb} />
         ) : (
           <div className="h-full overflow-y-auto">
-            {tab === 'files' && <RawFilesTab kb={kb} />}
+            {/* Keyed so a file selection never carries over to another knowledge base. */}
+            {tab === 'files' && <RawFilesTab key={kb.id} kb={kb} />}
             {tab === 'settings' && <SettingsTab kb={kb} onDeleted={onDeleted} />}
           </div>
         )}

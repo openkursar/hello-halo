@@ -41,7 +41,7 @@ export function SetupPage() {
   const oauth = useOAuthLogin({
     onError: setError,
     onSignedIn: async () => {
-      const result = await api.getConfig()
+      const result = await api.getConfig({ snapshot: true })
       if (!result.success || !result.data) throw new Error(result.error || t('Failed to load config'))
       setConfig(result.data as HaloConfig)
       await enterApp()
@@ -54,7 +54,7 @@ export function SetupPage() {
   const handleSkipModelConfig = async () => {
     setError(null)
     try {
-      const configResult = await api.getConfig()
+      const configResult = await api.getConfig({ snapshot: true })
       if (!configResult.success || !configResult.data) {
         setError(t('Failed to load config'))
         return

@@ -159,6 +159,30 @@ export const artifactApi = {
     return { success: true }
   },
 
+  // Remote clients only: put one file from this device into the space's working
+  // directory. The file is the request body, so the browser streams it.
+  uploadArtifactFile: async (spaceId: string, file: File): Promise<ApiResponse<{ path: string; name: string; size: number }>> => {
+    const baseUrl = getRemoteServerUrl()
+    if (!baseUrl) return { success: false, error: 'Server URL not configured' }
+    const token = getAuthToken()
+    try {
+      const res = await fetch(`${baseUrl}/api/spaces/${encodeURIComponent(spaceId)}/artifacts/upload?name=${encodeURIComponent(file.name)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: file,
+      })
+      const body = await res.json().catch(() => null)
+      if (!res.ok || !body?.success || !body.data) {
+        // A proxy or tunnel in between answers 413 with a page of its own.
+        const code = body?.code ?? (res.status === 413 ? 'TOO_LARGE' : undefined)
+        return { success: false, error: body?.error || `Upload failed (${res.status})`, ...(code ? { code } : {}) }
+      }
+      return { success: true, data: body.data }
+    } catch (error) {
+      return { success: false, error: (error as Error).message }
+    }
+  },
+
   // For this page's own use only (the image viewer's source): it carries the
   // access token, so it is never handed to another app or saved as a download.
   getArtifactDownloadUrl: (filePath: string): string => {

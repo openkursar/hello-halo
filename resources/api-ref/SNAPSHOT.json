@@ -1,16 +1,16 @@
 {
-  "totalRoutes": 296,
+  "totalRoutes": 299,
   "expose": {
-    "ai": 159,
+    "ai": 160,
     "wrapped": 11,
-    "internal": 126,
+    "internal": 128,
     "unlabeled": 0
   },
   "groups": {
     "conversation": 12,
     "workspace": 28,
     "digital-human": 50,
-    "knowledge-base": 21,
+    "knowledge-base": 22,
     "channels": 20,
     "settings": 17,
     "store": 27,

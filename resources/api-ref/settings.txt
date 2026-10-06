@@ -108,8 +108,8 @@ GET    /api/auth/providers                                         List the sign
 
 GET    /api/config                                                 Read the global configuration
      curl -s "$HALO_API_URL/api/config" -H "Authorization: Bearer $HALO_API_TOKEN"
-     # out: {"success":true,"data":{...}}  // secret fields come back as "***"
-     # note: Read-only here. The write side is not opened to the assistant.
+     # out: {"success":true,"data":{...},"configEpoch":0}  // secret fields come back as "***"
+     # note: Read-only here. The write side is not opened to the assistant. configEpoch -1 means the config file could not be read and data holds the built-in defaults, not what the user configured.
 
 GET    /api/config/credential-failures                             List credential fields that failed to decrypt at rest
      curl -s "$HALO_API_URL/api/config/credential-failures" -H "Authorization: Bearer $HALO_API_TOKEN"

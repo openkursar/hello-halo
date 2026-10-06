@@ -15,8 +15,8 @@ export const MODULE: RouteModuleMeta = {
       expose: 'ai',
       group: 'settings',
       summary: 'Read the global configuration',
-      returns: '{"success":true,"data":{...}}  // secret fields come back as "***"',
-      notes: 'Read-only here. The write side is not opened to the assistant.',
+      returns: '{"success":true,"data":{...},"configEpoch":0}  // secret fields come back as "***"',
+      notes: 'Read-only here. The write side is not opened to the assistant. configEpoch -1 means the config file could not be read and data holds the built-in defaults, not what the user configured.',
     },
 
     'GET /api/config/credential-failures': {
@@ -26,6 +26,9 @@ export const MODULE: RouteModuleMeta = {
       returns: '{"success":true,"data":[{"path":"...","label":"..."}]}',
       notes: 'Path and label only, never ciphertext. Non-empty means the user must re-enter that credential in the Halo app.',
     },
+
+    // Feeds the app's own warning banner.
+    'GET /api/config/read-failure': { expose: 'internal' },
 
     // Not atomic: `saveConfig` shallow-merges the top level and deep-merges
     // only a fixed list of branches, which notificationChannels and imChannels

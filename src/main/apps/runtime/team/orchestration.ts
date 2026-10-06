@@ -10,6 +10,7 @@ import { broadcastToAll } from '../../../http/websocket'
 import { sendToRenderer } from '../../../foundation/window.service'
 import { Semaphore } from '../concurrency'
 import { oneLineExcerpt } from '../text-truncate'
+import { inertCommandText } from '../turn-skills'
 import {
   buildTeamSessionKey,
   isRemoteMember,
@@ -1012,10 +1013,12 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
    *
    * A person's words stay verbatim, exactly as they do when they type into this
    * same chat locally — a 1:1 message is not team traffic and must never wear
-   * teammate framing.
+   * teammate framing. Words from outside this machine are never run as a command
+   * (turn-skills): the bus keeps them out of a running turn, and this holds
+   * whatever path brings them here.
    */
   function renderMidTurnEnvelope(envelope: TeamEnvelope, trigger: TeamTriggerContext): string {
-    if (trigger.kind === 'human_message') return envelope.body
+    if (trigger.kind === 'human_message') return trigger.external ? inertCommandText(envelope.body) : envelope.body
     const fromName = trigger.fromAppId ? memberName(envelope.teamId, trigger.fromAppId) : null
     if (!fromName) return `[Arrived while you were working]\n\n${envelope.body}`
     const role = isLead(envelope.teamId, trigger.fromAppId!) ? 'lead' : 'teammate'

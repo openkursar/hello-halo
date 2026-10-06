@@ -17,6 +17,7 @@ import {
   unbindFromApp as svcUnbindFromApp,
   addLinkedDir as svcAddLinkedDir,
   removeLinkedDir as svcRemoveLinkedDir,
+  retryLinkedDir as svcRetryLinkedDir,
   addRawFiles as svcAddRawFiles,
   listRawFiles as svcListRawFiles,
   removeRawFile as svcRemoveRawFile,
@@ -154,6 +155,23 @@ export function addLinkedDir(
 export function removeLinkedDir(kbId: string, linkId: string): ControllerResponse {
   try {
     return ok(svcRemoveLinkedDir(kbId, linkId))
+  } catch (e) { return fail(e) }
+}
+
+export function retryLinkedDir(kbId: string, linkId: string): ControllerResponse {
+  try {
+    const result = svcRetryLinkedDir(kbId, linkId)
+    if (result.ok) return ok(result.linked)
+    switch (result.reason) {
+      case 'path-missing':
+        return { success: false, error: 'Folder is still unavailable', code: 'PATH_NOT_FOUND' }
+      case 'link-not-found':
+        return { success: false, error: 'Watched folder not found', code: 'LINK_NOT_FOUND' }
+      case 'kb-not-found':
+        return { success: false, error: 'Knowledge base not found', code: 'KB_NOT_FOUND' }
+      default:
+        return { success: false, error: 'Failed to retry watched folder' }
+    }
   } catch (e) { return fail(e) }
 }
 

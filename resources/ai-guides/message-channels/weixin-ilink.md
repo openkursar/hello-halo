@@ -60,6 +60,14 @@ QR flow, including reconnecting after a session expiry.
   itself (`haltOnFatal()`) and requires a brand-new QR login — there is no silent token refresh.
 - **Media items degrade gracefully.** A failed image/file/video download becomes a text
   placeholder (`[Image — download failed]` etc.) rather than dropping the whole message.
+- **Processing Notice** (处理中提示, Halo 3.0 and later) is the one reply setting on this card: on by
+  default, a reply slower than 5 seconds is preceded by "✅ 已收到，正在处理…"; off, only the final
+  reply is sent (`message-channels/index.md` §2).
+- **The digital human's questions** (Halo 3.0 and later): with no permission control there is no
+  owner list, so a question is sent only to the direct chats that have **Auto-sync run result**
+  (自动同步运行结果) on in the digital human's bot sessions, and `/answer <number> <answer>` is
+  accepted from any direct chat with this account — like every other ability here, anyone who can
+  message it can answer. Details in `message-channels/index.md` §2.
 
 ## 5. Diagnosis
 

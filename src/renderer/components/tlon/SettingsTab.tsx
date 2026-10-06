@@ -17,13 +17,12 @@ import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 import {
   Trash2,
   FolderPlus,
-  FolderOpen,
-  X,
   Check,
   RefreshCw,
   ExternalLink,
 } from 'lucide-react'
 import { Switch } from '../ui/Switch'
+import { WatchedFolderRow } from './WatchedFolderRow'
 import type { KnowledgeBaseEntry } from '../../../shared/types/tlon'
 
 interface SettingsTabProps {
@@ -41,6 +40,7 @@ export function SettingsTab({ kb, onDeleted }: SettingsTabProps) {
   const unbindSpace = useTlonStore(s => s.unbindSpace)
   const addLinkedDir = useTlonStore(s => s.addLinkedDir)
   const removeLinkedDir = useTlonStore(s => s.removeLinkedDir)
+  const retryLinkedDir = useTlonStore(s => s.retryLinkedDir)
   const setDefaultKB = useTlonStore(s => s.setDefaultKB)
 
   const haloSpace = useSpaceStore(s => s.haloSpace)
@@ -55,6 +55,7 @@ export function SettingsTab({ kb, onDeleted }: SettingsTabProps) {
 
   const [name, setName] = useState(kb.name)
   const [description, setDescription] = useState(kb.description)
+  const [retryingLinkId, setRetryingLinkId] = useState<string | null>(null)
 
   useEffect(() => {
     loadSpaces()
@@ -115,6 +116,15 @@ export function SettingsTab({ kb, onDeleted }: SettingsTabProps) {
         const label = p.split(/[\\/]/).filter(Boolean).pop() || p
         await addLinkedDir(kb.id, { path: p, label })
       }
+    }
+  }
+
+  const handleRetryFolder = async (linkId: string) => {
+    setRetryingLinkId(linkId)
+    try {
+      await retryLinkedDir(kb.id, linkId)
+    } finally {
+      setRetryingLinkId(null)
     }
   }
 
@@ -233,26 +243,13 @@ export function SettingsTab({ kb, onDeleted }: SettingsTabProps) {
         ) : (
           <div className="space-y-1.5">
             {kb.linkedDirs.map(dir => (
-              <div
+              <WatchedFolderRow
                 key={dir.id}
-                className="group flex items-center gap-2.5 px-3 py-2.5 rounded-lg border border-border/60 bg-background"
-              >
-                <FolderOpen className="w-4 h-4 text-muted-foreground flex-shrink-0" />
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm truncate">{dir.label}</p>
-                  <p className="text-xs text-muted-foreground truncate">{dir.path}</p>
-                </div>
-                {!dir.watching && (
-                  <span className="text-xs text-destructive flex-shrink-0">{t('Unavailable')}</span>
-                )}
-                <button
-                  onClick={() => removeLinkedDir(kb.id, dir.id)}
-                  className="p-1.5 rounded-md opacity-0 group-hover:opacity-100 hover:bg-destructive/10 transition-all flex-shrink-0"
-                  title={t('Remove')}
-                >
-                  <X className="w-3.5 h-3.5 text-destructive" />
-                </button>
-              </div>
+                dir={dir}
+                retrying={retryingLinkId === dir.id}
+                onRetry={() => handleRetryFolder(dir.id)}
+                onRemove={() => removeLinkedDir(kb.id, dir.id)}
+              />
             ))}
           </div>
         )}

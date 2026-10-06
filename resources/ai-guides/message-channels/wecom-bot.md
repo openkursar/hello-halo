@@ -70,6 +70,9 @@ digital human at a time; the second instance simply won't be able to claim the W
   (`isQuoteReplyEnabled` gate in `InstanceCard`), and turning Quote Reply off force-clears
   Streaming if it was on. Reason: a suppressed quote bubble routes through the no-req_id push
   path, which streaming needs a req_id-bearing session to attach to.
+- **Processing Notice** (处理中提示, `processingNotice`, default **on**; Halo 3.0 and later) — the
+  same switch on every channel, described in `message-channels/index.md` §2. Greyed out while
+  Streaming is on.
 
 Reply Scope, Quote Reply, and Streaming all take effect on the **next** inbound message with no
 reconnect and no restart of Halo required — `ImChannelManager.configEqual()` deliberately excludes
@@ -111,6 +114,35 @@ Halo capabilities (`allowAiBrowser`, `allowEmail`, `allowNotify`, `allowApps`, `
 `allowOcr`) and a per-server whitelist for user-installed MCP servers
 (`allowedUserMcp`). `guestPolicy: undefined` (the default when guest access is off) means guests
 get **zero** tool access — chat only.
+
+**Skills for guests** (Halo 3.0 and later; `guestPolicy.allowedSkills`, skill folder names). With
+guest access on, the guest permissions show a **Skills** (技能) group listing the skills this
+digital human can load (global and space skills, as on its skills page), one switch each, **all
+off** by default:
+
+- A guest can use only the skills switched on here; asking for any other is refused, and the
+  refusal names the ones that are allowed.
+- A skill may read its own folder for that guest, even with file viewing off — but not other
+  skills' folders, and never write to them.
+- Everything else a skill does — running commands, changing files, sending email — still needs
+  the guest switches on this page, checked one action at a time. If only `npm run:*` commands are
+  allowed, a skill that tries to run `python3` is refused and told why.
+- A skill whose own pre-approvals (`allowed-tools` in its `SKILL.md`) go beyond what guests are
+  allowed does not load at all, and the reason names the entries that go beyond, e.g.
+  `Bash(python3:*)`. Fix it by allowing the same rule under the guest command settings, or by
+  removing that entry from the skill. A skill with hooks loads only when guests may run any
+  command; one that runs as a sub-agent (`context: fork`) needs **Subtasks** on.
+- **Subtasks** on lets guests' turns hand work to sub-agents, held to the same guest limits.
+- A guest's message that starts with `/` (e.g. `/some-skill`) is passed to the digital human as
+  plain text, never run as a command; the owner's messages are unaffected.
+- The model still sees every skill's name and description, so a guest who asks what it can do
+  may hear about skills that are switched off — using them is still refused.
+- Before 3.0, guests on a permission-controlled bot could not use skills at all.
+
+**Questions from the digital human** (Halo 3.0 and later): when the bound digital human asks for a
+decision, owners get the full question in their direct chat with the bot and answer with
+`/answer <number> <answer>`; groups only learn that a question is waiting. Who receives it and who
+may answer depends on permission control — see `message-channels/index.md` §2.
 
 **The defaults applied to a *new* instance are build-specific, not fixed.** `defaultEnabled`,
 `defaultGuestAccess`, `defaultGuestPolicy`, `ownerIdHint`, and `ownerSetupGuideUrl`
@@ -199,6 +231,9 @@ bug — do not diagnose it as a connection failure.
 | "This Bot ID is already in use" warning | Same `botId` configured on two enabled instances | Only one instance can hold the WebSocket slot per real bot — delete or disable the duplicate |
 | Owner claimed the wrong user | First DM sender ≠ intended owner | Manually edit **Owner User IDs** in the Permission Control section; replaces the auto-claimed value |
 | `notify_bot` / scheduled push to a chat never delivers | That chat has never messaged the bot before | A chat only becomes a known, pushable session after at least one real inbound message (`ImSessionRegistry`, registered in `dispatch-inbound.ts`) — have the target person or group `@`-mention the bot once first; see `create-digital-human/im-triggers.md` §B |
+| A guest is told a skill cannot be used | The skill is switched off for guests, or its own pre-approvals go beyond the guest switches (the reason names them) | §3 "Skills for guests" — switch it on, or allow the named rule, or remove it from the skill |
+| The owner never gets the digital human's question in IM | Permission control is off and no direct chat has **Auto-sync run result** on, or the bot was offline when the question was asked | `message-channels/index.md` §2 — the question is still open in Halo either way |
+| Every reply is preceded by "✅ 已收到，正在处理…", or the user wants it gone | Processing Notice is on (the default) and the reply took over 5 seconds | §2 — switch **Processing Notice** off, or turn Streaming on |
 
 ## Do not ask / do not assume
 

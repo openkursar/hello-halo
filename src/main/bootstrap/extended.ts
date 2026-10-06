@@ -40,7 +40,7 @@ import { registerPerfHandlers } from '../ipc/perf'
 import { registerGitBashHandlers, initializeGitBashOnStartup } from '../ipc/git-bash'
 import { cleanupAllCaches } from '../services/artifact-cache.service'
 import { flushSpaceActivity } from '../services/space.service'
-import { onConversationDeleted, isConversationGone } from '../services/conversation.service'
+import { onConversationDeleted, isConversationGone, deleteEphemeralConversations } from '../services/conversation.service'
 import { disposeSearchContext } from '../services/web-search'
 import {
   initConversationInterop,
@@ -1400,6 +1400,9 @@ async function initPlatformAndApps(): Promise<void> {
   registerIdleTask('prune-team-folders', () => getActiveTeamRuntime()?.teamFolders.prune())
   registerIdleTask('seed-builtin-skills', () => seedBuiltinSkills(appManager))
   registerIdleTask('verify-office-runtime', () => verifyOfficeRuntime())
+  // The knowledge base chat's conversations left by a run that quit mid-chat;
+  // only those created before this process started, so none is in use now.
+  registerIdleTask('delete-ephemeral-conversations', () => { deleteEphemeralConversations(performance.timeOrigin) })
   startIdleDrain()
 
   const dt = performance.now() - t0

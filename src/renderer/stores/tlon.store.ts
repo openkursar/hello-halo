@@ -19,6 +19,7 @@
 import { create } from 'zustand'
 import { api } from '../api'
 import { useNotificationStore } from './notification.store'
+import { useChatStore } from './chat.store'
 import i18n from '../i18n'
 import type {
   KnowledgeBaseEntry,
@@ -52,7 +53,11 @@ interface TlonChatSession {
   readPaths?: string[]
 }
 
-/** KB chats run as ephemeral conversations under the Halo temp space. */
+/**
+ * KB chats run on ephemeral conversations in the Halo temp space: never listed
+ * or searched, deleted when the chat ends (Clear chat, or leaving the KB), and
+ * swept at the next start if Halo quits first.
+ */
 const TLON_CHAT_SPACE = 'halo-temp'
 
 /**
@@ -142,12 +147,15 @@ interface TlonState {
   // ── Linked dirs ───────────────────────────
   addLinkedDir: (kbId: string, dir: { path: string; label: string }) => Promise<boolean>
   removeLinkedDir: (kbId: string, linkId: string) => Promise<boolean>
+  /** Look for an unavailable watched folder again; resumes learning it if it is back. */
+  retryLinkedDir: (kbId: string, linkId: string) => Promise<boolean>
 
   // ── Raw files ─────────────────────────────
   loadRawFiles: (kbId: string) => Promise<void>
   addFiles: (kbId: string, filePaths: string[]) => Promise<AddRawFilesResult | null>
   removeRawFile: (kbId: string, relativePath: string) => Promise<boolean>
-  removeRawFiles: (kbId: string, relativePaths: string[]) => Promise<number>
+  /** Resolves to the paths that could not be removed (empty when all were). */
+  removeRawFiles: (kbId: string, relativePaths: string[]) => Promise<{ failed: string[] }>
   pickAndAddFiles: (kbId: string) => Promise<void>
   pickAndImportFolder: (kbId: string) => Promise<void>
 
@@ -158,6 +166,7 @@ interface TlonState {
 
   // ── KB chat (ephemeral) ───────────────────
   sendChatMessage: (kbId: string, text: string) => Promise<void>
+  /** End a KB's chat: its transcript goes and its backing conversation is deleted. */
   clearChat: (kbId: string) => Promise<void>
   /** Subscribe to agent events for KB chats. Returns an unsubscribe fn. */
   subscribeChatEvents: () => () => void
@@ -423,6 +432,25 @@ export const useTlonStore = create<TlonState>((set, get) => ({
     }
   },
 
+  retryLinkedDir: async (kbId, linkId) => {
+    try {
+      const res = await api.tlon.retryLinkedDir(kbId, linkId)
+      await get().refreshKB(kbId)
+      if (res.success) return true
+      useNotificationStore.getState().show({
+        title: res.code === 'PATH_NOT_FOUND'
+          ? i18n.t('The folder is still unavailable. Connect the drive or network location it is on, then retry.')
+          : i18n.t('Could not check the folder. Please try again.'),
+        variant: 'warning',
+        duration: 6000,
+      })
+      return false
+    } catch (err) {
+      console.error('[TlonStore] retryLinkedDir error:', err)
+      return false
+    }
+  },
+
   // ── Raw files ─────────────────────────────
 
   loadRawFiles: async (kbId) => {
@@ -469,21 +497,23 @@ export const useTlonStore = create<TlonState>((set, get) => ({
   },
 
   removeRawFiles: async (kbId, relativePaths) => {
-    let removed = 0
+    const failed: string[] = []
     for (const p of relativePaths) {
       try {
         const res = await api.tlon.removeRaw(kbId, p)
-        if (res.success) removed++
+        // A file main could not delete comes back as success with data false.
+        if (!res.success || res.data === false) failed.push(p)
       } catch (err) {
         console.error('[TlonStore] removeRawFiles error:', err)
+        failed.push(p)
       }
     }
     // Refresh once after the whole batch instead of per file.
-    if (removed > 0) {
+    if (failed.length < relativePaths.length) {
       await get().loadRawFiles(kbId)
       await get().refreshKB(kbId)
     }
-    return removed
+    return { failed }
   },
 
   pickAndAddFiles: async (kbId) => {
@@ -570,7 +600,7 @@ export const useTlonStore = create<TlonState>((set, get) => ({
     if (!conversationId) {
       const kbName = get().kbs.find(k => k.id === kbId)?.name || 'Knowledge base'
       try {
-        const res = await api.createConversation(TLON_CHAT_SPACE, i18n.t('Ask: {{name}}', { name: kbName }))
+        const res = await api.createConversation(TLON_CHAT_SPACE, i18n.t('Ask: {{name}}', { name: kbName }), undefined, { ephemeral: true })
         conversationId = (res.success && res.data) ? (res.data as Conversation).id : undefined
       } catch (err) {
         console.error('[TlonStore] sendChatMessage createConversation error:', err)
@@ -629,19 +659,22 @@ export const useTlonStore = create<TlonState>((set, get) => ({
   },
 
   clearChat: async (kbId) => {
+    const session = get().chatSessions[kbId]
+    if (!session?.conversationId && !session?.messages.length) return
     clearChatWatchdog(kbId)
     releaseKbChatDetail(kbId)
-    const conversationId = get().chatSessions[kbId]?.conversationId
+    const conversationId = session?.conversationId
     set(state => ({
       chatSessions: { ...state.chatSessions, [kbId]: { messages: [], generating: false } },
     }))
-    // Drop the backend conversation so it doesn't linger in the temp space.
     if (conversationId) {
       try {
         await api.deleteConversation(TLON_CHAT_SPACE, conversationId)
       } catch (err) {
         console.error('[TlonStore] clearChat error:', err)
       }
+      // The chat view mirrored this conversation's turns from the shared agent events.
+      useChatStore.getState().forgetConversation(conversationId)
     }
   },
 

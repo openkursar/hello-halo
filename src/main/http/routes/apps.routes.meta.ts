@@ -263,7 +263,7 @@ export const MODULE: RouteModuleMeta = {
       summary: 'Merge-patch per-installation overrides (notification level, model)',
       body: '{"notificationLevel": "important"}',
       returns: '{success:true}',
-      notes: 'Other fields you can set the same way: modelSourceId, modelId, spaceMemoryAccess (true lets the digital human read its space\'s memory topics), chatReasoningEffort (off|minimal|low|medium|high|xhigh|max — how hard it thinks everywhere: its chats, IM replies and scheduled or manual runs; unset, the model\'s configured effort applies), memory ({enabled, autoConsolidate, cadence: "diligent"|"balanced"|"economical"} — sent as a whole object). JSON Merge Patch semantics: send null to clear a field (e.g. {"modelSourceId":null} to fall back to the global model). The run schedule is NOT set here — use POST /:appId/frequency.',
+      notes: 'Other fields you can set the same way: modelSourceId, modelId, spaceMemoryAccess (true lets the digital human read its space\'s memory topics), chatReasoningEffort (off|minimal|low|medium|high|xhigh|max — how hard it thinks everywhere: its chats, IM replies and scheduled or manual runs; unset, the model\'s configured effort applies), memory ({enabled, autoConsolidate, cadence: "diligent"|"balanced"|"economical"} — sent as a whole object), disabledTools (MCP servers only: tool names, as the server lists them, to leave out of every session — the whole list each time; [] or null turns them all back on). JSON Merge Patch semantics: send null to clear a field (e.g. {"modelSourceId":null} to fall back to the global model). The run schedule is NOT set here — use POST /:appId/frequency.',
       impact: 'reversible',
     },
     'POST /api/apps/:appId/frequency': {
@@ -398,6 +398,7 @@ export const MODULE: RouteModuleMeta = {
         '{success:true,data:[{id,role:"user"|"assistant",content,timestamp,thoughts?,thoughtsSummary?,images?}]}',
       notes: [
         'All three query params are required, 400 otherwise. spaceId must be the app\'s own — a different but valid one is accepted and reads the wrong space. Optional ?chatType=group, defaults to direct.',
+        'channel is the session\'s IM channel (wecom-bot, feishu-bot, dingtalk-bot, weixin-ilink-bot); chatId is taken as GET /api/im-sessions gives it. Any other channel, chatType or a chatId with whitespace, ":", "/", "\\" or ".." is a 400. Read "http" and "local" sessions with GET /api/apps/:appId/chat/messages?conversationId=.',
         'This is real correspondence with a person on the other end — read it only when the task needs it.',
       ].join('\n'),
     },
@@ -436,18 +437,18 @@ export const MODULE: RouteModuleMeta = {
       expose: 'ai',
       group: ['digital-human', 'channels'],
       summary: "Clear a digital human's chat history in a bound IM chat",
-      body: '{"spaceId": "<spaceId — the app\'s own spaceId from GET /api/apps>", "channel": "wecom", "chatType": "direct", "chatId": "<chatId — from GET /api/im-sessions>"}',
+      body: '{"spaceId": "<spaceId — the app\'s own spaceId from GET /api/apps>", "channel": "wecom-bot", "chatType": "direct", "chatId": "<chatId — from GET /api/im-sessions>"}',
       returns: '{success:true}',
-      notes: 'All four body fields are required, 400 otherwise. chatType is "direct" or "group".',
+      notes: 'All four body fields are required, 400 otherwise. channel, chatType and chatId are checked as for GET im-chat/messages; chatType is "direct" or "group".',
       impact: 'irreversible',
     },
     'POST /api/apps/:appId/im-chat/stop': {
       expose: 'ai',
       group: ['digital-human', 'channels'],
       summary: "Stop a digital human's in-progress reply in a bound IM chat (keeps history)",
-      body: '{"channel": "wecom", "chatType": "direct", "chatId": "<chatId — from GET /api/im-sessions>"}',
+      body: '{"channel": "wecom-bot", "chatType": "direct", "chatId": "<chatId — from GET /api/im-sessions>"}',
       returns: '{success:true,data:{stopped:boolean}}',
-      notes: 'chatType is "direct" or "group". Unlike im-chat/clear, this only aborts the current turn — the session and its history continue on the next inbound message.',
+      notes: 'channel, chatType and chatId are checked as for GET im-chat/messages; chatType is "direct" or "group". Unlike im-chat/clear, this only aborts the current turn — the session and its history continue on the next inbound message.',
     },
 
     // ── Native multi-session lifecycle ──────────────────────────────────

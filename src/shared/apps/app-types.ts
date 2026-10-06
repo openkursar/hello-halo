@@ -97,6 +97,11 @@ export interface InstalledApp {
     spaceMemoryAccess?: boolean
     /** This digital human's memory: on/off, auto-consolidation, cadence. */
     memory?: import('../types/memory').MemorySettings
+    /**
+     * MCP servers only: the tools turned off on the server's card, by the name
+     * the card lists. No session is given them, whoever it runs for.
+     */
+    disabledTools?: string[]
   }
 
   /** Permission grants and denials */
@@ -238,6 +243,11 @@ export interface ActivityEntryContent {
   dataPath?: string
   /** Question for the user (escalation only) */
   question?: string
+  /**
+   * Escalation only: the number it is answered by from an IM chat
+   * (`/answer <number> …`). One past the highest any kept escalation holds.
+   */
+  number?: number
   /** Preset choices for escalation */
   choices?: string[]
   /**

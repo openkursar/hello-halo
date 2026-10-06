@@ -17,6 +17,7 @@ const state = vi.hoisted(() => ({
   config: {} as Record<string, any>,
   haloConfigDir: '',
   ccConfigDir: '',
+  engine: 'anthropic',
 }))
 
 vi.mock('../../../../src/main/foundation/config.service', () => ({
@@ -30,7 +31,7 @@ vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
   analytics: { track: vi.fn(), trackErrorSurface: vi.fn() },
 }))
 vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
-  getActiveEngine: () => 'anthropic',
+  getActiveEngine: () => state.engine,
   getEngineCapabilities: () => ({ features: { hooks: true } }),
 }))
 
@@ -74,6 +75,7 @@ afterAll(() => {
 
 beforeEach(() => {
   state.config = { agent: {} }
+  state.engine = 'anthropic'
 })
 
 describe('buildUserSessionSdkOptions', () => {
@@ -175,6 +177,25 @@ describe('buildInternalTaskSdkOptions', () => {
   it('still withholds the native team tools', async () => {
     const options = await buildInternalTaskSdkOptions(params())
     for (const tool of TEAM_TOOLS) expect(options.disallowedTools).toContain(tool)
+  })
+})
+
+describe('the halo engine', () => {
+  // The engine knows no model's size: without the window it compacts every
+  // model at its 200K default, so a 1M model is compacted early.
+  it('is given the model\'s context window and output cap through both entries', async () => {
+    state.engine = 'halo'
+    const capabilities = { contextWindow: 1_000_000, maxOutputTokens: 64_000, maxOutputTokensConfigured: true }
+    for (const build of [buildUserSessionSdkOptions, buildInternalTaskSdkOptions]) {
+      const options = await build({ ...params(), credentials: { ...credentials, capabilities } })
+      expect(options.contextWindow).toBe(1_000_000)
+      expect(options.maxOutputTokens).toBe(64_000)
+    }
+  })
+
+  it('leaves the window to the engine when the model declares none', async () => {
+    state.engine = 'halo'
+    expect(await buildUserSessionSdkOptions(params())).not.toHaveProperty('contextWindow')
   })
 })
 

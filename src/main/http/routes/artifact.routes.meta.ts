@@ -55,6 +55,8 @@ export const MODULE: RouteModuleMeta = {
     'POST /api/artifacts/download-ticket': { expose: 'internal' },
     'GET /api/artifacts/file/:ticket': { expose: 'internal' },
     'GET /api/spaces/:spaceId/artifacts/download-all': { expose: 'internal' },
+    // A remote client's own file, streamed as the request body; only the composer uses it.
+    'POST /api/spaces/:spaceId/artifacts/upload': { expose: 'internal' },
 
     'GET /api/artifacts/content': {
       expose: 'ai',

@@ -148,7 +148,10 @@ export const MODULE: RouteModuleMeta = {
       summary: 'Create an empty conversation',
       body: '{"title":"Weekly report"}',
       returns: '{"success":true,"data":{"id":"<uuid>","title":"Weekly report"}}',
-      notes: 'Optional body field: reasoningEffort (off|minimal|low|medium|high|xhigh|max) — how hard it thinks; omit to follow the model\'s configured effort. Creates it empty. Make Halo reply in it with POST /api/agent/message — a conversation you made yourself is the safe target for that, since a turn you start there cannot interrupt one the user is having.',
+      notes: [
+        'Optional body field: reasoningEffort (off|minimal|low|medium|high|xhigh|max) — how hard it thinks; omit to follow the model\'s configured effort. Creates it empty. Make Halo reply in it with POST /api/agent/message — a conversation you made yourself is the safe target for that, since a turn you start there cannot interrupt one the user is having.',
+        'Optional body field: ephemeral (boolean) — for a view that shows the transcript itself (the knowledge base chat): it is left out of every conversation list and search, and deleted at the next start of Halo unless deleted before. Leave it out for a conversation the user should see.',
+      ].join('\n'),
     },
 
     'GET /api/spaces/:spaceId/conversations/:conversationId': {
