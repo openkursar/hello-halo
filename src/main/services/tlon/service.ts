@@ -34,6 +34,7 @@ import type {
   KBIndexV1,
   KBStats,
   LinkedDirectory,
+  LinkedDirLearningPause,
   KBReference,
   KBSource,
   RawFileStatus,
@@ -376,6 +377,11 @@ export function listKBsForApp(appId: string): KnowledgeBaseEntry[] {
 /** Persist an entry's meta.json and update the registry timestamp + index. */
 function saveEntry(entry: KnowledgeBaseEntry): void {
   entry.updatedAt = new Date().toISOString()
+  persistEntry(entry)
+}
+
+/** Persist an entry without touching updatedAt (which orders the list): for state Halo observed, not a user edit. */
+function persistEntry(entry: KnowledgeBaseEntry): void {
   try {
     writeFileSync(getKBMetaPath(entry.id), JSON.stringify(entry, null, 2), 'utf-8')
   } catch (error) {
@@ -569,13 +575,72 @@ function walkLinkedSources(linkedPath: string): LinkedSourcesOutcome {
  * Accepted source files of one watched folder, or null when the folder is over
  * the cap or too large to walk. Shared by ingest, learned-status listing, and
  * stats so an over-cap folder is ignored consistently everywhere — the same
- * policy that rejects it at add time.
+ * policy that rejects it at add time. The outcome is kept on the link so the
+ * settings say why the folder is not learned.
  */
-function listLinkedSourceFiles(linkedPath: string): string[] | null {
-  const outcome = walkLinkedSources(linkedPath)
+function listLinkedSourceFiles(entry: KnowledgeBaseEntry, linked: LinkedDirectory): string[] | null {
+  const outcome = walkLinkedSources(linked.path)
+  noteLearningPause(entry, linked, outcome.status === 'ok'
+    ? undefined
+    : outcome.status === 'too-many-files'
+      ? { reason: 'too-many-files', count: outcome.count, limit: MAX_LINKED_DIR_FILES }
+      : { reason: 'too-large' })
   if (outcome.status === 'ok') return outcome.files
-  warnLinkedDirIgnored(linkedPath, outcome.status)
+  warnLinkedDirIgnored(linked.path, outcome.status)
   return null
+}
+
+/** Record on the link why its files are not learned, and refresh the views when that changes. */
+function noteLearningPause(
+  entry: KnowledgeBaseEntry,
+  linked: LinkedDirectory,
+  pause: LinkedDirLearningPause | undefined
+): void {
+  if (JSON.stringify(linked.learningPaused) === JSON.stringify(pause)) return
+  if (pause) linked.learningPaused = pause
+  else delete linked.learningPaused
+  persistEntry(entry)
+  console.log(`[Tlon] Watched folder ${pause ? `paused (${pause.reason})` : 'learning again'}: ${linked.path}`)
+  import('./ingest')
+    .then(({ notifyStatsUpdated }) => notifyStatsUpdated(entry.id))
+    .catch(err => console.error('[Tlon] stats notification failed:', err))
+}
+
+/**
+ * Look for a watched folder again and record whether it is there: one missing
+ * when it was added or at the last check (an unplugged drive, an unmounted
+ * share) is watched again once it is back. Returns whether it is there.
+ */
+export function checkLinkedDirAvailable(kbId: string, linkId: string): boolean {
+  const entry = getRegistry().get(kbId)
+  const linked = entry?.linkedDirs.find(d => d.id === linkId)
+  if (!entry || !linked) return false
+  const available = existsSync(linked.path)
+  if (linked.watching !== available) {
+    linked.watching = available
+    persistEntry(entry)
+    console.log(`[Tlon] Watched folder ${available ? 'available again' : 'unavailable'}: ${linked.path}`)
+  }
+  return available
+}
+
+export type RetryLinkedDirResult =
+  | { ok: true; linked: LinkedDirectory }
+  | { ok: false; reason: 'kb-not-found' | 'link-not-found' | 'path-missing' }
+
+/** The settings' Retry on an unavailable watched folder: watch and learn it if it is back. */
+export function retryLinkedDir(kbId: string, linkId: string): RetryLinkedDirResult {
+  const entry = getRegistry().get(kbId)
+  if (!entry) return { ok: false, reason: 'kb-not-found' }
+  const linked = entry.linkedDirs.find(d => d.id === linkId)
+  if (!linked) return { ok: false, reason: 'link-not-found' }
+  if (!checkLinkedDirAvailable(kbId, linkId)) return { ok: false, reason: 'path-missing' }
+  if (entry.status === 'active') {
+    import('./watcher')
+      .then(({ startLinkedDirWatch }) => startLinkedDirWatch(kbId, linked))
+      .catch(err => console.error('[Tlon] retryLinkedDir watch start failed:', err))
+  }
+  return { ok: true, linked }
 }
 
 export function addLinkedDir(
@@ -1077,8 +1142,8 @@ export function refreshStats(kbId: string): KBStats {
   // Watched-folder sources are ingested like raw files, so they count toward the
   // total too — otherwise indexedCount (which includes them) could exceed it.
   for (const linked of entry?.linkedDirs ?? []) {
-    if (!existsSync(linked.path)) continue
-    const sources = listLinkedSourceFiles(linked.path)
+    if (!entry || !existsSync(linked.path)) continue
+    const sources = listLinkedSourceFiles(entry, linked)
     if (sources === null) continue
     for (const rel of sources) {
       try {
@@ -1192,8 +1257,8 @@ export function getRawFileLearnedStatus(kbId: string): RawFileStatus[] {
   // Watched folders: files are ingested in place (keyed by absolute path), so
   // list them too — otherwise a folder's files learn invisibly.
   for (const linked of entry?.linkedDirs ?? []) {
-    if (!existsSync(linked.path)) continue
-    const sources = listLinkedSourceFiles(linked.path)
+    if (!entry || !existsSync(linked.path)) continue
+    const sources = listLinkedSourceFiles(entry, linked)
     if (sources === null) continue
     for (const rel of sources) {
       const abs = join(linked.path, rel)
@@ -1273,7 +1338,7 @@ export function collectIngestCandidates(kbId: string): Array<{
 
   for (const linked of entry.linkedDirs) {
     if (!existsSync(linked.path)) continue
-    const sources = listLinkedSourceFiles(linked.path)
+    const sources = listLinkedSourceFiles(entry, linked)
     if (sources === null) continue
     for (const rel of sources) {
       const absolutePath = join(linked.path, rel)

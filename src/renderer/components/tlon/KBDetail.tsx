@@ -57,6 +57,8 @@ export function KBDetail({ kb, onDeleted }: KBDetailProps) {
 
   const sizeStr = kb.stats.rawSizeBytes > 0 ? formatSize(kb.stats.rawSizeBytes) : null
   const lastLearnTime = formatTimeAgo(kb.stats.lastIngestAt)
+  // The counts leave these folders' files out, so say so instead of looking complete.
+  const foldersNotLearning = kb.linkedDirs.filter(dir => !dir.watching || dir.learningPaused).length
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
@@ -92,6 +94,17 @@ export function KBDetail({ kb, onDeleted }: KBDetailProps) {
                     })
                   : t('No documents')}
               </span>
+              {foldersNotLearning > 0 && (
+                <>
+                  <span className="text-muted-foreground/40">·</span>
+                  <button
+                    onClick={() => setTab('settings')}
+                    className="text-amber-600 dark:text-amber-400 hover:underline"
+                  >
+                    {t('{{count}} watched folder(s) not learning', { count: foldersNotLearning })}
+                  </button>
+                </>
+              )}
               {sizeStr && (
                 <>
                   <span className="text-muted-foreground/40">·</span>

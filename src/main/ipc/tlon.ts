@@ -28,6 +28,7 @@ export function registerTlonHandlers(): void {
     tlonUnbindApp: async (kbId: string, appId: string) => tlonController.unbindFromApp(kbId, appId),
     tlonAddLinkedDir: async (kbId: string, dir: { path: string; label: string }) => tlonController.addLinkedDir(kbId, dir),
     tlonRemoveLinkedDir: async (kbId: string, linkId: string) => tlonController.removeLinkedDir(kbId, linkId),
+    tlonRetryLinkedDir: async (kbId: string, linkId: string) => tlonController.retryLinkedDir(kbId, linkId),
     tlonAddFiles: async (kbId: string, filePaths: string[]) => tlonController.addRawFiles(kbId, filePaths),
     tlonListRaw: async (kbId: string) => tlonController.listRawFiles(kbId),
     tlonRemoveRaw: async (kbId: string, relativePath: string) => tlonController.removeRawFile(kbId, relativePath),

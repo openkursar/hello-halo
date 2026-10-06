@@ -21,9 +21,20 @@ export interface LinkedDirectory {
   id: string
   path: string
   label: string
+  /** The folder was there when last checked (adding it, startup, Retry); false shows it as unavailable. */
   watching: boolean
   lastScannedAt?: string
+  /**
+   * Why the folder's files are not being learned although it is there: over the
+   * file cap, or too large to scan. Cleared by the first scan that finds it
+   * within bounds again.
+   */
+  learningPaused?: LinkedDirLearningPause
 }
+
+export type LinkedDirLearningPause =
+  | { reason: 'too-many-files'; count: number; limit: number }
+  | { reason: 'too-large' }
 
 export interface KBStats {
   rawFileCount: number

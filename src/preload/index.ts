@@ -254,6 +254,7 @@ export interface HaloAPI extends BrowserHostBridge {
   tlonUnbindApp: (kbId: string, appId: string) => Promise<IpcResponse>
   tlonAddLinkedDir: (kbId: string, dir: { path: string; label: string }) => Promise<IpcResponse>
   tlonRemoveLinkedDir: (kbId: string, linkId: string) => Promise<IpcResponse>
+  tlonRetryLinkedDir: (kbId: string, linkId: string) => Promise<IpcResponse>
   tlonAddFiles: (kbId: string, filePaths: string[]) => Promise<IpcResponse>
   tlonListRaw: (kbId: string) => Promise<IpcResponse>
   tlonRemoveRaw: (kbId: string, relativePath: string) => Promise<IpcResponse>

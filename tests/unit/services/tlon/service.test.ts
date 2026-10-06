@@ -26,6 +26,11 @@ vi.mock('@parcel/watcher', () => ({
     subscribe: vi.fn(async () => ({ unsubscribe: vi.fn(async () => {}) })),
   },
 }))
+const { notifyStatsUpdated } = vi.hoisted(() => ({ notifyStatsUpdated: vi.fn() }))
+vi.mock('../../../../src/main/services/tlon/ingest', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../../src/main/services/tlon/ingest')>()),
+  notifyStatsUpdated,
+}))
 
 import {
   _resetTlonRegistry,
@@ -46,6 +51,7 @@ import {
   unbindFromApp,
   addLinkedDir,
   removeLinkedDir,
+  retryLinkedDir,
   addRawFiles,
   removeRawFile,
   isAcceptedTextFile,
@@ -66,6 +72,7 @@ import {
   getKBChatContext,
   collectIngestCandidates,
 } from '../../../../src/main/services/tlon/service'
+import { startLinkedDirWatch } from '../../../../src/main/services/tlon/watcher'
 import {
   getKBIndexPath,
   getKBDir,
@@ -394,6 +401,71 @@ describe('Tlon Service', () => {
       expect(addLinkedDir(kb.id, { path: outer, label: 'sym' }).ok).toBe(true)
       const statuses = getRawFileLearnedStatus(kb.id)
       expect(statuses.filter(s => s.source === 'linked')).toHaveLength(1)
+    })
+
+    it('says why a folder that grew past the cap is not learned, and clears it once back under', async () => {
+      const kb = createKB({ name: 'Grown' })
+      const scratch = makeScratchDir()
+      for (let i = 0; i < 3; i++) fs.writeFileSync(path.join(scratch, `doc-${i}.md`), `doc ${i}`)
+      expect(addLinkedDir(kb.id, { path: scratch, label: 'docs' }).ok).toBe(true)
+      await vi.dynamicImportSettled()
+      notifyStatsUpdated.mockClear()
+      const updatedAt = getKB(kb.id)!.updatedAt
+      const link = () => getKB(kb.id)!.linkedDirs[0]
+      const savedLink = () => JSON.parse(fs.readFileSync(getKBMetaPath(kb.id), 'utf-8')).linkedDirs[0]
+      const linkedCandidates = () => collectIngestCandidates(kb.id).filter(c => c.sourceType === 'linked')
+
+      for (let i = 3; i < 501; i++) fs.writeFileSync(path.join(scratch, `doc-${i}.md`), `doc ${i}`)
+      expect(linkedCandidates()).toHaveLength(0)
+
+      const paused = { reason: 'too-many-files', count: 501, limit: 500 }
+      expect(link().learningPaused).toEqual(paused)
+      expect(savedLink().learningPaused).toEqual(paused)
+      await vi.dynamicImportSettled()
+      expect(notifyStatsUpdated).toHaveBeenCalledWith(kb.id)
+      // Observed state, not an edit: the list order (by updatedAt) stays put.
+      expect(getKB(kb.id)!.updatedAt).toBe(updatedAt)
+
+      fs.rmSync(path.join(scratch, 'doc-0.md'))
+      expect(getRawFileLearnedStatus(kb.id).filter(s => s.source === 'linked')).toHaveLength(500)
+      expect(link().learningPaused).toBeUndefined()
+      expect(savedLink().learningPaused).toBeUndefined()
+      expect(linkedCandidates()).toHaveLength(500)
+    })
+
+    it('Retry on a folder that was missing reports it still missing, then watches it once it is back', async () => {
+      const drive = path.join(makeScratchDir(), 'external-drive')
+      const kb = createKB({ name: 'Unplugged', linkedDirs: [{ path: drive, label: 'drive' }] })
+      await vi.dynamicImportSettled()
+      vi.mocked(startLinkedDirWatch).mockClear()
+      const linkId = kb.linkedDirs[0].id
+      expect(getKB(kb.id)!.linkedDirs[0].watching).toBe(false)
+
+      expect(retryLinkedDir(kb.id, linkId)).toEqual({ ok: false, reason: 'path-missing' })
+      await vi.dynamicImportSettled()
+      expect(startLinkedDirWatch).not.toHaveBeenCalled()
+
+      fs.mkdirSync(drive)
+      expect(retryLinkedDir(kb.id, linkId)).toMatchObject({ ok: true, linked: { id: linkId, watching: true } })
+      await vi.dynamicImportSettled()
+      expect(startLinkedDirWatch).toHaveBeenCalledWith(kb.id, expect.objectContaining({ id: linkId, path: drive }))
+      expect(JSON.parse(fs.readFileSync(getKBMetaPath(kb.id), 'utf-8')).linkedDirs[0].watching).toBe(true)
+
+      expect(retryLinkedDir(kb.id, 'no-such-link')).toEqual({ ok: false, reason: 'link-not-found' })
+      expect(retryLinkedDir('no-such-kb', linkId)).toEqual({ ok: false, reason: 'kb-not-found' })
+    })
+
+    it('Retry records a paused knowledge base\'s folder as back without watching it', async () => {
+      const dir = makeScratchDir()
+      const kb = createKB({ name: 'PausedRetry', linkedDirs: [{ path: dir, label: 'd' }] })
+      updateKB(kb.id, { status: 'paused' })
+      getKB(kb.id)!.linkedDirs[0].watching = false
+      await vi.dynamicImportSettled()
+      vi.mocked(startLinkedDirWatch).mockClear()
+
+      expect(retryLinkedDir(kb.id, kb.linkedDirs[0].id)).toMatchObject({ ok: true, linked: { watching: true } })
+      await vi.dynamicImportSettled()
+      expect(startLinkedDirWatch).not.toHaveBeenCalled()
     })
   })
 

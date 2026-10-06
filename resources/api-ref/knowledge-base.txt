@@ -21,6 +21,7 @@ operations on this page:
   GET    /api/tlon/<kbId>/ingest-status                              Get the current indexing progress for a collection
   POST   /api/tlon/<kbId>/linked-dirs                                Watch a server-local directory as a live document source
   DELETE /api/tlon/<kbId>/linked-dirs/<linkId>                       Stop watching a linked directory
+  POST   /api/tlon/<kbId>/linked-dirs/<linkId>/retry                 Look for an unavailable linked directory again and resume watching it if it is back
   GET    /api/tlon/<kbId>/raw                                        List the raw source files added to a collection
   POST   /api/tlon/<kbId>/remove-raw                                 Remove one document (raw source file) from a collection   !! destructive
   POST   /api/tlon/<kbId>/resolve-sources                            Map paths read from a collection back to their source documents
@@ -127,6 +128,14 @@ DELETE /api/tlon/<kbId>/linked-dirs/<linkId>                       Stop watching
      curl -sX DELETE "$HALO_API_URL/api/tlon/<kbId>/linked-dirs/<linkId>" -H "Authorization: Bearer $HALO_API_TOKEN"
      # out: {success:true,data:<removal result>}
      # note: Only removes the watch registration — the target folder and its files are untouched, and can be re-linked.
+
+POST   /api/tlon/<kbId>/linked-dirs/<linkId>/retry                 Look for an unavailable linked directory again and resume watching it if it is back
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/tlon/<kbId>/linked-dirs/<linkId>/retry" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:{id,path,label,watching:true,lastScannedAt?,learningPaused?}} when the folder is there
+     # note: A link shows watching:false when its folder was missing at the last check (e.g. an unplugged drive). Halo looks again at every start; this asks now.
+     # note: Failure carries a code: PATH_NOT_FOUND (the folder is still missing), LINK_NOT_FOUND, KB_NOT_FOUND.
+     # note: learningPaused ({reason:"too-many-files",count,limit} or {reason:"too-large"}) on a link means the folder is there but over the watched-folder limits, so its files are not learned.
 
 GET    /api/tlon/<kbId>/raw                                        List the raw source files added to a collection
      curl -s "$HALO_API_URL/api/tlon/<kbId>/raw" -H "Authorization: Bearer $HALO_API_TOKEN" | head -c 4000
