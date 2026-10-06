@@ -289,10 +289,82 @@ describe('dispatchInboundMessage — streaming selection', () => {
     expect(arg.onProgress).toBeUndefined()
   })
 
-  it('sends the processing ack via reply.send when streaming is absent', async () => {
+})
+
+// ============================================
+// The processing notice
+//
+// A quick answer needs nothing before it; a slow one tells the sender their
+// message arrived. An owner who finds even that too much turns it off.
+// ============================================
+
+describe('dispatchInboundMessage — the processing notice', () => {
+  const NOTICE = '✅ 已收到，正在处理…'
+
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  /** A turn that answers only when told to. */
+  function slowTurn(): { answer: (text: string) => void } {
+    let answer: (text: string) => void = () => {}
+    sendAppChatMessageMock.mockImplementationOnce(request => new Promise<undefined>(resolve => {
+      answer = text => {
+        (request.onReply as (t: string) => void)(text)
+        resolve(undefined)
+      }
+    }))
+    return { answer: text => answer(text) }
+  }
+
+  it('says the message is being worked on only once the answer has taken 5 seconds', async () => {
     const reply = makeReply(false)
+    const turn = slowTurn()
+    const dispatched = dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
+
+    await vi.advanceTimersByTimeAsync(4_999)
+    expect(reply.send).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(reply.send).toHaveBeenCalledWith(NOTICE)
+
+    turn.answer('the answer')
+    await dispatched
+    expect((reply.send as ReturnType<typeof vi.fn>).mock.calls.map(([text]) => text)).toEqual([NOTICE, 'the answer'])
+  })
+
+  it('sends nothing before an answer that comes sooner', async () => {
+    const reply = makeReply(false)
+    const turn = slowTurn()
+    const dispatched = dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
+
+    await vi.advanceTimersByTimeAsync(2_000)
+    turn.answer('quick answer')
+    await dispatched
+    await vi.advanceTimersByTimeAsync(10_000)
+
+    expect((reply.send as ReturnType<typeof vi.fn>).mock.calls.map(([text]) => text)).toEqual(['quick answer'])
+  })
+
+  it('never sends it where the owner turned it off', async () => {
+    instanceCfg = { processingNotice: false }
+    const reply = makeReply(false)
+    const turn = slowTurn()
+    const dispatched = dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    turn.answer('late answer')
+    await dispatched
+
+    expect((reply.send as ReturnType<typeof vi.fn>).mock.calls.map(([text]) => text)).toEqual(['late answer'])
+  })
+
+  it('leaves a stream showing its status at once, as before', async () => {
+    instanceCfg = { streaming: true, processingNotice: false }
+    const reply = makeReply(true)
+
     await dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
-    expect(reply.send).toHaveBeenCalledWith('✅ 已收到，正在处理…')
+
+    expect(reply.streaming!.update).toHaveBeenCalledWith({ type: 'status', text: NOTICE })
+    expect(reply.send).not.toHaveBeenCalled()
   })
 })
 

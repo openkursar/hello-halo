@@ -1337,6 +1337,18 @@ its answer after it, so it starts a direct message, or follows the mention in a
 group (`im-escalation.parseAnswerCommand`, §2.3). There is no "bot name"
 setting, and none is needed.
 
+### 4.4 The processing notice
+
+A stream shows at once, in the reply itself, that a message is being worked on.
+A reply sent as one message (streaming off, or stripped in a group without quote
+reply) has nothing to show until it is done, so `dispatch-inbound` sends
+"✅ 已收到，正在处理…" first — but only once the answer has taken
+`PROCESSING_NOTICE_DELAY_MS` (5 s): a quick answer needs nothing before it, and a
+notice on every message is noise in a group. The timer is cleared by the reply,
+by a failure and when the dispatch ends. Owners can turn the notice off per
+instance (`ImChannelInstanceConfig.processingNotice`, on unless `false`; the
+settings card greys it out while streaming is on).
+
 Tests live in `tests/unit/apps/runtime/` mirroring the source layout.
 
 ---

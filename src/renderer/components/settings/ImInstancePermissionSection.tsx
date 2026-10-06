@@ -19,6 +19,7 @@ import type { ImChannelInstanceConfig } from '../../../shared/types/im-channel'
 import type { AvailableSkill } from '../../../shared/apps/app-types'
 import { CapabilityPolicyFields } from '../capability/CapabilityPolicyFields'
 import { Switch } from '../ui/Switch'
+import { HelpHint } from '../ui/HelpHint'
 import { withGuestAccess } from '../../../shared/apps/capability-policy'
 
 /** Product-level permission defaults (from IPC). Mirrors auth-loader.ImChannelsPermissionDefaults. */
@@ -103,7 +104,13 @@ export function ImInstancePermissionSection({
       {/* Master toggle */}
       <div className="flex items-center justify-between">
         <div className="space-y-0.5">
-          <p className="text-sm text-muted-foreground">{t('Permission Control')}</p>
+          <div className="flex items-center gap-1">
+            <p className="text-sm text-muted-foreground">{t('Permission Control')}</p>
+            <HelpHint
+              label={t('About this setting')}
+              text={t('On: owners can use everything, and guests — everyone who is not an owner — can use only what you allow below. Off: everyone is treated as an owner. Owners are the IDs in the owner list; while the list is empty, the first person to message the bot directly becomes its owner.')}
+            />
+          </div>
           <p className="text-xs text-muted-foreground/70">
             {permissionEnabled
               ? t('Restrict access by owner/guest roles')

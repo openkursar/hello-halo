@@ -52,6 +52,8 @@ import { ImInstancePermissionSection } from './ImInstancePermissionSection'
 import { defaultGuestPolicy } from '../../../shared/apps/capability-policy'
 import type { ImPermissionDefaults } from './ImInstancePermissionSection'
 import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
+import { HelpHint } from '../ui/HelpHint'
+import { ImProcessingNoticeRow } from './ImProcessingNoticeRow'
 import { effectiveSmtpPort, parseSmtpPort, smtpPortAfterSecureChange } from './smtp-port'
 
 // ============================================
@@ -581,6 +583,13 @@ function InstanceCard({
     onChange({ ...instance, replyScope: scope as ImChannelInstanceConfig['replyScope'] })
   }
 
+  const handleProcessingNoticeChange = () => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    setDraft(null)
+    // On by default (undefined). Toggle off → explicit false; toggle on → undefined.
+    onChange({ ...instance, processingNotice: instance.processingNotice === false ? undefined : false })
+  }
+
   const isStreamingEnabled = instance.streaming === true
   const isQuoteReplyEnabled = (cfg.quoteReply as boolean) !== false
   const replyScope = instance.replyScope ?? 'all'
@@ -751,7 +760,10 @@ function InstanceCard({
 
           {/* Reply scope */}
           <div className="space-y-1">
-            <label className="text-sm text-muted-foreground">{t('Reply Scope')}</label>
+            <div className="flex items-center gap-1">
+              <label className="text-sm text-muted-foreground">{t('Reply Scope')}</label>
+              <HelpHint label={t('About this setting')} text={t('Decides where the digital human replies. All messages: it replies when @mentioned in groups and to direct messages. Group chats only: direct messages are declined. Direct messages only: group messages get no reply.')} />
+            </div>
             <select
               value={replyScope}
               onChange={(e) => handleReplyScopeChange(e.target.value)}
@@ -776,7 +788,10 @@ function InstanceCard({
           {/* Streaming toggle */}
           <div className="flex items-center justify-between">
             <div className="space-y-0.5">
-              <p className="text-sm text-muted-foreground">{t('Streaming')}</p>
+              <div className="flex items-center gap-1">
+                <p className="text-sm text-muted-foreground">{t('Streaming')}</p>
+                <HelpHint label={t('About this setting')} text={t('On: the reply is written into one message as it is produced. Off: one complete reply is sent when it is done. In group chats, Quote Reply must be on as well.')} />
+              </div>
               <p className="text-xs text-muted-foreground/70">
                 {isStreamingEnabled
                   ? t('Shows thinking process in real-time')
@@ -809,7 +824,10 @@ function InstanceCard({
           {/* Quote Reply toggle */}
           <div className="flex items-center justify-between">
             <div className="space-y-0.5">
-              <p className="text-sm text-muted-foreground">{t('Quote Reply (Group)')}</p>
+              <div className="flex items-center gap-1">
+                <p className="text-sm text-muted-foreground">{t('Quote Reply (Group)')}</p>
+                <HelpHint label={t('About this setting')} text={t('On: a reply in a group quotes the message it answers, so it is clear whom it answers. Off: replies are sent as plain messages, and streaming cannot be used.')} />
+              </div>
               <p className="text-xs text-muted-foreground/70">
                 {isQuoteReplyEnabled
                   ? t('Group replies quote the original message')
@@ -832,6 +850,12 @@ function InstanceCard({
               </div>
             </label>
           </div>
+
+          <ImProcessingNoticeRow
+            on={instance.processingNotice !== false}
+            streaming={isStreamingEnabled}
+            onToggle={handleProcessingNoticeChange}
+          />
 
           {/* ── Permission Control ── */}
           <ImInstancePermissionSection instance={instance} onChange={onChange} onDebouncedChange={scheduleChange} permissionDefaults={permissionDefaults} />
