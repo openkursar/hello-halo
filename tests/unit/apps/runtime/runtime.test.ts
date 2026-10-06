@@ -1636,6 +1636,7 @@ describe('AppRuntimeService', () => {
       onAppStatusChange: vi.fn().mockReturnValue(() => {}),
       onAppInstalled: vi.fn().mockReturnValue(() => {}),
       onAppUninstalled: vi.fn().mockReturnValue(() => {}),
+      onAppSpecUpgraded: vi.fn().mockReturnValue(() => {}),
     }
 
     // Mock Scheduler
@@ -2832,6 +2833,94 @@ describe('AppRuntimeService', () => {
       await new Promise(resolve => setImmediate(resolve))
 
       expect(mockScheduler.removeJob).toHaveBeenCalled()
+    })
+  })
+
+  // Every upgrade path ends in the manager's upgradeSpec; the runtime's part is
+  // to reschedule the app and to tell the user what kept their version.
+  describe('author upgrades', () => {
+    const outcome = (kept: string[], editsKnown = true) => ({ fromVersion: '1.2.0', toVersion: '1.3.0', kept, editsKnown })
+
+    function installedApp(): string {
+      const appId = randomUUID()
+      dbManager.getAppDatabase().prepare(`
+        INSERT INTO installed_apps (id, spec_id, space_id, spec_json, status, user_config_json, user_overrides_json, permissions_json, installed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(appId, `spec-${appId}`, 'space-001', JSON.stringify(createTestSpec()), 'active', '{}', '{}', '{"granted":[],"denied":[]}', Date.now())
+      return appId
+    }
+
+    function upgraded(appId: string, kept: string[], editsKnown = true): void {
+      mockAppManager.onAppSpecUpgraded.mock.calls[0][0](appId, outcome(kept, editsKnown))
+    }
+
+    it('reschedules the app and leaves a note naming what kept the user’s version', () => {
+      const appId = installedApp()
+      const service = createService()
+      const sync = vi.spyOn(service, 'syncAppSubscriptions')
+      vi.mocked(sendToRenderer).mockClear()
+
+      upgraded(appId, ['system_prompt', 'subscriptions'], false)
+
+      expect(sync).toHaveBeenCalledWith(appId)
+      const [note] = store.getEntriesForApp(appId)
+      expect(note).toMatchObject({
+        type: 'milestone',
+        content: { upgrade: outcome(['system_prompt', 'subscriptions'], false), source: { kind: 'upgrade', appId } },
+      })
+      expect(sendToRenderer).toHaveBeenCalledWith('app:activity_entry:new', expect.objectContaining({ appId }))
+    })
+
+    it('leaves no note when the upgrade applied in full', () => {
+      const appId = installedApp()
+      createService()
+
+      upgraded(appId, [])
+
+      expect(store.getEntriesForApp(appId)).toEqual([])
+    })
+
+    describe('adoptAuthorVersion', () => {
+      it('switches only fields the note kept, records them on the note and publishes it again', () => {
+        const appId = installedApp()
+        const service = createService()
+        upgraded(appId, ['system_prompt', 'subscriptions'])
+        const [note] = store.getEntriesForApp(appId)
+        mockAppManager.adoptAuthorVersion = vi.fn(() => ['system_prompt'])
+        const sync = vi.spyOn(service, 'syncAppSubscriptions')
+        vi.mocked(sendToRenderer).mockClear()
+
+        const updated = service.adoptAuthorVersion(appId, note.id, ['system_prompt', 'icon'])
+
+        expect(mockAppManager.adoptAuthorVersion).toHaveBeenCalledWith(appId, ['system_prompt'])
+        expect(updated.content.upgrade?.adopted).toEqual(['system_prompt'])
+        expect(store.getEntry(note.id)?.content.upgrade?.adopted).toEqual(['system_prompt'])
+        expect(sync).not.toHaveBeenCalled()
+        expect(sendToRenderer).toHaveBeenCalledWith('app:activity_entry:new', expect.objectContaining({ appId }))
+      })
+
+      it('reschedules the app when its run times switched', () => {
+        const appId = installedApp()
+        const service = createService()
+        upgraded(appId, ['subscriptions'])
+        const [note] = store.getEntriesForApp(appId)
+        mockAppManager.adoptAuthorVersion = vi.fn(() => ['subscriptions'])
+        const sync = vi.spyOn(service, 'syncAppSubscriptions')
+
+        service.adoptAuthorVersion(appId, note.id, ['subscriptions'])
+
+        expect(sync).toHaveBeenCalledWith(appId)
+      })
+
+      it('refuses a note that is not this app’s upgrade note', () => {
+        const appId = installedApp()
+        const service = createService()
+        upgraded(appId, ['system_prompt'])
+        const [note] = store.getEntriesForApp(appId)
+
+        expect(() => service.adoptAuthorVersion(randomUUID(), note.id, ['system_prompt'])).toThrow()
+        expect(() => service.adoptAuthorVersion(appId, 'missing', ['system_prompt'])).toThrow()
+      })
     })
   })
 

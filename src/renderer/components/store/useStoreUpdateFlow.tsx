@@ -13,7 +13,9 @@ import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useNotificationStore } from '../../stores/notification.store'
 import { getEntryVersions } from '../../../shared/store/store-meta'
 import { StoreUpdateDialog } from './StoreUpdateDialog'
+import type { UpgradePreview } from './StoreUpdateDialog'
 import { StoreInstallDialog } from './StoreInstallDialog'
+import { specFieldList } from '../apps/spec-field-label'
 import type { RegistryEntry, UpdateInfo, StoreAppDetail } from '../../../shared/store/store-types'
 
 type Phase = 'idle' | 'confirm' | 'copy'
@@ -34,10 +36,32 @@ export function useStoreUpdateFlow(
   updateInfo: UpdateInfo | null | undefined,
   providedDetail?: StoreAppDetail | null,
 ): StoreUpdateFlow {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const [phase, setPhase] = useState<Phase>('idle')
   const [copyDetail, setCopyDetail] = useState<StoreAppDetail | null>(null)
   const [busy, setBusy] = useState(false)
+  const [preview, setPreview] = useState<UpgradePreview | undefined>(undefined)
+  // Only a digital human keeps the user's version of what differs from the author's.
+  const keepsEdits = entry?.type === 'automation'
+
+  const start = () => {
+    setPhase('confirm')
+    if (!keepsEdits || !updateInfo) {
+      setPreview(undefined)
+      return
+    }
+    const appId = updateInfo.appId
+    setPreview({ status: 'loading' })
+    api.storePreviewUpgrade(appId)
+      .then(res => {
+        if (!res.success || !res.data) throw new Error(res.error ?? 'Preview unavailable')
+        setPreview({ status: 'ready', kept: res.data.kept, editsKnown: res.data.editsKnown })
+      })
+      .catch(err => {
+        console.warn('[StoreUpdateFlow] Upgrade preview unavailable', { appId, error: err })
+        setPreview({ status: 'unavailable' })
+      })
+  }
 
   const changelog = useMemo(() => {
     if (!entry || !updateInfo) return undefined
@@ -52,11 +76,17 @@ export function useStoreUpdateFlow(
       const res = await api.storeApplyUpgrade(updateInfo.appId, 'force')
       if (res.success) {
         refreshInstalled()
+        const kept = (res.data as { kept?: string[] } | undefined)?.kept ?? []
         useNotificationStore.getState().show({
           title: t('Updated'),
-          body: t('Upgraded to v{{version}}', { version: updateInfo.latestVersion }),
+          body: kept.length > 0
+            ? t('Upgraded to v{{version}}. These differ from the author’s new version and kept your current version: {{items}}', {
+              version: updateInfo.latestVersion,
+              items: specFieldList(kept, t, i18n.language),
+            })
+            : t('Upgraded to v{{version}}', { version: updateInfo.latestVersion }),
           variant: 'success',
-          duration: 3000,
+          duration: kept.length > 0 ? 6000 : 3000,
         })
       } else {
         useNotificationStore.getState().show({
@@ -143,6 +173,7 @@ export function useStoreUpdateFlow(
           toVersion={updateInfo.latestVersion}
           changelog={changelog}
           busy={busy}
+          preview={preview}
           onInstallCopy={installCopy}
           onOverwrite={overwrite}
           onIgnore={ignore}
@@ -167,5 +198,5 @@ export function useStoreUpdateFlow(
     </>
   )
 
-  return { start: () => setPhase('confirm'), busy, dialogs }
+  return { start, busy, dialogs }
 }

@@ -22,6 +22,7 @@ import { AppAlreadyInstalledError } from '../apps/manager/errors'
 import { getAppRuntime } from '../apps/runtime'
 import type { AppSpec, SkillSpec } from '../apps/spec/schema'
 import { resolveInstallSpaceId } from '../../shared/apps/install-scope'
+import type { SpecUpgradeOutcome } from '../../shared/apps/app-types'
 import type {
   RegistryEntry,
   RegistrySource,
@@ -920,6 +921,8 @@ export async function applyUpgrade(
   const newSpec = await acquireSpec(registry, found.entry)
   const newSpecWithStore = withInstallStoreMetadata(newSpec, found.entry.slug, found.registryId)
 
+  // The runtime reschedules the app and notes what was kept on its own: it
+  // reacts to every upgradeSpec, whichever path made it.
   const outcome = manager.upgradeSpec(appId, newSpecWithStore)
 
   console.log(
@@ -927,13 +930,28 @@ export async function applyUpgrade(
     `(severity=${severity}, mode=${mode}, kept=${outcome.kept.length})`
   )
 
-  // Refresh runtime activation for automation apps so subscriptions reflect any spec changes
-  const runtime = getAppRuntime()
-  if (runtime && newSpecWithStore.type === 'automation') {
-    runtime.syncAppSubscriptions(appId)
-  }
-
   return { appId, from: fromVersion, to: toVersion, severity, kept: outcome.kept, editsKnown: outcome.editsKnown }
+}
+
+/**
+ * What applying the available upgrade would keep at the user's version, for
+ * the update dialog. A browse fetch, like the detail view: no install order is
+ * opened, and the spec cache is reused.
+ */
+export async function previewUpgrade(appId: string): Promise<SpecUpgradeOutcome> {
+  ensureInitialized()
+  const manager = getAppManager()
+  if (!queryService || !manager) throw new Error('Store is not ready')
+
+  const app = manager.getApp(appId)
+  const slug = app?.spec.store?.slug
+  if (!app || !slug) throw new Error(`App ${appId} was not installed from the store`)
+  const found = queryService.findEntry(slug, app.spec.store?.registry_id)
+  if (!found || !isNewerVersion(found.entry.version, app.spec.version)) {
+    throw new Error(`No newer version of ${slug} is available`)
+  }
+  const spec = await queryService.fetchSpec(found.entry, found.registryId, config.registries)
+  return manager.previewUpgradeSpec(appId, withInstallStoreMetadata(spec, found.entry.slug, found.registryId))
 }
 
 /**

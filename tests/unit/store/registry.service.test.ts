@@ -49,6 +49,7 @@ import {
   listApps,
   installFromStore,
   applyUpgrade,
+  previewUpgrade,
   recordStoreOriginals,
   getRegistries,
   onSyncStatusChanged,
@@ -610,6 +611,37 @@ ${requiresSkill ? `requires:\n  skills:\n    - ${requiresSkill}\n` : ""}store:
       }))
       expect(manager.updateSpec).not.toHaveBeenCalled()
       expect(result).toMatchObject({ from: "1.0.0", to: "1.1.0", kept: ["system_prompt"], editsKnown: true })
+    })
+
+    // The update dialog shows what would keep the user's version before
+    // anything is installed, so the preview is a browse fetch, never an order.
+    it("previews an upgrade without opening an install order", async () => {
+      const installed = {
+        id: "app-1",
+        specId: "Ledger App",
+        status: "active",
+        spec: { name: "Ledger App", version: "1.0.0", store: { slug: "ledger-app", registry_id: "official" } },
+      }
+      const preview = { fromVersion: "1.0.0", toVersion: "1.1.0", kept: ["system_prompt"], editsKnown: true }
+      const manager = {
+        getApp: vi.fn(() => installed),
+        previewUpgradeSpec: vi.fn(() => preview),
+        upgradeSpec: vi.fn(),
+        listApps: vi.fn(() => []),
+      }
+      getAppManagerMock.mockReturnValue(manager)
+      await serve([{ ...APP, version: "1.1.0" }], {
+        "packages/digital-humans/ledger-app/spec.yaml": specYaml("1.1.0"),
+      })
+
+      await expect(previewUpgrade("app-1")).resolves.toEqual(preview)
+
+      expect(manager.previewUpgradeSpec).toHaveBeenCalledWith("app-1", expect.objectContaining({
+        version: "1.1.0",
+        store: expect.objectContaining({ slug: "ledger-app", registry_id: "official" }),
+      }))
+      expect(manager.upgradeSpec).not.toHaveBeenCalled()
+      expect(authorizeInstallMock).not.toHaveBeenCalled()
     })
 
     describe("recording the originals of earlier installs", () => {

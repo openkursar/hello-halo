@@ -255,6 +255,12 @@ bundled-and-managed approach mirrors VSCode's built-in extension model:
   edits to the definition survive it as they survive a store upgrade; the
   loader then resyncs the app's subscriptions, which the runtime activated from
   the previous spec earlier in startup.
+- **Identity**: an installed built-in is found by its spec id, which is its
+  name. A user may rename a digital human, which changes both; the loader then
+  recognises the row by what a rename leaves alone — the bundle's store slug,
+  or the name in its author's original (2.13) — and GC spares it the same way.
+  Matching by name alone installed a second copy at the next bundle change and
+  garbage-collected the renamed one, memory and all.
 - **Disable semantics**: a "uninstall" on a built-in is a soft uninstall
   (status=`uninstalled`); the loader respects it across launches. Standard
   `reinstall` flow re-enables. This matches VSCode's per-user disable flag.
@@ -388,6 +394,21 @@ spans fields (a kept `config_schema` lacking a key the author's new trigger
 refers to). The upgrade then keeps every differing field — the current spec at
 the new version, which is valid — instead of failing, and logs why.
 
+**After an upgrade**: `upgradeSpec` fires `onAppSpecUpgraded(appId, outcome)`
+whichever path called it. The runtime reacts there and nowhere else: it
+reschedules the app and, when fields were kept, writes the activity note the
+user reads (`apps/runtime/DESIGN.md` §2.21). Upgrade paths therefore do not
+reschedule on their own.
+
+**Preview and taking the author's version**: `previewUpgradeSpec` runs the
+same merge without writing, so the store's update dialog can name what will be
+kept before the user agrees. `adoptAuthorVersion(appId, fields)` writes the
+original's value of each field through `updateSpec` (removing a field the
+original lacks); the field then equals the original and follows the author
+again at the next upgrade. Release fields and fields already equal are left
+alone. A field depending on one that stays (a trigger's `config_key` on a kept
+`config_schema`) fails validation, and the error reaches the user.
+
 ---
 
 ## 3. SQLite Schema
@@ -456,8 +477,12 @@ interface AppManagerService {
   updateFrequency(appId: string, subscriptionId: string, frequency: string): void
   updateSpec(appId: string, specPatch: Record<string, unknown>): void          // user and AI edits
   upgradeSpec(appId: string, authorSpec: AppSpec): SpecUpgradeOutcome          // author's new version (2.13)
+  previewUpgradeSpec(appId: string, authorSpec: AppSpec): SpecUpgradeOutcome   // same merge, nothing written
+  adoptAuthorVersion(appId: string, fields: readonly string[]): string[]       // fields back to the original
+  getAuthorSpec(appId: string): AppSpec | null
   recordAuthorSpec(appId: string, authorSpec: AppSpec): boolean                // original for an earlier install
   listStoreInstallsWithoutAuthorSpec(): string[]
+  onAppSpecUpgraded(handler: SpecUpgradedHandler): Unsubscribe                 // after every upgradeSpec
   updateStatus(appId: string, status: AppStatus, extra?: { errorMessage?: string; pendingEscalationId?: string }): void
   updateLastRun(appId: string, outcome: RunOutcome, errorMessage?: string): void
   getApp(appId: string): InstalledApp | null

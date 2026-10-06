@@ -70,6 +70,13 @@ are opened only for locally owned installed digital humans; remote members keep
 the workbench's existing read-only boundary. Existing team conversation drafts and
 scroll positions survive the profile round trip.
 
+An author's upgrade that kept fields at the user's version leaves a note
+(`content.upgrade`, source `upgrade`) that `UpgradeNote` draws instead of the
+summary: the kept fields by name (`spec-field-label.ts`, shared with the
+store's update dialog), the author's version of each loaded only when asked,
+and switching one or all of them to it. It never says the user changed them —
+after an upgrade with no earlier author's version, that is not known.
+
 Desktop and HTTP clients use the same APIs. Layout is mobile-first; long source
 names, selected answers, loading failures and unavailable teams remain readable
 without hover. Errors are explicit and retain the last useful records and drafts.

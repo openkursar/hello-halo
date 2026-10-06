@@ -173,6 +173,9 @@ export type AppUninstallReason = 'user' | 'ai' | 'system' | 'space-deleted'
  */
 export type AppUninstalledHandler = (app: InstalledApp, reason: AppUninstallReason) => void
 
+/** Callback fired after an author's new version was applied with `upgradeSpec`. */
+export type SpecUpgradedHandler = (appId: string, outcome: SpecUpgradeOutcome) => void
+
 /** Unsubscribe function returned by event registration */
 export type Unsubscribe = () => void
 
@@ -408,6 +411,21 @@ export interface AppManagerService {
    */
   upgradeSpec(appId: string, authorSpec: AppSpec): SpecUpgradeOutcome
 
+  /** What `upgradeSpec` would keep for this author's spec, without applying it. */
+  previewUpgradeSpec(appId: string, authorSpec: AppSpec): SpecUpgradeOutcome
+
+  /**
+   * Switch fields of a digital human to the author's original, after which
+   * upgrades update them again. Release fields and fields already equal to the
+   * original are left alone.
+   *
+   * @returns the fields that changed
+   * @throws AppNotFoundError if the App does not exist
+   * @throws Error if no author's original is recorded
+   * @throws AppSpecValidationError if the result is invalid (a field depending on another one kept)
+   */
+  adoptAuthorVersion(appId: string, fields: readonly string[]): string[]
+
   /**
    * Record the author's original for a digital human installed before
    * originals were kept. Only the spec of the installed version qualifies, and
@@ -564,4 +582,10 @@ export interface AppManagerService {
    * Returns an unsubscribe function.
    */
   onAppUninstalled(handler: AppUninstalledHandler): Unsubscribe
+
+  /**
+   * Register a callback fired after every `upgradeSpec`, whichever path
+   * upgraded the App. Returns an unsubscribe function.
+   */
+  onAppSpecUpgraded(handler: SpecUpgradedHandler): Unsubscribe
 }

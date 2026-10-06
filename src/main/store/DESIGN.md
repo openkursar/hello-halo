@@ -213,12 +213,14 @@ Three consequences that read as surprises otherwise:
   in a federation (§2.1).
 
 Browsing is not installing: `query.service.ts` fetches specs for the detail view
-without an order, and must keep doing so. So does `recordStoreOriginals`, which
+without an order, and must keep doing so. So do `recordStoreOriginals`, which
 reads the store's copy of an already-installed version to keep as the author's
-original that upgrades are compared against (`apps/manager/DESIGN.md` §2.13):
-nothing is installed by it. An upgrade itself downloads through `acquireSpec`
-and hands the spec to `AppManager.upgradeSpec`, never `updateSpec`, so the
-user's edits survive it.
+original that upgrades are compared against (`apps/manager/DESIGN.md` §2.13),
+and `previewUpgrade`, which reads the next version for the update dialog to
+name what will keep the user's version: neither installs anything. An upgrade
+itself downloads through `acquireSpec` and hands the spec to
+`AppManager.upgradeSpec`, never `updateSpec`, so the user's edits survive it;
+rescheduling and the activity note are the runtime's reaction to that call.
 
 `installs` therefore means *authorised* downloads: an order is opened before the
 transfer, so one that then fails locally still counts. A delivery receipt would

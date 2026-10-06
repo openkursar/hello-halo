@@ -142,6 +142,16 @@ export function registerAppsRoutes(app: Express): void {
     if (!runtime) return
     await respondOperation(res, 'activity-entry', () => runtime.getActivityEntry(req.params.appId, req.params.entryId))
   })
+  app.post('/api/apps/:appId/activity/:entryId/adopt-author-version', async (req: Request, res: Response) => {
+    const runtime = getRuntimeOrFail(res)
+    if (!runtime) return
+    await respondOperation(res, 'adopt-author-version', () => runtime.adoptAuthorVersion(req.params.appId, req.params.entryId, req.body?.fields))
+  })
+  app.get('/api/apps/:appId/author-spec', async (req: Request, res: Response) => {
+    const manager = getManagerOrFail(res)
+    if (!manager) return
+    await respondOperation(res, 'author-spec', () => manager.getAuthorSpec(req.params.appId))
+  })
   app.post('/api/apps/:appId/space-preview', async (req: Request, res: Response) => {
     await respondOperation(res, 'space-preview', () => getAppSpaceChangePreview(req.params.appId, req.body.newSpaceId))
   })

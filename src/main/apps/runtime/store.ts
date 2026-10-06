@@ -507,6 +507,15 @@ export class ActivityStore {
     this.stmtUpdateEntryResponse.run(JSON.stringify(response), entryId)
   }
 
+  /** Record on an upgrade note the kept fields the user switched to the author's version. */
+  markUpgradeAdopted(entryId: string, fields: readonly string[]): ActivityEntry | null {
+    const entry = this.getEntry(entryId)
+    if (!entry?.content.upgrade) return null
+    entry.content.upgrade.adopted = [...new Set([...(entry.content.upgrade.adopted ?? []), ...fields])]
+    this.db.prepare('UPDATE activity_entries SET content_json = ? WHERE id = ?').run(JSON.stringify(entry.content), entryId)
+    return entry
+  }
+
   /** Get a pending (unanswered) escalation entry */
   getPendingEscalation(appId: string, entryId: string): ActivityEntry | null {
     const row = this.stmtGetPendingEscalation.get(appId, entryId) as EntryRow | undefined

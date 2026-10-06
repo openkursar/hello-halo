@@ -59,6 +59,27 @@ export function mergeAuthorUpgrade(
   return { spec, kept }
 }
 
+/**
+ * The spec patch that switches the given fields to the author's original, so
+ * that later upgrades update them again. Release fields are the author's
+ * already; a field the original lacks is removed (`null`, merge-patch style);
+ * a field already equal to the original is left out.
+ */
+export function authorVersionPatch(
+  current: AutomationSpec,
+  original: AutomationSpec,
+  fields: readonly string[],
+): Record<string, unknown> {
+  const mine = current as unknown as Record<string, unknown>
+  const theirs = original as unknown as Record<string, unknown>
+  const patch: Record<string, unknown> = {}
+  for (const field of fields) {
+    if (RELEASE_FIELDS.has(field) || sameValue(mine[field], theirs[field])) continue
+    patch[field] = theirs[field] ?? null
+  }
+  return patch
+}
+
 interface TriggerPairing {
   /** Which trigger of the other list each trigger of the base became (index to index). */
   pairs: Map<number, number>

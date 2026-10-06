@@ -27,6 +27,7 @@ import type {
   StatusChangeHandler,
   AppInstalledHandler,
   AppUninstalledHandler,
+  SpecUpgradedHandler,
   AppUninstallReason,
   Unsubscribe,
   UninstallOptions,
@@ -53,7 +54,7 @@ import { isBuiltinApp } from './types'
 import { sanitizeMemorySettings } from '../../../shared/types/memory'
 import { compareDotVersions } from '../../../shared/store/version-compare'
 import type { SpecUpgradeOutcome } from '../../../shared/apps/app-types'
-import { mergeAuthorUpgrade } from './spec-upgrade'
+import { authorVersionPatch, mergeAuthorUpgrade } from './spec-upgrade'
 
 // ============================================
 // MCP Apps Change Event
@@ -178,6 +179,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
   // status-change listeners.
   const appInstalledHandlers: AppInstalledHandler[] = []
   const appUninstalledHandlers: AppUninstalledHandler[] = []
+  const specUpgradedHandlers: SpecUpgradedHandler[] = []
 
   /**
    * Notify all registered status change handlers.
@@ -213,6 +215,55 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         console.error('[AppManager] Uninstall handler error:', error)
       }
     }
+  }
+
+  /** Fire spec-upgraded handlers. Errors are isolated per subscriber. */
+  function notifySpecUpgraded(appId: string, outcome: SpecUpgradeOutcome): void {
+    for (const handler of specUpgradedHandlers) {
+      try {
+        handler(appId, outcome)
+      } catch (error) {
+        console.error('[AppManager] Spec upgrade handler error:', error)
+      }
+    }
+  }
+
+  /**
+   * What an author's new version makes of an App, without writing anything.
+   * A digital human is merged over the user's edits (spec-upgrade.ts); any
+   * other App simply becomes the new version.
+   */
+  function planUpgrade(app: InstalledApp, authorSpec: AppSpec): {
+    next: AppSpec
+    merged: AppSpec | null
+    outcome: SpecUpgradeOutcome
+  } {
+    const next = validateAppSpec(authorSpec)
+    const fromVersion = app.spec.version
+    if (next.type !== 'automation' || app.spec.type !== 'automation') {
+      return { next, merged: null, outcome: { fromVersion, toVersion: next.version, kept: [], editsKnown: true } }
+    }
+
+    const recorded = store.getAuthorSpec(app.id)
+    const original = recorded?.type === 'automation' ? recorded : null
+    let merge = mergeAuthorUpgrade(app.spec, original, next)
+    let editsKnown = original !== null
+    let merged: AppSpec
+    try {
+      merged = validateAppSpec(merge.spec)
+    } catch (err) {
+      // Fields from two versions can break a rule spanning fields, such as a
+      // kept config_schema lacking a key that a new trigger refers to.
+      // Keeping every differing field is the current spec at the new version.
+      console.warn('[AppManager] Upgrade merge produced an invalid spec; keeping every differing field', {
+        appId: app.id,
+        error: err instanceof Error ? err.message : String(err),
+      })
+      merge = mergeAuthorUpgrade(app.spec, null, next)
+      editsKnown = false
+      merged = validateAppSpec(merge.spec)
+    }
+    return { next, merged, outcome: { fromVersion, toVersion: next.version, kept: merge.kept, editsKnown } }
   }
 
   /**
@@ -908,40 +959,36 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
     },
 
     upgradeSpec(appId: string, authorSpec: AppSpec): SpecUpgradeOutcome {
-      const app = requireApp(appId)
-      const next = validateAppSpec(authorSpec)
-      const fromVersion = app.spec.version
-      if (next.type !== 'automation' || app.spec.type !== 'automation') {
+      const { next, merged, outcome } = planUpgrade(requireApp(appId), authorSpec)
+      if (merged) {
+        store.updateSpecAndAuthorSpec(appId, merged, next)
+        const keptNote = outcome.kept.length > 0
+          ? ` keeping ${outcome.editsKnown ? 'edited' : 'undetermined'} fields: ${outcome.kept.join(', ')}`
+          : ''
+        console.log(`[AppManager] Upgraded app ${appId} ${outcome.fromVersion} -> ${outcome.toVersion}${keptNote}`)
+      } else {
         service.updateSpec(appId, next as unknown as Record<string, unknown>)
-        return { fromVersion, toVersion: next.version, kept: [], editsKnown: true }
       }
+      notifySpecUpgraded(appId, outcome)
+      return outcome
+    },
 
-      const recorded = store.getAuthorSpec(appId)
-      const original = recorded?.type === 'automation' ? recorded : null
-      let merge = mergeAuthorUpgrade(app.spec, original, next)
-      let editsKnown = original !== null
-      let spec: AppSpec
-      try {
-        spec = validateAppSpec(merge.spec)
-      } catch (err) {
-        // Fields from two versions can break a rule spanning fields, such as a
-        // kept config_schema lacking a key that a new trigger refers to.
-        // Keeping every differing field is the current spec at the new version.
-        console.warn('[AppManager] Upgrade merge produced an invalid spec; keeping every differing field', {
-          appId,
-          error: err instanceof Error ? err.message : String(err),
-        })
-        merge = mergeAuthorUpgrade(app.spec, null, next)
-        editsKnown = false
-        spec = validateAppSpec(merge.spec)
+    previewUpgradeSpec(appId: string, authorSpec: AppSpec): SpecUpgradeOutcome {
+      return planUpgrade(requireApp(appId), authorSpec).outcome
+    },
+
+    adoptAuthorVersion(appId: string, fields: readonly string[]): string[] {
+      const app = requireApp(appId)
+      const original = store.getAuthorSpec(appId)
+      if (app.spec.type !== 'automation' || original?.type !== 'automation') {
+        throw new Error('No author’s version is recorded for this digital human')
       }
-
-      store.updateSpecAndAuthorSpec(appId, spec, next)
-      const keptNote = merge.kept.length > 0
-        ? ` keeping ${editsKnown ? 'user edits' : 'undetermined fields'}: ${merge.kept.join(', ')}`
-        : ''
-      console.log(`[AppManager] Upgraded app ${appId} ${fromVersion} -> ${next.version}${keptNote}`)
-      return { fromVersion, toVersion: next.version, kept: merge.kept, editsKnown }
+      const patch = authorVersionPatch(app.spec, original, fields)
+      const changed = Object.keys(patch)
+      if (changed.length === 0) return []
+      service.updateSpec(appId, patch)
+      console.log(`[AppManager] App ${appId} switched to the author's version of: ${changed.join(', ')}`)
+      return changed
     },
 
     recordAuthorSpec(appId: string, authorSpec: AppSpec): boolean {
@@ -1205,6 +1252,16 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         const index = appUninstalledHandlers.indexOf(handler)
         if (index > -1) {
           appUninstalledHandlers.splice(index, 1)
+        }
+      }
+    },
+
+    onAppSpecUpgraded(handler: SpecUpgradedHandler): Unsubscribe {
+      specUpgradedHandlers.push(handler)
+      return () => {
+        const index = specUpgradedHandlers.indexOf(handler)
+        if (index > -1) {
+          specUpgradedHandlers.splice(index, 1)
         }
       }
     },

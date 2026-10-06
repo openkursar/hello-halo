@@ -38,11 +38,11 @@
  *           original if the row predates recorded originals; nothing else.
  *         - Present, bundled version newer: in-place upgrade via upgradeSpec()
  *           (never a downgrade — a newer row from the store is left alone),
- *           which keeps the user's edits to the definition, then a subscription
- *           resync. userConfig / status / overrides live outside the spec and
- *           are never touched. Bundled skills are refreshed via updateSpec
- *           regardless of parent version; non-bundled skills are (re)installed
- *           from the store if missing.
+ *           which keeps the user's edits to the definition; the runtime
+ *           reschedules the app on that upgrade. userConfig / status /
+ *           overrides live outside the spec and are never touched. Bundled
+ *           skills are refreshed via updateSpec regardless of parent version;
+ *           non-bundled skills are (re)installed from the store if missing.
  *   3. Garbage-collect: any installed app marked install_source='builtin' that
  *      is no longer in the current manifest (renamed, removed, swapped to a
  *      different product variant) is hard-deleted along with its bundled skills.
@@ -293,20 +293,6 @@ async function installRequiredSkillsForBuiltin(
   }
 }
 
-/**
- * Reschedule a digital human whose spec an upgrade just changed. The runtime
- * activated it from the previous spec earlier in startup, so a trigger the
- * upgrade added or moved would otherwise wait for the next launch.
- */
-async function syncSubscriptions(appId: string): Promise<void> {
-  try {
-    const { getAppRuntime } = await import('../runtime')
-    getAppRuntime()?.syncAppSubscriptions(appId)
-  } catch (err) {
-    console.warn(`[BuiltinLoader] Failed to reschedule ${appId} after its upgrade; it applies on next launch:`, err)
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Installed rows
 // ---------------------------------------------------------------------------
@@ -335,6 +321,23 @@ function createInstalledView(appManager: AppManagerService): InstalledView {
   }
 }
 
+/**
+ * A built-in the user renamed. Its name, and with it its spec id, no longer
+ * match the bundle, so it is recognised by what a rename leaves alone: the
+ * bundle's slug, or the name in its author's original. Missing it would install
+ * a second copy and let GC delete the renamed one with its memory.
+ */
+function findRenamedBuiltin(
+  rows: InstalledApp[],
+  bundled: AppSpec,
+  appManager: AppManagerService,
+): InstalledApp | undefined {
+  const candidates = rows.filter(a => isBuiltinApp(a) && a.spec.type === bundled.type)
+  const slug = bundled.store?.slug
+  return (slug ? candidates.find(a => a.spec.store?.slug === slug) : undefined)
+    ?? candidates.find(a => appManager.getAuthorSpec(a.id)?.name === bundled.name)
+}
+
 // ---------------------------------------------------------------------------
 // Per-entry processing
 // ---------------------------------------------------------------------------
@@ -344,6 +347,11 @@ interface ProcessedSpecIds {
   parents: Set<string>
   /** Bundled skill spec ids successfully processed (used by GC). */
   skills: Set<string>
+  /**
+   * Store slugs of the parents and skills processed (used by GC). A user can
+   * rename a digital human, which changes its spec id but never its slug.
+   */
+  slugs: Set<string>
   /**
    * SpecIds whose source manifest entry exists but failed to parse this run.
    * GC must treat these as "still expected" — a transient bad spec.yaml must
@@ -405,16 +413,21 @@ async function processEntry(
 
   const stampedSpec = stampBuiltin(spec)
   processed.parents.add(stampedSpec.name)
+  if (stampedSpec.store?.slug) processed.slugs.add(stampedSpec.store.slug)
 
   const bundledSkills = buildBundledSkillSpecs(appDir, spec.author).map(stampBuiltin)
-  for (const s of bundledSkills) processed.skills.add(s.name)
+  for (const s of bundledSkills) {
+    processed.skills.add(s.name)
+    if (s.store?.slug) processed.slugs.add(s.store.slug)
+  }
 
   // Pass entry.spaceId verbatim: null filters to global-only, a string filters
   // to that space. Coercing null → undefined here would broaden the lookup to
   // ALL spaces and mistakenly match a same-named app in another space, causing
   // the loader to silently skip the install.
-  const existing = installed.list(entry.spaceId)
-    .find(a => a.specId === stampedSpec.name)
+  const rows = installed.list(entry.spaceId)
+  const existing = rows.find(a => a.specId === stampedSpec.name)
+    ?? findRenamedBuiltin(rows, stampedSpec, appManager)
 
   if (!existing) {
     // ── Fresh install ──────────────────────────────────────────────────
@@ -505,7 +518,6 @@ async function processEntry(
         `[BuiltinLoader] Upgraded builtin "${stampedSpec.name}": ` +
         `${existing.spec.version} → ${stampedSpec.version} (kept=${outcome.kept.length})`
       )
-      await syncSubscriptions(existing.id)
     } catch (err) {
       processed.failures++
       console.warn(`[BuiltinLoader] Failed to upgrade "${stampedSpec.name}":`, err)
@@ -606,7 +618,9 @@ async function processEntry(
  * Safety: rows whose specId appears in `processed.parseFailed` are treated as
  * "still expected". A transient bad spec.yaml or missing file must not cause
  * the loader to delete an otherwise-healthy row — the next launch's parse
- * may succeed and the user's `userConfig` would already be gone.
+ * may succeed and the user's `userConfig` would already be gone. A row whose
+ * spec id no longer matches because the user renamed it is still expected by
+ * its slug or its original's name.
  */
 async function garbageCollectStaleBuiltins(
   appManager: AppManagerService,
@@ -618,10 +632,16 @@ async function garbageCollectStaleBuiltins(
   for (const app of all) {
     if (!isBuiltinApp(app)) continue
 
+    // A row the user renamed keeps the bundle's slug and its original's name.
+    // A manifest entry that failed to parse is known only by its directory,
+    // which bundles name after the slug.
+    const slug = app.spec.store?.slug
     const stillExpected =
       processed.parents.has(app.specId) ||
       processed.skills.has(app.specId) ||
-      processed.parseFailed.has(app.specId)
+      processed.parseFailed.has(app.specId) ||
+      (slug !== undefined && (processed.slugs.has(slug) || processed.parseFailed.has(slug))) ||
+      processed.parents.has(appManager.getAuthorSpec(app.id)?.name ?? '')
     if (stillExpected) continue
 
     // The row's spec is no longer in the current manifest — drop it.
@@ -709,6 +729,7 @@ export async function loadBuiltinApps(appManager: AppManagerService): Promise<vo
       await garbageCollectStaleBuiltins(appManager, installed, {
         parents: new Set(),
         skills: new Set(),
+        slugs: new Set(),
         parseFailed: new Set(),
         failures: 0,
         retries: [],
@@ -731,6 +752,7 @@ export async function loadBuiltinApps(appManager: AppManagerService): Promise<vo
   const processed: ProcessedSpecIds = {
     parents: new Set(),
     skills: new Set(),
+    slugs: new Set(),
     parseFailed: new Set(),
     failures: 0,
     retries: [],

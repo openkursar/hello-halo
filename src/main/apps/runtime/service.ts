@@ -416,10 +416,15 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
   }
 
   // ── Helper: Insert + broadcast activity entry ──────
-  function emitActivityEntry(entry: ActivityEntry): void {
-    store.insertEntry(entry)
+  /** Clients upsert by id, so this both announces a new entry and replaces a changed one. */
+  function publishEntry(entry: ActivityEntry): void {
     sendToRenderer('app:activity_entry:new', { appId: entry.appId, entry })
     broadcastToAll('app:activity_entry:new', { appId: entry.appId, entry: entry as unknown as Record<string, unknown> })
+  }
+
+  function emitActivityEntry(entry: ActivityEntry): void {
+    store.insertEntry(entry)
+    publishEntry(entry)
   }
 
   /**
@@ -776,8 +781,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
 
   function publishDecision(entry: ActivityEntry): void {
     try {
-      sendToRenderer('app:activity_entry:new', { appId: entry.appId, entry })
-      broadcastToAll('app:activity_entry:new', { appId: entry.appId, entry: entry as unknown as Record<string, unknown> })
+      publishEntry(entry)
       if (entry.userResponse) {
         const payload = { appId: entry.appId, entryId: entry.id, response: entry.userResponse, ...entry.content.teamContext }
         sendToRenderer('app:escalation:resolved', payload)
@@ -1430,6 +1434,22 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       publishDecision(store.confirmDeadline(appId, entryId, deadlineAt))
     },
 
+    adoptAuthorVersion(appId: string, entryId: string, fields: string[]): ActivityEntry {
+      const entry = store.getEntry(entryId)
+      const note = entry?.appId === appId ? entry.content.upgrade : undefined
+      if (!entry || !note) throw new Error('This upgrade note no longer exists')
+      if (!Array.isArray(fields) || fields.some(field => typeof field !== 'string')) {
+        throw new Error('fields must be a list of field names')
+      }
+      // Only what the note kept: it is what the user is looking at.
+      const requested = fields.filter(field => note.kept.includes(field))
+      const changed = appManager.adoptAuthorVersion(appId, requested)
+      if (changed.includes('subscriptions')) service.syncAppSubscriptions(appId)
+      const updated = store.markUpgradeAdopted(entryId, requested) ?? entry
+      publishEntry(updated)
+      return updated
+    },
+
     async stopRun(appId: string, runId: string): Promise<void> {
       const run = store.getRun(runId)
       if (!run || run.appId !== appId) throw new Error('Task not found')
@@ -1772,5 +1792,39 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     announceListChange(app.id, 'uninstalled')
   })
 
+  // ── React to an author's upgrade ────────────────────
+  // Every upgrade path (store, automatic or manual, and the bundle) ends in the
+  // manager's upgradeSpec, so this is where an upgrade reaches the running
+  // digital human: its triggers are rescheduled, and fields kept at the user's
+  // version are written up where the user looks.
+  appManager.onAppSpecUpgraded((appId, outcome) => {
+    try {
+      service.syncAppSubscriptions(appId)
+    } catch (err) {
+      console.error('[Runtime] Rescheduling after an upgrade failed; it applies on next activation', { appId, error: err })
+    }
+    if (outcome.kept.length === 0) return
+    try {
+      emitActivityEntry({
+        id: randomUUID(),
+        appId,
+        runId: UPGRADE_NOTE_RUN_ID,
+        type: 'milestone',
+        ts: Date.now(),
+        content: {
+          summary: `Upgraded from v${outcome.fromVersion} to v${outcome.toVersion}. ` +
+            `Kept the current version of what differs from the author's: ${outcome.kept.join(', ')}`,
+          upgrade: { ...outcome },
+          source: { kind: 'upgrade', appId },
+        },
+      })
+    } catch (err) {
+      console.error('[Runtime] Upgrade note could not be recorded', { appId, kept: outcome.kept, error: err })
+    }
+  })
+
   return service
 }
+
+/** Upgrade notes belong to no run; like chat reports, they carry a sentinel run id. */
+const UPGRADE_NOTE_RUN_ID = 'upgrade'
