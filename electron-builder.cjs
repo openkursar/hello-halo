@@ -20,6 +20,7 @@
 const fs = require('node:fs')
 const path = require('node:path')
 const { runtimeAsarUnpackGlob } = require('./runtimes/dsh/manifest.cjs')
+const { createStagedArtifactsHook } = require('./scripts/release/staged-artifacts.cjs')
 
 const ROOT = __dirname
 const PRODUCT_FILE = path.join(ROOT, 'product.json')
@@ -137,5 +138,6 @@ module.exports = {
   productName: field('name'),
   appId: field('appId'),
   publish: resolvePublish(),
-  files: [...(base.files ?? []), ...resolveProviderFiles()]
+  files: [...(base.files ?? []), ...resolveProviderFiles()],
+  afterAllArtifactBuild: createStagedArtifactsHook(product.content)
 }
