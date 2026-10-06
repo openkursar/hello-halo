@@ -761,8 +761,11 @@ export const useTlonStore = create<TlonState>((set, get) => ({
       const res = await api.getConversation(TLON_CHAT_SPACE, conversationId)
       if (res.success && res.data) {
         const messages = (res.data as Conversation).messages || []
+        // Only a reply after this turn's question: a turn that produced nothing
+        // has its empty reply removed, and the one before it answers the last question.
         for (let i = messages.length - 1; i >= 0; i--) {
           const m = messages[i] as Message
+          if (m.role === 'user') break
           if (m.role === 'assistant') { answer = (m.content || '').trim(); break }
         }
       }
