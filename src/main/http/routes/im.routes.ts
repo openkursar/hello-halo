@@ -578,4 +578,53 @@ export function registerImRoutes(app: Express): void {
     }
   })
 
+  // GET /api/im-sessions/linked?appId= — other digital humans' IM sessions this
+  // app was added to as push targets
+  app.get('/api/im-sessions/linked', async (req: Request, res: Response) => {
+    try {
+      const appId = typeof req.query.appId === 'string' ? req.query.appId : ''
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      res.json({ success: true, data: getImSessionRegistry()?.getLinkedSessions(appId) ?? [] })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/im-sessions/set-push-link — add, update or (link null) remove the
+  // link that lets a digital human push to another digital human's IM session
+  app.post('/api/im-sessions/set-push-link', async (req: Request, res: Response) => {
+    try {
+      const registry = getImSessionRegistry()
+      if (!registry) {
+        res.status(503).json({ success: false, error: 'IM session registry not initialized' })
+        return
+      }
+      const { appId, session, link } = (req.body ?? {}) as {
+        appId?: unknown
+        session?: { appId?: unknown; channel?: unknown; chatId?: unknown }
+        link?: { autoSync?: unknown } | null
+      }
+      const isText = (value: unknown): value is string => typeof value === 'string' && value.length > 0
+      if (!isText(appId) || !isText(session?.appId) || !isText(session?.channel) || !isText(session?.chatId)) {
+        res.status(400).json({ success: false, error: 'Expected appId and session {appId, channel, chatId}' })
+        return
+      }
+      if (link !== null && typeof link?.autoSync !== 'boolean') {
+        res.status(400).json({ success: false, error: 'Expected link {autoSync: boolean}, or null to remove it' })
+        return
+      }
+      const target = { appId: session.appId, channel: session.channel, chatId: session.chatId }
+      if (!registry.setPushLink(appId, target, link === null ? null : { autoSync: link.autoSync as boolean })) {
+        res.status(404).json({ success: false, error: 'Session not found' })
+        return
+      }
+      res.json({ success: true })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
 }

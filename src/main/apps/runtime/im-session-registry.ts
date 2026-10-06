@@ -4,7 +4,9 @@
  * Manages all known IM channel sessions across digital humans (Apps).
  * Sessions are automatically registered when a user messages the bot.
  * The `proactive` flag is toggled per contact in the digital human
- * detail page and consumed by apps/runtime/im-auto-sync.ts.
+ * detail page and consumed by apps/runtime/im-auto-sync.ts. Another digital
+ * human can be linked to a session as an extra push target (`pushLinks`); the
+ * link lives on the session, so it goes when the session does.
  *
  * Persistence: JSON file on disk, loaded at startup, written on every mutation.
  * Data volume is small (a few to tens of sessions per app), so full-file
@@ -17,7 +19,7 @@
  */
 
 import { readFileSync, renameSync } from 'fs'
-import type { ImSessionRecord } from '../../../shared/types/im-channel'
+import type { ImPushLink, ImSessionRecord } from '../../../shared/types/im-channel'
 import { classifySessionSource, LOCAL_SESSION_CHANNEL } from '../../../shared/types/im-channel'
 import { truncateUtf16Safe } from './text-truncate'
 import { getPendingRelayStore } from './pending-relays'
@@ -56,6 +58,23 @@ const HTTP_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000 // 30 days
  * harmless. Structural changes persist promptly via the microtask path instead.
  */
 const SOFT_PERSIST_THROTTLE_MS = 5000
+
+/** The push link `appId` holds on another digital human's IM session, if any. */
+function pushLinkOf(session: ImSessionRecord, appId: string): ImPushLink | undefined {
+  if (session.source !== 'im' || session.appId === appId) return undefined
+  return session.pushLinks?.find(link => link.appId === appId)
+}
+
+/** Links as read from disk: well-formed, one per app, never the session's own. */
+function readPushLinks(value: unknown, ownAppId: string): ImPushLink[] {
+  if (!Array.isArray(value)) return []
+  const links = new Map<string, ImPushLink>()
+  for (const entry of value as Array<Partial<ImPushLink> | null>) {
+    if (typeof entry?.appId !== 'string' || !entry.appId || entry.appId === ownAppId) continue
+    links.set(entry.appId, { appId: entry.appId, autoSync: entry.autoSync === true })
+  }
+  return [...links.values()]
+}
 
 // ============================================
 // Registry Implementation
@@ -323,38 +342,91 @@ export class ImSessionRegistry {
   }
 
   /**
-   * Get all sessions with proactive=true for a given app.
+   * Get all sessions with proactive=true for a given app, and the sessions it
+   * is linked to with auto-sync on.
    *
    * Consumed by apps/runtime/im-auto-sync.ts at run completion to dispatch
    * the assistant's final text response, and by apps/runtime/prompt.ts when
    * building the AI's auto-sync awareness fragment.
    */
   getProactiveSessions(appId: string): ImSessionRecord[] {
-    const result: ImSessionRecord[] = []
-    for (const session of this.sessions.values()) {
-      // Only IM sessions have a channel adapter to push through.
-      if (session.appId === appId && session.proactive && session.source === 'im') {
-        result.push({ ...session })
-      }
-    }
-    return result
+    return this.pushTargets(appId, session => session.proactive, link => link.autoSync)
   }
 
   /**
-   * Get all pushable IM sessions for a given app (source==='im').
+   * Get all pushable IM sessions for a given app (source==='im'): its own and
+   * those it is linked to.
    *
    * Used to build the notify_bot contact directory: the AI can only push to
    * sessions backed by a live channel adapter. HTTP/API sessions are excluded
    * here so they never appear as push targets.
    */
   getPushableSessions(appId: string): ImSessionRecord[] {
+    const result = this.pushTargets(appId, () => true, () => true)
+    result.sort((a, b) => b.lastActiveAt - a.lastActiveAt)
+    return result
+  }
+
+  /**
+   * Another digital human's IM sessions this app is linked to, most recently
+   * active first. Each copy is the session as its own app holds it.
+   */
+  getLinkedSessions(appId: string): ImSessionRecord[] {
     const result: ImSessionRecord[] = []
     for (const session of this.sessions.values()) {
-      if (session.appId === appId && session.source === 'im') {
-        result.push({ ...session })
-      }
+      if (pushLinkOf(session, appId)) result.push({ ...session })
     }
     result.sort((a, b) => b.lastActiveAt - a.lastActiveAt)
+    return result
+  }
+
+  /**
+   * Add, update or (`link` null) remove `appId`'s push link on another digital
+   * human's IM session, named by that session's own keys.
+   *
+   * @returns false when there is no such session, it is not an IM session, or
+   *   it is `appId`'s own
+   */
+  setPushLink(
+    appId: string,
+    target: { appId: string; channel: string; chatId: string },
+    link: { autoSync: boolean } | null
+  ): boolean {
+    const session = this.sessions.get(this.buildKey(target.appId, target.channel, target.chatId))
+    if (!session || session.source !== 'im' || session.appId === appId) return false
+    const others = (session.pushLinks ?? []).filter(existing => existing.appId !== appId)
+    const next = link ? [...others, { appId, autoSync: link.autoSync }] : others
+    if (next.length > 0) session.pushLinks = next
+    else delete session.pushLinks
+    this.requestPersist(true)
+    return true
+  }
+
+  /**
+   * The IM sessions `appId` reaches: its own that pass `own`, then those it is
+   * linked to whose link passes `linked`. A bot chat it reaches both ways is
+   * listed once, as its own.
+   */
+  private pushTargets(
+    appId: string,
+    own: (session: ImSessionRecord) => boolean,
+    linked: (link: ImPushLink) => boolean
+  ): ImSessionRecord[] {
+    const result: ImSessionRecord[] = []
+    const routes = new Set<string>()
+    for (const session of this.sessions.values()) {
+      // Only IM sessions have a channel adapter to push through.
+      if (session.appId !== appId || session.source !== 'im') continue
+      routes.add(`${session.instanceId}:${session.chatId}`)
+      if (own(session)) result.push({ ...session })
+    }
+    for (const session of this.sessions.values()) {
+      const link = pushLinkOf(session, appId)
+      const route = `${session.instanceId}:${session.chatId}`
+      if (!link || !linked(link) || routes.has(route)) continue
+      routes.add(route)
+      result.push({ ...session })
+    }
     return result
   }
 
@@ -420,15 +492,22 @@ export class ImSessionRegistry {
    */
   removeAllForApp(appId: string): number {
     let count = 0
+    let unlinked = false
     for (const [key, session] of this.sessions) {
       if (session.appId === appId) {
         this.sessions.delete(key)
         getPendingRelayStore()?.clearForChat(session.appId, session.channel, session.chatId)
         getConversationReminders()?.removeForChat(session.appId, session.channel, session.chatId)
         count++
+      } else if (pushLinkOf(session, appId)) {
+        // Its links on other apps' sessions go with it.
+        const others = session.pushLinks!.filter(link => link.appId !== appId)
+        if (others.length > 0) session.pushLinks = others
+        else delete session.pushLinks
+        unlinked = true
       }
     }
-    if (count > 0) {
+    if (count > 0 || unlinked) {
       this.requestPersist(true)
     }
     return count
@@ -527,6 +606,11 @@ export class ImSessionRegistry {
         // all IM sessions; derive from the channel value for correctness.
         if (!r.source) {
           r.source = classifySessionSource(r.channel)
+        }
+        if (r.pushLinks !== undefined) {
+          const links = r.source === 'im' ? readPushLinks(r.pushLinks, r.appId) : []
+          if (links.length > 0) r.pushLinks = links
+          else delete r.pushLinks
         }
         const key = this.buildKey(r.appId, r.channel, r.chatId)
         this.sessions.set(key, r)
