@@ -104,6 +104,25 @@ function buildBlockedMessage(url: string): string {
   }
 }
 
+function schemeOf(url: string): string {
+  try {
+    return new URL(url).protocol
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * What a page may open in its own view: a web address from any page, a local
+ * file only from a local page — the rule browsers apply. A popup is loaded by
+ * the main process, which the renderer's own check never sees.
+ */
+export function popupTargetAllowed(target: string, opener: string): boolean {
+  const scheme = schemeOf(target)
+  if (scheme === 'http:' || scheme === 'https:' || target === 'about:blank') return true
+  return scheme === 'file:' && schemeOf(opener) === 'file:'
+}
+
 function wasNavigationCancelled(error: unknown): boolean {
   const failure = error as { code?: string; errno?: number }
   return failure?.code === 'ERR_ABORTED' || failure?.errno === -3
@@ -672,6 +691,10 @@ class BrowserPageManager {
     // Handle new window requests - open in same view (with policy check)
     wc.setWindowOpenHandler(({ url }) => {
       if (!isCurrent()) return { action: 'deny' }
+      if (!popupTargetAllowed(url, wc.getURL())) {
+        console.warn('[Browser] Popup to a local address refused', { viewId, scheme: schemeOf(url) })
+        return { action: 'deny' }
+      }
       if (isUrlAllowedByPolicy(url)) {
         void wc.loadURL(url).catch(error => {
           if (!isCurrent()) return

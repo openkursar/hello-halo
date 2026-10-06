@@ -15,6 +15,8 @@ class FakeGuest extends EventEmitter {
   loadURL = vi.fn().mockResolvedValue(undefined)
   reload = vi.fn()
   setWindowOpenHandler = vi.fn()
+  pageUrl = 'https://example.com'
+  getURL = () => this.pageUrl
   zoom = 1
   getZoomFactor = () => this.zoom
   setZoomFactor = vi.fn((value: number) => { this.zoom = value })
@@ -161,5 +163,53 @@ describe('browser manager and persistent carrier', () => {
     guests.get('page')!.emit('did-start-navigation', {}, 'https://example.com/allowed', false, true)
     expect(manager.getState('page')).toMatchObject({ blockedByPolicy: false, blockedUrl: undefined })
     expect(manager.isRevealed('page')).toBe(true)
+  })
+})
+
+describe('pages opening new windows', () => {
+  type OpenHandler = (details: { url: string }) => { action: string }
+
+  async function openHandlerOf(id: string, pageUrl: string): Promise<{ guest: FakeGuest; open: OpenHandler }> {
+    await manager.create(id, 'https://example.com')
+    const guest = guests.get(id)!
+    guest.pageUrl = pageUrl
+    guest.loadURL.mockClear()
+    return { guest, open: guest.setWindowOpenHandler.mock.calls[0][0] as OpenHandler }
+  }
+
+  it('lets a web page open web addresses in its own view', async () => {
+    const { guest, open } = await openHandlerOf('page', 'https://example.com')
+    expect(open({ url: 'https://example.org/next' })).toEqual({ action: 'deny' })
+    expect(guest.loadURL).toHaveBeenCalledWith('https://example.org/next')
+  })
+
+  it('never lets a web page open a local address', async () => {
+    const { guest, open } = await openHandlerOf('page', 'https://example.com')
+    for (const url of ['file:///etc/hosts', 'FILE:///etc/hosts', 'view-source:file:///etc/hosts', 'filesystem:file:///x', 'chrome://settings']) {
+      expect(open({ url })).toEqual({ action: 'deny' })
+    }
+    expect(guest.loadURL).not.toHaveBeenCalled()
+    expect(manager.getState('page')).not.toMatchObject({ blockedByPolicy: true })
+  })
+
+  it('lets a local page open another local file, as browsers do', async () => {
+    const { guest, open } = await openHandlerOf('page', 'file:///Users/me/report/index.html')
+    expect(open({ url: 'file:///Users/me/report/detail.html' })).toEqual({ action: 'deny' })
+    expect(guest.loadURL).toHaveBeenCalledWith('file:///Users/me/report/detail.html')
+  })
+})
+
+describe('popupTargetAllowed', () => {
+  it('follows the browser rule for what a page may open', async () => {
+    const { popupTargetAllowed } = await import('../../../src/main/services/browser-view.service')
+    expect(popupTargetAllowed('https://a.example', 'https://b.example')).toBe(true)
+    expect(popupTargetAllowed('http://a.example', 'file:///x.html')).toBe(true)
+    expect(popupTargetAllowed('about:blank', 'https://b.example')).toBe(true)
+    expect(popupTargetAllowed('file:///x', 'https://b.example')).toBe(false)
+    expect(popupTargetAllowed('file:///x', 'about:blank')).toBe(false)
+    expect(popupTargetAllowed('file:///y', 'file:///x.html')).toBe(true)
+    expect(popupTargetAllowed('view-source:file:///x', 'file:///x.html')).toBe(false)
+    expect(popupTargetAllowed('javascript:alert(1)', 'https://b.example')).toBe(false)
+    expect(popupTargetAllowed('not a url', 'https://b.example')).toBe(false)
   })
 })
