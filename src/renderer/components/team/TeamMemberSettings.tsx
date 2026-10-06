@@ -398,7 +398,7 @@ function DelegatedCapabilities({ teamId, member }: { teamId: string; member: Tea
       {open && (
         <div className="space-y-3 border-t border-border px-3 py-3">
           <p className="text-xs text-muted-foreground/70">
-            {t('The tools it has in hand when anyone else puts it to work — a teammate’s digital human, or a person on another machine. Talking to it yourself is unaffected.')}
+            {t('The tools it has in hand when anyone else puts it to work — a teammate’s digital human, a person on another machine, or a guest in an IM chat your team answers whose request reaches it. Talking to it yourself is unaffected.')}
           </p>
           <CapabilityPolicyFields
             policy={policy}

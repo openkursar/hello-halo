@@ -820,6 +820,7 @@ async function runAppChatTurn(
             forwardDepth: teamContext.forwardDepth,
             // Same reasoning, different property of the chain: where it started.
             ...(externalOrigin ? { external: true } : {}),
+            ...(permCtx?.isOwner === false ? { servesGuest: true } : {}),
             // Lead-only team_complete → deferred seal after the lead's turn ends.
             requestComplete: (summary) =>
               getActiveTeamRuntime()!.requestSeal(teamContext.teamId, teamContext.epochId, summary),
@@ -1238,6 +1239,7 @@ async function runAppChatTurn(
             : { kind: 'ended' },
           ...(teamContext?.correlationId ? { correlationId: teamContext.correlationId } : {}),
           triggerKind: teamContext?.kind ?? 'human_message',
+          ...(externalOrigin ? { external: true } : {}),
           ...(teamContext?.kind && teamContext.kind !== 'human_message' ? {
             requestSummary: message.replace(/^\[[^\]\n]+\]\s*/, ''),
             requestFromAppId: teamContext.fromAppId,

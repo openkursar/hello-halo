@@ -41,6 +41,7 @@ import type {
 import type { TeamPromptContext } from './team-prompt'
 import type { TeamFolders } from './team-folder'
 import type { NoteTurnEndedInput } from './turn-report'
+import { peekTurnOrigin } from './external-origin'
 
 const LOG_TAG = '[TeamOrch]'
 
@@ -573,6 +574,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
         triggerKind: trigger.kind ?? 'human_message',
         requestSummary: envelope.body,
         requestFromAppId: envelope.fromAppId,
+        external: peekTurnOrigin(sessionKey, trigger),
       })
       settleDecision(trigger.correlationId, { kind: 'error', message: 'Member has no space' })
       bus.completeTurn({ sessionKey, trigger, outcome: { kind: 'error', message: 'Member has no space' } })
@@ -634,6 +636,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
               triggerKind: trigger.kind ?? 'human_message',
               requestSummary: envelope.body,
               requestFromAppId: envelope.fromAppId,
+              external: peekTurnOrigin(sessionKey, trigger),
             })
             // Actually tear down the still-running turn instead of merely
             // abandoning the promise — otherwise the member's session stays
@@ -690,6 +693,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
               triggerKind: trigger.kind ?? 'human_message',
               requestSummary: envelope.body,
               requestFromAppId: envelope.fromAppId,
+              external: peekTurnOrigin(sessionKey, trigger),
             })
           }
           const pending = pendingSeals.get(epochId)

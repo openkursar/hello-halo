@@ -83,9 +83,10 @@ vi.mock('../../../../src/main/apps/runtime/app-chat-sink', () => ({
   disposeAppChatSink: vi.fn(),
 }))
 
-const { getDelegatedPolicy, createTeamMcpServer } = vi.hoisted(() => ({
+const { getDelegatedPolicy, createTeamMcpServer, noteMemberTurnEnded } = vi.hoisted(() => ({
   getDelegatedPolicy: vi.fn((): unknown => undefined),
   createTeamMcpServer: vi.fn((_context: Record<string, unknown>) => ({ _isMcpServer: true, name: 'halo-team' })),
+  noteMemberTurnEnded: vi.fn((_input: Record<string, unknown>) => {}),
 }))
 vi.mock('../../../../src/main/apps/runtime/team', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -106,7 +107,7 @@ vi.mock('../../../../src/main/apps/runtime/team', async (importOriginal) => ({
     noteEpochTurn: () => true,
     noteMemberStatusChanged: () => {},
     noteMemberTurnStarted: () => {},
-    noteMemberTurnEnded: () => {},
+    noteMemberTurnEnded,
     reconcileAwaitingDecision: () => {},
     recordToolAudit: () => {},
     maybeAutoNameConversation: () => {},
@@ -295,7 +296,11 @@ import { setImPermissionContext, clearAllImPermissionContexts } from '../../../.
 import type { ImPermissionContext } from '../../../../src/main/apps/runtime/im-permission-registry'
 import { decideDelegatedTool } from '../../../../src/main/apps/runtime/delegation-gate'
 import { hostSystemPromptText } from '../../../../src/main/services/agent/system-prompt'
+import { createTurnReport } from '../../../../src/main/apps/runtime/team/turn-report'
+import type { MessageBus } from '../../../../src/main/apps/runtime/team/message-bus'
+import type { TeamStore } from '../../../../src/main/apps/team'
 import { buildTeamSessionKey } from '../../../../src/shared/apps/team-types'
+import type { TeamEnvelope, TeamTriggerContext } from '../../../../src/shared/apps/team-types'
 
 // ============================================
 // Helpers
@@ -349,6 +354,40 @@ function ownTurn(chat: ReturnType<typeof teamChat>): AppChatRequest {
   }
 }
 
+/**
+ * The notice a teammate's ending sends the lead fronting the chat, exactly as
+ * the turn-end report delivers it: the teammate ran a check the guest's work
+ * left behind, with the origin that turn ran under.
+ */
+async function turnEndNotice(chat: ReturnType<typeof teamChat>, external: boolean): Promise<AppChatRequest> {
+  const delivered: Array<{ envelope: TeamEnvelope; trigger: TeamTriggerContext }> = []
+  const report = createTurnReport({
+    store: {
+      getTeamById: () => ({ id: TEAM_ID, leadAppId: app.id, collabMode: 'free' }),
+      getEpochById: () => ({ id: chat.epochId, endedAt: null }),
+      getMember: (_teamId: string, appId: string) => ({ appId, memberName: appId === app.id ? 'desk' : 'researcher' }),
+      getTaskById: () => null,
+    } as unknown as TeamStore,
+    bus: {
+      deliverRuntimeWake: vi.fn(async (params: { envelope: TeamEnvelope; trigger: TeamTriggerContext }) => {
+        delivered.push(params)
+        return 'dispatched'
+      }),
+      tripExternal: vi.fn(),
+    } as unknown as MessageBus,
+    isLeadGenerating: () => false,
+  })
+  report.noteTurnEnded({
+    appId: 'app-researcher', teamId: TEAM_ID, epochId: chat.epochId, fate: { kind: 'ended' },
+    triggerKind: 'periodic_check', ...(external ? { external: true } : {}),
+  })
+  await vi.waitFor(() => expect(delivered).toHaveLength(1))
+  return {
+    appId: app.id, spaceId: 'space-1', message: delivered[0].envelope.body, conversationId: chat.conversationId,
+    imSession: IM_GROUP, teamContext: delivered[0].trigger,
+  }
+}
+
 /** A digital human's own IM chat — the rules a team-fronted chat must match. */
 function plainImTurn(chatId: string): AppChatRequest {
   return {
@@ -378,6 +417,7 @@ function teamToolsExternal(): boolean {
 beforeEach(() => {
   buildUserSessionSdkOptions.mockClear()
   createTeamMcpServer.mockClear()
+  noteMemberTurnEnded.mockClear()
   getDelegatedPolicy.mockReturnValue(undefined)
 })
 
@@ -511,5 +551,73 @@ describe('work a guest set in motion stays restricted when it comes back', () =>
 
     expect(lastOptions().disallowedTools).toBeUndefined()
     expect(runsCommands(chat.conversationId)).toBe(true)
+  })
+})
+
+describe('the turn-end notice of work a guest set in motion', () => {
+  it('after a restart has forgotten the chat, it wakes the front desk restricted', async () => {
+    // A fresh conversation stands for a restart: no sender on record, no remembered origin.
+    const chat = teamChat()
+    await sendAppChatMessage(await turnEndNotice(chat, true))
+
+    expect(runsCommands(chat.conversationId)).toBe(false)
+  })
+
+  it('after an owner spoke last in the chat, it still wakes the front desk restricted', async () => {
+    const chat = teamChat()
+    setImPermissionContext(chat.conversationId, guest)
+    await sendAppChatMessage(imTurn(chat, true))
+    setImPermissionContext(chat.conversationId, listedOwner)
+    await sendAppChatMessage(imTurn(chat))
+    expect(runsCommands(chat.conversationId)).toBe(true)
+
+    await sendAppChatMessage(await turnEndNotice(chat, true))
+
+    expect(runsCommands(chat.conversationId)).toBe(false)
+  })
+
+  it('a notice about work started here leaves the front desk as it was', async () => {
+    const chat = teamChat()
+    setImPermissionContext(chat.conversationId, listedOwner)
+    await sendAppChatMessage(await turnEndNotice(chat, false))
+
+    expect(runsCommands(chat.conversationId)).toBe(true)
+  })
+})
+
+describe('a member reports its own ending with the origin it ran under', () => {
+  it('a guest turn and a teammate turn on outside work end as outside work', async () => {
+    const chat = teamChat()
+    setImPermissionContext(chat.conversationId, guest)
+    await sendAppChatMessage(imTurn(chat, true))
+    expect(noteMemberTurnEnded).toHaveBeenLastCalledWith(expect.objectContaining({ external: true }))
+
+    const teammate = teamChat()
+    await sendAppChatMessage({
+      appId: app.id, spaceId: 'space-1', message: '[Team message from lead] go', conversationId: teammate.conversationId,
+      teamContext: trigger(teammate.epochId, { kind: 'message', fromAppId: 'app-lead', external: true }),
+    })
+    expect(noteMemberTurnEnded).toHaveBeenLastCalledWith(expect.objectContaining({ external: true }))
+  })
+
+  it('an owner turn ends with no outside origin', async () => {
+    const chat = teamChat()
+    setImPermissionContext(chat.conversationId, listedOwner)
+    await sendAppChatMessage(imTurn(chat))
+
+    expect(noteMemberTurnEnded.mock.calls.at(-1)![0]).not.toHaveProperty('external')
+  })
+})
+
+describe('a guest is not handed standing instructions', () => {
+  it('a guest turn gets no periodic-check tools; an owner turn in the same chat does', async () => {
+    const chat = teamChat()
+    setImPermissionContext(chat.conversationId, guest)
+    await sendAppChatMessage(imTurn(chat, true))
+    expect(createTeamMcpServer.mock.calls.at(-1)![0].servesGuest).toBe(true)
+
+    setImPermissionContext(chat.conversationId, listedOwner)
+    await sendAppChatMessage(imTurn(chat))
+    expect(createTeamMcpServer.mock.calls.at(-1)![0]).not.toHaveProperty('servesGuest')
   })
 })

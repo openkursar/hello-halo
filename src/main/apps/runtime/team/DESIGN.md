@@ -128,6 +128,10 @@ The coupling is inverted through `TeamDeliveryHooks` (see "Integration seam").
   or reassigned. Reports coalesce while the lead is busy. Its next ending, even a
   human conversation ending, releases existing collaboration notices. Completed
   tasks are checked both before flush and before buffered/in-flight-gated delivery.
+  An ending carries the origin of the turn it describes (`external`, resolved
+  the way the turn itself resolved it), and a notice that reports any outside
+  ending wakes the lead as outside work — the lead reads that work's outcome, so
+  the notice is one more hop the origin travels, like a `team_send`.
 - `checks.ts` — periodic checks: one member's standing instruction for another
   ("from now on, every half hour, look at this"). Two rules shape it: the alarm
   is armed only on the machine that OWNS the target (so the setter can shut their
@@ -1000,8 +1004,12 @@ team session key. From there it is the one guest path, not a second one:
 `applyCapabilityPolicy`, the per-call gate and the turn's file boundary, and the
 prompt carries the same IM security rules. The team's own coordination servers
 stay mounted for a guest (they are how the member reaches its team, not a
-capability lent to the caller); what decides how far a guest's request may go
-from there is its origin.
+capability lent to the caller), with one exception: a guest is not handed
+`team_schedule` / `team_unschedule` (`TeamMcpContext.servesGuest`). A periodic
+check is a standing instruction that keeps spending the owner's model allowance
+long after the guest has gone, and a guest of a digital human's own chat has no
+such tool either. What decides how far a guest's request may go from there is
+its origin.
 
 - **A guest's message is stamped `external`.** The IM channel is where it
   crosses into this node, and nobody here vouched for the sender — the same
@@ -1009,17 +1017,24 @@ from there is its origin.
   another machine. Without it the restriction would end at the front desk:
   asking it to have a teammate do the work would hand the request to a member
   running with the owner's own reach. With it, `team_send` carries the origin, a
-  teammate reads its delegated policy strictly, and the thread stays external
-  across wakes (`external-origin.ts`) until an owner's own message ends it.
+  teammate reads its delegated policy strictly — the same policy that holds a
+  teammate from another machine; the channel's guest policy bounds only the
+  front desk — and the thread stays external across wakes (`external-origin.ts`)
+  until an owner's own message ends it.
 - **A turn woken in the chat keeps the standing of whoever started the work.**
   While the permission context still names a guest it runs under that guest's
   policy — the same tool set as the guest's own turn, so the session is not
-  rebuilt between them. When the context cannot say (a restart cleared it) or an
-  owner spoke last, a woken turn continuing external work is borrowed
-  (`isBorrowedTeamTurn`) and held strictly to the member's delegated policy: who
-  spoke last in the chat says nothing about who set the work in motion. A turn
-  woken by work started here is unchanged. So is the person's own message, which
-  only the channel's rules decide.
+  rebuilt between them. Otherwise what the wake itself carries decides. Every
+  wake that continues outside work carries its origin: a teammate's
+  `team_send`, a check set during that work, an answered question (persisted
+  with the escalation), and the turn-end notice a teammate's ending sends the
+  lead (`turn-report`, external when any ending it reports was). Such a wake is
+  borrowed (`isBorrowedTeamTurn`) and held strictly to the member's delegated
+  policy even when the chat can no longer name the sender (the permission
+  context and the remembered origins live in memory, so a restart clears them)
+  or an owner spoke last: who spoke last in the chat says nothing about who set
+  the work in motion. A turn woken by work started here is unchanged. So is the
+  person's own message, which only the channel's rules decide.
 - **The session is shared with the owner's own Halo window.** Only turns framed
   for the chat (`imSession`) read the IM permission context; the owner typing
   into the same session from Halo is never taken for the chat's last guest, and,
@@ -1159,9 +1174,12 @@ Two facts about a member are per-TEAM and owner-authored, and they live on the
   `kind`, a path no office credential can reach (`http/auth/route-scope`). The
   person in an IM chat a member fronts is held to that chat's owner/guest rules
   instead; a turn woken there to continue work from outside is borrowed (see
-  "Team as an IM backend"). The team's own coordination servers (`halo-team`,
-  `halo-report`) are never withheld — they are the channel the turn arrived on,
-  not a capability lent.
+  "Team as an IM backend"). The policy therefore also bounds what a guest of such
+  a chat can reach through a teammate: the guest's request travels as outside
+  work, and the teammate it reaches answers to its own delegated policy, read
+  strictly — the settings screen says so. The team's own coordination servers
+  (`halo-team`, `halo-report`) are never withheld — they are the channel the
+  turn arrived on, not a capability lent.
 
 ### How strictly a borrowed turn reads silence
 
@@ -1190,8 +1208,10 @@ From there it travels two ways, and both were necessary:
 
 - **across hops** — `team_send` stamps it onto the messages the turn sends
   (`TeamMcpContext.external` → `SendInput.external` → the next trigger), exactly
-  as `forwardDepth` travels. Without it, routing a stranger's request through
-  one of the owner's own members launders it into a local one.
+  as `forwardDepth` travels; a check set in such a turn keeps it, and so does
+  the turn-end notice that reports such a turn to the lead (`turn-report`).
+  Without it, routing a stranger's request through one of the owner's own
+  members launders it into a local one.
 - **across wakes** — `team/external-origin.ts` keeps it per team session until a
   person types into that session HERE as the owner (at Halo, or in an IM chat
   whose rules count them as one). A runtime wake is authored on this

@@ -35,6 +35,7 @@ import { createMessageBus } from '../../../../../src/main/apps/runtime/team/mess
 import type { MessageBus, TurnCompletion } from '../../../../../src/main/apps/runtime/team/message-bus'
 import { createOrchestration } from '../../../../../src/main/apps/runtime/team/orchestration'
 import type { OrchestrationSessionDeps } from '../../../../../src/main/apps/runtime/team/orchestration'
+import type { NoteTurnEndedInput } from '../../../../../src/main/apps/runtime/team/turn-report'
 import { buildTeamEntry } from '../../../../../src/main/apps/runtime/team/team-prompt'
 import { buildTeamSessionKey } from '../../../../../src/shared/apps/team-types'
 import type { Team, TeamMember, TeamEpoch, TeamEdge } from '../../../../../src/main/apps/team/types'
@@ -186,7 +187,8 @@ describe('TeamOrchestration', () => {
     session: OrchestrationSessionDeps,
     turnTimeoutMs?: number,
     maxConcurrentTurns?: number,
-    renderDigest?: (teamId: string, epochId: string, viewerAppId: string) => string | null
+    renderDigest?: (teamId: string, epochId: string, viewerAppId: string) => string | null,
+    noteTurnEnded?: (input: NoteTurnEndedInput) => void
   ) {
     bus = createMessageBus({
       store,
@@ -200,6 +202,7 @@ describe('TeamOrchestration', () => {
       store, bus, session, turnTimeoutMs, maxConcurrentTurns,
       hasPendingEscalation: () => false,
       ...(renderDigest ? { renderDigest } : {}),
+      ...(noteTurnEnded ? { noteTurnEnded } : {}),
     })
     return orchestration
   }
@@ -1117,6 +1120,27 @@ describe('TeamOrchestration', () => {
 
         const outcome = lastOutcome(completeTurn, buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, epoch.id))
         expect(outcome?.kind).toBe('timeout')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it.each([true, false])('a turn cut off at the time limit is reported with its origin (external=%s)', async (external) => {
+      vi.useFakeTimers()
+      try {
+        seedTeam(store, { collabMode: 'free' })
+        const epoch = makeEpoch(store)
+        const { deps } = makeSession()
+        const noteTurnEnded = vi.fn()
+        build(deps, 1000, undefined, undefined, noteTurnEnded)
+
+        await bus.send({
+          teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, to: 'researcher', message: 'go', wait: false,
+          ...(external ? { external: true } : {}),
+        })
+        await vi.advanceTimersByTimeAsync(1001)
+
+        expect(noteTurnEnded).toHaveBeenCalledWith(expect.objectContaining({ fate: { kind: 'timeout' }, external }))
       } finally {
         vi.useRealTimers()
       }
