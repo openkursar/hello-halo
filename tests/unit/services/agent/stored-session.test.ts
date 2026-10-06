@@ -1,5 +1,5 @@
 /**
- * Deleting what a CC-protocol engine stored for one session: its transcript and
+ * Deleting what the default engine stored for one session: its transcript and
  * its side folder, in the project folder named after the working directory —
  * and nothing else.
  */
