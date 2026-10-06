@@ -20,13 +20,6 @@ import type { ArtifactChangeBatchEvent, FileQueryResult, ResolvedArtifactPath } 
 // delivered to the same subscribers as those from main.
 const localChangedBatchListeners = new Set<(data: ArtifactChangeBatchEvent) => void>()
 
-// On the Halo server's own address: the mobile app's page is local to the
-// phone, and a reverse proxy may serve Halo under a path prefix.
-function artifactDownloadUrl(filePath: string): string {
-  const token = getAuthToken()
-  return `${getRemoteServerUrl()}/api/artifacts/download?path=${encodeURIComponent(filePath)}&token=${encodeURIComponent(token || '')}`
-}
-
 export const artifactApi = {
   // ===== Artifact =====
   listArtifacts: async (spaceId: string, maxDepth: number = 2): Promise<ApiResponse> => {
@@ -135,19 +128,27 @@ export const artifactApi = {
     return { success: false, error: 'Cannot open folder in remote mode' }
   },
 
-  // Download artifact (remote mode only - triggers browser download)
-  downloadArtifact: (filePath: string): void => {
+  // Download artifact: the desktop opens the file; elsewhere the browser or the
+  // phone saves it from a link that carries a short-lived ticket, never the token.
+  downloadArtifact: async (filePath: string): Promise<ApiResponse> => {
     if (isElectron()) {
-      // In Electron, just open the file
-      window.halo.openArtifact(filePath)
-      return
+      void window.halo.openArtifact(filePath)
+      return { success: true }
     }
-    const url = artifactDownloadUrl(filePath)
+    // Asked for first, so a missing file is reported here instead of a link
+    // opening onto an error page.
+    const issued = await httpRequest<{ ticket: string }>('POST', '/api/artifacts/download-ticket', { path: filePath })
+    if (!issued.success || !issued.data?.ticket) {
+      return { success: false, error: issued.error || 'Download failed' }
+    }
+    // On the Halo server's own address: the mobile app's page is local to the
+    // phone, and a reverse proxy may serve Halo under a path prefix.
+    const url = `${getRemoteServerUrl()}/api/artifacts/file/${encodeURIComponent(issued.data.ticket)}`
     if (isCapacitor()) {
       // The app's web view cannot save files: the native shell hands the link
       // to the system (Android's download listener, the system browser on iOS).
       window.open(url, '_blank')
-      return
+      return { success: true }
     }
     const link = document.createElement('a')
     link.href = url
@@ -155,10 +156,15 @@ export const artifactApi = {
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
+    return { success: true }
   },
 
-  // Get download URL for an artifact (for use with fetch or direct links)
-  getArtifactDownloadUrl: (filePath: string): string => artifactDownloadUrl(filePath),
+  // For this page's own use only (the image viewer's source): it carries the
+  // access token, so it is never handed to another app or saved as a download.
+  getArtifactDownloadUrl: (filePath: string): string => {
+    const token = getAuthToken()
+    return `${getRemoteServerUrl()}/api/artifacts/download?path=${encodeURIComponent(filePath)}&token=${encodeURIComponent(token || '')}`
+  },
 
   // Read artifact content for Content Canvas
   readArtifactContent: async (filePath: string): Promise<ApiResponse> => {

@@ -3,13 +3,16 @@
  * carries an ASCII stand-in and the exact UTF-8 name (RFC 6266), which desktop
  * and mobile browsers save under. A bare percent-encoded `filename` was saved
  * literally by every browser that does not guess at decoding it.
+ *
+ * Links handed to a browser carry a ticket for one file instead of the token:
+ * the ticket link serves exactly that file until the ticket expires.
  */
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import express from 'express'
 import type { AddressInfo } from 'net'
 import type { Server } from 'http'
-import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -58,6 +61,7 @@ let base: string
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), 'artifact-download-'))
   const app = express()
+  app.use(express.json())
   registerArtifactRoutes(app)
   server = await new Promise<Server>((resolve) => {
     const s = app.listen(0, () => resolve(s))
@@ -96,5 +100,50 @@ describe('GET /api/artifacts/download', () => {
     expect(response.headers.get('content-disposition')).toBe(
       `attachment; filename="r_sum_ (1)'s.pdf"; filename*=UTF-8''r%C3%A9sum%C3%A9%20%281%29%27s.pdf`,
     )
+  })
+})
+
+async function issue(path: string): Promise<{ status: number; ticket?: string; error?: string }> {
+  const response = await fetch(`${base}/api/artifacts/download-ticket`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  })
+  const body = await response.json() as { data?: { ticket: string }; error?: string }
+  return { status: response.status, ticket: body.data?.ticket, error: body.error }
+}
+
+describe('ticket download links', () => {
+  it('serve the one file a ticket was issued for, under its exact name, until it expires', async () => {
+    const report = join(dir, '季度报告.docx')
+    const notes = join(dir, 'notes.txt')
+    writeFileSync(report, 'report-bytes')
+    writeFileSync(notes, 'notes-bytes')
+    const reportTicket = (await issue(report)).ticket!
+    const notesTicket = (await issue(notes)).ticket!
+
+    const first = await fetch(`${base}/api/artifacts/file/${reportTicket}`)
+    expect(first.status).toBe(200)
+    expect(first.headers.get('content-disposition')).toBe(
+      `attachment; filename="____.docx"; filename*=UTF-8''%E5%AD%A3%E5%BA%A6%E6%8A%A5%E5%91%8A.docx`,
+    )
+    expect(await first.text()).toBe('report-bytes')
+    // The app's web view fetches the link first, then the system browser fetches it again.
+    expect(await (await fetch(`${base}/api/artifacts/file/${reportTicket}`)).text()).toBe('report-bytes')
+    expect(await (await fetch(`${base}/api/artifacts/file/${notesTicket}`)).text()).toBe('notes-bytes')
+
+    const later = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 121_000)
+    try {
+      expect((await fetch(`${base}/api/artifacts/file/${reportTicket}`)).status).toBe(401)
+    } finally {
+      later.mockRestore()
+    }
+  })
+
+  it('refuse an unknown ticket, and issue none for a missing file or a folder', async () => {
+    expect((await fetch(`${base}/api/artifacts/file/${'x'.repeat(43)}`)).status).toBe(401)
+    expect(await issue(join(dir, 'gone.txt'))).toMatchObject({ status: 404, ticket: undefined })
+    mkdirSync(join(dir, 'folder'))
+    expect(await issue(join(dir, 'folder'))).toMatchObject({ status: 404, ticket: undefined })
   })
 })

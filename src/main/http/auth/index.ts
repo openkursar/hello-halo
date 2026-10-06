@@ -12,6 +12,8 @@
  *   audit            — JSONL audit log
  *   alert            — desktop notification on lockout
  *   middleware       — express auth gate + login handler
+ *   download-ticket  — two-minute single-file tickets that download links
+ *                      carry instead of the token
  */
 
 export {

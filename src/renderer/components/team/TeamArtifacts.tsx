@@ -10,6 +10,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../../api'
+import { downloadArtifact } from '../../services/artifact-download'
 import { useTranslation } from '../../i18n'
 import { useNotificationStore } from '../../stores/notification.store'
 import type { TeamArtifactOpenFailure } from '../../../shared/apps/team-types'
@@ -151,7 +152,7 @@ export function useTeamArtifacts(
     // Remote mode has no local application to open into, and the returned path
     // would name the server's disk — download the bytes instead.
     if (api.isRemoteMode()) {
-      void api.downloadArtifact(entry.path)
+      void downloadArtifact(entry.path)
       return
     }
     try {

@@ -95,6 +95,10 @@ param) except two public ones: `POST /api/remote/login` (validates a submitted t
 bearer token, `src/main/http/auth/middleware.ts:109-143`) and
 `GET /api/remote/status` (liveness probe) — both in `src/main/http/server.ts:194,197-206`.
 `GET /api/security/policy` is also public (renderer-safe policy slice).
+Artifact download links skip the token on purpose: `POST /api/artifacts/download-ticket` (bearer
+required) returns a ticket bound to one file for two minutes, and `GET /api/artifacts/file/:ticket`
+serves that file to whoever holds it, so a link handed to a phone's browser never carries the
+token (`src/main/http/auth/download-ticket.ts`).
 
 Route groups (each in its own file under `src/main/http/routes/`), roughly in the order a client
 would use them:

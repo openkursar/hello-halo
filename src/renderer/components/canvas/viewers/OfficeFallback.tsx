@@ -6,6 +6,7 @@
 
 import { FileWarning, ExternalLink, Download } from 'lucide-react'
 import { api } from '../../../api'
+import { downloadArtifact } from '../../../services/artifact-download'
 import type { CanvasTab } from '../../../stores/canvas.store'
 import { useTranslation } from '../../../i18n'
 
@@ -48,7 +49,7 @@ export function OfficeFallback({ tab, title, detail }: OfficeFallbackProps) {
               </button>
             )}
             <button
-              onClick={() => api.downloadArtifact(tab.path!)}
+              onClick={() => void downloadArtifact(tab.path!)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border text-sm text-foreground hover:bg-secondary transition-colors"
             >
               <Download className="w-4 h-4" />
