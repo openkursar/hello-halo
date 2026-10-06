@@ -41,6 +41,8 @@ const TEXT_TYPES = new Set(['text/plain', 'text/html', 'message/delivery-status'
 /** Base64 bodies are wrapped at 76 characters plus CRLF. */
 const BASE64_LINE_OCTETS = 78
 
+const SIZE_UNITS = ['B', 'KB', 'MB', 'GB']
+
 export function planMessageParts(structure: BodyStructureNode | undefined): MessagePartPlan | null {
   // A single-part message has no attachment to leave behind.
   if (!structure?.childNodes?.length) return null
@@ -97,4 +99,15 @@ export function decodedSize(node: Pick<BodyStructureNode, 'encoding' | 'size'>):
   if (node.encoding !== 'base64') return size
   const lineBreakOctets = Math.ceil(size / BASE64_LINE_OCTETS) * 2
   return Math.max(0, Math.floor((size - lineBreakOctets) * 3 / 4))
+}
+
+/** A size the reader must not take as exact, e.g. "~1.2 MB (estimated)". */
+export function approximateSizeLabel(bytes: number): string {
+  let value = bytes
+  let unit = 0
+  while (unit < SIZE_UNITS.length - 1 && Number(value.toFixed(1)) >= 1024) {
+    value /= 1024
+    unit++
+  }
+  return `~${Number(value.toFixed(unit === 0 ? 0 : 1))} ${SIZE_UNITS[unit]} (estimated)`
 }
