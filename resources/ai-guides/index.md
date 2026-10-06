@@ -35,6 +35,8 @@ Two rules hold across every guide here:
 | Reading or sending mail, calendar, or "email isn't working" | `email-setup/index.md` |
 | Installing or writing a skill or MCP server; "why isn't my tool showing up?" | `skills-and-mcp/index.md` |
 | Browser automation; staying logged in to a site; writing a `browser_run` script | `ai-browser/index.md` |
+| Knowledge bases (知识库): which files work, why a file is not learned, making the AI or a digital human use one, watched folders | `knowledge-base/index.md` |
+| The AI Terminal (AI 终端): turning it on, logging in over SSH and handing over, terminals that keep running | `ai-terminal/index.md` |
 | Controlling Halo from a phone or another machine; the HTTP API; internet access | `remote-access/index.md` |
 | Installing Halo; first launch; updates; "where is my config / log file?" | `getting-started/index.md` |
 
@@ -55,6 +57,8 @@ document opens with a table of its companion documents; read the entry first and
 | `email-setup/index.md` | The single global email credential and its two consumers — the mailbox/calendar tools and the one-way notification channel — plus what the Test button does and does not check. |
 | `skills-and-mcp/index.md` | Skills and MCP servers: how each is installed, how global vs. space scope resolves, and why skills are ambient within a scope while MCP access is declared per automation. |
 | `ai-browser/index.md` | Halo's built-in browser: session and login reuse, when to use it instead of fetching, and its interaction model. Companion: `ai-browser/scripting.md` for writing production `browser_run` scripts. |
+| `knowledge-base/index.md` | Knowledge bases: accepted files, local text extraction, which conversations and digital humans use a base, citations, and watched-folder limits. |
+| `ai-terminal/index.md` | The AI Terminal: persistent terminal sessions shared with the user, turning it on, the SSH hand-over pattern, tab-close behaviour, and platform support. |
 | `remote-access/index.md` | The HTTP/WebSocket API, its single shared credential, the optional tunnel, and the security properties the user must understand before enabling it. |
 
 This index is published alongside the guides and updated whenever one is added, so it — not any
