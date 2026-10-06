@@ -1595,6 +1595,7 @@ class WecomBotInstance implements ImChannelInstance {
     const f = fragment as {
       msgtype?: string
       text?: { content?: string }
+      voice?: { content?: string }
       file?: { filename?: string }
       link?: { title?: string; url?: string }
       mixed?: { msg_item?: Array<{ msgtype?: string; text?: { content?: string } }> }
@@ -1604,8 +1605,11 @@ class WecomBotInstance implements ImChannelInstance {
         return (f.text as TextMessage['text'] | undefined)?.content ?? ''
       case 'image':
         return '(image)'
-      case 'voice':
-        return '(voice message)'
+      case 'voice': {
+        // WeCom sends its own transcript of what was said.
+        const spoken = f.voice?.content?.trim()
+        return spoken ? `(voice transcript) ${spoken}` : '(voice message)'
+      }
       case 'file':
         return `(file: ${f.file?.filename ?? 'unknown'})`
       case 'video':

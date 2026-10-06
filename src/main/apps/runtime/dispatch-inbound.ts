@@ -43,6 +43,7 @@ import { setImStreamHandle } from './im-stream-registry'
 import { analytics } from '../../services/analytics/analytics.service'
 import { AnalyticsEvents } from '../../services/analytics/types'
 import { truncateUtf16Safe } from './text-truncate'
+import { AppChatTurnInterrupted, withTurnEndingNote, type AppChatTurnEnding } from './turn-ending'
 import { getSpace, getSpaceDir } from '../../services/space.service'
 import {
   getPendingRelayStore,
@@ -91,34 +92,32 @@ const SUPPLEMENT_PREVIEW_MAX = 20
 /** Beyond this count the ack switches to "last 3 + more" truncated form. */
 const SUPPLEMENT_ACK_TRUNCATE_THRESHOLD = 5
 
-/** Check whether a message is a stop command (case-insensitive, trimmed). */
-function isStopCommand(body: string): boolean {
-  return STOP_COMMANDS.has(body.trim().toLowerCase())
+/**
+ * Whether a message is one of `commands` (case-insensitive, trimmed).
+ *
+ * A group delivers the bot only messages that mention it, so a command there
+ * arrives as "@Halo AI Team /stop" — and where a bot name ends cannot be told
+ * from the text, since it may contain spaces. So in a group a command also
+ * counts when it ends a message that starts with a mention. The mentions are
+ * never stripped from the text itself: who else a message addresses is part
+ * of what the digital human should read.
+ */
+function isCommand(body: string, chatType: 'direct' | 'group', commands: Set<string>): boolean {
+  const text = body.trim().toLowerCase()
+  if (commands.has(text)) return true
+  if (chatType !== 'group' || !text.startsWith('@')) return false
+  const last = text.split(/\s+/).pop() ?? ''
+  return last.length < text.length && commands.has(last)
 }
 
-/** Check whether a message is a clear-context command (case-insensitive, trimmed). */
-function isClearCommand(body: string): boolean {
-  return CLEAR_COMMANDS.has(body.trim().toLowerCase())
+/** Check whether a message is a stop command. */
+function isStopCommand(body: string, chatType: 'direct' | 'group'): boolean {
+  return isCommand(body, chatType, STOP_COMMANDS)
 }
 
-/**
- * Leading @mention(s) in group bodies. WeCom (and similar IM platforms) deliver
- * a group message to the bot only when the bot is mentioned, so any leading
- * mention necessarily targets this bot — no identity matching needed. Mentions
- * elsewhere in the body are kept: they can point at other members and carry
- * semantic meaning for the model.
- */
-const LEADING_GROUP_MENTION = /^(?:@\S+\s+)+/
-
-/**
- * Strip leading @mention prefix from group bodies. Direct chats pass through
- * unchanged (mention prefixes never occur there). Applied once here, before
- * every downstream consumer (session preview, commands, identity injection,
- * relay quote), so command matching survives "@bot /stop".
- */
-function normalizeInboundBody(body: string, chatType: 'direct' | 'group'): string {
-  if (chatType !== 'group') return body
-  return body.replace(LEADING_GROUP_MENTION, '')
+/** Check whether a message is a clear-context command. */
+function isClearCommand(body: string, chatType: 'direct' | 'group'): boolean {
+  return isCommand(body, chatType, CLEAR_COMMANDS)
 }
 
 /**
@@ -711,11 +710,6 @@ export async function dispatchInboundMessage(
     ? buildTeamSessionKey(app.id, teamBacking.teamId, teamBacking.epochId)
     : buildImSessionKey(app.id, msg.channel, msg.chatType, msg.chatId)
 
-  // Normalize the body once at the single funnel every channel passes through.
-  // Pre-built paths (supplement flush) short-circuit identity injection below
-  // but still rely on the body for commands and previews.
-  msg.body = normalizeInboundBody(msg.body, msg.chatType)
-
   // Register session in ImSessionRegistry (idempotent — updates lastActiveAt on repeat)
   const registry = getImSessionRegistry()
   if (registry) {
@@ -742,7 +736,7 @@ export async function dispatchInboundMessage(
   }
 
   // ── Stop command: abort generation, silently drop buffered supplements ──
-  if (isStopCommand(msg.body)) {
+  if (isStopCommand(msg.body, msg.chatType)) {
     const dropped = clearSupplementBuffer(conversationId)
     const isActive = isAppChatConversationGenerating(conversationId)
     if (isActive) {
@@ -766,7 +760,7 @@ export async function dispatchInboundMessage(
   }
 
   // ── Clear command: reset context, silently drop buffered supplements ──
-  if (isClearCommand(msg.body)) {
+  if (isClearCommand(msg.body, msg.chatType)) {
     const dropped = clearSupplementBuffer(conversationId)
     console.log(
       `${LOG_TAG} Clear command received: channel=${msg.channel}, chatId=${msg.chatId}, ` +
@@ -1058,7 +1052,7 @@ export async function dispatchInboundMessage(
         : undefined,
 
       // Use streaming.finish when available, else fall back to one-shot send
-      onReply: (finalContent: string) => {
+      onReply: (finalContent: string, ending?: AppChatTurnEnding) => {
         void analytics.track(AnalyticsEvents.MESSAGE_SENT, {
           source: 'im-reply',
           direction: 'outbound',
@@ -1072,9 +1066,12 @@ export async function dispatchInboundMessage(
         // A whitespace-only payload is the empty-response repair placeholder:
         // we must still finish the streaming session (the only normal-path
         // terminator), but surface a notice rather than a blank message.
+        // A turn that stopped short says so, after what it wrote or alone.
         // Handed over whole: what one message can carry is the channel's to
         // know, and it sends a longer answer in parts.
-        const replyText = finalContent.trim() ? finalContent : EMPTY_RESPONSE_NOTICE
+        const replyText = ending
+          ? withTurnEndingNote(finalContent, ending)
+          : finalContent.trim() ? finalContent : EMPTY_RESPONSE_NOTICE
         const sendFn = reply.streaming
           ? () => reply.streaming!.finish(replyText)
           : () => reply.send(replyText)
@@ -1096,7 +1093,11 @@ export async function dispatchInboundMessage(
     // separate one-shot reply — otherwise WeCom receives an unterminated stream
     // plus a duplicate message, garbling the user's chat.
     try {
-      const errorMsg = `⚠️ Error: ${(err as Error).message?.slice(0, 200) ?? 'Unknown error'}`
+      // A turn cut off before writing anything is not an error the person can
+      // act on; what they can do is tell it to carry on.
+      const errorMsg = err instanceof AppChatTurnInterrupted
+        ? withTurnEndingNote('', { kind: 'interrupted' })
+        : `⚠️ Error: ${(err as Error).message?.slice(0, 200) ?? 'Unknown error'}`
       if (reply.streaming) {
         await reply.streaming.finish(errorMsg)
       } else {

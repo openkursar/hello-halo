@@ -276,8 +276,10 @@ describe('DshEventNormalizer — turn end reasons', () => {
     })
   })
 
-  it('maps the token ceiling to error_max_turns without flagging an error', () => {
-    expect(endWith({ kind: 'max-tokens' })).toMatchObject({ subtype: 'error_max_turns', is_error: false })
+  it('maps the token ceiling to a completed turn that says so, not to the step limit', () => {
+    // The harness is handed no step limit; reading the token ceiling as one put
+    // a wrong "step limit reached" notice on a reply that was only cut short.
+    expect(endWith({ kind: 'max-tokens' })).toMatchObject({ subtype: 'success', is_error: false, stop_reason: 'max_tokens' })
   })
 
   it('maps a cancelled turn to an interruption rather than an error', () => {

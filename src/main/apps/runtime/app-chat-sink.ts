@@ -41,6 +41,7 @@ import { ReplyTextAccumulator } from './reply-accumulator'
 import { ProgressEventParser } from './progress-formatter'
 import { TurnCutPoint } from './escalation-cut'
 import { openSessionWriter, saveChatSessionId, type SessionWriter } from './session-store'
+import { AppChatTurnInterrupted, turnEndingOf, withTurnEndingNote, type AppChatTurnEnding } from './turn-ending'
 import { stopGeneration } from '../../services/agent/control'
 import { listResidentSessions } from '../../services/agent'
 
@@ -51,7 +52,11 @@ import { listResidentSessions } from '../../services/agent'
 /** Per-round callbacks supplied by whoever sent the message. */
 export interface AppChatRoundHooks {
   onProgress?(event: ProgressEvent): void
-  onReply?(finalContent: string): void
+  /**
+   * The turn's answer. `ending` says it stopped short (the step limit, or cut
+   * off) — then `finalContent` is what was written, possibly nothing.
+   */
+  onReply?(finalContent: string, ending?: AppChatTurnEnding): void
   onMessageAccepted?(): void
 }
 
@@ -310,17 +315,19 @@ class AppChatSink implements TurnSink {
     // Raw aggregates define delivery independently of the live UI's streaming state.
     const accumulated = this.turn.accumulator.getReply()
     const replyContent = accumulated || result.finalContent
+    const ending = turnEndingOf(result)
 
     const round = this.takeCurrentRound()
     console.log(
       `[AppChat][${this.appId}] Turn complete (${round ? 'solicited' : 'autonomous'}): ` +
       `content=${replyContent.length} chars` +
       `${accumulated ? ' (from SDK message)' : ' (from streamResult)'}, ` +
-      `thoughts=${result.thoughts.length}, tokens=${result.tokenUsage ? 'yes' : 'no'}`
+      `thoughts=${result.thoughts.length}, tokens=${result.tokenUsage ? 'yes' : 'no'}` +
+      `${ending ? `, ended=${ending.kind}` : ''}`
     )
 
     if (!round) {
-      this.deliverAutonomous(replyContent)
+      this.deliverAutonomous(replyContent, ending)
       return
     }
 
@@ -329,23 +336,36 @@ class AppChatSink implements TurnSink {
     // terminates a streaming IM session. Whether the placeholder is shown or
     // replaced with a notice is the bridge's decision, not ours.
     if (replyContent) {
-      try {
-        round.hooks.onReply?.(replyContent)
-      } catch (err) {
-        console.error(`[AppChat][${this.appId}] onReply callback error:`, err)
-      }
-      round.resolve()
+      this.reply(round, replyContent, ending)
       return
     }
 
     // No content and the turn did not end cleanly: surface it as a failed round
     // so the caller can close out its transport. A user-initiated stop is not a
-    // failure — the caller already tore its transport down.
+    // failure — the caller already tore its transport down. A cut-off turn says
+    // so in a way its caller can tell from a model error.
     if (!result.wasAborted && (result.hasErrorThought || result.isInterrupted)) {
-      round.reject(new Error(result.errorThought?.content || 'The model response was interrupted.'))
+      round.reject(result.hasErrorThought
+        ? new Error(result.errorThought?.content || 'The model response was interrupted.')
+        : new AppChatTurnInterrupted())
       return
     }
 
+    // The step limit came before any text: the reply is that it stopped.
+    if (ending) {
+      this.reply(round, '', ending)
+      return
+    }
+    round.resolve()
+  }
+
+  private reply(round: Round, content: string, ending: AppChatTurnEnding | undefined): void {
+    try {
+      if (ending) round.hooks.onReply?.(content, ending)
+      else round.hooks.onReply?.(content)
+    } catch (err) {
+      console.error(`[AppChat][${this.appId}] onReply callback error:`, err)
+    }
     round.resolve()
   }
 
@@ -479,11 +499,13 @@ class AppChatSink implements TurnSink {
   /**
    * Deliver a turn nobody is waiting for. Native and HTTP sessions need nothing:
    * the transcript plus the agent:* events already reached the client. An IM
-   * chat has no live listener, so the text is pushed to it.
+   * chat has no live listener, so the text is pushed to it — noting a stop
+   * short, since nobody asked and nothing else would tell.
    */
-  private deliverAutonomous(replyContent: string): void {
-    const text = replyContent.trim()
-    if (!text) return
+  private deliverAutonomous(replyContent: string, ending: AppChatTurnEnding | undefined): void {
+    const written = replyContent.trim()
+    if (!written) return
+    const text = ending ? withTurnEndingNote(written, ending) : written
 
     const parsed = parseAppChatKey(this.conversationId)
     if (!parsed || classifySessionSource(parsed.channel) !== 'im') return
