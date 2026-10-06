@@ -442,6 +442,9 @@ export interface ImFileCapability {
    * @param file - A SanctionedFile produced by FileExportGate.sanction()
    * @param chatType - Conversation type ('direct' | 'group')
    * @returns true if sent successfully, false on recoverable failure
+   * @throws An Error whose message the caller relays to the user as is, when
+   *   the adapter knows why the file cannot be sent (e.g. it is over the
+   *   platform's size limit, or the platform said why it refused it)
    */
   sendFile(
     chatId: string,
