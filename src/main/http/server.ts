@@ -24,6 +24,7 @@ import { ACCESS_CODE_MIN_SUBMIT_LENGTH, PASSWORD_MAX_LENGTH } from '../../shared
 import { initWebSocket, shutdownWebSocket, getClientCount } from './websocket'
 import { registerApiRoutes } from './routes'
 import { getInvitePage } from './invite-page'
+import { serveRendererAssets } from './renderer-assets'
 import { getTeamStore } from '../apps/team'
 import { getLocalIdentity } from './identity/index'
 import { getMainWindow as getMainWindowFromService } from '../foundation/window.service'
@@ -322,7 +323,7 @@ export async function startHttpServer(
       next()
     })
 
-    expressApp.use(express.static(staticPath))
+    expressApp.use(serveRendererAssets(staticPath))
 
     // SPA fallback - Express 5.x requires named wildcard parameters
     expressApp.get('/{*path}', (req, res) => {
