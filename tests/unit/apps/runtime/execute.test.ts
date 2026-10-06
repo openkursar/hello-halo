@@ -90,6 +90,7 @@ vi.mock('../../../../src/main/apps/runtime/execution-environment', () => ({
   })),
   validateExecutionEnvironment: vi.fn(),
   validateEnvironmentConnections: vi.fn(),
+  missingConnections: vi.fn(() => []),
 }))
 vi.mock('../../../../src/main/apps/runtime/person-context-tool', () => ({
   createPersonContextMcpServer: vi.fn(() => ({ name: 'halo-person-context' })),
@@ -255,7 +256,7 @@ import {
   unregisterActiveSession,
   closeV2Session,
 } from '../../../../src/main/services/agent/session-manager'
-import { resolveExecutionEnvironment } from '../../../../src/main/apps/runtime/execution-environment'
+import { missingConnections, resolveExecutionEnvironment } from '../../../../src/main/apps/runtime/execution-environment'
 import { openSessionWriter } from '../../../../src/main/apps/runtime/session-store'
 
 // ============================================
@@ -618,6 +619,30 @@ describe('executeRun — stopping a run', () => {
     expect(interrupt).not.toHaveBeenCalled()
     // Closed once, by the run itself.
     expect(nextSession.close).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('executeRun — a declared connection is unusable', () => {
+  it('does not start: no model call, a failed run whose entry names what to install or turn on', async () => {
+    const missing = [{ id: 'docs', name: 'Team Docs', state: 'not_installed' as const }]
+    vi.mocked(missingConnections).mockReturnValueOnce(missing)
+    vi.mocked(createSession).mockClear()
+    vi.mocked(getApiCredentials).mockClear()
+    nextSession = new FakeSession({ script: [assistantReport()] })
+    const store = makeStore()
+    const emitEntry = vi.fn()
+
+    const result = await executeRun({ app: makeApp(), trigger: baseTrigger, store, memory: makeMemory(), emitEntry })
+
+    expect(getApiCredentials).not.toHaveBeenCalled()
+    expect(createSession).not.toHaveBeenCalled()
+    expect(nextSession.send).not.toHaveBeenCalled()
+    expect(result.outcome).toBe('error')
+    expect(result.errorMessage).toContain('"Team Docs" (not installed)')
+    expect(store.completeRun).toHaveBeenCalledWith(result.runId, expect.objectContaining({ status: 'error' }))
+    const entry = emitEntry.mock.calls.at(-1)?.[0]
+    expect(entry).toMatchObject({ type: 'run_error', content: { missingConnections: missing, status: 'error' } })
+    expect(entry.content.error).toBeUndefined()
   })
 })
 

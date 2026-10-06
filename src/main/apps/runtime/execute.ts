@@ -17,7 +17,7 @@ import { tmpdir } from 'os'
 import { randomUUID } from 'crypto'
 import { createSession, getEngineCapabilities } from '../../services/agent/resolved-sdk'
 import { getAppManager, type InstalledApp } from '../manager'
-import { resolveExecutionEnvironment, validateExecutionEnvironment, validateEnvironmentConnections } from './execution-environment'
+import { missingConnections, resolveExecutionEnvironment, validateExecutionEnvironment, validateEnvironmentConnections } from './execution-environment'
 import { createPersonContextMcpServer, personContextPrompt } from './person-context-tool'
 import { resolvePermission } from '../../../shared/apps/app-types'
 import { resolveMemoryLayout, type MemoryService, type MemoryCallerScope } from '../../platform/memory'
@@ -28,7 +28,7 @@ import type {
   RunStatus,
   ActivityEntry,
 } from './types'
-import { RunExecutionError } from './errors'
+import { MissingConnectionsError, RunExecutionError } from './errors'
 import { buildAppSystemPrompt, buildInitialMessage, buildEscalationResumeMessage } from './prompt'
 import { buildDisabledCapabilitiesGuidance, buildUnconfiguredCapabilitiesGuidance } from './prompt/capabilities'
 import { resolveNotifyAvailability } from './notify-availability'
@@ -304,6 +304,10 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     }
     validateExecutionEnvironment(environment)
     validateEnvironmentConnections(environment, app, manager)
+    // Checked before anything reaches a model: a run short of a connection it
+    // declares does not start, and the timeline says what to install or enable.
+    const unusable = missingConnections(app, manager, app.spaceId!)
+    if (unusable.length > 0) throw new MissingConnectionsError(unusable)
     // ── 1. Resolve credentials and working directory ─────
     //    (needed early: workDir feeds into system prompt,
     //     modelInfo feeds into base prompt's model display)
@@ -846,7 +850,9 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     const durationMs = finishedAt - startedAt
     const errorMessage = err instanceof Error ? err.message : String(err)
 
-    console.error(`[Runtime][${runTag}] ✗ Run failed: app=${app.id}, duration=${durationMs}ms:`, err)
+    const missing = err instanceof MissingConnectionsError ? err.missing : undefined
+    if (missing) console.warn(`[Runtime][${runTag}] ✗ Run not started: app=${app.id}: ${errorMessage}`)
+    else console.error(`[Runtime][${runTag}] ✗ Run failed: app=${app.id}, duration=${durationMs}ms:`, err)
 
     // Record failure
     store.completeRun(runId, {
@@ -864,12 +870,14 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       type: 'run_error',
       ts: finishedAt,
       sessionKey,
-      content: {
-        summary: `Run failed: ${errorMessage}`,
-        status: 'error',
-        durationMs,
-        error: errorMessage,
-      },
+      content: missing
+        ? { summary: errorMessage, status: 'error', durationMs, missingConnections: missing }
+        : {
+          summary: `Run failed: ${errorMessage}`,
+          status: 'error',
+          durationMs,
+          error: errorMessage,
+        },
     }
 
     try {

@@ -5,6 +5,7 @@
  */
 
 import type { AppStatus } from '../manager'
+import type { MissingConnection } from '../../../shared/apps/app-types'
 
 /**
  * Thrown when attempting to execute an App that is not in a runnable state.
@@ -90,5 +91,30 @@ export class RunProcessClearedError extends Error {
   constructor(runId: string) {
     super('The detailed process of this execution was cleared under the retention rule')
     this.runId = runId
+  }
+}
+
+const MISSING_STATE_TEXT: Record<MissingConnection['state'], string> = {
+  not_installed: 'not installed',
+  disabled: 'turned off',
+  needs_login: 'waiting for sign-in',
+  error: 'failing',
+}
+
+/**
+ * Thrown before a run starts when connections it declares are unusable, so
+ * nothing is sent to a model. `missing` is what the timeline entry shows.
+ */
+export class MissingConnectionsError extends Error {
+  readonly name = 'MissingConnectionsError'
+  readonly missing: MissingConnection[]
+
+  constructor(missing: MissingConnection[]) {
+    const list = missing.map(connection => `"${connection.name}" (${MISSING_STATE_TEXT[connection.state]})`).join(', ')
+    super(
+      `Did not run: ${missing.length === 1 ? 'a connection it declares is' : 'connections it declares are'} unavailable: ${list}. ` +
+      `Install or turn ${missing.length === 1 ? 'it' : 'them'} on in this digital human's Tools & Resources, or switch ${missing.length === 1 ? 'it' : 'them'} off there.`
+    )
+    this.missing = missing
   }
 }

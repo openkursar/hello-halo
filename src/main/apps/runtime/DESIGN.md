@@ -1016,6 +1016,22 @@ of each person:
   `RUN_PROCESS_CLEARED` over IPC and HTTP), and `continueFailedRun` and
   `injectIntoRun` refuse the run: nothing is left to continue it from.
 
+### 2.24 A Run Short of a Declared Connection Does Not Start
+
+An independent run hands the model only the declared connections (`requires.mcps`)
+that are running in its space. One that is not installed, turned off, waiting
+for sign-in or failing used to be skipped with a log line, so the run started
+without tools it was built around and failed with no visible reason.
+`executeRun` — the one entry of scheduled, manual, event and continued runs —
+now checks `missingConnections` after the environment checks and before
+credentials or a session exist, so nothing reaches a model. A gap throws
+`MissingConnectionsError`, which ends the run like any failure: `error`, counted
+toward the consecutive-failure pause, and a `run_error` entry carrying
+`content.missingConnections` (`{ id, name, state }`) that the timeline renders in
+the user's language with the way to Tools & Resources. A dependency the owner
+switched off for this person is a choice, not a gap; built-in capability ids are
+not installable connections. Chat keeps inheriting its workspace's connections.
+
 ---
 
 ## 3. SQLite Schema

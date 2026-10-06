@@ -252,6 +252,17 @@ export interface ActivityEntryContent {
   upgrade?: SpecUpgradeNote
   /** Scheduled times that came due while this run kept the person busy, and so were skipped. */
   skippedSchedules?: number
+  /** Set when the run did not start because connections it declares are unusable. */
+  missingConnections?: MissingConnection[]
+}
+
+/** A connection a digital human declares that a run could not use. */
+export interface MissingConnection {
+  /** The id its spec declares. */
+  id: string
+  /** The installed connection's name; the id when nothing is installed. */
+  name: string
+  state: 'not_installed' | 'disabled' | 'needs_login' | 'error'
 }
 
 /** One decision an escalation asks the user to make. */
