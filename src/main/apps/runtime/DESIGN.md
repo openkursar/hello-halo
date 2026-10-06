@@ -1306,9 +1306,10 @@ caches, ...) a full recreate would wipe.
 
 Generic code hands a reply, a push or a stream's final answer to the channel
 whole (`ReplyHandle.send`, `StreamingHandle.finish`, `pushToChat` take any
-length). It used to cut every IM reply to 4000 characters first, silently: the
-rest of a long answer was lost on every channel, while WeCom's own `(i/n)`
-splitting never triggered.
+length) — a run's result pushed to the chats that receive results
+(`im-auto-sync`) included. It used to cut every IM reply to 4000 characters
+first, silently: the rest of a long answer was lost on every channel, while
+WeCom's own `(i/n)` splitting never triggered.
 
 Each provider knows its platform's cap and states it once, in the unit that
 platform counts — WeCom 20000 bytes (its stream frames, markdown replies and

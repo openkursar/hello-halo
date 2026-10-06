@@ -6,7 +6,7 @@
  *   - no proactive sessions → no-op
  *   - registry / manager unavailable → safe no-op or skip count
  *   - per-session outcomes (sent / disconnected / instance missing / error)
- *   - truncation at MAX_PUSH_LENGTH
+ *   - a long result handed over whole (the channel sends it in parts)
  *   - never throws even when transport throws
  */
 
@@ -134,20 +134,20 @@ describe('autoSyncRunResult', () => {
       expect(instB.pushToChat).toHaveBeenCalledTimes(1)
     })
 
-    it('truncates body exceeding the length cap and appends marker', async () => {
+    it('hands a long result over whole: the channel sends it in parts, as every other reply', async () => {
+      // A fixed cut here dropped everything past 4000 characters before the
+      // channel's own splitting could send it.
       const session = makeSession()
       const instance = makeInstance()
       mockGetProactiveSessions.mockReturnValue([session])
       mockGetInstance.mockReturnValue(instance)
 
-      const longText = 'a'.repeat(5000)
+      const longText = '结果的每一段都要送达。'.repeat(900)
       const report = await autoSyncRunResult({ ...baseInput, finalText: longText })
 
       expect(report.sent).toBe(1)
       const [, body] = instance.pushToChat.mock.calls[0]
-      expect(body.length).toBeLessThanOrEqual(5000)
-      expect(body.startsWith('a'.repeat(4000))).toBe(true)
-      expect(body.endsWith('(truncated, see Halo for full content)')).toBe(true)
+      expect(body).toBe(longText)
     })
   })
 
