@@ -115,6 +115,8 @@ src/
 │   ├── http/                          # Remote Access: Express + WebSocket
 │   │   ├── routes/                    #   Per-domain route modules (*.routes.ts) +
 │   │   │                              #   _shared.ts (imports/helpers barrel) +
+│   │   │                              #   _path-guard.ts (which paths a remote client may
+│   │   │                              #   read/write; validateFilePath) +
 │   │   │                              #   index.ts (thin aggregator). NO business logic.
 │   │   │                              #   *.routes.meta.ts declare each route's AI exposure
 │   │   │                              #   (ai/wrapped/internal); _meta-types.ts + _meta-groups.ts
