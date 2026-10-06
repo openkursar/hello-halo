@@ -19,7 +19,7 @@ import { stringify as stringifyYaml, parse as parseYaml } from 'yaml'
 import { useAppsStore } from '../../stores/apps.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
-import type { InputDef, SubscriptionDef, AppSpec } from '../../../shared/apps/spec-types'
+import { usesWorkdayCalendar, type InputDef, type SubscriptionDef, type AppSpec } from '../../../shared/apps/spec-types'
 import type { InstalledApp } from '../../../shared/apps/app-types'
 import { resolvePermission } from '../../../shared/apps/app-types'
 import { findMissingRequiredConfig } from '../../../shared/apps/config-validation'
@@ -51,7 +51,6 @@ import {
   extractScheduleValue,
   applyScheduleValue,
   applyWorkdayCalendar,
-  usesWorkdayCalendar,
   type ScheduleValue,
 } from './schedule-utils'
 

@@ -1261,7 +1261,8 @@ never sees the owner's private reminders. `create_automation_app` says not to
 create a digital human for a reminder.
 
 - **The scheduler job is the reminder.** Kind `app_reminder`; its metadata
-  carries the app, conversation, text and who asked. No table of its own: the
+  carries the app, conversation, text and who asked — the sender of the turn it
+  was set in, even if someone else has written in the chat since. No table of its own: the
   scheduler's restart recovery brings reminders back and a one-off is disabled
   once due. At the next start the sweep drops fired one-offs and reminders
   whose digital human or conversation is gone (the session registry is asked;
@@ -1417,12 +1418,13 @@ src/main/apps/runtime/
   app-chat-browser.ts        -- The AI browser context each chat drives: resident for native chats, per-turn for IM/HTTP/team, idle/cap reaping, teardown by reason (§2.19)
   conversation-source.ts     -- The digital-human `ConversationSource` registered with services/conversation-interop (default + local sessions only; §2.20)
   run-conversation-source.ts -- A scheduled run's one-way sender identity for cross-conversation messages (§2.20)
+  local-time.ts              -- Local time as `YYYY-MM-DD HH:mm` for times written into text the model and the person read (run titles, reminders)
   conversation-collab.ts     -- Who gets `halo-conversations` (owner's `conversation-collab` switch, owner-only, no team channel, global master switch) and the lazy server factory shared by app-chat.ts and execute.ts (§2.20)
   app-chat-live-turn.ts      -- The turn a chat is running RIGHT NOW: whether there is one (`isAppChatConversationGenerating` — the only truthful busy probe, counting a message still on its way to the engine (`beginAppChatTurnStart`, §2.12a) as well as a queued round and a live turn; app chat never writes the engine's legacy `activeSessions` map) and how to add a message to it (`injectIntoAppChat` for the team bus; `injectIntoAppChatWhenLive`, which waits for a starting turn to begin and answers delivered / no_turn / stopped, for the user adding to their own turn through `app:chat-inject` / `POST /chat/inject` — that path passes `{ source: 'injection' }`, which the transcript reader shows as an annotation on the reply), plus the change announcements everything waiting on a conversation is woken by (`onAppChatConversationChange`, §2.12a). Its own leaf module because the team layer asks both synchronously, and app-chat.ts imports the team runtime accessor — a static edge back would close that cycle
   config-defaults.ts         -- Merge App config_schema defaults into userConfig
   dispatch-inbound.ts        -- Route IM inbound messages into app-chat
   chat-reset.ts              -- Clear all of a digital human's chats at once (default, local, IM), each as /clear does; API sessions, team chats, memory and reminders untouched; nothing posted into chats
-  im-permission-registry.ts  -- The IM chat's last sender and their standing, for a turn with no sender of its own (a message's own turn carries its sender in `AppChatRequest.imPermission`)
+  im-permission-registry.ts  -- The IM chat's last sender and their standing, read only as a turn with no sender of its own begins (a message's own turn carries its sender in `AppChatRequest.imPermission`; a tool asks app-chat for its turn's sender)
   im-sender-standing.ts      -- Under an instance's current settings: owner or guest (resolveImPermission), and which chats it answers (isOwnerUnbound, replyScopeCovers, instanceTakesChat); shared by inbound messages and reminders
   reminders/                 -- Reminders a digital human sets in a conversation (§2.27)
     index.ts                 -- the scheduler-backed service (set / list / cancel / sweep / cascades) and the turn text

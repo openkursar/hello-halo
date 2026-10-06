@@ -19,6 +19,7 @@ import type { RunOutcome, Schedule, SchedulerJob, SchedulerService } from '../..
 import { computeNextRun, parseEveryString } from '../../../platform/scheduler'
 import type { ReminderSchedule } from '../../../../shared/apps/conversation-reminders'
 import { parseAppChatKey } from '../../../../shared/apps/im-keys'
+import { formatLocalTime } from '../local-time'
 
 const LOG_TAG = '[Reminders]'
 
@@ -198,13 +199,6 @@ function onceAt(at: number, nowMs: number): ReminderSchedule {
   if (at <= nowMs) throw new ReminderError(`That time has already passed (it is now ${formatLocalTime(nowMs)}). Pick a time ahead of now.`)
   if (at - nowMs > MAX_AHEAD_MS) throw new ReminderError('A reminder can be at most a year ahead.')
   return { kind: 'once', at }
-}
-
-/** This computer's local time, to the minute — what the person and the model both read. */
-export function formatLocalTime(ms: number): string {
-  const date = new Date(ms)
-  const pad = (value: number) => String(value).padStart(2, '0')
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
 export function describeReminderSchedule(schedule: ReminderSchedule): string {

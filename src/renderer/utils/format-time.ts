@@ -24,6 +24,17 @@ export function formatTimeAgo(timestamp: number, t: (s: string, opts?: Record<st
   return t('{{count}}d ago', { count: days })
 }
 
+/**
+ * When a run started, the one way every run list says it: the time alone for
+ * today, the month and day before it otherwise.
+ */
+export function formatRunStart(timestamp: number, now = Date.now()): string {
+  const date = new Date(timestamp)
+  const time = date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  if (new Date(now).toDateString() === date.toDateString()) return time
+  return `${date.toLocaleDateString(undefined, { month: '2-digit', day: '2-digit' })} ${time}`
+}
+
 /** mm:ss for under an hour, h:mm:ss past that — running tasks rarely run long. */
 export function formatElapsed(ms: number): string {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000))

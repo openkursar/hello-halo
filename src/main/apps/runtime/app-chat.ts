@@ -187,6 +187,14 @@ export { getAppChatConversationId, buildImSessionKey }
  */
 const TEAM_CHANNEL_MCP: ReadonlySet<string> = new Set([TEAM_MCP_SERVER_NAME, 'halo-report', 'halo-person-context'])
 
+/**
+ * Whom each conversation's latest turn answers to, for its tools: a session's
+ * tool servers are made when it is created and serve every later turn, so they
+ * ask here instead of keeping the first turn's sender — or reading the chat's
+ * last sender, which another message may have replaced meanwhile.
+ */
+const turnSenders = new Map<string, ImPermissionContext | undefined>()
+
 // ============================================
 // Types
 // ============================================
@@ -519,6 +527,7 @@ async function runAppChatTurn(
   // window, whose turns carry no IM framing and are never the chat's sender.
   const permCtx = request.imPermission
     ?? (!teamContext || imSession ? getImPermissionContext(conversationId) : undefined)
+  turnSenders.set(conversationId, permCtx)
 
   // The person's own message in a team-fronted chat is decided by the channel's
   // rules alone, so what dispatch-inbound hands over must agree with itself: a
@@ -823,8 +832,9 @@ async function runAppChatTurn(
           'halo-reminders': createRemindersMcpServer({
             appId: app.id,
             conversationId,
+            // The turn the reminder is set in, whoever wrote in the chat since.
             currentSetter: () => {
-              const sender = getImPermissionContext(conversationId)
+              const sender = turnSenders.get(conversationId)
               return sender ? { id: sender.senderId, name: sender.senderName } : undefined
             },
           }),
@@ -1704,10 +1714,11 @@ async function clearHeldSession(conversationId: string, appId: string, spaceId: 
   // 5. Drop the sink. Its rounds were already settled when closeV2Session
   //    stopped the consumer; the next message builds a fresh one.
   disposeAppChatSink(conversationId)
-  // The terms and the origin the last turn left belong to a thread of work that
-  // no longer exists.
+  // The terms, the origin and the sender the last turn left belong to a thread
+  // of work that no longer exists.
   clearDelegation(conversationId)
   forgetTurnOrigin(conversationId)
+  turnSenders.delete(conversationId)
 
   // 6. Zero the registry's activity summary so the conversation list preview
   //    matches the now-empty transcript (no-op if the session was never

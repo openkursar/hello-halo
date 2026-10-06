@@ -23,6 +23,7 @@ import { buildRunSenderKey, parseRunSenderKey } from '../../../shared/apps/im-ke
 import { isConversationCollabEnabled } from '../../../shared/apps/app-types'
 import { getAppManager } from '../manager'
 import { COLLAB_OFF_REASON } from './conversation-collab'
+import { formatLocalTime } from './local-time'
 
 const LOG_TAG = '[RunConversations]'
 
@@ -44,15 +45,8 @@ const liveRuns = new Map<string, LiveRun>()
 const CLOSED_RUN_MEMORY = 500
 const closedRunSpaces = new Map<string, string>()
 
-/** Local time as `YYYY-MM-DD HH:mm`: unambiguous inside an English sentence, whatever the OS locale. */
-function formatRunTime(epochMs: number): string {
-  const d = new Date(epochMs)
-  const pad = (n: number): string => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
-
 function runTitle(name: string, startedAt: number): string {
-  return `${name} · scheduled run (${formatRunTime(startedAt)} run)`
+  return `${name} · scheduled run (${formatLocalTime(startedAt)} run)`
 }
 
 /**
