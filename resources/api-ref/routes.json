@@ -19,6 +19,10 @@
     "group": "settings"
   },
   {
+    "method": "GET",
+    "path": "/api/config/read-failure"
+  },
+  {
     "method": "POST",
     "path": "/api/config/validate"
   },

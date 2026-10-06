@@ -4,6 +4,7 @@
  */
 import type { Express, Request, Response } from 'express'
 import {
+  configController,
   getAISourceManager,
   modelCapabilitiesService,
 } from './_shared'
@@ -20,6 +21,11 @@ export function registerAiSourcesRoutes(app: Express): void {
       const { sourceId } = req.body
       const manager = getAISourceManager()
       const result = manager.switchCurrentSource(sourceId)
+      const notSaved = configController.notSavedWhileConfigUnreadable()
+      if (notSaved) {
+        res.json(notSaved)
+        return
+      }
       if (result.currentId !== sourceId) {
         res.json({ success: false, error: `Source not found: ${sourceId}` })
         return
@@ -35,7 +41,8 @@ export function registerAiSourcesRoutes(app: Express): void {
       const { modelId } = req.body
       const manager = getAISourceManager()
       const result = manager.switchCurrentModel(modelId)
-      res.json({ success: true, data: maskConfigFields({ aiSources: result }).aiSources })
+      res.json(configController.notSavedWhileConfigUnreadable()
+        ?? { success: true, data: maskConfigFields({ aiSources: result }).aiSources })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }
@@ -45,7 +52,8 @@ export function registerAiSourcesRoutes(app: Express): void {
     try {
       const manager = getAISourceManager()
       const result = manager.addSource(req.body)
-      res.json({ success: true, data: maskConfigFields({ aiSources: result }).aiSources })
+      res.json(configController.notSavedWhileConfigUnreadable()
+        ?? { success: true, data: maskConfigFields({ aiSources: result }).aiSources })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }
@@ -55,7 +63,8 @@ export function registerAiSourcesRoutes(app: Express): void {
     try {
       const manager = getAISourceManager()
       const result = manager.updateSource(req.params.sourceId, req.body)
-      res.json({ success: true, data: maskConfigFields({ aiSources: result }).aiSources })
+      res.json(configController.notSavedWhileConfigUnreadable()
+        ?? { success: true, data: maskConfigFields({ aiSources: result }).aiSources })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }
@@ -65,7 +74,8 @@ export function registerAiSourcesRoutes(app: Express): void {
     try {
       const manager = getAISourceManager()
       const result = manager.deleteSource(req.params.sourceId)
-      res.json({ success: true, data: maskConfigFields({ aiSources: result }).aiSources })
+      res.json(configController.notSavedWhileConfigUnreadable()
+        ?? { success: true, data: maskConfigFields({ aiSources: result }).aiSources })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }

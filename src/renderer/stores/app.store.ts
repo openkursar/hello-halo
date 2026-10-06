@@ -73,6 +73,8 @@ interface AppState {
   startGitBashInstall: () => Promise<void>
   refreshGitBashStatus: () => Promise<void>
   completeDeferredGitBashCheck: () => Promise<void>
+  /** The Git Bash setup page finished: go on with initialization from where it stopped. */
+  completeGitBashSetup: (installed: boolean) => Promise<void>
 
   // Initialization
   initialize: () => Promise<void>
@@ -143,7 +145,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   // bot from a digital human's settings page) leaves every other config-backed
   // view stale until restart. Surfaces that write through main call this.
   refreshConfig: async () => {
-    const response = await api.getConfig()
+    const response = await api.getConfig({ snapshot: true })
     if (response.success && response.data) set({ config: response.data as HaloConfig })
   },
 
@@ -262,6 +264,31 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
+  // Initialization stops at the Git Bash page before loading the settings, so
+  // they are loaded here — as the settings snapshot, like initialize does, or
+  // saves made later in the session would not be checked against failed reads.
+  completeGitBashSetup: async (installed) => {
+    console.log('[App] Git Bash setup completed, installed:', installed)
+    if (!installed) {
+      await api.setConfig({ gitBash: { skipped: true, installed: false, path: null } })
+    }
+
+    const response = await api.getConfig({ snapshot: true })
+    if (!response.success || !response.data) {
+      get().navigate('setup')
+      return
+    }
+    const config = response.data as HaloConfig
+    set({ config })
+    // Show setup if first launch or no AI source configured
+    // (modelConfigSkipped honors an explicit deferral from the first-run wizard)
+    if (config.isFirstLaunch || (!hasAnyAISource(config.aiSources) && !config.modelConfigSkipped)) {
+      get().navigate('setup')
+    } else {
+      await get().enterApp()
+    }
+  },
+
   // Initialize app
   initialize: async () => {
     console.log('[Store] initialize() called')
@@ -308,7 +335,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       // Load config from main process
       // config:get handler is registered in Essential services, so this always works.
       console.log('[Store] Loading config...')
-      const response = await api.getConfig()
+      const response = await api.getConfig({ snapshot: true })
       console.log('[Store] Config response:', response.success ? 'success' : 'failed')
 
       if (response.success && response.data) {

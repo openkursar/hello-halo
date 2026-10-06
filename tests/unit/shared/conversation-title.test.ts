@@ -37,3 +37,39 @@ describe('previewFromMessages', () => {
     expect(previewFromMessages([{ content: '' }, { content: ' ' }])).toBe('')
   })
 })
+
+describe('web addresses in a title', () => {
+  it('become the site and the last part of the path', () => {
+    expect(titleFromFirstMessage('https://github.com/openkursar/hello-halo 帮我看看这个仓库'))
+      .toBe('github.com › hello-halo 帮我看看这个仓库')
+    expect(titleFromFirstMessage('https://github.com/openkursar/hello-halo/issues/292?tab=1#top'))
+      .toBe('github.com › 292')
+  })
+
+  it('become just the site when there is no path', () => {
+    expect(titleFromFirstMessage('https://example.com')).toBe('example.com')
+    expect(titleFromFirstMessage('Read http://www.example.com/ first')).toBe('Read example.com first')
+  })
+
+  it('end where the sentence goes on', () => {
+    expect(titleFromFirstMessage('See https://example.com/docs/intro.')).toBe('See example.com › intro.')
+    expect(titleFromFirstMessage('看看https://github.com/a/b，然后修一下')).toBe('看看github.com › b，然后修一下')
+    expect(titleFromFirstMessage('Compare https://a.example/x and https://b.example/y'))
+      .toBe('Compare a.example › x and b.example › y')
+  })
+
+  it('show an encoded last part as readable text, and a malformed one as written', () => {
+    expect(titleFromFirstMessage('https://example.com/wiki/%E4%B8%AD%E6%96%87')).toBe('example.com › 中文')
+    expect(titleFromFirstMessage('https://example.com/a%E0%A4%A')).toBe('example.com › a%E0%A4%A')
+  })
+
+  it('leave anything that is not a web address alone', () => {
+    expect(titleFromFirstMessage('ftp://files.example/pub/x')).toBe('ftp://files.example/pub/x')
+    expect(titleFromFirstMessage('the http:// prefix')).toBe('the http:// prefix')
+  })
+
+  it('are shortened before the title is cut to length', () => {
+    const title = titleFromFirstMessage(`https://github.com/openkursar/hello-halo/blob/main/${'x'.repeat(80)} explain`)
+    expect(title).toBe(`github.com › ${'x'.repeat(37)}...`)
+  })
+})

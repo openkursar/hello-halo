@@ -31,12 +31,19 @@ export function registerConfigRoutes(app: Express): void {
   app.post('/api/config', async (req: Request, res: Response) => {
     if (rejectIfRemoteMcpForbidden(res, () => configTouchesMcp(req.body), 'POST /api/config')) return
     if (rejectIfRemoteBrowserAllowlistForbidden(res, req.body)) return
-    const result = configController.setConfig(req.body)
+    // Stamp of the settings the client built this save on (the body is the save itself).
+    const epoch = req.query.snapshotEpoch
+    const snapshotEpoch = typeof epoch === 'string' && /^-?\d+$/.test(epoch) ? Number(epoch) : undefined
+    const result = configController.setConfig(req.body, snapshotEpoch)
     res.json(result)
   })
 
   app.get('/api/config/credential-failures', async (_req: Request, res: Response) => {
     res.json(configController.getCredentialFailures())
+  })
+
+  app.get('/api/config/read-failure', async (_req: Request, res: Response) => {
+    res.json(configController.getConfigReadFailure())
   })
 
   app.post('/api/config/validate', async (req: Request, res: Response) => {

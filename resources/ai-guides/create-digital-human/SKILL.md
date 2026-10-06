@@ -67,6 +67,16 @@ changes when the list is reordered, so name them instead. There is no per-subscr
 field. Before 3.0 the trigger carried only the schedule (`(cron: 0 9 * * *)`), so a prompt had
 to tell runs apart by time.
 
+**Mainland China working days only.** A schedule can set `workday_calendar: true` in its
+`source.config` (schedules only; a boolean). The cron or interval still decides the time of day;
+a public holiday calendar decides which days count: public holidays are skipped and make-up
+working days on a weekend run. So the schedule itself must fire every day — `0 9 * * *`, never
+`0 9 * * 1-5`, which would miss every make-up Saturday. The day is judged by the local date of
+the computer running Halo. On a day the calendar does not cover (next year's arrangement not
+published yet, or no calendar available), the run is skipped and the timeline says so once that
+day; it never guesses. In the app this is the **Only on mainland China working days** switch
+under the schedule. Halo versions before 3.0 ignore the field and run every day.
+
 ## 2. The #1 mistake: don't invent trigger-matching questions for IM/WeCom
 
 Do **not** ask the user things like "should the bot respond to every message, or only when
