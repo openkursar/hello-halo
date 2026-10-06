@@ -1282,7 +1282,10 @@ Four consequences worth stating, because each was a hole:
   reaching the gate at all. So a skill call is judged by a pre-tool hook as well
   as the gate, and a skill whose pre-approvals reach past what the session
   already settles does not load (`turn-skills.ts`; runtime DESIGN "Skills on a
-  borrowed turn").
+  borrowed turn"). For the same reason a borrowed turn's message never runs as
+  an engine command — a person's message to a member included, while that
+  member's policy withholds anything, since every person's message to a member
+  is a borrowed turn.
 
 ### The owner's record (`team_tool_audit`)
 

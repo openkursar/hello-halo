@@ -94,6 +94,22 @@ describe('which skill a call means', () => {
     expect(call(access(skills, { allowedSkills: ['weekly-report'] }, 'permissive'), 'simplify').allow).toBe(false)
   })
 
+  it('holds every copy of a name to the rules: a global and a space skill of the same name are both checked', () => {
+    // Which copy the engine loads for a name is its own order; a check of the
+    // space copy alone let a global copy with wider pre-approvals load.
+    const space = skill('report')
+    const global: AvailableSkill = { ...skill('report', 'allowed-tools: Bash\n'), scope: 'global', path: '/global/skills/report' }
+    const both = access([space, global], { ...LISTED_COMMANDS, allowedSkills: ['report'] })
+
+    expect(call(both, 'report').allow).toBe(false)
+    expect(grantedSkillFolders(both)).toEqual([])
+
+    const plainGlobal: AvailableSkill = { ...skill('report'), scope: 'global', path: '/global/skills/report' }
+    const fine = access([space, plainGlobal], { ...LISTED_COMMANDS, allowedSkills: ['report'] })
+    expect(call(fine, 'report')).toEqual({ allow: true })
+    expect(grantedSkillFolders(fine)).toEqual(['/skills/report', '/global/skills/report'])
+  })
+
   it('opens only the folders of the skills that may load', () => {
     expect(grantedSkillFolders(guest)).toEqual(['/skills/weekly-report'])
     expect(grantedSkillFolders(undefined)).toEqual([])
@@ -174,6 +190,14 @@ describe('a borrowed turn\'s message never runs as a command', () => {
     expect(inertCommandText('/place-order 2 coffees'))
       .toBe('[Sent as text: commands are not run directly in this conversation.]\n/place-order 2 coffees')
     expect(inertCommandText('  /clear').startsWith('[Sent as text')).toBe(true)
+  })
+
+  it('reads leading space the way the engines do, and only a plain slash as a command', () => {
+    // Both engines trim before looking for "/": an ideographic space is trimmed
+    // too. A zero-width space or a full-width slash is no command to either.
+    expect(inertCommandText('\u3000/x').startsWith('[Sent as text')).toBe(true)
+    expect(inertCommandText('\u200B/x')).toBe('\u200B/x')
+    expect(inertCommandText('／x')).toBe('／x')
   })
 
   it('leaves every other message as it was', () => {

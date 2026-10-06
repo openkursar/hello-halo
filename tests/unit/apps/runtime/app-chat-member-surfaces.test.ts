@@ -166,7 +166,7 @@ vi.mock('../../../../src/main/services/agent/helpers', () => ({
 }))
 vi.mock('../../../../src/main/services/agent/events', () => ({ emitAgentEvent: vi.fn() }))
 // A borrowed turn lists the skills it could load; none here.
-vi.mock('../../../../src/main/apps/skill-discovery', () => ({ listAvailableSkills: () => [] }))
+vi.mock('../../../../src/main/apps/skill-discovery', () => ({ listLoadableSkillCopies: () => [] }))
 vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
   analytics: { track: vi.fn(), trackErrorSurface: vi.fn() },
 }))

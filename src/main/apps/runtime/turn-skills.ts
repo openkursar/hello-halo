@@ -92,9 +92,14 @@ export function turnSkillAccess(
   return { skills, grantsUnlisted: mode === 'permissive' && policy?.allowedSkills === undefined }
 }
 
-/** The folders of the skills this turn may load: readable to it, whatever else it may read. */
+/**
+ * The folders of the skills this turn may load: readable to it, whatever else it
+ * may read. A name with any copy that may not load opens none of its copies.
+ */
 export function grantedSkillFolders(access: TurnSkillAccess | undefined): string[] {
-  return access?.skills.filter(skill => skill.granted && !skill.refusal).map(skill => skill.path) ?? []
+  if (!access) return []
+  const blocked = new Set(access.skills.filter(skill => skill.refusal).map(skill => skill.dirName))
+  return access.skills.filter(skill => skill.granted && !blocked.has(skill.dirName)).map(skill => skill.path)
 }
 
 export type SkillCallDecision = { allow: true } | { allow: false; reason: string }

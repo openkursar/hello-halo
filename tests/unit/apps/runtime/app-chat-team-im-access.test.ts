@@ -288,7 +288,7 @@ vi.mock('../../../../src/main/services/memory-consolidation', () => ({
 }))
 // The skills the digital human can load: one a guest may be allowed, one not.
 vi.mock('../../../../src/main/apps/skill-discovery', () => ({
-  listAvailableSkills: () => ['weekly-report', 'place-order'].map(dirName => ({
+  listLoadableSkillCopies: () => ['weekly-report', 'place-order'].map(dirName => ({
     name: dirName, description: '', scope: 'global', dirName,
     path: `/tmp/halo-test/skills/${dirName}`, content: `---\nname: ${dirName}\n---\nDo it.\n`,
   })),

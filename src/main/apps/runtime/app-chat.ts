@@ -116,7 +116,7 @@ import {
   turnFileExportRefusal,
 } from './delegation-gate'
 import { grantedSkillFolders, inertCommandText, turnSkillAccess, type TurnSkillAccess } from './turn-skills'
-import { listAvailableSkills } from '../skill-discovery'
+import { listLoadableSkillCopies } from '../skill-discovery'
 import { allowsBuiltin, SKILL_TOOL } from '../../../shared/apps/capability-policy'
 import type { CapabilityMode, CapabilityPolicy } from '../../../shared/apps/capability-policy'
 import type { TeamTriggerContext } from '../../../shared/apps/team-types'
@@ -1009,7 +1009,7 @@ async function runAppChatTurn(
       // Which skills this turn may load, measured against what the engine now
       // settles without asking — only where the skill tool exists for it at all.
       if (allowsBuiltin(delegation.policy, SKILL_TOOL, delegation.mode)) {
-        turnSkills = turnSkillAccess(listAvailableSkills(spaceId), delegation.policy, delegation.mode, {
+        turnSkills = turnSkillAccess(listLoadableSkillCopies(spaceId), delegation.policy, delegation.mode, {
           allowedRules: sdkOptions.allowedTools ?? [],
           disallowed: sdkOptions.disallowedTools ?? [],
           hooked: strictFiles ? [SKILL_TOOL, ...FILE_TOOLS] : [SKILL_TOOL],

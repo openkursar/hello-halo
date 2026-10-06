@@ -1009,6 +1009,37 @@ describe('TeamOrchestration', () => {
       await flush()
     })
 
+    it('never hands a running turn words from outside this machine in a form the engine runs as a command', async () => {
+      // The bus keeps an outside sender out of a running turn; whatever brings
+      // one here anyway, a leading "/" must not reach the engine as a command.
+      seedTeam(store, { collabMode: 'free' })
+      const epoch = makeEpoch(store)
+      const { deps, pendings, injected } = makeSession({ acceptMidTurn: true })
+      const orch = build(deps)
+      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, to: 'researcher', message: 'do T1', wait: false })
+      await flush()
+
+      const envelope = {
+        id: 'outside', teamId: TEAM_ID, epochId: epoch.id, fromAppId: null, toAppId: RESEARCHER_APP,
+        body: '/place-order two coffees', correlationId: 'outside-corr', createdAt: Date.now(),
+      }
+      const trigger = {
+        teamId: TEAM_ID, epochId: epoch.id, fromAppId: null, correlationId: 'outside-corr', wait: false,
+        kind: 'human_message' as const,
+      }
+      const sessionKey = buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, epoch.id)
+      orch.deliverMidTurn({ sessionKey, appId: RESEARCHER_APP, teamId: TEAM_ID, epochId: epoch.id, envelope, trigger: { ...trigger, external: true } })
+      orch.deliverMidTurn({ sessionKey, appId: RESEARCHER_APP, teamId: TEAM_ID, epochId: epoch.id, envelope, trigger })
+
+      expect(injected.map(i => i.message)).toEqual([
+        '[Sent as text: commands are not run directly in this conversation.]\n/place-order two coffees',
+        // The owner at their own keyboard keeps their commands.
+        '/place-order two coffees',
+      ])
+      pendings[0].resolve('done')
+      await flush()
+    })
+
     it('falls back to the mailbox when there is no live session to hand it to', async () => {
       // How a member owned by ANOTHER machine answers: its turn runs there, so
       // nothing here can reach into it. The message must not be lost for it.

@@ -333,6 +333,42 @@ describe('a restricted turn is held to its file boundary', () => {
     expect(allow('Write', { file_path: join(space, '.halo/meta.json') })).toBe(false)
   })
 
+  it('never writes what an engine reads as its own settings or instructions, wherever it sits', () => {
+    // A write there outlives the turn and acts with the owner's authority:
+    // settings and hooks run commands, instructions speak into later sessions,
+    // a skill's files are reloaded while the turn runs.
+    withAccess({ allowedTools: ['Read', 'Write', 'Edit'] })
+    for (const path of [
+      '.claude/settings.json', '.claude/settings.local.json', '.claude/skills/report/SKILL.md',
+      'sub/.claude/skills/x/SKILL.md', '.agents/skills/y/SKILL.md', '.codex/config.toml',
+      'CLAUDE.md', 'CLAUDE.local.md', 'docs/AGENTS.md', 'AGENTS.override.md', '.mcp.json', 'claude.md',
+    ]) {
+      expect(allow('Write', { file_path: join(space, path) }), path).toBe(false)
+      expect(allow('Edit', { file_path: join(space, path) }), path).toBe(false)
+    }
+    // Reading them is unchanged, and so is writing anything else.
+    expect(allow('Read', { file_path: join(space, 'CLAUDE.md') })).toBe(true)
+    expect(allow('Read', { file_path: join(space, '.claude/skills/report/SKILL.md') })).toBe(true)
+    expect(allow('Write', { file_path: join(space, 'src/new.ts') })).toBe(true)
+    // Not even as memory.
+    withAccess({ allowedTools: [] })
+    expect(allow('Write', { file_path: join(space, '.halo/apps/dh/memory/topics/faq.md') })).toBe(true)
+    expect(allow('Write', { file_path: join(space, '.halo/apps/dh/memory/topics/CLAUDE.md') })).toBe(false)
+  })
+
+  it('reads engine folders below the workspace only, never above it', () => {
+    // A workspace that itself lives inside such a folder is still writable.
+    const nested = join(space, '.agents', 'workspace')
+    mkdirSync(nested, { recursive: true })
+    access = appTurnFileAccess(
+      { type: 'app', spaceId: 's', spacePath: nested, appId: 'dh' },
+      { memoryActive: true, spaceMemoryOffered: false, workDir: nested, attachedFiles: [] }
+    )
+    withAccess({ allowedTools: ['Write'] })
+    expect(allow('Write', { file_path: join(nested, 'notes.md') })).toBe(true)
+    expect(allow('Write', { file_path: join(nested, '.agents/skills/z/SKILL.md') })).toBe(false)
+  })
+
   it('follows links: a link inside memory pointing outside is outside', () => {
     symlinkSync('/etc', join(space, '.halo/apps/dh/memory/topics/escape'))
     withAccess({ allowedTools: [] })

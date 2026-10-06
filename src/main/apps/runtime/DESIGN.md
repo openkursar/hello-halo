@@ -1552,6 +1552,14 @@ for external integrations. Both paths share admission and concurrency checks.
   - the folder of each skill the turn may load is readable, read only, whatever
     the reading switches say: a skill reads its own instructions and references
     as it runs, and a global skill lives outside the workspace.
+  - what an engine reads as its own settings or standing instructions is never
+    written, granted Write or not, memory included: `.claude/`, `.agents/` and
+    `.codex/` anywhere below the workspace, and `CLAUDE.md`, `CLAUDE.local.md`,
+    `AGENTS.md`, `AGENTS.override.md` and `.mcp.json` by name anywhere
+    (`ENGINE_CONTROL_FOLDERS` / `ENGINE_CONTROL_FILES`, each entry with the engine
+    that reads it). A write there would outlive the turn and act with the
+    owner's authority — settings and hooks run commands, instructions speak
+    into every later session, a skill's files are reloaded while a turn runs.
   - Bash and the terminal cannot be held to paths; they follow the policy only.
   - Codex runs no restricted turn at all (it cannot enforce a policy).
 - TodoWrite is available to every caller (`ALWAYS_AVAILABLE_BUILTIN_TOOLS`).
@@ -1602,6 +1610,16 @@ itself has no switch: it exists for a caller exactly when some skill does.
   pre-approvals and no call anything could judge — and an IM guest's direct
   message reaches the engine as typed. Such a message gets a line in front
   (`inertCommandText`); a granted skill is still reached through the skill tool.
+  Words from outside this machine get the same treatment when they would join a
+  running turn (`team/orchestration.renderMidTurnEnvelope`), though the bus keeps
+  them out of one in the first place.
+- **Every copy of a name is checked.** A global and a space skill may share a
+  folder name, and which one the engine loads for it is the engine's own order;
+  the check runs over every copy (`skill-discovery.listLoadableSkillCopies`), and
+  a name with any copy that may not load does not load and opens no folder.
+  A skill built into the engine that shares a name with the owner's is the one
+  the engine loads; those bring only read tools, or tools a strict turn already
+  withholds, so they reach no further than the policy.
 - **The sub-agent switch covers both names** the engine knows the tool by
   (`Agent`, and the older `Task` a rule still acts on). `Task` used to stay in a
   strict turn's withheld list with no switch of its own, which took the tool away

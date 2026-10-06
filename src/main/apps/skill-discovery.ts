@@ -16,7 +16,7 @@
  * empty or wrong list. The disk is the runtime source of truth.
  */
 
-import { existsSync, readdirSync, readFileSync } from 'fs'
+import { existsSync, readdirSync, readFileSync, type Dirent } from 'fs'
 import { join } from 'path'
 import { resolveGlobalSkillsDir } from './manager/skill-sync'
 import { getWorkingDir } from '../services/agent/helpers'
@@ -30,7 +30,7 @@ function scanSkillsDir(dir: string, scope: 'global' | 'space'): AvailableSkill[]
   if (!existsSync(dir)) return []
 
   const results: AvailableSkill[] = []
-  let entries: ReturnType<typeof readdirSync>
+  let entries: Dirent[]
   try {
     entries = readdirSync(dir, { withFileTypes: true })
   } catch (err) {
@@ -68,14 +68,17 @@ function scanSkillsDir(dir: string, scope: 'global' | 'space'): AvailableSkill[]
   return results
 }
 
+function skillDirsOf(spaceId: string): { globalDir: string; spaceDir: string } {
+  return { globalDir: resolveGlobalSkillsDir(), spaceDir: join(getWorkingDir(spaceId), '.claude', 'skills') }
+}
+
 /**
  * List the skills a digital human in the given space can load at runtime.
  * Space-scoped skills override global ones sharing the same directory name
  * (project settings win over user settings), matching SDK resolution.
  */
 export function listAvailableSkills(spaceId: string): AvailableSkill[] {
-  const globalDir = resolveGlobalSkillsDir()
-  const spaceDir = join(getWorkingDir(spaceId), '.claude', 'skills')
+  const { globalDir, spaceDir } = skillDirsOf(spaceId)
 
   const globalSkills = scanSkillsDir(globalDir, 'global')
   const spaceSkills = scanSkillsDir(spaceDir, 'space')
@@ -93,3 +96,14 @@ export function listAvailableSkills(spaceId: string): AvailableSkill[] {
   )
   return merged
 }
+
+/**
+ * Every copy of every skill the space's engine may load, a global and a space
+ * skill of the same name both kept. Which copy the engine loads for a name is
+ * its own order, so a check of what may load has to hold for each.
+ */
+export function listLoadableSkillCopies(spaceId: string): AvailableSkill[] {
+  const { globalDir, spaceDir } = skillDirsOf(spaceId)
+  return [...scanSkillsDir(spaceDir, 'space'), ...scanSkillsDir(globalDir, 'global')]
+}
+
