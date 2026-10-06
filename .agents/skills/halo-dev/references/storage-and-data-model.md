@@ -90,8 +90,9 @@ Inside `memory/`: `topics/` (agent-written wiki), `run/` (run records), `archive
 (memory.md before each consolidation), `.snapshots/` (restorable memory.md + topics),
 `.consolidation/` (a running consolidation's private copy).
 
-The agent edits memory with its own Read/Edit/Write; the only memory MCP tool is
-`memory_status` (structure, no content).
+The agent reads and updates memory with native Read/Grep/Glob/Edit/Write. Core
+annotated format, a mature example and recording policies stay in the system prompt; no
+memory MCP server or tutorial lookup is needed.
 
 ## 5) Shared Type Contracts (Renderer-safe)
 

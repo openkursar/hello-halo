@@ -65,7 +65,7 @@ not breed them.
 **Anti-example (do not imitate).** `foundation/config.service.ts` importing the
 `AnalyticsConfig` *type* from `services` — it's a type, so the fix is to move it to
 `shared/types`; not a seam, and not an upward import.
-**Positive example.** `app-bridge`, `memory/sdk`, the daemon's
+**Positive example.** `app-bridge`, the daemon's
 `setDaemonStealthInjector` — each a genuine upper-tier runtime behavior that cannot
 be threaded in as a parameter.
 

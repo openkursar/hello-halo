@@ -90,7 +90,7 @@ Purpose:
 
 - memory layout per owner (digital human, space): `memory.md` (`# now` + `# History`) and `memory/topics/` wiki
 - snapshot + rendering of the bounded `## Memory` block a turn opens with (capped `# now`, recent History titles, generated topic index)
-- memory instructions (owner kind, `memory_schema` tracked items, empty-space short form)
+- shared annotated memory format and mature example, owner recording policy, `memory_schema` tracked items, paths and trusted author tag
 - the per-memory write lock, and the engine-hook write guard that holds the agent's file tools to it
 - the file side of consolidation (cadence assessment, workspace, validation, conflict report + rebase, swap, snapshots, History trim, cooldown state)
 

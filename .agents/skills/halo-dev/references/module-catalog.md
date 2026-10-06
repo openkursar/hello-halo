@@ -18,7 +18,7 @@ Quick jump list for engineers who already know the target area.
 | `platform/store` | SQLite manager + migration runner | `src/main/platform/store/index.ts`, `src/main/platform/store/database-manager.ts` | `src/main/platform/store/DESIGN.md` |
 | `platform/scheduler` | persistent schedule engine and run logs | `src/main/platform/scheduler/index.ts`, `src/main/platform/scheduler/timer.ts`, `src/main/platform/scheduler/store.ts` | `src/main/platform/scheduler/DESIGN.md` |
 | `platform/event` | event routing, filtering, dedup, adapters | `src/main/platform/event/index.ts`, `src/main/platform/event/event-bus.ts`, `src/main/platform/event/sources/*.ts` | N/A |
-| `platform/memory` | scoped memory tools and file management | `src/main/platform/memory/index.ts`, `src/main/platform/memory/tools.ts`, `src/main/platform/memory/paths.ts` | `src/main/platform/memory/DESIGN.md` |
+| `platform/memory` | memory files, standing conventions, snapshots and write guard | `src/main/platform/memory/index.ts`, `src/main/platform/memory/prompt.ts`, `src/main/platform/memory/paths.ts` | `src/main/platform/memory/DESIGN.md` |
 | `platform/background` | keep-alive, tray, daemon browser | `src/main/platform/background/index.ts`, `src/main/platform/background/daemon-browser.ts`, `src/main/platform/background/keep-alive.ts` | `src/main/platform/background/DESIGN.md` |
 
 ## Integration Modules

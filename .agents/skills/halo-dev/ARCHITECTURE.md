@@ -36,7 +36,9 @@ Services Layer (src/main/services)
   - openai-compat-router (src/main/openai-compat-router) sits in this tier:
     services/agent starts it and encodes backend configs through its index;
     it depends on services only through the standalone proxy-fetch utility,
-    never through a domain service. It owns the Claude Code identity sent
+    never through a domain service. Its one runtime seam is the request
+    credential resolver ai-sources registers at bootstrap, which gives each
+    proxied request its account's current token. It owns the Claude Code identity sent
     upstream (utils/claude-code-identity), which services/agent reads
     through the router's index.
 
@@ -46,7 +48,7 @@ Platform Layer (src/main/platform)
   - event       : event routing/filter/dedup
   - memory      : memory.md + topic wiki per owner (digital human, space): layouts,
                   turn rendering, write lock + engine-hook write guard, file side
-                  of consolidation (SDK primitives injected via memory/sdk)
+                  of consolidation; standing conventions shared across owners
   - background  : keep-alive + tray + daemon browser
   - turn-gate   : generic "one turn per session key" lock + FIFO mailbox
                   (shared by apps/runtime/team and services/agent; see its DESIGN.md)
@@ -78,9 +80,6 @@ Foundation Layer (src/main/foundation)  ← bedrock, zero upward deps
   - `services/app-bridge.ts` — the agent engine and space service reach the App
     manager / `halo-apps` MCP server / MCP-change events through this seam;
     `apps/runtime` registers the concrete impls at startup (`registerAppBridge`).
-  - `platform/memory/sdk.ts` — the agent-SDK `tool()`/`createSdkMcpServer()`
-    primitives are injected by bootstrap (`setMemorySdk`) so memory never imports
-    `services/agent`.
   - `services/conversation-interop/source.ts` — the conversation directory behind
     `conversation_read`/`conversation_send` is a set of registered
     `ConversationSource`s; the space's own conversations are built in and
@@ -308,6 +307,27 @@ Key types:
 | `ContentReference` | A place the user pointed at and sent with a message (file lines, a diff side, terminal output, a message passage, a local path): location + excerpt as it was + note. The transcript keeps the record; the model reads it expanded as `<halo_references>` (`services/agent/references.ts`) |
 | `MessageTask` | A built-in task a user message starts (today: code review from the changes view). Set only in the main process; the model reads it as `<halo_task>` |
 
+**Managed OAuth accounts** are independent `AISource` records, not one record per
+provider. Login without a target adds an account (a verified stable account id may
+match an existing record); targeted reauthentication preserves the source id and
+rejects a known account mismatch. An optional provider `getAccountId` verifies a
+legacy identity from that source's credential before an id migration; labels never
+prove identity. ChatGPT separates user/workspace identity from the provider-owned
+`accountId` used by inference and catalog routing; workspace membership alone is
+not proof of the same user. Providers receive only the selected source's legacy
+config slice. Credentials, temporary provider tokens, catalogs and request
+capabilities must never be shared between accounts. Async credential and catalog
+writes are single-flight per source and discard obsolete results. Model-bound
+credentials are prepared for the same captured effective model used to resolve the
+backend descriptor. Every engine receives the same captured account snapshot;
+alternate engines never re-read global selection during creation. Source changes
+rebuild only sessions using that source, at the existing safe boundaries; an unavailable explicit source must fail rather than
+silently use another account. CLI-delegated credentials remain a single external
+slot. Generic client config snapshots preserve live managed source metadata,
+credentials and selection; account edits and lifecycle operations use targeted
+source APIs, so stale snapshots cannot delete/revive accounts or roll back edits. OAuth tokens are masked at IPC/HTTP
+boundaries, and login responses never expose provider token payloads.
+
 **`delegated` auth type** (`claude-cli` source): Halo holds no credential — the
 bundled Claude Code CLI authenticates itself from its own store, keyed by
 `CLAUDE_CONFIG_DIR`. Consequences for any code touching sources:
@@ -469,8 +489,8 @@ Services use a **callback registration pattern** to avoid circular dependencies:
 
 - `config.service.ts` provides `onApiConfigChange(callback)` registration
 - `agent` service registers the callback at module load
-- When API config changes (provider/apiKey/apiUrl), agent is automatically notified to clean up all V2 Sessions
-- User's next message automatically creates a new Session with the updated config
+- V2 credential/routing/capability changes notify agent with affected source ids; only those sessions rebuild at safe boundaries. Legacy API changes invalidate all sessions.
+- User's next message automatically creates a Session with the updated source config
 
 **BrowserWindow lifecycle**: Always check `!mainWindow.isDestroyed()` before accessing `mainWindow`, especially in async callbacks and event listeners (the window may already be destroyed).
 

@@ -26,7 +26,7 @@ Primary files:
 2. runtime job callback builds trigger context
 3. runtime enforces concurrency via semaphore
 4. `executeRun(...)` creates run record and isolated SDK session
-5. memory MCP + report MCP are injected
+5. report MCP is injected; enabled memory supplies standing conventions and a bounded opening snapshot, read and edited with native file tools
 6. run completes and writes:
    - run status in `automation_runs`
    - activity entries in `activity_entries`
