@@ -88,8 +88,8 @@ export function registerAppsRoutes(app: Express): void {
     return target
   }
 
-  // Helper: the IM session an im-chat route names by its parts, or a 400 when
-  // a part could not address one.
+  // The IM session an im-chat route names by its parts, or a 400 when a part
+  // could not address one.
   function resolveImChatOrFail(channel: unknown, chatType: unknown, chatId: unknown, res: Response) {
     const chat = resolveHttpImChat(channel, chatType, chatId)
     if (!chat.ok) {

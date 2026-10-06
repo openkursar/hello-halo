@@ -116,7 +116,7 @@ export function StoreUpdateDialog({
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" onMouseDown={onClose}>
       <div
-        className="relative w-full max-w-md bg-background border border-border/60 rounded-[14px] shadow-xl p-7"
+        className="relative w-full max-w-md max-h-[calc(100dvh-2rem)] overflow-y-auto bg-background border border-border/60 rounded-[14px] shadow-xl p-7"
         onMouseDown={e => e.stopPropagation()}
       >
         <button

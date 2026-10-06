@@ -48,7 +48,7 @@ export function WatchedFolderRow({ dir, retrying, onRetry, onRemove }: WatchedFo
       )}
       <button
         onClick={onRemove}
-        className="p-1.5 rounded-md opacity-0 group-hover:opacity-100 hover:bg-destructive/10 transition-all flex-shrink-0"
+        className="p-1.5 rounded-md opacity-0 group-hover:opacity-100 max-sm:opacity-100 hover:bg-destructive/10 transition-all flex-shrink-0"
         title={t('Remove')}
       >
         <X className="w-3.5 h-3.5 text-destructive" />

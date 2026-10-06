@@ -11,14 +11,14 @@
 
 import { beforeEach, expect, it, vi } from 'vitest'
 
-const env = vi.hoisted(() => ({ runner: null as any, electron: true, pathFor: new Map<object, string>(), upload: null as any }))
+const env = vi.hoisted(() => ({ runner: null as any, electron: true, pathFor: new Map<object, string>(), upload: null as any, spaceId: 's' as string | null }))
 vi.mock('react', async original => ({ ...await original<typeof import('react')>(), useState: (value: any) => env.runner.state(value), useRef: (value: any) => env.runner.ref(value), useMemo: (compute: any) => compute(), useCallback: (fn: any) => fn, useEffect: () => {}, useLayoutEffect: () => {} }))
 vi.mock('../../../src/renderer/api', () => ({ api: { getPathForFile: (file: object) => env.pathFor.get(file) ?? '', pickLocalEntries: vi.fn(), uploadArtifactFile: (...args: unknown[]) => env.upload(...args) } }))
 vi.mock('../../../src/renderer/api/transport', () => ({ isElectron: () => env.electron }))
 vi.mock('../../../src/renderer/i18n', () => ({ useTranslation: () => ({ t: (text: string) => text }), default: { t: (text: string) => text } }))
 vi.mock('../../../src/renderer/stores/app.store', () => ({ useAppStore: (select: any) => select({ config: null }) }))
 vi.mock('../../../src/renderer/stores/space.store', () => ({ useSpaceStore: (select: any) => select({ currentSpace: null }) }))
-vi.mock('../../../src/renderer/stores/chat.store', () => ({ useChatStore: Object.assign((select: any) => select({ pendingComposerInput: null, currentSpaceId: 's' }), { getState: () => ({ clearComposerDraft: vi.fn() }), setState: vi.fn() }) }))
+vi.mock('../../../src/renderer/stores/chat.store', () => ({ useChatStore: Object.assign((select: any) => select({ pendingComposerInput: null, currentSpaceId: env.spaceId }), { getState: () => ({ clearComposerDraft: vi.fn() }), setState: vi.fn() }) }))
 // The store is real; only its React hooks are read straight from the state (no React render here).
 vi.mock('../../../src/renderer/stores/composer-references.store', async original => {
   const real = await original<typeof import('../../../src/renderer/stores/composer-references.store')>()
@@ -67,6 +67,7 @@ const toolbar = (tree: any) => nodes(tree).find(node => typeof node.type === 'fu
 const dropZone = (tree: any) => nodes(tree).find(node => typeof node.props?.onDrop === 'function')
 const cards = (tree: any): ContentReference[] => nodes(tree).find(node => node.type === ComposerReferenceChips)?.props.references ?? []
 const errorText = (tree: any) => nodes(tree).find(node => node.type === 'span' && String(node.props?.className).includes('text-destructive flex-1'))?.props.children
+const spanTexts = (tree: any) => nodes(tree).filter(node => node.type === 'span' && typeof node.props?.children === 'string').map(node => node.props.children)
 /** What the user sees of a path card: its path and kind. */
 const paths = (references: readonly ContentReference[] | undefined) =>
   (references ?? []).map(ref => (ref.source.kind === 'path' ? { path: ref.source.path, isDirectory: ref.source.isDirectory } : ref.source.kind))
@@ -82,6 +83,7 @@ let props: any
 let goal: any
 beforeEach(() => {
   env.electron = true
+  env.spaceId = 's'
   env.pathFor.clear()
   env.upload = vi.fn(async (_spaceId: string, file: { name: string }) => ({ success: true, data: { path: `/srv/space/${file.name}`, name: file.name, size: 10 } }))
   useComposerReferencesStore.setState({ drafts: new Map(), target: null, signal: null })
@@ -342,16 +344,27 @@ it.each([
   const dropping = drop(render(), [PDF])
   const typed = type('Read this')
   expect(toolbar(typed).props.canSend).toBe(false)
+  expect(spanTexts(typed)).toContain('Uploading {{count}} file(s)…')
   pressEnter(typed)
   expect(sender()).not.toHaveBeenCalled()
 
   finish({ success: true, data: { path: '/srv/space/q3 report.pdf', name: 'q3 report.pdf', size: 10 } })
   await dropping
   const ready = render()
+  expect(spanTexts(ready)).not.toContain('Uploading {{count}} file(s)…')
   expect(toolbar(ready).props.canSend).toBe(true)
   pressEnter(ready)
   expect(sender()).toHaveBeenCalledTimes(1)
   expect(paths(sentReferences(sender().mock.calls[0]))).toEqual([{ path: '/srv/space/q3 report.pdf', isDirectory: false }])
+})
+
+it('on a remote client with no workspace open, a file is not uploaded and the user is told to open one', async () => {
+  env.electron = false
+  env.spaceId = null
+  const { render } = mount()
+  await drop(render(), [PDF])
+  expect(env.upload).not.toHaveBeenCalled()
+  expect(errorText(render())).toBe('Open a workspace to attach files')
 })
 
 it('on a remote client a file over the upload limit, or one the server refuses, is not attached and the user is told', async () => {

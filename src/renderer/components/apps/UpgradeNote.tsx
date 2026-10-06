@@ -131,7 +131,9 @@ export function UpgradeNote({ appId, entryId, note }: UpgradeNoteProps) {
       {!note.editsKnown && (
         <p className="text-xs text-muted-foreground">
           {t('Halo cannot tell which of them you changed.')}
-          {note.kept.includes('subscriptions') && !adopted.has('subscriptions') && ` ${t('Run times the author added were not added; use the author’s version to get them.')}`}
+          {note.kept.includes('subscriptions') && !adopted.has('subscriptions') && (
+            <span className="block">{t('Run times the author added were not added; use the author’s version to get them.')}</span>
+          )}
         </p>
       )}
 

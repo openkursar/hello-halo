@@ -25,6 +25,7 @@ import { useTranslation } from '../../i18n'
 import { api } from '../../api'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
 import { getImSessionDisplayName } from '../../../shared/types/im-channel'
+import { getImChannelDisplay } from '../apps/im-channel-labels'
 
 // ============================================
 // Types
@@ -36,21 +37,6 @@ interface ImSessionsSectionProps {
   appName?: string
   /** When true, render without the section wrapper/title — for embedding inside other components */
   compact?: boolean
-}
-
-// ============================================
-// Channel Display Config
-// ============================================
-
-const CHANNEL_DISPLAY: Record<string, { label: string; color: string }> = {
-  'wecom-bot': { label: 'WeCom', color: 'text-green-500' },
-  'feishu-bot': { label: 'Feishu', color: 'text-blue-500' },
-  'dingtalk-bot': { label: 'DingTalk', color: 'text-indigo-500' },
-  'weixin-ilink-bot': { label: 'WeChat iLink', color: 'text-green-600' },
-}
-
-function getChannelDisplay(channel: string) {
-  return CHANNEL_DISPLAY[channel] ?? { label: channel, color: 'text-muted-foreground' }
 }
 
 function formatTime(ts: number): string {
@@ -205,7 +191,7 @@ export function ImSessionsSection({ appId, appName, compact }: ImSessionsSection
       ) : (
         <div className="space-y-2">
           {sessions.map((session) => {
-            const channelInfo = getChannelDisplay(session.channel)
+            const channelInfo = getImChannelDisplay(session.channel)
             const key = `${session.appId}:${session.channel}:${session.chatId}`
             const resolvedAppName = isGlobalMode ? (appNames[session.appId] || session.appId.slice(0, 8)) : null
 

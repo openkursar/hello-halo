@@ -312,7 +312,7 @@ export function RawFilesTab({ kb }: RawFilesTabProps) {
               <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs">
                 <div className="flex items-start justify-between gap-2">
                   <p className="font-medium text-destructive">
-                    {t("Couldn't remove {{count}} file(s). They stay selected so you can try again.", { count: notRemoved.length })}
+                    {t('Could not remove {{count}} file(s). They stay selected so you can try again.', { count: notRemoved.length })}
                   </p>
                   <button
                     onClick={() => setNotRemoved([])}
@@ -426,6 +426,8 @@ function FileRow({
   const isLearned = file.state === 'learned'
   const selectable = !!selection && isRemovable(file)
   const isSelected = selectable && selection.isSelected(file)
+  // Said in the row, not only in a tooltip: a touch screen shows no tooltip.
+  const unpickableReason = selection && !selectable ? t('From a watched folder — manage it in Settings') : null
 
   const handleClick = () => {
     if (selectable) {
@@ -452,7 +454,7 @@ function FileRow({
           onChange={() => selection.toggle(file)}
           onClick={(e) => e.stopPropagation()}
           aria-label={t('Select "{{name}}"', { name: file.name })}
-          title={selectable ? undefined : t('From a watched folder — manage it in Settings')}
+          title={unpickableReason ?? undefined}
           className="w-3.5 h-3.5 rounded border-border accent-primary cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 flex-shrink-0"
         />
       )}
@@ -460,7 +462,12 @@ function FileRow({
       <FileText className="w-4 h-4 text-muted-foreground flex-shrink-0" />
       <div className="min-w-0 flex-1">
         <p className="text-sm truncate">{file.name}</p>
-        {reason ? (
+        {unpickableReason ? (
+          <p className="text-[11px] text-muted-foreground truncate flex items-center gap-1">
+            <FolderOpen className="w-3 h-3 flex-shrink-0" />
+            {unpickableReason}
+          </p>
+        ) : reason ? (
           <p className={`text-[11px] truncate ${file.state === 'failed' ? 'text-destructive' : 'text-amber-600 dark:text-amber-500'}`}>
             {reason}
           </p>
@@ -479,7 +486,7 @@ function FileRow({
         {formatSize(file.size)}
       </span>
       {isLearned && !selection && (
-        <Eye className="w-3.5 h-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
+        <Eye className="w-3.5 h-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 max-sm:opacity-100 transition-opacity flex-shrink-0" />
       )}
       {file.source === 'linked' ? (
         // Watched-folder files live outside the KB — remove the folder in
@@ -493,7 +500,7 @@ function FileRow({
       ) : !selection && (
         <button
           onClick={(e) => { e.stopPropagation(); onRemove(file) }}
-          className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-destructive/20 transition-all flex-shrink-0"
+          className="p-1 rounded opacity-0 group-hover:opacity-100 max-sm:opacity-100 hover:bg-destructive/20 transition-all flex-shrink-0"
           title={t('Remove')}
         >
           <Trash2 className="w-3.5 h-3.5 text-destructive" />

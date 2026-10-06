@@ -52,7 +52,8 @@ describe('UpgradeNote', () => {
     const html = render(UpgradeNote, { appId: 'app-1', entryId: 'entry-1', note: { ...note, editsKnown: false } })
 
     expect(html).toContain('Halo cannot tell which of them you changed.')
-    expect(html).toContain('Run times the author added were not added; use the author’s version to get them.')
+    // Its own line, not glued on with a space a Chinese or Japanese sentence would not have.
+    expect(html).toContain('changed.<span class="block">Run times the author added were not added; use the author’s version to get them.</span>')
   })
 
   it('lists connections and skills among what can be kept', () => {
@@ -90,7 +91,20 @@ describe('upgradedMessage', () => {
   it('adds that Halo cannot tell which of them the user changed when there was no earlier author’s version', () => {
     const message = upgradedMessage('1.3.0', { kept: ['system_prompt'], editsKnown: false }, t, 'en')
 
-    expect(message).toMatch(/kept your current version: System Prompt Halo cannot tell which of them you changed\.$/)
+    expect(message).toBe('Upgraded to v1.3.0. These differ from the author’s new version and kept your current version: System Prompt. Halo cannot tell which of them you changed.')
+  })
+
+  it('hands the translator that message as one sentence, not two joined with a space', () => {
+    const keys: string[] = []
+    const recording = ((text: string, values?: Record<string, unknown>) => {
+      keys.push(text)
+      return translate(text, values)
+    }) as unknown as typeof t
+
+    upgradedMessage('1.3.0', { kept: ['system_prompt'], editsKnown: false }, recording, 'en')
+
+    expect(keys).toContain('Upgraded to v{{version}}. These differ from the author’s new version and kept your current version: {{items}}. Halo cannot tell which of them you changed.')
+    expect(keys).not.toContain('Halo cannot tell which of them you changed.')
   })
 })
 

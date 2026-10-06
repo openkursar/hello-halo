@@ -103,6 +103,18 @@ describe('AppRemindersSection', () => {
     expect(shown).toMatch(/Once, /)
   })
 
+  it('names an unnamed local chat the way the conversation list does', async () => {
+    env.api.appListReminders.mockResolvedValue({
+      success: true,
+      data: [{ ...REMINDERS[1], id: 'r-3', conversationId: 'app-chat:app-1:local:c-1', conversation: { kind: 'local' } }],
+    })
+
+    const shown = text((await open()).tree)
+
+    expect(shown).toContain('New chat')
+    expect(shown).not.toContain('Chat session')
+  })
+
   it('cancels one and reads the list again', async () => {
     const { tree } = await open()
     const [firstCancel] = nodes(tree).filter(node => node.type === 'button')

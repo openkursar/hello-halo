@@ -29,7 +29,10 @@ function describeTiming(reminder: ConversationReminderView, t: Translate): strin
 function describeConversation(reminder: ConversationReminderView, t: Translate): string {
   const { kind, name } = reminder.conversation
   if (kind === 'default') return t('Main chat')
-  return name ?? (kind === 'im' ? t('IM chat') : t('Chat session'))
+  if (name) return name
+  if (kind === 'im') return t('IM chat')
+  // What the conversation list calls an unnamed local chat.
+  return kind === 'local' ? t('New chat') : t('Chat session')
 }
 
 export function AppRemindersSection({ appId }: { appId: string }) {
