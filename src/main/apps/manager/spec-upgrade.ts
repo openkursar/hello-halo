@@ -59,40 +59,81 @@ export function mergeAuthorUpgrade(
   return { spec, kept }
 }
 
+interface TriggerPairing {
+  /** Which trigger of the other list each trigger of the base became (index to index). */
+  pairs: Map<number, number>
+  /**
+   * Base triggers whose pairing is a guess: they sit in a stretch where the two
+   * sides hold different numbers of triggers, so which one was edited and which
+   * was added or removed cannot be told.
+   */
+  guessed: Set<number>
+}
+
 /**
- * Which trigger of `other` each trigger of `base` became (index to index).
- *
  * Triggers with an id are the same trigger when their ids match. Id-less ones,
- * the way authors usually write them, are paired first by identical content,
- * so a trigger inserted or removed elsewhere cannot shift the rest; what is
- * left is paired in order as the same trigger edited. A trigger still unpaired
- * was added (in `other`) or removed (from `base`).
+ * the way authors usually write them, are anchored first on a longest common
+ * run of identical triggers, which keeps their order; a trigger inserted or
+ * removed elsewhere cannot shift the rest. What lies between two anchors is
+ * paired in order as the same trigger edited, and what is left over in that
+ * stretch was added (in `other`) or removed (from `base`).
  */
-function pairTriggers(base: SubscriptionDef[], other: SubscriptionDef[]): Map<number, number> {
+function pairTriggers(base: SubscriptionDef[], other: SubscriptionDef[]): TriggerPairing {
   const pairs = new Map<number, number>()
-  const taken = new Set<number>()
-  const pair = (i: number, j: number): void => {
-    pairs.set(i, j)
-    taken.add(j)
-  }
+  const guessed = new Set<number>()
 
   base.forEach((sub, i) => {
     if (sub.id === undefined) return
     const j = other.findIndex(candidate => candidate.id === sub.id)
-    if (j !== -1) pair(i, j)
+    if (j !== -1) pairs.set(i, j)
   })
 
-  const unnamed = base.flatMap((sub, i) => (sub.id === undefined ? [i] : []))
-  const free = (): number[] => other.flatMap((sub, j) => (sub.id === undefined && !taken.has(j) ? [j] : []))
-  for (const i of unnamed) {
-    const j = free().find(candidate => sameValue(base[i], other[candidate]))
-    if (j !== undefined) pair(i, j)
+  const left = base.flatMap((sub, i) => (sub.id === undefined ? [i] : []))
+  const right = other.flatMap((sub, j) => (sub.id === undefined ? [j] : []))
+  const anchors = commonSubsequence(left.length, right.length, (l, r) => sameValue(base[left[l]], other[right[r]]))
+  let fromLeft = 0
+  let fromRight = 0
+  for (const [toLeft, toRight] of [...anchors, [left.length, right.length] as const]) {
+    const stretch = left.slice(fromLeft, toLeft)
+    const counterparts = right.slice(fromRight, toRight)
+    stretch.forEach((i, k) => {
+      if (k < counterparts.length) pairs.set(i, counterparts[k])
+      if (counterparts.length > 0 && counterparts.length !== stretch.length) guessed.add(i)
+    })
+    if (toLeft < left.length) pairs.set(left[toLeft], right[toRight])
+    fromLeft = toLeft + 1
+    fromRight = toRight + 1
   }
-  const rest = free()
-  unnamed.filter(i => !pairs.has(i)).forEach((i, k) => {
-    if (k < rest.length) pair(i, rest[k])
-  })
-  return pairs
+  return { pairs, guessed }
+}
+
+/** Index pairs of a longest common subsequence of two sequences, in order. */
+function commonSubsequence(
+  lengthA: number,
+  lengthB: number,
+  same: (i: number, j: number) => boolean,
+): Array<readonly [number, number]> {
+  const longest = Array.from({ length: lengthA + 1 }, () => new Array<number>(lengthB + 1).fill(0))
+  for (let i = lengthA - 1; i >= 0; i--) {
+    for (let j = lengthB - 1; j >= 0; j--) {
+      longest[i][j] = same(i, j) ? longest[i + 1][j + 1] + 1 : Math.max(longest[i + 1][j], longest[i][j + 1])
+    }
+  }
+  const run: Array<readonly [number, number]> = []
+  let i = 0
+  let j = 0
+  while (i < lengthA && j < lengthB) {
+    if (same(i, j)) {
+      run.push([i, j])
+      i++
+      j++
+    } else if (longest[i + 1][j] >= longest[i][j + 1]) {
+      i++
+    } else {
+      j++
+    }
+  }
+  return run
 }
 
 function invert(pairs: Map<number, number>): Map<number, number> {
@@ -113,8 +154,19 @@ function mergeSubscriptions(
   const mine = current ?? []
   const base = original ?? []
   const theirs = next ?? []
-  const toMine = pairTriggers(base, mine)
-  const toTheirs = pairTriggers(base, theirs)
+  const toMine = pairTriggers(base, mine).pairs
+  const author = pairTriggers(base, theirs)
+  const toTheirs = author.pairs
+
+  // Where the author's pairing is a guess and the user changed or deleted one
+  // of those triggers, any guess could drop the author's new trigger or run an
+  // edited one twice. The user's list then stays as it is; the note offers the
+  // author's version.
+  for (const b of author.guessed) {
+    const m = toMine.get(b)
+    if (m === undefined || !sameValue(mine[m], base[b])) return current
+  }
+
   const fromMine = invert(toMine)
   const fromTheirs = invert(toTheirs)
 

@@ -218,6 +218,65 @@ describe('mergeAuthorUpgrade', () => {
 
       expect(spec.subscriptions).toEqual([B, editedA])
     })
+
+    // Pairing what is left over across the whole list, rather than between the
+    // triggers both sides kept, paired B with the author's inserted trigger.
+    it('pairs edits between unchanged triggers when both sides insert one in front and edit the same one', () => {
+      const U = at('0 6 * * *')
+      const W = at('0 9 * * 1')
+      const userB = at('0 13 * * *')
+      const authorB = at('0 14 * * *')
+      const { spec } = mergeAuthorUpgrade(
+        v12({ subscriptions: [U, A, userB] }),
+        v12({ subscriptions: [A, B] }),
+        v13({ subscriptions: [W, A, authorB] }),
+      )
+
+      expect(spec.subscriptions).toEqual([W, A, userB, U])
+    })
+
+    it('keeps both insertions when the two sides insert at different places in the middle', () => {
+      const C = at('0 18 * * *')
+      const U = at('0 10 * * *')
+      const W = at('0 15 * * *')
+      const { spec } = mergeAuthorUpgrade(
+        v12({ subscriptions: [A, U, B, C] }),
+        v12({ subscriptions: [A, B, C] }),
+        v13({ subscriptions: [A, B, W, C] }),
+      )
+
+      expect(spec.subscriptions).toEqual([A, B, W, C, U])
+    })
+
+    // The author added a trigger and changed another one in the same place, so
+    // which of the two is the changed one cannot be told. Guessing could lose
+    // the new trigger or run the user's edit next to the author's.
+    it('keeps the user’s triggers when the author both added and changed one where the user changed it', () => {
+      const W = at('0 9 * * 1')
+      const authorA = at('0 7 * * *')
+      const userA = at('0 9 * * *')
+      const { spec, kept } = mergeAuthorUpgrade(
+        v12({ subscriptions: [userA] }),
+        v12({ subscriptions: [A] }),
+        v13({ subscriptions: [W, authorA] }),
+      )
+
+      expect(spec.subscriptions).toEqual([userA])
+      expect(kept).toContain('subscriptions')
+    })
+
+    it('takes the author’s triggers in that case when the user changed none of them', () => {
+      const W = at('0 9 * * 1')
+      const authorA = at('0 7 * * *')
+      const { spec, kept } = mergeAuthorUpgrade(
+        v12({ subscriptions: [A] }),
+        v12({ subscriptions: [A] }),
+        v13({ subscriptions: [W, authorA] }),
+      )
+
+      expect(spec.subscriptions).toEqual([W, authorA])
+      expect(kept).toEqual([])
+    })
   })
 
   describe('without the author’s original', () => {

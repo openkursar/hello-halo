@@ -329,10 +329,18 @@ written at install and replaced at every upgrade (`spec-upgrade.ts`).
   version or goes with the author's removal, the author's new ones are added
   and the user's own are kept. A trigger with an `id` is identified by it.
   Id-less triggers — how authors and the AI guides usually write them — are
-  paired by identical content first, then the rest in order as the same trigger
-  edited; pairing by position alone would let a trigger inserted or removed
-  elsewhere drop the author's new one and revive the one the user replaced.
-  The same trigger added by both sides is kept once.
+  anchored on a longest common run of identical triggers (order kept); what
+  lies between two anchors is paired in order as the same trigger edited, and
+  what is left over there was added or removed. Pairing by position, or across
+  the whole list, would let a trigger inserted or removed elsewhere drop the
+  author's new one and revive the one the user replaced. The same trigger added
+  by both sides is kept once.
+- Where the author's stretch between anchors changed length (a trigger added
+  or removed there as well as one changed), which one changed is a guess. If
+  the user also changed or deleted a trigger in that stretch, the user's list
+  is kept as it is and reported as kept, rather than risk losing the author's
+  new trigger or running an edited one twice; the user can take the author's
+  version from the activity note.
 - Nothing is merged inside a field: a prompt is the user's or the author's.
 
 The outcome (`SpecUpgradeOutcome`, shared) names the fields left different from
