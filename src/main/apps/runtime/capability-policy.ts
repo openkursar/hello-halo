@@ -37,14 +37,19 @@ export { computeDisallowedBuiltins }
  * the session, and the office credential that reaches the cross-machine 1:1
  * endpoint is denied that local path (`http/auth/route-scope`).
  *
- * IM-backed turns are deliberately left out — the team's IM front desk is a
- * separate scenario with its own hardening decision.
+ * In a chat a member fronts over IM, the person's own message answers to that
+ * channel's owner/guest rules instead. A turn woken there to continue work
+ * that entered from outside is borrowed like any other: who spoke last in the
+ * chat says nothing about who set the work in motion.
  */
 export function isBorrowedTeamTurn(
   teamTurnKind: TeamTriggerContext['kind'] | undefined,
-  overImChannel: boolean
+  overImChannel: boolean,
+  external: boolean
 ): boolean {
-  return !!teamTurnKind && !overImChannel
+  if (!teamTurnKind) return false
+  if (!overImChannel) return true
+  return teamTurnKind !== 'human_message' && external
 }
 
 /**

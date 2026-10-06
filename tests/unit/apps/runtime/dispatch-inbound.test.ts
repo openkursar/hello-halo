@@ -120,6 +120,8 @@ import {
   setPendingRelayStore,
 } from '../../../../src/main/apps/runtime/pending-relays'
 import { analytics } from '../../../../src/main/services/analytics/analytics.service'
+import { setImPermissionContext, clearImPermissionContext } from '../../../../src/main/apps/runtime/im-permission-registry'
+import { maybeClaimOwner } from '../../../../src/main/apps/runtime/im-channels/owner-claim'
 import type { InboundMessage, ReplyHandle } from '../../../../src/shared/types/inbound-message'
 
 const trackMock = analytics.track as ReturnType<typeof vi.fn>
@@ -388,6 +390,90 @@ describe('dispatchInboundMessage — team-backed binding', () => {
     const arg = sendAppChatMessageMock.mock.calls[0][0] as { conversationId: string; teamContext?: unknown }
     expect(arg.conversationId).toBe('app-chat:app-1:wecom-bot:direct:chat-1')
     expect(arg.teamContext).toBeUndefined()
+  })
+})
+
+// ============================================
+// Owner / guest rules of a team-fronted chat
+//
+// The member fronting a chat answers to the same rules as a digital human's own
+// IM chat: the channel's permission control decides who is an owner, and its
+// guest policy holds everyone else. A guest's message is also stamped as coming
+// from outside, which is what carries the restriction on to teammates.
+// ============================================
+
+const TEAM_SESSION = 'app-chat:member-1:team:team-1:epoch-1'
+
+describe('dispatchInboundMessage — owner/guest rules of a team-fronted chat', () => {
+  const GUEST_POLICY = { allowedTools: ['Read'] }
+
+  function sentTeamContext(): { external?: boolean } | undefined {
+    return (sendAppChatMessageMock.mock.calls[0][0] as { teamContext?: { external?: boolean } }).teamContext
+  }
+
+  beforeEach(() => {
+    getAppMock.mockReturnValue(MEMBER_APP)
+    withTeam([LOCAL_MEMBER])
+  })
+
+  it('holds a non-owner to the guest policy on the member team session', async () => {
+    instanceCfg = { teamId: 'team-1', permissionEnabled: true, owners: ['boss'], guestPolicy: GUEST_POLICY }
+
+    await dispatchInboundMessage(makeMsg({ chatType: 'group', from: 'u1' }), makeReply(false), 'member-1', 'inst-1')
+
+    expect(setImPermissionContext).toHaveBeenCalledWith(TEAM_SESSION, expect.objectContaining({
+      senderId: 'u1', isOwner: false, guestPolicy: GUEST_POLICY, ownerIds: ['boss'],
+    }))
+    expect(sentTeamContext()).toMatchObject({ kind: 'human_message', external: true })
+  })
+
+  it('gives a listed owner full access, unstamped', async () => {
+    instanceCfg = { teamId: 'team-1', permissionEnabled: true, owners: ['boss'], guestPolicy: GUEST_POLICY }
+
+    await dispatchInboundMessage(makeMsg({ chatType: 'group', from: 'boss' }), makeReply(false), 'member-1', 'inst-1')
+
+    expect(setImPermissionContext).toHaveBeenCalledWith(TEAM_SESSION, expect.objectContaining({
+      senderId: 'boss', isOwner: true, ownerIds: ['boss'],
+    }))
+    expect(sentTeamContext()?.external).toBeUndefined()
+  })
+
+  it('treats everyone as an owner when permission control is off, as a digital human chat does', async () => {
+    instanceCfg = { teamId: 'team-1', permissionEnabled: false, owners: ['boss'], guestPolicy: GUEST_POLICY }
+
+    await dispatchInboundMessage(makeMsg({ chatType: 'group', from: 'u1' }), makeReply(false), 'member-1', 'inst-1')
+
+    expect(setImPermissionContext).toHaveBeenCalledWith(TEAM_SESSION, expect.objectContaining({
+      isOwner: true, guestPolicy: undefined, ownerIds: undefined,
+    }))
+    expect(sentTeamContext()?.external).toBeUndefined()
+  })
+
+  it('asks for an owner before serving a group when none is bound', async () => {
+    instanceCfg = { teamId: 'team-1', permissionEnabled: true, owners: [] }
+    const reply = makeReply(false)
+
+    await dispatchInboundMessage(makeMsg({ chatType: 'group', chatId: 'g-owner-guide' }), reply, 'member-1', 'inst-1')
+
+    expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+    expect((reply.send as ReturnType<typeof vi.fn>).mock.calls[0][0]).toContain('no owner yet')
+  })
+
+  it('binds the first direct-message sender as owner when none is bound', async () => {
+    instanceCfg = { teamId: 'team-1', permissionEnabled: true, owners: [] }
+
+    await dispatchInboundMessage(makeMsg({ chatType: 'direct', from: 'u1' }), makeReply(false), 'member-1', 'inst-1')
+
+    expect(maybeClaimOwner).toHaveBeenCalledWith('inst-1', 'u1')
+  })
+
+  it('forgets the last sender standing when the chat is cleared', async () => {
+    instanceCfg = { teamId: 'team-1', permissionEnabled: true, owners: ['boss'] }
+    teamRuntime = { ...teamRuntime, sealConversationEpoch: vi.fn(async () => undefined) }
+
+    await dispatchInboundMessage(makeMsg({ body: '/clear' }), makeReply(false), 'member-1', 'inst-1')
+
+    expect(clearImPermissionContext).toHaveBeenCalledWith(TEAM_SESSION)
   })
 })
 

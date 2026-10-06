@@ -574,7 +574,9 @@ async function runAppChatTurn(
 
   // Read IM permission context early — needed for both system prompt (ownerIds)
   // and SDK options (guest tool restrictions). null for native Halo chat.
-  const permCtx = getImPermissionContext(conversationId)
+  // A team session also serves its owner's own Halo window, whose turns carry
+  // no IM framing and must never be read as the chat's last sender.
+  const permCtx = !teamContext || imSession ? getImPermissionContext(conversationId) : undefined
   const personCaller: PersonContextCaller = {
     appId,
     capabilityMode: 'chat',
@@ -595,10 +597,18 @@ async function runAppChatTurn(
   const usesHaloApi =
     resolvePermission(app, HALO_API_TOOLSET_ID, false) && permCtx?.isOwner !== false
 
+  // Where the work this turn continues was asked for. Resolved once, here,
+  // because the answer is needed in several places that cannot each re-derive
+  // it: whose turn this is, the team tools this turn sends with, what the turn
+  // is allowed to do, and the owner's record of it. Not read from the trigger
+  // alone — a wake authored by the runtime here (an answered question, a
+  // periodic check) carries no origin of its own; see team/external-origin.ts.
+  const externalOrigin = teamContext ? resolveTurnOrigin(conversationId, teamContext) : false
+
   // Off unless the owner switched it on, and never on someone else's turn (an IM
   // guest, a teammate borrowing this digital human), in a team channel, or in an
   // IM/HTTP session.
-  const borrowedTeamTurn = !!teamContext && isBorrowedTeamTurn(teamContext.kind, !!imSession)
+  const borrowedTeamTurn = !!teamContext && isBorrowedTeamTurn(teamContext.kind, !!imSession, externalOrigin)
   const conversationCollab = resolveConversationCollab(app, {
     conversationId,
     delegated: permCtx?.isOwner === false || borrowedTeamTurn,
@@ -627,18 +637,6 @@ async function runAppChatTurn(
     }) ?? undefined,
   })
   if (personCaller.authority !== 'guest') identity.push(personContextPrompt(personCaller))
-  // Team turns take precedence over IM (trusted member, no guest restrictions).
-  // When a team turn ALSO arrives over an IM channel (a team-backed IM instance),
-  // the bound member keeps its team identity + tools and gains a front-desk
-  // bridge so it replies to the person in-chat. It runs as a trusted team peer,
-  // so IM guest hardening (buildImConstraints) is intentionally NOT applied.
-  // Where the work this turn continues was asked for. Resolved once, here,
-  // because the answer is needed in three places that cannot each re-derive it:
-  // the team tools this turn sends with, what the turn is allowed to do, and
-  // the owner's record of it. Not read from the trigger alone — a wake authored
-  // by the runtime here (an answered question, a periodic check) carries no
-  // origin of its own; see team/external-origin.ts.
-  const externalOrigin = teamContext ? resolveTurnOrigin(conversationId, teamContext) : false
 
   if (teamContext) {
     // Every team turn (user/IM/teammate) stamps the epoch's activity, and wakes
@@ -653,10 +651,16 @@ async function runAppChatTurn(
   let entry: string
   let constraints: string[]
   if (teamPromptCtx) {
+    // Team turns take precedence over IM. When a team turn ALSO arrives over an
+    // IM channel (a team-backed IM instance), the bound member keeps its team
+    // identity + tools and gains a front-desk bridge so it replies to the
+    // person in-chat — and the chat's owner/guest rules, as any IM chat has.
     entry = imSession
       ? `${buildTeamEntry(teamPromptCtx)}\n\n${buildTeamImBridge(imSession, teamPromptCtx.selfIsLead)}`
       : buildTeamEntry(teamPromptCtx)
-    constraints = buildTeamConstraints(teamPromptCtx)
+    constraints = imSession
+      ? [...buildTeamConstraints(teamPromptCtx), ...buildImConstraints(imSession, permCtx?.ownerIds)]
+      : buildTeamConstraints(teamPromptCtx)
   } else if (imSession) {
     entry = buildImEntry(imSession, permCtx?.ownerIds, {
       channelsConfigured: notifyAvail.channelsConfigured,
@@ -816,6 +820,7 @@ async function runAppChatTurn(
             forwardDepth: teamContext.forwardDepth,
             // Same reasoning, different property of the chain: where it started.
             ...(externalOrigin ? { external: true } : {}),
+            ...(permCtx?.isOwner === false ? { servesGuest: true } : {}),
             // Lead-only team_complete → deferred seal after the lead's turn ends.
             requestComplete: (summary) =>
               getActiveTeamRuntime()!.requestSeal(teamContext.teamId, teamContext.epochId, summary),
@@ -912,8 +917,10 @@ async function runAppChatTurn(
       dbMcpServers,
       // The team's own coordination tools are the channel this turn happens on,
       // not a capability: withholding them isolates the member instead of
-      // restricting the caller. An IM guest's turn has no such channel.
-      alwaysKeep: borrowedTeamTurn ? TEAM_CHANNEL_MCP : undefined,
+      // restricting the caller — a guest of a team-fronted chat included, whose
+      // request carries its origin on to any teammate it reaches. A digital
+      // human's own IM guest has no such channel.
+      alwaysKeep: teamContext ? TEAM_CHANNEL_MCP : undefined,
       keepFileTools: strictFiles,
     })
     if (applied.enforced) {
@@ -1232,6 +1239,7 @@ async function runAppChatTurn(
             : { kind: 'ended' },
           ...(teamContext?.correlationId ? { correlationId: teamContext.correlationId } : {}),
           triggerKind: teamContext?.kind ?? 'human_message',
+          ...(externalOrigin ? { external: true } : {}),
           ...(teamContext?.kind && teamContext.kind !== 'human_message' ? {
             requestSummary: message.replace(/^\[[^\]\n]+\]\s*/, ''),
             requestFromAppId: teamContext.fromAppId,

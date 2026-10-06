@@ -86,6 +86,13 @@ export interface TeamMcpContext {
    * the owner's own digital humans does not turn it into the owner's.
    */
   external?: boolean
+  /**
+   * The turn serves a guest of an IM chat this member fronts. Periodic checks
+   * are standing instructions that keep spending the owner's model allowance
+   * long after the request, so a guest neither sets nor stops them — a guest of
+   * a digital human's own chat has no such tool either.
+   */
+  servesGuest?: boolean
   /** Deferred: applied after the lead's turn ends, never aborts mid-turn. */
   requestComplete: (summary: string) => void
 }
@@ -818,14 +825,14 @@ export function createTeamMcpServer(context: TeamMcpContext): SdkMcpServer {
     // A member is never the lead of the team it serves in, so it is not offered
     // a tool it could only be refused.
     ...(context.selfIsLead ? [buildReadMemberTool(resolve)] : []),
-    buildScheduleTool(resolve),
-    buildUnscheduleTool(resolve),
+    ...(context.servesGuest ? [] : [buildScheduleTool(resolve), buildUnscheduleTool(resolve)]),
     buildCompleteTool(resolve),
   ]
 
   console.log(
     `${LOG_TAG} ${TEAM_MCP_SERVER_NAME} created: team=${context.teamId} ` +
-      `caller=${context.callerAppId} collabMode=${context.collabMode}`
+      `caller=${context.callerAppId} collabMode=${context.collabMode}` +
+      `${context.servesGuest ? ' guest=yes (no periodic checks)' : ''}`
   )
 
   return createSdkMcpServer({

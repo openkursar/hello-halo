@@ -46,6 +46,13 @@ export interface NoteTurnEndedInput {
   requestSummary?: string
   finalReply?: string
   requestFromAppId?: string | null
+  /**
+   * The work this turn served entered from outside (see
+   * {@link TeamTriggerContext.external}). The notice carries it on to the lead
+   * like a `team_send` would: the lead reads the outcome of that work, so it
+   * must not read it with the owner's own reach.
+   */
+  external?: boolean
 }
 
 export interface TurnReport {
@@ -103,6 +110,7 @@ interface StopFact {
   did: string[] | null
   requestSummary?: string
   finalReply?: string
+  external: boolean
 }
 
 /**
@@ -426,6 +434,7 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
           fate.kind !== 'never_ran' && startedAt !== undefined
             ? describeActs(teamId, appId, epochId, startedAt)
             : null,
+        external: input.external === true,
       }
 
       const key = epochKey(teamId, epochId)
@@ -490,6 +499,10 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
             : fact.fate,
         }
       })
+      // One notice carries several endings, so it runs under the strictest of
+      // them: a single ending of outside work is enough to read the whole
+      // notice as coming from outside.
+      const external = facts.some((fact) => fact.external)
       await bus.deliverRuntimeWake({
         envelope: {
           id: randomUUID(),
@@ -501,7 +514,10 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
           correlationId,
           createdAt: Date.now(),
         },
-        trigger: { teamId, epochId, correlationId, fromAppId: null, wait: false, kind: 'member_stopped' },
+        trigger: {
+          teamId, epochId, correlationId, fromAppId: null, wait: false, kind: 'member_stopped',
+          ...(external ? { external: true } : {}),
+        },
         onBusy: 'buffer',
       })
       const wakes = (reportWakeCount.get(key) ?? 0) + 1
