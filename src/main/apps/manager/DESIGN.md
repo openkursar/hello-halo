@@ -253,12 +253,13 @@ bundled-and-managed approach mirrors VSCode's built-in extension model:
   live in DB columns that the loader never touches when refreshing. A newer
   bundled version goes through `service.upgradeSpec` (2.13), so the user's
   edits to the definition survive it as they survive a store upgrade; the
-  loader then resyncs the app's subscriptions, which the runtime activated from
-  the previous spec earlier in startup.
+  runtime reschedules the app on that upgrade (2.13), not the loader.
 - **Identity**: an installed built-in is found by its spec id, which is its
   name. A user may rename a digital human, which changes both; the loader then
   recognises the row by what a rename leaves alone — the bundle's store slug,
   or the name in its author's original (2.13) — and GC spares it the same way.
+  A built-in matching by name but carrying another bundle slug is a different
+  built-in renamed to that name, and is not taken for the entry.
   Matching by name alone installed a second copy at the next bundle change and
   garbage-collected the renamed one, memory and all.
 - **Disable semantics**: a "uninstall" on a built-in is a soft uninstall

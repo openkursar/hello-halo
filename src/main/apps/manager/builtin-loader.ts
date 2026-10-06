@@ -322,6 +322,17 @@ function createInstalledView(appManager: AppManagerService): InstalledView {
 }
 
 /**
+ * A built-in that carries this bundle entry's name but another bundle slug:
+ * the user renamed a different built-in to it. Taking it for this entry would
+ * upgrade that one with this entry's definition.
+ */
+function isOtherBuiltin(row: InstalledApp, bundled: AppSpec): boolean {
+  const slug = bundled.store?.slug
+  const rowSlug = row.spec.store?.slug
+  return isBuiltinApp(row) && !!slug && !!rowSlug && rowSlug !== slug
+}
+
+/**
  * A built-in the user renamed. Its name, and with it its spec id, no longer
  * match the bundle, so it is recognised by what a rename leaves alone: the
  * bundle's slug, or the name in its author's original. Missing it would install
@@ -426,7 +437,7 @@ async function processEntry(
   // ALL spaces and mistakenly match a same-named app in another space, causing
   // the loader to silently skip the install.
   const rows = installed.list(entry.spaceId)
-  const existing = rows.find(a => a.specId === stampedSpec.name)
+  const existing = rows.find(a => a.specId === stampedSpec.name && !isOtherBuiltin(a, stampedSpec))
     ?? findRenamedBuiltin(rows, stampedSpec, appManager)
 
   if (!existing) {

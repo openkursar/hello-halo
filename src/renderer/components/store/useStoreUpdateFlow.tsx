@@ -15,7 +15,7 @@ import { getEntryVersions } from '../../../shared/store/store-meta'
 import { StoreUpdateDialog } from './StoreUpdateDialog'
 import type { UpgradePreview } from './StoreUpdateDialog'
 import { StoreInstallDialog } from './StoreInstallDialog'
-import { specFieldList } from '../apps/spec-field-label'
+import { upgradedMessage } from '../apps/spec-field-label'
 import type { RegistryEntry, UpdateInfo, StoreAppDetail } from '../../../shared/store/store-types'
 
 type Phase = 'idle' | 'confirm' | 'copy'
@@ -76,17 +76,12 @@ export function useStoreUpdateFlow(
       const res = await api.storeApplyUpgrade(updateInfo.appId, 'force')
       if (res.success) {
         refreshInstalled()
-        const kept = (res.data as { kept?: string[] } | undefined)?.kept ?? []
+        const outcome = (res.data as { kept?: string[]; editsKnown?: boolean } | undefined) ?? {}
         useNotificationStore.getState().show({
           title: t('Updated'),
-          body: kept.length > 0
-            ? t('Upgraded to v{{version}}. These differ from the author’s new version and kept your current version: {{items}}', {
-              version: updateInfo.latestVersion,
-              items: specFieldList(kept, t, i18n.language),
-            })
-            : t('Upgraded to v{{version}}', { version: updateInfo.latestVersion }),
+          body: upgradedMessage(updateInfo.latestVersion, outcome, t, i18n.language),
           variant: 'success',
-          duration: kept.length > 0 ? 6000 : 3000,
+          duration: outcome.kept?.length ? 6000 : 3000,
         })
       } else {
         useNotificationStore.getState().show({
