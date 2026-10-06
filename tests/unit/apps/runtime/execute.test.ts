@@ -702,6 +702,65 @@ describe('executeRun — stopping a run', () => {
   })
 })
 
+describe('executeRun — tokens of a stopped or failed run', () => {
+  const usageResult = (input: number, output: number, extra: SdkMessage = {}): SdkMessage => ({
+    type: 'result',
+    usage: { input_tokens: input, output_tokens: output, cache_read_input_tokens: 1000, cache_creation_input_tokens: 0 },
+    ...extra,
+  })
+
+  it('counts the tokens the interrupted turn reports after the stop, and still records a stop', async () => {
+    let interrupted!: () => void
+    const stopReached = new Promise<void>(resolve => { interrupted = resolve })
+    nextSession = new FakeSession()
+    Object.assign(nextSession, { interrupt: vi.fn(async () => interrupted()) })
+    vi.spyOn(nextSession, 'stream').mockImplementation(async function* () {
+      yield systemInit()
+      yield { type: 'assistant', message: { content: [{ type: 'text', text: 'Working on it' }] } }
+      await stopReached
+      yield { type: 'user', message: { content: [{ type: 'text', text: '[Request interrupted by user]' }] } }
+      yield usageResult(300, 40, { subtype: 'error_during_execution', is_error: true, result: 'Operation was aborted' })
+    })
+    const store = makeStore()
+    const controller = new AbortController()
+    const running = executeRun({
+      app: makeApp(), trigger: baseTrigger, store, memory: makeMemory(), abortSignal: controller.signal,
+    })
+    await vi.waitFor(() => expect(nextSession.send).toHaveBeenCalled())
+
+    controller.abort()
+    const result = await running
+
+    expect(result.tokensUsed).toBe(340)
+    expect(result.tokenUsage).toEqual({ inputTokens: 300, outputTokens: 40, cacheReadTokens: 1000, cacheCreationTokens: 0 })
+    expect(store.completeRun).toHaveBeenCalledWith(result.runId, expect.objectContaining({ tokensUsed: 340 }))
+    // The stop ended it, not the model's error report.
+    expect(result.errorMessage).toBe('Stopped before reporting results')
+  })
+
+  it('keeps the tokens of the turns that finished when a later one fails with an exception', async () => {
+    nextSession = new FakeSession()
+    let cycle = 0
+    vi.spyOn(nextSession, 'stream').mockImplementation(async function* () {
+      cycle++
+      // The first turn ends without a report, so the run auto-continues and that turn fails.
+      if (cycle === 1) yield usageResult(100, 50)
+      else throw new Error('transport exploded')
+    })
+    const store = makeStore()
+
+    const result = await executeRun({ app: makeApp(), trigger: baseTrigger, store, memory: makeMemory() })
+
+    expect(result.outcome).toBe('error')
+    expect(result.tokensUsed).toBe(150)
+    expect(result.tokenUsage).toEqual({ inputTokens: 100, outputTokens: 50, cacheReadTokens: 1000, cacheCreationTokens: 0 })
+    expect(store.completeRun).toHaveBeenCalledWith(
+      result.runId,
+      expect.objectContaining({ status: 'error', tokensUsed: 150 }),
+    )
+  })
+})
+
 describe('executeRun — a declared connection is unusable', () => {
   it('does not start: no model call, a failed run whose entry names what to install or turn on', async () => {
     const missing = [{ id: 'docs', name: 'Team Docs', state: 'not_installed' as const }]
