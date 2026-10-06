@@ -10,11 +10,12 @@
 #
 # Run on demand (not part of any client build):
 #   npm run build:server
-#   # or: bash scripts/build-server-halo.sh [OUTPUT_REPO_DIR]
+#   # or: bash scripts/build-server-halo.sh [OUTPUT_DIR]   (default: deploy/server)
 #
 # It cross-builds the linux-x64 headless app, compresses it, and splits it into
-# <90MB parts inside the halo-server repo's bundle/ directory (so it survives git
-# host per-file size limits and rebuilds offline in the container).
+# <90MB parts inside deploy/server/bundle/ (git hosts reject larger files, should
+# the bundle be committed to a deploy repo), next to the Dockerfile that turns it
+# into the server image.
 #
 # Env:
 #   ELECTRON_MIRROR                  electron download mirror (recommended in CN)
@@ -24,7 +25,7 @@
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUT_REPO="${1:-$PROJECT_ROOT/../halo-server}"
+OUT_REPO="${1:-$PROJECT_ROOT/deploy/server}"
 PART_SIZE="${PART_SIZE:-90m}"
 
 cd "$PROJECT_ROOT"
@@ -33,8 +34,8 @@ log() { printf '\033[34m[build-server]\033[0m %s\n' "$*"; }
 die() { printf '\033[31m[build-server][ERROR]\033[0m %s\n' "$*" >&2; exit 1; }
 
 [ -f server.product.json ] || die "server.product.json not found at repo root"
-[ -d "$OUT_REPO" ] || die "output repo not found: $OUT_REPO"
-[ -f "$OUT_REPO/Dockerfile" ] || die "$OUT_REPO does not look like the halo-server repo (no Dockerfile)"
+[ -d "$OUT_REPO" ] || die "output directory not found: $OUT_REPO"
+[ -f "$OUT_REPO/Dockerfile" ] || die "$OUT_REPO has no Dockerfile (expected deploy/server or a copy of it)"
 
 # Swap in the server profile, and ALWAYS restore the original product.json on exit
 # (success, failure, or interrupt) so the working tree is never left modified.
@@ -94,4 +95,4 @@ rm -f "$TMP_TGZ"
 log "done. bundle parts:"
 ls -lh "$OUT_REPO"/bundle/ | awk 'NR>1 {print "  " $5 "  " $9}'
 log "compressed size: $(echo "$orig_size" | awk '{printf "%.0f MB\n", $1/1024/1024}')"
-log "next: cd $OUT_REPO && git add bundle && git commit && git push"
+log "next: docker build -t halo-server $OUT_REPO"

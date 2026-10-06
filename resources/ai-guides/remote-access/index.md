@@ -1,6 +1,6 @@
 # Remote Access — HTTP API, Auth, and the Internet Tunnel
 
-Last updated: 2026-09-03
+Last updated: 2026-10-06
 
 Read this whenever the user wants to control Halo from another device, asks about the HTTP/API
 surface, wants an internet-reachable URL (not just LAN), or reports remote access failing to
@@ -86,6 +86,12 @@ desktop use. Don't conflate this with "regular Halo with Remote Access on":
 - This mode is for scripted/automated deployment, not something a desktop end user toggles from
   Settings — don't suggest `HALO_SERVER_MODE` to a user who's just trying to reach their desktop
   Halo from a phone; that's the ordinary Settings → Remote Access flow in §2.
+- **Deployment files live in the repository** under `deploy/server/` (`Dockerfile`,
+  `docker-entrypoint.sh`, `docker-compose.yml`); `npm run build:server`
+  (`scripts/build-server-halo.sh`) writes the Linux app bundle into `deploy/server/bundle/`, then
+  `docker build -t halo-server deploy/server`. There is no published image and no separate deploy
+  repository — don't send users looking for one. The docs site's "Halo Server" section has the
+  full walkthrough.
 
 ## 4. The HTTP/WebSocket surface
 
