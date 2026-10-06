@@ -20,7 +20,7 @@ import { getSpace, touchSpaceActivity } from './space.service'
 import { getSeedKBIds } from './tlon'
 import { getConfig } from '../foundation/config.service'
 import { v4 as uuidv4 } from 'uuid'
-import { previewFromMessage, titleFromFirstMessage } from '../../shared/conversation-title'
+import { previewFromMessages, titleFromFirstMessage } from '../../shared/conversation-title'
 import { DEFAULT_TOOLSETS } from '../../shared/constants/toolsets'
 import { isSpaceConversationId } from '../../shared/apps/im-keys'
 import type { Thought, TranscriptMessage } from '../../shared/types/transcript'
@@ -445,10 +445,7 @@ function writeIndex(conversationsDir: string, conversations: ConversationMeta[])
 }
 
 function toMeta(conversation: Conversation): ConversationMeta {
-  const lastMessage = conversation.messages[conversation.messages.length - 1]
-  const preview = lastMessage
-    ? previewFromMessage(lastMessage.content, lastMessage.metadata?.references) ?? ''
-    : undefined
+  const preview = previewFromMessages(conversation.messages)
 
   const meta: ConversationMeta = {
     id: conversation.id,
@@ -1036,6 +1033,30 @@ export function updateLastMessage(
   debouncedUpdateIndexEntry(conversationsDir, spaceId, conversationId, toMeta(conversation))
 
   return lastMessage
+}
+
+/**
+ * Remove the reply placeholder of a turn that produced nothing: the
+ * conversation's last message, only while it is still an empty assistant
+ * message. A placeholder followed by injected messages stays, since those are
+ * shown on the reply they follow. Returns whether it was removed.
+ */
+export function removeEmptyReplyPlaceholder(spaceId: string, conversationId: string): boolean {
+  const result = cachedRead(spaceId, conversationId)
+  if (!result) return false
+
+  const { conversation, filePath, conversationsDir } = result
+  const last = conversation.messages[conversation.messages.length - 1]
+  if (!last || last.role !== 'assistant' || last.content || last.error || last.thoughtsSummary || last.thoughts?.length || last.images?.length) {
+    return false
+  }
+
+  conversation.messages.pop()
+  conversation.messageCount = conversation.messages.length
+
+  cachedWrite(conversationId, conversation, filePath, conversationsDir, spaceId)
+  debouncedUpdateIndexEntry(conversationsDir, spaceId, conversationId, toMeta(conversation))
+  return true
 }
 
 /**

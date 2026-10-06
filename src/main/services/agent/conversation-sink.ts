@@ -15,6 +15,7 @@ import type { TurnSink } from './turn-sink'
 import {
   addMessage,
   updateLastMessage,
+  removeEmptyReplyPlaceholder,
   saveSessionId,
   getConversation
 } from '../conversation.service'
@@ -93,8 +94,10 @@ function persistTurnResult(
   // Still persist when only thoughts exist (thinking-only turns) so the
   // reasoning survives a reload.
   const contentToStore = hasMeaningfulContent ? finalContent : ''
+  // The connection and end-of-turn markers are not something the turn produced.
+  const producedThoughts = thoughts.some((t: Thought) => t.type !== 'system' && t.type !== 'result')
 
-  if (contentToStore || hasErrorThought || thoughts.length > 0 || error) {
+  if (contentToStore || hasErrorThought || producedThoughts || error) {
     // Extract file changes summary
     let metadata: { fileChanges?: FileChangesSummary } | undefined
     let sources: KBSource[] | undefined
@@ -127,5 +130,8 @@ function persistTurnResult(
       sources,
       error: error || errorThought?.content,
     })
+  } else {
+    // Typically stopped before the model said anything: no blank reply is left behind.
+    removeEmptyReplyPlaceholder(spaceId, conversationId)
   }
 }
