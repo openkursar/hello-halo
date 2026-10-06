@@ -15,7 +15,6 @@
  *   - Remote: Remote access feature (optional)
  *   - Browser: Embedded browser for Content Canvas (V2 feature)
  *   - AIBrowser: AI browser automation tools (self-initializing via MCP server)
- *   - Overlay: Floating UI elements (optional)
  *   - Search: Global search (optional)
  *   - Performance: Developer monitoring tools (dev only)
  *   - GitBash: Windows Git Bash setup (Windows optional)
@@ -36,7 +35,6 @@ import { registerAIBrowserHandlers, cleanupAIBrowserHandlers } from '../ipc/ai-b
 import { cleanupAIBrowser } from '../services/ai-browser'
 import { cleanupAITerminal } from '../services/ai-terminal'
 import { cleanupTerminalHandlers } from '../ipc/terminal'
-import { registerOverlayHandlers, cleanupOverlayHandlers } from '../ipc/overlay'
 import { initializeSearchHandlers, cleanupSearchHandlers } from '../ipc/search'
 import { registerPerfHandlers } from '../ipc/perf'
 import { registerGitBashHandlers, initializeGitBashOnStartup } from '../ipc/git-bash'
@@ -58,7 +56,7 @@ import { initSpaceMemoryConsolidation, disposeSpaceMemoryConsolidation } from '.
 import { markExtendedServicesReady } from './state'
 import { getMainWindow, sendToRenderer } from '../foundation/window.service'
 import { initializeHealthSystem, setSessionCleanupFn } from '../services/health'
-import { closeAllV2Sessions } from '../services/agent/session-manager'
+import { closeAllV2Sessions } from '../services/agent'
 import { registerHealthHandlers } from '../ipc/health'
 import { initBackground, shutdownBackground, getBackgroundService, setDaemonStealthInjector } from '../platform/background'
 import { injectStealthScripts } from '../services/stealth'
@@ -1505,8 +1503,7 @@ export function initializeExtendedServices(): void {
     }
   })
 
-  // Browser: Embedded BrowserView for Content Canvas
-  // Note: BrowserView is created lazily when Canvas is opened
+  // Browser pages attach lazily to the registered DOM host.
   registerBrowserHandlers(mainWindow)
 
   // Browser Policy: user-extensible allowlist (Settings + blocked-page action)
@@ -1516,10 +1513,6 @@ export function initializeExtendedServices(): void {
   // (called on demand). Only the view-lifecycle event forwarding is wired here so
   // the renderer can reveal the AI's live view. See ai-browser/DESIGN.md.
   registerAIBrowserHandlers()
-
-  // Overlay: Floating UI elements (chat capsule, etc.)
-  // Already implements lazy initialization internally
-  registerOverlayHandlers(mainWindow)
 
   // Search: Global search functionality
   initializeSearchHandlers()
@@ -1654,99 +1647,105 @@ export function initializeExtendedServices(): void {
  * Called during window-all-closed to properly release resources.
  */
 export async function cleanupExtendedServices(): Promise<void> {
-  // Space: Flush any throttled activity timestamps to disk before teardown
-  flushSpaceActivity()
-
-  // Store: Stop upgrade scheduler before tearing down registry / app manager
-  stopUpgradeScheduler()
-
-  // Announcements: stop polling the feed
-  stopAnnouncementScheduler()
-
-  // Store: Shutdown registry service (before app manager)
-  shutdownRegistryService()
-
-  // Cross-Conversation Interop: drop the digital-human source and every
-  // turn-end subscription.
-  digitalHumanConversations?.dispose()
-  digitalHumanConversations = null
-  disposeConversationInterop()
-  disposeSpaceMemoryConsolidation()
-
-  // Team: Tear down the service + runtime accessor and the data layer before
-  // the App Manager goes away (the service holds an App Manager reference).
-  shutdownTeamService()
-  setActiveTeamRuntime(null)
-  if (onSystemResume) {
-    powerMonitor.removeListener('resume', onSystemResume)
-    onSystemResume = null
-  }
+  let cacheShutdown: Promise<void> | null = null
   try {
-    flushRelayCapture?.()
-    disposeRelayCapture?.dispose()
-  } catch (err) {
-    console.error('[Bootstrap] Relay capture teardown error:', err)
+    // Space: Flush any throttled activity timestamps to disk before teardown
+    flushSpaceActivity()
+
+    // Store: Stop upgrade scheduler before tearing down registry / app manager
+    stopUpgradeScheduler()
+
+    // Announcements: stop polling the feed
+    stopAnnouncementScheduler()
+
+    // Store: Shutdown registry service (before app manager)
+    shutdownRegistryService()
+
+    // Cross-Conversation Interop: drop the digital-human source and every
+    // turn-end subscription.
+    digitalHumanConversations?.dispose()
+    digitalHumanConversations = null
+    disposeConversationInterop()
+    disposeSpaceMemoryConsolidation()
+
+    // Team: Tear down the service + runtime accessor and the data layer before
+    // the App Manager goes away (the service holds an App Manager reference).
+    shutdownTeamService()
+    setActiveTeamRuntime(null)
+    if (onSystemResume) {
+      powerMonitor.removeListener('resume', onSystemResume)
+      onSystemResume = null
+    }
+    try {
+      flushRelayCapture?.()
+      disposeRelayCapture?.dispose()
+    } catch (err) {
+      console.error('[Bootstrap] Relay capture teardown error:', err)
+    }
+    disposeRelayCapture = null
+    flushRelayCapture = null
+    getFederationManager()?.stopAll()
+    setFederationManager(null)
+    setFederationInbound(null)
+    shutdownTeamStore()
+    shutdownFederationStore()
+
+    // Apps: Shutdown runtime first (deactivates all apps, stops event router, cancels runs).
+    // This is intentionally ahead of `analytics.destroy()` so that any final
+    // `RunFinishedEvent`s fired during deactivation are still delivered to the
+    // analytics pipeline and buffered by the telemetry provider.
+    const runtimeShutdown = shutdownAppRuntime().catch(err => console.error('[Bootstrap] AppRuntime shutdown error:', err))
+    try {
+      closeAllV2Sessions()
+    } finally {
+      cacheShutdown = cleanupAllCaches()
+      void cacheShutdown.catch(error => console.error('[Bootstrap] Artifact cache shutdown failed:', error))
+    }
+    await runtimeShutdown
+    await shutdownAppManager().catch(err => console.error('[Bootstrap] AppManager shutdown error:', err))
+
+    // Analytics: Flush pending events (including anything buffered from the
+    // runtime shutdown above). The provider applies its own bounded flush
+    // timeout so we never hang here.
+    await analytics.destroy().catch(err => console.error('[Bootstrap] Analytics shutdown error:', err))
+
+    // Platform: Shutdown scheduler (stop timers)
+    await shutdownScheduler().catch(err => console.error('[Bootstrap] Scheduler shutdown error:', err))
+
+    // Platform: Close database connections
+    taskStateService?.dispose()
+    taskStateService = null
+    if (platformDb) {
+      await shutdownStore(platformDb).catch(err => console.error('[Bootstrap] Store shutdown error:', err))
+      platformDb = null
+    }
+
+    // Background: Shutdown daemon browser, clear keep-alive, destroy tray
+    shutdownBackground()
+
+    // AI Browser: Cleanup global singleton context (scoped contexts are cleaned
+    // up by their owners: app-chat.ts / execute.ts) and unsubscribe event forwarding
+    cleanupAIBrowserHandlers()
+    cleanupAIBrowser()
+
+    // AI Terminal: Unsubscribe event forwarding, then kill all pty sessions
+    cleanupTerminalHandlers()
+    cleanupAITerminal()
+
+    // Dispose temporary search pages before browser hosts shut down.
+    await disposeSearchContext().catch(err => console.error('[Bootstrap] WebSearch shutdown error:', err))
+
+    // Search: Cancel any ongoing searches
+    cleanupSearchHandlers()
+
+    // Tlon: Unsubscribe all KB watchers and clear timers
+    await shutdownTlon().catch(err => console.error('[Bootstrap] Tlon shutdown error:', err))
+
+    // OCR: Terminate the shared tesseract worker (used by tlon, chat toolset, automation)
+    await shutdownOcr().catch(err => console.error('[Bootstrap] OCR shutdown error:', err))
+  } finally {
+    await (cacheShutdown ?? cleanupAllCaches())
   }
-  disposeRelayCapture = null
-  flushRelayCapture = null
-  getFederationManager()?.stopAll()
-  setFederationManager(null)
-  setFederationInbound(null)
-  shutdownTeamStore()
-  shutdownFederationStore()
-
-  // Apps: Shutdown runtime first (deactivates all apps, stops event router, cancels runs).
-  // This is intentionally ahead of `analytics.destroy()` so that any final
-  // `RunFinishedEvent`s fired during deactivation are still delivered to the
-  // analytics pipeline and buffered by the telemetry provider.
-  await shutdownAppRuntime().catch(err => console.error('[Bootstrap] AppRuntime shutdown error:', err))
-  await shutdownAppManager().catch(err => console.error('[Bootstrap] AppManager shutdown error:', err))
-
-  // Analytics: Flush pending events (including anything buffered from the
-  // runtime shutdown above). The provider applies its own bounded flush
-  // timeout so we never hang here.
-  await analytics.destroy().catch(err => console.error('[Bootstrap] Analytics shutdown error:', err))
-
-  // Platform: Shutdown scheduler (stop timers)
-  await shutdownScheduler().catch(err => console.error('[Bootstrap] Scheduler shutdown error:', err))
-
-  // Platform: Close database connections
-  taskStateService?.dispose()
-  taskStateService = null
-  if (platformDb) {
-    await shutdownStore(platformDb).catch(err => console.error('[Bootstrap] Store shutdown error:', err))
-    platformDb = null
-  }
-
-  // Background: Shutdown daemon browser, clear keep-alive, destroy tray
-  shutdownBackground()
-
-  // AI Browser: Cleanup global singleton context (scoped contexts are cleaned
-  // up by their owners: app-chat.ts / execute.ts) and unsubscribe event forwarding
-  cleanupAIBrowserHandlers()
-  cleanupAIBrowser()
-
-  // AI Terminal: Unsubscribe event forwarding, then kill all pty sessions
-  cleanupTerminalHandlers()
-  cleanupAITerminal()
-
-  // Web Search: Dispose search context (cleanup any in-flight BrowserViews)
-  await disposeSearchContext().catch(err => console.error('[Bootstrap] WebSearch shutdown error:', err))
-
-  // Overlay: Cleanup overlay BrowserView
-  cleanupOverlayHandlers()
-
-  // Search: Cancel any ongoing searches
-  cleanupSearchHandlers()
-
-  // Artifact Cache: Close file watchers and clear caches
-  await cleanupAllCaches()
-
-  // Tlon: Unsubscribe all KB watchers and clear timers
-  await shutdownTlon().catch(err => console.error('[Bootstrap] Tlon shutdown error:', err))
-
-  // OCR: Terminate the shared tesseract worker (used by tlon, chat toolset, automation)
-  await shutdownOcr().catch(err => console.error('[Bootstrap] OCR shutdown error:', err))
 
   console.log('[Bootstrap] Extended services cleaned up')
 }

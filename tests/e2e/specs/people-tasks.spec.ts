@@ -18,6 +18,9 @@ test('a team waiting for the user appears in the task panel and opens its workbe
 
   await row.click()
   await expect(window.getByRole('heading', { name: 'Decision team', exact: true })).toBeVisible()
-  // The Apps page header names where its back button leads once a team is open.
-  await expect(window.getByRole('button', { name: 'Teams', exact: true })).toBeVisible()
+  const back = window.getByRole('button', { name: 'Back to teams', exact: true })
+  await expect(back).toBeVisible()
+  await back.click()
+  await expect(window.getByRole('button', { name: /^Teams(?: \d+)?$/ })).toBeVisible()
+  await expect(window.getByRole('heading', { name: 'Decision team', exact: true, level: 1 })).toHaveCount(0)
 })

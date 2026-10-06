@@ -23,7 +23,7 @@ await window.halo.perfStop()    // Stop monitoring
 | Main | Heap | V8 heap memory |
 | Main | RSS | Process total memory |
 | Main | CPU | CPU usage % |
-| Main | Views | BrowserView count |
+| Main | Views | Live browser page count (attached webview guests) |
 | Main | IPC | IPC call count |
 | Renderer | FPS | Frame rate |
 | Renderer | Frame | Avg frame time |

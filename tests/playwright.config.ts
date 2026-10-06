@@ -125,10 +125,15 @@ export default defineConfig({
     },
     {
       name: 'browser-view-frame',
-      testMatch: ['**/browser-view-frame.spec.ts', '**/browser-view-reveal.spec.ts'],
+      testMatch: ['**/browser-view-frame.spec.ts', '**/browser-view-reveal.spec.ts', '**/browser-carrier-server.spec.ts'],
       use: {
         actionTimeout: 10000
       }
+    },
+    {
+      name: 'browser-carrier-packaged',
+      testMatch: '**/browser-carrier-packaged.spec.ts',
+      use: { actionTimeout: 10000 }
     },
     {
       name: 'settings',

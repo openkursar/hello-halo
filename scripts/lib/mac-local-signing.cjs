@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { findMachOFiles } = require('./macho-deployment-target.cjs');
 
 function signingEnvironment() {
   const candidates = [process.env.CODESIGN_ALLOCATE];
@@ -36,27 +37,6 @@ function signingEnvironment() {
   } finally {
     fs.rmSync(probeDir, { recursive: true, force: true });
   }
-}
-
-function findMachOFiles(directory) {
-  const files = [];
-  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-    const file = path.join(directory, entry.name);
-    if (entry.isDirectory()) files.push(...findMachOFiles(file));
-    else if (entry.isFile() && !entry.name.endsWith('.class')) {
-      const fd = fs.openSync(file, 'r');
-      try {
-        const header = Buffer.alloc(4);
-        if (fs.readSync(fd, header, 0, 4, 0) === 4 &&
-            ['feedface', 'cefaedfe', 'feedfacf', 'cffaedfe', 'cafebabe', 'bebafeca', 'cafebabf', 'bfbafeca'].includes(header.toString('hex'))) {
-          files.push(file);
-        }
-      } finally {
-        fs.closeSync(fd);
-      }
-    }
-  }
-  return files;
 }
 
 function signLocalApp(appPath, entitlementsPath, env = signingEnvironment()) {

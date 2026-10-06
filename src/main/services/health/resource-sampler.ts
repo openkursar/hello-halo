@@ -16,7 +16,7 @@
 import { app } from 'electron'
 import { execFile } from 'child_process'
 import os from 'os'
-import { monitorEventLoopDelay, type IntervalHistogram } from 'perf_hooks'
+import { monitorEventLoopDelay, type ELDHistogram } from 'perf_hooks'
 import { getMainWindow } from '../../foundation/window.service'
 import { evaluateMemoryPressure, getMemoryPressure, type MemoryReading } from '../../platform/background'
 import { getCurrentProcesses } from './process-guardian'
@@ -225,7 +225,7 @@ type SampleListener = (sample: ResourceSample) => void
 const listeners = new Set<SampleListener>()
 let latest: ResourceSample | null = null
 let timer: NodeJS.Timeout | null = null
-let histogram: IntervalHistogram | null = null
+let histogram: ELDHistogram | null = null
 let inFlight: Promise<ResourceSample | null> | null = null
 let running = false
 

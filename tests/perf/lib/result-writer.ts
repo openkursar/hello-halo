@@ -15,8 +15,8 @@ const resultsRoot = path.resolve(path.dirname(__filename), '../results')
  * Injected centrally here (every scenario already ends by calling
  * `writeResult`) instead of copy-pasted into every spec file.
  */
-export function writeResult(result: PerfResult): string {
-  const withLoad: PerfResult = { ...result, loadAverage: os.loadavg(), aiSource: currentAiSource() }
+export function writeResult<T extends Pick<PerfResult, 'scenario' | 'label'>>(result: T): string {
+  const withLoad = { ...result, loadAverage: os.loadavg(), aiSource: currentAiSource() }
   const filePath = resultPath(withLoad.label, withLoad.scenario)
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
   fs.writeFileSync(filePath, JSON.stringify(withLoad, null, 2))

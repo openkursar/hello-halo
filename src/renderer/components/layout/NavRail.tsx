@@ -178,7 +178,11 @@ export function NavRail() {
       // The macOS traffic-light group is wider than the prototype's 56px
       // column and doesn't zoom, so the rail keeps 64 real pixels at any
       // zoom, and never less than 64 CSS pixels for its own icons.
-      style={isMacElectron ? { width: 'max(4rem, calc(64px / var(--display-scale, 1)))' } : undefined}
+      style={isMacElectron
+        ? { width: 'max(4rem, calc(64px / var(--display-scale, 1)))' }
+        : isElectron() && platform.isLinux
+          ? { paddingTop: 'max(.75rem, min(env(titlebar-area-height, 0px), env(titlebar-area-x, 0px)))' }
+          : undefined}
     >
       {isMacElectron && (
         <div

@@ -46,6 +46,42 @@ export interface MemStat {
   deltaMB: number
 }
 
+export interface HtmlPreviewProcess {
+  pid: number
+  creationTime: number
+  contentsId: number
+  frameTreeNodeId: number
+  processId: number
+  routingId: number
+  /** Older Electron runtimes expose the routing tuple but no frame token. */
+  frameToken: string | null
+  url: string
+  targetId: string
+}
+
+export interface HtmlPreviewEvidence {
+  baseline: { previewFrameCount: number; parent: HtmlPreviewProcess; rendererPids: number[] }
+  frame: HtmlPreviewProcess
+  session: { targetInfoUrl: string; targetInfoUrlAvailable: boolean; frameTreeId: string; frameTreeUrl: string; runtimeUrl: string } | null
+  fixture: { name: string; bytes: number; sha256: string; elements: number; sections: number; lastSection: string }
+  served: { bytes: number; sha256: string; status: number; requestUrl: string; responseUrl: string; responseUrlAvailable: boolean; redirected: boolean }
+  document: { url: string; title: string; readyState: string; elements: number; attachedNodes: number; sections: number; lastSection: string; heading: string }
+  pixels: { width: number; height: number; opaquePixels: number; inkPixels: number; bytes: number; sha256: string; artifact: string }
+  pixelReadyMsFromOpen: number
+  /** The image checkpoint follows the existing CPU sampling window; it is not a first-paint timestamp. */
+  verificationAfterSampling: true
+  evidenceVerificationMs: number
+  rawParent: { start: number; end: number; delta: number }
+  rendererNodes: {
+    counter: 'Performance.Nodes'
+    scope: 'distinct-owned-renderer-processes'
+    start: number
+    end: number
+    delta: number
+    processes: Array<{ role: 'parent' | 'preview'; pid: number; creationTime: number; targetId: string; nodes: number }>
+  }
+}
+
 export interface PerfResult {
   scenario: string
   label: string
@@ -152,6 +188,9 @@ export interface PerfResult {
   idleCpu?: { avgPercent: number; maxPercent: number; first15AvgPercent: number; samples: number[]; failedTicks: number; totalTicks: number }
   /** Per-pid breakdown, used when a scenario spans more than one renderer (e.g. S5 pdf's BrowserView). */
   perProcess?: Array<{ pid: number; type: string; cpuAvg: number; cpuMax: number; memAvgMB: number; memMaxMB: number }>
+  /** HTML keeps the parent counters above and separately counts each owned renderer once. */
+  htmlPreview?: HtmlPreviewEvidence
+  htmlPreviewFailure?: { stage: string; message: string; observed: Record<string, unknown> }
   /**
    * Step-level checkpoints (ms since scenario start) for multi-phase
    * scenarios (e.g. S6's open-preview -> click-input -> fill-text ->

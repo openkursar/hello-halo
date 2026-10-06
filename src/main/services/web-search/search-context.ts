@@ -2,7 +2,7 @@
  * Web Search MCP - Search Context
  *
  * Core execution logic for programmatic web search.
- * Uses Electron BrowserView to load search pages and extract results
+ * Uses temporary embedded browser pages to extract search results.
  * via JavaScript execution - no AI interpretation needed.
  *
  * Performance characteristics:
@@ -102,7 +102,7 @@ function generateViewId(): string {
 /**
  * WebSearchContext - Manages search execution
  *
- * Each search creates a temporary offscreen BrowserView,
+ * Each search creates a temporary page in the hidden browser host,
  * executes the search, extracts results, and cleans up.
  */
 export class WebSearchContext {
@@ -202,7 +202,7 @@ export class WebSearchContext {
       const searchUrl = engine.buildSearchUrl(query, { maxResults })
       console.log(`[WebSearch] URL: ${searchUrl.slice(0, 100)}${searchUrl.length > 100 ? '...' : ''}`)
 
-      // Create offscreen BrowserView
+      // Search pages use the unattended host.
       console.log(`[WebSearch] Creating offscreen view: ${viewId}`)
       await browserViewManager.create(viewId, undefined, { offscreen: true })
 
@@ -429,7 +429,7 @@ export class WebSearchContext {
   }
 
   /**
-   * Clean up a BrowserView
+   * Release a temporary browser page
    */
   private async cleanupView(viewId: string): Promise<void> {
     if (!this.activeViews.delete(viewId)) return // already disposed

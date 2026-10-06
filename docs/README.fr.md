@@ -149,10 +149,10 @@ Ces operations ne consomment aucun contexte par defaut : seule celle que vous de
 
 | Plateforme | Telechargement | Prerequis |
 |----------|----------|--------------|
-| **macOS** (Apple Silicon) | [.dmg](https://github.com/openkursar/hello-halo/releases/latest) | macOS 11+ |
-| **macOS** (Intel) | [.dmg](https://github.com/openkursar/hello-halo/releases/latest) | macOS 11+ |
+| **macOS** (Apple Silicon) | [.dmg](https://github.com/openkursar/hello-halo/releases/latest) | macOS 12+ |
+| **macOS** (Intel) | [.dmg](https://github.com/openkursar/hello-halo/releases/latest) | macOS 12+ |
 | **Windows** | [.exe](https://github.com/openkursar/hello-halo/releases/latest) | Windows 10+ |
-| **Linux** | [.AppImage](https://github.com/openkursar/hello-halo/releases/latest) | Ubuntu 20.04+ |
+| **Linux** | [.AppImage](https://github.com/openkursar/hello-halo/releases/latest) | Ubuntu 22.04+ |
 | **Android** | [.apk](https://github.com/openkursar/hello-halo/releases/latest) | Android 8+ |
 | **iOS** | Compiler depuis les sources | iOS 15+ |
 

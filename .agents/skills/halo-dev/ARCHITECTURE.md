@@ -68,6 +68,9 @@ Foundation Layer (src/main/foundation)  ← bedrock, zero upward deps
 - **foundation** is the bedrock: it imports only Electron/Node/`shared` — never
   `platform/services/apps/http`. Anything config/log/window/crypto/product-config
   belongs here. A foundation file importing an upper tier is always a bug.
+- File-picker calls use `foundation/file-dialog` to retain their last successful
+  directory across launches. The lazy, bounded native-dialog state lives in
+  Electron userData; explicit caller paths retain precedence.
 - `apps/runtime` is the orchestration boundary; do not push runtime orchestration
   into transport layers.
 - `platform/*` stay generic infrastructure (not renderer-specific, not UI-coupled),
@@ -175,7 +178,7 @@ src/
 │       │                              #   directory swap). See updater/DESIGN.md
 │       └── *.service.ts + utilities   # Domain singletons: config, conversation, space,
 │                                      #   artifact, artifact-cache, search,
-│                                      #   window, overlay, onboarding, notification,
+│                                      #   window, onboarding, notification,
 │                                      #   announcement (static-feed poll → toast; the only
 │                                      #     server→client push that is not version-coupled),
 │                                      #   protocol, api-validator, model-capabilities,
@@ -357,7 +360,7 @@ All channels follow `module:action` format. Modules are organized by functional 
 | Conversation & agent | `conversation`, `agent` (incl. `agent:toolsets-*` + `toolsets:changed` event) |
 | Terminal | `terminal` (`terminal:list/create/input/resize/kill/replay` + `terminal:data`/`terminal:lifecycle` events) |
 | Space & artifact | `space`, `artifact`, `search`, `git` (the changes view: `git:*` typed-RPC channels, failures carry a `GitErrorCode`; remote twin `POST /api/git/*`), `code-review` (the changes view's review buttons: `code-review:start/get-latest/availability`; remote twin `/api/code-review/*`) |
-| Browser | `browser`, `browser-policy`, `ai-browser`, `overlay` |
+| Browser | `browser`, `browser-host`, `browser-policy`, `ai-browser` |
 | Apps & store | `app`, `store`, `onboarding` |
 | IM channels | `im-channels`, `im-sessions`, `wecom-bot`, `weixin-ilink` |
 | Digital team | `team` (offices, members + per-team duty/capability policy, blackboard, periodic checks, invites, federation presence) |
@@ -507,10 +510,10 @@ ContentCanvas.tsx          # Main container; renders <TabContent key={tab.id}>
     ├── HtmlViewer.tsx     # halo-preview:// origin for files in a space; opaque srcdoc otherwise
     ├── ImageViewer.tsx    # Zoom/pan
     ├── CsvViewer.tsx      # Table view
-    ├── BrowserViewer.tsx  # Live web pages
+    ├── BrowserViewer.tsx  # Chrome and a presentation anchor for a persistent webview guest
     ├── XlsxViewer.tsx     # SheetJS parse in a Web Worker + virtualized table
     ├── DocxViewer.tsx     # docx-preview (patched: blob URLs revoked on dispose)
-    ├── PdfViewer.tsx      # pdfjs-dist; remote/web only (desktop uses BrowserView)
+    ├── PdfViewer.tsx      # pdfjs-dist; remote/web only (desktop uses Chromium webview)
     ├── PptxViewer.tsx     # Placeholder — no renderer; open externally / download
     ├── TerminalViewer.tsx / TeamViewer.tsx
     ├── changes/           # Code changes read-only as diffs (@codemirror/merge): a space's Git repositories
@@ -572,11 +575,19 @@ thing the cap exists to prevent.
 ### Technical Decisions
 
 - **HTML preview**: Uses `<iframe srcdoc>` instead of blob URLs (avoids CSP restrictions)
-- **Fullscreen**: Calls `BrowserWindow.maximize()` for window-level maximization
+- **Canvas fullscreen**: Uses renderer layout state to expand the Canvas and hide the composer. Native window maximization/fullscreen is a separate window concern.
 
 ## 10) AI Browser Module
 
-AI-controlled embedded browser for web automation. Uses Electron BrowserView + CDP.
+AI-controlled embedded browser for web automation. Uses Electron webview guests + main-process CDP. The browser manager owns policy,
+identity and page state; `services/browser-host` owns fixed guest attachment.
+Interactive and watchable AI pages share a permanent main-renderer host; pure
+automation and search use a minimal hidden host. Viewers only borrow presentation
+and may unmount without destroying pages. See `services/browser-host/DESIGN.md`.
+`services/browser-input` owns keyboard/text delivery and operation-scoped frame
+routing. `BrowserInputOperation` holds the debugger resources and pressed input of
+one operation; opaque iframe DOM references select local isolated worlds or owned
+child debugger sessions, without URL matching or global target enumeration.
 
 ### 14 Browser Tools (consolidated from 28)
 
@@ -641,19 +652,23 @@ Do not create new CSS files unless the above exceptions apply.
 ### 12.1) Window Chrome & Top Overlays (Non-Negotiable)
 
 The desktop window is frameless: native controls are painted by the OS compositor
-*above* all page content and cannot be covered by z-index. macOS shows traffic
-lights top-left; Windows/Linux use `titleBarOverlay` top-right. The whole top
-strip is also the OS drag region.
+*above* all page content and cannot be covered by z-index. macOS traffic lights
+sit above the NavRail; Windows uses right-side `titleBarOverlay` controls. Linux
+follows the native control layout, which can place controls on either side.
+The title strip also contains the OS drag region.
 
 Any component fixed to the top of the window (headers, and full-width alert/
 notification banners such as `CredentialAlertBanner`) **must**:
 
-- **Reserve the native-control space** so its own interactive elements never sit
-  under the OS buttons (where clicks are swallowed). Mirror `Header`'s
-  convention, gated on `isElectron() && !isCapacitor()`:
-  - macOS → `pl-20 pr-4` (left traffic lights)
-  - Windows/Linux → `pl-4 pr-36` (right titleBarOverlay buttons)
-  - remote/browser/Capacitor → plain `px-4` (no overlay)
+- **Reserve the actual native-control overlap** so interactive elements never sit
+  under OS buttons. Gate desktop handling on `isElectron() && !isCapacitor()`:
+  - macOS → the rail reserves traffic-light space; a full-width banner reserves
+    its own left inset. A header starting after the rail needs no duplicate inset.
+  - Windows → reserve the right-side controls, accounting for display scale.
+  - Linux → use `env(titlebar-area-x)` and `env(titlebar-area-width)` to reserve
+    left/right overlap; do not assume a right-side control group. The rail also
+    accounts for the native title-bar height.
+  - remote/browser/Capacitor → no desktop native-control reservation.
 - **Declare drag regions explicitly**: put `drag-region` on the container that
   overlaps the title strip, and `no-drag` on every button/link inside it.
   Without `no-drag`, clicks over the drag strip are consumed as window drags.
@@ -797,6 +812,10 @@ that reaches one and not the other is worse than one that reaches neither.
 - **Renderer transport mode switch**: `src/renderer/api/transport.ts`
 
 Desktop mode: renderer -> preload -> IPC -> main.
+First-render reads of extended IPC services share `api/bootstrap-ready`'s
+bounded Pull+Push barrier. It observes the existing bootstrap status and ready
+event once, and releases all concurrent reads when registration is complete.
+It does not start domain services or poll for readiness.
 Remote mode: renderer -> HTTP/WS -> main.
 
 ### 17.1 Self-API (the agent operating Halo)
@@ -848,6 +867,18 @@ from `createOfficialDocsSession()` and hands the callback to
 `createHaloAppsMcpServer`. Session-scoped by closure, never process-wide: one
 conversation consulting the guide must not unlock spec authoring in another.
 
+### Browser attachment transport
+
+`browser:host-ready` (snapshot), `browser:host-command` (upsert/remove),
+`browser:host-failed` and `browser:host-frame-ready` (frame-lease
+acknowledgement) form a desktop-only DOM attachment protocol. It is registered
+before the main window loads; the hidden host uses a minimal sandbox-compatible
+preload with this protocol alone. Guest attachment is authorized in main; guests
+never receive Halo's preload. The `browser:page-gone` event tells the main
+renderer that a page was closed or lost, so Canvas can drop or recreate its tab.
+Existing `browser:*` business methods retain their legacy names and response
+shapes. The fullscreen chat capsule is ordinary DOM.
+
 ## 18) Logging
 
 **Production logging requirements:**
@@ -861,7 +892,7 @@ conversation consulting the guide must not unlock spec authoring in another.
 
 | Layer | Technology |
 |-------|------------|
-| Framework | Electron 29 |
+| Framework | Electron 43 (macOS 12+) |
 | UI | React 18 + TailwindCSS 3.4 |
 | State | Zustand 4.5 |
 | i18n | i18next 25.7 |

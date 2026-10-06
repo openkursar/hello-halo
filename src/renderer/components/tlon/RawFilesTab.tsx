@@ -93,7 +93,7 @@ export function RawFilesTab({ kb }: RawFilesTabProps) {
     setIsDragging(false)
     const paths: string[] = []
     for (const file of Array.from(e.dataTransfer.files)) {
-      const p = (file as File & { path?: string }).path
+      const p = api.getPathForFile(file)
       if (p) paths.push(p)
     }
     if (paths.length > 0) {

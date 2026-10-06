@@ -53,7 +53,7 @@ function MarkdownEntry(props: ViewerProps) {
   return props.tab.isEditMode ? <CodeViewer {...props} /> : <MarkdownViewer {...props} />
 }
 
-// A desktop gets a BrowserView (Chromium's own renderer, PDFs included); a
+// A desktop gets a webview guest (Chromium's own renderer, PDFs included); a
 // remote client has none, so PDFs render with pdfjs and pages fall back to a link.
 const remote = api.isRemoteMode()
 

@@ -6,13 +6,17 @@
  */
 
 import { test, expect, hasApiKey } from '../fixtures/electron'
+import type { HaloAPI } from '../../../src/preload'
 import {
   navigateToChat,
+  navigateToSettings,
+  waitForHomePage,
   navigateToRemoteSettings,
   clickRemoteToggle
 } from '../fixtures/helpers'
 
 test.describe('Smoke Tests', () => {
+  test.use({ appStoreRegistries: [{ id: 'claude-skills', name: 'Claude Skills Registry', url: 'https://majiayu000.github.io/claude-skill-registry-core', sourceType: 'claude-skills', enabled: false }] })
   test('application launches successfully', async ({ electronApp }) => {
     // Verify app is running
     const isRunning = electronApp.process() !== null
@@ -28,8 +32,8 @@ test.describe('Smoke Tests', () => {
   test('window has correct dimensions', async ({ window }) => {
     // Get actual window dimensions from the renderer
     const dimensions = await window.evaluate(() => ({
-      width: window.innerWidth,
-      height: window.innerHeight
+      width: globalThis.innerWidth,
+      height: globalThis.innerHeight
     }))
 
     // Window should have reasonable size
@@ -46,18 +50,9 @@ test.describe('Smoke Tests', () => {
     expect(root).toBeTruthy()
   })
 
-  test('shows splash or main content', async ({ window }) => {
-    // App should show either splash screen or main content
-    // Wait for any of these to appear
-    await Promise.race([
-      window.waitForSelector('[data-testid="splash-screen"]', { timeout: 5000 }).catch(() => null),
-      window.waitForSelector('[data-testid="main-content"]', { timeout: 5000 }).catch(() => null),
-      window.waitForSelector('[data-testid="api-setup"]', { timeout: 5000 }).catch(() => null),
-      // Fallback: any visible text content
-      window.waitForSelector('text=/Halo|API|连接|设置/', { timeout: 5000 }).catch(() => null)
-    ])
-
-    // Take screenshot for debugging
+  test('renders the loaded application shell', async ({ window }) => {
+    await waitForHomePage(window)
+    await expect(window.getByRole('button', { name: 'Conversation', exact: true }).first()).toBeVisible()
     await window.screenshot({ path: 'tests/e2e/results/smoke-initial-state.png' })
   })
 
@@ -74,6 +69,10 @@ test.describe('Smoke Tests', () => {
     // Wait a moment for any async errors
     await window.waitForTimeout(2000)
 
+    const config = await window.evaluate(() => (window as unknown as { halo: HaloAPI }).halo.getConfig())
+    expect(config.success).toBe(true)
+    expect((config.data as { appStore: { registries: Array<{ id: string; enabled: boolean }> } }).appStore.registries.find(registry => registry.id === 'claude-skills')).toMatchObject({ enabled: false })
+
     // Filter out known acceptable errors
     const criticalErrors = errors.filter(error =>
       !error.includes('net::ERR_') && // Network errors are acceptable
@@ -84,18 +83,30 @@ test.describe('Smoke Tests', () => {
     expect(criticalErrors).toHaveLength(0)
   })
 
-  test('no unhandled promise rejections', async ({ electronApp }) => {
-    const rejections: string[] = []
-
-    // Listen for unhandled rejections in main process
-    electronApp.on('close', () => {
-      // Process closed normally
+  test('basic navigation does not produce unhandled rejections in main or renderer', async ({ electronApp, window }) => {
+    const rendererErrors: string[] = []
+    window.on('pageerror', error => rendererErrors.push(error.message))
+    await electronApp.evaluate(() => {
+      const state = globalThis as unknown as { carrierUnhandled: string[]; carrierRejectionListener: (reason: unknown) => void }
+      state.carrierUnhandled = []
+      state.carrierRejectionListener = reason => state.carrierUnhandled.push(reason instanceof Error ? reason.message : String(reason))
+      process.on('unhandledRejection', state.carrierRejectionListener)
     })
-
-    // Wait a moment
-    await new Promise(resolve => setTimeout(resolve, 2000))
-
-    expect(rejections).toHaveLength(0)
+    try {
+      await navigateToChat(window)
+      await navigateToSettings(window)
+      await navigateToChat(window)
+      await window.waitForTimeout(2000)
+      expect(await electronApp.evaluate(() => (globalThis as unknown as { carrierUnhandled: string[] }).carrierUnhandled)).toEqual([])
+      expect(rendererErrors).toEqual([])
+    } finally {
+      await electronApp.evaluate(() => {
+        const state = globalThis as unknown as { carrierUnhandled?: string[]; carrierRejectionListener?: (reason: unknown) => void }
+        process.removeListener('unhandledRejection', state.carrierRejectionListener!)
+        delete state.carrierUnhandled
+        delete state.carrierRejectionListener
+      })
+    }
   })
 })
 
@@ -116,17 +127,8 @@ test.describe('First Launch Flow', () => {
 
 test.describe('Basic Navigation', () => {
   test('settings button is accessible', async ({ window }) => {
-    // Wait for app to fully load
-    await window.waitForLoadState('networkidle')
-
-    // Look for settings button (gear icon)
-    const settingsButton = await window.$('[data-testid="settings-button"], button:has(svg[class*="settings"]), button:has(svg[class*="cog"])').catch(() => null)
-
-    // Settings should be accessible from main UI
-    // Note: May not be visible during API setup
-    if (settingsButton) {
-      expect(settingsButton).toBeTruthy()
-    }
+    await navigateToSettings(window)
+    await expect(window.locator('#ai-model')).toBeVisible()
   })
 })
 
@@ -182,7 +184,7 @@ test.describe('Core Features', () => {
     // Wait for LAN section (supports both EN and CN)
     await window.waitForSelector('text=/本机地址|局域网地址|Local Address|LAN Address/i', { timeout: 15000 })
 
-    await window.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
+    await window.locator('#remote').scrollIntoViewIfNeeded()
     await window.waitForTimeout(500)
 
     // Click tunnel button (supports both EN and CN)

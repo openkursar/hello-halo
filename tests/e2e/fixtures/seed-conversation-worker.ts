@@ -10,11 +10,12 @@
  * profile without needing a real `app` object, which `ELECTRON_RUN_AS_NODE=1`
  * replaces with the electron binary path string.
  *
- * Contract: argv[2] is a JSON-encoded { testConfigDir, options }; the seeded
- * { conversationId, testConfigDir } is printed to stdout as the last line.
+ * argv[2] carries { testConfigDir, options }; fd3 carries the complete result.
+ * stdout/stderr remain available for service logs, including debounced writes.
  */
 
 import { createConversation, addMessage } from '../../../src/main/services/conversation.service'
+import { writeFileSync } from 'node:fs'
 import type { SeedConversationOptions, SeededConversation } from './seed-conversation'
 
 /** A reply whose height depends on `n`: from one line to several screens. */
@@ -56,12 +57,7 @@ function main(): void {
   }
 
   const result: SeededConversation = { conversationId: conversation.id, messageIds }
-  // Last stdout line only. conversation.service.ts schedules its index
-  // rebuild on a debounce timer (see "[Conversation] Index rebuilt
-  // asynchronously" in its own logs) — without a hard exit here, those
-  // trailing log lines land after this JSON line and break the
-  // last-line-only contract the caller relies on.
-  process.stdout.write(JSON.stringify(result) + '\n')
+  writeFileSync(3, JSON.stringify(result), 'utf8')
   process.exit(0)
 }
 

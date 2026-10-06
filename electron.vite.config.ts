@@ -2,6 +2,7 @@ import { createReadStream, cpSync, existsSync } from 'fs'
 import { resolve, sep } from 'path'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import type { Plugin } from 'vite'
+import { build as buildEsbuild } from 'esbuild'
 import react from '@vitejs/plugin-react'
 
 /**
@@ -48,6 +49,38 @@ function pdfjsAssets(): Plugin {
   }
 }
 
+function sandboxedPreloads(): Plugin {
+  return {
+    name: 'sandboxed-preloads',
+    async buildStart() {
+      // Sandboxed preloads cannot require shared chunks: emit one self-contained file.
+      const result = await buildEsbuild({
+        entryPoints: [resolve(__dirname, 'src/preload/browser-host.ts')],
+        outfile: 'browser-host.cjs',
+        bundle: true,
+        platform: 'node',
+        format: 'cjs',
+        external: ['electron'],
+        write: false,
+        metafile: true,
+      })
+      for (const output of Object.values(result.metafile!.outputs)) {
+        if (output.imports.some(dependency => dependency.external && dependency.path !== 'electron')) {
+          throw new Error('Sandboxed browser host preload must bundle every dependency except electron')
+        }
+      }
+      for (const input of Object.keys(result.metafile!.inputs)) this.addWatchFile(resolve(input))
+      this.emitFile({ type: 'asset', fileName: 'browser-host.cjs', source: result.outputFiles![0].text })
+    },
+    generateBundle(_options, bundle) {
+      const preload = bundle['index.cjs']
+      if (!preload || preload.type !== 'chunk' || preload.dynamicImports.length || preload.imports.some(dependency => dependency !== 'electron')) {
+        throw new Error('Sandboxed main preload must be a self-contained CommonJS chunk with only electron external')
+      }
+    },
+  }
+}
+
 // Telemetry / analytics identifiers are deliberately NOT injected at build
 // time. They are per-variant configuration in product.json, read at runtime
 // by the analytics service — a missing value is a verify-inputs failure
@@ -88,15 +121,15 @@ export default defineConfig({
     }
   },
   preload: {
-    plugins: [externalizeDepsPlugin()],
+    plugins: [externalizeDepsPlugin(), sandboxedPreloads()],
     build: {
       rollupOptions: {
         input: {
           index: resolve(__dirname, 'src/preload/index.ts')
         },
         output: {
-          format: 'es',
-          entryFileNames: '[name].mjs'
+          format: 'cjs',
+          entryFileNames: '[name].cjs'
         }
       }
     }
@@ -116,7 +149,7 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: resolve(__dirname, 'src/renderer/index.html'),
-          overlay: resolve(__dirname, 'src/renderer/overlay.html')
+          'browser-host': resolve(__dirname, 'src/renderer/browser-host.html')
         }
       }
     },

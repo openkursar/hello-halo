@@ -146,7 +146,7 @@ export function useLiveSessions(): LiveSessionsApi {
     if (session.kind === 'terminal') {
       return openTerminalInCanvas(session.id, session.title)
     }
-    // Attach the exact AI-driven BrowserView (same WebContents).
+    // Attach the exact AI-driven browser page (same WebContents).
     return canvasLifecycle.attachAIBrowserView(session.id, session.url || '', session.title)
   }, [openTerminalInCanvas])
 

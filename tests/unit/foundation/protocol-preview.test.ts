@@ -166,7 +166,7 @@ describe('preview storage', () => {
     expect(options.origin).toBe(`halo-preview://${host}`)
     // Per-origin stores only — never session-wide caches such as the shader cache.
     expect([...(options.storages ?? [])].sort()).toEqual(
-      ['cachestorage', 'cookies', 'filesystem', 'indexdb', 'localstorage', 'serviceworkers', 'websql']
+      ['cachestorage', 'cookies', 'filesystem', 'indexdb', 'localstorage', 'serviceworkers']
     )
   })
 

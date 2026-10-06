@@ -13,6 +13,12 @@ import { navigateToApps } from '../fixtures/helpers'
 import type { Page } from '@playwright/test'
 import { openTeamWorkbench } from '../fixtures/team-workbench'
 
+test.use({
+  appStoreRegistries: [['official', 'mcp-official', 'smithery', 'claude-skills', 'skillhub'].map(id => ({
+    id, name: id, url: `https://example.invalid/${id}`, enabled: false,
+  })), { scope: 'test' }],
+})
+
 /** Navigate to the Teams tab inside the Studio/Apps page. */
 async function navigateToTeams(window: Page) {
   await navigateToApps(window)
@@ -101,15 +107,11 @@ test.describe('Team render — §2 automatable subset', () => {
     await navigateToTeams(window)
 
     await window.evaluate(() => {
-      localStorage.setItem('halo-locale', 'zh')
+      localStorage.setItem('halo-locale', 'zh-CN')
     })
     await window.reload()
     await window.waitForSelector('#root', { timeout: 15000 })
-    await window.waitForTimeout(2000)
-
-    // Navigate back to the teams view under the zh locale.
-    const studio = await window.waitForSelector('text=/^Studio$|^工坊$|^Apps$/i', { timeout: 15000 })
-    await studio.click()
+    await window.getByRole('button', { name: '数字人', exact: true }).click()
     const zhTab = window.getByRole('button', { name: /^团队/ })
     await expect(zhTab).toBeVisible()
     await zhTab.click()

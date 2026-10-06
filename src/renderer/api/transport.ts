@@ -464,6 +464,7 @@ export function onEvent<T = unknown>(channel: string, callback: (data: T) => voi
       'remote:status-change': 'onRemoteStatusChange',
       'credential:decrypt-failed': 'onCredentialDecryptFailed',
       'browser:state-change': 'onBrowserStateChange',
+      'browser:page-gone': 'onBrowserPageGone',
       'browser:zoom-changed': 'onBrowserZoomChanged',
       'canvas:tab-action': 'onCanvasTabAction',
       'ai-browser:active-view-changed': 'onAIBrowserActiveViewChanged',

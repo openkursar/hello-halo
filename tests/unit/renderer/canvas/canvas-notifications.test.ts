@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 let emitBrowserState: (data: unknown) => void = () => {}
 vi.mock('../../../../src/renderer/api', () => ({
   api: {
-    onBrowserStateChange: (cb: (data: unknown) => void) => { emitBrowserState = cb; return () => {} },
+    onBrowserPageGone: () => () => {}, onBrowserStateChange: (cb: (data: unknown) => void) => { emitBrowserState = cb; return () => {} },
     onArtifactChangedBatch: () => () => {},
     onMemoryPressure: () => () => {},
     getMemoryPressure: async () => 'normal',

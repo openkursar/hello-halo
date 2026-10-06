@@ -14,8 +14,8 @@
  * that:
  *   - There is no circular dependency between the two modules.
  *   - The resolver can be unit tested without an Electron runtime —
- *     `browser-view.service.ts` cannot be imported in Vitest because it pulls
- *     in Electron's `BrowserView` at module load time.
+ *     the browser manager also imports the Electron host, while this resolver
+ *     remains independent of the desktop runtime.
  */
 
 // Desktop Chrome User-Agent to avoid detection as Electron app.

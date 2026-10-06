@@ -193,14 +193,23 @@ const PRESETS = ['links', 'code150']
 // Built once at startup so every request in this process serves byte-identical content.
 const TOKENS_BY_CONTENT = {
   default: buildTokenStream(TOKEN_COUNT),
+  numbers: Array.from({ length: 50 }, (_, index) => `${index % 5 + 1} `),
+  first: ['First'],
+  second: ['Second'],
   ...Object.fromEntries(PRESETS.map(name => [name, chunked(presetText(name), 40)])),
 }
 if (!TOKENS_BY_CONTENT[CONTENT]) throw new Error(`Unknown MOCK_CONTENT preset: ${CONTENT}`)
 
-/** The preset a prompt asks for with `mock-content:<preset>`, else MOCK_CONTENT. */
+/** Select explicit workload presets or deterministic chat-fixture replies. */
 function contentFor(body) {
   const text = JSON.stringify(body.messages ?? [])
   const asked = PRESETS.find(name => text.includes(`mock-content:${name}`))
+  const lastUser = body.messages?.filter(message => message.role === 'user').at(-1)
+  const prompt = typeof lastUser?.content === 'string' ? lastUser.content
+    : Array.isArray(lastUser?.content) ? lastUser.content.map(part => part.text ?? '').join('\n') : ''
+  if (prompt.includes('Count from 1 to 5 slowly.')) return 'numbers'
+  if (prompt.includes('Say "First" and nothing else.')) return 'first'
+  if (prompt.includes('Say "Second" and nothing else.')) return 'second'
   return asked ?? CONTENT
 }
 

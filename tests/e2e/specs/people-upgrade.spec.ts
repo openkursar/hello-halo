@@ -3,16 +3,22 @@ import { navigateToApps } from '../fixtures/helpers'
 
 test.setTimeout(60000)
 
-test('directory search, bounded pages, return state and coordinator separation use real persisted data', async ({ window }) => {
+test('directory search, bounded pages, return state and dedicated coordinator settings use real persisted data', async ({ window }) => {
   await navigateToApps(window)
   const search = window.getByRole('textbox', { name: 'Search digital humans' })
   await expect(search).toBeVisible()
   await expect(window.locator('article')).toHaveCount(24)
-  await expect(window.getByRole('button', { name: 'System coordinator', exact: true })).toHaveCount(0)
+  const coordinator = window.getByRole('button', { name: 'System coordinator', exact: true })
+  await expect(coordinator).toBeVisible()
+  await coordinator.click()
+  await window.getByRole('button', { name: 'Capabilities and settings', exact: true }).click()
+  await expect(window.locator('#settings-group-identity input[type="text"]').first()).toHaveValue('System coordinator')
+  await window.getByRole('button', { name: 'All digital humans', exact: true }).click()
   await search.fill('Evidence team')
-  await expect(window.locator('article')).toHaveCount(1)
+  await expect(window.locator('article')).toHaveCount(2)
+  await expect(window.getByRole('button', { name: 'System coordinator', exact: true })).toBeVisible()
   await window.getByRole('button', { name: 'Analyst 000', exact: true }).click()
-  await expect(window.getByRole('button', { name: 'Run once', exact: true })).toBeEnabled()
+  await expect(window.getByRole('button', { name: 'Run now', exact: true })).toBeEnabled()
   await window.getByRole('button', { name: 'All digital humans', exact: true }).click()
   await expect(search).toHaveValue('Evidence team')
   await search.fill('')
@@ -21,7 +27,7 @@ test('directory search, bounded pages, return state and coordinator separation u
   await window.screenshot({ path: 'tests/e2e/results/people-directory-list.png' })
 })
 
-test('inbox includes hidden coordinators, pages requests, and retains unsent decision drafts', async ({ window }) => {
+test('inbox includes dedicated coordinators, pages requests, and retains unsent decision drafts', async ({ window }) => {
   await navigateToApps(window)
   await window.getByRole('button', { name: /^Handle all/ }).click()
   await expect(window.locator('article')).toHaveCount(30)
@@ -57,7 +63,7 @@ test.describe('large directory and responsive detail', () => {
     }
     await window.getByRole('textbox', { name: 'Search digital humans' }).fill('Analyst 000')
     await window.getByRole('button', { name: 'Analyst 000', exact: true }).click()
-    await expect(window.getByRole('button', { name: 'Run once', exact: true })).toBeEnabled()
+    await expect(window.getByRole('button', { name: 'Run now', exact: true })).toBeEnabled()
     const size = await window.evaluate(() => ({ content: document.documentElement.scrollWidth, viewport: document.documentElement.clientWidth }))
     expect(size.content).toBeLessThanOrEqual(size.viewport + 1)
     await window.screenshot({ path: 'tests/e2e/results/people-detail-320-dark.png' })

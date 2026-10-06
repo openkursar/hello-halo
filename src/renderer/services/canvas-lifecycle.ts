@@ -1,30 +1,7 @@
 /**
- * Canvas Lifecycle Manager - Centralized BrowserView and Tab Management
- *
- * This class manages the lifecycle of BrowserViews and Canvas tabs in an
- * imperative, predictable manner. It replaces the complex useEffect-based
- * lifecycle management that was prone to race conditions and timing issues.
- *
- * Key responsibilities:
- * - Tab creation, switching, closing, and reordering
- * - BrowserView creation, showing, hiding, and destruction
- * - State synchronization with React via callbacks
- *
- * Content types and rendering:
- * - code/markdown/json/csv/text: Load content via IPC, render in React
- * - image: Use halo-file:// protocol (bypasses CSP in renderer)
- * - pdf: Use BrowserView with file:// (BrowserView has no cross-origin restrictions)
- * - browser: Use BrowserView with https:// URLs
- *
- * Protocol: halo-file://
- * - Custom protocol registered in main process (protocol.service.ts)
- * - Used by <img> tags in renderer to bypass CSP restrictions
- * - NOT used for BrowserView (BrowserView can access file:// directly)
- *
- * Design principles:
- * - Single source of truth for tab and view state
- * - Imperative control flow (no React side effects)
- * - React only handles UI rendering and event triggering
+ * Owns Canvas tabs and their resource budgets independently of React viewers.
+ * BrowserView API names are retained for compatibility; their pages are webview
+ * guests in a permanent host, and AI-owned guests outlive borrowed Canvas tabs.
  */
 
 import { api } from '../api'
@@ -199,13 +176,7 @@ export interface TabState {
   changes?: ChangesSource
   /** A place to show once; see RevealRequest. */
   reveal?: RevealRequest
-  /**
-   * Whether the Canvas owns the BrowserView's lifecycle.
-   * true  — created via createBrowserView (openUrl/openPdf): destroy on close.
-   * false — attached via attachAIBrowserView: the AI drives a single view whose
-   *         WebContents outlives any tab, so closing detaches rather than
-   *         destroys. Destroying it would end the AI's live browser session.
-   */
+  /** False for borrowed AI pages: closing their tab must not end the AI session. */
   browserViewOwned?: boolean
 }
 
@@ -473,6 +444,7 @@ class CanvasLifecycle {
 
   // IPC listener cleanup
   private browserStateUnsubscribe: (() => void) | null = null
+  private browserPageGoneUnsubscribe: (() => void) | null = null
   private artifactChangedUnsubscribe: (() => void) | null = null
   private memoryPressureUnsubscribe: (() => void) | null = null
 
@@ -482,8 +454,10 @@ class CanvasLifecycle {
   private budgetsDirty = false
   /** Makes each created view id unique, so a replacement never collides with one still being destroyed. */
   private viewGeneration = 0
-  /** Tab id -> its BrowserView creation in flight; at most one per tab. */
+  /** At most one browser page creation per tab, including after an unexpected loss. */
   private creatingViews = new Map<string, Promise<void>>()
+  /** Explicit close/eviction must never be mistaken for an unexpected lost page. */
+  private releasingViews = new Set<string>()
   private budgetEvictionCallbacks: Set<BudgetEvictionCallback> = new Set()
 
   /** Tab id -> activation sequence number; larger = used more recently. */
@@ -584,6 +558,7 @@ class CanvasLifecycle {
       }
     })
 
+    this.browserPageGoneUnsubscribe = api.onBrowserPageGone(({ viewId, reason }) => this.handleBrowserPageGone(viewId, reason))
     this.artifactChangedUnsubscribe = api.onArtifactChangedBatch((batch) => this.handleArtifactChanges(batch))
 
     this.memoryPressureUnsubscribe = api.onMemoryPressure(({ level }) => this.setMemoryPressure(level))
@@ -603,6 +578,9 @@ class CanvasLifecycle {
       this.browserStateUnsubscribe()
       this.browserStateUnsubscribe = null
     }
+
+    this.browserPageGoneUnsubscribe?.()
+    this.browserPageGoneUnsubscribe = null
 
     if (this.artifactChangedUnsubscribe) {
       this.artifactChangedUnsubscribe()
@@ -624,8 +602,11 @@ class CanvasLifecycle {
    * Set the container bounds getter function
    * Called by BrowserViewer to provide DOM reference
    */
-  setContainerBoundsGetter(getter: () => DOMRect | null): void {
+  setContainerBoundsGetter(getter: () => DOMRect | null): () => void {
     this.containerBoundsGetter = getter
+    return () => {
+      if (this.containerBoundsGetter === getter) this.containerBoundsGetter = null
+    }
   }
 
   // ============================================
@@ -688,9 +669,7 @@ class CanvasLifecycle {
       }
     }
 
-    // PDF files are opened via BrowserView (Chromium native PDF renderer) on
-    // desktop. Remote clients have no BrowserView — fall through to a content
-    // tab whose base64 bytes are rendered by the pdfjs-based PdfViewer.
+    // Desktop uses Chromium's native PDF viewer; remote clients load bytes for pdfjs.
     if (type === 'pdf' && !api.isRemoteMode()) {
       return this.openPdf(path, title)
     }
@@ -738,14 +717,9 @@ class CanvasLifecycle {
     if (this.tabs.get(tabId)?.reveal?.seq === seq) this.patchTab(tabId, { reveal: undefined })
   }
 
-  /**
-   * Open a PDF file using BrowserView (Chromium native PDF renderer)
-   * Note: BrowserView can access file:// directly, no need for halo-file://
-   */
   private async openPdf(path: string, title?: string): Promise<string> {
     const tabId = generateTabId()
-    // BrowserView has no cross-origin restrictions, use file:// directly
-    // Encode path to handle non-ASCII characters and spaces
+    // Native PDF guests navigate directly to the file; the app never reads its bytes.
     const pdfUrl = `file://${encodeURI(path)}`
 
     const tab: NewTab = {
@@ -765,7 +739,6 @@ class CanvasLifecycle {
 
     this.addTab(tab)
 
-    // Switch to new tab (this will create the BrowserView)
     await this.switchTab(tabId)
 
     return tabId
@@ -867,15 +840,22 @@ class CanvasLifecycle {
 
     this.addTab(tab)
 
-    // Switch to new tab (this will create the BrowserView)
     await this.switchTab(tabId)
 
     return tabId
   }
 
-  /**
-   * Attach an existing AI Browser BrowserView to the Canvas
-   */
+  /** Navigation survives a viewer unmount while its guest is still being created. */
+  async navigateBrowserTab(tabId: string, url: string): Promise<void> {
+    const tab = this.tabs.get(tabId)
+    if (!tab || (tab.type !== 'browser' && tab.type !== 'pdf')) return
+    if (!tab.browserViewId) await this.createBrowserView(tabId, 'about:blank')
+    const current = this.tabs.get(tabId)
+    if (!current?.browserViewId) return
+    await api.navigateBrowserView(current.browserViewId, url)
+  }
+
+  /** Borrows an AI page without changing its owner or guest identity. */
   async attachAIBrowserView(viewId: string, url: string, title?: string): Promise<string> {
     // Check if this view is already attached
     for (const [tabId, tab] of this.tabs) {
@@ -924,7 +904,7 @@ class CanvasLifecycle {
 
   /**
    * Open a terminal session in the canvas. Terminal tabs render in React
-   * (TerminalViewer) — no BrowserView. Dedups by session id. With `reveal`,
+   * (TerminalViewer). Dedups by session id. With `reveal`,
    * the viewer shows that output once its replay is in.
    */
   async openTerminal(sessionId: string, title?: string, options: { reveal?: RevealTarget } = {}): Promise<string> {
@@ -1106,13 +1086,45 @@ class CanvasLifecycle {
   }
 
   /**
-   * Close the tabs showing an AI-attached view that no longer exists (its
-   * session ended). Owned views are the Canvas's own to close; only attached
-   * ones can vanish underneath their tab.
+   * An AI owner ended the page. Owned Canvas pages instead follow the general
+   * browser page-loss event so they can recover independently of AI sessions.
    */
   async closeTabsOfGoneView(viewId: string): Promise<void> {
     const stale = [...this.tabs.values()].filter(tab => tab.browserViewId === viewId && !tab.browserViewOwned)
     for (const tab of stale) await this.closeTab(tab.id)
+  }
+
+  private handleBrowserPageGone(viewId: string, reason: 'closed' | 'lost'): void {
+    if (this.releasingViews.has(viewId)) return
+    for (const tab of this.tabs.values()) {
+      if (tab.browserViewId !== viewId || !tab.browserViewOwned) continue
+      if (reason === 'closed') {
+        void this.closeTab(tab.id).catch(error => {
+          console.error('[CanvasLifecycle] Closing a browser tab failed:', viewId, error)
+        })
+        continue
+      }
+      const browserState: BrowserState = { isLoading: true, canGoBack: false, canGoForward: false }
+      this.patchTab(tab.id, {
+        browserViewId: undefined,
+        browserViewOwned: undefined,
+        browserState,
+        error: undefined,
+        isLoading: true,
+      })
+      this.notifyBrowserStateChange(tab.id, browserState)
+      console.warn('[CanvasLifecycle] Browser page lost; releasing its tab attachment:', viewId)
+      void this.restoreLostBrowserPage(tab.id).catch(error => {
+        console.error('[CanvasLifecycle] Restoring a lost browser page failed:', viewId, error)
+      })
+    }
+  }
+
+  private async restoreLostBrowserPage(tabId: string): Promise<void> {
+    await this.creatingViews.get(tabId)
+    const tab = this.tabs.get(tabId)
+    if (!tab || (tab.type !== 'browser' && tab.type !== 'pdf') || tab.browserViewId || this.activeTabId !== tabId || !this.isOpen) return
+    await this.createBrowserView(tabId, tab.url || 'about:blank')
   }
 
   /**
@@ -1127,8 +1139,6 @@ class CanvasLifecycle {
       console.log(`[CanvasLifecycle] Close of dirty tab ${tabId} cancelled by user`)
       return
     }
-
-    console.log(`[CanvasLifecycle] Closing tab: ${tabId}`)
 
     // Terminal tabs: defer to the close policy for the underlying pty (keep in
     // background / terminate / cancel). A cancel aborts the whole close.
@@ -1189,8 +1199,6 @@ class CanvasLifecycle {
       }
     }
 
-    console.log('[CanvasLifecycle] Closing all tabs')
-
     // Tear down each tab's underlying resource. Browser/pdf views go by
     // ownership (see releaseBrowserView). Terminals defer to the bulk disposal
     // policy — non-interactive, so no per-tab prompts: the user's own terminals
@@ -1217,10 +1225,6 @@ class CanvasLifecycle {
     this.notifyActiveTabChange()
   }
 
-  /**
-   * Switch to a specific tab (CORE METHOD)
-   * Handles hiding previous BrowserView and showing/creating new one
-   */
   async switchTab(tabId: string): Promise<void> {
     const tab = this.tabs.get(tabId)
     if (!tab) {
@@ -1228,45 +1232,33 @@ class CanvasLifecycle {
       return
     }
 
-    console.log(`[CanvasLifecycle] Switching to tab: ${tabId}`)
-
     const previousTabId = this.activeTabId
     const previousTab = previousTabId ? this.tabs.get(previousTabId) : null
 
-    // 1. Publish the new active tab before the hide await, so a caller that
-    // arrives mid-switch reads where we are going rather than where we were.
-    // The hide below targets the previous tab by captured id, so it is unaffected.
+    // Publish before awaiting hide so overlapping switches see the new target.
     this.activeTabId = tabId
     this.lastActivated.set(tabId, ++this.activationSeq)
 
-    // 2. Hide previous BrowserView if it exists (browser or pdf types)
     const prevNeedsBrowserView = previousTab?.type === 'browser' || previousTab?.type === 'pdf'
     if (prevNeedsBrowserView && previousTab.browserViewId && previousTabId !== tabId) {
-      console.log(`[CanvasLifecycle] Hiding previous BrowserView: ${previousTab.browserViewId}`)
       await api.hideBrowserView(previousTab.browserViewId)
     }
 
-    // 3. Create a BrowserView for browser/pdf tabs that lack one. Showing is
-    // deliberately left out: this runs before notifyActiveTabChange(), so
-    // containerBoundsGetter still resolves against the outgoing tab's DOM.
-    // BrowserViewer positions the view after React commits the new active tab.
+    // The outgoing viewer still owns the bounds; the new viewer presents after commit.
     const needsBrowserView = tab.type === 'browser' || tab.type === 'pdf'
     if (needsBrowserView && !tab.browserViewId) {
-      // Don't await - let it load in background, UI switches immediately,
-      // loading state updates via IPC events
-      console.log(`[CanvasLifecycle] Creating new BrowserView for tab: ${tabId}`)
+      // Creation must not delay the tab switch; navigation state arrives by event.
       this.createBrowserView(tabId, tab.url || 'about:blank').catch(err => {
-        console.error(`[CanvasLifecycle] Failed to create BrowserView for tab ${tabId}:`, err)
+        console.error(`[CanvasLifecycle] Failed to create browser page for tab ${tabId}:`, err)
       })
     }
 
-    // 4. A tab whose content was dropped for the budget reads it back.
+    // Restore content released by the hidden-tab budget.
     if (tab.contentUnloaded && tab.path) {
       this.patchTab(tabId, { contentUnloaded: false, isLoading: true, error: undefined })
       void this.loadFileContent(tabId, tab.path, tab.type)
     }
 
-    // 5. Notify React
     this.notifyActiveTabChange()
 
     void this.applyBudgets()
@@ -1408,12 +1400,9 @@ class CanvasLifecycle {
   }
 
   // ============================================
-  // BrowserView Lifecycle
+  // Browser Page Lifecycle
   // ============================================
 
-  /**
-   * Create a new BrowserView
-   */
   private createBrowserView(tabId: string, url: string): Promise<void> {
     // A second request (double click, the AI and the user at once, a retry)
     // joins the first: two creations would leave one view no tab references.
@@ -1429,8 +1418,6 @@ class CanvasLifecycle {
     if (!tab) return
 
     const viewId = `browser-${tabId}-${++this.viewGeneration}`
-    console.log(`[CanvasLifecycle] Creating BrowserView: ${viewId} for URL: ${url}`)
-
     try {
       const result = await api.createBrowserView(viewId, url)
 
@@ -1439,7 +1426,6 @@ class CanvasLifecycle {
       const current = this.tabs.get(tabId)
       if (!current || (current.browserViewId && current.browserViewId !== viewId)) {
         if (result.success) {
-          console.log(`[CanvasLifecycle] BrowserView ${viewId} no longer needed, destroying it`)
           await api.destroyBrowserView(viewId)
         }
         return
@@ -1449,13 +1435,11 @@ class CanvasLifecycle {
         this.patchTab(tabId, { browserViewId: viewId, browserViewOwned: true })
         void this.applyBudgets()
 
-        // Show the view
-        await this.showBrowserView(viewId)
+        // Creation may finish after the user switched away from this tab.
+        if (this.activeTabId === tabId && this.isOpen) await this.showBrowserView(viewId)
       } else if ((result as { code?: string }).code === 'BROWSER_POLICY_BLOCKED') {
-        // Initial URL blocked by browser policy — no BrowserView exists yet.
-        // Surface the same blocked state as navigation blocks so the policy
-        // overlay (and its "allow and retry" action) covers this entry too.
-        console.warn(`[CanvasLifecycle] BrowserView creation blocked by policy: ${url}`)
+        // No guest exists yet; the policy overlay still needs to offer allow-and-retry.
+        console.warn('[CanvasLifecycle] Browser page creation blocked by policy:', viewId)
         const browserState: BrowserState = {
           isLoading: false,
           canGoBack: false,
@@ -1467,17 +1451,17 @@ class CanvasLifecycle {
         this.patchTab(tabId, { error: result.error, isLoading: false, browserState })
         this.notifyBrowserStateChange(tabId, browserState)
       } else {
-        console.error(`[CanvasLifecycle] Failed to create BrowserView: ${result.error}`)
+        console.error(`[CanvasLifecycle] Failed to create browser page ${viewId}: ${result.error}`)
         this.patchTab(tabId, { error: result.error || 'Failed to create browser view', isLoading: false })
       }
     } catch (error) {
-      console.error(`[CanvasLifecycle] Exception creating BrowserView:`, error)
+      console.error('[CanvasLifecycle] Browser page creation failed:', viewId, error)
       this.patchTab(tabId, { error: (error as Error).message, isLoading: false })
     }
   }
 
   /**
-   * Retry a tab whose BrowserView creation was blocked by browser policy
+   * Retry a tab whose page creation was blocked by browser policy
    * (no view exists yet, so browser:navigate cannot be used). Called by the
    * policy-block overlay after the user allowlisted the blocked host.
    */
@@ -1491,9 +1475,6 @@ class CanvasLifecycle {
     await this.createBrowserView(tabId, url)
   }
 
-  /**
-   * Show a BrowserView at the container position
-   */
   private async showBrowserView(viewId: string): Promise<void> {
     if (!this.containerBoundsGetter) {
       console.warn('[CanvasLifecycle] No container bounds getter set, deferring showBrowserView')
@@ -1507,13 +1488,6 @@ class CanvasLifecycle {
       return
     }
 
-    console.log(`[CanvasLifecycle] Showing BrowserView: ${viewId} at`, {
-      x: Math.round(bounds.left),
-      y: Math.round(bounds.top),
-      width: Math.round(bounds.width),
-      height: Math.round(bounds.height),
-    })
-
     await api.showBrowserView(viewId, {
       x: Math.round(bounds.left),
       y: Math.round(bounds.top),
@@ -1522,25 +1496,22 @@ class CanvasLifecycle {
     })
   }
 
-  /**
-   * Hide a BrowserView
-   */
   private async hideBrowserView(viewId: string): Promise<void> {
-    console.log(`[CanvasLifecycle] Hiding BrowserView: ${viewId}`)
     await api.hideBrowserView(viewId)
   }
 
-  /**
-   * Destroy a BrowserView
-   */
   private async destroyBrowserView(viewId: string): Promise<void> {
-    console.log(`[CanvasLifecycle] Destroying BrowserView: ${viewId}`)
-    await api.hideBrowserView(viewId)
-    await api.destroyBrowserView(viewId)
+    this.releasingViews.add(viewId)
+    try {
+      await api.hideBrowserView(viewId)
+      await api.destroyBrowserView(viewId)
+    } finally {
+      this.releasingViews.delete(viewId)
+    }
   }
 
   /**
-   * Give up a tab's BrowserView, destroying it only if the Canvas owns it.
+   * Give up a tab's browser page, destroying it only if the Canvas owns it.
    *
    * The single place both close paths go through, so a tab can never be
    * removed one way and leak (or kill) its view the other way.
@@ -1551,15 +1522,9 @@ class CanvasLifecycle {
       await this.destroyBrowserView(tab.browserViewId)
       return
     }
-    console.log(`[CanvasLifecycle] Detaching BrowserView: ${tab.browserViewId}`)
     await this.hideBrowserView(tab.browserViewId)
   }
 
-  /**
-   * Update bounds of active BrowserView (called on resize)
-   * Uses resizeBrowserView instead of showBrowserView to avoid
-   * expensive addBrowserView calls during animation
-   */
   async updateActiveBounds(): Promise<void> {
     if (!this.activeTabId) return
 
@@ -1571,9 +1536,7 @@ class CanvasLifecycle {
   }
 
   /**
-   * Show and position the active BrowserView. The only entry point that does so:
-   * BrowserViewer calls it once mounted, which is the earliest moment the
-   * container it is positioned against exists.
+   * The viewer calls this after mounting, when its presentation surface exists.
    */
   async ensureActiveBrowserViewShown(): Promise<void> {
     if (!this.activeTabId) return
@@ -1581,15 +1544,10 @@ class CanvasLifecycle {
     const tab = this.tabs.get(this.activeTabId)
     const hasBrowserView = (tab?.type === 'browser' || tab?.type === 'pdf') && tab.browserViewId
     if (hasBrowserView) {
-      // Use showBrowserView which adds the view to the window
       await this.showBrowserView(tab.browserViewId!)
     }
   }
 
-  /**
-   * Resize a BrowserView (without re-adding to window)
-   * More efficient than showBrowserView for continuous updates
-   */
   private async resizeBrowserView(viewId: string): Promise<void> {
     if (!this.containerBoundsGetter) return
 
@@ -1604,9 +1562,6 @@ class CanvasLifecycle {
     })
   }
 
-  /**
-   * Hide active BrowserView (called when canvas is hidden)
-   */
   async hideActiveBrowserView(): Promise<void> {
     if (!this.activeTabId) return
 
@@ -1618,8 +1573,7 @@ class CanvasLifecycle {
   }
 
   /**
-   * Hide all BrowserViews (called when leaving SpacePage)
-   * Keeps tabs in memory, just hides the native views
+   * Leaving the space page parks guests while retaining their tabs and owners.
    */
   async hideAllBrowserViews(): Promise<void> {
     for (const [, tab] of this.tabs) {
@@ -1782,8 +1736,6 @@ class CanvasLifecycle {
     // Can't open if no tabs
     if (open && this.tabs.size === 0) return
 
-    console.log(`[CanvasLifecycle] Setting open: ${open}`)
-
     this.isOpen = open
     this.isTransitioning = true
 
@@ -1794,6 +1746,13 @@ class CanvasLifecycle {
     }
 
     this.notifyOpenStateChange()
+
+    const activeTabId = this.activeTabId
+    if (open && activeTabId) {
+      void this.restoreLostBrowserPage(activeTabId).catch(error => {
+        console.error('[CanvasLifecycle] Restoring the expanded browser page failed:', activeTabId, error)
+      })
+    }
 
     // Clear transitioning after animation
     setTimeout(() => {

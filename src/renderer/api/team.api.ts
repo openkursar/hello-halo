@@ -1,5 +1,6 @@
 /** Digital Team domain slice of the unified api object. */
 import { httpRequest, isElectron, onEvent } from './_shared'
+import { ensureExtendedServicesReady } from './bootstrap-ready'
 import type { ApiResponse } from './_shared'
 import type {
   CreateTeamInput,
@@ -17,7 +18,10 @@ import type { ContentReference } from '../../shared/types/content-reference'
 export const teamApi = {
   // ===== Teams =====
   teamList: async (spaceId?: string): Promise<ApiResponse> => {
-    if (isElectron()) return window.halo.teamList(spaceId)
+    if (isElectron()) {
+      await ensureExtendedServicesReady()
+      return window.halo.teamList(spaceId)
+    }
     const qs = spaceId ? `?spaceId=${encodeURIComponent(spaceId)}` : ''
     return httpRequest('GET', `/api/teams${qs}`)
   },
@@ -293,7 +297,10 @@ export const teamApi = {
    * only — web clients are never a deep-link target.
    */
   teamConsumePendingInvite: async (): Promise<ApiResponse> => {
-    if (isElectron()) return window.halo.teamConsumePendingInvite()
+    if (isElectron()) {
+      await ensureExtendedServicesReady()
+      return window.halo.teamConsumePendingInvite()
+    }
     return { success: true, data: null }
   },
 

@@ -27,9 +27,9 @@ runtime) depends on it for SQLite access. It must be the first module completed.
 
 ### 2.1 Existing SQLite usage in the project
 
-**None.** The project has zero `better-sqlite3` or SQLite dependencies. The only
-mention of "sqlite" in source code is in file-type constants for artifact display.
-This is a greenfield module.
+The app database backs scheduler, app manager/runtime, digital teams,
+federation, task state and the store's registry cache. Consumers obtain their
+connection and namespaced migrations through this module's public index.
 
 ### 2.2 better-sqlite3 characteristics
 
@@ -37,7 +37,9 @@ This is a greenfield module.
 - Runs in-process, no IPC overhead
 - Excellent performance for read-heavy workloads
 - WAL mode supports concurrent reads with one writer
-- Native addon -- needs `electron-rebuild` or `electron-builder` native dep handling
+- `better-sqlite3` 13 uses stable N-API with native prebuilds included in its npm
+  package. Its JavaScript database/statement API and SQLite file format remain
+  the persistence boundary; an Electron upgrade does not require a schema migration.
 - The project already uses `externalizeDepsPlugin()` in electron-vite, which
   externalizes all deps from the main process bundle. This handles native modules.
 
@@ -61,10 +63,20 @@ For the store module, we use `getHaloDir()` to get the base path, then append
 ### 2.5 Electron build pipeline
 
 `electron.vite.config.ts` uses `externalizeDepsPlugin()` which externalizes
-native Node modules. `better-sqlite3` will be automatically handled. The
-`package.json` build config already has `npmRebuild: false` and a `postinstall`
-script with `electron-builder install-app-deps` which rebuilds native modules
-for the correct Electron ABI.
+native Node modules. `better-sqlite3` remains external and loads its N-API
+binary from `prebuilds/<platform>-<arch>.node`. Packaging unpacks these binaries
+and keeps the target platform only. Preparation, binary checks and the packaging
+hook share the paths and architecture validation in
+`scripts/lib/better-sqlite3-prebuilds.mjs`; there is no Electron ABI download cache.
+
+The driver uses N-API 10, which requires Node 22.14+ for build tools; the app
+runs it under Electron 43's Node 24. macOS validation also rejects deployment
+targets newer than macOS 12. Linux uses upstream's stock prebuild unchanged, so
+the Linux floor is whatever that binary requires (glibc 2.34, Ubuntu 22.04).
+
+The WAL workload in `tests/perf/sqlite-native-benchmark.cjs` takes an optional
+driver directory, so matched runtime/driver pairs can be compared before and
+after an upgrade without using live data.
 
 ## 3. Key Design Decisions
 

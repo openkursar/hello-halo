@@ -187,7 +187,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     // ============================================
 
     setBrowserViewId: (_tabId: string, _viewId: string) => {
-      // No-op: BrowserView lifecycle is managed by canvasLifecycle
+      // No-op: browser page lifecycle is managed by canvasLifecycle
       console.warn('[canvas.store] setBrowserViewId is deprecated, managed by canvasLifecycle')
     },
 

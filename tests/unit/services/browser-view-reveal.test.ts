@@ -1,196 +1,165 @@
-/**
- * Watching a page an AI drives offscreen.
- *
- * A digital-human chat's pages live on a hidden host window. "View live feed"
- * shows the EXACT page (same WebContents), so show() must move it to the main
- * window and hide() must send it home again — otherwise the AI would be left
- * with a detached view that produces no frames. Throttling has to follow the
- * move: disabled it evicts the frame on the very next remove/add round trip.
- */
+import { EventEmitter } from 'node:events'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { describe, it, expect, beforeEach, vi } from 'vitest'
-
-const hostOf = new Map<unknown, unknown>()
-const throttling: boolean[] = []
+const host = vi.hoisted(() => ({ initialize: vi.fn(), create: vi.fn(), present: vi.fn(), isVisible: vi.fn(), destroy: vi.fn(), destroyAll: vi.fn() }))
+const policy = vi.hoisted(() => ({ allowed: true }))
+const guests = new Map<string, FakeGuest>()
+const visible = new Set<string>()
 let nextId = 1
 
-vi.mock('electron', () => {
-  class FakeBrowserView {
-    webContents = {
-      id: nextId++,
-      setUserAgent: vi.fn(),
-      loadURL: vi.fn().mockResolvedValue(undefined),
-      on: vi.fn(),
-      setWindowOpenHandler: vi.fn(),
-      debugger: { isAttached: vi.fn(() => false), attach: vi.fn(), sendCommand: vi.fn() },
-      isDestroyed: vi.fn(() => false),
-      destroy: vi.fn(),
-      getZoomFactor: () => 1,
-      setBackgroundThrottling: vi.fn((allowed: boolean) => { throttling.push(allowed) }),
-    }
-    bounds: unknown = null
-    setBackgroundColor = vi.fn()
-    setBounds = vi.fn((b: unknown) => { this.bounds = b })
-    setAutoResize = vi.fn()
-  }
-
-  class FakeBrowserWindow {
-    webContents = { send: vi.fn(), getZoomFactor: () => 1 }
-    addBrowserView = vi.fn((view: unknown) => { hostOf.set(view, this) })
-    removeBrowserView = vi.fn((view: unknown) => { if (hostOf.get(view) === this) hostOf.delete(view) })
-    setSkipTaskbar = vi.fn()
-    on = vi.fn()
-    destroy = vi.fn()
-    isDestroyed = vi.fn(() => false)
-  }
-
-  return { BrowserView: FakeBrowserView, BrowserWindow: FakeBrowserWindow }
-})
-
-vi.mock('../../../src/main/services/browser-policy.service', () => ({ isUrlAllowedByPolicy: () => true }))
-vi.mock('../../../src/main/foundation/config.service', () => ({
-  getConfig: () => ({}),
-  onBrowserConfigChange: () => {},
-}))
-
-import { BrowserWindow } from 'electron'
-import { browserViewManager } from '../../../src/main/services/browser-view.service'
-
-const BOUNDS = { x: 10, y: 20, width: 800, height: 600 }
-let mainWindow: InstanceType<typeof BrowserWindow>
-
-async function createOffscreen(id: string) {
-  await browserViewManager.create(id, 'https://example.com', { offscreen: true })
-  return (browserViewManager as any).views.get(id)
+class FakeGuest extends EventEmitter {
+  id = nextId++
+  destroyed = false
+  isDestroyed = () => this.destroyed
+  setUserAgent = vi.fn()
+  loadURL = vi.fn().mockResolvedValue(undefined)
+  reload = vi.fn()
+  setWindowOpenHandler = vi.fn()
+  zoom = 1
+  getZoomFactor = () => this.zoom
+  setZoomFactor = vi.fn((value: number) => { this.zoom = value })
+  debugger = { isAttached: vi.fn(() => false), attach: vi.fn(), detach: vi.fn(), sendCommand: vi.fn().mockResolvedValue({}) }
+  navigationHistory = { canGoBack: () => false, canGoForward: () => false, getAllEntries: () => [], getActiveIndex: () => 0, removeEntryAtIndex: vi.fn() }
+  close() { this.destroyed = true; this.emit('destroyed') }
 }
 
-describe('revealing an offscreen page', () => {
-  beforeEach(() => {
-    browserViewManager.destroyAll()
-    hostOf.clear()
-    throttling.length = 0
-    mainWindow = new BrowserWindow() as never
-    browserViewManager.initialize(mainWindow as never)
-  })
+class FakeWindow extends EventEmitter {
+  webContents = { send: vi.fn(), getZoomFactor: () => 1, isDestroyed: () => false }
+  isDestroyed = () => false
+}
 
-  it('moves the exact view to the main window and re-enables throttling first', async () => {
-    const view = await createOffscreen('ai-1')
-    const offscreenHost = hostOf.get(view)
-    expect(offscreenHost).not.toBe(mainWindow)
+vi.mock('electron', () => ({ BrowserWindow: FakeWindow }))
+vi.mock('../../../src/main/services/browser-host/manager', () => ({ browserHostManager: host }))
+vi.mock('../../../src/main/services/browser-policy.service', () => ({ isUrlAllowedByPolicy: () => policy.allowed }))
+vi.mock('../../../src/main/foundation/config.service', () => ({ getConfig: () => ({}), onBrowserConfigChange: vi.fn() }))
 
-    expect(browserViewManager.show('ai-1', BOUNDS)).toBe(true)
+type BrowserManager = typeof import('../../../src/main/services/browser-view.service')['browserViewManager']
+let manager: BrowserManager
+const BOUNDS = { x: 10, y: 20, width: 800, height: 600 }
 
-    expect(hostOf.get(view)).toBe(mainWindow)
-    expect(throttling).toEqual([true])
-    expect(browserViewManager.isRevealed('ai-1')).toBe(true)
-    expect(view.setBounds).toHaveBeenLastCalledWith(BOUNDS)
-  })
-
-  it('puts the view back on its hidden host when the main window refuses it', async () => {
-    const view = await createOffscreen('ai-1')
-    const offscreenHost = hostOf.get(view)
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
-    ;(mainWindow as any).addBrowserView.mockImplementationOnce(() => { throw new Error('window destroyed') })
-
-    expect(browserViewManager.show('ai-1', BOUNDS)).toBe(false)
-
-    expect(hostOf.get(view)).toBe(offscreenHost)
-    expect(browserViewManager.isRevealed('ai-1')).toBe(false)
-    expect(throttling).toEqual([true, false])
-    expect(error).toHaveBeenCalledWith(expect.stringContaining('addBrowserView failed'), expect.any(Error))
-    error.mockRestore()
-  })
-
-  it('sends the view home when it is hidden, so the AI keeps a compositing surface', async () => {
-    const view = await createOffscreen('ai-1')
-    const offscreenHost = hostOf.get(view)
-    browserViewManager.show('ai-1', BOUNDS)
-
-    browserViewManager.hide('ai-1')
-
-    expect(hostOf.get(view)).toBe(offscreenHost)
-    expect(throttling).toEqual([true, false])
-    expect(browserViewManager.isRevealed('ai-1')).toBe(false)
-    expect(view.bounds).toEqual({ x: 0, y: 0, width: 1280, height: 720 })
-  })
-
-  it('survives repeated tab-switch round trips', async () => {
-    const view = await createOffscreen('ai-1')
-    for (let i = 0; i < 3; i++) {
-      browserViewManager.show('ai-1', BOUNDS)
-      expect(hostOf.get(view)).toBe(mainWindow)
-      browserViewManager.hide('ai-1')
-      expect(hostOf.get(view)).not.toBe(mainWindow)
-    }
-    expect(throttling).toEqual([true, false, true, false, true, false])
-  })
-
-  it('returns a revealed view home when another view is shown in its place', async () => {
-    const first = await createOffscreen('ai-1')
-    await createOffscreen('ai-2')
-    browserViewManager.show('ai-1', BOUNDS)
-
-    browserViewManager.show('ai-2', BOUNDS)
-
-    expect(hostOf.get(first)).not.toBe(mainWindow)
-    expect(browserViewManager.isRevealed('ai-1')).toBe(false)
-    expect(browserViewManager.isRevealed('ai-2')).toBe(true)
-  })
-
-  it('never re-homes an ordinary canvas view', async () => {
-    await browserViewManager.create('canvas-1', 'https://example.com')
-    const view = (browserViewManager as any).views.get('canvas-1')
-    browserViewManager.show('canvas-1', BOUNDS)
-    browserViewManager.hide('canvas-1')
-
-    expect(hostOf.get(view)).toBeUndefined()
-    expect(throttling).toEqual([])
-    expect(browserViewManager.isRevealed('canvas-1')).toBe(false)
-  })
+beforeEach(async () => {
+  vi.resetModules()
+  vi.resetAllMocks()
+  guests.clear()
+  visible.clear()
+  policy.allowed = true
+  host.create.mockImplementation(async (id: string) => { const guest = new FakeGuest(); guests.set(id, guest); return guest })
+  host.present.mockImplementation((id: string, _bounds: unknown, shown: boolean) => { if (shown) visible.add(id); else visible.delete(id); return true })
+  host.isVisible.mockImplementation((id: string) => visible.has(id))
+  host.destroy.mockImplementation((id: string) => { const guest = guests.get(id); guests.delete(id); visible.delete(id); guest?.close() })
+  host.destroyAll.mockImplementation(() => { for (const id of guests.keys()) host.destroy(id) })
+  manager = (await import('../../../src/main/services/browser-view.service')).browserViewManager
+  manager.initialize(new FakeWindow() as never)
 })
 
-describe('destroying a page', () => {
-  beforeEach(() => {
-    browserViewManager.destroyAll()
-    hostOf.clear()
-    mainWindow = new BrowserWindow() as never
-    browserViewManager.initialize(mainWindow as never)
+afterEach(() => { manager.destroyAll() })
+
+describe('browser manager and persistent carrier', () => {
+  it('keeps WebContents identity across watching, parking and repeated presentation', async () => {
+    await manager.create('ai-page', 'https://example.com')
+    const guest = manager.getWebContents('ai-page')
+    for (let cycle = 0; cycle < 8; cycle++) {
+      expect(manager.show('ai-page', BOUNDS)).toBe(true)
+      expect(manager.isRevealed('ai-page')).toBe(true)
+      expect(manager.hide('ai-page')).toBe(true)
+      expect(manager.isRevealed('ai-page')).toBe(false)
+      expect(manager.getWebContents('ai-page')).toBe(guest)
+    }
+    expect(host.create).toHaveBeenCalledOnce()
+    expect(host.destroy).not.toHaveBeenCalled()
   })
 
-  it('notifies subscribers whichever host the view was on, and forgets the reveal', async () => {
+  it('parks the former page before showing its replacement without recreating either', async () => {
+    await manager.create('first', 'https://example.com/first')
+    await manager.create('second', 'https://example.com/second')
+    manager.show('first', BOUNDS)
+    host.present.mockClear()
+    manager.show('second', BOUNDS)
+    expect(host.present.mock.calls.map(([id, _bounds, shown]) => ({ id, shown }))).toEqual([{ id: 'first', shown: false }, { id: 'second', shown: true }])
+    expect(manager.getActiveViewId()).toBe('second')
+    expect(host.create).toHaveBeenCalledTimes(2)
+  })
+
+  it('uses the host creation contract for unattended pages and never transfers a guest', async () => {
+    await manager.create('automation', 'https://example.com', { offscreen: true })
+    expect(host.create).toHaveBeenCalledWith('automation', true)
+    const guest = manager.getWebContents('automation')
+    host.present.mockReturnValueOnce(false)
+    expect(manager.show('automation', BOUNDS)).toBe(false)
+    expect(manager.getWebContents('automation')).toBe(guest)
+    expect(manager.getActiveViewId()).toBeNull()
+  })
+
+  it('announces page loss once when the host destroys a guest and clears all browser state', async () => {
     const seen: string[] = []
-    const off = browserViewManager.onViewDestroyed((id) => seen.push(id))
-    await createOffscreen('ai-1')
-    browserViewManager.show('ai-1', BOUNDS)
-
-    browserViewManager.destroy('ai-1')
-
-    expect(seen).toEqual(['ai-1'])
-    expect(browserViewManager.isRevealed('ai-1')).toBe(false)
-    expect(browserViewManager.getState('ai-1')).toBeNull()
+    const off = manager.onViewDestroyed(id => seen.push(id))
+    await manager.create('page', 'https://example.com')
+    manager.show('page', BOUNDS)
+    guests.get('page')!.close()
+    expect(manager.getState('page')).toBeNull()
+    expect(manager.getWebContents('page')).toBeNull()
+    expect(manager.getActiveViewId()).toBeNull()
+    manager.destroy('page')
+    expect(seen).toEqual(['page'])
     off()
   })
 
-  it('does not notify for a view that never existed', () => {
+  it('continues announcing destruction when one subscriber fails', async () => {
     const seen: string[] = []
-    const off = browserViewManager.onViewDestroyed((id) => seen.push(id))
-    browserViewManager.destroy('nope')
-    expect(seen).toEqual([])
-    off()
-  })
-
-  it('keeps notifying the rest when one subscriber throws', async () => {
-    const seen: string[] = []
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const offBad = browserViewManager.onViewDestroyed(() => { throw new Error('boom') })
-    const offGood = browserViewManager.onViewDestroyed((id) => seen.push(id))
-    await createOffscreen('ai-1')
-
-    browserViewManager.destroy('ai-1')
-
-    expect(seen).toEqual(['ai-1'])
+    const offBad = manager.onViewDestroyed(() => { throw new Error('subscriber failed') })
+    const offGood = manager.onViewDestroyed(id => seen.push(id))
+    await manager.create('page', 'https://example.com')
+    manager.destroy('page')
+    expect(seen).toEqual(['page'])
     offBad()
     offGood()
-    errorSpy.mockRestore()
+  })
+
+  it('ignores navigation and destruction events from an older guest with the same page id', async () => {
+    await manager.create('same-id', 'https://example.com/first')
+    const oldGuest = guests.get('same-id')!
+    manager.destroy('same-id')
+    await manager.create('same-id', 'https://example.com/replacement')
+    const replacement = manager.getWebContents('same-id')
+    oldGuest.emit('page-title-updated', {}, 'stale title')
+    oldGuest.emit('did-start-navigation', {}, 'https://stale.invalid', false, true)
+    oldGuest.emit('destroyed')
+    expect(manager.getWebContents('same-id')).toBe(replacement)
+    expect(manager.getState('same-id')).toMatchObject({ title: 'New Tab', url: 'https://example.com/replacement' })
+  })
+
+  it('does not register a guest that attaches after its browser was closed', async () => {
+    let resolve!: (guest: FakeGuest) => void
+    host.create.mockImplementationOnce(() => new Promise<FakeGuest>(accept => { resolve = accept }))
+    const creation = manager.create('closing', 'https://example.com')
+    const rejected = expect(creation).rejects.toThrow('closed during creation')
+    await Promise.resolve()
+    manager.destroy('closing')
+    resolve(new FakeGuest())
+    await rejected
+    expect(manager.getState('closing')).toBeNull()
+    expect(manager.getWebContents('closing')).toBeNull()
+  })
+
+  it('rejects policy blocked initial URLs before allocating a guest', async () => {
+    policy.allowed = false
+    await expect(manager.create('blocked', 'https://blocked.invalid')).rejects.toMatchObject({ code: 'BROWSER_POLICY_BLOCKED' })
+    expect(host.create).not.toHaveBeenCalled()
+    expect(manager.getState('blocked')).toBeNull()
+  })
+
+  it('parks a policy blocked page and restores its existing guest after allowed navigation', async () => {
+    await manager.create('page', 'https://example.com')
+    const guest = manager.getWebContents('page')
+    manager.show('page', BOUNDS)
+    policy.allowed = false
+    expect(await manager.navigate('page', 'https://blocked.invalid')).toBe(false)
+    expect(manager.getState('page')).toMatchObject({ blockedByPolicy: true, blockedUrl: 'https://blocked.invalid' })
+    expect(manager.isRevealed('page')).toBe(false)
+    expect(manager.getWebContents('page')).toBe(guest)
+    policy.allowed = true
+    guests.get('page')!.emit('did-start-navigation', {}, 'https://example.com/allowed', false, true)
+    expect(manager.getState('page')).toMatchObject({ blockedByPolicy: false, blockedUrl: undefined })
+    expect(manager.isRevealed('page')).toBe(true)
   })
 })

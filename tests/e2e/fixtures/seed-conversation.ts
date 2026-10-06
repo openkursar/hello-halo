@@ -22,7 +22,7 @@
 
 import path from 'path'
 import fs from 'fs'
-import { execFileSync } from 'child_process'
+import { spawnSync } from 'child_process'
 import esbuild from 'esbuild'
 import electronPath from 'electron'
 import { fileURLToPath } from 'url'
@@ -63,6 +63,7 @@ function getBundledWorker(): string {
     bundle: true,
     platform: 'node',
     format: 'cjs',
+    packages: 'external',
     outfile,
     // Native addons load at run time from node_modules; esbuild cannot bundle them.
     external: ['better-sqlite3', 'electron', '@parcel/watcher'],
@@ -82,15 +83,34 @@ function getBundledWorker(): string {
  *   matching `getHaloDir()`'s env-var override.
  */
 export function seedLongConversation(testConfigDir: string, options: SeedConversationOptions = {}): SeededConversation {
+  const expectedMessages = options.messageCount ?? 120
+  if (!Number.isInteger(expectedMessages) || expectedMessages < 0) throw new Error('Conversation seed messageCount must be a non-negative integer')
   const worker = getBundledWorker()
   const payload = JSON.stringify({ testConfigDir, options })
   const haloDataDir = path.join(testConfigDir, '.halo')
 
-  const output = execFileSync(electronPath as unknown as string, [worker, payload], {
+  const result = spawnSync(electronPath as unknown as string, [worker, payload], {
     env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', HALO_DATA_DIR: haloDataDir },
     encoding: 'utf-8',
+    stdio: ['ignore', 'pipe', 'pipe', 'pipe'],
+    maxBuffer: 16 * 1024 * 1024,
   })
-
-  const lastLine = output.trim().split('\n').pop() ?? ''
-  return JSON.parse(lastLine) as SeededConversation
+  if (result.error) throw new Error(`Conversation seed worker could not complete: ${result.error.message}`, { cause: result.error })
+  if (result.status !== 0 || result.signal) {
+    throw new Error(`Conversation seed worker failed (status=${result.status}, signal=${result.signal ?? 'none'}):\n${result.stderr?.slice(-16000) ?? ''}\n${result.stdout?.slice(-16000) ?? ''}`)
+  }
+  const response = result.output[3]
+  if (typeof response !== 'string' || !response.length) throw new Error('Conversation seed worker returned no result on its dedicated channel')
+  let parsed: unknown
+  try { parsed = JSON.parse(response) }
+  catch (error) { throw new Error('Conversation seed worker returned invalid JSON on its dedicated channel', { cause: error }) }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Conversation seed worker returned an invalid result object')
+  const value = parsed as Partial<SeededConversation>
+  const messageIds = value.messageIds
+  if (Object.keys(parsed).length !== 2 || typeof value.conversationId !== 'string' || !value.conversationId.trim() ||
+      !Array.isArray(messageIds) || messageIds.length !== expectedMessages ||
+      messageIds.some(id => typeof id !== 'string' || !id.trim()) || new Set(messageIds).size !== expectedMessages) {
+    throw new Error('Conversation seed worker result does not match the requested conversation/message structure')
+  }
+  return { conversationId: value.conversationId, messageIds }
 }

@@ -7,7 +7,7 @@
  * local filesystem directly.
  */
 
-import { dialog } from 'electron'
+import { showOpenDialog } from '../foundation/file-dialog'
 import * as tlonController from '../controllers/tlon.controller'
 import type { CreateKBInput, UpdateKBInput } from '../../shared/types/tlon'
 import { tlonRpc } from '../../shared/rpc/contracts/tlon.contract'
@@ -40,7 +40,7 @@ export function registerTlonHandlers(): void {
     // Pickers open the OS dialog directly (renderer has no filesystem access).
     tlonPickFiles: async () => {
       try {
-        const result = await dialog.showOpenDialog({
+        const result = await showOpenDialog({
           title: 'Add files to knowledge base',
           properties: ['openFile', 'multiSelections'],
           buttonLabel: 'Add',
@@ -52,7 +52,7 @@ export function registerTlonHandlers(): void {
     },
     tlonPickFolder: async (options?: { title?: string; buttonLabel?: string }) => {
       try {
-        const result = await dialog.showOpenDialog({
+        const result = await showOpenDialog({
           title: options?.title || 'Link a folder to watch',
           properties: ['openDirectory'],
           buttonLabel: options?.buttonLabel || 'Link',

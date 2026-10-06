@@ -8,7 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../../../src/renderer/api', () => ({
   api: {
-    onBrowserStateChange: () => () => {},
+    onBrowserPageGone: () => () => {}, onBrowserStateChange: () => () => {},
     onArtifactChangedBatch: () => () => {},
     onMemoryPressure: () => () => {},
     getMemoryPressure: async () => 'normal',

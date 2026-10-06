@@ -32,7 +32,7 @@ test('nav entries address the groups they render, and a jump brings its group in
     const groups = Array.from(document.querySelectorAll('[id^="settings-group-"]'))
     return {
       ids: groups.map(node => node.id),
-      headings: groups.map(node => node.querySelector('h2')?.textContent?.trim() ?? ''),
+      headings: groups.map(node => (node.querySelector('h2') ?? node.querySelector(':scope > button[aria-expanded] > span'))?.textContent?.trim() ?? ''),
       entries: Array.from(document.querySelectorAll('nav button span.truncate')).map(node => node.textContent?.trim() ?? ''),
     }
   })
@@ -44,6 +44,11 @@ test('nav entries address the groups they render, and a jump brings its group in
   await expect(advanced).not.toBeInViewport()
   await nav.getByRole('button', { name: 'Advanced', exact: true }).click()
   await expect(advanced).toBeInViewport()
+  const disclosure = advanced.getByRole('button', { name: 'Advanced', exact: true })
+  await expect(disclosure).toHaveAttribute('aria-expanded', 'false')
+  await disclosure.click()
+  await expect(disclosure).toHaveAttribute('aria-expanded', 'true')
+  await expect(advanced.getByRole('heading', { name: 'App Spec', exact: true })).toBeVisible()
 })
 
 test('an unsaved edit marks its group in the nav and clears when saved', async ({ window }) => {

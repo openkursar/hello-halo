@@ -1,5 +1,6 @@
 import fs from 'fs'
 import path from 'path'
+import { execFileSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import remend from 'remend'
 import { parseMarkdownIntoBlocks } from 'streamdown'
@@ -8,14 +9,10 @@ import { checkStreamingMarkdown, streamingCuts } from '../../../perf/lib/streami
 
 const REPO_ROOT = path.resolve(__dirname, '../../../..')
 
-function collectMarkdown(dir: string, out: string[] = []): string[] {
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === 'node_modules' || entry.name.startsWith('.git')) continue
-    const full = path.join(dir, entry.name)
-    if (entry.isDirectory()) collectMarkdown(full, out)
-    else if (entry.name.endsWith('.md')) out.push(full)
-  }
-  return out
+function collectMarkdown(dir: string): string[] {
+  // Build caches contain third-party corpora; Git defines the project's source files.
+  return execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', '*.md'], { cwd: dir })
+    .toString('utf8').split('\0').filter(Boolean).map(file => path.join(dir, file)).filter(file => fs.existsSync(file))
 }
 
 const mendStreamingMarkdown = (content: string) => createStreamingMarkdown().update(content).markdown

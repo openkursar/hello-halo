@@ -8,10 +8,10 @@
  * panel beside the diffs.
  */
 
-import { test as base, type ElectronApplication, type Page } from '@playwright/test'
+import { test as base, expect, type ElectronApplication, type Page } from '@playwright/test'
 import { getAppEntryPath, launchElectronApp } from './electron'
-import { waitForHomePage } from './helpers'
-import { createGitWorkspace, type GitWorkspace } from './git-workspace'
+import { navigateToWorkspaces } from './helpers'
+import { CONVERSATION_TITLE, SPACE_NAME, createGitWorkspace, type GitWorkspace } from './git-workspace'
 
 interface Fixtures {
   replyEditCount: number
@@ -44,7 +44,12 @@ export const test = base.extend<Fixtures>({
       if (win.isMaximized()) win.unmaximize()
       win.setSize(size.width, size.height)
     }, WINDOW_SIZE)
-    await waitForHomePage(window)
+    await navigateToWorkspaces(window)
+    await window.locator('[role="button"]:not([aria-roledescription="sortable"])').filter({
+      has: window.getByRole('heading', { name: SPACE_NAME, exact: true, level: 3 }),
+    }).click()
+    await expect(window.locator('textarea')).toBeVisible()
+    await expect(window.getByRole('banner').getByText(CONVERSATION_TITLE, { exact: true })).toBeVisible()
     await use(window)
   },
 })

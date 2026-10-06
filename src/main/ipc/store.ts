@@ -19,7 +19,8 @@
  *   store:get-capabilities               Resolve renderer-safe store capability flags
  */
 
-import { ipcMain, dialog } from 'electron'
+import { ipcMain } from 'electron'
+import { showOpenDialog, showSaveDialog } from '../foundation/file-dialog'
 import { readFile, writeFile } from 'fs/promises'
 import * as storeController from '../controllers/store.controller'
 import {
@@ -214,7 +215,7 @@ export function registerStoreHandlers(): void {
         if (!app) return { success: false, error: `App not found: ${input.appId}` }
 
         const safeName = deriveSlug(app.spec.store?.slug ?? app.spec.name) || 'app'
-        const dialogResult = await dialog.showSaveDialog({
+        const dialogResult = await showSaveDialog({
           title: 'Export as .dhpkg',
           defaultPath: `${safeName}-${app.spec.version ?? '0.0.0'}.dhpkg`,
           filters: [{ name: 'DHP Package', extensions: ['dhpkg'] }],
@@ -259,7 +260,7 @@ export function registerStoreHandlers(): void {
         }
 
         const safeName = deriveSlug(app.spec.store?.slug ?? app.spec.name) || 'app'
-        const dialogResult = await dialog.showSaveDialog({
+        const dialogResult = await showSaveDialog({
           title: 'Export skill',
           defaultPath: `${safeName}-${app.spec.version ?? '0.0.0'}.zip`,
           filters: [{ name: 'Skill Package', extensions: ['zip'] }],
@@ -286,7 +287,7 @@ export function registerStoreHandlers(): void {
       try {
         let filePath = input?.filePath
         if (!filePath) {
-          const dialogResult = await dialog.showOpenDialog({
+          const dialogResult = await showOpenDialog({
             title: 'Import .dhpkg',
             filters: [{ name: 'DHP Package', extensions: ['dhpkg', 'zip'] }],
             properties: ['openFile'],

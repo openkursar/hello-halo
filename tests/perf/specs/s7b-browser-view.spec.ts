@@ -1,49 +1,39 @@
-/**
- * S7-b — browser (BrowserViewer / AI 浏览器), the other non-file-preview
- * ContentType. Like PDF, this renders through a separate Electron BrowserView
- * process — `includePerProcess`-style per-pid breakdown is required (not
- * just the type-level aggregate) so the cost can actually be attributed to
- * that process rather than blended into the main window's renderer numbers
- * (the PDF run already proved this is possible).
- *
- * Content: the same html-extreme-2mb.html fixture S5 used for HtmlViewer
- * (iframe srcDoc), loaded here instead through the BrowserView's own address
- * bar via a local file:// URL — same bytes, different rendering path, no
- * network dependency.
- */
+/** Identical local HTML and visible bounds isolate the two browser carriers from homepage/network races. */
 
 import { test, expect } from '@playwright/test'
-import path from 'path'
-import { fileURLToPath } from 'url'
 import {
   getAppEntryPath,
   createTestConfigDir,
-  cleanupTestConfigDir,
-  launchElectronApp
+  cleanupTestConfigDir
 } from '../../e2e/fixtures/electron'
 import { navigateToChat } from '../../e2e/fixtures/helpers'
-import { openFromHeaderMenu } from '../lib/open-artifact'
 import { installRenderObserversNow, resetRenderObservers, readRenderMetrics } from '../lib/render-metrics'
 import { CdpMetricsCollector, type CdpSnapshot } from '../lib/cdp-metrics'
 import { ProcessMetricsSampler } from '../lib/process-metrics'
 import { installUnresponsiveTracker, readUnresponsiveCount, readCrashCount } from '../lib/unresponsive'
 import { installReloadGuard } from '../lib/reload-guard'
-import { fixturePath } from '../lib/fixture-store'
 import { writeResult, beginScenario, currentLabel, currentThrottle } from '../lib/result-writer'
 import { getBuildIdentity } from '../lib/build-identity'
 import type { PerfResult } from '../types'
-
-const __filename = fileURLToPath(import.meta.url)
+import {
+  browserGuestSnapshot, captureBrowserPerf, closeBrowserPerfPage, createBrowserPerfPage,
+  createBrowserPerfSite, oneCoreProcessStats, readBrowserGuestFailures, readBrowserResources, readBrowserRuntime,
+  launchBrowserPerfApp, type BrowserPerfApp, type BrowserPerfResult,
+} from '../lib/browser-workload'
 
 test('S7b browser view (heavy html)', async () => {
   beginScenario('s7b-browser-view')
   const appEntryPath = getAppEntryPath()
   const testConfigDir = createTestConfigDir(appEntryPath)
   const warnings: string[] = []
-
-  const app = await launchElectronApp(appEntryPath, testConfigDir)
+  const site = await createBrowserPerfSite()
+  let app: BrowserPerfApp['app'] | undefined
+  let launched: BrowserPerfApp | undefined
+  let sampler: ProcessMetricsSampler | undefined
 
   try {
+    launched = await launchBrowserPerfApp(appEntryPath, testConfigDir)
+    app = launched.app
     const window = await app.firstWindow()
     await window.waitForLoadState('domcontentloaded')
     await navigateToChat(window)
@@ -55,35 +45,43 @@ test('S7b browser view (heavy html)', async () => {
     await cdp.connect()
     const throttle = currentThrottle()
     await cdp.setCpuThrottlingRate(throttle)
-
-    await openFromHeaderMenu(window, 'Open browser')
-
-    const addressBar = window.getByPlaceholder(/Enter URL or search Bing|输入网址或搜索必应/)
-    await addressBar.waitFor({ state: 'visible', timeout: 20000 })
-
+    const runtime = await readBrowserRuntime(app, appEntryPath)
+    const resourcesBefore = await readBrowserResources(app, window)
     await resetRenderObservers(window)
     const heapStart = await cdp.snapshot()
-
-    const sampler = new ProcessMetricsSampler(app)
-    sampler.start()
     const t0 = Date.now()
-
-    const fileUrl = `file://${fixturePath('html-extreme-2mb.html')}`
-    await addressBar.fill(fileUrl)
-    await addressBar.press('Enter')
-
-    // BrowserView loading has its own overlay (see open-artifact.ts's
-    // waitForPdfLoaded) but that only covers the *initial* BrowserView
-    // handshake, not this specific navigation — settle on a fixed window
-    // matching S5's html/pdf runs (~3s to render) plus margin.
-    await window.waitForTimeout(8000)
-
+    const page = await createBrowserPerfPage(app, window, 'perf-heavy-browser', site.heavy)
+    expect(page.pid, 'guest process can be attributed separately from the main renderer').not.toBe(runtime.mainWindowPid)
+    const frame = await captureBrowserPerf(app, window, 'perf-heavy-browser')
     const durationMs = Date.now() - t0
-    sampler.stop()
+    const workloadPrecondition = {
+      fullyOpaque: frame.fullyOpaquePixels === frame.width * frame.height,
+      whiteBlankCorner: frame.blankCorner.whitePixels === frame.blankCorner.pixels,
+    }
+    const comparablePixels = workloadPrecondition.fullyOpaque && workloadPrecondition.whiteBlankCorner
+    if (!comparablePixels) warnings.push('browser pixels: the heavy fixture must paint a fully opaque frame and an exactly white blank corner; this run is not a comparable workload.')
+    const guestHeap = await browserGuestSnapshot(app, page.contentsId)
+
+    // The separate window is an idle sample, not part of the loading measurement.
+    const warmupMs = 1000
+    const steadyRequestedMs = 5000
+    await window.waitForTimeout(warmupMs)
+    sampler = new ProcessMetricsSampler(app, 500, { cpuSource: 'cumulative' })
+    await sampler.startAsync()
+    const steadyStarted = Date.now()
+    await window.waitForTimeout(steadyRequestedMs)
+    const steady = await sampler.drainSettled()
+    const steadyDurationMs = Date.now() - steadyStarted
+    const mainWindow = oneCoreProcessStats(steady.byPid.get(runtime.mainWindowPid), runtime.logicalCores)
+    const guest = oneCoreProcessStats(steady.byPid.get(page.pid), runtime.logicalCores)
+    expect(mainWindow, 'main renderer stable-period samples were collected').not.toBeNull()
+    expect(guest, 'guest stable-period samples were collected by its actual OS PID').not.toBeNull()
+    expect(guest!.cpuSampleCount).toBeGreaterThanOrEqual(5)
 
     const rendererReloads = reloadGuard.getReloadCount()
-    const crashCount = await readCrashCount(app).catch(() => 0)
-    const noReloadOrCrash = rendererReloads === 0 && crashCount === 0
+    const crashCount = await readCrashCount(app)
+    const guestFailures = await readBrowserGuestFailures(app)
+    const noReloadOrCrash = rendererReloads === 0 && crashCount === 0 && guestFailures.crashes === 0 && guestFailures.navigations === 0
 
     const samplingStats = sampler.getSamplingStats()
     if (samplingStats.plannedTicks > 0 && samplingStats.succeededTicks < samplingStats.plannedTicks) {
@@ -120,11 +118,10 @@ test('S7b browser view (heavy html)', async () => {
       warnings.push('eventLatency: PerformanceObserver never attached — null, not "0 observed".')
     }
 
-    // `valid` = contamination-free (no status field here).
-    const valid = noReloadOrCrash
+    const valid = noReloadOrCrash && comparablePixels
     const unresponsiveCount = await readUnresponsiveCount(app)
 
-    const result: PerfResult = {
+    const result: BrowserPerfResult = {
       scenario: 's7b-browser-view',
       label: currentLabel(),
       build: getBuildIdentity(),
@@ -156,18 +153,40 @@ test('S7b browser view (heavy html)', async () => {
       valid,
       unmeasuredMetrics: unmeasuredMetrics.length ? unmeasuredMetrics : undefined,
       warnings: warnings.length ? warnings : undefined,
-      // BrowserView is a separate process — must be broken out by
-      // pid, not just blended into the renderer-type aggregate (same
-      // requirement as S5 pdf).
-      perProcess: sampler.summarizeByPid()
+      perProcess: sampler.summarizeByPid(),
+      status: comparablePixels ? 'ok' : 'precondition-failed',
+      steps: [{ label: 'fixture and pixels ready', tMs: durationMs }, { label: 'steady sampling ended', tMs: Date.now() - t0 }],
+      browser: {
+        runtime, fixture: site.heavy, page, frame, workloadPrecondition, guestHeap, guestFailures,
+        loadingDurationMs: durationMs,
+        loadingIncludesPixels: true,
+        warmupMs, steadyRequestedMs, steadyDurationMs,
+        steady: { mainWindow, guest, totalRssAvgMB: steady.totalRssAvgMB, cpuUnit: 'percent of one logical core', cpuQuality: sampler.getCpuQuality() },
+        resourcesBefore,
+      },
     }
+
+    await closeBrowserPerfPage(app, window, 'perf-heavy-browser', page.contentsId)
+    const resourcesAfter = await readBrowserResources(app, window)
+    result.browser.resourcesAfter = resourcesAfter
+    expect(resourcesAfter.domPages).toBe(resourcesBefore.domPages)
+    expect(resourcesAfter.webContentsIds).not.toContain(page.contentsId)
+    expect((await readBrowserRuntime(app, appEntryPath)).mainBundleSha256).toBe(runtime.mainBundleSha256)
 
     const filePath = writeResult(result)
     console.log(`[perf] S7b result written to ${filePath}${warnings.length ? ` (${warnings.length} warning(s))` : ''}`)
 
     expect(result.durationMs).toBeGreaterThan(0)
+    expect(workloadPrecondition, 'the heavy fixture must render the same opaque white background before its telemetry can be compared').toEqual({ fullyOpaque: true, whiteBlankCorner: true })
+    expect(result.valid, 'browser loading and stable telemetry were not contaminated by a reload or crash').toBe(true)
   } finally {
-    await app.close()
-    cleanupTestConfigDir(testConfigDir)
+    try { await sampler?.stopSettled() }
+    finally {
+      try { await launched?.dispose() }
+      finally {
+        try { await site.close() }
+        finally { cleanupTestConfigDir(testConfigDir) }
+      }
+    }
   }
 })

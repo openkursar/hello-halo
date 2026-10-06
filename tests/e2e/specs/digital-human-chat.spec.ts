@@ -23,6 +23,7 @@ import {
   launchElectronApp,
 } from '../fixtures/electron'
 import { seedDigitalHumanChat, userLine, replyLine, type SeededDigitalHumanChat } from '../fixtures/seed-digital-human-chat'
+import { navigateToChat } from '../fixtures/helpers'
 
 const SCROLLER = '[data-testid="transcript-scroller"]'
 
@@ -74,6 +75,7 @@ async function launch(options: { width?: number; height?: number } = {}): Promis
   const app = await launchElectronApp(appEntryPath, testConfigDir)
   const window = await app.firstWindow()
   await window.waitForLoadState('domcontentloaded')
+  await navigateToChat(window)
   if (options.width) {
     const cdp = await window.context().newCDPSession(window)
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: options.width, height: options.height ?? 800, deviceScaleFactor: 1, mobile: false })
@@ -376,7 +378,7 @@ test.describe('digital-human conversation on the chat page', () => {
       await composer.waitFor({ timeout: 20000 })
 
       // The history sheet lists the digital human's conversation beside the space's own.
-      await window.locator('button:has(svg.lucide-history)').first().click()
+      await window.getByTitle('Conversation history', { exact: true }).click()
       const row = window.getByText(seeded.turns[2].reply.slice(0, 20)).first()
       await expect(row).toBeVisible({ timeout: 10000 })
       await expect(window.getByText(seeded.name).first()).toBeVisible()

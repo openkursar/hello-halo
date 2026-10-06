@@ -25,20 +25,15 @@
  * Writes its own JSON next to the other results (not the S1–S9 PerfResult shape).
  */
 
-import fs from 'fs'
-import path from 'path'
-import { fileURLToPath } from 'url'
 import { test, expect, hasApiKey } from '../fixtures/perf-electron'
 import { navigateToChat, sendMessage } from '../../e2e/fixtures/helpers'
 import { waitForStreamComplete } from '../lib/wait-for-stream-complete'
 import { installReloadGuard } from '../lib/reload-guard'
 import { installUnresponsiveTracker, readCrashCount } from '../lib/unresponsive'
-import { beginScenario, currentLabel } from '../lib/result-writer'
+import { beginScenario, currentLabel, writeResult } from '../lib/result-writer'
 import { writeSkipResult } from '../lib/skip-record'
 import { getBuildIdentity } from '../lib/build-identity'
 
-const __filename = fileURLToPath(import.meta.url)
-const RESULTS_ROOT = path.resolve(path.dirname(__filename), '../results')
 const SCENARIO = 's13-background-streams'
 const BACKGROUND = 5
 const SPACE_ID = 'halo-temp'
@@ -156,9 +151,7 @@ test('S13 background streams', async ({ electronApp, window }, testInfo) => {
     byChannel: tally.byChannel,
     target: 'backgroundDetailEvents = 0; backgroundStatusEvents ≈ 5 × (turn-start + complete)',
   }
-  const resultPath = path.join(RESULTS_ROOT, currentLabel(), `${SCENARIO}.json`)
-  fs.mkdirSync(path.dirname(resultPath), { recursive: true })
-  fs.writeFileSync(resultPath, JSON.stringify(result, null, 2))
+  const resultPath = writeResult(result)
   console.log(`[perf] S13 result written to ${resultPath} (valid=${valid})`)
 
   expect(valid, problems.join('; ')).toBe(true)

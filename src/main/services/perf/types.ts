@@ -54,9 +54,9 @@ export interface CpuMetrics {
   percentCPU: number
 }
 
-/** BrowserView metrics */
+/** Embedded browser page metrics; field names preserve the diagnostics contract. */
 export interface BrowserViewMetrics {
-  /** Number of active BrowserView instances */
+  /** Number of live embedded browser pages */
   count: number
   /** IDs of active views */
   viewIds: string[]
@@ -98,7 +98,7 @@ export interface PerfSnapshot {
   memory: MemoryMetrics
   /** CPU metrics (main process) */
   cpu: CpuMetrics
-  /** BrowserView metrics */
+  /** Embedded browser page metrics; field names preserve the diagnostics contract. */
   browserViews: BrowserViewMetrics
   /** IPC metrics (reset each sample) */
   ipc: IpcMetrics
@@ -117,7 +117,7 @@ export interface PerfThresholds {
   rssMB: number
   /** Warn if CPU exceeds this (%) */
   cpuPercent: number
-  /** Warn if BrowserView count exceeds */
+  /** Warn if browser page count exceeds */
   browserViewCount: number
   /** Warn if slow IPC calls exceed this per sample */
   slowIpcCalls: number

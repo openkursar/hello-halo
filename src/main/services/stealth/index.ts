@@ -1,7 +1,7 @@
 /**
  * Stealth Module
  *
- * Browser fingerprint evasion system for Electron BrowserView.
+ * Browser fingerprint evasion for embedded Chromium pages.
  * Ported from puppeteer-extra-plugin-stealth (MIT License).
  *
  * This module provides anti-fingerprinting capabilities to make
@@ -103,7 +103,7 @@ export function getStealthScript(): string {
  * to inject scripts BEFORE any page JavaScript runs, which is critical for
  * evading fingerprint detection that runs early in page load.
  *
- * This should be called after creating a BrowserView but before loading any URL.
+ * Install before navigating the guest to an external URL.
  *
  * @param webContents - The WebContents instance to inject into
  */

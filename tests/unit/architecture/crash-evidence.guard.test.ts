@@ -19,10 +19,11 @@ describe('crash evidence guard', () => {
     expect(calls.map((m) => m.file), formatMatches(calls)).toEqual(['src/main/index.ts'])
 
     const index = readSource('src/main/index.ts')
-    const shutdownBody = index.slice(index.indexOf('async function shutdownServices'))
-    expect(shutdownBody.indexOf('markSessionCleanExit()')).toBeGreaterThan(-1)
-    expect(shutdownBody.indexOf('markSessionCleanExit()'))
-      .toBeLessThan(shutdownBody.indexOf('async function shutdownServicesWithTimeout'))
+    const shutdownStart = index.indexOf('function shutdownServices(')
+    const shutdownEnd = index.indexOf('function shutdownServicesWithTimeout(')
+    expect(shutdownStart).toBeGreaterThan(-1)
+    expect(shutdownEnd).toBeGreaterThan(shutdownStart)
+    expect(index.slice(shutdownStart, shutdownEnd)).toContain('markSessionCleanExit()')
   })
 
   it('marks the health registry clean only from the health shutdown', () => {

@@ -1,11 +1,11 @@
 /**
  * Run vitest under Electron's Node runtime.
  *
- * Tests load better-sqlite3, which is built against Electron's ABI, so plain
- * Node cannot run them. On macOS the interpreter is the Electron *Helper*
- * binary rather than the main one: every process started from the main binary
- * registers with LaunchServices and puts an "exec" icon in the Dock, and vitest
- * forks one per worker. Elsewhere the main binary has no such side effect.
+ * Tests exercise the Node version shipped with the app. On macOS the
+ * interpreter is the Electron *Helper* binary rather than the main one: every
+ * process started from the main binary registers with LaunchServices and puts
+ * an "exec" icon in the Dock, and vitest forks one per worker. Elsewhere the
+ * main binary has no such side effect.
  *
  * Usage: node scripts/run-vitest.mjs <vitest args...>
  */

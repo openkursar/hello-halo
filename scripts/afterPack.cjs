@@ -8,10 +8,7 @@
 //    sees a complete set), but only the target platform's package is needed
 //    at runtime. Cleaning here avoids mutating the shared node_modules.
 //
-// 2. Swap better-sqlite3 .node binary with the correct platform-specific
-//    prebuild. The host-compiled binary (darwin-arm64 on M4 Mac) is replaced
-//    with the prebuild matching the target platform. Prebuilds are downloaded
-//    by prepare-binaries.mjs and stored in node_modules/better-sqlite3/prebuilds/.
+// 2. Keep and validate the target platform's better-sqlite3 N-API binary.
 //
 // 3. Keep only the target platform's @img/sharp-* package (plus its libvips
 //    sibling) and fail the build if its prebuilt binary is absent. Same
@@ -40,6 +37,7 @@ const {
   nativeCompanionsFor,
 } = require('../runtimes/dsh/manifest.cjs');
 const { signLocalApp } = require('./lib/mac-local-signing.cjs');
+const { assertMacOSDeploymentTargets } = require('./lib/macho-deployment-target.cjs');
 
 // electron-builder Arch enum: 0=ia32, 1=x64, 2=armv7l, 3=arm64, 4=universal
 const ARCH_NAMES = { 0: 'ia32', 1: 'x64', 2: 'armv7l', 3: 'arm64', 4: 'universal' };
@@ -163,50 +161,22 @@ function cleanNonTargetWatchers(context) {
   console.log(`[afterPack] ${key}: keeping @parcel/${targetPkg}`);
 }
 
-/**
- * Swap better-sqlite3 .node binary with the correct platform-specific prebuild.
- *
- * The binary in the unpacked output is whatever was in node_modules at pack time
- * (the host platform's binary, e.g. darwin-arm64 when building on M4 Mac).
- * This function replaces it with the prebuild matching the target platform.
- *
- * Prebuilds are stored at:
- *   {projectRoot}/node_modules/better-sqlite3/prebuilds/{platform}-{arch}/better_sqlite3.node
- *
- * Target location in unpacked output:
- *   app.asar.unpacked/node_modules/better-sqlite3/build/Release/better_sqlite3.node
- */
-function swapBetterSqlite3Binary(context) {
+/** Keep the target's bundled N-API binary, which is independent of Electron ABI. */
+async function cleanAndValidateBetterSqlite3Prebuilds(context) {
   const platform = context.electronPlatformName;
   const archStr = ARCH_NAMES[context.arch] || String(context.arch);
   const key = `${platform}-${archStr}`;
-
-  const projectRoot = path.resolve(__dirname, '..');
-  const prebuildSrc = path.join(
-    projectRoot, 'node_modules/better-sqlite3/prebuilds', `${platform}-${archStr}`, 'better_sqlite3.node'
-  );
-
-  if (!fs.existsSync(prebuildSrc)) {
-    console.error(`[afterPack] Missing better-sqlite3 prebuild for ${key}: ${prebuildSrc}`);
-    console.error(`[afterPack] Run "npm run prepare:all" to download prebuilds for all platforms`);
-    throw new Error(`Missing better-sqlite3 prebuild for ${key}`);
+  const { getBetterSqlite3PrebuildPath, validateBetterSqlite3Prebuild } = await import('./lib/better-sqlite3-prebuilds.mjs');
+  const target = { platform, arch: archStr };
+  const prebuild = getBetterSqlite3PrebuildPath(getUnpackedDir(context), target);
+  const validation = validateBetterSqlite3Prebuild(prebuild, target);
+  if (!validation.valid) {
+    throw new Error(`[afterPack] Invalid bundled better-sqlite3 N-API binary for ${key}: ${validation.reason}. Check the prebuilds asarUnpack rule.`);
   }
-
-  const unpackedDir = getUnpackedDir(context);
-  const targetNode = path.join(
-    unpackedDir, 'node_modules/better-sqlite3/build/Release/better_sqlite3.node'
-  );
-
-  if (!fs.existsSync(targetNode)) {
-    console.error(`[afterPack] ${key}: better_sqlite3.node not found in unpacked output`);
-    console.error(`[afterPack] Check that asarUnpack includes "node_modules/better-sqlite3/build/Release/*.node"`);
-    throw new Error(`better_sqlite3.node not found in unpacked output for ${key}`);
+  for (const entry of fs.readdirSync(path.dirname(prebuild))) {
+    if (entry !== `${key}.node`) fs.rmSync(path.join(path.dirname(prebuild), entry), { recursive: true, force: true });
   }
-
-  fs.copyFileSync(prebuildSrc, targetNode);
-
-  const sizeMB = (fs.statSync(targetNode).size / 1024 / 1024).toFixed(1);
-  console.log(`[afterPack] ${key}: swapped better-sqlite3 binary (${sizeMB} MB)`);
+  console.log(`[afterPack] ${key}: validated better-sqlite3 N-API binary (${(validation.size / 1024 / 1024).toFixed(1)} MB)`);
 }
 
 /**
@@ -582,6 +552,7 @@ function cleanAnthropicVendorBinaries(context) {
  * node_modules/cloudflared/bin/ (see CLOUDFLARED_VARIANTS). The copy goes from
  * the project node_modules (source of truth) into the unpacked output, so the
  * result is deterministic regardless of which variants electron-builder packed.
+ * Returns the installed binary path, or null when the target has no variant.
  */
 function installCloudflaredBinary(context) {
   const platform = context.electronPlatformName;
@@ -591,7 +562,7 @@ function installCloudflaredBinary(context) {
 
   if (!variant) {
     console.warn(`[afterPack] No cloudflared variant mapping for ${key}, skipping`);
-    return;
+    return null;
   }
 
   const projectRoot = path.resolve(__dirname, '..');
@@ -633,6 +604,7 @@ function installCloudflaredBinary(context) {
   const sizeMB = (fs.statSync(path.join(destDir, runtimeName)).size / 1024 / 1024).toFixed(1);
   console.log(`[afterPack] ${key}: installed cloudflared as bin/${runtimeName} (${sizeMB} MB)` +
     (removed.length > 0 ? `, removed ${removed.length} variant(s): ${removed.join(', ')}` : ''));
+  return path.join(destDir, runtimeName);
 }
 
 /**
@@ -969,8 +941,7 @@ module.exports = async function(context) {
   // Clean non-target watcher packages from unpacked output
   cleanNonTargetWatchers(context);
 
-  // Swap better-sqlite3 native binary for the target platform
-  swapBetterSqlite3Binary(context);
+  await cleanAndValidateBetterSqlite3Prebuilds(context);
 
   // Give the dsh bundle its own node_modules and native companions for this
   // target, then prune its private node-pty. None of this touches packages the
@@ -991,7 +962,7 @@ module.exports = async function(context) {
   cleanAnthropicVendorBinaries(context);
 
   // Install the target cloudflared binary under its runtime name.
-  installCloudflaredBinary(context);
+  const cloudflaredBinary = installCloudflaredBinary(context);
 
   // Ensure all native binaries in unpacked output have +x permission.
   // Defends against upstream npm packages shipping broken permissions
@@ -1010,6 +981,13 @@ module.exports = async function(context) {
   if (context.electronPlatformName !== 'darwin') {
     return;
   }
+
+  const nativeAppPath = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`);
+  const { CLOUDFLARED_MINIMUM_MACOS } = await import('./lib/cloudflared.mjs');
+  const helperFloors = cloudflaredBinary ? { [cloudflaredBinary]: CLOUDFLARED_MINIMUM_MACOS } : {};
+  const nativeTargets = assertMacOSDeploymentTargets(nativeAppPath, undefined, helperFloors);
+  console.log(`[afterPack] Verified macOS 12 deployment targets for ${nativeTargets.length} native binaries` +
+    (cloudflaredBinary ? ` (cloudflared: macOS ${CLOUDFLARED_MINIMUM_MACOS})` : ''));
 
   // Developer ID mode: electron-builder performs real Developer ID signing and
   // notarization in its own later step. Ad-hoc signing here would overwrite that

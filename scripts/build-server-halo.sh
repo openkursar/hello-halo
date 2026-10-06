@@ -54,7 +54,7 @@ restore_product() {
 trap restore_product EXIT
 cp server.product.json product.json
 
-# 1) Ensure linux native binaries are present (better-sqlite3 electron prebuild,
+# 1) Ensure linux native binaries are present (better-sqlite3 N-API prebuild,
 #    @parcel/watcher-linux, codex-linux, cloudflared-linux).
 log "preparing linux native binaries..."
 node scripts/prepare-binaries.mjs --platform linux

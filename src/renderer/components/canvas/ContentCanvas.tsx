@@ -1,26 +1,6 @@
 /**
- * Content Canvas - Main content viewing area
- *
- * The Content Canvas transforms Halo from a simple chat interface
- * into a rich content browser. It displays code, markdown, images,
- * and embedded browser views.
- *
- * Layout:
- * - Tab bar at top for switching between open files
- * - Content viewer fills remaining space
- * - Appropriate viewer component selected based on content type
- *
- * Keyboard shortcuts:
- * - Cmd/Ctrl+T: New browser tab
- * - Cmd/Ctrl+W: Close current tab
- * - Cmd/Ctrl+Shift+W: Close all tabs
- * - Cmd/Ctrl+Tab: Switch to next tab
- * - Cmd/Ctrl+Shift+Tab: Switch to previous tab
- * - Cmd/Ctrl+1-9: Switch to tab by index
- * - Escape: Collapse canvas
- *
- * This component uses useCanvasLifecycle for state management.
- * BrowserView lifecycle is managed centrally by CanvasLifecycle.
+ * Mounts only the active tab's viewer. Browser guests outlive these viewers in
+ * their permanent host; tab ownership and budgets belong to CanvasLifecycle.
  */
 
 import { useCallback, useEffect, useState, Suspense } from 'react'

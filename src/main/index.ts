@@ -260,6 +260,7 @@ import { manualCheckForUpdates } from './services/updater'
 import { initAnalytics } from './services/analytics'
 import { registerPrivilegedSchemes, registerProtocols } from './foundation/protocol.service'
 import { setMainWindow } from './foundation/window.service'
+import { registerBrowserHostHandlers } from './ipc/browser-host'
 import { checkAndArmSessionIntegrity, markSessionCleanExit } from './foundation/session-integrity'
 import { announceRendererHalted, decideAllWindowsClosed, remindRendererHalted, showUncaughtErrorNotice } from './services/lifecycle'
 import { getBackgroundService } from './platform/background'
@@ -475,6 +476,7 @@ function createWindow(): void {
     minHeight: 600,
     show: false,
     autoHideMenuBar: true,
+    roundedCorners: process.platform !== 'linux',
     // macOS: hiddenInset for traffic lights in content area
     // Windows/Linux: hidden + titleBarOverlay for native buttons overlay
     titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
@@ -493,10 +495,11 @@ function createWindow(): void {
     } : undefined,
     backgroundColor: '#0c0e12',
     webPreferences: {
-      preload: join(__dirname, '../preload/index.mjs'),
-      sandbox: false,
+      preload: join(__dirname, '../preload/index.cjs'),
+      sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
+      webviewTag: true,
       // Seed the persistent display scale before first paint: zoomFactor applies
       // the zoom natively, and the CLI arg lets the preload set --display-scale
       // synchronously, so chrome-inset compensation is correct on frame one.
@@ -504,6 +507,8 @@ function createWindow(): void {
       additionalArguments: [`--halo-display-scale=${currentDisplayScale()}`]
     }
   })
+
+  registerBrowserHostHandlers(mainWindow)
 
   // The window is created hidden and revealed on first paint. When the process
   // was started by something non-interactive — the installer's "run when
@@ -746,41 +751,48 @@ app.whenReady().then(async () => {
   })
 })
 
-let hasShutdown = false
+let shutdownPromise: Promise<void> | null = null
+let shutdownWait: Promise<void> | null = null
+let quitResumed = false
 const SHUTDOWN_TIMEOUT_MS = 5000
-async function shutdownServices(): Promise<void> {
-  if (hasShutdown) {
-    return
-  }
-  hasShutdown = true
+function shutdownServices(): Promise<void> {
+  if (shutdownPromise) return shutdownPromise
+  shutdownPromise = (async () => {
+    // Record the initiation even if a later cleanup reaches the quit deadline.
+    markSessionCleanExit()
+    flushAllPendingIndexWrites()
+    shutdownHealthSystem()
 
-  // Record that a graceful shutdown was initiated. Done first so a normal quit is
-  // marked clean even if a later cleanup step is slow; an ungraceful death never
-  // reaches this path and so remains flagged on the next launch.
-  markSessionCleanExit()
-
-  // Flush pending conversation index writes before shutdown
-  flushAllPendingIndexWrites()
-
-  // Shutdown health system first (marks clean exit)
-  shutdownHealthSystem()
-
-  await shutdownRemoteAccess().catch(console.error)
-  await stopOpenAICompatRouter().catch(console.error)
-  await cleanupExtendedServices().catch(console.error)
+    const remoteShutdown = shutdownRemoteAccess().catch(error => console.error('[Main] Remote access shutdown failed:', error))
+    await cleanupExtendedServices().catch(error => console.error('[Main] Extended services shutdown failed:', error))
+    await stopOpenAICompatRouter().catch(error => console.error('[Main] Compatibility router shutdown failed:', error))
+    await remoteShutdown
+  })()
+  return shutdownPromise
 }
 
-async function shutdownServicesWithTimeout(timeoutMs: number): Promise<void> {
-  const shutdownPromise = shutdownServices().catch(console.error)
-  await Promise.race([
-    shutdownPromise,
+function shutdownServicesWithTimeout(timeoutMs: number): Promise<void> {
+  if (shutdownWait) return shutdownWait
+  let timer: ReturnType<typeof setTimeout> | undefined
+  shutdownWait = Promise.race([
+    shutdownServices().catch(error => console.error('[Main] Application shutdown failed:', error)),
     new Promise<void>((resolve) => {
-      setTimeout(() => {
-        console.warn(`[Main] Shutdown timeout after ${timeoutMs}ms, forcing quit`)
+      timer = setTimeout(() => {
+        console.warn(`[Main] Cleanup exceeded ${timeoutMs}ms; continuing application quit`)
         resolve()
       }, timeoutMs)
     })
-  ])
+  ]).finally(() => clearTimeout(timer))
+  return shutdownWait
+}
+
+function requestAppQuit(): void {
+  isAppQuitting = true
+  void shutdownServicesWithTimeout(SHUTDOWN_TIMEOUT_MS).then(() => {
+    if (quitResumed) return
+    quitResumed = true
+    app.quit()
+  })
 }
 
 // macOS installs an update through Electron's native updater (Squirrel), which
@@ -823,9 +835,11 @@ app.on('render-process-gone', (_event, webContents, details) => {
   })
 })
 
-app.on('before-quit', () => {
+app.on('before-quit', event => {
   isAppQuitting = true
-  shutdownServicesWithTimeout(SHUTDOWN_TIMEOUT_MS).catch(console.error)
+  if (quitResumed) return
+  event.preventDefault()
+  requestAppQuit()
 })
 
 app.on('window-all-closed', () => {
@@ -843,9 +857,7 @@ app.on('window-all-closed', () => {
     }
     return
   }
-  shutdownServicesWithTimeout(SHUTDOWN_TIMEOUT_MS)
-    .catch(console.error)
-    .finally(() => app.quit())
+  requestAppQuit()
 })
 
 // Export mainWindow for IPC handlers

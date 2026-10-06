@@ -1,6 +1,6 @@
 /**
  * PDF viewer backed by pdfjs-dist, used in remote/web mode where the desktop
- * BrowserView (Chromium's native PDF viewer) is unavailable. Single-page view
+ * browser page (Chromium's native PDF viewer) is unavailable. Single-page view
  * with page navigation and zoom; default zoom fits the page width to the
  * container.
  */

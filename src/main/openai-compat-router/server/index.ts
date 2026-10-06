@@ -82,6 +82,7 @@ export async function stopOpenAICompatRouter(): Promise<void> {
 
   await new Promise<void>((resolve) => {
     s.close(() => resolve())
+    s.closeAllConnections()
   })
 
   console.log('[OpenAICompatRouter] Stopped')

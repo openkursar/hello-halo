@@ -3,6 +3,8 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import { browserHostBridge } from './browser-host-bridge'
+import type { BrowserHostBridge, BrowserPageGone } from '../shared/types/browser-host'
 import type { RpcContract, RpcClient } from '../shared/rpc/define'
 import type { CatalogModelCapability, ModelCapabilityOverride } from '../shared/types/model-capabilities'
 import type { ReasoningEffortLevel } from '../shared/constants/reasoning-effort'
@@ -46,7 +48,6 @@ import { searchRpc } from '../shared/rpc/contracts/search.contract'
 import { wecomBotRpc } from '../shared/rpc/contracts/wecom-bot.contract'
 import { feishuBotRpc } from '../shared/rpc/contracts/feishu-bot.contract'
 import { gitBashRpc } from '../shared/rpc/contracts/git-bash.contract'
-import { overlayRpc } from '../shared/rpc/contracts/overlay.contract'
 import { appRpc } from '../shared/rpc/contracts/app.contract'
 import { TEAM_IPC, TEAM_EVENTS } from '../shared/apps/team-types'
 import type {
@@ -95,7 +96,7 @@ type AuthRpcClient = RpcClient<typeof authRpc>
 }
 
 // Type definitions for exposed API
-export interface HaloAPI {
+export interface HaloAPI extends BrowserHostBridge {
   // Generic Auth (provider-agnostic)
   authGetProviders: () => Promise<IpcResponse>
   authGetBuiltinProviders: () => Promise<IpcResponse>
@@ -373,6 +374,7 @@ export interface HaloAPI {
   // Browser (embedded browser for Content Canvas)
   getBrowserHomepage: () => Promise<IpcResponse>
   createBrowserView: (viewId: string, url?: string) => Promise<IpcResponse>
+  onBrowserPageGone: (callback: (data: BrowserPageGone) => void) => () => void
   destroyBrowserView: (viewId: string) => Promise<IpcResponse>
   showBrowserView: (viewId: string, bounds: { x: number; y: number; width: number; height: number }) => Promise<IpcResponse>
   hideBrowserView: (viewId: string) => Promise<IpcResponse>
@@ -414,11 +416,6 @@ export interface HaloAPI {
   listAIBrowserLivePages: () => Promise<IpcResponse<AIBrowserLivePage[]>>
   onAIBrowserConversationReleased: (callback: (data: AIBrowserConversationReleased) => void) => () => void
   stopAIBrowserPage: (viewId: string, conversationId: string) => Promise<IpcResponse<AIBrowserStopResult>>
-
-  // Overlay (for floating UI above BrowserView)
-  showChatCapsuleOverlay: () => Promise<IpcResponse>
-  hideChatCapsuleOverlay: () => Promise<IpcResponse>
-  onCanvasExitMaximized: (callback: () => void) => () => void
 
   // Performance Monitoring (Developer Tools)
   perfStart: (config?: { sampleInterval?: number; maxSamples?: number }) => Promise<IpcResponse>
@@ -844,6 +841,7 @@ function bindRpc<C extends RpcContract>(contract: C): { [K in keyof C & keyof Ha
 
 // Expose API to renderer
 const api: HaloAPI = {
+  ...browserHostBridge,
   // Typed-RPC-derived bindings (see shared/rpc/contracts). Channel names and
   // argument shapes come from the contract — no manual sync needed.
   ...bindRpc(modelCapabilitiesRpc),
@@ -948,6 +946,7 @@ const api: HaloAPI = {
   onDisplayScale: (callback) => createEventListener('display:scale-changed', callback),
   getBrowserHomepage: () => ipcRenderer.invoke('browser:get-homepage'),
   createBrowserView: (viewId, url) => ipcRenderer.invoke('browser:create', { viewId, url }),
+  onBrowserPageGone: (callback) => createEventListener('browser:page-gone', callback),
   destroyBrowserView: (viewId) => ipcRenderer.invoke('browser:destroy', { viewId }),
   showBrowserView: (viewId, bounds) => ipcRenderer.invoke('browser:show', { viewId, bounds }),
   hideBrowserView: (viewId) => ipcRenderer.invoke('browser:hide', { viewId }),
@@ -978,10 +977,6 @@ const api: HaloAPI = {
   listAIBrowserLivePages: () => ipcRenderer.invoke('ai-browser:list-live-pages'),
   onAIBrowserConversationReleased: (callback) => createEventListener('ai-browser:conversation-released', callback),
   stopAIBrowserPage: (viewId, conversationId) => ipcRenderer.invoke('ai-browser:stop-page', { viewId, conversationId }),
-
-  // Overlay (for floating UI above BrowserView)
-  ...bindRpc(overlayRpc),
-  onCanvasExitMaximized: (callback) => createEventListener('canvas:exit-maximized', callback),
 
   // Performance Monitoring (Developer Tools)
   ...bindRpc(perfRpc),
@@ -1189,24 +1184,6 @@ const platformInfo = {
 
 contextBridge.exposeInMainWorld('platform', platformInfo)
 
-// Expose basic electron IPC for overlay SPA
-// This is used by the overlay window which doesn't need the full halo API
-const electronAPI = {
-  ipcRenderer: {
-    on: (channel: string, callback: (...args: unknown[]) => void) => {
-      ipcRenderer.on(channel, (_event, ...args) => callback(...args))
-    },
-    removeListener: (channel: string, callback: (...args: unknown[]) => void) => {
-      ipcRenderer.removeListener(channel, callback as (...args: unknown[]) => void)
-    },
-    send: (channel: string, ...args: unknown[]) => {
-      ipcRenderer.send(channel, ...args)
-    }
-  }
-}
-
-contextBridge.exposeInMainWorld('electron', electronAPI)
-
 // TypeScript declaration for window.halo and window.platform
 declare global {
   interface Window {
@@ -1216,14 +1193,6 @@ declare global {
       isMac: boolean
       isWindows: boolean
       isLinux: boolean
-    }
-    // For overlay SPA - access via contextBridge
-    electron?: {
-      ipcRenderer: {
-        on: (channel: string, callback: (...args: unknown[]) => void) => void
-        removeListener: (channel: string, callback: (...args: unknown[]) => void) => void
-        send: (channel: string, ...args: unknown[]) => void
-      }
     }
   }
 }

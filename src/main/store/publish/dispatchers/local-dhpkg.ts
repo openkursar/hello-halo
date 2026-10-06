@@ -3,7 +3,7 @@
  * via the system save dialog. Also reused by the `store:export-dhpkg` IPC.
  */
 
-import { dialog } from 'electron'
+import { showSaveDialog } from '../../../foundation/file-dialog'
 import { writeFile } from 'fs/promises'
 import { pack } from '../../dhpkg'
 import { deriveSlug } from '../spec-enrich'
@@ -24,7 +24,7 @@ export async function dispatch(
   const safeName = spec.store?.slug || deriveSlug(spec.name) || 'app'
   const defaultName = `${safeName}-${spec.version ?? '0.0.0'}.dhpkg`
 
-  const result = await dialog.showSaveDialog({
+  const result = await showSaveDialog({
     title: 'Export as .dhpkg',
     defaultPath: defaultName,
     filters: [{ name: 'DHP Package', extensions: ['dhpkg'] }],

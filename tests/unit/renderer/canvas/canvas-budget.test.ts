@@ -17,6 +17,7 @@ let emitPressure: (e: { level: 'normal' | 'low' | 'critical' }) => void = () => 
 const disk = new Map<string, string>()
 const readArtifactContent = vi.fn(async (path: string) => ({ success: true, data: { content: disk.get(path) ?? '' } }))
 const createBrowserView = vi.fn(async (_viewId: string, _url: string) => ({ success: true }))
+const showBrowserView = vi.fn(async () => ({ success: true }))
 /** When set, view destruction waits for it — to hold a budget pass mid-release. */
 let destroyGate: Promise<void> | null = null
 const destroyBrowserView = vi.fn(async () => {
@@ -31,7 +32,7 @@ function holdDestroys(): () => void {
 
 vi.mock('../../../../src/renderer/api', () => ({
   api: {
-    onBrowserStateChange: () => () => {},
+    onBrowserPageGone: () => () => {}, onBrowserStateChange: () => () => {},
     onArtifactChangedBatch: () => () => {},
     onMemoryPressure: (cb: typeof emitPressure) => { emitPressure = cb; return () => {} },
     getMemoryPressure: async () => 'normal',
@@ -39,7 +40,7 @@ vi.mock('../../../../src/renderer/api', () => ({
     isRemoteMode: () => false,
     createBrowserView: (...a: unknown[]) => createBrowserView(...(a as [string, string])),
     destroyBrowserView: (...a: unknown[]) => destroyBrowserView(...(a as [])),
-    showBrowserView: vi.fn(async () => ({ success: true })),
+    showBrowserView: (...args: unknown[]) => showBrowserView(...(args as [])),
     hideBrowserView: vi.fn(async () => ({ success: true })),
   },
 }))
@@ -64,6 +65,7 @@ beforeEach(async () => {
   disk.clear()
   readArtifactContent.mockClear()
   createBrowserView.mockClear()
+  showBrowserView.mockClear()
   destroyBrowserView.mockClear()
 })
 
@@ -99,6 +101,23 @@ describe('open-tab limit', () => {
 })
 
 describe('live browser views', () => {
+  it('does not present an inactive page whose attachment finishes after the user switches away', async () => {
+    let finish!: () => void
+    createBrowserView.mockImplementationOnce(async () => {
+      await new Promise<void>(resolve => { finish = resolve })
+      return { success: true }
+    })
+    const releaseBounds = canvasLifecycle.setContainerBoundsGetter(() => ({ x: 10, y: 20, width: 400, height: 300 } as DOMRect))
+    const first = await canvasLifecycle.openUrl('https://late.test')
+    await canvasLifecycle.openContent('active text', 'Note', 'text')
+    showBrowserView.mockClear()
+    finish()
+    await flush()
+    expect(canvasLifecycle.getTab(first)!.browserViewId).toBeDefined()
+    expect(showBrowserView).not.toHaveBeenCalled()
+    releaseBounds()
+  })
+
   it('releases the least recently used hidden owned view and recreates it when shown', async () => {
     const ids: string[] = []
     for (let i = 0; i <= MAX_LIVE_BROWSER_VIEWS; i++) {

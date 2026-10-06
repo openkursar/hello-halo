@@ -16,7 +16,7 @@
  * a regression, not the expected finding.
  *
  * pdf opens via BrowserViewer, a *separate* Electron renderer process
- * (Chromium's native PDF viewer in a BrowserView) — `includePerProcess`
+ * (Chromium's native PDF viewer in a browser guest) — `includePerProcess`
  * records a per-pid breakdown so that process isn't blended into the main
  * window's renderer numbers.
  */

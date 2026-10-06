@@ -8,6 +8,8 @@ Thanks for your interest in contributing to Halo! This guide will help you get s
 
 ## Development Setup
 
+Requires Node 22.14 or newer: the native dependencies use Node-API 10.
+
 ```bash
 # Clone the repository
 git clone https://github.com/openkursar/hello-halo.git
@@ -22,15 +24,9 @@ npm run dev
 
 ## Troubleshooting
 
-**App Manager stuck on "not yet initialized" / `NODE_MODULE_VERSION` mismatch in logs**
+**A native module fails to load after `npm rebuild` or an interrupted install**
 
-The `better-sqlite3` native module was compiled for system Node instead of Electron. Rebuild it:
-
-```bash
-npx electron-rebuild -f -w better-sqlite3
-```
-
-This happens after `npm rebuild`, an interrupted `npm install`, or any `node-gyp` build run under system Node. A full `npm install` fixes it automatically via `postinstall`.
+`npm install` runs `scripts/postinstall.mjs`, which downloads the Electron runtime and runs `electron-builder install-app-deps`. `better-sqlite3` loads the Node-API binary bundled in its package, so it needs no Electron-specific rebuild. The `node-abi` dev dependency keeps the rebuild's ABI table new enough for the pinned Electron. Rerun `npm install` to restore a consistent state.
 
 ## Project Structure
 

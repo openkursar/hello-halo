@@ -18,6 +18,7 @@ import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import type { PerfResult } from './types'
+import { verifyFrozenResults } from './build-identity/index.mjs'
 
 const resultsRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'results')
 
@@ -55,6 +56,8 @@ const EXPECTED_BY_SET: Record<string, string[]> = {
 const OPTIONAL = new Set(['s5-file-preview', 's9-soak', 's9-soak-probe', 's10-csv-crash-loop'])
 
 const args = process.argv.slice(2)
+const identityMode = args.find(argument => argument.startsWith('--identity='))?.slice('--identity='.length) ?? 'clean-git'
+if (!['clean-git', 'frozen-content'].includes(identityMode)) throw new Error(`Unknown identity mode: ${identityMode}`)
 const setArg = args.find((a) => a.startsWith('--set='))?.slice('--set='.length) ?? 'full'
 const EXPECTED = EXPECTED_BY_SET[setArg]
 if (!EXPECTED) {
@@ -150,9 +153,9 @@ if (invalid.length > 0) {
 // A number is only comparable if we know which artifact produced it. Without
 // the build sidecar the identity falls back to live HEAD, which may not be
 // what the measured binary was built from at all.
-const unverified = results.filter((r) => r.build && !r.build.verified)
+const unverified = results.filter((r) => !r.build || !r.build.verified)
 const dirty = results.filter((r) => r.build?.dirty)
-const noKind = results.filter((r) => r.build && r.build.artifactKind === null)
+const noKind = results.filter((r) => !r.build || !['electron-vite', 'packaged-mac-arm64', 'packaged-mac-x64', 'packaged-win', 'packaged-linux'].includes(r.build.artifactKind ?? ''))
 console.log(`[6] build identity: ${unverified.length} unverified, ${dirty.length} from a dirty tree, ${noKind.length} with unknown artifact kind`)
 if (unverified.length > 0) failures.push(`${unverified.length} result(s) carry an unverified build identity — run \`node tests/perf/record-build.mjs\` right after building, before measuring`)
 if (noKind.length > 0) failures.push(`${noKind.length} result(s) do not record which artifact kind was measured — electron-vite output and a packaged app are not comparable`)
@@ -164,8 +167,19 @@ if (dirty.length > 0) {
   // failing on it would make this check red on every release, which is how a
   // check stops being read.
   const message = `${dirty.length} result(s) were measured from a dirty working tree`
-  if (setArg === 'release') console.log(`      note: ${message} — expected during a release (version bump not yet committed); not comparable as a baseline`)
+  if (identityMode === 'frozen-content') console.log(`      ${message}; complete content evidence is required below`)
+  else if (setArg === 'release') console.log(`      note: ${message} — expected during a release (version bump not yet committed); not comparable as a baseline`)
   else failures.push(message)
+}
+if (identityMode === 'frozen-content') {
+  try {
+    const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
+    const compareTo = args.find(argument => argument.startsWith('--compare-to='))?.slice('--compare-to='.length)
+    await verifyFrozenResults(projectRoot, results, { resultDir: dir, compareTo })
+    console.log('[6a] complete preflight/postflight content and actual runtime evidence verified')
+  } catch (error) {
+    failures.push(`Frozen content identity failed: ${error instanceof Error ? error.message : String(error)}`)
+  }
 }
 
 // Results from one run agree on their AI source, so disagreement proves the
@@ -185,7 +199,7 @@ if (sources.includes('external')) {
 
 console.log()
 if (failures.length === 0) {
-  console.log(`PASS — results/${label}/ is a complete, trustworthy run`)
+  console.log(`PASS — results/${label}/ is a complete, trustworthy ${identityMode === 'frozen-content' ? 'frozen candidate comparison' : 'run'}`)
 } else {
   console.log(`FAIL — ${failures.length}:`)
   for (const f of failures) console.log(`  - ${f}`)

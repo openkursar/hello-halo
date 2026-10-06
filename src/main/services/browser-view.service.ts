@@ -1,21 +1,7 @@
-/**
- * BrowserView Service - Manages embedded browser views
- *
- * This service creates and manages BrowserView instances for the Content Canvas,
- * enabling true browser functionality within Halo - like having Chrome embedded
- * in the app.
- *
- * Key features:
- * - Multiple concurrent BrowserViews (one per tab)
- * - Full Chromium rendering with network capabilities
- * - Security isolation (sandbox mode)
- * - State tracking (URL, title, loading, navigation history)
- * - AI-ready (screenshot capture, JS execution)
- * - Window-level isolation: AI automation views are hosted on a separate
- *   hidden BrowserWindow to prevent lifecycle conflicts with user-visible views
- */
+/** Browser page state and policy, independent of the guest's DOM host. */
 
-import { BrowserView, BrowserWindow } from 'electron'
+import { BrowserWindow, type WebContents } from 'electron'
+import { browserHostManager, captureBrowserPage } from './browser-host'
 import { isUrlAllowedByPolicy } from './browser-policy.service'
 import { resolveUserAgent } from './user-agent-resolver'
 import { getConfig, onBrowserConfigChange } from '../foundation/config.service'
@@ -39,9 +25,7 @@ export interface BrowserViewState {
   isDevToolsOpen: boolean
   deviceMode: DeviceMode
   error?: string
-  /** True when a navigation was blocked by browser policy. Used by renderer
-   *  to show the policy-block overlay and by applyBounds() to keep the
-   *  native BrowserView offscreen so the overlay is visible. */
+  /** Policy blocks park the guest so the host can show its recovery controls. */
   blockedByPolicy?: boolean
   /** Exact URL that was blocked. `state.url` can be stale here (e.g. a
    *  redirect block keeps the pre-redirect URL), so the overlay's
@@ -57,9 +41,7 @@ export interface BrowserViewBounds {
 }
 
 export interface BrowserViewCreateOptions {
-  /** When true, the view is hosted on a hidden offscreen window instead of the
-   *  main window. Used by AI automation to isolate view lifecycle from the
-   *  user-visible browser. Defaults to false. */
+  /** Background-only pages cannot be displayed or transferred to the main host. */
   offscreen?: boolean
   /** Initial device emulation mode. Defaults to 'pc'. */
   deviceMode?: DeviceMode
@@ -81,7 +63,7 @@ export const H5_VIEWPORT_WIDTH = 430
 /** H5 (mobile) emulation — iPhone 16 Pro Max (430×932 pt, 3× scale) */
 export const H5_DEVICE_METRICS = {
   width: 430,
-  height: 0,          // 0 = auto: let the actual BrowserView height determine window.innerHeight
+  height: 0,          // 0 = auto: let the actual guest height determine window.innerHeight
   deviceScaleFactor: 3,
   mobile: true,
   screenWidth: 430,
@@ -122,30 +104,33 @@ function buildBlockedMessage(url: string): string {
   }
 }
 
+function wasNavigationCancelled(error: unknown): boolean {
+  const failure = error as { code?: string; errno?: number }
+  return failure?.code === 'ERR_ABORTED' || failure?.errno === -3
+}
+
+function navigationFailureDetails(error: unknown): unknown {
+  if (!(error instanceof Error)) return { errorType: typeof error }
+  const failure = error as Error & { code?: string; errno?: number }
+  return { code: failure.code, errno: failure.errno, stack: failure.stack?.split('\n').slice(1).join('\n') }
+}
+
 // ============================================
-// BrowserView Manager
+// Browser page manager
 // ============================================
 
-class BrowserViewManager {
-  private views: Map<string, BrowserView> = new Map()
+class BrowserPageManager {
+  private views = new Map<string, { webContents: WebContents }>()
+  private pendingCreates = new Map<string, Promise<BrowserViewState>>()
   private states: Map<string, BrowserViewState> = new Map()
   private mainWindow: BrowserWindow | null = null
   private activeViewId: string | null = null
+  private displayedViewId: string | null = null
 
   // Last visible bounds per view — used to restore position after policy-block hide.
   private lastBounds: Map<string, BrowserViewBounds> = new Map()
 
-  // Hidden offscreen window that hosts AI automation BrowserViews.
-  // Isolates AI view lifecycle from the user-visible mainWindow so that
-  // creating/destroying AI views cannot corrupt the mainWindow's view list.
-  private offscreenWindow: BrowserWindow | null = null
-  // Views whose home is the offscreen window (AI automation / digital-human chat).
-  private offscreenViewIds: Set<string> = new Set()
-  // Subset of offscreenViewIds a user is currently watching: temporarily hosted
-  // on the main window so the canvas can show the exact page the AI drives.
-  // hide() sends them home again.
-  private revealedViewIds: Set<string> = new Set()
-  private destroyedListeners: Set<(viewId: string) => void> = new Set()
+  private destroyedListeners: Set<(viewId: string, webContentsId?: number) => void> = new Set()
 
   // Debounce timers for state change events
   // This prevents flooding the renderer with too many IPC messages during rapid navigation
@@ -167,7 +152,10 @@ class BrowserViewManager {
    * Initialize the manager with the main window
    */
   initialize(mainWindow: BrowserWindow) {
+    if (this.mainWindow === mainWindow) return
     this.mainWindow = mainWindow
+    this.lastAppliedUserAgent = getConfig().browser?.userAgent
+    browserHostManager.initialize(mainWindow)
 
     // Clean up views when window is closed
     mainWindow.on('closed', () => {
@@ -190,7 +178,7 @@ class BrowserViewManager {
   }
 
   /**
-   * Apply a (possibly new) User-Agent to every active BrowserView. Called by
+   * Apply a (possibly new) User-Agent to every active browser page. Called by
    * the browser-config-change subscriber when the user edits the UA in
    * Settings. Each active page is reloaded so `navigator.userAgent` picks up
    * the new value — Chromium caches the UA at page-init time, so
@@ -211,361 +199,129 @@ class BrowserViewManager {
         if (state.url && state.url !== 'about:blank') {
           view.webContents.reload()
         }
-        console.log(`[BrowserView] Applied updated User-Agent to view: ${viewId}`)
       } catch (e) {
-        console.error(`[BrowserView] Failed to apply UA to view ${viewId}:`, e)
+        console.error(`[Browser] Failed to apply UA to view ${viewId}:`, e)
       }
     }
   }
 
-  /**
-   * Get or lazily create the hidden offscreen host window.
-   *
-   * This window is never shown to the user. Its sole purpose is to provide a
-   * compositing surface for AI automation BrowserViews so that CDP commands
-   * (e.g. Page.captureScreenshot) produce frames. The window itself loads no
-   * content and consumes minimal memory (~10 MB).
-   */
-  private getOrCreateOffscreenWindow(): BrowserWindow {
-    if (this.offscreenWindow && !this.offscreenWindow.isDestroyed()) {
-      return this.offscreenWindow
-    }
-
-    this.offscreenWindow = new BrowserWindow({
-      show: false,
-      width: 1280,
-      height: 720,
-      webPreferences: {
-        // Minimal prefs — this window never loads content itself
-        nodeIntegration: false,
-        contextIsolation: true,
-        // Hidden host window: keep child views rendering so CDP/capturePage
-        // can obtain frames instead of hanging on a throttled compositor.
-        backgroundThrottling: false,
-      },
-    })
-
-    // Prevent from appearing in taskbar / dock
-    this.offscreenWindow.setSkipTaskbar(true)
-
-    // Handle unexpected close (e.g. OS kill)
-    this.offscreenWindow.on('closed', () => {
-      this.offscreenWindow = null
-    })
-
-    console.log('[BrowserView] Offscreen host window created for AI automation views')
-    return this.offscreenWindow
-  }
-
-  /**
-   * Create a new BrowserView
-   */
+  /** Resolves when the guest is usable; navigation completion is reported through page state. */
   async create(viewId: string, url?: string, options?: BrowserViewCreateOptions): Promise<BrowserViewState> {
-    const isOffscreen = options?.offscreen ?? false
-    const deviceMode: DeviceMode = options?.deviceMode ?? 'pc'
-    console.log(`[BrowserView] >>> create() called - viewId: ${viewId}, url: ${url}, offscreen: ${isOffscreen}, deviceMode: ${deviceMode}`)
-
-    // Browser policy check — reject BEFORE creating any BrowserView.
-    // The IPC handler returns { success: false, error, code } which the
-    // renderer maps to the policy-block overlay (no BrowserView involved).
     if (url && !isUrlAllowedByPolicy(url)) {
-      const msg = buildBlockedMessage(url)
-      console.log(`[BrowserView] ${msg}`)
-      const error = new Error(msg) as Error & { code?: string }
+      const error = new Error(buildBlockedMessage(url)) as Error & { code?: string }
       error.code = BROWSER_POLICY_BLOCKED
+      console.warn('[Browser] Initial navigation blocked', { viewId })
       throw error
     }
-
-    // Don't create duplicate views
-    if (this.views.has(viewId)) {
-      console.log(`[BrowserView] View already exists, returning existing state`)
-      return this.states.get(viewId)!
-    }
-
-    console.log(`[BrowserView] Creating new BrowserView...`)
-    const view = new BrowserView({
-      webPreferences: {
-        sandbox: true, // Security: enable sandbox for external content
-        contextIsolation: true,
-        nodeIntegration: false,
-        webSecurity: true,
-        allowRunningInsecureContent: false,
-        // Persistent storage for cookies, localStorage, etc.
-        // Shared across mainWindow and offscreen window — login state is preserved.
-        partition: 'persist:browser',
-        // Enable smooth scrolling and other web features
-        scrollBounce: true,
-        // Only views on the permanently hidden host window may disable
-        // throttling: their compositor would otherwise stall and hang
-        // Page.captureScreenshot (esp. Windows). Never disable it for
-        // main-window views. Electron then suppresses the widget's hidden
-        // state, so the removeBrowserView/addBrowserView round trip behind
-        // every canvas tab switch evicts the frame without ever re-embedding
-        // it — the view keeps routing input and running JS but paints nothing
-        // but its background color, permanently.
-        backgroundThrottling: !isOffscreen,
-      },
-    })
-    console.log(`[BrowserView] BrowserView instance created`)
-
-    // Issue #124: apply custom UA if configured.
-    const customUA = getConfig().browser?.userAgent
-    view.webContents.setUserAgent(resolveUserAgent(customUA, deviceMode))
-
-    // Set background color to white (standard web)
-    view.setBackgroundColor('#ffffff')
-
-    // Attach to the appropriate host window so the Chromium compositor allocates
-    // a compositing surface. Without this, CDP commands that need pixel output
-    // (e.g. Page.captureScreenshot) will hang because no frames are produced.
-    //
-    // For user-visible views: attach to mainWindow at offscreen bounds;
-    //   show() later repositions to visible bounds.
-    // For AI automation views: attach to a dedicated hidden offscreen window
-    //   to isolate lifecycle from the user's mainWindow.
-    const hostWindow = isOffscreen
-      ? this.getOrCreateOffscreenWindow()
-      : this.mainWindow
-
-    if (hostWindow && !hostWindow.isDestroyed()) {
-      hostWindow.addBrowserView(view)
-      // Offscreen window is hidden, so (0,0) is fine. User views start off-screen
-      // and are repositioned by show().
-      const initialBounds = isOffscreen
-        ? { x: 0, y: 0, width: 1280, height: 720 }
-        : { x: -10000, y: -10000, width: 1280, height: 720 }
-      view.setBounds(initialBounds)
-    }
-
-    if (isOffscreen) {
-      this.offscreenViewIds.add(viewId)
-    }
-
-    // Initialize state
-    // Only set isLoading for real HTTP(S) URLs — about:blank / file: / etc. load instantly
-    const needsLoading = !!url && (url.startsWith('http://') || url.startsWith('https://'))
+    const pending = this.pendingCreates.get(viewId)
+    if (pending) return pending
+    const existing = this.states.get(viewId)
+    if (existing) return existing
+    const deviceMode = options?.deviceMode ?? 'pc'
     const state: BrowserViewState = {
       id: viewId,
       url: url || 'about:blank',
       title: 'New Tab',
-      isLoading: needsLoading,
+      isLoading: !!url && url !== 'about:blank',
       canGoBack: false,
       canGoForward: false,
       zoomLevel: 1,
       isDevToolsOpen: false,
       deviceMode,
     }
-
-    this.views.set(viewId, view)
     this.states.set(viewId, state)
-    console.log(`[BrowserView] View stored in map, views count: ${this.views.size}`)
-
-    // Bind events
-    this.bindEvents(viewId, view)
-    console.log(`[BrowserView] Events bound`)
-
-    // NOTE: CDP device emulation (viewport/touch) is applied in bindEvents
-    // after did-finish-load, not here. The WebContents debugger cannot be
-    // attached before the first navigation completes.
-    // UA is already set via setUserAgent() above — this handles server-side
-    // UA detection without needing CDP.
-
-    // Navigate to initial URL
-    // (Policy check already happened at the top of create() — if we reach
-    // here the URL is allowed or absent.)
-    if (url) {
+    let promise!: Promise<BrowserViewState>
+    promise = Promise.resolve().then(async () => {
       try {
-        console.log(`[BrowserView] Loading URL: ${url}`)
-        await view.webContents.loadURL(url)
-        console.log(`[BrowserView] URL loaded successfully`)
+        if (this.states.get(viewId) !== state) throw new Error('Browser page closed before creation')
+        const webContents = await browserHostManager.create(viewId, options?.offscreen ?? false)
+        if (this.states.get(viewId) !== state || webContents.isDestroyed()) {
+          throw new Error('Browser page closed during creation')
+        }
+        const view = { webContents }
+        this.views.set(viewId, view)
+        webContents.once('destroyed', () => {
+          if (this.views.get(viewId) === view) this.cleanupStaleView(viewId)
+        })
+        webContents.setUserAgent(resolveUserAgent(getConfig().browser?.userAgent, deviceMode))
+        webContents.setZoomFactor(state.zoomLevel)
+        this.bindEvents(viewId, view)
+        if (url) {
+          void webContents.loadURL(url).catch(error => {
+            if (webContents.isDestroyed() || this.states.get(viewId) !== state || wasNavigationCancelled(error)) return
+            console.warn('[Browser] Initial navigation failed', { viewId }, navigationFailureDetails(error))
+          })
+        }
+        if (this.states.get(viewId) !== state) throw new Error('Browser page closed during navigation')
+        return state
       } catch (error) {
-        console.error(`[BrowserView] Failed to load URL: ${url}`, error)
-        state.error = (error as Error).message
-        state.isLoading = false
+        if (this.states.get(viewId) === state) this.destroy(viewId)
+        console.warn('[Browser] Page creation failed', { viewId }, error)
+        throw error
+      } finally {
+        if (this.pendingCreates.get(viewId) === promise) this.pendingCreates.delete(viewId)
       }
-    }
-
-    console.log(`[BrowserView] <<< create() returning state:`, JSON.stringify(state, null, 2))
-    return state
-  }
-
-  /**
-   * Show a BrowserView at specified bounds
-   */
-  show(viewId: string, bounds: BrowserViewBounds) {
-    console.log(`[BrowserView] >>> show() called - viewId: ${viewId}, bounds:`, bounds)
-
-    const view = this.views.get(viewId)
-    if (!view) {
-      console.error(`[BrowserView] show() - View not found: ${viewId}`)
-      return false
-    }
-    if (!this.mainWindow) {
-      console.error(`[BrowserView] show() - mainWindow is null`)
-      return false
-    }
-
-    // Defensive: if the native BrowserView object has been destroyed (e.g. by
-    // a race condition), clean up the stale entry and bail out.
-    try {
-      if (view.webContents.isDestroyed()) {
-        console.error(`[BrowserView] show() - View webContents already destroyed, cleaning up: ${viewId}`)
-        this.cleanupStaleView(viewId)
-        return false
-      }
-    } catch (e) {
-      console.error(`[BrowserView] show() - View object destroyed, cleaning up: ${viewId}`)
-      this.cleanupStaleView(viewId)
-      return false
-    }
-
-    // Hide currently active view first
-    if (this.activeViewId && this.activeViewId !== viewId) {
-      console.log(`[BrowserView] Hiding previous active view: ${this.activeViewId}`)
-      this.hide(this.activeViewId)
-    }
-
-    if (this.offscreenViewIds.has(viewId) && !this.revealedViewIds.has(viewId)) {
-      this.revealOffscreenView(viewId, view)
-    }
-
-    // Add to window
-    console.log(`[BrowserView] Adding BrowserView to window...`)
-    try {
-      this.mainWindow.addBrowserView(view)
-    } catch (error) {
-      console.error(`[BrowserView] show() - addBrowserView failed: ${viewId}`, error)
-      // A revealed view already left its home window; without this it would be
-      // hosted nowhere and the AI driving it would lose its compositing surface.
-      if (this.revealedViewIds.has(viewId)) this.returnToOffscreenWindow(viewId, view)
-      return false
-    }
-    console.log(`[BrowserView] BrowserView added to window`)
-
-    // Set bounds with integer values (H5-aware, respects policy-block state)
-    const intBounds = this.resolveBounds(viewId, bounds)
-    console.log(`[BrowserView] Setting bounds:`, intBounds)
-    this.applyBounds(viewId, intBounds)
-
-    // Auto-resize with window (only width and height, not position)
-    view.setAutoResize({
-      width: false,
-      height: false,
-      horizontal: false,
-      vertical: false,
     })
-
-    this.activeViewId = viewId
-    console.log(`[BrowserView] <<< show() success - activeViewId: ${this.activeViewId}`)
-    return true
+    this.pendingCreates.set(viewId, promise)
+    return promise
   }
 
-  /**
-   * Hide a BrowserView (remove from window but keep in memory)
-   */
-  hide(viewId: string) {
+  show(viewId: string, bounds: BrowserViewBounds): boolean {
     const view = this.views.get(viewId)
-    if (!view) return false
-
-    // Remove from the correct host window
-    const hostWindow = this.isHostedOffscreen(viewId)
-      ? this.offscreenWindow
-      : this.mainWindow
-
-    if (hostWindow && !hostWindow.isDestroyed()) {
-      try {
-        hostWindow.removeBrowserView(view)
-      } catch (e) {
-        // View might already be removed
-      }
+    if (!view || view.webContents.isDestroyed()) {
+      console.warn('[Browser] Cannot show unavailable page', { viewId })
+      if (view) this.cleanupStaleView(viewId)
+      return false
     }
-
-    // A revealed view has no business lingering detached: the AI keeps driving
-    // it and CDP screenshots need a compositing surface.
-    if (this.revealedViewIds.has(viewId)) {
-      this.returnToOffscreenWindow(viewId, view)
+    if (this.displayedViewId && this.displayedViewId !== viewId) this.hide(this.displayedViewId)
+    const result = this.applyBounds(viewId, bounds, true)
+    if (result) {
+      this.activeViewId = viewId
+      this.displayedViewId = viewId
     }
-
-    if (this.activeViewId === viewId) {
-      this.activeViewId = null
-    }
-
-    return true
+    return result
   }
 
-  /**
-   * Whether a view is currently hosted on the hidden window (as opposed to
-   * home-offscreen but temporarily revealed on the main window).
-   */
-  private isHostedOffscreen(viewId: string): boolean {
-    return this.offscreenViewIds.has(viewId) && !this.revealedViewIds.has(viewId)
+  hide(viewId: string): boolean {
+    if (!this.views.has(viewId)) return false
+    const result = this.applyBounds(viewId, this.lastBounds.get(viewId) ?? { x: 0, y: 0, width: 1280, height: 720 }, false)
+    if (this.activeViewId === viewId) this.activeViewId = null
+    if (this.displayedViewId === viewId) this.displayedViewId = null
+    return result
   }
 
-  /** Whether a home-offscreen view is currently shown to the user on the main window. */
+  /** A visible AI page can be selected by an interactive context without changing hosts. */
   isRevealed(viewId: string): boolean {
-    return this.revealedViewIds.has(viewId)
-  }
-
-  /**
-   * Move a home-offscreen view to the main window so the user can watch and take
-   * over the exact page the AI is driving. Throttling must be re-enabled first:
-   * with it disabled, the remove/add round trip behind every canvas tab switch
-   * would evict the compositor frame for good (see create()).
-   */
-  private revealOffscreenView(viewId: string, view: BrowserView) {
-    if (this.offscreenWindow && !this.offscreenWindow.isDestroyed()) {
-      try {
-        this.offscreenWindow.removeBrowserView(view)
-      } catch {
-        // Already detached
-      }
-    }
-    view.webContents.setBackgroundThrottling(true)
-    this.revealedViewIds.add(viewId)
-    console.log(`[BrowserView] Offscreen view revealed on main window: ${viewId}`)
-  }
-
-  /** Inverse of revealOffscreenView(); the view must already be detached from the main window. */
-  private returnToOffscreenWindow(viewId: string, view: BrowserView) {
-    this.revealedViewIds.delete(viewId)
-    try {
-      if (view.webContents.isDestroyed()) return
-      const host = this.getOrCreateOffscreenWindow()
-      host.addBrowserView(view)
-      view.setBounds({ x: 0, y: 0, width: 1280, height: 720 })
-      view.webContents.setBackgroundThrottling(false)
-      console.log(`[BrowserView] Revealed view returned to offscreen host: ${viewId}`)
-    } catch (error) {
-      console.error(`[BrowserView] Failed to return view to offscreen host: ${viewId}`, error)
-    }
+    return browserHostManager.isVisible(viewId)
   }
 
   /** Subscribe to view destruction, whichever path destroyed it. Returns an unsubscribe. */
-  onViewDestroyed(listener: (viewId: string) => void): () => void {
+  onViewDestroyed(listener: (viewId: string, webContentsId?: number) => void): () => void {
     this.destroyedListeners.add(listener)
     return () => this.destroyedListeners.delete(listener)
   }
 
-  private emitViewDestroyed(viewId: string) {
+  private emitViewDestroyed(viewId: string, webContentsId?: number, reason: 'closed' | 'lost' = 'closed') {
+    if (this.mainWindow && !this.mainWindow.isDestroyed() && !this.mainWindow.webContents.isDestroyed()) {
+      this.mainWindow.webContents.send('browser:page-gone', { viewId, reason })
+    }
     for (const listener of this.destroyedListeners) {
       try {
-        listener(viewId)
+        listener(viewId, webContentsId)
       } catch (error) {
-        console.error(`[BrowserView] view-destroyed listener failed for ${viewId}:`, error)
+        console.error(`[Browser] view-destroyed listener failed for ${viewId}:`, error)
       }
     }
   }
 
   /**
-   * Resize a BrowserView
+   * Resize a browser page
    */
   resize(viewId: string, bounds: BrowserViewBounds) {
     const view = this.views.get(viewId)
     if (!view) return false
 
-    this.applyBounds(viewId, this.resolveBounds(viewId, bounds))
-
-    return true
+    return this.applyBounds(viewId, bounds)
   }
 
   /**
@@ -593,7 +349,6 @@ class BrowserViewManager {
 
     // Browser policy check
     if (!isUrlAllowedByPolicy(url)) {
-      console.log(`[BrowserView] Navigation blocked by browser policy: ${url}`)
       this.updateState(viewId, {
         error: buildBlockedMessage(url),
         blockedByPolicy: true,
@@ -609,7 +364,8 @@ class BrowserViewManager {
 
       return true
     } catch (error) {
-      console.error(`[BrowserView] Navigation failed: ${url}`, error)
+      if (this.views.get(viewId) !== view || wasNavigationCancelled(error)) return false
+      console.error('[Browser] Navigation failed', { viewId }, navigationFailureDetails(error))
       this.updateState(viewId, {
         error: (error as Error).message,
         isLoading: false,
@@ -636,8 +392,8 @@ class BrowserViewManager {
    */
   goBack(viewId: string): boolean {
     const view = this.views.get(viewId)
-    if (!view || !view.webContents.canGoBack()) return false
-    view.webContents.goBack()
+    if (!view || !view.webContents.navigationHistory.canGoBack()) return false
+    view.webContents.navigationHistory.goBack()
     return true
   }
 
@@ -646,8 +402,8 @@ class BrowserViewManager {
    */
   goForward(viewId: string): boolean {
     const view = this.views.get(viewId)
-    if (!view || !view.webContents.canGoForward()) return false
-    view.webContents.goForward()
+    if (!view || !view.webContents.navigationHistory.canGoForward()) return false
+    view.webContents.navigationHistory.goForward()
     return true
   }
 
@@ -657,6 +413,17 @@ class BrowserViewManager {
   reload(viewId: string): boolean {
     const view = this.views.get(viewId)
     if (!view) return false
+    const state = this.states.get(viewId)
+    if (view.webContents.getURL().startsWith('about:blank#halo-browser-')) {
+      if (state?.url && !state.url.startsWith('about:blank')) {
+        void this.navigate(viewId, state.url)
+      } else {
+        void view.webContents.loadURL('about:blank').catch(error => {
+          if (!view.webContents.isDestroyed() && !wasNavigationCancelled(error)) console.warn('[Browser] Blank page reload failed', { viewId }, navigationFailureDetails(error))
+        })
+      }
+      return true
+    }
     view.webContents.reload()
     return true
   }
@@ -668,6 +435,8 @@ class BrowserViewManager {
     const view = this.views.get(viewId)
     if (!view) return false
     view.webContents.stop()
+    this.updateState(viewId, { isLoading: false })
+    this.emitStateChangeImmediate(viewId)
     return true
   }
 
@@ -679,10 +448,10 @@ class BrowserViewManager {
     if (!view) return null
 
     try {
-      const image = await view.webContents.capturePage()
+      const image = await captureBrowserPage(view.webContents)
       return image.toDataURL()
     } catch (error) {
-      console.error('[BrowserView] Screenshot failed:', error)
+      console.error('[Browser] Screenshot failed:', error)
       return null
     }
   }
@@ -697,7 +466,7 @@ class BrowserViewManager {
     try {
       return await view.webContents.executeJavaScript(code)
     } catch (error) {
-      console.error('[BrowserView] JS execution failed:', error)
+      console.error('[Browser] JS execution failed:', error)
       return null
     }
   }
@@ -743,11 +512,11 @@ class BrowserViewManager {
   }
 
   /**
-   * Destroy a specific BrowserView
+   * Destroy a browser page
    */
   destroy(viewId: string) {
     const view = this.views.get(viewId)
-    if (!view) return
+    if (!view && !this.states.has(viewId)) return
 
     // Clear any pending debounce timer for this view
     const timer = this.stateChangeDebounceTimers.get(viewId)
@@ -756,40 +525,22 @@ class BrowserViewManager {
       this.stateChangeDebounceTimers.delete(viewId)
     }
 
-    // Remove from the correct host window
-    const hostWindow = this.isHostedOffscreen(viewId) ? this.offscreenWindow : this.mainWindow
-
-    if (hostWindow && !hostWindow.isDestroyed()) {
-      try {
-        hostWindow.removeBrowserView(view)
-      } catch (e) {
-        // Already removed
-      }
-    }
-
-    // Close webContents
-    try {
-      ;(view.webContents as any).destroy()
-    } catch (e) {
-      // Already destroyed
-    }
-
-    // Clean up maps
     this.views.delete(viewId)
     this.states.delete(viewId)
     this.lastBounds.delete(viewId)
-    this.offscreenViewIds.delete(viewId)
-    this.revealedViewIds.delete(viewId)
+    this.pendingCreates.delete(viewId)
+    browserHostManager.destroy(viewId)
 
     if (this.activeViewId === viewId) {
       this.activeViewId = null
     }
+    if (this.displayedViewId === viewId) this.displayedViewId = null
 
-    this.emitViewDestroyed(viewId)
+    this.emitViewDestroyed(viewId, view?.webContents.id)
   }
 
   /**
-   * Destroy all BrowserViews and the offscreen host window
+   * Destroy all browser pages and the hidden host
    */
   destroyAll() {
     // Clear all debounce timers
@@ -802,24 +553,41 @@ class BrowserViewManager {
       this.destroy(viewId)
     }
 
-    // Destroy the offscreen host window if it exists
-    if (this.offscreenWindow && !this.offscreenWindow.isDestroyed()) {
-      this.offscreenWindow.destroy()
-    }
-    this.offscreenWindow = null
-    this.offscreenViewIds.clear()
-    this.revealedViewIds.clear()
+    browserHostManager.destroyAll()
+    for (const viewId of [...this.states.keys()]) this.destroy(viewId)
   }
 
   /**
    * Bind WebContents events
    */
-  private bindEvents(viewId: string, view: BrowserView) {
+  private bindEvents(viewId: string, view: { webContents: WebContents }) {
     const wc = view.webContents
+    const isCurrent = () => this.views.get(viewId) === view && !wc.isDestroyed()
+    let attachmentHistory = true
+    const removeAttachmentHistory = () => {
+      if (!attachmentHistory) return
+      const entries = wc.navigationHistory.getAllEntries()
+      const index = entries.findIndex(entry => entry.url.startsWith('about:blank#halo-browser-'))
+      if (index === -1) attachmentHistory = false
+      else if (index !== wc.navigationHistory.getActiveIndex() && wc.navigationHistory.removeEntryAtIndex(index)) attachmentHistory = false
+    }
+
+    wc.on('render-process-gone', (_event, details) => {
+      if (!isCurrent()) return
+      this.updateState(viewId, { isLoading: false, error: `Browser page stopped: ${details.reason}` })
+      this.emitStateChangeImmediate(viewId)
+    })
+
+    wc.on('did-navigate', () => {
+      if (!isCurrent()) return
+      removeAttachmentHistory()
+      const state = this.states.get(viewId)
+      if (state && wc.getZoomFactor() !== state.zoomLevel) wc.setZoomFactor(state.zoomLevel)
+    })
 
     // Navigation start - immediate emit for responsive UI feedback
     wc.on('did-start-navigation', (_event, url, isInPlace, isMainFrame) => {
-      if (!isMainFrame) return
+      if (!isMainFrame || !isCurrent()) return
 
       this.updateState(viewId, {
         url,
@@ -834,10 +602,12 @@ class BrowserViewManager {
 
     // Navigation finished - immediate emit for responsive UI feedback
     wc.on('did-finish-load', () => {
+      if (!isCurrent()) return
+      removeAttachmentHistory()
       this.updateState(viewId, {
         isLoading: false,
-        canGoBack: wc.canGoBack(),
-        canGoForward: wc.canGoForward(),
+        canGoBack: wc.navigationHistory.canGoBack(),
+        canGoForward: wc.navigationHistory.canGoForward(),
         error: undefined,
         blockedByPolicy: false,
         blockedUrl: undefined,
@@ -852,14 +622,14 @@ class BrowserViewManager {
       const state = this.states.get(viewId)
       if (state?.deviceMode === 'h5') {
         this.applyDeviceMode(viewId, 'h5').catch(err => {
-          console.warn(`[BrowserView] did-finish-load applyDeviceMode failed:`, err)
+          console.warn(`[Browser] did-finish-load applyDeviceMode failed:`, err)
         })
       }
     })
 
     // Navigation failed - immediate emit
     wc.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
-      if (!isMainFrame) return
+      if (!isMainFrame || !isCurrent()) return
 
       // Ignore aborted loads (user navigation)
       if (errorCode === -3) return
@@ -873,12 +643,14 @@ class BrowserViewManager {
 
     // Title updated - debounced (can happen frequently during SPA navigation)
     wc.on('page-title-updated', (_event, title) => {
+      if (!isCurrent()) return
       this.updateState(viewId, { title })
       this.emitStateChange(viewId) // debounced
     })
 
     // Favicon updated - debounced (not urgent)
     wc.on('page-favicon-updated', (_event, favicons) => {
+      if (!isCurrent()) return
       if (favicons.length > 0) {
         this.updateState(viewId, { favicon: favicons[0] })
         this.emitStateChange(viewId) // debounced
@@ -887,22 +659,28 @@ class BrowserViewManager {
 
     // URL changed (for SPA navigation) - debounced (can happen very frequently)
     wc.on('did-navigate-in-page', (_event, url, isMainFrame) => {
-      if (!isMainFrame) return
+      if (!isMainFrame || !isCurrent()) return
 
       this.updateState(viewId, {
         url,
-        canGoBack: wc.canGoBack(),
-        canGoForward: wc.canGoForward(),
+        canGoBack: wc.navigationHistory.canGoBack(),
+        canGoForward: wc.navigationHistory.canGoForward(),
       })
       this.emitStateChange(viewId) // debounced
     })
 
     // Handle new window requests - open in same view (with policy check)
     wc.setWindowOpenHandler(({ url }) => {
+      if (!isCurrent()) return { action: 'deny' }
       if (isUrlAllowedByPolicy(url)) {
-        wc.loadURL(url)
+        void wc.loadURL(url).catch(error => {
+          if (!isCurrent()) return
+          if (wasNavigationCancelled(error)) return
+          console.warn('[Browser] Popup navigation failed', { viewId }, navigationFailureDetails(error))
+          this.updateState(viewId, { error: (error as Error).message, isLoading: false })
+          this.emitStateChangeImmediate(viewId)
+        })
       } else {
-        console.log(`[BrowserView] window.open blocked by browser policy: ${url}`)
         this.updateState(viewId, { error: buildBlockedMessage(url), blockedByPolicy: true, blockedUrl: url })
         this.emitStateChangeImmediate(viewId)
       }
@@ -911,6 +689,7 @@ class BrowserViewManager {
 
     // Handle external protocol links & browser policy
     wc.on('will-navigate', (event, url) => {
+      if (!isCurrent()) { event.preventDefault(); return }
       // Block non-standard protocols (javascript:, data:, etc.)
       if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('file://')) {
         event.preventDefault()
@@ -919,7 +698,6 @@ class BrowserViewManager {
       // Browser policy check for page-initiated navigations
       if (!isUrlAllowedByPolicy(url)) {
         event.preventDefault()
-        console.log(`[BrowserView] will-navigate blocked by browser policy: ${url}`)
         this.updateState(viewId, { error: buildBlockedMessage(url), blockedByPolicy: true, blockedUrl: url })
         this.emitStateChangeImmediate(viewId)
       }
@@ -927,9 +705,9 @@ class BrowserViewManager {
 
     // Block server-side redirects (301/302) to disallowed domains
     wc.on('will-redirect', (event, url) => {
+      if (!isCurrent()) { event.preventDefault(); return }
       if (!isUrlAllowedByPolicy(url)) {
         event.preventDefault()
-        console.log(`[BrowserView] will-redirect blocked by browser policy: ${url}`)
         this.updateState(viewId, { error: buildBlockedMessage(url), blockedByPolicy: true, blockedUrl: url, isLoading: false })
         this.emitStateChangeImmediate(viewId)
       }
@@ -940,7 +718,7 @@ class BrowserViewManager {
    * Update state.
    *
    * When blockedByPolicy transitions, applyBounds() is called to move the
-   * BrowserView offscreen (blocked) or restore it to visible bounds (unblocked).
+   * guest offscreen (blocked) or restore it to visible bounds (unblocked).
    * This is the ONLY place that sets blockedByPolicy — all policy-block callers
    * set error + blockedByPolicy together via this method.
    */
@@ -954,57 +732,19 @@ class BrowserViewManager {
     // On policy-block transition, re-apply bounds to move view offscreen or restore it
     if (wasPolicyBlocked !== !!state.blockedByPolicy) {
       const bounds = this.lastBounds.get(viewId)
-      if (bounds && !this.isHostedOffscreen(viewId)) {
+      if (bounds) {
         this.applyBounds(viewId, bounds)
       }
     }
   }
 
-  /**
-   * Single exit point for setBounds — arbitrates between tab-switch visibility
-   * and policy-block visibility. Always records lastBounds for later restore.
-   */
-  private applyBounds(viewId: string, bounds: BrowserViewBounds) {
-    const view = this.views.get(viewId)
-    const state = this.states.get(viewId)
-    if (!view) return
-
-    // Store the renderer-space bounds, not the converted ones — a later
-    // restore re-enters here and must not scale an already-scaled rect.
+  private applyBounds(viewId: string, bounds: BrowserViewBounds, visible = this.displayedViewId === viewId): boolean {
     this.lastBounds.set(viewId, bounds)
-
-    if (state?.blockedByPolicy) {
-      view.setBounds({ x: -10000, y: -10000, width: 0, height: 0 })
-    } else {
-      view.setBounds(this.toWindowBounds(viewId, bounds))
-    }
-  }
-
-  /**
-   * Convert renderer CSS pixels to main-window DIPs.
-   *
-   * The renderer measures the canvas container with getBoundingClientRect(),
-   * which reports CSS pixels inside the page's zoomed coordinate space, while
-   * setBounds() positions the view in unzoomed window DIPs. The two only
-   * coincide while appearance.displayScale is 1 — at any other scale the view
-   * lands short of its container (up and to the left) and is sized off by the
-   * same factor.
-   */
-  private toWindowBounds(viewId: string, bounds: BrowserViewBounds): BrowserViewBounds {
-    // Offscreen views live on the hidden host window, which is never zoomed,
-    // and their bounds are set in DIPs already.
-    if (this.isHostedOffscreen(viewId)) return bounds
-    if (!this.mainWindow || this.mainWindow.isDestroyed()) return bounds
-
-    const zoom = this.mainWindow.webContents.getZoomFactor()
-    if (zoom === 1) return bounds
-
-    return {
-      x: Math.round(bounds.x * zoom),
-      y: Math.round(bounds.y * zoom),
-      width: Math.round(bounds.width * zoom),
-      height: Math.round(bounds.height * zoom),
-    }
+    const state = this.states.get(viewId)
+    const contents = this.views.get(viewId)?.webContents
+    // Standard webviews inherit host zoom; page zoom must remain independent of UI scale.
+    if (contents && !contents.isDestroyed() && state && contents.getZoomFactor() !== state.zoomLevel) contents.setZoomFactor(state.zoomLevel)
+    return browserHostManager.present(viewId, this.resolveBounds(viewId, bounds), visible && !state?.blockedByPolicy, state?.deviceMode === 'h5' ? H5_VIEWPORT_WIDTH : undefined)
   }
 
   /**
@@ -1023,7 +763,7 @@ class BrowserViewManager {
     const timer = setTimeout(() => {
       this.stateChangeDebounceTimers.delete(viewId)
       this.doEmitStateChange(viewId)
-    }, BrowserViewManager.STATE_CHANGE_DEBOUNCE_MS)
+    }, BrowserPageManager.STATE_CHANGE_DEBOUNCE_MS)
 
     this.stateChangeDebounceTimers.set(viewId, timer)
   }
@@ -1061,7 +801,7 @@ class BrowserViewManager {
   // ============================================
 
   /**
-   * Resolve the actual integer bounds to apply to a BrowserView.
+   * Resolve the actual integer bounds of a browser page.
    *
    * In H5 mode the view is constrained to H5_VIEWPORT_WIDTH pixels and
    * centered horizontally within the container bounds passed from the renderer.
@@ -1096,7 +836,7 @@ class BrowserViewManager {
   }
 
   /**
-   * Remove a stale view entry whose native object has been destroyed.
+   * Remove a stale view entry whose guest has been destroyed.
    * Called defensively when we detect a destroyed webContents.
    */
   private cleanupStaleView(viewId: string) {
@@ -1105,15 +845,17 @@ class BrowserViewManager {
       clearTimeout(timer)
       this.stateChangeDebounceTimers.delete(viewId)
     }
+    if (!this.states.has(viewId)) return
+    const contentsId = this.views.get(viewId)?.webContents.id
+    this.pendingCreates.delete(viewId)
     this.views.delete(viewId)
     this.states.delete(viewId)
     this.lastBounds.delete(viewId)
-    this.offscreenViewIds.delete(viewId)
-    this.revealedViewIds.delete(viewId)
     if (this.activeViewId === viewId) {
       this.activeViewId = null
     }
-    this.emitViewDestroyed(viewId)
+    if (this.displayedViewId === viewId) this.displayedViewId = null
+    this.emitViewDestroyed(viewId, contentsId, 'lost')
   }
 
   // ============================================
@@ -1194,8 +936,6 @@ class BrowserViewManager {
     const state = this.states.get(viewId)
     if (!view || !state) return false
 
-    console.log(`[BrowserView] setDeviceMode: viewId=${viewId}, mode=${mode}`)
-
     try {
       // 1. Switch UA on the webContents object (affects subsequent navigations
       //    at the Electron level, independent of CDP). Issue #124: honor the
@@ -1208,16 +948,17 @@ class BrowserViewManager {
 
       // 3. Persist mode in state and notify renderer
       state.deviceMode = mode
+      const bounds = this.lastBounds.get(viewId)
+      if (bounds) this.applyBounds(viewId, bounds)
       this.emitStateChangeImmediate(viewId)
 
       // 4. Reload so the server receives the new UA and the page re-renders
       //    with the correct viewport from the very first paint.
       view.webContents.reload()
 
-      console.log(`[BrowserView] setDeviceMode success: viewId=${viewId}, mode=${mode}`)
       return true
     } catch (error) {
-      console.error(`[BrowserView] setDeviceMode failed:`, error)
+      console.error(`[Browser] setDeviceMode failed:`, error)
       return false
     }
   }
@@ -1268,14 +1009,13 @@ class BrowserViewManager {
             ],
       })
 
-      console.log(`[BrowserView] applyDeviceMode CDP commands sent: viewId=${viewId}, mode=${mode}`)
     } catch (error) {
       // CDP errors are non-fatal at creation time (debugger may not be ready yet
       // for brand-new views — the navigation itself will still use the correct UA).
-      console.warn(`[BrowserView] applyDeviceMode CDP warning (non-fatal): viewId=${viewId}`, error)
+      console.warn(`[Browser] applyDeviceMode CDP warning (non-fatal): viewId=${viewId}`, error)
     }
   }
 }
 
 // Singleton instance
-export const browserViewManager = new BrowserViewManager()
+export const browserViewManager = new BrowserPageManager()

@@ -30,6 +30,12 @@
   /* Dark theme (default). Neutrals carry a cool (blue-adjacent, H~220) tint
      rather than pure gray — matched to the prototype's own token values. */
   --background: 220 20% 6%;
+  /* Browser gutters match Chromium's default page surface in either theme. */
+  --browser-background: 0 0% 100%;
+  /* Blocking portals cover resource sheets and the search overlay (100/101). */
+  --layer-workspace-trigger: 60;
+  --layer-workspace-sheet: 70;
+  --layer-global-modal: 120;
   --foreground: 223 17% 92%;
   --card: 220 18% 10%;
   --card-foreground: 223 17% 92%;
