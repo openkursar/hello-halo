@@ -37,3 +37,19 @@ export function specFieldList(fields: readonly string[], t: TFunction, language:
     return labels.join(', ')
   }
 }
+
+/** The success message of an update applied in place, naming what kept the user's version. */
+export function upgradedMessage(
+  version: string,
+  outcome: { kept?: readonly string[]; editsKnown?: boolean },
+  t: TFunction,
+  language: string,
+): string {
+  const kept = outcome.kept ?? []
+  if (kept.length === 0) return t('Upgraded to v{{version}}', { version })
+  const message = t('Upgraded to v{{version}}. These differ from the author’s new version and kept your current version: {{items}}', {
+    version,
+    items: specFieldList(kept, t, language),
+  })
+  return outcome.editsKnown === false ? `${message} ${t('Halo cannot tell which of them you changed.')}` : message
+}

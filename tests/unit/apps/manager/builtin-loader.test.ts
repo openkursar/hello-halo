@@ -143,6 +143,17 @@ describe('loadBuiltinApps with a built-in the user renamed', () => {
     expectUpgradedInPlace(manager)
   })
 
+  // The user renamed another built-in to this entry's name: same name, other slug.
+  it('does not take another built-in renamed to this entry’s name for it', async () => {
+    writeBundle('1.1.0', 'daily-report')
+    const manager = managerWith(installedBuiltin('1.0.0', 'daily-report', 'weekly-report'))
+
+    await loadBuiltinApps(manager as unknown as AppManagerService)
+
+    expect(manager.upgradeSpec).not.toHaveBeenCalled()
+    expect(manager.deleteApp).not.toHaveBeenCalled()
+  })
+
   it('still removes a built-in the bundle no longer ships', async () => {
     writeBundle('1.1.0', 'daily-report')
     const app = installedBuiltin('1.0.0', 'retired-report', 'retired-report')

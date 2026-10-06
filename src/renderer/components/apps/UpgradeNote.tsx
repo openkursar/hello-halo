@@ -103,7 +103,8 @@ export function UpgradeNote({ appId, entryId, note }: UpgradeNoteProps) {
       await useAppsStore.getState().refreshApp(appId)
     } catch (err) {
       console.warn('[UpgradeNote] Switching to the author’s version failed', { appId, fields, error: err })
-      setError(t('Could not switch to the author’s version: {{reason}}', { reason: err instanceof Error ? err.message : String(err) }))
+      // The reason is untranslated main-process text, so it goes to the log only.
+      setError(t('Could not switch to the author’s version. An item that depends on another one can only switch together with it.'))
     } finally {
       setBusy(false)
     }

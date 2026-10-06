@@ -28,6 +28,7 @@ vi.mock('react-dom', async original => ({
 
 import { UpgradeNote } from '../../../src/renderer/components/apps/UpgradeNote'
 import { StoreUpdateDialog } from '../../../src/renderer/components/store/StoreUpdateDialog'
+import { upgradedMessage } from '../../../src/renderer/components/apps/spec-field-label'
 
 function render<P extends object>(component: ComponentType<P>, props: P): string {
   return renderToStaticMarkup(createElement(component, props))
@@ -70,6 +71,26 @@ describe('UpgradeNote', () => {
 
     expect(html).not.toContain('Use the author’s version')
     expect(html).toContain('View the author’s version')
+  })
+})
+
+describe('upgradedMessage', () => {
+  const t = translate as unknown as Parameters<typeof upgradedMessage>[2]
+
+  it('says only the version when the update applied in full', () => {
+    expect(upgradedMessage('1.3.0', { kept: [], editsKnown: true }, t, 'en')).toBe('Upgraded to v1.3.0')
+  })
+
+  it('names what kept the user’s version', () => {
+    const message = upgradedMessage('1.3.0', { kept: ['system_prompt', 'subscriptions'], editsKnown: true }, t, 'en')
+
+    expect(message).toBe('Upgraded to v1.3.0. These differ from the author’s new version and kept your current version: System Prompt and Run times')
+  })
+
+  it('adds that Halo cannot tell which of them the user changed when there was no earlier author’s version', () => {
+    const message = upgradedMessage('1.3.0', { kept: ['system_prompt'], editsKnown: false }, t, 'en')
+
+    expect(message).toMatch(/kept your current version: System Prompt Halo cannot tell which of them you changed\.$/)
   })
 })
 
