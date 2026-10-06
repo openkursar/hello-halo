@@ -142,6 +142,11 @@ This prompts the user to log in before the automation runs and stores no secret
   documentation** — a user-installed MCP server not listed there is silently unavailable to this
   app's autonomous runs even if it's active in the space and the user can see it working when
   they chat with the digital human directly. It has no effect on built-in capabilities
-  (`ai-browser`, `ai-terminal`, etc. — those follow `permissions[]` only). See
+  (`ai-browser`, `ai-terminal`, etc. — those follow `permissions[]` only). From Halo 3.0 a listed
+  connection that is unusable stops the run instead: when one the owner has not switched off for
+  this digital human is not installed, turned off, waiting for sign-in or failing in the space,
+  its runs (scheduled, event-triggered, started by hand or continued) do not start and call no
+  model. The timeline shows a **Not started** entry naming each connection and why, with **Open
+  Tools & Resources**; it counts as a failed run toward the usual pause after five in a row. See
   `create-digital-human/spec-reference.md`'s `requires` section before assuming an MCP-dependent
   automation will "just work" on its schedule.
