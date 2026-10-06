@@ -50,6 +50,23 @@ several sibling topics — read across it, don't duplicate it:
 A digital human can have a schedule *and* be reachable over IM at the same time — those are
 two independent mechanisms, not alternatives.
 
+**Several subscriptions doing different jobs.** Give each one an `id` (`subscriptions[].id`,
+optional, unique within the app — validation rejects a repeat) and write each job into
+`system_prompt` under that name. From Halo 3.0 the Trigger section of a run's first message
+names the subscription that fired (`src/main/apps/runtime/service.ts`):
+
+```
+Scheduled run for "Daily Brief" — subscription "morning-report" (cron: 0 9 * * *). Time: …
+Triggered by event "file.created" for "Inbox Sorter" — subscription "inbox-files". Time: …
+```
+
+So the prompt can say: *when the trigger names subscription "morning-report", send the daily
+report; when it names subscription "evening-report", send the evening summary.* An unnamed
+subscription appears as `subscription #2` — its position in the list, counting from 1 — which
+changes when the list is reordered, so name them instead. There is no per-subscription prompt
+field. Before 3.0 the trigger carried only the schedule (`(cron: 0 9 * * *)`), so a prompt had
+to tell runs apart by time.
+
 ## 2. The #1 mistake: don't invent trigger-matching questions for IM/WeCom
 
 Do **not** ask the user things like "should the bot respond to every message, or only when
