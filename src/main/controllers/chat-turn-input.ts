@@ -122,7 +122,6 @@ export function toAppChatRequest(appId: string, body: unknown): AppChatRequestRe
       ...(images ? { images } : {}),
       ...(fields.thinkingEnabled !== undefined ? { thinkingEnabled: !!fields.thinkingEnabled } : {}),
       ...(isReasoningEffortLevel(fields.reasoningEffort) ? { reasoningEffort: fields.reasoningEffort } : {}),
-      useChatThinkingLevel: true,
       ...(canvasContext ? { canvasContext } : {}),
       ...(references.references ? { references: references.references } : {}),
       ...(target.teamContext ? { teamContext: target.teamContext } : {}),

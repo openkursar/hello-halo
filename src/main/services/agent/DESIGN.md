@@ -297,9 +297,10 @@ Two inputs decide how hard a model thinks, and they are orthogonal:
 The composer's thinking slider adds a picked level that wins over both, `'off'`
 included: a space conversation's own `reasoningEffort` (on the conversation,
 like its model pin), a digital human's `userOverrides.chatReasoningEffort` (one
-level for all its chat sessions, applied only to sends from the chat surfaces —
-IM, team and federation dispatch and automation runs keep the configured
-effort), else a level an HTTP caller put on the send. `pickReasoningEffort`
+level for the digital human on every entry — its chats in Halo, IM and over
+HTTP, team turns, and automation runs, which pass it to `resolveCredentialsForSdk`
+and `applyReasoningEffort` the same way chat does), else a level an HTTP caller
+put on the send. `pickReasoningEffort`
 takes the first ladder level in that order, so a bad stored value falls
 through; both stored fields are also validated where they are written. The
 renderer's last-used level only seeds a new conversation — passed to

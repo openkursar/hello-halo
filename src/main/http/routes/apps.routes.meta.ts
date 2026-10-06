@@ -263,7 +263,7 @@ export const MODULE: RouteModuleMeta = {
       summary: 'Merge-patch per-installation overrides (notification level, model)',
       body: '{"notificationLevel": "important"}',
       returns: '{success:true}',
-      notes: 'Other fields you can set the same way: modelSourceId, modelId, spaceMemoryAccess (true lets the digital human read its space\'s memory topics), chatReasoningEffort (off|minimal|low|medium|high|xhigh|max — how hard it thinks in chat; IM replies and scheduled runs keep the model\'s configured effort), memory ({enabled, autoConsolidate, cadence: "diligent"|"balanced"|"economical"} — sent as a whole object). JSON Merge Patch semantics: send null to clear a field (e.g. {"modelSourceId":null} to fall back to the global model). The run schedule is NOT set here — use POST /:appId/frequency.',
+      notes: 'Other fields you can set the same way: modelSourceId, modelId, spaceMemoryAccess (true lets the digital human read its space\'s memory topics), chatReasoningEffort (off|minimal|low|medium|high|xhigh|max — how hard it thinks everywhere: its chats, IM replies and scheduled or manual runs; unset, the model\'s configured effort applies), memory ({enabled, autoConsolidate, cadence: "diligent"|"balanced"|"economical"} — sent as a whole object). JSON Merge Patch semantics: send null to clear a field (e.g. {"modelSourceId":null} to fall back to the global model). The run schedule is NOT set here — use POST /:appId/frequency.',
       impact: 'reversible',
     },
     'POST /api/apps/:appId/frequency': {

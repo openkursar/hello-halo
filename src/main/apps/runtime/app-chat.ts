@@ -203,14 +203,11 @@ export interface AppChatRequest {
   attachedFiles?: string[]
   /** Enable extended thinking mode */
   thinkingEnabled?: boolean
-  /** Depth picked for this send; overrides thinkingEnabled and the model config. */
-  reasoningEffort?: ReasoningEffortLevel
   /**
-   * Set by the chat surfaces (IPC and HTTP send) so the digital human's own
-   * chat level applies. IM, team and federation dispatch leave it unset, so
-   * their replies keep the model's configured effort.
+   * Depth picked for this send; overrides thinkingEnabled and the model config,
+   * but not the digital human's own level, which applies to every turn.
    */
-  useChatThinkingLevel?: boolean
+  reasoningEffort?: ReasoningEffortLevel
   /** What the user has open in the canvas, so the agent can refer to it naturally. */
   canvasContext?: CanvasContext
   /**
@@ -572,10 +569,9 @@ async function runAppChatTurn(
   const credentials = app.userOverrides?.modelSourceId
     ? await getApiCredentialsForSource(app.userOverrides.modelSourceId, app.userOverrides.modelId)
     : await getApiCredentials()
-  // In chat the digital human's own level wins over one the send carries.
-  const pickedEffort = pickReasoningEffort(
-    request.useChatThinkingLevel ? app.userOverrides?.chatReasoningEffort : undefined, reasoningEffort
-  )
+  // The digital human's own level, on every entry (its Halo chat, IM, HTTP,
+  // team turns, reminders), wins over one the send carries.
+  const pickedEffort = pickReasoningEffort(app.userOverrides?.chatReasoningEffort, reasoningEffort)
   const resolvedCreds = await resolveCredentialsForSdk(credentials, pickedEffort)
   const electronPath = getHeadlessElectronPath()
   const workDir = environment.workDir
