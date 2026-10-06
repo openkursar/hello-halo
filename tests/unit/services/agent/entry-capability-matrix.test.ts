@@ -343,6 +343,7 @@ vi.mock('../../../../src/main/apps/runtime/execution-environment', () => ({
   resolveExecutionEnvironment: () => environment,
   validateExecutionEnvironment: vi.fn(),
   validateEnvironmentConnections: vi.fn(),
+  missingConnections: vi.fn(() => []),
   legacySessionEnvironmentKey: (appId: string, runId: string) => `legacy:${appId}:${runId}`,
   appChatRunId: (conversationId: string, appId: string) => `run-${conversationId}-${appId}`,
 }))
