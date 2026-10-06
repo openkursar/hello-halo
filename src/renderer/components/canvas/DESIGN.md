@@ -109,28 +109,50 @@ as diffs. `openChanges(source, { reveal })` keeps one tab per source:
   lifecycle does not reach into the viewer): sub-page, repository, scope,
   filter, folded and loaded cards, files a reference forced into view, scroll
   anchors, the detail page and the commit message draft. Display preferences
-  (side by side, collapse unchanged, file list, tree, hide generated) are per
+  (side by side, collapse unchanged, file list and its width, tree, hide generated) are per
   user, in `stores/changes-view-prefs.store.ts`; going back to a place never
   changes them.
-- **Bounded rendering and reads.** Cards are virtualized and scrolling fast
-  shows placeholders instead; at most 12 cards hold CodeMirror editors
-  (`diff/editor-slots.ts`, off-screen ones released first). File contents are
-  read three at a time, newest request first, and a read for a card that has
-  scrolled away is dropped before it starts (`state/request-queue.ts`); texts
-  share a 32M-character cache per load. Generated and very large diffs wait for
-  "Load diff"; binary and over-limit files never load text.
-- **Landing where a jump aims.** The list lays out unseen cards by each card's
-  own estimate (`heightEstimates`) and measures resizes at once; a new editor's
-  body keeps its previous height until CodeMirror has measured its lines; a
-  card shown from the file list is kept at the top while the heights around it
-  settle, and a reveal is applied only once it has. Editors scroll places into
-  view on the stack's scroller (`EditorView.scrollHandler`), since CodeMirror's
-  own scrolling misreads the list's inner layers. Pending comments keep their
-  lines unfolded (`onLines` → `expandCollapsedAt`).
+- **Bounded rendering and reads.** Small diffs keep all file cards mounted in a
+  native scroller. Larger diffs show one selected file, with explicit previous /
+  next file controls and file-list selection (`diff/stack-policy.ts`: file,
+  changed-line, text and fragment budgets). Scrolling never evicts editors or
+  substitutes placeholders. Already-read text checks the aggregate budget before
+  editors mount, since changed-line counts cannot price unchanged context
+  (`ReadBudget`). Its sizes belong to the repository and compare scope they were
+  read under: another scope forgets them, while a refresh of the same scope keeps
+  them, so a large diff does not show every file again only to read them all. A
+  "Load diff" that tips the budget shows the file it loaded. A
+  reply file with many edit fragments pages them explicitly; chunk navigation
+  crosses those pages, and the tab remembers each file's last fragment page. CodeMirror still
+  renders only its visible lines. File contents are read three at a time,
+  newest request first; folding or selecting another file cancels reads before
+  they start (`state/request-queue.ts`). Texts share a 32M-character cache per
+  load. Generated and very large diffs wait for "Load diff"; binary and
+  over-limit files never load text.
+- **One order.** The diffs are in the file list's order (`inPanelOrder`): its
+  groups, then Tree (folders first) or List (whole paths), names compared
+  naturally. Next file, F7 and "k of N" walk the list as it reads.
+- **Landing where a jump aims.** File-list selections and saved scroll anchors
+  use the mounted card's actual position; content resizes preserve the requested
+  position only until the user takes over. Reveals wait for the file's editors
+  and their CodeMirror measurement, not an estimated list position. Editors
+  scroll places into view on the stack's native scroller
+  (`EditorView.scrollHandler`). Pending comments keep their lines unfolded
+  (`onLines` → `expandCollapsedAt`).
+- **File hierarchy.** Paths are compared once per change list or mode switch
+  (`createPathOrder`); the groups a filter narrows on every keystroke are only
+  arranged by that order, and folding only flattens again. Only uninterrupted
+  single-child directory chains are compacted; branching parents contain their
+  subfolders. Deep rows stop indenting before a file's name loses its room.
+  Rows remain virtualized independently of the diff cards.
 - **Width-driven layout.** Columns follow the viewer's own width (the canvas
   can be narrow on a wide window): side by side needs a 640px diff area; the
-  file list docks from 740px and is a modal drawer below that. The view
-  re-renders only when the width crosses one of these steps.
+  file list docks from 740px and is a modal drawer below that. The docked list
+  resizes within 220–480px while leaving at least 480px for content. Pointer
+  movement re-renders only the panel (mounted editors re-wrap to the new width);
+  the saved preference and the side-by-side / inline choice change on release.
+  Keyboard resizing and double-click reset share the same bounds.
+  Canvas resize re-renders the view only across layout steps.
 - **Pointing and going back.** Both sides of every diff are referenceable
   (`referenceExtension`; in the inline layout the deleted lines are the before
   side). A reply's edits carry no repository, so their references hold the

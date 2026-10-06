@@ -10,7 +10,9 @@
  *   view), `useTextReferences` (rendered text), `attachTerminalReferences`
  *   (xterm).
  * - Going back: `revealReference`, `revealMessage`, and the helpers a viewer
- *   uses when it consumes a tab's reveal request itself.
+ *   uses when it consumes a tab's reveal request itself. An editor softens the
+ *   lines a reveal flashes by setting the CSS property `--halo-reveal-alpha`
+ *   (default 0.32) on its root.
  * - Chips: the composer's and the transcript's summary of a message's
  *   references, with the list each opens; the task card.
  * - The page layer: `ReferenceLayer`, `ConversationReferenceScope`, file links.

@@ -83,6 +83,11 @@
   --diff-add: 142 71% 45%;
   --diff-del: 0 72% 63%;
   --diff-mod: 38 92% 50%;
+  /* Diff-only syntax, contrasted against layered line and word tints. */
+  --diff-syntax-keyword: 277 45% 75%;
+  --diff-syntax-function: 213 65% 74%;
+  --diff-syntax-string: 146 40% 70%;
+  --diff-syntax-number: 32 50% 72%;
 
   /* App type accent colors (skill = cyan, mcp = amber). Brightened for the
      dark default; .light carries the source values. */
@@ -141,6 +146,10 @@
   --diff-add: 142 72% 29%;
   --diff-del: 0 72% 45%;
   --diff-mod: 32 100% 32%;
+  --diff-syntax-keyword: 277 55% 32%;
+  --diff-syntax-function: 213 70% 30%;
+  --diff-syntax-string: 146 20% 28%;
+  --diff-syntax-number: 32 50% 28%;
 
   /* App type accent colors — light values (skill #0d9488, mcp #b26a00) */
   --app-skill: 175 84% 32%;
@@ -1179,19 +1188,6 @@ html.platform-desktop body::after {
   user-select: none;
   color: hsl(var(--muted-foreground) / 0.4);
   border-right: 1px solid hsl(var(--border) / 0.3);
-}
-
-/* A diff not drawn yet (fast scroll, loading, or past the editor cap): faint
-   code lines instead of a blank box. A background only, so it adds no
-   elements, no animation and no reads. */
-.diff-skeleton {
-  --diff-skeleton-line: linear-gradient(hsl(var(--muted)) 8px, transparent 0);
-  background-image:
-    var(--diff-skeleton-line), var(--diff-skeleton-line), var(--diff-skeleton-line),
-    var(--diff-skeleton-line), var(--diff-skeleton-line), var(--diff-skeleton-line);
-  background-position: 16px 6px, 32px 26px, 32px 46px, 48px 66px, 32px 106px, 16px 126px;
-  background-size: 180px 140px, 320px 140px, 260px 140px, 120px 140px, 360px 140px, 220px 140px;
-  background-repeat: repeat-y;
 }
 
 /* Image attachment styles */

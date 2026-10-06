@@ -167,8 +167,9 @@ const referenceTheme = EditorView.baseTheme({
     padding: '4px 12px 6px 8px',
   },
   // The merge-view selectors outrank a diff theme's changed-line tint, which would hide the flash.
+  // An editor with its own line tints may set --halo-reveal-alpha to soften it (see index.ts).
   '.cm-line.cm-haloRevealLine, &.cm-merge-a .cm-line.cm-haloRevealLine, &.cm-merge-b .cm-line.cm-haloRevealLine': {
-    backgroundColor: 'hsl(var(--halo-warning) / 0.32) !important',
+    backgroundColor: 'hsl(var(--halo-warning) / var(--halo-reveal-alpha, 0.32)) !important',
   },
 })
 

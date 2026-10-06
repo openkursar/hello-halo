@@ -41,7 +41,8 @@ import type { CardGate } from './diff/FileDiffCard'
 import { TopBar } from './top-bar/TopBar'
 import { FilePanel } from './panel/FilePanel'
 import { FileDrawer } from './panel/FileDrawer'
-import type { PanelGroup, PanelGroupId } from './panel/panel-rows'
+import { ResizableFilePanel } from './panel/ResizableFilePanel'
+import { createPathOrder, inPanelOrder, type PanelGroup, type PanelGroupId } from './panel/panel-rows'
 import { CommitBox } from './commit/CommitBox'
 import { DetailBar } from './overview/DetailBar'
 import { OverviewPage } from './overview/OverviewPage'
@@ -56,7 +57,7 @@ import { useChangesKeys } from './shared/use-changes-keys'
 import { matchesFilter } from './model/file-filter'
 import { isLargeDiff, totalsOf, viewFileFromGit, type ViewFile } from './model/view-files'
 import { baseName, deepestRootOf, joinRepoPath, relativeTo } from './model/paths'
-import { scopeLabel } from './model/scope'
+import { scopeKey, scopeLabel } from './model/scope'
 import { trashWording } from './model/trash-wording'
 
 type GitSource = Extract<ChangesSource, { kind: 'git' }>
@@ -117,9 +118,9 @@ export function GitChangesView({ tab, source }: { tab: TabState; source: GitSour
   const rootRef = useRef<HTMLDivElement>(null)
   const stackRef = useRef<DiffStackHandle>(null)
   const panelToggleRef = useRef<HTMLButtonElement>(null)
-  const width = useContainerWidth(rootRef, (w) => layoutStep(w, prefs.panelOpen))
-  const layout = changesLayout(width)
-  const pageWidth = width === 0 ? 0 : mainWidth(width, prefs.panelOpen)
+  const width = useContainerWidth(rootRef, (w) => layoutStep(w, prefs.panelOpen, prefs.panelWidth))
+  const layout = changesLayout(width, prefs.panelWidth)
+  const pageWidth = width === 0 ? 0 : mainWidth(width, prefs.panelOpen, prefs.panelWidth)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [currentKey, setCurrentKey] = useState<string | null>(memory.stackAnchor?.key ?? null)
   const [commitError, setCommitError] = useState<GitErrorText | null>(null)
@@ -190,8 +191,30 @@ export function GitChangesView({ tab, source }: { tab: TabState; source: GitSour
     [prefs.hideGenerated, files, forced]
   )
   const totals = useMemo(() => (list ? totalsOf(files) : null), [list, files])
+  // Of the list on screen, which during a scope switch is still the previous scope's.
+  const scopeIsWorkingTree = (list?.scope ?? memory.scope).kind === 'uncommitted'
+
+  // Panel groups: the working tree's own groups for uncommitted changes, the compared files otherwise.
+  const groups = useMemo<PanelGroup[]>(() => {
+    if (!scopeIsWorkingTree || !status || !repoRoot) return [{ id: 'changes', files: shown }]
+    const toView = (entries: typeof status.staged) => entries.map((f) => viewFileFromGit(f, repoRoot)).filter(passes)
+    return [
+      { id: 'conflicted', files: toView(status.conflicted) },
+      { id: 'staged', files: toView(status.staged) },
+      { id: 'unstaged', files: toView(status.unstaged) },
+    ]
+  }, [scopeIsWorkingTree, status, repoRoot, shown, passes])
+  const order = useMemo(() => {
+    const paths = list?.files.map((f) => f.path) ?? []
+    for (const entries of status ? [status.conflicted, status.staged, status.unstaged] : []) {
+      for (const entry of entries) paths.push(entry.path)
+    }
+    return createPathOrder(paths, prefs.tree)
+  }, [list, status, prefs.tree])
+  // The diffs follow the file list, so Next file, F7 and "k of N" walk it in the order it shows.
+  const ordered = useMemo(() => inPanelOrder(shown, groups, order), [shown, groups, order])
   const detail = memory.page === 'overview' ? memory.detail : null
-  const stackFiles = useMemo(() => (detail ? detailFiles(detail, shown) : shown), [detail, shown])
+  const stackFiles = useMemo(() => (detail ? detailFiles(detail, ordered) : ordered), [detail, ordered])
 
   const setFilter = useCallback((filter: string) => update({ filter, forced: [] }), [update])
   const setHideGenerated = useCallback((hide: boolean) => {
@@ -259,7 +282,6 @@ export function GitChangesView({ tab, source }: { tab: TabState; source: GitSour
   const stagedPaths = useMemo(() => new Set(status?.staged.map((f) => f.path)), [status])
   const unstagedPaths = useMemo(() => new Set(status?.unstaged.map((f) => f.path)), [status])
   const conflictedPaths = useMemo(() => new Set(status?.conflicted.map((f) => f.path)), [status])
-  const scopeIsWorkingTree = memory.scope.kind === 'uncommitted'
 
   const reportFailure = useCallback((message: string) => {
     notify({ title: message, variant: 'error', duration: 6000 })
@@ -340,17 +362,6 @@ export function GitChangesView({ tab, source }: { tab: TabState; source: GitSour
       duration: 4000,
     })
   }, [controller, notify, t, upstream])
-
-  // Panel groups: the working tree's own groups for uncommitted changes, the compared files otherwise.
-  const groups = useMemo<PanelGroup[]>(() => {
-    if (!scopeIsWorkingTree || !status || !repoRoot) return [{ id: 'changes', files: shown }]
-    const toView = (entries: typeof status.staged) => entries.map((f) => viewFileFromGit(f, repoRoot)).filter(passes)
-    return [
-      { id: 'conflicted', files: toView(status.conflicted) },
-      { id: 'staged', files: toView(status.staged) },
-      { id: 'unstaged', files: toView(status.unstaged) },
-    ]
-  }, [scopeIsWorkingTree, status, repoRoot, shown, passes])
 
   const rowActions = useCallback((file: ViewFile, group: PanelGroupId): ReactNode => {
     if (busyPaths.has(file.path)) return BUSY
@@ -541,7 +552,11 @@ export function GitChangesView({ tab, source }: { tab: TabState; source: GitSour
       loaded: memory.loaded.includes(file.key) ? memory.loaded : [...memory.loaded, file.key],
       forced: passes(file) ? memory.forced : [...memory.forced, file.key],
     })
-    queueStackAction((stack) => stack.withEditors(file.key, (editors) => showReference(editors[0], reveal)), true)
+    queueStackAction((stack) => stack.withEditors(
+      file.key,
+      (editors) => showReference(editors[0], reveal),
+      () => { void revealFileAt(path, fileTarget(reveal)) }
+    ), true)
   }, [reveal, phase, repoRoot, repositories, files, controller, consumeReveal, passes, update, memory, queueStackAction])
 
   useEffect(() => {
@@ -626,6 +641,7 @@ export function GitChangesView({ tab, source }: { tab: TabState; source: GitSour
         key={detail ? `detail:${detail.kind}:${detail.items[detail.index]}` : 'all'}
         ref={stackRef}
         files={stackFiles}
+        scope={list ? `${repoRoot}\n${scopeKey(list.scope)}` : undefined}
         layout={diffLayout}
         collapseUnchanged={prefs.collapseUnchanged}
         folded={folded}
@@ -660,7 +676,7 @@ export function GitChangesView({ tab, source }: { tab: TabState; source: GitSour
       onShowGenerated={showGenerated}
       filter={memory.filter}
       onFilterChange={setFilter}
-      tree={prefs.tree}
+      order={order}
       onTreeChange={prefs.setTree}
       hideGenerated={prefs.hideGenerated}
       onHideGeneratedChange={setHideGenerated}
@@ -726,9 +742,9 @@ export function GitChangesView({ tab, source }: { tab: TabState; source: GitSour
           {page}
         </section>
         {panel && layout.dockedPanel && prefs.panelOpen && (
-          <aside className="flex min-h-0 shrink-0 flex-col border-l border-border" style={{ width: layout.panelWidth }} aria-label={t('File list')}>
+          <ResizableFilePanel containerRef={rootRef} preferredWidth={prefs.panelWidth} onWidthChange={prefs.setPanelWidth}>
             {panel}
-          </aside>
+          </ResizableFilePanel>
         )}
         {panel && !layout.dockedPanel && drawerOpen && (
           <FileDrawer fullWidth={layout.stacked} onClose={() => setDrawerOpen(false)} opener={panelToggleRef}>

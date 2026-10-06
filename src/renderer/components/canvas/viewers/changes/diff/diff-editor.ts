@@ -13,9 +13,8 @@ import { Decoration, EditorView, drawSelection, highlightSpecialChars, lineNumbe
 import { syntaxHighlighting } from '@codemirror/language'
 import { MergeView, getChunks, getOriginalDoc, mergeViewSiblings, uncollapseUnchanged, unifiedMergeView, type Chunk } from '@codemirror/merge'
 import { getLanguageSupport } from '../../../../../lib/codemirror-setup'
-import { haloHighlightStyle } from '../../../../../lib/codemirror-theme'
 import { baseName, extensionOf } from '../model/paths'
-import { diffEditorTheme } from './diff-theme'
+import { diffEditorTheme, diffHighlightStyle } from './diff-theme'
 
 export type DiffLayout = 'split' | 'unified'
 export type DiffSide = 'before' | 'after'
@@ -116,7 +115,7 @@ const markField = StateField.define<DecorationSet>({
 function markLines(view: EditorView, from: number, to: number, mark: Mark): void {
   view.dispatch({ effects: setMark.of({ from, to: Math.max(from, Math.min(to, view.state.doc.length)), mark }) })
   setTimeout(() => {
-    // The editor may have been destroyed (scrolled away, unmounted) meanwhile.
+    // The editor may have been unmounted meanwhile.
     if (view.dom.isConnected) view.dispatch({ effects: setMark.of(null) })
   }, MARK_MS[mark])
 }
@@ -167,7 +166,7 @@ function commonExtensions(spec: DiffEditorSpec): Extension[] {
     highlightSpecialChars(),
     drawSelection(),
     EditorView.lineWrapping,
-    syntaxHighlighting(haloHighlightStyle),
+    syntaxHighlighting(diffHighlightStyle),
     language ?? [],
     markField,
     diffEditorTheme,

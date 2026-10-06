@@ -22,6 +22,8 @@ import { diffFromMessage, type DiffPart, type LoadedDiff } from '../diff/diff-co
 import { unfoldReferencedLines, type DiffSide } from '../diff/diff-editor'
 import { FilePanel } from '../panel/FilePanel'
 import { FileDrawer } from '../panel/FileDrawer'
+import { ResizableFilePanel } from '../panel/ResizableFilePanel'
+import { createPathOrder, inPanelOrder, type PanelGroup } from '../panel/panel-rows'
 import { LoadErrorState, LoadingState } from '../shared/EmptyStates'
 import { formatTime } from '../shared/format'
 import { IconButton, DiffStat } from '../shared/parts'
@@ -47,12 +49,13 @@ export function MessageChangesView({ tab, source }: { tab: TabState; source: Mes
   const tabIdRef = useRef(tab.id)
   const { openFile, consumeReveal } = useCanvasActions()
   const [memory, update] = useViewMemory(tab)
+  const editPages = memory.editPages ??= Object.create(null)
   const prefs = useChangesViewPrefs()
   const rootRef = useRef<HTMLDivElement>(null)
   const stackRef = useRef<DiffStackHandle>(null)
   const panelToggleRef = useRef<HTMLButtonElement>(null)
-  const width = useContainerWidth(rootRef, (w) => layoutStep(w, prefs.panelOpen))
-  const layout = changesLayout(width)
+  const width = useContainerWidth(rootRef, (w) => layoutStep(w, prefs.panelOpen, prefs.panelWidth))
+  const layout = changesLayout(width, prefs.panelWidth)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [currentKey, setCurrentKey] = useState<string | null>(memory.stackAnchor?.key ?? null)
   const [state, setState] = useState<LoadState>({ status: 'loading' })
@@ -82,6 +85,9 @@ export function MessageChangesView({ tab, source }: { tab: TabState; source: Mes
 
   const files = useMemo(() => (state.status === 'ready' ? state.files : []), [state])
   const shown = useMemo(() => files.filter((f) => matchesFilter(f.path, memory.filter)), [files, memory.filter])
+  const groups = useMemo<PanelGroup[]>(() => [{ id: 'changes', files: shown }], [shown])
+  const order = useMemo(() => createPathOrder(files.map((f) => f.path), prefs.tree), [files, prefs.tree])
+  const ordered = useMemo(() => inPanelOrder(shown, groups, order), [shown, groups, order])
   const totals = useMemo(() => totalsOf(files), [files])
   const folded = useMemo(() => new Set(memory.folded), [memory.folded])
   const allFolded = useMemo(() => shown.length > 0 && shown.every((f) => folded.has(f.key)), [shown, folded])
@@ -110,8 +116,11 @@ export function MessageChangesView({ tab, source }: { tab: TabState; source: Mes
   const onAnchorChange = useCallback((anchor: StackAnchor) => {
     memory.stackAnchor = anchor
   }, [memory])
+  const onEditPageChange = useCallback((key: string, page: number) => {
+    (memory.editPages ??= Object.create(null))[key] = page
+  }, [memory])
 
-  const sideBySideFits = width === 0 || mainWidth(width, prefs.panelOpen) >= MIN_SIDE_BY_SIDE_WIDTH
+  const sideBySideFits = width === 0 || mainWidth(width, prefs.panelOpen, prefs.panelWidth) >= MIN_SIDE_BY_SIDE_WIDTH
   const diffLayout = prefs.sideBySide && sideBySideFits ? 'split' : 'unified'
 
   const openInEditor = useCallback((file: ViewFile) => {
@@ -200,12 +209,12 @@ export function MessageChangesView({ tab, source }: { tab: TabState; source: Mes
 
   const panel = state.status === 'ready' && (
     <FilePanel
-      groups={[{ id: 'changes', files: shown }]}
+      groups={groups}
       hiddenGenerated={0}
       onShowGenerated={noop}
       filter={memory.filter}
       onFilterChange={setFilter}
-      tree={prefs.tree}
+      order={order}
       onTreeChange={prefs.setTree}
       hideGenerated={false}
       onHideGeneratedChange={noop}
@@ -231,7 +240,7 @@ export function MessageChangesView({ tab, source }: { tab: TabState; source: Mes
     page = (
       <DiffStack
         ref={stackRef}
-        files={shown}
+        files={ordered}
         layout={diffLayout}
         collapseUnchanged={prefs.collapseUnchanged}
         folded={folded}
@@ -247,6 +256,8 @@ export function MessageChangesView({ tab, source }: { tab: TabState; source: Mes
         onAnchorChange={onAnchorChange}
         onCurrentChange={setCurrentKey}
         header={banner}
+        editPages={editPages}
+        onEditPageChange={onEditPageChange}
       />
     )
   }
@@ -272,9 +283,9 @@ export function MessageChangesView({ tab, source }: { tab: TabState; source: Mes
       <div className="relative flex min-h-0 flex-1">
         <section className="relative min-w-0 flex-1" aria-label={compareLabel}>{page}</section>
         {panel && layout.dockedPanel && prefs.panelOpen && (
-          <aside className="flex min-h-0 shrink-0 flex-col border-l border-border" style={{ width: layout.panelWidth }} aria-label={t('File list')}>
+          <ResizableFilePanel containerRef={rootRef} preferredWidth={prefs.panelWidth} onWidthChange={prefs.setPanelWidth}>
             {panel}
-          </aside>
+          </ResizableFilePanel>
         )}
         {panel && !layout.dockedPanel && drawerOpen && (
           <FileDrawer fullWidth={layout.stacked} onClose={() => setDrawerOpen(false)} opener={panelToggleRef}>

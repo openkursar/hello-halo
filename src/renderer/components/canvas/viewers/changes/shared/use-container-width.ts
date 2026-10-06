@@ -10,8 +10,8 @@ import { useViewerResources } from '../../../viewer-resources'
 /**
  * The element's width, re-rendering only when `step(width)` changes: the view
  * lays out by a few width steps, and dragging the canvas edge would otherwise
- * re-render it on every frame. Between steps the returned width may lag; it is
- * always within the same step as the real one.
+ * re-render it on every frame. Between steps it keeps the latest measurement
+ * for the next render; pixel-accurate consumers must measure their own bounds.
  */
 export function useContainerWidth(ref: RefObject<HTMLElement | null>, step: (width: number) => string): number {
   const resources = useViewerResources()
@@ -44,10 +44,10 @@ export function useContainerWidth(ref: RefObject<HTMLElement | null>, step: (wid
     if (step(latest.current.width) !== step(width)) setWidth(latest.current.width)
   })
 
-  return width
+  return latest.current.width
 }
 
-/** Layout steps of the changes view by its own width (see the design checklist §14). */
+/** Layout steps of the changes view by its own width. */
 export interface ChangesLayout {
   width: number
   /** Hide the file count and the branch name in the top bar. */
@@ -61,14 +61,32 @@ export interface ChangesLayout {
   stacked: boolean
 }
 
-export function changesLayout(width: number): ChangesLayout {
+export const MIN_PANEL_WIDTH = 220
+export const MAX_PANEL_WIDTH = 480
+export const MIN_MAIN_WIDTH = 480
+
+export function panelWidthBounds(containerWidth: number): { min: number; max: number } {
+  return {
+    min: MIN_PANEL_WIDTH,
+    max: containerWidth > 0 ? Math.max(MIN_PANEL_WIDTH, Math.min(MAX_PANEL_WIDTH, containerWidth - MIN_MAIN_WIDTH)) : MAX_PANEL_WIDTH,
+  }
+}
+
+export function clampPanelWidth(containerWidth: number, preferredWidth?: number): number {
+  const fallback = containerWidth >= 980 || containerWidth <= 0 ? 300 : 260
+  const requested = preferredWidth !== undefined && Number.isFinite(preferredWidth) ? preferredWidth : fallback
+  const { min, max } = panelWidthBounds(containerWidth)
+  return Math.max(min, Math.min(max, requested))
+}
+
+export function changesLayout(width: number, preferredPanelWidth?: number): ChangesLayout {
   const known = width > 0
   return {
     width,
     hideMinorStats: known && width < 980,
     // A little under the 760px step, so a canvas of "about 760" still gets the docked list.
     dockedPanel: !known || width >= 740,
-    panelWidth: width >= 980 || !known ? 300 : 260,
+    panelWidth: clampPanelWidth(width, preferredPanelWidth),
     compactTools: known && width < 740,
     stacked: known && width < 560,
   }
@@ -82,17 +100,17 @@ export const OVERVIEW_KPI_ROW_WIDTH = 640
 export const OVERVIEW_TWO_COLUMNS_WIDTH = 860
 
 /** The width the diffs (or the overview) get beside a docked file list. */
-export function mainWidth(width: number, panelOpen: boolean): number {
-  const layout = changesLayout(width)
+export function mainWidth(width: number, panelOpen: boolean, preferredPanelWidth?: number): number {
+  const layout = changesLayout(width, preferredPanelWidth)
   return width - (layout.dockedPanel && panelOpen ? layout.panelWidth : 0)
 }
 
 /** Every width step the changes view lays out by, as one comparable value. */
-export function layoutStep(width: number, panelOpen: boolean): string {
-  const { hideMinorStats, dockedPanel, panelWidth, compactTools, stacked } = changesLayout(width)
-  const main = mainWidth(width, panelOpen)
+export function layoutStep(width: number, panelOpen: boolean, preferredPanelWidth?: number): string {
+  const { hideMinorStats, dockedPanel, compactTools, stacked } = changesLayout(width, preferredPanelWidth)
+  const main = mainWidth(width, panelOpen, preferredPanelWidth)
   return [
-    width > 0, hideMinorStats, dockedPanel, panelWidth, compactTools, stacked,
+    width > 0, hideMinorStats, dockedPanel, compactTools, stacked,
     main >= MIN_SIDE_BY_SIDE_WIDTH, main >= OVERVIEW_KPI_ROW_WIDTH, main >= OVERVIEW_TWO_COLUMNS_WIDTH,
   ].join()
 }
