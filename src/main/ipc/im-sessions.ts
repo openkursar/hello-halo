@@ -4,7 +4,8 @@
  * Provides session list and management for the Settings UI.
  * The registry is populated automatically by dispatch-inbound when
  * users message the bot; these handlers expose read, rename, toggle
- * auto-sync (proactive flag), and remove.
+ * auto-sync (proactive flag), remove, and the push links that let another
+ * digital human push to a session.
  *
  * Registered from the typed RPC contract (passthrough — handler bodies and
  * return shapes preserved verbatim). Generic, provider-agnostic (ARCHITECTURE §22).
@@ -65,6 +66,33 @@ export function registerImSessionHandlers(): void {
     imSessionsSetCustomName: async (input: { appId: string; channel: string; chatId: string; name: string }) => {
       try {
         if (!renameChatSession(input.appId, input.channel, input.chatId, input.name)) {
+          return { success: false, error: 'Session not found' }
+        }
+        return { success: true }
+      } catch (error: unknown) {
+        return { success: false, error: (error as Error).message }
+      }
+    },
+    // Other digital humans' IM sessions this app was added to as push targets
+    imSessionsListLinked: async (appId: string) => {
+      try {
+        return { success: true, data: getImSessionRegistry()?.getLinkedSessions(appId) ?? [] }
+      } catch (error: unknown) {
+        return { success: false, error: (error as Error).message }
+      }
+    },
+    // Add, update (auto-sync) or, with link null, remove a push link
+    imSessionsSetPushLink: async (input: {
+      appId: string
+      session: { appId: string; channel: string; chatId: string }
+      link: { autoSync: boolean } | null
+    }) => {
+      try {
+        const registry = getImSessionRegistry()
+        if (!registry) {
+          return { success: false, error: 'IM session registry not initialized' }
+        }
+        if (!registry.setPushLink(input.appId, input.session, input.link)) {
           return { success: false, error: 'Session not found' }
         }
         return { success: true }

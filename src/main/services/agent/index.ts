@@ -149,10 +149,11 @@ export { addSdkHooks } from './sdk-config'
 export { markMcpServerSettings } from './sdk-config'
 /**
  * An engine's error text as users read it (a local connection refused by
- * security software is explained), and the diagnostics' check of that same
- * connection from a child process started the way engine processes start.
+ * security software is explained), the test for such an error (raw or already
+ * explained), and the diagnostics' check of that same connection from a child
+ * process started the way engine processes start.
  */
-export { explainEngineError, checkChildLocalConnection } from './local-connection'
+export { explainEngineError, isRefusedLocalConnection, checkChildLocalConnection } from './local-connection'
 export { parseSDKMessage, buildMessageContent, formatCanvasContext } from './message-utils'
 /**
  * What a user turn carries besides its text, as the model reads it (references

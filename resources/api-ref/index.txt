@@ -75,6 +75,8 @@ GET    /api/im-sessions                                            [ai]       ch
 POST   /api/im-sessions/set-proactive                              [ai]       channels,digital-human  Toggle whether a run's result is auto-pushed to this chat when it finishes
 POST   /api/im-sessions/remove                                     [ai]       channels,digital-human  Remove a chat binding from the IM session registry
 POST   /api/im-sessions/set-custom-name                            [ai]       channels,digital-human  Set a custom display name for a chat binding
+GET    /api/im-sessions/linked                                     [ai]       channels,digital-human  List the IM chats a digital human pushes to through another digital human's bot
+POST   /api/im-sessions/set-push-link                              [ai]       channels,digital-human  Let a digital human push to an IM chat another digital human's bot knows, or stop it
 GET    /api/auth/providers                                         [ai]       settings                List the sign-in and model providers this build offers
 GET    /api/system/version                                         [ai]       settings                Read the running Halo version
 GET    /api/apps                                                   [ai]       digital-human           List digital humans (and other installed apps) in a space

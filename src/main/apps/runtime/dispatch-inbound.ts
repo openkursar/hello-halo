@@ -44,7 +44,8 @@ import { setImStreamHandle } from './im-stream-registry'
 import { analytics } from '../../services/analytics/analytics.service'
 import { AnalyticsEvents } from '../../services/analytics/types'
 import { truncateUtf16Safe } from './text-truncate'
-import { AppChatTurnInterrupted, withTurnEndingNote, type AppChatTurnEnding } from './turn-ending'
+import { withTurnEndingNote, type AppChatTurnEnding } from './turn-ending'
+import { imErrorReply } from './im-error-reply'
 import { getSpace, getSpaceDir } from '../../services/space.service'
 import {
   getPendingRelayStore,
@@ -707,9 +708,13 @@ export async function dispatchInboundMessage(
   }
 
   // ── Reply scope check ──────────────────────────────────────────
-  // The owner gate above and this check are also what a reminder coming due
-  // in this chat meets (im-sender-standing `instanceTakesChat`).
-  if (!replyScopeCovers(instanceCfg, msg.chatType)) {
+  // Not for an answer in a direct chat: questions are asked there, and every
+  // notice of one points there, whatever the scope (im-escalation). The owner
+  // gate above and this check are also what a reminder coming due in this chat
+  // meets (im-sender-standing `instanceTakesChat`).
+  const answerArgs = parseAnswerCommand(msg.body, msg.chatType)
+  const answersInDirectChat = msg.chatType === 'direct' && answerArgs !== null
+  if (!replyScopeCovers(instanceCfg, msg.chatType) && !answersInDirectChat) {
     const rejectionMsg = msg.chatType === 'direct' ? DM_REJECTED_MESSAGE : GROUP_REJECTED_MESSAGE
     console.log(
       `${LOG_TAG} Blocked by replyScope: scope=${replyScope}, chatType=${msg.chatType}, ` +
@@ -818,7 +823,6 @@ export async function dispatchInboundMessage(
   // ── Answer command: a question this digital human asked, answered here ──
   // Never reaches the model: it is the owner answering through Halo's own
   // answer path, not a message to the digital human (im-escalation).
-  const answerArgs = parseAnswerCommand(msg.body, msg.chatType)
   if (answerArgs !== null) {
     const deps = await runtimeAnswerDeps()
     const result = deps
@@ -1142,13 +1146,9 @@ export async function dispatchInboundMessage(
     // separate one-shot reply — otherwise WeCom receives an unterminated stream
     // plus a duplicate message, garbling the user's chat.
     try {
-      // A turn cut off before writing anything is not an error the person can
-      // act on; what they can do is tell it to carry on.
-      const errorMsg = err instanceof AppChatTurnInterrupted
-        ? withTurnEndingNote('', { kind: 'interrupted' })
-        : (err as Error)?.name === 'WorkingDirectoryUnavailableError'
-          ? WORKING_DIR_UNAVAILABLE_NOTICE
-          : `⚠️ Error: ${(err as Error).message?.slice(0, 200) ?? 'Unknown error'}`
+      const errorMsg = (err as Error)?.name === 'WorkingDirectoryUnavailableError'
+        ? WORKING_DIR_UNAVAILABLE_NOTICE
+        : imErrorReply(err)
       if (reply.streaming) {
         await reply.streaming.finish(errorMsg)
       } else {

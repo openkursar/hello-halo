@@ -289,6 +289,10 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
   // Scoped browser context for this run (created in try, cleaned up in finally)
   let scopedBrowserCtx: ReturnType<typeof createScopedBrowserContext> | undefined
 
+  // The turns finished so far, kept in reach of catch: a run that fails with an
+  // exception still records the tokens they used.
+  let streamResult: StreamResult | undefined
+
   // ── Build memory scope (before try so it's available in catch) ─────
   const memoryScope: MemoryCallerScope = {
     type: 'app',
@@ -654,7 +658,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     })
 
     // ── 6. Process stream (headless: persist JSONL + detect report_to_user) ──
-    let streamResult = await processStream(
+    streamResult = await processStream(
       session,
       formatReferencesBlock(followupReferences, workDir) + initialMessage,
       abortController,
@@ -880,6 +884,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       status: 'error',
       finishedAt,
       durationMs,
+      tokensUsed: streamResult?.totalTokens || undefined,
       errorMessage,
     })
 
@@ -914,7 +919,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       trigger,
       outcome: 'error',
       durationMs,
-      tokensUsed: 0,
+      tokensUsed: streamResult?.totalTokens ?? 0,
       finalText: `Error: ${errorMessage}`,
       escalation: false,
       runTag,
@@ -928,6 +933,8 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       startedAt,
       finishedAt,
       durationMs,
+      tokensUsed: streamResult?.totalTokens || undefined,
+      tokenUsage: streamResult?.usage,
       errorMessage,
     }
   } finally {
@@ -966,6 +973,27 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
 // ============================================
 // Stream Processing
 // ============================================
+
+/** Take a turn's token usage from its result message. */
+function noteResultUsage(result: StreamResult, m: any): void {
+  // On the halo engine `usage` already includes sub-agents' tokens.
+  if (m.usage) {
+    result.totalTokens = (m.usage.input_tokens || 0) + (m.usage.output_tokens || 0)
+  }
+  if (m.cumulative_usage) {
+    result.totalTokens =
+      (m.cumulative_usage.input_tokens || 0) + (m.cumulative_usage.output_tokens || 0)
+  }
+  const usage = m.cumulative_usage ?? m.usage
+  if (usage) {
+    result.usage = {
+      inputTokens: usage.input_tokens || 0,
+      outputTokens: usage.output_tokens || 0,
+      cacheReadTokens: usage.cache_read_input_tokens || 0,
+      cacheCreationTokens: usage.cache_creation_input_tokens || 0,
+    }
+  }
+}
 
 /**
  * Process the V2 session stream for a headless automation run.
@@ -1012,15 +1040,24 @@ async function processStream(
   let toolUseCount = 0
   const cutPoint = new TurnCutPoint()
 
+  let stopNoticed = false
   try {
     for await (const sdkMessage of session.stream()) {
-      if (abortController.signal.aborted) {
-        console.log(`[Runtime][${runTag}] Run aborted during stream processing`)
-        break
-      }
       if (!sdkMessage || typeof sdkMessage !== 'object') continue
-
       const msgType = (sdkMessage as { type?: string }).type
+
+      // Stopped: nothing more is handled, but the interrupted turn still reports
+      // its tokens in the result that ends the stream (a stop that is not
+      // answered closes the engine, which ends it too — see engine-stop.ts).
+      if (abortController.signal.aborted) {
+        if (!stopNoticed) {
+          stopNoticed = true
+          console.log(`[Runtime][${runTag}] Run aborted during stream processing`)
+        }
+        if (msgType === 'result') noteResultUsage(result, sdkMessage)
+        continue
+      }
+
       messageCount++
 
       // Persist assistant/user messages to the run JSONL for "View process" reload.
@@ -1050,23 +1087,7 @@ async function processStream(
 
       if (msgType === 'result') {
         const m = sdkMessage as any
-        // On the halo engine `usage` already includes sub-agents' tokens.
-        if (m.usage) {
-          result.totalTokens = (m.usage.input_tokens || 0) + (m.usage.output_tokens || 0)
-        }
-        if (m.cumulative_usage) {
-          result.totalTokens =
-            (m.cumulative_usage.input_tokens || 0) + (m.cumulative_usage.output_tokens || 0)
-        }
-        const usage = m.cumulative_usage ?? m.usage
-        if (usage) {
-          result.usage = {
-            inputTokens: usage.input_tokens || 0,
-            outputTokens: usage.output_tokens || 0,
-            cacheReadTokens: usage.cache_read_input_tokens || 0,
-            cacheCreationTokens: usage.cache_creation_input_tokens || 0,
-          }
-        }
+        noteResultUsage(result, m)
         if (m.is_error || m.error_during_execution) {
           result.aiReportedError = true
           if (typeof m.result === 'string' && m.result.length > 0) {

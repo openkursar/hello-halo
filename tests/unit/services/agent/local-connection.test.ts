@@ -22,6 +22,7 @@ vi.mock('../../../../src/main/services/agent/codex/transport/connection', () => 
 import {
   checkChildLocalConnection,
   explainEngineError,
+  isRefusedLocalConnection,
   localConnectionProgram,
 } from '../../../../src/main/services/agent/local-connection'
 
@@ -30,12 +31,29 @@ beforeEach(() => {
   env.codex = null
 })
 
+const REFUSED = [
+  'API Error: Unable to connect to API (EACCES)',
+  'API Error: Unable to connect to API (EPERM)',
+  'request to http://127.0.0.1:65305/v1/messages failed, reason: connect EACCES 127.0.0.1:65305',
+  // The halo engine's model calls, which all go to the router.
+  'fetch failed (EACCES)',
+  'fetch failed (EPERM)',
+]
+
+const OTHER = [
+  'API Error: Unable to connect to API (ECONNREFUSED)',
+  'API Error: Unable to connect to API. Check your internet connection',
+  'Unable to connect to API: SSL certificate has expired',
+  'API Error: 401 {"error":{"message":"invalid key"}}',
+  'connect EACCES 10.0.0.5:443',
+  'fetch failed (ECONNREFUSED)',
+  'fetch failed',
+  'spawn EACCES',
+  '',
+]
+
 describe('explainEngineError', () => {
-  it.each([
-    'API Error: Unable to connect to API (EACCES)',
-    'API Error: Unable to connect to API (EPERM)',
-    'request to http://127.0.0.1:65305/v1/messages failed, reason: connect EACCES 127.0.0.1:65305',
-  ])('explains %s and names the program to allow', (error) => {
+  it.each(REFUSED)('explains %s and names the program to allow', (error) => {
     const explained = explainEngineError(error)
 
     expect(explained).toMatch(/^Security software on this computer blocked Halo's internal connection to 127\.0\.0\.1/)
@@ -44,15 +62,19 @@ describe('explainEngineError', () => {
     expect(explained).toContain(`(engine error: ${error})`)
   })
 
-  it.each([
-    'API Error: Unable to connect to API (ECONNREFUSED)',
-    'API Error: Unable to connect to API. Check your internet connection',
-    'Unable to connect to API: SSL certificate has expired',
-    'API Error: 401 {"error":{"message":"invalid key"}}',
-    'connect EACCES 10.0.0.5:443',
-    '',
-  ])('leaves %s as it is', (error) => {
+  it.each(OTHER)('leaves %s as it is', (error) => {
     expect(explainEngineError(error)).toBe(error)
+  })
+})
+
+describe('isRefusedLocalConnection', () => {
+  it.each(REFUSED)('recognizes %s, and the explanation made of it', (error) => {
+    expect(isRefusedLocalConnection(error)).toBe(true)
+    expect(isRefusedLocalConnection(explainEngineError(error))).toBe(true)
+  })
+
+  it.each(OTHER)('does not take %s for one', (error) => {
+    expect(isRefusedLocalConnection(error)).toBe(false)
   })
 })
 

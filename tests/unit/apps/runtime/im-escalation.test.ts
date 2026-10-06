@@ -12,11 +12,12 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { config, registrySessions, instances, epochs } = vi.hoisted(() => ({
+const { config, registrySessions, instances, epochs, recordChatPush } = vi.hoisted(() => ({
   config: { imChannels: { instances: [] as Array<Record<string, unknown>> } },
   registrySessions: [] as Array<Record<string, unknown>>,
-  instances: new Map<string, { isConnected: () => boolean; pushToChat: (chatId: string, text: string, chatType: 'direct' | 'group') => boolean }>(),
+  instances: new Map<string, { providerType?: string; isConnected: () => boolean; pushToChat: (chatId: string, text: string, chatType: 'direct' | 'group') => boolean }>(),
   epochs: new Map<string, { chatKey?: string }>(),
+  recordChatPush: vi.fn(),
 }))
 
 vi.mock('../../../../src/main/foundation/config.service', async (importOriginal) => ({
@@ -32,6 +33,7 @@ vi.mock('../../../../src/main/apps/runtime/im-session-registry', () => ({
 vi.mock('../../../../src/main/apps/team', () => ({
   getTeamStore: () => ({ getEpochById: (id: string) => epochs.get(id) ?? null }),
 }))
+vi.mock('../../../../src/main/apps/runtime/chat-push', () => ({ recordChatPush }))
 
 import {
   answerEscalationFromIm,
@@ -50,7 +52,7 @@ import type { ActivityEntry } from '../../../../src/shared/apps/app-types'
 function bot(id: string, fields: Record<string, unknown>) {
   const pushToChat = vi.fn((_chatId: string, _text: string, _chatType: 'direct' | 'group') => true)
   config.imChannels.instances.push({ id, enabled: true, type: 'wecom-bot', config: {}, ...fields })
-  instances.set(id, { isConnected: () => true, pushToChat })
+  instances.set(id, { providerType: 'wecom-bot', isConnected: () => true, pushToChat })
   return pushToChat
 }
 
@@ -70,6 +72,7 @@ beforeEach(() => {
   registrySessions.length = 0
   instances.clear()
   epochs.clear()
+  recordChatPush.mockClear()
 })
 
 describe('asking over IM', () => {
@@ -122,6 +125,8 @@ describe('asking over IM', () => {
     deliverEscalationToIm(question({ teamContext: { teamId: 't1', epochId: 'e1' } }, 'researcher'), 'Researcher')
 
     expect(push.mock.calls.map(([chatId, , type]) => [chatId, type])).toEqual([['boss', 'direct'], ['project-group', 'group']])
+    // Kept where the bot's chats are kept, and sent by: the digital human it serves.
+    expect(recordChatPush.mock.calls.map(([sent]) => [sent.appId, sent.pushedBy, sent.chatId])).toEqual([['lead', 'lead', 'boss'], ['lead', 'lead', 'project-group']])
   })
 
   it('reaches no bot of another digital human, and none that is offline', () => {
@@ -173,6 +178,21 @@ describe('asking over IM', () => {
     }
   })
 
+  it('keeps what it sent in the record of each chat it reached, as a question pushed there', () => {
+    const push = bot('i1', { appId: 'dh', permissionEnabled: true, owners: ['boss'] })
+    chat('i1', 'direct', 'boss', { contactId: 'boss' })
+    chat('i1', 'group', 'ops-group', { proactive: true })
+    chat('i1', 'group', 'unreachable-group', { proactive: true })
+    push.mockImplementation((chatId: string) => chatId !== 'unreachable-group')
+
+    deliverEscalationToIm(question({}), 'Release Bot')
+
+    expect(recordChatPush.mock.calls.map(([sent]) => sent)).toEqual([
+      { appId: 'dh', channel: 'wecom-bot', chatType: 'direct', chatId: 'boss', text: push.mock.calls[0][1], via: 'question', pushedBy: 'dh' },
+      { appId: 'dh', channel: 'wecom-bot', chatType: 'group', chatId: 'ops-group', text: push.mock.calls[1][1], via: 'question', pushedBy: 'dh' },
+    ])
+  })
+
   it('lists several decisions, and asks for one answer per line', () => {
     const push = bot('i1', { appId: 'dh', permissionEnabled: true, owners: ['boss'] })
     chat('i1', 'direct', 'boss', { contactId: 'boss' })
@@ -217,10 +237,13 @@ describe('what counts as an answer command', () => {
     expect(parseAnswerCommand('the answer is 7', 'direct')).toBeNull()
   })
 
-  it('reads a mention typed by hand as ending at its first space', () => {
-    // A real WeCom mention ends with U+2005; without it a name with spaces
-    // cannot be told from the words after it, so nothing is taken as an answer.
-    expect(parseAnswerCommand('@Halo AI 团队 /answer 7 A', 'group')).toBeNull()
+  it('reads a bot name with ordinary spaces the way /stop does, once the answer names its question', () => {
+    // Where such a name ends cannot be told from the text. "/stop" counts when
+    // it ends the message; "/answer" counts when a question number follows it.
+    expect(parseAnswerCommand('@Halo AI Team /answer 3 A', 'group')).toBe('3 A')
+    expect(parseAnswerCommand('@Halo AI 团队 /answer 7\nA\nB', 'group')).toBe('7\nA\nB')
+    // Without a number it may as well be a sentence about answering.
+    expect(parseAnswerCommand('@Halo AI Team /answer A', 'group')).toBeNull()
   })
 })
 

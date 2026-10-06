@@ -20,6 +20,7 @@ import type { TeamTriggerContext } from '../../../shared/apps/team-types'
 import type { ImageAttachment } from '../../../shared/types/image-attachment'
 import type { ContentReference } from '../../../shared/types/content-reference'
 import type {
+  ChatPushVia,
   Thought,
   TranscriptMessage,
   TranscriptPage,
@@ -56,6 +57,22 @@ export interface SessionWriter {
     provenance?: TranscriptProvenance,
     references?: ContentReference[]
   ): void
+  /**
+   * Record a message the digital human sent to this chat outside its turns.
+   * Never among a turn's lines: reading the file back takes it as the end of any
+   * turn before it.
+   */
+  writePush(push: RecordedPush): void
+}
+
+/** A message sent to a chat outside its turns, as the chat's record keeps it. */
+export interface RecordedPush {
+  text: string
+  via: ChatPushVia
+  /** When it was sent (ISO); now when omitted */
+  at?: string
+  /** The digital human that sent it, when it is not the chat's own (one linked to the chat) */
+  by?: { appId: string; name: string }
 }
 
 /** Get the directory for run session files */
@@ -114,6 +131,16 @@ export function openSessionWriter(spacePath: string, appId: string, runId: strin
         ...(provenance?.metadata ? { _metadata: provenance.metadata } : {}),
         ...(references && references.length > 0 ? { _references: references } : {}),
         message: { role: 'user', content: blocks },
+      })
+    },
+
+    writePush({ text, via, at, by }): void {
+      appendLine({
+        _ts: at ?? new Date().toISOString(),
+        type: 'push',
+        _pushVia: via,
+        ...(by ? { _pushedBy: by } : {}),
+        message: { role: 'assistant', content: [{ type: 'text', text }] },
       })
     },
   }

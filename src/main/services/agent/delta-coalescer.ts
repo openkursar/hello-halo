@@ -1,6 +1,6 @@
 /**
- * Streamed deltas of one turn — reply text, thinking, tool input — merged and
- * published at most once per interval instead of once per model token.
+ * Streamed deltas of one turn — reply text and thinking — merged and published
+ * at most once per interval instead of once per model token.
  *
  * A provider can stream a couple of hundred small deltas a second; each one
  * published on its own is an IPC message, a WebSocket frame per remote client
@@ -16,8 +16,8 @@ export const DELTA_INTERVAL_MS = 30
 
 export interface DeltaCoalescer {
   text(delta: string): void
-  /** Thinking text, or partial tool-input JSON when `isToolInput`. */
-  thought(thoughtId: string, delta: string, isToolInput?: boolean): void
+  /** Thinking text of one thought. */
+  thought(thoughtId: string, delta: string): void
   /** Publishes what is pending now, in arrival order. */
   flush(): void
   /** Drops what is pending without publishing it. */
@@ -27,7 +27,6 @@ export interface DeltaCoalescer {
 interface Pending {
   /** Null for reply text. */
   thoughtId: string | null
-  isToolInput: boolean
   delta: string
 }
 
@@ -49,7 +48,7 @@ export function createDeltaCoalescer(
     if (pending.length === 0) return
     const batch = pending
     pending = []
-    for (const { thoughtId, isToolInput, delta } of batch) {
+    for (const { thoughtId, delta } of batch) {
       if (thoughtId === null) {
         emitAgentEvent('agent:message', spaceId, conversationId, {
           type: 'message',
@@ -57,25 +56,23 @@ export function createDeltaCoalescer(
           isComplete: false,
           isStreaming: true
         })
-      } else if (isToolInput) {
-        emitAgentEvent('agent:thought-delta', spaceId, conversationId, { thoughtId, delta, isToolInput: true })
       } else {
         emitAgentEvent('agent:thought-delta', spaceId, conversationId, { thoughtId, delta })
       }
     }
   }
 
-  const add = (thoughtId: string | null, delta: string, isToolInput: boolean) => {
+  const add = (thoughtId: string | null, delta: string) => {
     if (!delta) return
     const last = pending[pending.length - 1]
-    if (last && last.thoughtId === thoughtId && last.isToolInput === isToolInput) last.delta += delta
-    else pending.push({ thoughtId, isToolInput, delta })
+    if (last && last.thoughtId === thoughtId) last.delta += delta
+    else pending.push({ thoughtId, delta })
     if (!timer) timer = setTimeout(flush, intervalMs)
   }
 
   return {
-    text: delta => add(null, delta, false),
-    thought: (thoughtId, delta, isToolInput = false) => add(thoughtId, delta, isToolInput),
+    text: delta => add(null, delta),
+    thought: (thoughtId, delta) => add(thoughtId, delta),
     flush,
     discard: () => {
       cancelTimer()

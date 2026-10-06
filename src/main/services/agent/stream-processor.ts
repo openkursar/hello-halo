@@ -881,17 +881,14 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
         // We track the toolId here so we can check when the block completes.
       }
 
-      // Tool use input JSON delta - accumulate partial JSON
+      // Tool use input JSON delta - accumulate partial JSON. Nothing is published:
+      // no client shows partial input, and the parsed input goes out at block stop.
       if (event.type === 'content_block_delta' && event.delta?.type === 'input_json_delta') {
         const blockIndex = event.index ?? 0
         const blockState = streamingBlocks.get(blockIndex)
 
         if (blockState && blockState.type === 'tool_use') {
-          const partialJson = event.delta.partial_json || ''
-          blockState.content += partialJson
-
-          // For progress indication only; the parsed input goes out at block stop.
-          deltas.thought(blockState.thoughtId, partialJson, true)
+          blockState.content += event.delta.partial_json || ''
         }
       }
 

@@ -229,6 +229,8 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
   handleAgentThoughtDelta: (data) => {
     const { conversationId, thoughtId, delta, content, toolInput, isComplete, isReady, isToolInput, toolResult, isToolResult, taskProgress } = data
     // Partial tool input only signals progress the step already shows as streaming.
+    // Halo no longer publishes it, but an older one still may: a team peer, or
+    // the computer a phone app connects to.
     if (isToolInput && !(isComplete && toolInput) && !taskProgress && !(isToolResult && toolResult)) return
 
     set((state) => {

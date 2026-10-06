@@ -114,7 +114,9 @@ export function buildUnconfiguredCapabilitiesGuidance(
     pending.push(
       '- IM Push — enabled, but no IM contact is connected, so notify_bot is ' +
       'not available. To use it, the user must connect an IM channel in ' +
-      'Settings → Message Channels and add this digital human to a chat.'
+      'Settings → Message Channels and add this digital human to a chat, or ' +
+      'pick chats another bot already knows with "Add from existing chats" ' +
+      'under Reachable Contacts in this digital human\'s settings.'
     )
   }
 

@@ -514,6 +514,8 @@ export interface HaloAPI extends BrowserHostBridge {
   imSessionsSetProactive: (input: { appId: string; channel: string; chatId: string; proactive: boolean }) => Promise<IpcResponse>
   imSessionsRemove: (input: { appId: string; channel: string; chatId: string }) => Promise<IpcResponse>
   imSessionsSetCustomName: (input: { appId: string; channel: string; chatId: string; name: string }) => Promise<IpcResponse>
+  imSessionsListLinked: (appId: string) => Promise<IpcResponse>
+  imSessionsSetPushLink: (input: { appId: string; session: { appId: string; channel: string; chatId: string }; link: { autoSync: boolean } | null }) => Promise<IpcResponse>
 
   // WeChat Personal Bot via iLink API
   weixinIlinkRequestQrcode: () => Promise<IpcResponse<{ qrcode: string; qrcodeImgContent: string; baseUrl: string }>>

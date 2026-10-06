@@ -18,6 +18,7 @@ import {
   isCrossConversationNotice,
 } from './cross-conversation'
 import { TeamMemberMessage, isTeamMessage } from './team-collab'
+import { PushedMessageLabel, isPushedMessage } from './PushedMessageLabel'
 import type { Message, Thought } from '../../types'
 
 export interface MessageRowProps {
@@ -185,6 +186,7 @@ export const MessageRow = memo(function MessageRow({
   return (
     <div className={`pb-5 ${className}`}>
       {senderLabel}
+      {isPushedMessage(message) && <PushedMessageLabel via={message.metadata?.pushVia} by={message.metadata?.pushedByName} />}
       <MessageItem
         message={message}
         previousCost={previousCost}

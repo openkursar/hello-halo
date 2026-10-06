@@ -40,7 +40,7 @@ import { getActiveImChannelManager } from './im-channels'
 import { ReplyTextAccumulator } from './reply-accumulator'
 import { ProgressEventParser } from './progress-formatter'
 import { TurnCutPoint } from './escalation-cut'
-import { openSessionWriter, saveChatSessionId, type SessionWriter } from './session-store'
+import { openSessionWriter, saveChatSessionId, type RecordedPush, type SessionWriter } from './session-store'
 import { AppChatTurnInterrupted, turnEndingOf, withTurnEndingNote, type AppChatTurnEnding } from './turn-ending'
 import { stopGeneration } from '../../services/agent/control'
 import { listResidentSessions } from '../../services/agent'
@@ -145,6 +145,11 @@ class AppChatSink implements TurnSink {
    * and an unclaimed turn is proof of liveness just the same.
    */
   private turnRunning = false
+  /**
+   * Pushes that came while a turn was running, written when it ends: the
+   * record keeps a turn's lines together, and reading it back relies on that.
+   */
+  private heldPushes: RecordedPush[] = []
 
   constructor(
     private readonly appId: string,
@@ -208,6 +213,15 @@ class AppChatSink implements TurnSink {
     references?: ContentReference[]
   ): void {
     this.getWriter()?.writeTrigger(text, images, teamOrigin, provenance, references)
+  }
+
+  /** Record a message the digital human pushed to this chat outside its turns (chat-record). */
+  writePush(push: RecordedPush): void {
+    if (this.turnRunning) {
+      this.heldPushes.push({ ...push, at: push.at ?? new Date().toISOString() })
+      return
+    }
+    this.getWriter()?.writePush(push)
   }
 
   /** A message failed before the engine created a turn to checkpoint. */
@@ -291,6 +305,7 @@ class AppChatSink implements TurnSink {
       this.completeTurn(result)
     } finally {
       this.turnRunning = false
+      this.writeHeldPushes()
       // Anything still queued is owed a turn of its own from here.
       this.armTurnStartDeadline()
       emitRoundChange(this.conversationId)
@@ -304,6 +319,7 @@ class AppChatSink implements TurnSink {
       const round = this.takeCurrentRound()
       round?.reject(error)
       this.turnRunning = false
+      this.writeHeldPushes()
       this.armTurnStartDeadline()
       emitRoundChange(this.conversationId)
     }
@@ -374,6 +390,7 @@ class AppChatSink implements TurnSink {
       if (partial) this.persistPartial(partial, 'Chat session ended before the reply completed.')
     } finally {
       this.turnRunning = false
+      this.writeHeldPushes()
       this.clearTurnStartDeadline()
       const pending = this.takeCurrentRound()
       pending?.reject(new Error('Chat session ended before the reply completed.'))
@@ -387,9 +404,10 @@ class AppChatSink implements TurnSink {
     }
   }
 
-  /** Drop the sink's timer so a discarded sink cannot outlive its conversation. */
+  /** Drop the sink's timer and held pushes so a discarded sink cannot outlive its conversation. */
   dispose(): void {
     this.clearTurnStartDeadline()
+    this.heldPushes = []
   }
 
   // ── Internals ──────────────────────────────────────────
@@ -460,6 +478,10 @@ class AppChatSink implements TurnSink {
     if (!round || round.settled) return null
     round.settled = true
     return round
+  }
+
+  private writeHeldPushes(): void {
+    for (const push of this.heldPushes.splice(0)) this.getWriter()?.writePush(push)
   }
 
   private getWriter(): SessionWriter | undefined {

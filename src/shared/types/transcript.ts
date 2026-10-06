@@ -84,12 +84,22 @@ export type TranscriptRole = 'user' | 'assistant' | 'system'
  *   conversation (e.g. delivery cooldown)
  * - `team-message`: a team member's message or a collaboration status notice
  *   delivered to the coordinating conversation
+ * - `push`: a message the digital human sent to this chat on its own, outside
+ *   the chat's turns (see {@link ChatPushVia}); stored as `role: 'assistant'`
  */
 export type TranscriptSource =
   | 'injection'
   | 'cross-conversation'
   | 'cross-conversation-notice'
   | 'team-message'
+  | 'push'
+
+/**
+ * What sent a pushed message: `notify_bot` (`message`), a run's result sent to
+ * the chats that receive results (`result`), or a question for the owner
+ * (`question`).
+ */
+export type ChatPushVia = 'message' | 'result' | 'question'
 
 export interface ToolCall {
   id: string
@@ -152,6 +162,14 @@ export interface TranscriptMessageMetadata extends TranscriptProvenanceMetadata 
   references?: ContentReference[]
   /** Built-in task this message starts (user messages only). */
   task?: MessageTask
+  /** What sent a pushed message (source `push` only). */
+  pushVia?: ChatPushVia
+  /**
+   * The digital human that pushed the message when it is not the chat's own (one
+   * linked to the chat), and its name when it was sent (source `push` only).
+   */
+  pushedByAppId?: string
+  pushedByName?: string
 }
 
 export interface TranscriptMessage {

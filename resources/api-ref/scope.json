@@ -285,6 +285,14 @@
   },
   {
     "method": "GET",
+    "path": "/api/im-sessions/linked"
+  },
+  {
+    "method": "POST",
+    "path": "/api/im-sessions/set-push-link"
+  },
+  {
+    "method": "GET",
     "path": "/api/auth/providers"
   },
   {

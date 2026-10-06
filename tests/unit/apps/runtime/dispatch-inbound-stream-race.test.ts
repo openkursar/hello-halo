@@ -110,6 +110,9 @@ vi.mock('../../../../src/main/services/analytics/types', () => ({
   AnalyticsEvents: {},
 }))
 
+// The IM error reply asks whether a failure is a refused local connection; what
+// a chat is then told is im-error-reply.test's, with the real check.
+vi.mock('../../../../src/main/services/agent', () => ({ isRefusedLocalConnection: () => false }))
 vi.mock('../../../../src/main/foundation/product-config', () => ({
   getImChannelsPermissionDefaults: vi.fn(() => ({})),
 }))
@@ -151,7 +154,9 @@ function makeStreamingHandle(): StreamingHandle {
 
 function makeReply(streaming?: StreamingHandle): ReplyHandle {
   return {
-    send: vi.fn(async () => true),
+    channel: 'wecom-bot',
+    chatId: 'chat-1',
+    send: vi.fn(async () => {}),
     streaming,
   }
 }

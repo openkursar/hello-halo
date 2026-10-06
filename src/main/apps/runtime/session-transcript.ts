@@ -13,6 +13,7 @@ import type { TeamTriggerContext } from '../../../shared/apps/team-types'
 import type { ImageAttachment, ImageMediaType } from '../../../shared/types/image-attachment'
 import type { ContentReference } from '../../../shared/types/content-reference'
 import type {
+  ChatPushVia,
   Thought,
   TranscriptMessage,
   TokenUsage,
@@ -40,6 +41,10 @@ export interface StoredEvent {
   _metadata?: TranscriptProvenanceMetadata
   /** Places the user pointed at with a trigger message, in the order they added them */
   _references?: ContentReference[]
+  /** What sent a `push` record */
+  _pushVia?: ChatPushVia
+  /** The digital human that sent a `push` record, when it is not the chat's own */
+  _pushedBy?: { appId: string; name: string }
   /** The SDK message payload */
   message?: {
     role?: string
@@ -85,6 +90,10 @@ function createThoughtIdGenerator(): () => string {
  *      last candidate of the turn is the bubble and leaves the thoughts.
  * 4. Tool-result user events merge into the corresponding tool_use thought.
  * 5. Non-tool user events (trigger, escalation) flush and start a new turn.
+ * 6. A `push` (a message the digital human sent to this chat outside its turns)
+ *    is a message of its own. Its writer never puts one among a turn's lines
+ *    (app-chat-sink holds it until the turn ends), so like a user event it
+ *    closes any turn before it.
  *
  * Result: one agent turn = one collapsed thought-process block + one message bubble,
  * identical to the main-space rendering.
@@ -219,6 +228,27 @@ export function convertEventsToMessages(events: StoredEvent[], lines?: readonly 
       flush()
       streamBlocks.clear()
       toolUseMap.clear()
+      continue
+    }
+
+    // ── A message the digital human pushed to this chat ──
+    if (event.type === 'push') {
+      flush()
+      const content = extractTextContent(event.message?.content)
+      if (content) {
+        const by = parsePushedBy(event._pushedBy)
+        messages.push({
+          id: messageId(lineOf(index)),
+          role: 'assistant',
+          source: 'push',
+          content,
+          timestamp: ts,
+          metadata: {
+            pushVia: parsePushVia(event._pushVia),
+            ...(by ? { pushedByAppId: by.appId, pushedByName: by.name } : {}),
+          },
+        })
+      }
       continue
     }
 
@@ -503,6 +533,18 @@ const TRANSCRIPT_SOURCES: ReadonlySet<string> = new Set<TranscriptSource>([
 /** A stored `_source`, or undefined when absent or unrecognised (read as an ordinary turn). */
 function parseSource(raw: unknown): TranscriptSource | undefined {
   return typeof raw === 'string' && TRANSCRIPT_SOURCES.has(raw) ? (raw as TranscriptSource) : undefined
+}
+
+/** A stored `_pushVia`; unrecognised reads as a plain message. */
+function parsePushVia(raw: unknown): ChatPushVia {
+  return raw === 'result' || raw === 'question' ? raw : 'message'
+}
+
+/** A stored `_pushedBy`, when it names a digital human. */
+function parsePushedBy(raw: unknown): { appId: string; name: string } | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const { appId, name } = raw as Record<string, unknown>
+  return typeof appId === 'string' && appId && typeof name === 'string' && name ? { appId, name } : undefined
 }
 
 const PROVENANCE_STRING_KEYS = [

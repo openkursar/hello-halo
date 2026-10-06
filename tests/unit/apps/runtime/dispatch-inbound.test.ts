@@ -109,6 +109,9 @@ vi.mock('../../../../src/main/services/space.service', () => ({
   getSpaceDir: vi.fn(() => '/tmp/space-dir'),
   getSpace: vi.fn(() => ({ path: '/tmp/space' })),
 }))
+// The IM error reply asks whether a failure is a refused local connection; what
+// a chat is then told is im-error-reply.test's, with the real check.
+vi.mock('../../../../src/main/services/agent', () => ({ isRefusedLocalConnection: (error: string) => error.includes('Unable to connect to API (EACCES)') }))
 vi.mock('../../../../src/main/foundation/product-config', () => ({
   getImChannelsPermissionDefaults: vi.fn(() => undefined),
 }))
@@ -507,6 +510,26 @@ describe('dispatchInboundMessage — a turn that stopped short', () => {
     await dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
 
     expect(reply.send).toHaveBeenLastCalledWith('⚠️ Error: API Error: 529 overloaded')
+  })
+
+  it('tells a chat no path of this computer, and not the program to allow when a local connection was refused', async () => {
+    // The chat may hold people from outside; the explanation is for the owner, in Halo.
+    sendAppChatMessageMock.mockRejectedValueOnce(new Error(
+      "Security software on this computer blocked Halo's internal connection to 127.0.0.1, so the request never " +
+      'reached the model. Ask your IT team to allow this program to make local connections: ' +
+      '/Applications/Halo.app/Contents/MacOS/Halo (engine error: API Error: Unable to connect to API (EACCES))'
+    ))
+    sendAppChatMessageMock.mockRejectedValueOnce(new Error("ENOENT: no such file or directory, open '/Users/lin/space/notes.md'"))
+    const refused = makeReply(false)
+    const missing = makeReply(false)
+
+    await dispatchInboundMessage(makeMsg(), refused, 'app-1', 'inst-1')
+    await dispatchInboundMessage(makeMsg({ chatId: 'chat-2' }), missing, 'app-1', 'inst-1')
+
+    const [refusedText] = (refused.send as ReturnType<typeof vi.fn>).mock.calls.at(-1)!
+    expect(refusedText).toContain('安全软件拦截了本机连接')
+    expect(refusedText).not.toContain('/Applications')
+    expect(missing.send).toHaveBeenLastCalledWith("⚠️ Error: ENOENT: no such file or directory, open '<local path>'")
   })
 
   it('says a missing working folder needs the owner, without the owner’s local path', async () => {
@@ -1156,6 +1179,42 @@ describe('dispatchInboundMessage — /answer', () => {
     await dispatchInboundMessage(makeMsg({ chatType: 'group', chatId: 'g-1', body: '@Halo AI 团队\u2005/answer 12 B' }), reply, 'app-1', 'inst-1')
 
     expect(answerDeps.respond).toHaveBeenCalledWith('app-1', 'q-1', expect.objectContaining({ choice: 'No' }))
+    expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+  })
+
+  it('takes it in a group whose bot name holds ordinary spaces, as /stop is taken there', async () => {
+    instanceCfg = { permissionEnabled: true, owners: ['u1'] }
+
+    await dispatchInboundMessage(makeMsg({ chatType: 'group', chatId: 'g-1', body: '@Halo AI Team /answer 12 B' }), makeReply(false), 'app-1', 'inst-1')
+
+    expect(answerDeps.respond).toHaveBeenCalledWith('app-1', 'q-1', expect.objectContaining({ choice: 'No' }))
+    expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+  })
+
+  it('takes the owner\'s answer in the direct chat of a bot that replies in groups only', async () => {
+    // The question is asked there, and the notice in a group points there.
+    instanceCfg = { replyScope: 'group', permissionEnabled: true, owners: ['u1'] }
+    const reply = makeReply(false)
+
+    await dispatchInboundMessage(makeMsg({ body: '/answer 12 A' }), reply, 'app-1', 'inst-1')
+
+    expect(answerDeps.respond).toHaveBeenCalledWith('app-1', 'q-1', expect.objectContaining({ choice: 'Yes' }))
+    expect(reply.send).toHaveBeenCalledWith('已收到，任务继续。（编号 12 的问题）')
+    expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+  })
+
+  it('still turns away the rest of that direct chat, and an answer in a group of a bot that replies in direct chats only', async () => {
+    instanceCfg = { replyScope: 'group', permissionEnabled: true, owners: ['u1'] }
+    const direct = makeReply(false)
+    await dispatchInboundMessage(makeMsg({ body: 'Ship it?' }), direct, 'app-1', 'inst-1')
+    expect((direct.send as ReturnType<typeof vi.fn>).mock.calls[0][0]).toContain('group chats')
+
+    instanceCfg = { replyScope: 'direct', permissionEnabled: true, owners: ['u1'] }
+    const group = makeReply(false)
+    await dispatchInboundMessage(makeMsg({ chatType: 'group', chatId: 'g-1', body: '@Halo\u2005/answer 12 A' }), group, 'app-1', 'inst-1')
+    expect((group.send as ReturnType<typeof vi.fn>).mock.calls[0][0]).toContain('direct messages')
+
+    expect(answerDeps.respond).not.toHaveBeenCalled()
     expect(sendAppChatMessageMock).not.toHaveBeenCalled()
   })
 

@@ -9,4 +9,6 @@ export const imSessionsRpc = {
   imSessionsSetProactive: rawRpcMethod('im-sessions:set-proactive'),
   imSessionsRemove: rawRpcMethod('im-sessions:remove'),
   imSessionsSetCustomName: rawRpcMethod('im-sessions:set-custom-name'),
+  imSessionsListLinked: rawRpcMethod('im-sessions:list-linked'),
+  imSessionsSetPushLink: rawRpcMethod('im-sessions:set-push-link'),
 }

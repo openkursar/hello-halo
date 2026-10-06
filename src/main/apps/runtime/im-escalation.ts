@@ -30,6 +30,7 @@ import { getTeamStore } from '../team'
 import { getActiveImChannelManager } from './im-channels'
 import { getImSessionRegistry } from './im-session-registry'
 import { truncateUtf16Safe } from './text-truncate'
+import { recordChatPush } from './chat-push'
 
 const LOG_TAG = '[ImEscalation]'
 
@@ -75,14 +76,21 @@ export function deliverEscalationToIm(entry: ActivityEntry, appName: string): vo
       if (origin?.instanceId === cfg.id && origin.chatType === 'group') groups.add(origin.chatId)
       counts.ownerChats += owners.length
       counts.groups += groups.size
+      // The chats are the bot's, kept under — and asked from — the digital human it serves.
+      const pushed = (chatId: string, chatType: 'direct' | 'group', text: string) =>
+        recordChatPush({ appId: cfg.appId, channel: instance.providerType, chatType, chatId, text, via: 'question', pushedBy: cfg.appId })
 
       for (const session of owners) {
-        if (instance.pushToChat(session.chatId, question, 'direct')) counts.asked++
-        else counts.failed++
+        if (instance.pushToChat(session.chatId, question, 'direct')) {
+          counts.asked++
+          pushed(session.chatId, 'direct', question)
+        } else counts.failed++
       }
       for (const chatId of groups) {
-        if (instance.pushToChat(chatId, notice, 'group')) counts.told++
-        else counts.failed++
+        if (instance.pushToChat(chatId, notice, 'group')) {
+          counts.told++
+          pushed(chatId, 'group', notice)
+        } else counts.failed++
       }
     }
 
@@ -166,15 +174,27 @@ const ANSWER_COMMAND = /^\/answer(?=\s|$)/i
  */
 const LEADING_MENTIONS = /^(?:@(?:[^@/\u2005\n]+\u2005|\S+\s)\s*)+/
 
+/** `/answer` as a word of its own, followed by the number of the question it answers. */
+const NUMBERED_ANSWER = /\s(\/answer\s+\d)/i
+
 /**
  * The text after `/answer` when this message is one, else null. A direct
  * message must start with it; in a group it may also come right after the
- * mentions the message starts with, and only there — "@bot I'll /answer it
- * later" is a message, not an answer.
+ * mentions the message starts with — "@bot I'll /answer it later" is a
+ * message, not an answer.
+ *
+ * Where a mention without WeCom's U+2005 ends cannot be told when the name
+ * holds ordinary spaces ("@Halo AI Team /answer 3 A"). `/stop` counts there
+ * when it ends the message; `/answer` counts further into it when it names
+ * its question, which a sentence about answering does not.
  */
 export function parseAnswerCommand(body: string, chatType: 'direct' | 'group'): string | null {
   let text = body.trim()
-  if (chatType === 'group') text = text.replace(LEADING_MENTIONS, '')
+  if (chatType === 'group') {
+    const afterMentions = text.replace(LEADING_MENTIONS, '')
+    const numbered = text.startsWith('@') && !text.includes('\u2005') ? NUMBERED_ANSWER.exec(text) : null
+    text = ANSWER_COMMAND.test(afterMentions) || !numbered ? afterMentions : text.slice(numbered.index + 1)
+  }
   const match = ANSWER_COMMAND.exec(text)
   return match ? text.slice(match[0].length).trim() : null
 }

@@ -28,6 +28,7 @@ import { setImPermissionContext } from '../im-permission-registry'
 import { instanceTakesChat, resolveImPermission } from '../im-sender-standing'
 import { sanitizeRuntimeTags } from '../pending-relays'
 import { withTurnEndingNote } from '../turn-ending'
+import { imErrorReply } from '../im-error-reply'
 import { getSpaceDir } from '../../../services/space.service'
 import { parseAppChatKey, parseNativeChatKey } from '../../../../shared/apps/im-keys'
 import { classifySessionSource, getImSessionDisplayName, LOCAL_SESSION_CHANNEL } from '../../../../shared/types/im-channel'
@@ -37,8 +38,14 @@ const LOG_TAG = '[Reminders]'
 /** Reminders waiting for their conversation, with how many more times each came due meanwhile. */
 const waiting = new Map<string, { missed: number }>()
 
-/** The turn a reminder starts, given the text it carries; or why it has nowhere to go now. */
-type Target = ((text: string) => { request: AppChatRequest; beforeSend?: () => void }) | 'gone' | 'unavailable'
+/**
+ * The turn a reminder starts, given the text it carries, and what its chat is
+ * told if that turn fails; or why it has nowhere to go now.
+ */
+type Target =
+  | ((text: string) => { request: AppChatRequest; beforeSend?: () => void; onFailure?: (error: unknown) => void })
+  | 'gone'
+  | 'unavailable'
 
 function targetOf(reminder: ConversationReminder): Target {
   const app = getAppManager()?.getApp(reminder.appId)
@@ -72,6 +79,17 @@ function targetOf(reminder: ConversationReminder): Target {
   const setter = reminder.setBy
   const permission = resolveImPermission(config, setter?.id ?? '', setter?.name ?? '')
   const senderIdentity = parsed.chatType === 'direct' && setter ? { id: setter.id, name: setter.name } : undefined
+  // Nobody waits on a reminder's turn, so a push the chat does not take is
+  // only logged.
+  const push = (text: string, what: string) => {
+    try {
+      if (!instance.pushToChat(parsed.chatId, text, parsed.chatType)) {
+        console.warn(`${LOG_TAG} The ${what} was not taken by the chat: ${conversationId}`)
+      }
+    } catch (error) {
+      console.error(`${LOG_TAG} Pushing the ${what} failed: ${conversationId}`, error)
+    }
+  }
   return text => ({
     request: {
       ...base(parsed.chatType === 'group' && setter ? `<msg-sender id="${setter.id}" name="${setter.name}" />\n${text}` : text),
@@ -97,15 +115,12 @@ function targetOf(reminder: ConversationReminder): Target {
       onReply: (reply, ending) => {
         // A turn that stopped short says so, as any reply in an IM chat does.
         const pushed = ending ? withTurnEndingNote(reply, ending) : reply
-        if (!pushed.trim()) return
-        try {
-          instance.pushToChat(parsed.chatId, pushed, parsed.chatType)
-        } catch (error) {
-          console.error(`${LOG_TAG} Pushing the reminder reply failed: ${conversationId}`, error)
-        }
+        if (pushed.trim()) push(pushed, 'reminder reply')
       },
     },
     beforeSend: () => setImPermissionContext(conversationId, permission),
+    // Told as the chat is told when a turn of its own fails.
+    onFailure: error => push(imErrorReply(error), 'note that the reminder failed'),
   })
 }
 
@@ -133,10 +148,11 @@ export function deliverReminder(reminder: ConversationReminder, dueAt: number): 
       return
     }
     // Written by the model, read later as a message: no runtime tag may ride along.
-    const { request, beforeSend } = now(sanitizeRuntimeTags(renderReminderTurn(reminder, dueAt, Date.now(), missed)))
+    const { request, beforeSend, onFailure } = now(sanitizeRuntimeTags(renderReminderTurn(reminder, dueAt, Date.now(), missed)))
     beforeSend?.()
     sendAppChatMessage(request).catch((error: unknown) => {
       console.error(`${LOG_TAG} The reminder turn failed: ${reminder.conversationId}`, error)
+      onFailure?.(error)
     })
   })
   return 'started'

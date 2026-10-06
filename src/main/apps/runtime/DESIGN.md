@@ -170,6 +170,10 @@ every bot serving that digital human or fronting its team:
   `dispatch-inbound` and never reaches the model. Only an owner answers (any chat); with
   permission control off, only a direct chat does. The answer is read as a choice letter, a
   choice's words or free text, one line per decision when several were asked.
+- Where a question or its notice says to answer, the answer is taken: the direct chat
+  takes `/answer` even on a bot that replies in groups only (the reply scope turns away
+  the rest of that chat). A group is never pointed to, so a bot that replies in direct
+  chats only still turns an answer there away.
 - Every escalation carries `content.number`, one past the highest any kept escalation holds
   (`nextEscalationNumber`), so a later question never takes the number of one still kept.
   (A number comes back only once the question holding the highest one is deleted — its
@@ -581,6 +585,15 @@ Consequences that matter:
   the stream processor's `agent:error` (`interrupted`) notice covers the step
   limit with or without text. A reply cut at the output-token ceiling is not
   the step limit and gets no note on any engine (services/agent DESIGN §3).
+- **A failed turn is told without this computer** (`im-error-reply.ts`). Every
+  IM path that runs a turn — the person's message (`dispatch-inbound`), a
+  reminder (`reminders/delivery`) — tells the chat of a failure with
+  `imErrorReply`: the cut-off note for `AppChatTurnInterrupted`; for a local
+  connection security software refused (`isRefusedLocalConnection`), that it
+  happened and that the owner sees to it in Halo, without the program to allow;
+  otherwise `⚠️ Error: …` with this computer's paths replaced by `<local path>`
+  (POSIX roots, drives, network shares, file URLs — never a web address's path),
+  then cut to 200 characters. An IM group may hold people from outside.
 - Those cover a session that *reports* its death. A session that simply never
   produces a turn — a resume against a transcript a crashed process left broken,
   an engine that failed to launch — reports nothing, and the caller would await a
@@ -765,6 +778,46 @@ acceptable because AI context is only ever consumed by a run, and runs are
 inbound-triggered. Deep history beyond the quote requires the AI to Read/Grep
 the source transcript, reusing existing tools instead of a new query API.
 
+### 2.14a A Push Is in the Record of the Chat It Went To
+
+**Problem**: a message a digital human sends to an IM chat outside that chat's
+turns — a `notify_bot` message, a run's result for the chats that receive results
+(`im-auto-sync`), a question for the owner (`im-escalation`) — went out on the
+platform and nowhere else. Its owner, reading the chat in Halo, saw the person's
+reply to it with nothing before it.
+
+**Decision**: each successful send is noted with `chat-push.recordChatPush`
+(loaded on use, never throws) and written by `chat-record.writeChatPush` into the
+chat's record as a `push` line (`SessionWriter.writePush`) saying what sent it
+(`message` | `result` | `question`). It reads as an assistant message with
+`source: 'push'` (§2.18), labelled in the chat as sent proactively, and the chat
+moves to the top of the session list (`ImSessionRegistry.notePush`, then
+`app:im-session-updated`).
+
+- **One writer, one place**: the line goes through the chat's sink
+  (`getAppChatSink`), the record's one writer, in the space the chat's session was
+  pinned to (`chat-record.chatRecordPath`, which `app-chat` reads from as well). A
+  chat a team fronts is recorded in the team's conversation with it.
+- **Who sent it**: a digital human linked to another one's chat (`pushLinks`)
+  pushes into that chat's record, since the chat's replies go to the chat's own
+  digital human. The line then names the sender (`_pushedBy`: its id and its name
+  at the time, read as `metadata.pushedByAppId` / `pushedByName`), the label says
+  "Sent proactively by …", and the session list shows it as the last sender. A
+  push by the chat's own digital human carries no `_pushedBy`.
+- **Seen while open**: no turn starts, so an open view reads the record again on
+  the announcement instead — the chat's view (`ImChatView`) on
+  `app:im-session-updated` for that chat while no turn of it runs, the team's
+  conversation (`TeamSessionChat`) on `team:member-history`.
+- **A turn stays whole**: a push that comes while a turn of that chat is running is
+  held by the sink and written when the turn ends, with the time it was sent. A
+  large file is paged by the line a message starts on (§2.18), which a line in the
+  middle of a turn would cut. Halo exiting mid-turn loses the held line, not the
+  push; clearing the chat drops it.
+- **The AI is not told here**: the relay spool (§2.14) still carries the push into
+  the chat's next turn, and the AI's own history is unchanged.
+- **What a record means**: the platform accepted the message for sending. A file
+  `notify_bot` sent is named (`📎 name`), not stored.
+
 ### 2.15 Knowledge Base Injection Mirrored Across Both Prompt Builders
 
 **Decision**: `prompt.ts`'s `buildAppSystemPrompt()` (automation/headless
@@ -902,6 +955,11 @@ JSONL storage is unchanged (append-only, written by `session-store`).
   Writers use `SessionWriter.writeTrigger(content, images, teamOrigin, provenance)`
   / `TurnSink.writeUserMessage(...)`, and write the text to *show*, not the
   framed text the model received.
+- **Pushes.** A `push` line (§2.14a) reads as an assistant message with
+  `source: 'push'`, `metadata.pushVia`, and the sender when it is not the chat's
+  own digital human (`pushedByAppId` / `pushedByName`). Its writer never puts one among a
+  turn's lines, so like a user event it ends any turn left open before it (one
+  cut off without its end), and messages stay in the order of their lines.
 - **Surface**: `app:chat-transcript` / `app:chat-message-thoughts` (IPC, contract in
   `shared/rpc/contracts/app.contract.ts`) and
   `GET /api/apps/:appId/chat/transcript`, `GET /api/apps/:appId/chat/messages/:messageId/thoughts`
@@ -1221,11 +1279,14 @@ create a digital human for a reminder.
   late. An IM chat gets the framing and file sending dispatch-inbound gives it,
   the asker's `<msg-sender>` in a group (and as the subject of any push), the
   asker's standing re-resolved under the channel's current settings
-  (`im-sender-standing.ts`), and the reply pushed to the chat. A chat where the
-  channel would refuse a message now — outside its reply scope, or a group
-  while permission control has no owner bound — gets no turn: the same rules
-  dispatch-inbound applies (`instanceTakesChat`). A one-off still waiting when
-  Halo quits is not delivered: the scheduler disabled it when it came due.
+  (`im-sender-standing.ts`), and the reply pushed to the chat. A turn that
+  fails is told to the chat as a failed turn of its own is (`imErrorReply`,
+  §2.12a); nobody waits on it, so a push the chat does not take is logged, not
+  retried. A chat where the channel would refuse a message now — outside its
+  reply scope, or a group while permission control has no owner bound — gets
+  no turn: the same rules dispatch-inbound applies (`instanceTakesChat`). A
+  one-off still waiting when Halo quits is not delivered: the scheduler
+  disabled it when it came due.
 - **Guests do not get it.** The server is not in the capability toggle table,
   and the guest filter keeps no server an owner was never offered a switch for:
   a guest may only query, and every reminder is a future turn someone pays for.
@@ -1339,8 +1400,9 @@ src/main/apps/runtime/
 
   -- Interactive chat with an App (separate from automation runs):
   app-chat.ts                -- sendAppChatMessage() and chat session lifecycle
-  app-chat-sink.ts           -- TurnSink for chat: run JSONL + round/autonomous delivery (§2.12a)
+  app-chat-sink.ts           -- TurnSink for chat: run JSONL + round/autonomous delivery (§2.12a); the record's one writer, holding a push that comes mid-turn until the turn ends (§2.14a)
   turn-ending.ts             -- A turn that stopped short (step limit, cut off): how it is recognized and the note an IM chat gets (§2.12a)
+  im-error-reply.ts          -- What an IM chat is told when its turn failed: no path or program of this computer goes out (§2.12a)
   turn-skills.ts             -- Which skills a borrowed turn may load, what a granted skill may not bring with it, and why its message never runs as a command ("Skills on a borrowed turn")
   app-chat-browser.ts        -- The AI browser context each chat drives: resident for native chats, per-turn for IM/HTTP/team, idle/cap reaping, teardown by reason (§2.19)
   conversation-source.ts     -- The digital-human `ConversationSource` registered with services/conversation-interop (default + local sessions only; §2.20)
@@ -1359,6 +1421,8 @@ src/main/apps/runtime/
     view.ts                  -- the page's list and cancel
   im-session-registry.ts     -- Persistent IM session list (per app + channel + chatId)
   pending-relays.ts          -- Cross-session relay spool + <relay-from> rendering (§2.14)
+  chat-push.ts               -- How a sender notes a push it sent to an IM chat; loads chat-record on use (§2.14a)
+  chat-record.ts             -- Where a chat's record is kept (`chatRecordPath`), and a push written into it and the session list (§2.14a)
   progress-formatter.ts      -- Format streaming progress events for IM transports
   session-store.ts           -- JSONL persistence for chat history + SDK session IDs; transcript reads, paging and the parse cache (§2.18)
   session-transcript.ts      -- Pure codec: stored SDK events → `TranscriptMessage` (ids, thoughts, provenance; §2.18)
@@ -1472,9 +1536,12 @@ recognized in `dispatch-inbound.ts`: exact in a direct chat; in a group also
 when the command ends a message that starts with a mention. `/answer` carries
 its answer after it, so it starts a direct message, or in a group comes right
 after the mentions the message starts with — a WeCom mention ends with U+2005,
-one typed by hand at its first space — and nowhere later in the sentence
-(`im-escalation.parseAnswerCommand`, §2.3). There is no "bot name" setting, and
-none is needed.
+one typed by hand at its first space. Where a mention without U+2005 ends cannot
+be told when the bot's name holds ordinary spaces, so there, as `/stop` counts at
+the end of such a message, `/answer` counts further into it when the number of
+its question follows ("@Halo AI Team /answer 3 A"); a sentence about answering
+names no question (`im-escalation.parseAnswerCommand`, §2.3). There is no "bot
+name" setting, and none is needed.
 
 ### 4.4 The processing notice
 

@@ -99,9 +99,27 @@ describe('streamed deltas', () => {
       'thought:system',
       'thought:thinking', 'thought-delta:Let me think', 'thought-delta:complete',
       'message:start', 'message:Hello there', 'message:block',
-      'thought:tool_use', 'thought-delta:{"command":"ls"}', 'thought-delta:complete', 'agent:tool-call',
+      'thought:tool_use', 'thought-delta:complete', 'agent:tool-call',
       'thought:result', 'message:final', 'agent:complete',
     ])
+  })
+
+  it('never include a tool call\'s input while it streams: no client shows it, the parsed input follows at block stop', async () => {
+    const outcome = run([
+      init,
+      streamEvent({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tu1', name: 'Write' } }),
+      ...Array.from({ length: 50 }, (_, i) => streamEvent({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: i === 0 ? '{"file_path":"a.txt","content":"' : 'x' } })),
+      streamEvent({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '"}' } }),
+      blockStop(0),
+      result,
+    ])
+    await vi.runAllTimersAsync()
+    await outcome
+
+    const toolDeltas = events().filter(e => e.channel === 'agent:thought-delta' && e.data.isToolInput)
+    expect(toolDeltas).toHaveLength(1)
+    expect(toolDeltas[0].data).toMatchObject({ isComplete: true, isReady: true, toolInput: { file_path: 'a.txt', content: 'x'.repeat(49) } })
+    expect(toolDeltas[0].data.delta).toBeUndefined()
   })
 
   it('reach clients at most about once per interval at 200 deltas a second, with nothing lost', async () => {

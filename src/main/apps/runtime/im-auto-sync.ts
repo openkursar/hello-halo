@@ -23,6 +23,7 @@
 
 import { getImSessionRegistry } from './im-session-registry'
 import { getActiveImChannelManager } from './im-channels'
+import { recordChatPush } from './chat-push'
 
 export interface AutoSyncInput {
   appId: string
@@ -105,6 +106,15 @@ export async function autoSyncRunResult(input: AutoSyncInput): Promise<AutoSyncR
       const ok = instance.pushToChat(session.chatId, text, session.chatType)
       if (ok) {
         report.sent++
+        recordChatPush({
+          appId: session.appId,
+          channel: session.channel,
+          chatType: session.chatType,
+          chatId: session.chatId,
+          text,
+          via: 'result',
+          pushedBy: input.appId,
+        })
       } else {
         console.warn(
           `[Runtime][${input.runTag}] Auto-sync push rejected: chat=${session.chatId} ` +
