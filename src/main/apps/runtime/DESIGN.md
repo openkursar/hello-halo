@@ -1438,6 +1438,10 @@ and `POST /api/apps/:appId/runs/start`. It acknowledges admission without waitin
 for model completion, so the automatic-task switch remains usable while work is
 running. The existing public `/trigger` endpoint retains its completion response
 for external integrations. Both paths share admission and concurrency checks.
+Only the desktop's `app:start-run` marks the run `watchable`: the user is at the
+screen, so its browser context is announced under the run key and its pages open
+in the main window, listed in the live-session tray as "digital human · page".
+Remote, tool-started and scheduled runs keep their pages in the hidden host.
 
 
 ## Memory and file boundaries of a digital human

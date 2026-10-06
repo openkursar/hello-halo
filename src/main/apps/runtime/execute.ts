@@ -438,8 +438,11 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     // ── 3b. Create scoped browser context for this run ────
     //    Scoped context isolates activeViewId from user's interactive browser
     //    and other concurrent runs, while sharing the same session/cookies.
+    //    A run the user started from the desktop carries its run key, so its
+    //    pages open in the main window and the live-session tray names them
+    //    after the digital human; every other run stays in the hidden host.
     scopedBrowserCtx = usesAIBrowser
-      ? createScopedBrowserContext()
+      ? createScopedBrowserContext(trigger.watchable ? { conversationId: runSender, spaceId: app.spaceId! } : undefined)
       : undefined
 
     // ── 4. Create MCP servers ──────────────────────────────

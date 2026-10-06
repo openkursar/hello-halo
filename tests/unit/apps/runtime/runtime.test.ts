@@ -2944,6 +2944,18 @@ describe('AppRuntimeService', () => {
       expect(executeRun).not.toHaveBeenCalled()
     })
 
+    it('marks only the desktop Run once as watchable', async () => {
+      seedApp()
+      const service = createService()
+
+      await service.startManually(testAppId, { watchable: true })
+      expect(vi.mocked(executeRun).mock.calls[0][0].trigger).toMatchObject({ type: 'manual', watchable: true })
+
+      vi.mocked(executeRun).mockClear()
+      await service.startManually(testAppId)
+      expect(vi.mocked(executeRun).mock.calls[0][0].trigger.watchable).toBeUndefined()
+    })
+
     it('still resolves when the run ends without ever reporting a start', async () => {
       seedApp()
       const service = createService()
