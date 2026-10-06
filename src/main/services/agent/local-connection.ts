@@ -18,11 +18,14 @@ import { resolveBundledCodexBinary } from './codex/transport/connection'
 /**
  * A connect() to the router refused by the system, as engines report it:
  * Claude Code CLI 2.1.89 says "Unable to connect to API (EACCES)"; Node's own
- * wording, which Node-based engines pass on, is "connect EACCES 127.0.0.1:<port>".
+ * wording, which Node-based engines pass on, is "connect EACCES 127.0.0.1:<port>";
+ * the halo engine says "fetch failed (EACCES)" — it words only a failed model
+ * call that way, and Halo points every model call of it at the router.
  */
 const REFUSED_LOCAL_CONNECTION = [
   /Unable to connect to API \((?:EACCES|EPERM)\)/,
   /connect (?:EACCES|EPERM) (?:127\.0\.0\.1|::1|localhost)\b/,
+  /\bfetch failed \((?:EACCES|EPERM)\)/,
 ]
 
 const BLOCKED_CODES = new Set(['EACCES', 'EPERM'])
@@ -44,11 +47,19 @@ export function localConnectionProgram(): string {
 }
 
 /**
+ * Whether an error is a refused local connection: an engine's own report, or
+ * the explanation `explainEngineError` made of one (it quotes the report).
+ */
+export function isRefusedLocalConnection(error: string): boolean {
+  return REFUSED_LOCAL_CONNECTION.some(pattern => pattern.test(error))
+}
+
+/**
  * An engine error as the user should read it: a refused local connection is
  * explained, with the program to allow; any other error comes back unchanged.
  */
 export function explainEngineError(error: string): string {
-  if (!REFUSED_LOCAL_CONNECTION.some(pattern => pattern.test(error))) return error
+  if (!isRefusedLocalConnection(error)) return error
   return (
     "Security software on this computer blocked Halo's internal connection to 127.0.0.1, so the request never " +
     'reached the model. This is not a problem with the model, the account or the gateway. Ask your IT team to ' +
