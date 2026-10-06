@@ -13,6 +13,7 @@ const env = vi.hoisted(() => ({
   runner: null as any,
   toolsets: { list: [] as any[], requested: new Set<string>() },
   onRequested: null as null | (() => void),
+  toggle: null as any,
 }))
 vi.mock('react', async original => ({ ...await original<typeof import('react')>(), useState: (value: any) => env.runner.state(value), useRef: (value: any) => env.runner.ref(value), useMemo: (compute: any) => compute(), useCallback: (fn: any) => fn, useEffect: () => {}, useLayoutEffect: () => {} }))
 vi.mock('../../../src/renderer/api', () => ({ api: {} }))
@@ -35,7 +36,7 @@ vi.mock('../../../src/renderer/components/onboarding/onboardingData', () => ({ g
 vi.mock('../../../src/renderer/components/chat/composer-menu/useComposerToolsets', () => ({
   useComposerToolsets: (options: { onRequested: () => void }) => {
     env.onRequested = options.onRequested
-    return { list: env.toolsets.list, extraEnabled: [], requested: env.toolsets.requested, toggle: vi.fn() }
+    return { list: env.toolsets.list, extraEnabled: [], requested: env.toolsets.requested, toggle: env.toggle }
   },
 }))
 vi.mock('../../../src/renderer/components/chat/LiveSessionsHeader', () => ({ LiveSessionsHeader: () => null }))
@@ -60,16 +61,20 @@ const toolbar = (tree: any) => nodes(tree).find(node => typeof node.type === 'fu
 
 const terminal = { id: 'ai-terminal', displayName: 'Terminal', summary: 'Run commands', open: false }
 
-function mount(isGenerating: boolean) {
+function mountWithProps(isGenerating: boolean) {
   const runner = new ComponentRunner()
   const props = { onSend: vi.fn(async () => true), onInject: vi.fn(), onStop: vi.fn(), isGenerating }
-  return () => runner.render(() => (InputArea as unknown as { type: (p: typeof props) => unknown }).type(props))
+  return { props, render: () => runner.render(() => (InputArea as unknown as { type: (p: typeof props) => unknown }).type(props)) }
 }
+const mount = (isGenerating: boolean) => mountWithProps(isGenerating).render
+const textarea = (tree: any) => nodes(tree).find(node => node.type === 'textarea')
+const key = (name: string) => ({ key: name, shiftKey: false, ctrlKey: false, nativeEvent: { isComposing: false }, preventDefault: vi.fn(), stopPropagation: vi.fn() })
 
 beforeEach(() => {
   vi.stubGlobal('window', { innerWidth: 1280 })
   env.toolsets = { list: [terminal], requested: new Set(['ai-terminal']) }
   env.onRequested = null
+  env.toggle = vi.fn()
 })
 
 describe('a toolset request while the turn is running', () => {
@@ -94,5 +99,26 @@ describe('a toolset request while the turn is running', () => {
     render()
     env.onRequested!()
     expect(panel(render()).props.sections.map((section: any) => section.id)).toEqual(['add', 'context', 'capabilities'])
+  })
+})
+
+describe('a panel the AI opened', () => {
+  it('leaves the keyboard in the composer: keys flip nothing, and Esc closes the panel without stopping the turn', () => {
+    const { props, render } = mountWithProps(true)
+    render()
+    env.onRequested!()
+    expect(panel(render()).props.takeFocus).toBe(false)
+    textarea(render()).props.onKeyDown(key(' '))
+    textarea(render()).props.onKeyDown(key('Enter'))
+    expect(env.toggle).not.toHaveBeenCalled()
+    textarea(render()).props.onKeyDown(key('Escape'))
+    expect(panel(render())).toBeUndefined()
+    expect(props.onStop).not.toHaveBeenCalled()
+  })
+
+  it('takes the keyboard when the user opens it with "+"', () => {
+    const render = mount(true)
+    toolbar(render()).props.onAttachMenuToggle()
+    expect(panel(render()).props.takeFocus).toBe(true)
   })
 })

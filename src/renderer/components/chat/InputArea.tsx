@@ -361,15 +361,19 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
     if (signal.focus === 'text') requestAnimationFrame(focusText)
   }, [signal, focusText])
 
-  const openAttachMenu = useCallback(() => {
+  // Opened by an AI request rather than by the user: the panel then leaves the keyboard to the composer.
+  const [attachMenuByRequest, setAttachMenuByRequest] = useState(false)
+  const openAttachMenu = useCallback((byRequest = false) => {
     setSlashMenuOpen(false)
     setMentionMenuOpen(false)
+    setAttachMenuByRequest(byRequest)
     setShowAttachMenu(true)
   }, [])
+  const openAttachMenuForRequest = useCallback(() => openAttachMenu(true), [openAttachMenu])
   const toolsets = useComposerToolsets({
     enabled: !hideToolsetControls,
     panelOpen: showAttachMenu,
-    onRequested: openAttachMenu,
+    onRequested: openAttachMenuForRequest,
   })
 
   useEffect(() => {
@@ -1142,6 +1146,13 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
     }
     // ─────────────────────────────────────────────────────────────────────────
 
+    // A panel the AI opened leaves the keyboard here: Esc closes it rather than stopping the turn.
+    if (showAttachMenu && e.key === 'Escape') {
+      e.preventDefault()
+      setShowAttachMenu(false)
+      return
+    }
+
     // Leaving goal mode keeps the text as an ordinary draft. Esc here never
     // stops a running turn; a second Esc, outside goal mode, does.
     if (goalMode && (e.key === 'Escape' || (e.key === 'Backspace' && content === ''))) {
@@ -1321,6 +1332,7 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
               // Rows come and go when a turn ends; a fresh panel keeps the keyboard highlight on the right row.
               key={isGenerating ? 'turn-running' : 'idle'}
               sections={panelSections}
+              takeFocus={!attachMenuByRequest}
               anchorRef={cardRef}
               triggerRef={plusTriggerRef}
               onClose={closeAttachMenu}
