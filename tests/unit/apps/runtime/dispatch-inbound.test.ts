@@ -109,6 +109,9 @@ vi.mock('../../../../src/main/services/space.service', () => ({
   getSpaceDir: vi.fn(() => '/tmp/space-dir'),
   getSpace: vi.fn(() => ({ path: '/tmp/space' })),
 }))
+// The IM error reply asks whether a failure is a refused local connection; what
+// a chat is then told is im-error-reply.test's, with the real check.
+vi.mock('../../../../src/main/services/agent', () => ({ isRefusedLocalConnection: (error: string) => error.includes('Unable to connect to API (EACCES)') }))
 vi.mock('../../../../src/main/foundation/product-config', () => ({
   getImChannelsPermissionDefaults: vi.fn(() => undefined),
 }))
@@ -490,6 +493,26 @@ describe('dispatchInboundMessage — a turn that stopped short', () => {
     await dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
 
     expect(reply.send).toHaveBeenLastCalledWith('⚠️ Error: API Error: 529 overloaded')
+  })
+
+  it('tells a chat no path of this computer, and not the program to allow when a local connection was refused', async () => {
+    // The chat may hold people from outside; the explanation is for the owner, in Halo.
+    sendAppChatMessageMock.mockRejectedValueOnce(new Error(
+      "Security software on this computer blocked Halo's internal connection to 127.0.0.1, so the request never " +
+      'reached the model. Ask your IT team to allow this program to make local connections: ' +
+      '/Applications/Halo.app/Contents/MacOS/Halo (engine error: API Error: Unable to connect to API (EACCES))'
+    ))
+    sendAppChatMessageMock.mockRejectedValueOnce(new Error("ENOENT: no such file or directory, open '/Users/lin/space/notes.md'"))
+    const refused = makeReply(false)
+    const missing = makeReply(false)
+
+    await dispatchInboundMessage(makeMsg(), refused, 'app-1', 'inst-1')
+    await dispatchInboundMessage(makeMsg({ chatId: 'chat-2' }), missing, 'app-1', 'inst-1')
+
+    const [refusedText] = (refused.send as ReturnType<typeof vi.fn>).mock.calls.at(-1)!
+    expect(refusedText).toContain('安全软件拦截了本机连接')
+    expect(refusedText).not.toContain('/Applications')
+    expect(missing.send).toHaveBeenLastCalledWith("⚠️ Error: ENOENT: no such file or directory, open '<local path>'")
   })
 })
 

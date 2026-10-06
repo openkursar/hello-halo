@@ -42,8 +42,11 @@ vi.mock('../../../../src/main/apps/runtime/im-channels', () => ({
 vi.mock('../../../../src/main/apps/runtime/im-channels/file-send-resolve', () => ({ resolveImFileSend: () => undefined }))
 vi.mock('../../../../src/main/apps/runtime/im-permission-registry', () => ({ setImPermissionContext: env.setPermission }))
 vi.mock('../../../../src/main/services/space.service', () => ({ getSpaceDir: () => '/work' }))
+// What a chat is told of a refused local connection is im-error-reply.test's.
+vi.mock('../../../../src/main/services/agent', () => ({ isRefusedLocalConnection: () => false }))
 
 const { deliverReminder } = await import('../../../../src/main/apps/runtime/reminders/delivery')
+const { AppChatTurnInterrupted, withTurnEndingNote } = await import('../../../../src/main/apps/runtime/turn-ending')
 const { setConversationReminders } = await import('../../../../src/main/apps/runtime/reminders')
 
 const APP = 'app-1'
@@ -175,6 +178,43 @@ describe('deliverReminder', () => {
     // A turn cut off before it finished says so, as every IM reply does.
     request.onReply('Time is', { kind: 'interrupted' })
     expect(pushToChat).toHaveBeenLastCalledWith('g-1', expect.stringMatching(/^Time is\n\n（.+）$/), 'group')
+  })
+
+  it('tells an IM chat when the reminder\'s turn failed, as the chat is told of a turn of its own', async () => {
+    const pushToChat = vi.fn().mockReturnValue(true)
+    env.sessions.set('wecom-bot:g-1', { instanceId: 'inst-1', chatId: 'g-1', displayName: 'g-1' })
+    env.instances.set('inst-1', { providerType: 'wecom-bot', pushToChat })
+    env.configs.set('inst-1', { appId: APP })
+    env.send.mockRejectedValueOnce(new AppChatTurnInterrupted())
+    env.send.mockRejectedValueOnce(new Error("429 Too Many Requests (quota file '/Users/lin/.halo/quota.json')"))
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    for (let i = 0; i < 2; i++) {
+      deliverReminder(reminder(`app-chat:${APP}:wecom-bot:group:g-1`), NOW)
+      await settle()
+    }
+
+    expect(pushToChat.mock.calls.map(([chatId, text, chatType]) => [chatId, text, chatType])).toEqual([
+      ['g-1', withTurnEndingNote('', { kind: 'interrupted' }), 'group'],
+      ['g-1', "⚠️ Error: 429 Too Many Requests (quota file '<local path>')", 'group'],
+    ])
+    errors.mockRestore()
+  })
+
+  it('logs a push the chat would not take, and does not try again', async () => {
+    const pushToChat = vi.fn().mockReturnValue(false)
+    env.sessions.set('weixin-ilink-bot:u-1', { instanceId: 'inst-1', chatId: 'u-1', displayName: 'Li' })
+    env.instances.set('inst-1', { providerType: 'weixin-ilink-bot', pushToChat })
+    env.configs.set('inst-1', { appId: APP })
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    deliverReminder(reminder(`app-chat:${APP}:weixin-ilink-bot:direct:u-1`), NOW)
+    await settle()
+    ;(sent()[0] as Record<string, any>).onReply('Time is up!')
+
+    expect(pushToChat).toHaveBeenCalledTimes(1)
+    expect(warnings.mock.calls.map(([line]) => String(line)).some(line => line.includes('not taken') && line.includes(':direct:u-1'))).toBe(true)
+    warnings.mockRestore()
   })
 
   it('names its contact in a direct chat instead of tagging the message', async () => {

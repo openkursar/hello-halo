@@ -585,6 +585,15 @@ Consequences that matter:
   the stream processor's `agent:error` (`interrupted`) notice covers the step
   limit with or without text. A reply cut at the output-token ceiling is not
   the step limit and gets no note on any engine (services/agent DESIGN §3).
+- **A failed turn is told without this computer** (`im-error-reply.ts`). Every
+  IM path that runs a turn — the person's message (`dispatch-inbound`), a
+  reminder (`reminders/delivery`) — tells the chat of a failure with
+  `imErrorReply`: the cut-off note for `AppChatTurnInterrupted`; for a local
+  connection security software refused (`isRefusedLocalConnection`), that it
+  happened and that the owner sees to it in Halo, without the program to allow;
+  otherwise `⚠️ Error: …` with this computer's paths replaced by `<local path>`
+  (POSIX roots, drives, network shares, file URLs — never a web address's path),
+  then cut to 200 characters. An IM group may hold people from outside.
 - Those cover a session that *reports* its death. A session that simply never
   produces a turn — a resume against a transcript a crashed process left broken,
   an engine that failed to launch — reports nothing, and the caller would await a
@@ -1270,9 +1279,11 @@ create a digital human for a reminder.
   late. An IM chat gets the framing and file sending dispatch-inbound gives it,
   the asker's `<msg-sender>` in a group (and as the subject of any push), the
   asker's standing re-resolved under the channel's current settings
-  (`im-sender-standing.ts`), and the reply pushed to the chat. A one-off still
-  waiting when Halo quits is not delivered: the scheduler disabled it when it
-  came due.
+  (`im-sender-standing.ts`), and the reply pushed to the chat. A turn that
+  fails is told to the chat as a failed turn of its own is (`imErrorReply`,
+  §2.12a); nobody waits on it, so a push the chat does not take is logged, not
+  retried. A one-off still waiting when Halo quits is not delivered: the
+  scheduler disabled it when it came due.
 - **Guests do not get it.** The server is not in the capability toggle table,
   and the guest filter keeps no server an owner was never offered a switch for:
   a guest may only query, and every reminder is a future turn someone pays for.
@@ -1354,6 +1365,7 @@ src/main/apps/runtime/
   app-chat.ts                -- sendAppChatMessage() and chat session lifecycle
   app-chat-sink.ts           -- TurnSink for chat: run JSONL + round/autonomous delivery (§2.12a); the record's one writer, holding a push that comes mid-turn until the turn ends (§2.14a)
   turn-ending.ts             -- A turn that stopped short (step limit, cut off): how it is recognized and the note an IM chat gets (§2.12a)
+  im-error-reply.ts          -- What an IM chat is told when its turn failed: no path or program of this computer goes out (§2.12a)
   turn-skills.ts             -- Which skills a borrowed turn may load, what a granted skill may not bring with it, and why its message never runs as a command ("Skills on a borrowed turn")
   app-chat-browser.ts        -- The AI browser context each chat drives: resident for native chats, per-turn for IM/HTTP/team, idle/cap reaping, teardown by reason (§2.19)
   conversation-source.ts     -- The digital-human `ConversationSource` registered with services/conversation-interop (default + local sessions only; §2.20)
