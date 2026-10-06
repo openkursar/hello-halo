@@ -167,6 +167,10 @@ const REASONING_EFFORT_PROFILES: readonly ProfileEntry[] = [
   // and mapped server-side; thinking stops only through `thinking.type`.
   { pattern: 'deepseek', profile: { thinkingToggle: true } },
 
+  // MiMo — mimo.mi.com deep-thinking guide: the V2.5 and V2.6 models think by
+  // default and stop through `thinking.type`. Effort is left as forwarded.
+  { pattern: 'mimo-v2', profile: { thinkingToggle: true } },
+
   // GLM — docs.bigmodel.cn thinking-mode guide. GLM-5.3 and GLM-5.3-FLASH always think
   // and accept only low/high/max.
   { pattern: 'glm-5-3', profile: { levels: ['low', 'high', 'max'], disableValue: 'low' } },
