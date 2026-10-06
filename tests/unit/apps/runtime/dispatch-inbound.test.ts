@@ -121,6 +121,23 @@ vi.mock('../../../../src/main/apps/team', () => ({
 vi.mock('../../../../src/main/apps/runtime/team', () => ({
   getActiveTeamRuntime: () => teamRuntime,
 }))
+// ── The runtime's answer path, behind /answer ──
+const { answerDeps } = vi.hoisted(() => ({
+  answerDeps: {
+    pending: [] as Array<Record<string, unknown>>,
+    respond: vi.fn(async () => undefined),
+  },
+}))
+vi.mock('../../../../src/main/apps/runtime/im-escalation', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  runtimeAnswerDeps: async () => ({
+    pendingEscalations: () => answerDeps.pending,
+    escalationByNumber: (number: number) =>
+      answerDeps.pending.find(e => (e.content as { number?: number }).number === number) ?? null,
+    isRunClosed: () => false,
+    respond: answerDeps.respond,
+  }),
+}))
 
 import {
   dispatchInboundMessage,
@@ -981,3 +998,61 @@ describe('dispatchInboundMessage — buffered messages', () => {
     expect(setImPermissionContext).toHaveBeenLastCalledWith(CONV, expect.objectContaining({ isOwner: false }))
   })
 })
+
+// ============================================
+// /answer — an owner answers a question from the chat
+// ============================================
+
+describe('dispatchInboundMessage — /answer', () => {
+  const QUESTION = {
+    id: 'q-1', appId: 'app-1', runId: 'run-1', type: 'escalation', ts: 1,
+    content: { summary: 'Ship tonight?', choices: ['Yes', 'No'], number: 12 },
+  }
+
+  beforeEach(() => {
+    answerDeps.pending = [QUESTION]
+    answerDeps.respond.mockClear()
+  })
+
+  it('takes an owner\'s answer the way Halo does, and never hands it to the digital human', async () => {
+    instanceCfg = { permissionEnabled: true, owners: ['u1'] }
+    const reply = makeReply(false)
+
+    await dispatchInboundMessage(makeMsg({ body: '/answer 12 A' }), reply, 'app-1', 'inst-1')
+
+    expect(answerDeps.respond).toHaveBeenCalledWith('app-1', 'q-1', expect.objectContaining({ choice: 'Yes' }))
+    expect(reply.send).toHaveBeenCalledWith('已收到，任务继续。（编号 12 的问题）')
+    expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+  })
+
+  it('takes it from an owner in a group too, after the mention', async () => {
+    instanceCfg = { permissionEnabled: true, owners: ['u1'] }
+    const reply = makeReply(false)
+
+    await dispatchInboundMessage(makeMsg({ chatType: 'group', chatId: 'g-1', body: '@Halo AI 团队 /answer 12 B' }), reply, 'app-1', 'inst-1')
+
+    expect(answerDeps.respond).toHaveBeenCalledWith('app-1', 'q-1', expect.objectContaining({ choice: 'No' }))
+    expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+  })
+
+  it('tells anyone else it is the owner\'s to answer, and approves nothing', async () => {
+    instanceCfg = { permissionEnabled: true, owners: ['boss'] }
+    const reply = makeReply(false)
+
+    await dispatchInboundMessage(makeMsg({ body: '/answer 12 A' }), reply, 'app-1', 'inst-1')
+
+    expect(answerDeps.respond).not.toHaveBeenCalled()
+    expect(reply.send).toHaveBeenCalledWith('只有主人可以回答这个问题。')
+    expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+  })
+
+  it('leaves an ordinary message that only mentions answering to the digital human', async () => {
+    instanceCfg = { permissionEnabled: true, owners: ['u1'] }
+
+    await dispatchInboundMessage(makeMsg({ body: 'what should I /answer here?' }), makeReply(false), 'app-1', 'inst-1')
+
+    expect(answerDeps.respond).not.toHaveBeenCalled()
+    expect(sendAppChatMessageMock).toHaveBeenCalledTimes(1)
+  })
+})
+

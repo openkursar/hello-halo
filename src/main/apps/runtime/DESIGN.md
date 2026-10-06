@@ -154,6 +154,28 @@ Two consequences follow:
   the authority (`hasPendingSoloEscalation`). Open questions are
   closed only by their own deadline or explicit task closure, never by a person-level status change.
 
+**A question reaches IM, and is answered there** (`im-escalation.ts`). A person who works
+with a digital human only through an IM bot would otherwise never see that it stopped to
+ask. When the question is saved, `report-tool` hands it to `deliverEscalationToIm`, for
+every bot serving that digital human or fronting its team:
+- The full question goes only to owners' direct chats — a decision may carry private
+  details. An owner is read by who is on the other side of the chat
+  (`ImSessionRecord.contactId`, recorded as they write; some platforms give a direct chat
+  an ID of its own). With permission control off there is no owner list, so the direct
+  chats chosen to receive results stand for it, never every contact.
+- A group that receives results, and the group a team's work came from, is told only that
+  a question waits for the owner.
+- `/answer <number> <answer>` takes the path an answer given in Halo takes
+  (`respondToEscalation`), so the first answer wins wherever it was given. It is handled in
+  `dispatch-inbound` and never reaches the model. Only an owner answers (any chat); with
+  permission control off, only a direct chat does. The answer is read as a choice letter, a
+  choice's words or free text, one line per decision when several were asked.
+- Every escalation carries `content.number`, unique and never reused (`nextEscalationNumber`),
+  so a late answer cannot land on a newer question. A number that names another bot's
+  question is "not found", not the one question this bot has open. With one question open
+  the number may be left out. Answered, closed and expired questions only get an
+  explanation.
+
 ### 2.4 report_to_user as SDK MCP Server
 
 **Decision**: `report_to_user` is implemented as an SDK MCP server using
@@ -1175,6 +1197,7 @@ src/main/apps/runtime/
   people-directory.ts        -- bounded directory page projection
   prompt.ts                  -- buildAppSystemPrompt() for automation (headless) sessions
   report-tool.ts             -- report_to_user SDK MCP tool
+  im-escalation.ts           -- A question asked over IM: who is asked, who is told, and `/answer` (§2.3)
   escalation-cut.ts          -- when a turn that asked the user may be ended (§2.3); applied by execute.ts and app-chat-sink.ts
   notify-tool.ts             -- halo-notify SDK MCP tool (notify_channel + notify_bot)
   notify-availability.ts     -- resolveNotifyAvailability() — single source of truth for whether notify tools are actually loaded (mirrors notify-tool injection rules; consumed by chat + automation prompts)
@@ -1309,8 +1332,10 @@ addresses is part of it. (Feishu's SDK already removes the bot's own mention fro
 structured mention list; WeCom names nobody, and where a bot name ends cannot
 be told from the text, since names may contain spaces.) Commands are
 recognized in `dispatch-inbound.ts`: exact in a direct chat; in a group also
-when the command ends a message that starts with a mention. There is no "bot
-name" setting, and none is needed.
+when the command ends a message that starts with a mention. `/answer` carries
+its answer after it, so it starts a direct message, or follows the mention in a
+group (`im-escalation.parseAnswerCommand`, §2.3). There is no "bot name"
+setting, and none is needed.
 
 Tests live in `tests/unit/apps/runtime/` mirroring the source layout.
 

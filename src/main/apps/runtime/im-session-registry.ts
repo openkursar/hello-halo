@@ -100,7 +100,13 @@ export class ImSessionRegistry {
     chatId: string,
     chatType: 'direct' | 'group',
     instanceId: string,
-    opts?: { displayName?: string; lastSender?: string; lastMessage?: string; teamContext?: ImSessionRecord['teamContext'] }
+    opts?: {
+      displayName?: string
+      lastSender?: string
+      lastMessage?: string
+      teamContext?: ImSessionRecord['teamContext']
+      contactId?: string
+    }
   ): void {
     const key = this.buildKey(appId, channel, chatId)
     const existing = this.sessions.get(key)
@@ -114,7 +120,9 @@ export class ImSessionRegistry {
       existing.messageCount = (existing.messageCount ?? 0) + 1
       if (opts?.lastSender !== undefined) existing.lastSender = opts.lastSender
       if (opts?.lastMessage !== undefined) existing.lastMessage = truncateUtf16Safe(opts.lastMessage, 50)
-      this.requestPersist(archiveChanged)
+      const contactChanged = !!opts?.contactId && existing.contactId !== opts.contactId
+      if (contactChanged) existing.contactId = opts!.contactId
+      this.requestPersist(archiveChanged || contactChanged)
     } else {
       const source = classifySessionSource(channel)
       this.sessions.set(key, {
@@ -125,6 +133,7 @@ export class ImSessionRegistry {
         instanceId,
         chatId,
         chatType,
+        ...(opts?.contactId ? { contactId: opts.contactId } : {}),
         displayName: opts?.displayName || chatId,
         proactive: false,
         lastActiveAt: Date.now(),

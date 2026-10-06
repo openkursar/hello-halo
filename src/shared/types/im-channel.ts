@@ -629,6 +629,12 @@ export interface ImSessionRecord {
   chatId: string
   /** Conversation type */
   chatType: 'direct' | 'group'
+  /**
+   * Direct chats: the person on the other side, by the platform user ID an
+   * owner list holds. Some platforms give a direct chat an ID of its own, so
+   * `chatId` cannot stand in for it there. Absent until they next write.
+   */
+  contactId?: string
   /** Human-readable name for UI display (set once on first registration, never overwritten) */
   displayName: string
   /** User-assigned custom name — highest display priority */

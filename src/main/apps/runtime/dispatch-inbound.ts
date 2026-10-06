@@ -56,6 +56,7 @@ import { resolveImFileSend } from './im-channels/file-send-resolve'
 import { maybeClaimOwner } from './im-channels/owner-claim'
 import { resolveInboundIdentity } from './im-channels/identity-resolve'
 import { getImChannelsPermissionDefaults } from '../../foundation/product-config'
+import { answerEscalationFromIm, parseAnswerCommand, runtimeAnswerDeps } from './im-escalation'
 
 // ============================================
 // Constants
@@ -719,6 +720,7 @@ export async function dispatchInboundMessage(
       teamContext: teamBacking ? { teamId: teamBacking.teamId, epochId: teamBacking.teamContext.epochId } : undefined,
       lastSender: msg.fromName,
       lastMessage: truncateUtf16Safe(msg.body, 50),
+      ...(msg.chatType === 'direct' && msg.from ? { contactId: msg.from } : {}),
     })
 
     // Notify renderer of session update for real-time panel refresh
@@ -785,6 +787,27 @@ export async function dispatchInboundMessage(
       console.error(`${LOG_TAG} Failed to clear context: session=${conversationId}`, err)
       await reply.send('Failed to clear context. Please try again.').catch(() => {})
     }
+    return
+  }
+
+  // ── Answer command: a question this digital human asked, answered here ──
+  // Never reaches the model: it is the owner answering through Halo's own
+  // answer path, not a message to the digital human (im-escalation).
+  const answerArgs = parseAnswerCommand(msg.body, msg.chatType)
+  if (answerArgs !== null) {
+    const deps = await runtimeAnswerDeps()
+    const answerReply = deps
+      ? await answerEscalationFromIm(answerArgs, {
+          appId: app.id,
+          ...(instanceCfg?.teamId ? { teamId: instanceCfg.teamId } : {}),
+          senderId: msg.from,
+          chatType: msg.chatType,
+          permissionEnabled: instanceCfg?.permissionEnabled ?? false,
+          owners: instanceCfg?.owners ?? [],
+        }, deps)
+      : '现在无法处理回答，请稍后再试。'
+    console.log(`${LOG_TAG} Answer command: channel=${msg.channel}, chatId=${msg.chatId}, session=${conversationId}`)
+    await reply.send(answerReply).catch(() => {})
     return
   }
 

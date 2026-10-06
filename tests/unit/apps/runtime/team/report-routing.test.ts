@@ -40,6 +40,8 @@ vi.mock('../../../../../src/main/http/websocket', () => ({ broadcastToAll }))
 vi.mock('../../../../../src/main/foundation/window.service', () => ({ sendToRenderer }))
 vi.mock('../../../../../src/main/services/notification.service', () => ({ notifyAppEvent }))
 vi.mock('../../../../../src/main/apps/runtime/team', () => ({ getActiveTeamRuntime }))
+const { deliverEscalationToIm } = vi.hoisted(() => ({ deliverEscalationToIm: vi.fn() }))
+vi.mock('../../../../../src/main/apps/runtime/im-escalation', () => ({ deliverEscalationToIm }))
 
 import { createReportToolServer } from '../../../../../src/main/apps/runtime/report-tool'
 import type { ReportToolContext } from '../../../../../src/main/apps/runtime/report-tool'
@@ -58,6 +60,7 @@ function makeStore() {
       getAllPendingEscalations: vi.fn(() =>
         entries.filter((e) => e.type === 'escalation' && !e.userResponse)
       ),
+      nextEscalationNumber: vi.fn(() => entries.filter((e) => e.type === 'escalation').length + 1),
     } as any,
   }
 }
@@ -316,4 +319,23 @@ describe('report routing (§5.3)', () => {
     expect(entries[0].content.teamContext).toBeUndefined()
     expect(res.content[0].text).toMatch(/report saved/i)
   })
+
+  it('numbers each question and asks it over IM too, while other reports stay off IM', async () => {
+    // A question must reach a person who works with the digital human only
+    // through an IM bot, and carry the number they answer it by there.
+    deliverEscalationToIm.mockClear()
+    const { store, entries } = makeStore()
+    const ctx: ReportToolContext = { appId: 'app-solo', appName: 'Solo', runId: 'run-1', sessionKey: 'session-1' }
+    const handler = getReportHandler(ctx, store)
+
+    await handler({ type: 'escalation', message: 'Ship tonight?', choices: ['Yes', 'No'] })
+    await handler({ type: 'run_complete', message: 'done' })
+    await handler({ type: 'escalation', message: 'And the hotfix?' })
+    await vi.waitFor(() => expect(deliverEscalationToIm).toHaveBeenCalledTimes(2))
+
+    expect(entries.filter(e => e.type === 'escalation').map(e => e.content.number)).toEqual([1, 2])
+    expect(entries.find(e => e.type === 'run_complete')?.content.number).toBeUndefined()
+    expect(deliverEscalationToIm).toHaveBeenCalledWith(expect.objectContaining({ id: entries[0].id }), 'Solo')
+  })
 })
+
