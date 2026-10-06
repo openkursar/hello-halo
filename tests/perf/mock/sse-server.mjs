@@ -37,7 +37,11 @@
  *   MOCK_CONTENT        default "default"; "links" = ~20K chars of link- and
  *                       bold-dense paragraphs, "code150" = one 150-line fenced
  *                       TypeScript block. Presets stream in fixed 40-char deltas
- *                       (MOCK_TOKEN_COUNT does not apply).
+ *                       (MOCK_TOKEN_COUNT does not apply). "burst" = ~3.2K chars
+ *                       of reasoning (`reasoning_content`) then ~20K chars of
+ *                       Markdown, in 16-char deltas every 5 ms (200 a second,
+ *                       MOCK_INTERVAL_MS does not apply): a small-chunk,
+ *                       high-rate provider with a long thinking phase.
  *
  * A prompt containing `mock-content:<preset>` gets that preset regardless of
  * MOCK_CONTENT, so one mock (the one run-perf starts) serves every scenario.
@@ -166,6 +170,13 @@ const LINK_PARAGRAPH = (n) =>
 const CODE_LINE = (n) =>
   `export function step${n}(input: number): number { return input * ${n} + ${n % 7} } // line ${n}\n`
 
+const BURST_PARAGRAPH = (n) =>
+  `${n % 8 === 1 ? `## Part ${Math.ceil(n / 8)}\n\n` : ''}Point ${n}: a long reply arrives in small pieces, and each piece ` +
+  `should cost the view no more than the one before it, however long the reply has grown.\n\n` +
+  `${n % 5 === 0 ? `- check ${n}a stays readable\n- check ${n}b stays responsive\n\n` : ''}`
+
+const BURST_REASONING = (n) => `Step ${n}: weigh what the next part of the answer needs before writing it. `
+
 function presetText(name) {
   if (name === 'links') {
     let text = '# Link-dense report\n\n'
@@ -177,7 +188,18 @@ function presetText(name) {
     for (let n = 1; n <= 150; n++) code += CODE_LINE(n)
     return `Here is the whole module:\n\n\`\`\`ts\n${code}\`\`\`\n\nThat is all 150 lines.\n`
   }
+  if (name === 'burst') {
+    let text = '# Burst report\n\n'
+    for (let n = 1; text.length < 20000; n++) text += BURST_PARAGRAPH(n)
+    return text
+  }
   throw new Error(`Unknown MOCK_CONTENT preset: ${name}`)
+}
+
+function burstReasoning() {
+  let text = ''
+  for (let n = 1; text.length < 3200; n++) text += BURST_REASONING(n)
+  return text
 }
 
 /** Fixed-size deltas, like a provider streaming a long reply. */
@@ -188,7 +210,11 @@ function chunked(text, size) {
 }
 
 const CONTENT = process.env.MOCK_CONTENT || 'default'
-const PRESETS = ['links', 'code150']
+const PRESETS = ['links', 'code150', 'burst']
+
+/** Delta size and pace of presets that model a particular provider rather than the default stream. */
+const BURST_DELTA_CHARS = 16
+const INTERVAL_BY_CONTENT = { burst: 5 }
 
 // Built once at startup so every request in this process serves byte-identical content.
 const TOKENS_BY_CONTENT = {
@@ -196,8 +222,10 @@ const TOKENS_BY_CONTENT = {
   numbers: Array.from({ length: 50 }, (_, index) => `${index % 5 + 1} `),
   first: ['First'],
   second: ['Second'],
-  ...Object.fromEntries(PRESETS.map(name => [name, chunked(presetText(name), 40)])),
+  ...Object.fromEntries(PRESETS.map(name => [name, chunked(presetText(name), name === 'burst' ? BURST_DELTA_CHARS : 40)])),
 }
+/** Reasoning streamed before the reply (`reasoning_content`, which the router turns into a thinking block). */
+const REASONING_BY_CONTENT = { burst: chunked(burstReasoning(), BURST_DELTA_CHARS) }
 if (!TOKENS_BY_CONTENT[CONTENT]) throw new Error(`Unknown MOCK_CONTENT preset: ${CONTENT}`)
 
 /** Select explicit workload presets or deterministic chat-fixture replies. */
@@ -239,8 +267,10 @@ async function handleChatCompletions(req, res) {
   const reportTool = body.tools?.find(tool => tool.function?.name === 'mcp__halo-report__report_to_user')
   const reportResult = body.messages?.some(message => message.role === 'tool' && message.tool_call_id === 'mock-report-1')
   const TOKENS = reportTool ? (reportResult ? ['Run finished.'] : ['Preparing the run report.']) : TOKENS_BY_CONTENT[content]
+  const REASONING = reportTool ? [] : REASONING_BY_CONTENT[content] ?? []
+  const interval = INTERVAL_BY_CONTENT[content] ?? INTERVAL_MS
 
-  console.log(`[mock-sse] POST ${req.url} model=${model} stream=${stream} tokens=${TOKENS.length} content=${content} interval=${INTERVAL_MS}ms report=${!!reportTool} followup=${!!reportResult}`)
+  console.log(`[mock-sse] POST ${req.url} model=${model} stream=${stream} tokens=${TOKENS.length} reasoning=${REASONING.length} content=${content} interval=${interval}ms report=${!!reportTool} followup=${!!reportResult}`)
 
   if (!stream) {
     // Non-streaming fallback: full OpenAI chat completion object, for completeness.
@@ -275,26 +305,15 @@ async function handleChatCompletions(req, res) {
       return
     }
 
-    if (i === 0) {
-      // First chunk carries the role, matching real providers' first frame.
+    if (i < REASONING.length + TOKENS.length) {
+      const delta = i < REASONING.length ? { reasoning_content: REASONING[i] } : { content: TOKENS[i - REASONING.length] }
       sseChunk(res, {
         id: 'mock-cmpl-1',
         object: 'chat.completion.chunk',
         created: Math.floor(Date.now() / 1000),
         model,
-        choices: [{ index: 0, delta: { role: 'assistant', content: TOKENS[i] }, finish_reason: null }]
-      })
-      i++
-      return
-    }
-
-    if (i < TOKENS.length) {
-      sseChunk(res, {
-        id: 'mock-cmpl-1',
-        object: 'chat.completion.chunk',
-        created: Math.floor(Date.now() / 1000),
-        model,
-        choices: [{ index: 0, delta: { content: TOKENS[i] }, finish_reason: null }]
+        // The first chunk carries the role, matching real providers' first frame.
+        choices: [{ index: 0, delta: i === 0 ? { role: 'assistant', ...delta } : delta, finish_reason: null }]
       })
       i++
       return
@@ -318,12 +337,12 @@ async function handleChatCompletions(req, res) {
       created: Math.floor(Date.now() / 1000),
       model,
       choices: [{ index: 0, delta: {}, finish_reason: reportTool && !reportResult ? 'tool_calls' : 'stop' }],
-      usage: { prompt_tokens: 20, completion_tokens: TOKENS.length, total_tokens: TOKENS.length + 20 }
+      usage: { prompt_tokens: 20, completion_tokens: REASONING.length + TOKENS.length, total_tokens: REASONING.length + TOKENS.length + 20 }
     })
     res.write('data: [DONE]\n\n')
     res.end()
     clearInterval(timer)
-  }, INTERVAL_MS)
+  }, interval)
 
   req.on('close', () => clearInterval(timer))
 }
