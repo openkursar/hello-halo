@@ -21,6 +21,8 @@ export interface ChatPush {
   /** What the chat received */
   text: string
   via: ChatPushVia
+  /** The digital human that sent it: the chat's own (`appId`), or one linked to the chat */
+  pushedBy: string
 }
 
 /** Note a push that was sent. Never throws and never waits. */

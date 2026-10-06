@@ -57,7 +57,11 @@ function session(chatId: string, chatType: 'direct' | 'group'): ImSessionRecord 
 function notifyBot(exportGate = new FileExportGate([])) {
   const server = createNotifyToolServer({
     appId: 'dh', appName: 'Desk', runId: 'run-1',
-    imSessions: [session('ops-group', 'group'), session('boss', 'direct'), { ...session('ops-group', 'group'), instanceId: 'inst-2' }],
+    imSessions: [
+      session('ops-group', 'group'), session('boss', 'direct'), { ...session('ops-group', 'group'), instanceId: 'inst-2' },
+      // Another digital human's chat, reached through a push link (#135).
+      { ...session('release-group', 'group'), appId: 'ops-dh', instanceId: 'inst-3' },
+    ],
     usesImPush: true,
     exportGate,
     relay: { sessionKey: 'app-chat:dh:wecom-bot:group:ops-group', contact: 'inst-1:ops-group', isOwner: true },
@@ -103,8 +107,14 @@ describe('what notify_bot sent, in the record of the chat it went to', () => {
     expect(recordChatPush).toHaveBeenCalledOnce()
     expect(recordChatPush).toHaveBeenCalledWith({
       appId: 'dh', channel: 'wecom-bot', chatType: 'direct', chatId: 'boss',
-      text: 'FYI: the ops group asked about the release', via: 'message',
+      text: 'FYI: the ops group asked about the release', via: 'message', pushedBy: 'dh',
     })
+  })
+
+  it('is kept in the chat\'s own digital human\'s record when sent through a push link, naming who sent it', async () => {
+    await notifyBot()({ to: 'inst-3:release-group', message: 'Release 3.0 is out' })
+
+    expect(recordChatPush).toHaveBeenCalledWith(expect.objectContaining({ appId: 'ops-dh', chatId: 'release-group', pushedBy: 'dh' }))
   })
 
   it('names a file it sent, and keeps a message whose file did not go', async () => {

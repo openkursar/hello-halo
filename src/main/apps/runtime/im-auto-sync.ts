@@ -113,6 +113,7 @@ export async function autoSyncRunResult(input: AutoSyncInput): Promise<AutoSyncR
           chatId: session.chatId,
           text,
           via: 'result',
+          pushedBy: input.appId,
         })
       } else {
         console.warn(

@@ -58,11 +58,21 @@ export interface SessionWriter {
     references?: ContentReference[]
   ): void
   /**
-   * Record a message the digital human sent to this chat outside its turns
-   * (see `ChatPushVia`), sent at `at` (default now). Never among a turn's lines:
-   * reading the file back takes it as the end of any turn before it.
+   * Record a message the digital human sent to this chat outside its turns.
+   * Never among a turn's lines: reading the file back takes it as the end of any
+   * turn before it.
    */
-  writePush(text: string, via: ChatPushVia, at?: string): void
+  writePush(push: RecordedPush): void
+}
+
+/** A message sent to a chat outside its turns, as the chat's record keeps it. */
+export interface RecordedPush {
+  text: string
+  via: ChatPushVia
+  /** When it was sent (ISO); now when omitted */
+  at?: string
+  /** The digital human that sent it, when it is not the chat's own (one linked to the chat) */
+  by?: { appId: string; name: string }
 }
 
 /** Get the directory for run session files */
@@ -124,11 +134,12 @@ export function openSessionWriter(spacePath: string, appId: string, runId: strin
       })
     },
 
-    writePush(text, via, at): void {
+    writePush({ text, via, at, by }): void {
       appendLine({
         _ts: at ?? new Date().toISOString(),
         type: 'push',
         _pushVia: via,
+        ...(by ? { _pushedBy: by } : {}),
         message: { role: 'assistant', content: [{ type: 'text', text }] },
       })
     },

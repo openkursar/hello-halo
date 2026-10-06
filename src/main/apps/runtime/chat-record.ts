@@ -15,7 +15,7 @@
  */
 
 import { buildImSessionKey } from '../../../shared/apps/im-keys'
-import { buildTeamSessionKey } from '../../../shared/apps/team-types'
+import { buildTeamSessionKey, TEAM_EVENTS } from '../../../shared/apps/team-types'
 import { sendToRenderer } from '../../foundation/window.service'
 import { broadcastToAll } from '../../http/websocket'
 import { getSpace } from '../../services/space.service'
@@ -46,7 +46,8 @@ export function writeChatPush(push: ChatPush): void {
     ? buildTeamSessionKey(push.appId, session.teamContext.teamId, session.teamContext.epochId)
     : buildImSessionKey(push.appId, push.channel, push.chatType, push.chatId)
 
-  const app = getAppManager()?.getApp(push.appId)
+  const manager = getAppManager()
+  const app = manager?.getApp(push.appId)
   const fallback = app?.spaceId ? getSpace(app.spaceId)?.path ?? '' : ''
   const spacePath = chatRecordPath(push.appId, conversationId, fallback)
   if (!spacePath) {
@@ -54,15 +55,21 @@ export function writeChatPush(push: ChatPush): void {
     return
   }
 
+  // A push from a digital human linked to the chat goes into the record of the
+  // chat's own digital human — the one the chat's replies go to — under the
+  // sender's name.
+  const by = push.pushedBy === push.appId
+    ? undefined
+    : { appId: push.pushedBy, name: manager?.getApp(push.pushedBy)?.spec.name ?? push.pushedBy }
   getAppChatSink({
     appId: push.appId,
     conversationId,
     runId: appChatRunId(conversationId, push.appId),
     spacePath,
-  }).writePush(push.text, push.via)
+  }).writePush({ text: push.text, via: push.via, by })
 
   const lastMessage = truncateUtf16Safe(push.text, 50)
-  const lastSender = app?.spec.name
+  const lastSender = by?.name ?? app?.spec.name
   registry?.notePush(push.appId, push.channel, push.chatId, { lastSender, lastMessage })
   const update = {
     appId: push.appId,
@@ -75,4 +82,10 @@ export function writeChatPush(push: ChatPush): void {
   }
   sendToRenderer('app:im-session-updated', update)
   broadcastToAll('app:im-session-updated', update)
+  if (session?.teamContext) {
+    // What an open view of the team's conversation reloads on.
+    const history = { teamId: session.teamContext.teamId, appId: push.appId, epochId: session.teamContext.epochId }
+    sendToRenderer(TEAM_EVENTS.memberHistory, history)
+    broadcastToAll(TEAM_EVENTS.memberHistory, history)
+  }
 }

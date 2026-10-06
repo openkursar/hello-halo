@@ -43,6 +43,8 @@ export interface StoredEvent {
   _references?: ContentReference[]
   /** What sent a `push` record */
   _pushVia?: ChatPushVia
+  /** The digital human that sent a `push` record, when it is not the chat's own */
+  _pushedBy?: { appId: string; name: string }
   /** The SDK message payload */
   message?: {
     role?: string
@@ -234,13 +236,17 @@ export function convertEventsToMessages(events: StoredEvent[], lines?: readonly 
       flush()
       const content = extractTextContent(event.message?.content)
       if (content) {
+        const by = parsePushedBy(event._pushedBy)
         messages.push({
           id: messageId(lineOf(index)),
           role: 'assistant',
           source: 'push',
           content,
           timestamp: ts,
-          metadata: { pushVia: parsePushVia(event._pushVia) },
+          metadata: {
+            pushVia: parsePushVia(event._pushVia),
+            ...(by ? { pushedByAppId: by.appId, pushedByName: by.name } : {}),
+          },
         })
       }
       continue
@@ -532,6 +538,13 @@ function parseSource(raw: unknown): TranscriptSource | undefined {
 /** A stored `_pushVia`; unrecognised reads as a plain message. */
 function parsePushVia(raw: unknown): ChatPushVia {
   return raw === 'result' || raw === 'question' ? raw : 'message'
+}
+
+/** A stored `_pushedBy`, when it names a digital human. */
+function parsePushedBy(raw: unknown): { appId: string; name: string } | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const { appId, name } = raw as Record<string, unknown>
+  return typeof appId === 'string' && appId && typeof name === 'string' && name ? { appId, name } : undefined
 }
 
 const PROVENANCE_STRING_KEYS = [
