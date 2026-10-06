@@ -627,14 +627,10 @@ export async function dispatchInboundMessage(
   // initialisation, replyScope is a reply policy. A 'group'-scoped instance
   // still needs its owner bound via DM — gating DMs first would make claiming
   // impossible while the group guide keeps pointing users at DMs.
-  // Team-backed turns run the bound member as a trusted team peer (owner
-  // posture), so owner-claim / no-owner gating does not apply — mirrors the permission-context
-  // skip below. Without this guard, enterprise builds (permissionEnabled=true by
-  // default) would block team-backed group chats until someone DMs to claim owner.
   const ownersUnset =
     instanceCfg?.permissionEnabled === true &&
     (!Array.isArray(instanceCfg.owners) || instanceCfg.owners.length === 0)
-  if (!teamBacking && ownersUnset) {
+  if (ownersUnset) {
     if (msg.chatType === 'direct' && msg.from) {
       const claimed = await maybeClaimOwner(instanceId, msg.from)
       if (claimed) {
@@ -761,8 +757,8 @@ export async function dispatchInboundMessage(
         )
       } else {
         await clearImSession(app.id, app.spaceId!, msg.channel, msg.chatType, msg.chatId)
-        clearImPermissionContext(conversationId)
       }
+      clearImPermissionContext(conversationId)
       // Undelivered relay context belongs to the discarded conversation.
       getPendingRelayStore()?.clear(conversationId)
       await reply.send('Context cleared. Starting a fresh conversation.')
@@ -858,26 +854,19 @@ export async function dispatchInboundMessage(
   //   permissionEnabled=false            → everyone is owner (no restrictions, personal use default)
   //   permissionEnabled=true, owners=[]  → everyone is guest, deny-all (no one has write access)
   //   permissionEnabled=true, owners=[…] → only listed IDs are owners; others are guests
-  // Team-backed turns run the bound member as a trusted team peer (owner
-  // posture): IM guest hardening is NOT applied, so the permission context is left unset
-  // (app-chat treats a null context as unrestricted for this team session key).
-  let isOwner = true
-  // Stays false for team turns: it gates relay transcript exposure on the sender
-  // being verified against an explicit owner allowlist, which a team peer is not.
-  let hasOwnerRestriction = false
-  if (!teamBacking) {
-    const permissionEnabled = instanceCfg?.permissionEnabled ?? false
-    const owners = permissionEnabled ? instanceCfg?.owners : undefined
-    hasOwnerRestriction = Array.isArray(owners) && owners.length > 0
-    isOwner = !permissionEnabled || (hasOwnerRestriction && owners!.includes(msg.from))
-    setImPermissionContext(conversationId, {
-      senderId: msg.from,
-      senderName,
-      isOwner,
-      guestPolicy: permissionEnabled ? instanceCfg?.guestPolicy : undefined,
-      ownerIds: hasOwnerRestriction ? owners! : undefined,
-    })
-  }
+  //
+  // A team-fronted chat is held to the same rules, on the member's team session.
+  const permissionEnabled = instanceCfg?.permissionEnabled ?? false
+  const owners = permissionEnabled ? instanceCfg?.owners : undefined
+  const hasOwnerRestriction = Array.isArray(owners) && owners.length > 0
+  const isOwner = !permissionEnabled || (hasOwnerRestriction && owners!.includes(msg.from))
+  setImPermissionContext(conversationId, {
+    senderId: msg.from,
+    senderName,
+    isOwner,
+    guestPolicy: permissionEnabled ? instanceCfg?.guestPolicy : undefined,
+    ownerIds: hasOwnerRestriction ? owners! : undefined,
+  })
 
   // Register the active round's streaming handle ONLY on the start-of-round
   // path — never on the supplement-buffer branch above (which returns early).
@@ -999,8 +988,14 @@ export async function dispatchInboundMessage(
       senderIdentity,
       imSession,
       // Team-backed chat: hand the member its team context (tools + Entry + the
-      // long-lived conversation epoch). Absent for single-human chats.
-      ...(teamBacking ? { teamContext: teamBacking.teamContext } : {}),
+      // long-lived conversation epoch). Absent for single-human chats. A guest
+      // is someone nobody here vouched for, so their request is stamped as
+      // entering from outside: whatever it sets in motion — a teammate it is
+      // handed to, a later turn that continues it — reads silence as a refusal
+      // (team/external-origin.ts).
+      ...(teamBacking
+        ? { teamContext: isOwner ? teamBacking.teamContext : { ...teamBacking.teamContext, external: true } }
+        : {}),
 
       // IM has no Deep Thinking toggle, so replies take the same extended
       // thinking this digital human's scheduled runs get.

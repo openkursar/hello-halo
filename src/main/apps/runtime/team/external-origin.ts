@@ -38,9 +38,10 @@ export function resolveTurnOrigin(sessionKey: string, trigger: TeamTriggerContex
   }
 
   // A person typed this, here. A person on ANOTHER machine reaches the member
-  // through the office endpoint, which stamps the message before it gets this
-  // far — so an unstamped one is the owner at their own keyboard, and that is
-  // the one act that ends a borrowed thread of work.
+  // through the office endpoint, and a guest through an IM chat, both stamped
+  // before it gets this far — so an unstamped one is the owner (at their own
+  // keyboard, or in a chat that counts them as one), and that is the one act
+  // that ends a borrowed thread of work.
   if (!trigger.kind || trigger.kind === 'human_message') {
     remember(sessionKey, false)
     return false

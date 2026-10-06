@@ -1247,7 +1247,8 @@ for external integrations. Both paths share admission and concurrency checks.
   (`userOverrides.memory`).
 - Its space's topics: offered read-only when `spaceMemoryAccess` is on and the
   space has memory on. Writes are refused by the write guard.
-- A strict turn (an IM guest, or a teammate's request from another machine) is
+- A strict turn (an IM guest — of the digital human's own chat or of a chat it
+  fronts for a team — or a teammate's turn on work that entered from outside) is
   held to `turn-file-access.ts`, enforced by a pre-tool hook and the delegation
   gate alike. A teammate from this machine is the owner's own: held to the tool
   switches only, with no path boundary, as before.

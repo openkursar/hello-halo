@@ -801,8 +801,10 @@ files here allowed to.
   directly — the bus owns the busy gate.
 - `team-prompt.ts` — `buildTeamEntry(ctx)` / `buildTeamConstraints(ctx)`, the
   Team Entry/Constraint layers (parallel to `im-prompt`). Rendered from a
-  `TeamPromptContext` built by orchestration; a team turn runs as a trusted
-  member (never an IM guest).
+  `TeamPromptContext` built by orchestration. A turn framed for an IM chat a
+  member fronts also carries that chat's IM security rules (`buildImConstraints`,
+  the owner roster), exactly as a digital human's own IM chat does — see "Team
+  as an IM backend".
 
   **The Entry is frozen at session creation, so it must be byte-stable for a
   (team, member) pair.** It is part of the agent session's reuse fingerprint
@@ -977,9 +979,9 @@ ${instanceId}:${chatType}:${chatId}`) and calls `sendAppChatMessage` with BOTH
 on `selfIsLead`: the lead is the team's counter and routes work, a teammate was
 reached in its own right and answers its own remit first. Either way the message
 is from a real person and that member's final message goes back to the chat. The
-member runs as a trusted team peer — IM guest hardening is intentionally not
-applied (no permission context for the team session key). Provider-agnostic: any
-IM brand works, since the binding lives in the generic config + dispatch path.
+chat's owner/guest rules apply exactly as in a digital human's own IM chat (see
+below). Provider-agnostic: any IM brand works, since the binding lives in the
+generic config + dispatch path.
 
 **The binding names a member, not a role.** Promoting a different lead does not
 re-point an existing channel. `dispatch-inbound.ts` is the trust boundary for it
@@ -988,6 +990,44 @@ dropped unless the bound app is still a member of that team AND is locally owned
 (`isRemoteMember` false). A federated member's app is not installed on this
 machine, so nothing here could run it — the picker offers only `localMembers`
 (`TeamListItem`) for the same reason.
+
+**Owners and guests are the channel's, exactly as for a digital human.** Who is
+an owner is answered per message by `dispatch-inbound` from the channel's
+permission control — the same three cases, the same owner auto-claim and
+no-owner gate — and written to the IM permission context under the member's
+team session key. From there it is the one guest path, not a second one:
+`app-chat` holds a guest to the channel's guest policy through
+`applyCapabilityPolicy`, the per-call gate and the turn's file boundary, and the
+prompt carries the same IM security rules. The team's own coordination servers
+stay mounted for a guest (they are how the member reaches its team, not a
+capability lent to the caller); what decides how far a guest's request may go
+from there is its origin.
+
+- **A guest's message is stamped `external`.** The IM channel is where it
+  crosses into this node, and nobody here vouched for the sender — the same
+  reading "How strictly a borrowed turn reads silence" gives a request from
+  another machine. Without it the restriction would end at the front desk:
+  asking it to have a teammate do the work would hand the request to a member
+  running with the owner's own reach. With it, `team_send` carries the origin, a
+  teammate reads its delegated policy strictly, and the thread stays external
+  across wakes (`external-origin.ts`) until an owner's own message ends it.
+- **A turn woken in the chat keeps the standing of whoever started the work.**
+  While the permission context still names a guest it runs under that guest's
+  policy — the same tool set as the guest's own turn, so the session is not
+  rebuilt between them. When the context cannot say (a restart cleared it) or an
+  owner spoke last, a woken turn continuing external work is borrowed
+  (`isBorrowedTeamTurn`) and held strictly to the member's delegated policy: who
+  spoke last in the chat says nothing about who set the work in motion. A turn
+  woken by work started here is unchanged. So is the person's own message, which
+  only the channel's rules decide.
+- **The session is shared with the owner's own Halo window.** Only turns framed
+  for the chat (`imSession`) read the IM permission context; the owner typing
+  into the same session from Halo is never taken for the chat's last guest, and,
+  being the owner at their own keyboard, ends the external thread.
+
+One consequence reaches past guests: a teammate on another machine whose reply
+wakes the front desk is now held to the member's delegated policy, as it already
+was for every other member.
 
 The **reply** side has the same question and must answer it identically:
 `resolveImRoute` decides whether a later, woken turn pushes back to the chat. It
@@ -1116,10 +1156,12 @@ Two facts about a member are per-TEAM and owner-authored, and they live on the
   a cross-machine 1:1 from another person is held to it exactly like a
   teammate's `team_send`. The owner's own chat is the one exemption; it is
   recognisable because it goes straight to the session and carries no trigger
-  `kind`, a path no office credential can reach (`http/auth/route-scope`). An
-  IM-backed turn is out of scope of this rule (see "Team as an IM backend").
-  The team's own coordination servers (`halo-team`, `halo-report`) are never
-  withheld — they are the channel the turn arrived on, not a capability lent.
+  `kind`, a path no office credential can reach (`http/auth/route-scope`). The
+  person in an IM chat a member fronts is held to that chat's owner/guest rules
+  instead; a turn woken there to continue work from outside is borrowed (see
+  "Team as an IM backend"). The team's own coordination servers (`halo-team`,
+  `halo-report`) are never withheld — they are the channel the turn arrived on,
+  not a capability lent.
 
 ### How strictly a borrowed turn reads silence
 
@@ -1137,9 +1179,12 @@ A borrowed turn is not one thing, and the difference is which machine asked:
 whole of its integrity. It is stamped ONLY where a request crosses into this
 node — an inbound office wake (`withExternalOrigin`, beside the space
 correction, and for the same reason: the sender authored every field on the
-frame) and the office-credential 1:1 endpoint (`team.routes`, where the
+frame), the office-credential 1:1 endpoint (`team.routes`, where the
 credential's presence is what separates a teammate from the owner's own remote
-access). A value arriving on the wire is overwritten, never trusted.
+access), and a guest's message in an IM chat a member fronts
+(`dispatch-inbound`, where the channel's permission control is what separates a
+guest from an owner). A value arriving on the wire is overwritten, never
+trusted.
 
 From there it travels two ways, and both were necessary:
 
@@ -1148,7 +1193,8 @@ From there it travels two ways, and both were necessary:
   as `forwardDepth` travels. Without it, routing a stranger's request through
   one of the owner's own members launders it into a local one.
 - **across wakes** — `team/external-origin.ts` keeps it per team session until a
-  person types into that session HERE. A runtime wake is authored on this
+  person types into that session HERE as the owner (at Halo, or in an IM chat
+  whose rules count them as one). A runtime wake is authored on this
   machine and so can carry no origin of its own; without stickiness, asking for
   something that needs a decision and waiting for the owner to answer their own
   digital human's question would resume the work unrestricted.
