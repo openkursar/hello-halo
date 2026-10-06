@@ -26,6 +26,7 @@ import { getToolIcon } from '../icons/ToolIcons'
 import { BrowserTaskCard, isBrowserTool } from '../tool/BrowserTaskCard'
 import { TerminalTaskCard, isTerminalTool } from '../tool/TerminalTaskCard'
 import { MarkdownRenderer } from './MarkdownRenderer'
+import { UserMessageText } from './UserMessageText'
 import { FileChangesFooter } from '../diff'
 import { normalizeFileChangesSummary } from '../../../shared/file-changes'
 import { MessageImages } from './ImageAttachmentPreview'
@@ -379,26 +380,23 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
         <MessageImages images={message.images} />
       )}
 
-      {/* Message content with streaming cursor */}
-      <div ref={contentRef} className="break-words leading-relaxed" data-message-content>
-        {message.content && (
-          isUser ? (
-            // User messages: simple whitespace-preserving text
-            <span className="whitespace-pre-wrap">{userParts ? userParts.text.trimEnd() : message.content}</span>
-          ) : (
-            // Assistant messages: full markdown rendering
-            <MarkdownRenderer content={message.content} />
-          )
-        )}
-        {/* Streaming cursor when actively receiving tokens */}
-        {isStreaming && (
-          <span className="inline-block w-0.5 h-5 ml-0.5 bg-primary streaming-cursor align-middle" />
-        )}
-        {/* Waiting dots when content paused but still working (e.g., tool call in progress) */}
-        {isWaitingMore && !isStreaming && (
-          <span className="waiting-dots ml-1 text-muted-foreground/60" />
-        )}
-      </div>
+      {isUser ? (
+        // User messages: whitespace-preserving text, a long one folded
+        <UserMessageText messageId={message.id} text={message.content ? (userParts ? userParts.text.trimEnd() : message.content) : ''} />
+      ) : (
+        // Assistant messages: full markdown rendering, with streaming cursor
+        <div ref={contentRef} className="break-words leading-relaxed" data-message-content>
+          {message.content && <MarkdownRenderer content={message.content} />}
+          {/* Streaming cursor when actively receiving tokens */}
+          {isStreaming && (
+            <span className="inline-block w-0.5 h-5 ml-0.5 bg-primary streaming-cursor align-middle" />
+          )}
+          {/* Waiting dots when content paused but still working (e.g., tool call in progress) */}
+          {isWaitingMore && !isStreaming && (
+            <span className="waiting-dots ml-1 text-muted-foreground/60" />
+          )}
+        </div>
+      )}
 
       {/* Knowledge-base citations — documents the agent Read this turn, click to open in the canvas */}
       {!isUser && message.sources && message.sources.length > 0 && (
