@@ -1,6 +1,7 @@
 /**
  * A download the server cannot provide (file moved or deleted, access refused,
- * no connection) is reported in the app instead of failing silently.
+ * no connection) is reported in the app instead of failing silently, in
+ * translated words; the server's own message goes to the log.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -18,13 +19,18 @@ beforeEach(() => {
 })
 
 describe('downloading an artifact', () => {
-  it('says why when the server cannot provide the file', async () => {
+  it('says so in translated words when the server cannot provide the file, logging the server\'s own', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     downloadArtifact.mockResolvedValue({ success: false, error: 'File not found' })
     await download('/space/gone.docx')
     expect(downloadArtifact).toHaveBeenCalledWith('/space/gone.docx')
-    expect(useNotificationStore.getState().toasts).toMatchObject([
-      { title: 'Could not download this file', body: 'File not found', variant: 'error' },
-    ])
+    expect(useNotificationStore.getState().toasts).toMatchObject([{
+      title: 'Could not download this file',
+      body: 'It may have been moved or deleted, or the connection to Halo was interrupted. Please try again.',
+      variant: 'error',
+    }])
+    expect(warn).toHaveBeenCalledWith('[ArtifactDownload] Download refused', { error: 'File not found' })
+    warn.mockRestore()
   })
 
   it('stays quiet when the download started', async () => {

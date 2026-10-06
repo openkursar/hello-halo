@@ -16,17 +16,28 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
+// Set to make the next file open fail the way a permission error does.
+const io = vi.hoisted(() => ({ failNextOpen: false }))
+
 vi.mock('../../../../src/main/http/routes/_shared', async () => {
   const fs = await import('fs')
   const path = await import('path')
   const zlib = await import('zlib')
+  const { Readable } = await import('stream')
+  const createReadStream = ((...args: Parameters<typeof fs.createReadStream>) => {
+    if (!io.failNextOpen) return fs.createReadStream(...args)
+    io.failNextOpen = false
+    return new Readable({
+      read() { this.destroy(Object.assign(new Error('EACCES: permission denied, open'), { code: 'EACCES' })) },
+    })
+  }) as typeof fs.createReadStream
   return {
     basename: path.basename,
     collectFiles: vi.fn(),
     createFile: vi.fn(),
     createFolder: vi.fn(),
     createGzip: zlib.createGzip,
-    createReadStream: fs.createReadStream,
+    createReadStream,
     detectFileType: vi.fn(),
     existsSync: fs.existsSync,
     getWorkingDir: vi.fn(),
@@ -92,6 +103,16 @@ describe('GET /api/artifacts/download', () => {
     expect(response.headers.get('content-type')).toBe('application/octet-stream')
     expect(response.headers.get('content-length')).toBe('10')
     expect(body).toBe('docx-bytes')
+  })
+
+  it('answers with an error, not a dropped connection, when the file cannot be opened', async () => {
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {})
+    io.failNextOpen = true
+    const { response, body } = await download('locked.txt', 'secret')
+    quiet.mockRestore()
+    expect(response.status).toBe(500)
+    expect(response.headers.get('content-disposition')).toBeNull()
+    expect(JSON.parse(body)).toEqual({ success: false, error: 'Could not read the file' })
   })
 
   it('encodes accents and the characters RFC 5987 reserves, keeping the type', async () => {

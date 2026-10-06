@@ -58,7 +58,10 @@ function attachment(fileName: string): string {
   return `attachment; filename="${asciiName}"; filename*=UTF-8''${utf8Name}`
 }
 
-/** Sends one file as a download; a read that fails midway drops the connection. */
+/**
+ * Sends one file as a download. A file that cannot be opened gets an error
+ * response; a read that fails after bytes went out can only drop the connection.
+ */
 function sendFileAttachment(res: Response, filePath: string, size: number): void {
   const fileName = basename(filePath)
   const ext = fileName.split('.').pop()?.toLowerCase() || ''
@@ -66,9 +69,16 @@ function sendFileAttachment(res: Response, filePath: string, size: number): void
   res.setHeader('Content-Disposition', attachment(fileName))
   res.setHeader('Content-Length', size)
   createReadStream(filePath)
-    .on('error', (error) => {
+    .on('error', (error: NodeJS.ErrnoException) => {
       console.error('[Download] Could not read the file:', error.message)
-      res.destroy(error)
+      if (res.headersSent) {
+        res.destroy(error)
+        return
+      }
+      res.removeHeader('Content-Disposition')
+      res.removeHeader('Content-Length')
+      const missing = error.code === 'ENOENT'
+      res.status(missing ? 404 : 500).json({ success: false, error: missing ? 'File not found' : 'Could not read the file' })
     })
     .pipe(res)
 }
