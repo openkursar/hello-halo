@@ -697,7 +697,11 @@ export async function dispatchInboundMessage(
   }
 
   // ── Reply scope check ──────────────────────────────────────────
-  if (replyScope !== 'all' && replyScope !== msg.chatType) {
+  // Not for an answer in a direct chat: questions are asked there, and every
+  // notice of one points there, whatever the scope (im-escalation).
+  const answerArgs = parseAnswerCommand(msg.body, msg.chatType)
+  const answersInDirectChat = msg.chatType === 'direct' && answerArgs !== null
+  if (replyScope !== 'all' && replyScope !== msg.chatType && !answersInDirectChat) {
     const rejectionMsg = msg.chatType === 'direct' ? DM_REJECTED_MESSAGE : GROUP_REJECTED_MESSAGE
     console.log(
       `${LOG_TAG} Blocked by replyScope: scope=${replyScope}, chatType=${msg.chatType}, ` +
@@ -806,7 +810,6 @@ export async function dispatchInboundMessage(
   // ── Answer command: a question this digital human asked, answered here ──
   // Never reaches the model: it is the owner answering through Halo's own
   // answer path, not a message to the digital human (im-escalation).
-  const answerArgs = parseAnswerCommand(msg.body, msg.chatType)
   if (answerArgs !== null) {
     const deps = await runtimeAnswerDeps()
     const result = deps
