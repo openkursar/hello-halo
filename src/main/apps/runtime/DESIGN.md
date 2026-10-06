@@ -1262,7 +1262,18 @@ WeChat 4000 characters (what the platform's own bot plugin sends per message).
 `im-channels/message-parts.ts` does the splitting for all of them, so a long
 text reads the same everywhere: ordered parts labeled `(i/n)`, each sent once
 the one before it settled, cut at a paragraph or line break near the cap and
-never inside a character, a code block closed and reopened across a cut.
+never inside a character or an emoji sequence, a code block (backtick or tilde
+fence) closed and reopened across a cut, no part that is only whitespace.
+
+What a chat gets is bounded the same way for every channel. At most
+`MAX_PARTS` (10) parts: past that a chat is the wrong place to read it, and the
+strictest burst limit (WeCom, 30 messages a minute per chat) stays clear of it
+— so the last part sent says the rest is in Halo. A part that does not go out
+stops the rest: a reply with a hole in it reads as whole, so the remaining
+parts are held back and the chat is told, best effort, that part k failed and
+the whole reply is in Halo. Two replies to one chat (an answer and a notify
+push, say) go out one after the other, never interleaved: each provider names
+the chat (`MessageRoute.chat`) and the parts of the second wait for the first.
 
 A WeCom stream that outgrows one message is closed on what fits plus a notice,
 rather than sending a frame the server rejects — which left the stream stuck

@@ -163,6 +163,24 @@ describe('WeCom: text longer than one message', () => {
     expect(partBodies(contents(client.sendMessage)).join('')).toBe(LONG_ANSWER)
   })
 
+  it('stops at a part that does not go out and tells the chat where to read the rest', async () => {
+    const { instance, client } = await onlineInstance()
+    let calls = 0
+    client.sendMessage.mockImplementation(async () => {
+      calls++
+      if (calls === 2) throw new Error('errcode=45009 rate limit')
+    })
+
+    instance.pushToChat('chat-1', LONG_ANSWER, 'direct')
+    await vi.advanceTimersByTimeAsync(0)
+
+    const sent = contents(client.sendMessage)
+    expect(sent).toHaveLength(3)
+    expect(sent[0].startsWith('(1/3)')).toBe(true)
+    expect(sent[1].startsWith('(2/3)')).toBe(true)
+    expect(sent[2]).toBe('回复的第 2 条发送失败，完整内容请在 Halo 里查看')
+  })
+
   it('answers a short message exactly as before: one quoted reply, unlabeled', async () => {
     const { instance, client } = await onlineInstance()
 

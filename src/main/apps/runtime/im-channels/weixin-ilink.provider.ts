@@ -670,11 +670,14 @@ class WeixinIlinkBotInstance implements ImChannelInstance {
 
   // ── Send message ──────────────────────────────────────────────
 
-  /** Text of any length: longer than one message, it goes out as ordered `(i/n)` parts. */
+  /**
+   * Text of any length: longer than one message, it goes out as ordered `(i/n)`
+   * parts, never interleaved with another reply to the same person.
+   */
   private sendText(toUserId: string, text: string, contextToken: string): Promise<void> {
     return sendAsMessagesOrThrow(text, ILINK_MESSAGE_LIMIT, (message) =>
       this.sendItems(toUserId, [{ type: 1, text_item: { text: message } }], contextToken),
-    )
+    { chat: `${this.providerType}:${this.instanceId}:${toUserId}` })
   }
 
   private async sendItems(

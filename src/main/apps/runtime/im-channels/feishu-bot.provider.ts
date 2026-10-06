@@ -622,8 +622,13 @@ class FeishuBotInstance implements ImChannelInstance {
         })
         return false
       }
-    })
+    }, { chat: this.chatKey(chatId) })
     return true
+  }
+
+  /** A chat as this bot's sends name it, so parts of two replies never interleave. */
+  private chatKey(chatId: string): string {
+    return `${this.providerType}:${this.instanceId}:${chatId}`
   }
 
   /**
@@ -1219,7 +1224,7 @@ class FeishuBotInstance implements ImChannelInstance {
     }
     await sendAsMessagesOrThrow(text, FEISHU_MESSAGE_LIMIT, (message, index) =>
       this.deliverMessage(channel, chatId, message, trace, index === 0 ? replyTo : undefined),
-    )
+    { chat: this.chatKey(chatId) })
   }
 
   /**
