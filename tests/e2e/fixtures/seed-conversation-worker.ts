@@ -53,7 +53,10 @@ function main(): void {
         : `Seeded answer #${i + 1}. This is a longer assistant reply that spans a couple of sentences ` +
           'so each row has a realistic amount of rendered text, matching a typical real conversation ' +
           'turn rather than a single short line.'
-    messageIds.push(addMessage('halo-temp', conversation.id, { role, content }).id)
+    const tokenUsage = role === 'assistant' && options.tokenUsage
+      ? { inputTokens: 0, outputTokens: 100, cacheReadTokens: (600 + i + 1) * 1000, cacheCreationTokens: 0, totalCostUsd: (i + 1) / 100, contextWindow: 1_000_000 }
+      : undefined
+    messageIds.push(addMessage('halo-temp', conversation.id, { role, content, ...(tokenUsage && { tokenUsage }) }).id)
   }
 
   const result: SeededConversation = { conversationId: conversation.id, messageIds }

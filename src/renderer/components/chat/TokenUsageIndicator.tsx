@@ -56,7 +56,10 @@ export function TokenUsageIndicator({ tokenUsage, previousCost = 0, className = 
     const follow = () => {
       cancelAnimationFrame(frame)
       frame = requestAnimationFrame(() => {
-        setTooltipAt(placeAbove(anchorRef.current))
+        const next = placeAbove(anchorRef.current)
+        // Move it only while still open: the scroll that carries the anchor
+        // away from the pointer lands right after mouseleave has closed it.
+        setTooltipAt(prev => (prev ? next : null))
       })
     }
     window.addEventListener('scroll', follow, true)

@@ -93,7 +93,7 @@ export default defineConfig({
     },
     {
       name: 'transcript-scroll',
-      testMatch: '**/transcript-scroll.spec.ts',
+      testMatch: ['**/transcript-scroll.spec.ts', '**/token-usage-popup.spec.ts'],
       use: { actionTimeout: 15000 }
     },
     {

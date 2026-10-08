@@ -45,6 +45,11 @@ export interface SeedConversationOptions {
    * prose) — the shape that stresses transcript scrolling. Defaults to uniform.
    */
   variety?: 'uniform' | 'mixed'
+  /**
+   * Give every reply a token usage record, so the usage count renders under
+   * it. The n-th message (1-based) reads `${600 + n}K`, telling replies apart.
+   */
+  tokenUsage?: boolean
 }
 
 let bundledWorkerPath: string | null = null
