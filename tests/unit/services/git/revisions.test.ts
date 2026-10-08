@@ -54,6 +54,8 @@ describe('listRevisionOptions', () => {
     expect(options.every((option) => option.date)).toBe(true)
   })
 
+  // Builds its history with about 150 git processes, which outlasts the default
+  // timeout when the suite runs in parallel.
   it('stays within the limit and copes with a branch that has no commits', async () => {
     const dir = makeTempDir('halo-git-revisions-')
     dirs.push(dir)
@@ -73,5 +75,5 @@ describe('listRevisionOptions', () => {
     expect(options.filter((option) => option.kind === 'tag')).toHaveLength(5)
     expect(options.filter((option) => option.kind === 'commit')).toHaveLength(30)
     expect(options.some((option) => option.revision === 'main')).toBe(false)
-  })
+  }, 60_000)
 })

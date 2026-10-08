@@ -18,6 +18,13 @@ vi.mock('../../../../../src/main/services/git-bash', () => ({
   detectGitBash: () => detectGitBash(),
 }))
 
+// The bundle is a build artifact: a fresh checkout, or a build that does not
+// ship the engine, has none. These tests assert the launch environment only.
+vi.mock('../../../../../src/main/services/agent/dsh/runtime/resolve', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  resolveDshRuntime: () => ({ entryPath: '/stub/runtime.mjs', version: 'test' }),
+}))
+
 import { buildDshLaunchSpec } from '../../../../../src/main/services/agent/dsh/runtime/launch-spec'
 import { resolveDshShell } from '../../../../../src/main/services/agent/dsh/runtime/resolve'
 
