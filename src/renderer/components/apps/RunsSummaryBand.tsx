@@ -48,7 +48,7 @@ export function RunsSummaryBand({ appId }: { appId: string }) {
   return (
     <section
       aria-label={t('Reliability')}
-      className="mb-6 rounded-xl border border-border bg-secondary/20 px-4 py-3"
+      className="mb-6 rounded-xl border border-border-soft bg-secondary/20 px-4 py-3"
     >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <span className="text-[15px] font-semibold tabular-nums text-foreground">

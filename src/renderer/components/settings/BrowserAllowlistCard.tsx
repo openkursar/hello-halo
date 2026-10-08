@@ -105,7 +105,7 @@ export function BrowserAllowlistCard() {
   if (!editable) return null
 
   return (
-    <section id="browser-allowlist" className="bg-card rounded-xl border border-border p-6">
+    <section id="browser-allowlist" className="bg-card rounded-xl border border-border-faint p-6">
       <div className="flex items-center gap-2 mb-1">
         <Globe className="w-5 h-5 text-muted-foreground" />
         <h2 className="text-lg font-medium">{t('Browser Allowed Sites')}</h2>

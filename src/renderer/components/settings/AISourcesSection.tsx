@@ -215,7 +215,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
         className={`border rounded-lg transition-all ${
           isCurrent
             ? 'border-primary bg-primary/5'
-            : 'border-border-primary bg-surface-secondary'
+            : 'border-border bg-surface-secondary'
         }`}
       >
         {/* Header */}
@@ -232,7 +232,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
             className={`w-5 h-5 shrink-0 rounded-full border-2 flex items-center justify-center transition-colors ${
               isCurrent
                 ? 'border-primary bg-primary'
-                : 'border-border-secondary hover:border-primary'
+                : 'border-border hover:border-primary'
             }`}
           >
             {isCurrent && <Check size={12} className="text-white" />}
@@ -275,7 +275,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
 
         {/* Expanded details */}
         {isExpanded && (
-          <div className="px-3 pb-3 pt-0 border-t border-border-secondary">
+          <div className="px-3 pb-3 pt-0 border-t border-border">
             <div className="pt-3 space-y-2">
               {/* Provider */}
               <div className="flex justify-between text-sm">
@@ -421,7 +421,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
   if (deletingSourceId) {
     const sourceToDelete = aiSources.sources.find(s => s.id === deletingSourceId)
     return (
-      <div className="p-4 bg-surface-secondary rounded-lg border border-border-primary space-y-4">
+      <div className="p-4 bg-surface-secondary rounded-lg border border-border space-y-4">
         <h3 className="font-medium text-text-primary">{t('Confirm Delete')}</h3>
         <p className="text-text-secondary">
           {t('Are you sure you want to delete')} <strong>{sourceToDelete?.name}</strong>?
@@ -447,7 +447,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
   if (oauth.login?.redirect) {
     const provider = oauthProviders.find(entry => entry.type === oauth.login?.provider)
     return (
-      <div className="min-w-0 p-4 bg-surface-secondary rounded-lg border border-border-primary">
+      <div className="min-w-0 p-4 bg-surface-secondary rounded-lg border border-border">
         <OAuthRedirectLogin
           title={provider ? getLocalizedText(provider.displayName) : oauth.login.provider}
           redirect={oauth.login.redirect}
@@ -468,7 +468,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
       ? t('Starting login...')
       : userCode ? t('Enter the code in your browser') : t('Waiting for login...')
     return (
-      <div className="p-4 bg-surface-secondary rounded-lg border border-border-primary space-y-4">
+      <div className="p-4 bg-surface-secondary rounded-lg border border-border space-y-4">
         <div className="flex items-center gap-3">
           <Loader2 size={20} className="animate-spin text-primary" />
           <span className="text-text-primary">{status}</span>
@@ -509,7 +509,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
           {aiSources.sources.map(renderSourceCard)}
         </div>
       ) : (
-        <div className="p-6 text-center text-text-tertiary bg-surface-secondary rounded-lg border border-border-primary">
+        <div className="p-6 text-center text-text-tertiary bg-surface-secondary rounded-lg border border-border">
           {t('No AI sources configured')}
         </div>
       )}
@@ -518,7 +518,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
       <button
         onClick={() => setShowAddForm(true)}
         className="w-full flex items-center justify-center gap-2 px-4 py-3 border-2 border-dashed
-                 border-border-secondary hover:border-primary text-text-secondary hover:text-primary
+                 border-border hover:border-primary text-text-secondary hover:text-primary
                  rounded-lg transition-colors"
       >
         <Plus size={18} />
@@ -563,7 +563,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
               key={provider.type}
               onClick={onClick}
               className="flex items-center gap-3 w-full p-3 bg-surface-secondary hover:bg-surface-tertiary
-                       border border-border-primary rounded-lg transition-colors"
+                       border border-border rounded-lg transition-colors"
             >
               <ProviderIconTile provider={provider} size="md" />
               <div className="flex-1 min-w-0 text-left">
@@ -581,7 +581,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
         }
 
         return (
-          <div className="pt-4 border-t border-border-secondary space-y-4">
+          <div className="pt-4 border-t border-border space-y-4">
             {availablePresetProviders.length > 0 && (
               <div>
                 <h4 className="text-sm font-medium text-text-secondary mb-3">

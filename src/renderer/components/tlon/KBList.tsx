@@ -33,7 +33,7 @@ export function KBList({ onCreate }: KBListProps) {
         {/* New knowledge base card (dashed border) */}
         <button
           onClick={onCreate}
-          className="flex flex-col items-center justify-center gap-2 border-2 border-dashed border-border rounded-lg p-4 min-h-[160px] text-muted-foreground hover:text-foreground hover:border-primary/50 transition-colors"
+          className="flex flex-col items-center justify-center gap-2 border border-dashed border-border-soft rounded-lg p-4 min-h-[160px] text-muted-foreground hover:text-foreground hover:border-border hover:bg-secondary/40 transition-colors ease-halo"
         >
           <Plus className="w-6 h-6" />
           <span className="text-sm font-medium">{t('New knowledge base')}</span>

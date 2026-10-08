@@ -153,6 +153,12 @@ export function ArtifactTree({ spaceId, onRootCountChange }: ArtifactTreeProps) 
 
   const openFile = useCanvasStore(state => state.openFile)
 
+  // A row's highlight marks the file showing in the canvas, so it goes when the canvas closes.
+  const canvasOpen = useCanvasStore(state => state.isOpen)
+  useEffect(() => {
+    if (!canvasOpen) treeRef.current?.deselectAll()
+  }, [canvasOpen])
+
   // Load tree data (root level only for lazy loading)
   const loadTree = useCallback(async () => {
     if (!spaceId) return
@@ -609,7 +615,7 @@ export function ArtifactTree({ spaceId, onRootCountChange }: ArtifactTreeProps) 
 
   // Recede at rest: thin strokes, and below full strength until the pointer
   // enters the toolbar, where they return to the 3:1 faint color.
-  const toolbarButtonClass = 'w-6 h-6 flex items-center justify-center rounded-sm text-faint-foreground opacity-60 group-hover/toolbar:opacity-100 focus-visible:opacity-100 transition-[color,opacity] ease-halo hover:bg-surface-hover hover:text-foreground'
+  const toolbarButtonClass = 'w-6 h-6 flex items-center justify-center rounded-sm text-faint-foreground opacity-60 dark-ui:opacity-100 group-hover/toolbar:opacity-100 focus-visible:opacity-100 transition-[color,opacity] ease-halo hover:bg-surface-hover hover:text-foreground'
   const refreshButton = (
     <button
       onClick={() => { api.reconcileArtifacts(spaceId) }}
@@ -621,7 +627,7 @@ export function ArtifactTree({ spaceId, onRootCountChange }: ArtifactTreeProps) 
   )
   const openFolderButton = isWebMode ? (
     <span
-      className="w-6 h-6 flex items-center justify-center text-faint-foreground opacity-60 group-hover/toolbar:opacity-100 transition-opacity ease-halo cursor-not-allowed"
+      className="w-6 h-6 flex items-center justify-center text-faint-foreground opacity-60 dark-ui:opacity-100 group-hover/toolbar:opacity-100 transition-opacity ease-halo cursor-not-allowed"
       title={t('Please open folder in client')}
     >
       <Monitor className="w-3.5 h-3.5" strokeWidth={1.5} />

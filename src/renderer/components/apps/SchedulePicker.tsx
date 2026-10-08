@@ -474,7 +474,7 @@ function CronEditor({
                 className={`w-9 h-8 text-xs rounded-lg transition-all duration-150 ${
                   (state.weekDays ?? []).includes(day)
                     ? 'bg-primary text-primary-foreground shadow-sm shadow-primary/25'
-                    : 'border border-border/50 text-muted-foreground hover:border-primary/50 hover:text-foreground'
+                    : 'border border-border-faint text-muted-foreground hover:border-primary/50 hover:text-foreground'
                 }`}
               >
                 {t(WEEKDAY_LABELS[day])}
@@ -498,7 +498,7 @@ function CronEditor({
                 className={`w-8 h-8 text-xs rounded-lg transition-all duration-150 ${
                   (state.monthDays ?? []).includes(day)
                     ? 'bg-primary text-primary-foreground shadow-sm shadow-primary/25'
-                    : 'border border-border/50 text-muted-foreground hover:border-primary/50 hover:text-foreground'
+                    : 'border border-border-faint text-muted-foreground hover:border-primary/50 hover:text-foreground'
                 }`}
               >
                 {day}

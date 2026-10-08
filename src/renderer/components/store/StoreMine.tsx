@@ -232,10 +232,10 @@ export function StoreMine() {
           ) : (
             <section>
               <SectionLabel>{t('My Publications')}</SectionLabel>
-              <div className="overflow-x-auto rounded-[10px] border border-border/60 bg-card">
+              <div className="overflow-x-auto rounded-[10px] border border-border-soft bg-card">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="text-left text-xs text-muted-foreground border-b border-border/60">
+                    <tr className="text-left text-xs text-muted-foreground border-b border-border-soft">
                       <th className="font-medium py-2.5 px-3">{t('App')}</th>
                       <th className="font-medium py-2.5 px-3">{t('Type')}</th>
                       <th className="font-medium py-2.5 px-3">{t('Version')}</th>
@@ -305,7 +305,7 @@ function MineRow({ pub, busy, onOpen, onUnpublish, onPublishVersion }: MineRowPr
     : '—'
 
   return (
-    <tr className="border-b border-border/60 last:border-0 align-middle">
+    <tr className="border-b border-border-soft last:border-0 align-middle">
       <td className="py-2.5 px-3">
         <div className="flex items-center gap-2 min-w-0">
           {appType && <AppTypeIcon type={appType} name={pubLabel} size="sm" />}

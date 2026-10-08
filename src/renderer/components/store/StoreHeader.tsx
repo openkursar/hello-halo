@@ -40,7 +40,7 @@ function PublishButton({ onClick }: { onClick: () => void }) {
   return (
     <button
       onClick={onClick}
-      className="flex flex-shrink-0 items-center gap-1.5 px-3 py-2 text-[13px] border border-border/60 bg-card text-muted-foreground rounded-lg hover:text-foreground hover:border-border transition-colors"
+      className="flex flex-shrink-0 items-center gap-1.5 px-3 py-2 text-[13px] border border-border-soft bg-card text-muted-foreground rounded-lg hover:text-foreground hover:border-border transition-colors"
       title={t('Publish your Digital Human or Skill to the store')}
       aria-label={t('Publish App')}
     >
@@ -141,7 +141,7 @@ export function StoreHeader() {
             value={storeSearchQuery}
             onChange={e => handleSearchChange(e.target.value)}
             placeholder={t('Search Digital Humans / Skills / MCP')}
-            className="w-full pl-9 pr-3 py-2 text-[13px] bg-card border border-border/60 rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground placeholder:text-muted-foreground/50"
+            className="w-full pl-9 pr-3 py-2 text-[13px] bg-card border border-border-soft rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground placeholder:text-muted-foreground/50"
           />
         </div>
         <button
@@ -158,7 +158,7 @@ export function StoreHeader() {
         {capabilities?.identity === 'account' && (
           <button
             onClick={() => setStoreMineOpen(true)}
-            className="flex flex-shrink-0 items-center gap-1 px-3.5 py-2 text-[13px] border border-border/60 bg-card text-muted-foreground hover:text-foreground hover:border-border rounded-lg transition-colors"
+            className="flex flex-shrink-0 items-center gap-1 px-3.5 py-2 text-[13px] border border-border-soft bg-card text-muted-foreground hover:text-foreground hover:border-border rounded-lg transition-colors"
             title={t('My Publications')}
           >
             <span>{t('Mine')}</span>

@@ -176,7 +176,7 @@ export function SpacesPage() {
             value={searchQuery}
             onChange={(e) => handleSearchChange(e.target.value)}
             placeholder={t('Search workspaces')}
-            className="w-full pl-9 pr-3 py-2 text-[13px] bg-card border border-border/60 rounded-lg focus:outline-none focus:border-primary focus:shadow-[inset_0_0_0_1px_var(--primary)] text-foreground placeholder:text-muted-foreground/50"
+            className="w-full pl-9 pr-3 py-2 text-[13px] bg-card border border-border-soft rounded-lg focus:outline-none focus:border-primary focus:shadow-[inset_0_0_0_1px_var(--primary)] text-foreground placeholder:text-muted-foreground/50"
           />
         </div>
         <button
@@ -189,7 +189,7 @@ export function SpacesPage() {
         </button>
         <button
           onClick={() => openCreateDialog()}
-          className="flex-shrink-0 flex items-center gap-1.5 px-3 py-2 text-[13px] border border-border/60 bg-card text-muted-foreground rounded-lg hover:text-foreground hover:border-border transition-colors"
+          className="flex-shrink-0 flex items-center gap-1.5 px-3 py-2 text-[13px] border border-border-soft bg-card text-muted-foreground rounded-lg hover:text-foreground hover:border-border transition-colors"
         >
           <Plus className="w-4 h-4" />
           {t('New Workspace')}

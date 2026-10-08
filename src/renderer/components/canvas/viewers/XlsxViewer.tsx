@@ -254,7 +254,7 @@ export default function XlsxViewer({ tab, onScrollChange }: XlsxViewerProps) {
             )}
             itemContent={(rowIndex, row) => (
               <>
-                <td className="px-3 py-1.5 text-xs text-muted-foreground/60 border-b border-r border-border/50 bg-background/50">
+                <td className="px-3 py-1.5 text-xs text-muted-foreground/60 border-b border-r border-border-faint bg-background/50">
                   {rowIndex + 1}
                 </td>
                 {Array.from({ length: colCount }, (_, colIndex) => {
@@ -264,7 +264,7 @@ export default function XlsxViewer({ tab, onScrollChange }: XlsxViewerProps) {
                     <td
                       key={colIndex}
                       colSpan={colSpan}
-                      className="px-3 py-1.5 border-b border-r border-border/50 whitespace-nowrap overflow-hidden text-ellipsis"
+                      className="px-3 py-1.5 border-b border-r border-border-faint whitespace-nowrap overflow-hidden text-ellipsis"
                       title={row[colIndex] || ''}
                     >
                       {row[colIndex] || ''}

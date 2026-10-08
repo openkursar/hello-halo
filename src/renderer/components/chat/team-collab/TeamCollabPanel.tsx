@@ -56,7 +56,7 @@ export const TeamCollabPanel = memo(function TeamCollabPanel({ conversationId }:
     : t('finished')
 
   return (
-    <div className="mb-3 rounded-lg border border-border/50 bg-muted/30 p-3 animate-fade-in">
+    <div className="mb-3 rounded-lg border border-border-faint bg-muted/30 p-3 animate-fade-in">
       <div className="flex items-center gap-2 mb-1.5 text-xs text-muted-foreground">
         <Users className="w-3.5 h-3.5 shrink-0" />
         <span className="font-medium truncate">{t('Team')}: {collab.name}</span>

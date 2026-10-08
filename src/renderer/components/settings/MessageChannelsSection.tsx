@@ -595,7 +595,7 @@ function InstanceCard({
   const replyScope = instance.replyScope ?? 'all'
 
   return (
-    <div className="border border-border/60 rounded-lg overflow-hidden bg-card/50">
+    <div className="border border-border-soft rounded-lg overflow-hidden bg-card/50">
       {/* Instance header */}
       <button
         type="button"
@@ -681,7 +681,7 @@ function InstanceCard({
 
       {/* Instance body */}
       {isExpanded && (
-        <div className="px-3 pb-3 pt-2 border-t border-border/60 space-y-3 animate-in slide-in-from-top-1 duration-150">
+        <div className="px-3 pb-3 pt-2 border-t border-border-soft space-y-3 animate-in slide-in-from-top-1 duration-150">
           {/* Enable toggle */}
           <div className="flex items-center justify-between">
             <p className="text-sm text-muted-foreground">{t('Enabled')}</p>
@@ -1074,7 +1074,7 @@ function NotifyChannelCard({
 
           {/* Advanced fields (collapsible) */}
           {def.fields.some(f => f.group === 'advanced') && (
-            <div className="border-t border-border/60 pt-3">
+            <div className="border-t border-border-soft pt-3">
               <Disclosure title={t('Advanced')} contentClassName="space-y-3">
                 {def.fields.filter(f => f.group === 'advanced').map((field) => renderField(field))}
                 <p className="text-[11px] text-muted-foreground leading-relaxed">
@@ -1519,7 +1519,7 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
   }, [instances, saveInstances])
 
   return (
-    <section id="message-channels" className="bg-card rounded-xl border border-border p-4 sm:p-6">
+    <section id="message-channels" className="bg-card rounded-xl border border-border-faint p-4 sm:p-6">
       <div className="mb-4">
         <h2 className="text-lg font-medium">{t('Message Channels')}</h2>
         <p className="text-sm text-muted-foreground mt-1">

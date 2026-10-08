@@ -105,7 +105,7 @@ export function MobileOverflowMenu({ onSearch }: MobileOverflowMenuProps) {
           <div
             className={`
               fixed inset-x-0 bottom-0 z-50
-              bg-card rounded-t-2xl border-t border-border/50
+              bg-card rounded-t-2xl border-t border-border-faint
               shadow-2xl overflow-hidden
               ${isAnimatingOut ? 'animate-slide-out-bottom' : 'animate-slide-in-bottom'}
             `}
@@ -116,7 +116,7 @@ export function MobileOverflowMenu({ onSearch }: MobileOverflowMenuProps) {
             </div>
 
             {/* Header */}
-            <div className="px-4 py-2 border-b border-border/50 flex items-center justify-between">
+            <div className="px-4 py-2 border-b border-border-faint flex items-center justify-between">
               <h3 className="text-base font-semibold text-foreground">{t('More')}</h3>
               <button
                 onClick={() => closeMenu()}

@@ -82,7 +82,7 @@ export function NewSpaceCard({ onClick, onFolderDrop }: NewSpaceCardProps) {
       className={`flex h-full min-h-[104px] flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed transition-colors ease-halo ${
         dragOver
           ? 'border-primary bg-primary/5 text-foreground'
-          : 'border-border text-muted-foreground hover:border-primary/40 hover:text-foreground hover:bg-secondary/40'
+          : 'border-border-soft text-muted-foreground hover:border-border hover:text-foreground hover:bg-secondary/40'
       }`}
     >
       <Plus className="w-5 h-5" />

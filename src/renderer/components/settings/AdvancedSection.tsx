@@ -368,7 +368,7 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
   // ─── Render ─────────────────────────────────────────────────────────────────
 
   return (
-    <section id="advanced" className="bg-card rounded-xl border border-border p-4 sm:p-6">
+    <section id="advanced" className="bg-card rounded-xl border border-border-faint p-4 sm:p-6">
       <h2 className="text-lg font-medium mb-4">{t('Advanced')}</h2>
 
       {/* Warning banner */}

@@ -191,7 +191,7 @@ export function FeishuInstanceCard({
   const appId = (currentCfg.appId as string) || ''
 
   return (
-    <div className="border border-border/60 rounded-lg overflow-hidden bg-card/50">
+    <div className="border border-border-soft rounded-lg overflow-hidden bg-card/50">
       {/* Instance header */}
       <button
         type="button"
@@ -274,7 +274,7 @@ export function FeishuInstanceCard({
 
       {/* Instance body */}
       {isExpanded && (
-        <div className="px-3 pb-3 pt-2 border-t border-border/60 space-y-3 animate-in slide-in-from-top-1 duration-150">
+        <div className="px-3 pb-3 pt-2 border-t border-border-soft space-y-3 animate-in slide-in-from-top-1 duration-150">
           {/* Enable toggle */}
           <div className="flex items-center justify-between">
             <p className="text-sm text-muted-foreground">{t('Enabled')}</p>

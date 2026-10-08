@@ -197,7 +197,7 @@ export function ImPushTargetPicker({ appId, onClose, onAdded }: ImPushTargetPick
 
         {error && <p className="px-4 pb-2 text-xs text-destructive">{error}</p>}
 
-        <div className="flex items-center justify-end gap-2 px-4 pb-4 pt-1 border-t border-border/50">
+        <div className="flex items-center justify-end gap-2 px-4 pb-4 pt-1 border-t border-border-faint">
           <button
             type="button"
             onClick={requestClose}

@@ -47,7 +47,7 @@ function OptionRow({ option, busy }: { option: UpdateOption; busy?: boolean }) {
   const accent =
     option.accent === 'primary'
       ? 'border-primary/40 hover:border-primary hover:bg-primary/5'
-      : 'border-border/60 hover:border-border/60 hover:bg-secondary/50'
+      : 'border-border-soft hover:border-border-soft hover:bg-secondary/50'
   const iconColor = option.accent === 'primary' ? 'text-primary' : 'text-muted-foreground'
 
   return (
@@ -116,12 +116,12 @@ export function StoreUpdateDialog({
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" onMouseDown={onClose}>
       <div
-        className="relative w-full max-w-md max-h-[calc(100dvh-2rem)] overflow-y-auto bg-background border border-border/60 rounded-[14px] shadow-xl p-7"
+        className="relative w-full max-w-md max-h-[calc(100dvh-2rem)] overflow-y-auto bg-background border border-border-soft rounded-[14px] shadow-xl p-7"
         onMouseDown={e => e.stopPropagation()}
       >
         <button
           onClick={onClose}
-          className="absolute top-4 right-4 flex h-7 w-7 items-center justify-center rounded-md border border-border/60 bg-background text-muted-foreground hover:text-foreground hover:border-border/60 transition-colors"
+          className="absolute top-4 right-4 flex h-7 w-7 items-center justify-center rounded-md border border-border-soft bg-background text-muted-foreground hover:text-foreground hover:border-border-soft transition-colors"
           aria-label={t('Close')}
         >
           <X className="w-3.5 h-3.5" />
@@ -134,7 +134,7 @@ export function StoreUpdateDialog({
         </div>
 
         {changelog && (
-          <div className="mb-4 max-h-32 overflow-y-auto rounded-lg bg-muted/40 border border-border/60 p-3">
+          <div className="mb-4 max-h-32 overflow-y-auto rounded-lg bg-muted/40 border border-border-soft p-3">
             <p className="text-xs text-muted-foreground whitespace-pre-line">{changelog}</p>
           </div>
         )}
@@ -146,7 +146,7 @@ export function StoreUpdateDialog({
           </p>
         )}
         {preview?.status === 'ready' && preview.kept.length > 0 && (
-          <div className="mb-4 space-y-1 rounded-lg border border-border/60 p-3 text-xs text-muted-foreground">
+          <div className="mb-4 space-y-1 rounded-lg border border-border-soft p-3 text-xs text-muted-foreground">
             <p className="text-foreground">
               {t('These differ from the author’s new version and will keep your current version: {{items}}', {
                 items: specFieldList(preview.kept, t, i18n.language),
@@ -166,7 +166,7 @@ export function StoreUpdateDialog({
         <div className="flex mt-5">
           <button
             onClick={onClose}
-            className="flex-1 px-5 py-2.5 text-[13px] text-muted-foreground border border-border/60 rounded-lg hover:text-foreground hover:border-border/60 transition-colors"
+            className="flex-1 px-5 py-2.5 text-[13px] text-muted-foreground border border-border-soft rounded-lg hover:text-foreground hover:border-border-soft transition-colors"
           >
             {t('Cancel')}
           </button>

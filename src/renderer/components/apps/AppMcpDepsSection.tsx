@@ -111,7 +111,7 @@ function AddDependencyMenu({
               {t('No other MCP servers installed in this workspace.')}
             </p>
           )}
-          <div className="my-1 border-t border-border/50" />
+          <div className="my-1 border-t border-border-faint" />
           <button
             onClick={() => { onBrowseStore(); setOpen(false) }}
             className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-muted/60 transition-colors text-primary"
@@ -264,7 +264,7 @@ function DepRow({
 
       {/* Expanded detail */}
       {expanded && (
-        <div className="px-3 pb-3 pt-1 space-y-2.5 border-t border-border/50">
+        <div className="px-3 pb-3 pt-1 space-y-2.5 border-t border-border-faint">
           {reason && (
             <div className="text-xs">
               <span className="text-muted-foreground">{t('Reason')}: </span>

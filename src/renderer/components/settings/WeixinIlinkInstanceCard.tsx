@@ -229,7 +229,7 @@ export function WeixinIlinkInstanceCard({
       : t('Not connected')
 
   return (
-    <div className="border border-border/60 rounded-lg overflow-hidden bg-card/50">
+    <div className="border border-border-soft rounded-lg overflow-hidden bg-card/50">
       {/* Instance header */}
       <button
         type="button"
@@ -300,7 +300,7 @@ export function WeixinIlinkInstanceCard({
 
       {/* Instance body */}
       {isExpanded && (
-        <div className="px-3 pb-3 pt-2 border-t border-border/60 space-y-3 animate-in slide-in-from-top-1 duration-150">
+        <div className="px-3 pb-3 pt-2 border-t border-border-soft space-y-3 animate-in slide-in-from-top-1 duration-150">
           {/* Auth flow */}
           <div className="flex flex-col items-center gap-3 py-2">
             {authState.status === 'idle' && (

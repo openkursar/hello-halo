@@ -4,7 +4,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { ChevronDown } from 'lucide-react'
+import { Check, ChevronDown } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { getFilteredNavItems } from './nav-config'
@@ -39,10 +39,10 @@ function NavButton({
     <button
       onClick={onClick}
       className={cn(
-        "w-full flex items-center gap-2.5 px-4 py-2.5 text-sm text-left transition-colors",
-        "hover:bg-secondary",
-        active && "bg-primary/10 text-primary border-l-2 border-primary",
-        !active && "border-l-2 border-transparent"
+        "w-full flex items-center gap-2.5 rounded-md px-3 py-2 text-sm text-left transition-colors",
+        active
+          ? "bg-secondary text-foreground font-medium"
+          : "text-muted-foreground hover:bg-secondary hover:text-foreground"
       )}
     >
       <Icon className="w-4 h-4 flex-shrink-0" />
@@ -94,7 +94,7 @@ function MobileNavDropdown({
         )}
       >
         <div className="flex items-center gap-2">
-          {ActiveIcon && <ActiveIcon className="w-4 h-4 text-primary" />}
+          {ActiveIcon && <ActiveIcon className="w-4 h-4 text-muted-foreground" />}
           <span>{t(activeItem?.labelKey || '')}</span>
         </div>
         <ChevronDown className={cn(
@@ -119,13 +119,13 @@ function MobileNavDropdown({
                 className={cn(
                   "w-full flex items-center gap-2.5 px-4 py-3 text-sm text-left transition-colors",
                   "hover:bg-secondary",
-                  isActive && "bg-primary/10 text-primary"
+                  isActive && "bg-secondary text-foreground font-medium"
                 )}
               >
                 <Icon className="w-4 h-4 flex-shrink-0" />
                 <span>{t(item.labelKey)}</span>
                 {isActive && (
-                  <span className="ml-auto text-xs text-primary">●</span>
+                  <Check className="ml-auto w-4 h-4 text-primary" />
                 )}
               </button>
             )
@@ -146,7 +146,7 @@ export function SettingsNav({ isRemoteMode, activeSection, onSectionChange }: Se
 
   if (isMobile) {
     return (
-      <div className="px-4 py-3 border-b border-border bg-background sticky top-0 z-10">
+      <div className="px-4 py-3 border-b border-border-faint bg-background sticky top-0 z-10">
         <MobileNavDropdown
           navItems={navItems}
           activeSection={activeSection}
@@ -158,8 +158,8 @@ export function SettingsNav({ isRemoteMode, activeSection, onSectionChange }: Se
 
   // Desktop sidebar
   return (
-    <nav className="w-48 shrink-0 border-r border-border bg-background overflow-y-auto">
-      <div className="py-2">
+    <nav className="w-48 shrink-0 border-r border-border-faint bg-background overflow-y-auto">
+      <div className="flex flex-col gap-0.5 p-2">
         {navItems.map((item) => (
           <NavButton
             key={item.id}

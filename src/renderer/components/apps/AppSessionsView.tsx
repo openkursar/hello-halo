@@ -56,7 +56,7 @@ export function AppSessionsView({ appId, spaceId }: { appId: string; spaceId: st
   return (
     <div className="flex h-full min-h-0 flex-col">
       {instances.length > 1 && (
-        <div className="flex flex-shrink-0 items-center gap-1.5 overflow-x-auto border-b border-border px-3 py-2 sm:px-4">
+        <div className="flex flex-shrink-0 items-center gap-1.5 overflow-x-auto border-b border-border-faint px-3 py-2 sm:px-4">
           {instances.map(instance => (
             <button
               key={instance.id}
@@ -64,8 +64,8 @@ export function AppSessionsView({ appId, spaceId }: { appId: string; spaceId: st
               aria-pressed={selectedId === instance.id}
               className={`flex flex-shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs transition-colors ${
                 selectedId === instance.id
-                  ? 'border-primary/50 bg-primary/10 text-foreground'
-                  : 'border-border text-muted-foreground hover:text-foreground hover:bg-secondary/50'
+                  ? 'border-border bg-secondary text-foreground'
+                  : 'border-border-faint text-muted-foreground hover:text-foreground hover:bg-secondary/50'
               }`}
             >
               <span className={`h-1.5 w-1.5 rounded-full ${instance.connected ? 'bg-halo-success' : 'bg-muted-foreground/30'}`} />

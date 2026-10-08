@@ -729,7 +729,7 @@ function LoadFailedState({ message, onRetry }: { message: string; onRetry?: () =
 }
 
 // Fixed hover/press treatment shared by every suggestion chip below.
-const CHIP_CLASS = 'group flex items-center gap-[7px] h-[34px] px-3.5 rounded-full border border-border/50 bg-card text-[13px] text-muted-foreground transition-colors ease-halo hover:text-foreground hover:border-border hover:bg-secondary'
+const CHIP_CLASS = 'group flex items-center gap-[7px] h-[34px] px-3.5 rounded-full border border-border-faint bg-card text-[13px] text-muted-foreground transition-colors ease-halo hover:text-foreground hover:border-border hover:bg-secondary'
 const CHIP_ICON_CLASS = 'w-[15px] h-[15px] text-subtle-foreground transition-colors ease-halo group-hover:text-foreground'
 
 // Empty state component - adapts to compact mode

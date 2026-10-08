@@ -4,11 +4,12 @@
  */
 
 import { useState, useCallback } from 'react'
-import { ChevronLeft } from 'lucide-react'
 import { useAppStore } from '../stores/app.store'
 import { api } from '../api'
 import type { HaloConfig } from '../types'
 import { Header } from '../components/layout/Header'
+import { SearchIcon } from '../components/search/SearchIcon'
+import { useSearchStore } from '../stores/search.store'
 import { useTranslation } from '../i18n'
 import { useIsMobile } from '../hooks/useIsMobile'
 
@@ -29,7 +30,8 @@ import {
 
 export function SettingsPage() {
   const { t } = useTranslation()
-  const { config, setConfig, navigateBack } = useAppStore()
+  const { config, setConfig } = useAppStore()
+  const { openSearch } = useSearchStore()
   const isMobile = useIsMobile()
   const isRemoteMode = api.isRemoteMode()
 
@@ -46,15 +48,8 @@ export function SettingsPage() {
     <div className="h-full w-full flex flex-col">
       {/* Header */}
       <Header
-        left={
-          <button
-            onClick={() => navigateBack('space')}
-            className="flex items-center gap-1.5 text-sm font-medium hover:text-muted-foreground transition-colors"
-          >
-            <ChevronLeft className="w-4 h-4" />
-            {t('Settings')}
-          </button>
-        }
+        left={<span className="text-sm font-semibold text-foreground whitespace-nowrap">{t('Settings')}</span>}
+        right={<SearchIcon onClick={() => openSearch('global')} />}
       />
 
       {/* Main Content Area */}
@@ -83,7 +78,7 @@ export function SettingsPage() {
           <div className="p-6">
             <div className="max-w-2xl mx-auto space-y-6">
               {/* AI Sources Section (v2) */}
-              <section id="ai-model" className="bg-card rounded-xl border border-border p-6">
+              <section id="ai-model" className="bg-card rounded-xl border border-border-faint p-6">
                 <h2 className="text-lg font-medium mb-4">{t('AI Model')}</h2>
                 <AISourcesSection config={config as HaloConfig} setConfig={setConfig} />
               </section>

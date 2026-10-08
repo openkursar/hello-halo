@@ -285,7 +285,7 @@ export function SkillInfoCard({ appId, spaceName }: SkillInfoCardProps) {
 
                   {/* Divider */}
                   {allSpaces.length > 0 && (
-                    <div className="my-1 border-t border-border/50" />
+                    <div className="my-1 border-t border-border-faint" />
                   )}
 
                   {/* Per-space options */}

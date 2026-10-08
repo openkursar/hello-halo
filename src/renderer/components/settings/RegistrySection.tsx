@@ -166,7 +166,7 @@ export function RegistrySection() {
     registry.isDefault || BUILTIN_IDS.has(registry.id)
 
   return (
-    <section id="app-store" className="bg-card rounded-xl border border-border p-6">
+    <section id="app-store" className="bg-card rounded-xl border border-border-faint p-6">
       <div className="mb-4">
         <h2 className="text-lg font-medium">{t('App Store')}</h2>
         <p className="text-sm text-muted-foreground mt-1">

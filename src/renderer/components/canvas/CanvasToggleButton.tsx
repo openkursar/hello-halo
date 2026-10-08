@@ -6,7 +6,7 @@ const PLACEMENT_CLASS = {
   // Among the tab bar's own actions, while the canvas is open
   'tab-bar': 'canvas-tab-bar-action',
   // On the right edge of the area the canvas folded away from, while it is collapsed
-  edge: 'absolute right-0 top-1/2 -translate-y-1/2 z-20 flex items-center gap-1 rounded-l-lg border border-r-0 border-border/60 bg-card/90 px-1.5 py-2 text-xs text-muted-foreground shadow-sm hover:bg-secondary hover:text-foreground transition-colors',
+  edge: 'absolute right-0 top-1/2 -translate-y-1/2 z-20 flex items-center gap-1 rounded-l-lg border border-r-0 border-border-soft bg-card/90 px-1.5 py-2 text-xs text-muted-foreground shadow-sm hover:bg-secondary hover:text-foreground transition-colors',
 } as const
 
 /**

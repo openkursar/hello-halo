@@ -103,7 +103,7 @@ export function SpaceCard({ space, onOpen, onOpenTab }: SpaceCardProps) {
         focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary
         ${space.isMissing
           ? 'border-dashed opacity-60 hover:opacity-100'
-          : 'border-border/60 hover:border-border hover:shadow-sm'}`}
+          : 'border-border-soft hover:border-border hover:shadow-sm'}`}
     >
       <div className="flex items-start gap-2.5">
         <SpaceAvatar space={space} size={40} className={space.isMissing ? 'opacity-60' : ''} />
@@ -148,7 +148,7 @@ export function SpaceCard({ space, onOpen, onOpenTab }: SpaceCardProps) {
                   <button onClick={handleOpenFolder} className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-muted/60 transition-colors">
                     <FolderOpen className="w-3.5 h-3.5 text-muted-foreground" /> {t('Show in Folder')}
                   </button>
-                  <div className="my-1 border-t border-border/60" />
+                  <div className="my-1 border-t border-border-soft" />
                   <button onClick={handleDelete} className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-halo-error hover:bg-halo-error/10 transition-colors">
                     <Trash2 className="w-3.5 h-3.5" /> {t('Delete')}
                   </button>

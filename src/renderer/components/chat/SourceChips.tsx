@@ -19,7 +19,7 @@ export function SourceChips({ sources }: SourceChipsProps) {
   if (sources.length === 0) return null
 
   return (
-    <div className="mt-2 pt-2 border-t border-border/60 flex flex-wrap items-center gap-1.5">
+    <div className="mt-2 pt-2 border-t border-border-soft flex flex-wrap items-center gap-1.5">
       <span className="text-[11px] text-muted-foreground">{t('Sources')}</span>
       {sources.map((s, i) => (
         <button

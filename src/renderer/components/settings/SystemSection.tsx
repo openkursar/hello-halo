@@ -293,7 +293,7 @@ export function SystemSection({ config, setConfig }: SystemSectionProps) {
   return (
     <>
       {/* Permissions Section */}
-      <section id="permissions" className="bg-card rounded-xl border border-border p-6">
+      <section id="permissions" className="bg-card rounded-xl border border-border-faint p-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-medium">{t('Permissions')}</h2>
           <span className="text-xs px-2 py-1 rounded-full bg-green-500/20 text-green-500">
@@ -331,7 +331,7 @@ export function SystemSection({ config, setConfig }: SystemSectionProps) {
       <BrowserAllowlistCard />
 
       {/* System Section */}
-      <section id="system" className="bg-card rounded-xl border border-border p-6">
+      <section id="system" className="bg-card rounded-xl border border-border-faint p-6">
         <h2 className="text-lg font-medium mb-4">{t('System')}</h2>
 
         <div className="space-y-4">
@@ -436,7 +436,7 @@ export function SystemSection({ config, setConfig }: SystemSectionProps) {
 
             {/* Browser proxy toggle — only visible when a proxy is configured */}
             {proxyInput.trim() && (
-              <div className="flex items-center justify-between mt-3 pt-3 border-t border-border/50">
+              <div className="flex items-center justify-between mt-3 pt-3 border-t border-border-faint">
                 <div className="flex-1 min-w-0 mr-3">
                   <p className="text-sm font-medium">{t('Also apply to AI Browser')}</p>
                   <p className="text-xs text-muted-foreground">

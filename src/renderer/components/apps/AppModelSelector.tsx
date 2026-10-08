@@ -230,7 +230,7 @@ export function AppModelSelector({
               </div>
             </button>
 
-            <div className="border-t border-border/50 my-0.5" />
+            <div className="border-t border-border-faint my-0.5" />
 
             {/* Per-source model lists */}
             {aiSources.sources.map(source => {
@@ -281,7 +281,7 @@ export function AppModelSelector({
                     </div>
                   )}
 
-                  <div className="border-t border-border/50" />
+                  <div className="border-t border-border-faint" />
                 </div>
               )
             })}

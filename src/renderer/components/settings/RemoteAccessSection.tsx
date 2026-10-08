@@ -222,7 +222,7 @@ export function RemoteAccessSection({ config, setConfig }: RemoteAccessSectionPr
   }
 
   return (
-    <section id="remote" className="bg-card rounded-xl border border-border p-6">
+    <section id="remote" className="bg-card rounded-xl border border-border-faint p-6">
       <h2 className="text-lg font-medium mb-4">{t('Remote Access')}</h2>
 
       {/* Security Warning */}

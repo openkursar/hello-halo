@@ -92,7 +92,7 @@ export function AboutSection() {
   const isBusy = updateStatus.phase === 'checking' || updateStatus.phase === 'downloading'
 
   return (
-    <section id="about" className="bg-card rounded-xl border border-border p-6">
+    <section id="about" className="bg-card rounded-xl border border-border-faint p-6">
       <h2 className="text-lg font-medium mb-4">{t('About')}</h2>
 
       <div className="space-y-3 text-sm">

@@ -555,7 +555,7 @@ export function SearchPanel({ isOpen, onClose }: SearchPanelProps) {
                   )
                 })
               )}
-              <div className="mt-1 pt-1 border-t border-border/50">
+              <div className="mt-1 pt-1 border-t border-border-faint">
                 <CmdkRow
                   icon={Search}
                   title={t('Search message content for "{{query}}"', { query })}

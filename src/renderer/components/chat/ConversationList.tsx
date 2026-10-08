@@ -84,7 +84,7 @@ type ConversationRow =
   /** `hint` is hover-only: the distinction between sections is one-time
    *  knowledge, not worth permanent vertical space in a 140px-wide sidebar.
    *  Omitted where the label already says everything. */
-  | { type: 'header'; key: string; section: ConversationSection; label: string; hint?: string; collapsed: boolean }
+  | { type: 'header'; key: string; section: ConversationSection; label: string; hint?: string; collapsed: boolean; afterCollapsed: boolean }
   | { type: 'item'; key: string; conversation: ConversationMeta }
   | { type: 'dh-header'; key: string; appId: string; name: string; uninstalled: boolean; collapsed: boolean }
   /** `standalone` rows sit outside their digital human's section (i.e. in
@@ -122,7 +122,8 @@ const ROW_TITLE = 'flex-1 min-w-0 overflow-hidden whitespace-nowrap [mask-image:
 // Shown only while the row itself is highlighted (hover, open menu, keyboard
 // focus), since their fade-in backdrop is the row's highlight colour.
 const ROW_ACTIONS = 'absolute inset-y-0 right-1.5 flex items-center gap-0.5 pl-5 bg-[linear-gradient(to_right,transparent,hsl(var(--secondary))_20px)] opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto group-data-[menu-open]:opacity-100 group-data-[menu-open]:pointer-events-auto has-[:focus-visible]:opacity-100 has-[:focus-visible]:pointer-events-auto'
-const ROW_HIGHLIGHT = 'data-[menu-open]:bg-secondary data-[menu-open]:text-foreground has-[:focus-visible]:bg-secondary'
+// `dark-ui:` rows outrank plain state variants, so the open-menu text is restated for dark.
+const ROW_HIGHLIGHT = 'data-[menu-open]:bg-secondary data-[menu-open]:text-foreground dark-ui:data-[menu-open]:text-foreground has-[:focus-visible]:bg-secondary'
 
 /** A digital human's face, clickable through to its page (activity thread). */
 function PersonAvatarLink({ appId, name, size, dimmed, disabled, className }: {
@@ -137,7 +138,7 @@ function PersonAvatarLink({ appId, name, size, dimmed, disabled, className }: {
   const { t } = useTranslation()
   const face = <AutomationAvatar name={name} size={size} />
   if (disabled) {
-    return <span className={cn('flex shrink-0', dimmed && 'opacity-50', className)}>{face}</span>
+    return <span className={cn('flex shrink-0', dimmed && 'opacity-50 dark-ui:opacity-70', className)}>{face}</span>
   }
   return (
     <button
@@ -151,7 +152,7 @@ function PersonAvatarLink({ appId, name, size, dimmed, disabled, className }: {
       aria-label={t('View {{name}}', { name })}
       className={cn(
         'flex shrink-0 rounded-full transition-[opacity,transform] ease-halo hover:opacity-100 hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
-        dimmed && 'opacity-50',
+        dimmed && 'opacity-50 dark-ui:opacity-70 dark-ui:hover:opacity-100',
         className
       )}
     >
@@ -200,9 +201,11 @@ function buildConversationRows(
 
   const out: ConversationRow[] = []
 
+  let previousCollapsed = false
   const header = (section: ConversationSection, label: string, hint?: string): boolean => {
     const collapsed = collapsedSections.has(section)
-    out.push({ type: 'header', key: `header:${section}`, section, label, hint, collapsed })
+    out.push({ type: 'header', key: `header:${section}`, section, label, hint, collapsed, afterCollapsed: previousCollapsed })
+    previousCollapsed = collapsed
     return !collapsed
   }
 
@@ -618,7 +621,9 @@ export const ConversationList = memo(function ConversationList({
           ROW_HIGHLIGHT,
           isActive
             ? 'bg-secondary text-foreground font-medium'
-            : 'text-subtle-foreground hover:bg-secondary hover:text-foreground'
+            // Dark theme: rows are read, not just scanned, so they stay at the
+            // brighter secondary tone; the selected one is marked by its fill.
+            : 'text-subtle-foreground hover:bg-secondary hover:text-foreground dark-ui:text-muted-foreground dark-ui:hover:text-foreground'
         )}
       >
 
@@ -712,7 +717,9 @@ export const ConversationList = memo(function ConversationList({
             : 'cursor-pointer',
           isActive && !row.uninstalled
             ? 'bg-secondary text-foreground font-medium'
-            : 'text-subtle-foreground hover:bg-secondary hover:text-foreground'
+            // Dark theme: rows are read, not just scanned, so they stay at the
+            // brighter secondary tone; the selected one is marked by its fill.
+            : 'text-subtle-foreground hover:bg-secondary hover:text-foreground dark-ui:text-muted-foreground dark-ui:hover:text-foreground'
         )}
       >
 
@@ -806,7 +813,7 @@ export const ConversationList = memo(function ConversationList({
     return (
       <div
         ref={containerRef}
-        className="relative w-14 h-full flex-shrink-0 border-r border-border/50 bg-background flex flex-col items-center"
+        className="relative w-14 h-full flex-shrink-0 border-r border-border-faint bg-background flex flex-col items-center"
       >
         <div className="w-full px-2 pt-2.5 pb-1.5">
           <button
@@ -881,7 +888,7 @@ export const ConversationList = memo(function ConversationList({
     <>
     <div
       ref={containerRef}
-      className="border-r border-border/50 flex flex-col bg-background relative"
+      className="border-r border-border-faint flex flex-col bg-background relative"
       style={{ width, transition: isDragging ? 'none' : 'width 0.2s ease' }}
     >
       <div className="flex flex-col gap-2 px-2.5 pt-4 pb-3">
@@ -909,7 +916,8 @@ export const ConversationList = memo(function ConversationList({
                 // No uppercase/letter-spacing: both are no-ops on CJK labels
                 // and only loosen them oddly.
                 return (
-                  <div className={cn('bg-background', index === 0 ? 'pt-1' : 'mt-4 pt-2.5 border-t border-border/50')}>
+                  // After a folded section the divider is dropped but the spacing kept.
+                  <div className={cn('bg-background', index === 0 ? 'pt-1' : cn('mt-4 pt-2.5', !row.afterCollapsed && 'border-t border-border-faint'))}>
                     <button
                       type="button"
                       onClick={() => {
@@ -918,7 +926,7 @@ export const ConversationList = memo(function ConversationList({
                       }}
                       aria-expanded={!row.collapsed}
                       title={row.hint}
-                      className="group flex w-full items-center gap-1 rounded-sm px-1.5 pb-1 text-xs font-medium text-subtle-foreground/70 hover:text-subtle-foreground transition-colors ease-halo"
+                      className="group flex w-full items-center gap-1 rounded-sm px-1.5 pb-1 text-xs font-medium text-subtle-foreground/70 dark-ui:text-subtle-foreground hover:text-subtle-foreground dark-ui:hover:text-muted-foreground transition-colors ease-halo"
                     >
                       <span>{row.label}</span>
                       <ChevronRight className={cn(
@@ -953,7 +961,8 @@ export const ConversationList = memo(function ConversationList({
                       aria-expanded={!row.collapsed}
                       className={cn(
                         'flex flex-1 min-w-0 items-center pl-1.5 py-1.5 text-[13px] font-medium',
-                        row.uninstalled ? 'cursor-not-allowed' : 'text-foreground'
+                        // A group label, not a row to read: in the dark theme it sits with its sessions' tone.
+                        row.uninstalled ? 'cursor-not-allowed' : 'text-foreground dark-ui:text-muted-foreground'
                       )}
                     >
                       <span className="flex-1 min-w-0 truncate text-left">{row.name}</span>

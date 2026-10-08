@@ -26,10 +26,12 @@ export function CapabilitySwitcher({ type, selectedAppId, onSelect }: Capability
     () => apps
       .filter(app => app.spec.type === type && app.status !== 'uninstalled')
       .map(app => {
-        const name = resolveSpecI18n(app.spec, language).name || app.id
+        const spec = resolveSpecI18n(app.spec, language)
+        const name = spec.name || app.id
         return {
           id: app.id,
           name,
+          description: spec.description,
           icon: <AppTypeIcon type={type} icon={app.spec.icon} name={name} size="xs" />,
           dimmed: app.status === 'paused',
         }

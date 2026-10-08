@@ -44,25 +44,31 @@
   --primary: 217 91% 60%;
   --primary-foreground: 0 0% 100%;
   --primary-hover: 221 83% 53%;
-  --secondary: 220 19% 13%;
+  /* Raised from 13%: the selected/hovered fill must read against the 6%
+     canvas, not just exist. */
+  --secondary: 220 19% 16%;
   --secondary-foreground: 223 17% 92%;
-  --muted: 220 19% 13%;
-  --muted-foreground: 217 12% 65%;
-  /* Tertiary text. Lightened from the prototype's 46% — that value scores 4.00
-     against --background and 3.71 against --card, below WCAG AA for the 10–12px
-     labels this token is used on. 52% clears 4.5 on both surfaces. */
-  --subtle-foreground: 220 9% 52%;
+  --muted: 220 19% 16%;
+  --muted-foreground: 217 12% 72%;
+  /* Tertiary text, used on 10–13px labels. Clears WCAG AA 4.5 on every
+     surface it sits on, hovered rows (--surface-hover) included. */
+  --subtle-foreground: 220 9% 63%;
   /* Low-frequency icon controls only (never text): recedes until hovered.
      Kept at the 3:1 floor for interactive graphics, including on the
      secondary-tinted toolbars and hovered rows it sits on. */
-  --faint-foreground: 220 8% 44%;
+  --faint-foreground: 220 8% 50%;
   --accent: 217 91% 60%;
   --accent-foreground: 0 0% 100%;
   --accent-on-dark: 212 96% 78%;
-  --surface-hover: 222 17% 15%;
+  --surface-hover: 222 17% 19%;
   --destructive: 0 62% 50%;
   --destructive-foreground: 0 0% 98%;
-  --border: 220 15% 16%;
+  --border: 220 15% 20%;
+  /* Soft and faint dividers. Solid here: an alpha border on a near-black
+     canvas all but vanishes. The light theme defines them as alphas of
+     --border instead. */
+  --border-soft: hsl(220 15% 18%);
+  --border-faint: hsl(220 15% 16%);
   --input: 220 19% 13%;
   --ring: 217 91% 60%;
   --radius: 0.75rem;
@@ -137,6 +143,8 @@
   --destructive: 0 72% 51%;
   --destructive-foreground: 0 0% 100%;
   --border: 220 12% 89%;
+  --border-soft: hsl(var(--border) / 0.6);
+  --border-faint: hsl(var(--border) / 0.5);
   --input: 220 14% 94%;
   --ring: 217 91% 55%;
 
@@ -1562,8 +1570,26 @@ html.platform-desktop body::after {
   transform-origin: center;
   animation: avatar-look 2.4s ease-in-out infinite, avatar-blink 2.4s ease-in-out infinite;
 }
+/* Same motion, only while its own host (e.g. a digital-human card) is
+   hovered or holds focus; a dedicated class so an outer hover never starts it. */
+.avatar-alive-host:hover .avatar-alive-on-hover > svg > g > g > *,
+.avatar-alive-host:focus-within .avatar-alive-on-hover > svg > g > g > * {
+  animation: avatar-look 2.4s ease-in-out infinite;
+}
+.avatar-alive-host:hover .avatar-alive-on-hover > svg > g > g > rect,
+.avatar-alive-host:focus-within .avatar-alive-on-hover > svg > g > g > rect {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: avatar-look 2.4s ease-in-out infinite, avatar-blink 2.4s ease-in-out infinite;
+}
+/* Lists `rect` too: those rules outrank a bare `*`. */
 @media (prefers-reduced-motion: reduce) {
-  .avatar-alive > svg > g > g > * { animation: none; }
+  .avatar-alive > svg > g > g > *,
+  .avatar-alive > svg > g > g > rect,
+  .avatar-alive-host:hover .avatar-alive-on-hover > svg > g > g > *,
+  .avatar-alive-host:hover .avatar-alive-on-hover > svg > g > g > rect,
+  .avatar-alive-host:focus-within .avatar-alive-on-hover > svg > g > g > *,
+  .avatar-alive-host:focus-within .avatar-alive-on-hover > svg > g > g > rect { animation: none; }
 }
 
 /* Thinking level slider (ThinkingLevelControl): a thick rounded track filled up

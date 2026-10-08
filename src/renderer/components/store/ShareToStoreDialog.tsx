@@ -879,11 +879,11 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
         onMouseDown={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="relative flex-shrink-0 px-7 pt-6 pb-4 border-b border-border/60">
+        <div className="relative flex-shrink-0 px-7 pt-6 pb-4 border-b border-border-soft">
           <h2 className="text-base font-bold text-foreground">{t('Publish app to store')}</h2>
           <button
             onClick={onClose}
-            className="absolute top-4 right-4 flex h-7 w-7 items-center justify-center rounded-md border border-border/60 bg-background text-muted-foreground hover:text-foreground hover:border-border transition-colors"
+            className="absolute top-4 right-4 flex h-7 w-7 items-center justify-center rounded-md border border-border-soft bg-background text-muted-foreground hover:text-foreground hover:border-border transition-colors"
             aria-label={t('Close')}
           >
             <X className="w-3.5 h-3.5" />
@@ -927,7 +927,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
                   <button
                     key={pick}
                     onClick={() => { setType(pick); setStep('form') }}
-                    className="group flex items-center gap-3 p-4 text-left rounded-[10px] border border-border/60 bg-background hover:border-primary/50 hover:bg-muted/30 transition-colors"
+                    className="group flex items-center gap-3 p-4 text-left rounded-[10px] border border-border-soft bg-background hover:border-primary/50 hover:bg-muted/30 transition-colors"
                   >
                     {pick === 'automation' ? <RotatingDigitalHumanIcon /> : <AppTypeIcon type={pick} size="md" />}
                     <div className="min-w-0 flex-1">
@@ -979,7 +979,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
               id="publish-type"
               value={type}
               onChange={e => setType(e.target.value as ShareType)}
-              className="w-full px-3 py-2 text-[13px] bg-muted/40 border border-border/60 rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
+              className="w-full px-3 py-2 text-[13px] bg-muted/40 border border-border-soft rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
             >
               <option value="automation">{t('Digital Human')}</option>
               <option value="skill">{t('Skill')}</option>
@@ -1055,7 +1055,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
                   id="publish-name"
                   value={name}
                   onChange={e => { draftDirty.current = true; setName(e.target.value); clearInvalid('name'); setSubmitError(null) }}
-                  className={`w-full px-3 py-2 text-[13px] bg-muted/40 border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground ${invalid.has('name') ? 'border-red-400 ring-1 ring-red-400/40' : 'border-border/60'}`}
+                  className={`w-full px-3 py-2 text-[13px] bg-muted/40 border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground ${invalid.has('name') ? 'border-red-400 ring-1 ring-red-400/40' : 'border-border-soft'}`}
                 />
                 {type === 'skill' && sourceSpec?.name && (
                   <p className="text-[11px] text-muted-foreground">
@@ -1092,7 +1092,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
                   value={description}
                   onChange={e => { draftDirty.current = true; setDescription(e.target.value) }}
                   rows={3}
-                  className="w-full px-3 py-2 text-[13px] bg-muted/40 border border-border/60 rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground resize-none"
+                  className="w-full px-3 py-2 text-[13px] bg-muted/40 border border-border-soft rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground resize-none"
                 />
               </div>
               </div>
@@ -1115,7 +1115,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
                     onChange={e => { draftDirty.current = true; setChangelog(e.target.value) }}
                     rows={2}
                     placeholder={t("What's new in this version?")}
-                    className="w-full px-3 py-2 text-[13px] bg-muted/40 border border-border/60 rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground resize-none placeholder:text-muted-foreground/50"
+                    className="w-full px-3 py-2 text-[13px] bg-muted/40 border border-border-soft rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground resize-none placeholder:text-muted-foreground/50"
                   />
                 </div>
               )}
@@ -1135,7 +1135,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
                   <div className="flex items-center gap-2.5">
                     <div className="flex flex-col gap-0.5 flex-shrink-0">
                       <span className="text-[10px] uppercase tracking-wide text-muted-foreground/60">{t('Current')}</span>
-                      <span className="px-3 py-2 text-[13px] font-mono text-muted-foreground bg-muted/40 border border-border/60 rounded-lg">
+                      <span className="px-3 py-2 text-[13px] font-mono text-muted-foreground bg-muted/40 border border-border-soft rounded-lg">
                         v{storeVersion}
                       </span>
                     </div>
@@ -1146,7 +1146,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
                         id="publish-version"
                         value={version}
                         onChange={e => { draftDirty.current = true; setVersion(e.target.value); setVersionTouched(true); clearInvalid('version'); setSubmitError(null) }}
-                        className={`w-full px-3 py-2 text-[13px] bg-muted/40 border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground font-mono ${invalid.has('version') ? 'border-red-400 ring-1 ring-red-400/40' : 'border-border/60'}`}
+                        className={`w-full px-3 py-2 text-[13px] bg-muted/40 border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground font-mono ${invalid.has('version') ? 'border-red-400 ring-1 ring-red-400/40' : 'border-border-soft'}`}
                       />
                     </div>
                   </div>
@@ -1155,7 +1155,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
                     id="publish-version"
                     value={version}
                     onChange={e => { draftDirty.current = true; setVersion(e.target.value); setVersionTouched(true); clearInvalid('version'); setSubmitError(null) }}
-                    className={`w-full px-3 py-2 text-[13px] bg-muted/40 border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground font-mono ${invalid.has('version') ? 'border-red-400 ring-1 ring-red-400/40' : 'border-border/60'}`}
+                    className={`w-full px-3 py-2 text-[13px] bg-muted/40 border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground font-mono ${invalid.has('version') ? 'border-red-400 ring-1 ring-red-400/40' : 'border-border-soft'}`}
                   />
                 )}
                 {storeVersion && (
@@ -1176,7 +1176,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
               <div className="rounded-xl bg-background p-4 space-y-4">
 
               <div className="flex flex-col gap-1.5">
-                <div className="flex flex-col divide-y divide-border/60 rounded-lg border border-border/60 overflow-hidden bg-background">
+                <div className="flex flex-col divide-y divide-border-soft rounded-lg border border-border-soft overflow-hidden bg-background">
                   {formSkills.map(skill => (
                     <BundledSkillItem
                       key={skill.key}
@@ -1191,7 +1191,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
                     />
                   ))}
                 </div>
-                <p className="rounded-lg border border-border/60 bg-muted/30 px-3.5 py-2.5 text-xs leading-relaxed text-muted-foreground">
+                <p className="rounded-lg border border-border-soft bg-muted/30 px-3.5 py-2.5 text-xs leading-relaxed text-muted-foreground">
                   {t('These skills are submitted together with this digital human. Turn on "List separately" to also publish the skill as its own entry in the store\'s Skill list; otherwise it stays a private capability of the digital human and is not listed on its own.')}
                 </p>
               </div>
@@ -1245,10 +1245,10 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
 
         {/* Footer — hidden on the type-choice step (close via the header ✕) */}
         {signedIn === true && step !== 'type' && (
-        <div className="flex items-center gap-3 px-7 py-4 border-t border-border/60 flex-shrink-0">
+        <div className="flex items-center gap-3 px-7 py-4 border-t border-border-soft flex-shrink-0">
           <button
             onClick={onClose}
-            className="flex-1 px-5 py-2.5 text-[13px] text-muted-foreground border border-border/60 rounded-lg hover:text-foreground hover:border-border transition-colors"
+            className="flex-1 px-5 py-2.5 text-[13px] text-muted-foreground border border-border-soft rounded-lg hover:text-foreground hover:border-border transition-colors"
           >
             {submitSuccess ? t('Done') : t('Cancel')}
           </button>
@@ -1534,7 +1534,7 @@ function TagInput({ tags, onChange }: TagInputProps) {
       <label htmlFor="publish-tags" className="text-xs font-semibold text-muted-foreground">
         {t('Tags')} <span className="text-muted-foreground/60">{t('(optional, up to {{max}})', { max: MAX_TAGS })}</span>
       </label>
-      <div className="flex flex-wrap items-center gap-1.5 px-2 py-1.5 bg-muted/40 border border-border/60 rounded-lg focus-within:ring-1 focus-within:ring-primary">
+      <div className="flex flex-wrap items-center gap-1.5 px-2 py-1.5 bg-muted/40 border border-border-soft rounded-lg focus-within:ring-1 focus-within:ring-primary">
         {tags.map(tag => (
           <span key={tag} className="inline-flex items-center gap-1 px-2 py-0.5 text-xs bg-background border border-border rounded text-foreground">
             {tag}
@@ -1699,7 +1699,7 @@ function InstalledPicker({ apps, selectedId, onSelect, type, invalid, pinned }: 
           onChange={e => { setQuery(e.target.value); openList() }}
           onFocus={openList}
           placeholder={type === 'automation' ? t('Select a digital human') : t('Select a skill')}
-          className={`w-full pl-8 pr-8 py-2 text-[13px] bg-muted/40 border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground placeholder:text-muted-foreground/50 ${invalid ? 'border-red-400 ring-1 ring-red-400/40' : 'border-border/60'}`}
+          className={`w-full pl-8 pr-8 py-2 text-[13px] bg-muted/40 border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground placeholder:text-muted-foreground/50 ${invalid ? 'border-red-400 ring-1 ring-red-400/40' : 'border-border-soft'}`}
         />
         <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/60 pointer-events-none" />
       </div>
@@ -1708,7 +1708,7 @@ function InstalledPicker({ apps, selectedId, onSelect, type, invalid, pinned }: 
         <div
           ref={listRef}
           style={{ position: 'fixed', top: anchor.top, left: anchor.left, width: anchor.width }}
-          className="z-[60] max-h-44 overflow-y-auto rounded-lg border border-border/60 bg-background shadow-lg divide-y divide-border/60"
+          className="z-[60] max-h-44 overflow-y-auto rounded-lg border border-border-soft bg-background shadow-lg divide-y divide-border-soft"
         >
           {ordered.length === 0 ? (
             <p className="px-3 py-4 text-xs text-muted-foreground text-center">{t('No matches')}</p>
@@ -1754,7 +1754,7 @@ function StagedPreview({ staged, onClear }: StagedPreviewProps) {
   const fileCount = staged.skillFiles ? Object.keys(staged.skillFiles).length : undefined
 
   return (
-    <div className="flex items-start gap-3 p-3 bg-muted/40 rounded-lg border border-border/60">
+    <div className="flex items-start gap-3 p-3 bg-muted/40 rounded-lg border border-border-soft">
       <Icon className="w-4 h-4 text-primary flex-shrink-0 mt-0.5" />
       <div className="min-w-0 flex-1">
         <p className="text-sm font-medium text-foreground truncate">{staged.spec.name}</p>

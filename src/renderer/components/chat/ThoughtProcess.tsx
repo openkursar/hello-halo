@@ -411,7 +411,7 @@ export const ThoughtProcess = memo(function ThoughtProcess({ thoughts, isThinkin
             ? 'border-primary/40'
             : errorCount > 0
               ? 'border-destructive/40'
-              : 'border-border/50'
+              : 'border-border-faint'
           }
         `}
       >

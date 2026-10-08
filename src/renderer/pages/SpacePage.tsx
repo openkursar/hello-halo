@@ -499,7 +499,7 @@ export function SpacePage() {
                   ref={chatContainerRef}
                   className={`
                     flex flex-col min-w-0 relative
-                    ${isCanvasOpen ? 'border-r border-border/60' : 'flex-1 border-r border-transparent'}
+                    ${isCanvasOpen ? 'border-r border-border-soft' : 'flex-1 border-r border-transparent'}
                   `}
                   style={{
                     width: isCanvasOpen ? dragChatWidth : undefined,

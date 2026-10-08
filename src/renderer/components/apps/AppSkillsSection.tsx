@@ -111,7 +111,7 @@ function SkillRow({
       </div>
 
       {expanded && (
-        <div className="px-3 pb-3 pt-1 space-y-2.5 border-t border-border/50">
+        <div className="px-3 pb-3 pt-1 space-y-2.5 border-t border-border-faint">
           {!installedApp && <p className="text-xs text-muted-foreground">{t('External file. Edit it in its source folder; it is not managed as an installed library item.')}</p>}
           {overridesGlobal && <p className="text-xs text-muted-foreground">{t('This workspace version overrides the global skill with the same command name.')}</p>}
           {installedApp?.spec.requires?.mcps?.length ? <p className="text-xs text-muted-foreground">{t('Required connections: {{names}}', { names: installedApp.spec.requires.mcps.map(dependency => dependency.id).join(', ') })}</p> : null}

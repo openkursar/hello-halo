@@ -177,11 +177,11 @@ export function ImInstancePermissionSection({
           {/* Guest section divider — makes the owner/guest boundary visually explicit */}
           {hasOwners && (
             <div className="flex items-center gap-2 pt-1">
-              <div className="flex-1 border-t border-border/60" />
+              <div className="flex-1 border-t border-border-soft" />
               <span className="text-[10px] uppercase tracking-widest text-muted-foreground/50 px-1">
                 {t('Guest Permissions')}
               </span>
-              <div className="flex-1 border-t border-border/60" />
+              <div className="flex-1 border-t border-border-soft" />
             </div>
           )}
 

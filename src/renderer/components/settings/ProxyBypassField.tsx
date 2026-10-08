@@ -35,7 +35,7 @@ export function ProxyBypassField({ config, setConfig }: ProxyBypassFieldProps) {
   }
 
   return (
-    <div className="mt-3 pt-3 border-t border-border/50">
+    <div className="mt-3 pt-3 border-t border-border-faint">
       <p className="text-sm font-medium">{t("Don't use the proxy for")}</p>
       <p className="text-xs text-muted-foreground">
         {t('Separate entries with commas. .example.com covers its subdomains only; add example.com for the domain itself. IP ranges such as 10.0.0.0/8 work too.')}

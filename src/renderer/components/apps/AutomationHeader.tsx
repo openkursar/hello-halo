@@ -18,6 +18,7 @@ import { AutomationAvatar } from './AutomationAvatar'
 import { useAppsStore } from '../../stores/apps.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { AppStatusDot } from './AppStatusDot'
+import { PersonStatusDot } from './PersonStatusDot'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { resolveSpecI18n } from '../../utils/spec-i18n'
 import { formatTimeAgo } from '../../utils/format-time'
@@ -30,25 +31,13 @@ import { useAppImInstances } from '../../hooks/useAppImInstances'
 import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 import { ShareCurrentAppDialog } from '../store/ShareCurrentAppDialog'
 import { WorkspaceMigrationDialog } from './WorkspaceMigrationDialog'
+import { automationStatusLabel, describePersonStatus } from '../../utils/automation-status'
 import type { BrowserLoginEntry } from '../../../shared/apps/spec-types'
 
 interface AutomationHeaderProps {
   appId: string
   /** Space name to display in the header subtitle */
   spaceName?: string
-}
-
-// Friendly, human-feeling status labels
-function statusLabel(s: string, t: (key: string) => string): string {
-  switch (s) {
-    case 'running': return t('Working')
-    case 'queued': return t('Queued')
-    case 'idle': return t('Standing by')
-    case 'waiting_user': return t('Waiting for you')
-    case 'paused': return t('Automatic tasks paused')
-    case 'error': return t('Encountered an issue')
-    default: return s
-  }
 }
 
 export type AutomationTab = 'activity' | 'config' | 'teams' | 'sessions'
@@ -236,9 +225,12 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
           <h2 className="text-lg font-semibold text-foreground truncate leading-tight">{name}</h2>
           {description && <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{description}</p>}
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            <AppStatusDot status={status} runtimeStatus={runtimeStatus} size="sm" />
+            {/* A stop shows as the stop (in the switcher's tones), not as whatever run is in flight. */}
+            {runtimeState?.blocked
+              ? <PersonStatusDot appStatus={status} effective={effectiveStatus} flag={describePersonStatus(status, runtimeState, t).flag} />
+              : <AppStatusDot status={status} runtimeStatus={runtimeStatus} size="sm" />}
             <span className="text-xs text-muted-foreground">
-              {statusLabel(effectiveStatus, t)}
+              {runtimeState?.blocked ? describePersonStatus(status, runtimeState, t).label : automationStatusLabel(effectiveStatus, t)}
               {freqLabel && <span className="mx-1">·</span>}
               {freqLabel && <span>{freqLabel}</span>}
             </span>
@@ -290,11 +282,11 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
 
             <button onClick={() => void perform(() => triggerApp(appId))} disabled={action || isRunning || isQueued}
               title={isQueued ? t('An independent execution is already queued') : isRunning ? t('An independent execution is already running') : t('Start a new independent execution')}
-              className="flex min-h-9 items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs hover:bg-secondary disabled:opacity-50">
+              className="flex min-h-9 items-center gap-1.5 rounded-lg border border-border-soft px-3 py-2 text-xs hover:bg-secondary disabled:opacity-50">
               <Play size={14} />{isQueued ? t('Queued') : isRunning ? t('Working') : t('Run now')}
             </button>
             <button onClick={() => void perform(() => isPaused ? resumeApp(appId) : pauseApp(appId))} disabled={action}
-              aria-pressed={!isPaused} className="flex min-h-9 items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs hover:bg-secondary disabled:opacity-50">
+              aria-pressed={!isPaused} className="flex min-h-9 items-center gap-1.5 rounded-lg border border-border-soft px-3 py-2 text-xs hover:bg-secondary disabled:opacity-50">
               {isPaused ? <RefreshCw size={14} /> : <Pause size={14} />}{isPaused ? t('Enable automatic tasks') : t('Pause automatic tasks')}
             </button>
 
@@ -399,7 +391,7 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
         // Rule sits under the tabs, inset like the header; `min-w-full w-max`
         // keeps it under the whole strip once the tabs scroll horizontally.
         <div className="overflow-x-auto px-6 sm:px-10">
-          <div className="flex min-w-full w-max items-center gap-0.5 border-b border-border">
+          <div className="flex min-w-full w-max items-center gap-0.5 border-b border-border-faint">
           {tabs.map(tab => {
             const Icon = tab.icon
             const isActive = currentTab === tab.key
