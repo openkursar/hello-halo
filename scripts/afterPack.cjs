@@ -51,6 +51,16 @@ const WATCHER_TARGETS = {
   'linux-x64':    'watcher-linux-x64-glibc',
 };
 
+// Maps platform-arch to the @napi-rs/canvas platform package to KEEP. It is an
+// optional dependency of the pdf library, and npm installs only the build host's
+// variant, which is the wrong chip when packaging the other arch.
+const CANVAS_TARGETS = {
+  'darwin-arm64': 'canvas-darwin-arm64',
+  'darwin-x64':   'canvas-darwin-x64',
+  'win32-x64':    'canvas-win32-x64-msvc',
+  'linux-x64':    'canvas-linux-x64-gnu',
+};
+
 // Maps platform-arch to the node-pty prebuilds directory name to KEEP.
 // node-pty ships prebuilds for mac and win in the npm package.
 // Linux is intentionally excluded: no public prebuilds available; the terminal
@@ -158,7 +168,39 @@ function cleanNonTargetWatchers(context) {
   if (removed.length > 0) {
     console.log(`[afterPack] ${key}: removed ${removed.length} non-target watcher(s): ${removed.join(', ')}`);
   }
+
+  // A host that compiled the watcher itself leaves a binary for its own chip
+  // here. The target's prebuilt package is what loads, so this fallback is dead
+  // weight and, when packaging the other arch, the wrong chip.
+  const compiledDir = path.join(parcelDir, 'watcher', 'build');
+  if (fs.existsSync(path.join(parcelDir, targetPkg)) && fs.existsSync(compiledDir)) {
+    fs.rmSync(compiledDir, { recursive: true, force: true });
+    console.log(`[afterPack] ${key}: removed host-compiled @parcel/watcher/build`);
+  }
   console.log(`[afterPack] ${key}: keeping @parcel/${targetPkg}`);
+}
+
+/**
+ * Remove @napi-rs/canvas platform packages other than the target's.
+ */
+function cleanNonTargetCanvasPackages(context) {
+  const archStr = ARCH_NAMES[context.arch] || String(context.arch);
+  const key = `${context.electronPlatformName}-${archStr}`;
+  const targetPkg = CANVAS_TARGETS[key];
+  const napiDir = path.join(getUnpackedDir(context), 'node_modules', '@napi-rs');
+
+  if (!targetPkg || !fs.existsSync(napiDir)) return;
+
+  const removed = [];
+  for (const entry of fs.readdirSync(napiDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !entry.name.startsWith('canvas-') || entry.name === targetPkg) continue;
+    fs.rmSync(path.join(napiDir, entry.name), { recursive: true, force: true });
+    removed.push(entry.name);
+  }
+
+  if (removed.length > 0) {
+    console.log(`[afterPack] ${key}: removed ${removed.length} non-target canvas package(s): ${removed.join(', ')}`);
+  }
 }
 
 /** Keep the target's bundled N-API binary, which is independent of Electron ABI. */
@@ -182,12 +224,12 @@ async function cleanAndValidateBetterSqlite3Prebuilds(context) {
 /**
  * Install the dsh runtime's own node_modules into the packaged output.
  *
- * electron-builder drops `node_modules` directories it finds under a `files`
- * glob — it collects node_modules from the dependency graph instead — so the
- * tree `runtimes/dsh/build.mjs` plants beside the bundle (private
+ * The tree `runtimes/dsh/build.mjs` plants beside the bundle (private
  * externals with their dependencies, native companions for every platform)
- * never reaches the artifact on its own. It is copied from the project here,
- * minus the native companions of other platforms.
+ * is dropped by older electron-builder versions when it sits under a `files`
+ * glob and carried whole by newer ones. Either way the artifact must end up
+ * with this target's companions alone, so it is copied from the project here
+ * and the other platforms' companions are removed from the result.
  */
 function installDshPrivateExternals(context) {
   const projectRoot = path.resolve(__dirname, '..');
@@ -220,6 +262,9 @@ function installDshPrivateExternals(context) {
       return !skip.has(name);
     },
   });
+  for (const name of skip) {
+    fs.rmSync(path.join(destModules, ...name.split('/')), { recursive: true, force: true });
+  }
   console.log(
     `[afterPack] ${key}: dsh runtime node_modules installed ` +
     `(private: ${PRIVATE_EXTERNALS.map(e => e.name).join(', ')}; native: ${[...keep].join(', ') || 'none'})`
@@ -940,6 +985,7 @@ function validatePackagedArtifact(context) {
 module.exports = async function(context) {
   // Clean non-target watcher packages from unpacked output
   cleanNonTargetWatchers(context);
+  cleanNonTargetCanvasPackages(context);
 
   await cleanAndValidateBetterSqlite3Prebuilds(context);
 
