@@ -8,7 +8,8 @@
  */
 
 import { useState } from 'react'
-import { MoreHorizontal, Sparkles, Search, Settings, ChevronRight, X, Globe, TerminalSquare, Loader2, GitCompareArrows } from 'lucide-react'
+import { MoreHorizontal, Sparkles, Search, Settings, ChevronRight, X, Loader2 } from 'lucide-react'
+import { BROWSER_META, TERMINAL_META, CHANGES_META } from '../canvas'
 import { useAppStore } from '../../stores/app.store'
 import { useActiveModelTarget } from '../../hooks/useActiveModelTarget'
 import { openPersonModelSettings } from '../../utils/people-navigation'
@@ -18,6 +19,10 @@ import { ModelSelectSheet } from '../ai-config/ModelSelector'
 import { useSpaceQuickActions } from '../../hooks/useSpaceQuickActions'
 import { trackHome, trackNavigate } from '../../services/home-telemetry'
 import { trackToolOpen } from '../../services/tool-session-telemetry'
+
+const BrowserIcon = BROWSER_META.icon
+const TerminalIcon = TERMINAL_META.icon
+const ChangesIcon = CHANGES_META.icon
 
 interface MobileOverflowMenuProps {
   onSearch: () => void
@@ -168,7 +173,7 @@ export function MobileOverflowMenu({ onSearch }: MobileOverflowMenuProps) {
                   onClick={handleOpenBrowser}
                   className="w-full px-4 py-3 flex items-center gap-3 hover:bg-secondary/80 transition-colors"
                 >
-                  <Globe className="w-4 h-4 text-blue-500 flex-shrink-0" />
+                  <BrowserIcon className={`w-4 h-4 ${BROWSER_META.color} flex-shrink-0`} />
                   <span className="text-sm text-foreground">{t('Open browser')}</span>
                 </button>
               )}
@@ -182,7 +187,7 @@ export function MobileOverflowMenu({ onSearch }: MobileOverflowMenuProps) {
                   {terminalCreating ? (
                     <Loader2 className="w-4 h-4 flex-shrink-0 animate-spin" />
                   ) : (
-                    <TerminalSquare className="w-4 h-4 text-violet-500 flex-shrink-0" />
+                    <TerminalIcon className={`w-4 h-4 ${TERMINAL_META.color} flex-shrink-0`} />
                   )}
                   <span className="text-sm text-foreground">{t('Open terminal')}</span>
                 </button>
@@ -193,7 +198,7 @@ export function MobileOverflowMenu({ onSearch }: MobileOverflowMenuProps) {
                   onClick={handleOpenChanges}
                   className="w-full px-4 py-3 flex items-center gap-3 hover:bg-secondary/80 transition-colors"
                 >
-                  <GitCompareArrows className="w-4 h-4 text-orange-500 flex-shrink-0" />
+                  <ChangesIcon className={`w-4 h-4 ${CHANGES_META.color} flex-shrink-0`} />
                   <span className="text-sm text-foreground">{t('Changes')}</span>
                 </button>
               )}

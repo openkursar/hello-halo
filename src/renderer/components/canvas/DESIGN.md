@@ -364,3 +364,15 @@ Rules:
 - [ ] Third-party renderer: count `createObjectURL`/`revokeObjectURL` and listener add/remove; unpaired ones get a `patches/` fix plus a guard (docx-preview, xterm).
 - [ ] Text the user can point at goes through a `components/references` adapter (CodeMirror extension — it also draws pending comments as cards under their lines —, `useTextReferences`, terminal), and the viewer consumes `tab.reveal`, `commentId` included (see "Going back to a place").
 - [ ] Unit tests for its pure logic; a `tests/perf` scenario if it can hold large content.
+- [ ] Its entry in `NON_FILE_CONTENT_META` (`content-type-meta.ts`) — the compiler asks for it; `null` for a file type (see "Tab icons").
+
+## Tab icons
+
+A file tab's icon comes from its extension (`FileIcon`). Every other content
+type takes its icon and hue from `NON_FILE_CONTENT_META` in
+`content-type-meta.ts`, which the tab bar and the header and mobile overflow
+menus all read (through `canvas/index.ts`), so a menu entry and its tab cannot
+drift apart. It is a full `Record<ContentType, …>`, so a new type does not
+compile without an entry. The tab draws it at 80% opacity and the file icons'
+1.5 stroke, so it reads as what the user just opened without outshining its
+title. A type without a coloured menu entry (goal, team) uses `primary`.

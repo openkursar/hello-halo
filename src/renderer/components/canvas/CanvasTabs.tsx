@@ -24,7 +24,7 @@
  */
 
 import { useState, useRef, useCallback, useEffect, forwardRef, type ReactNode } from 'react'
-import { X, Loader2, AlertCircle, Plus, Maximize2, Minimize2, Target, GitCompareArrows } from 'lucide-react'
+import { X, Loader2, AlertCircle, Plus, Maximize2, Minimize2 } from 'lucide-react'
 import { type TabState } from '../../services/canvas-lifecycle'
 import { useActiveTabId, useCanvasActions, useTabList } from '../../hooks/useCanvasLifecycle'
 import { useCanvasStore } from '../../stores/canvas.store'
@@ -35,6 +35,7 @@ import { useTranslation } from '../../i18n'
 import { getBrowserHomepage } from '../../utils/browser-homepage'
 import { trackToolOpen } from '../../services/tool-session-telemetry'
 import { CanvasToggleButton } from './CanvasToggleButton'
+import { NON_FILE_CONTENT_META } from './content-type-meta'
 
 interface CanvasTabsProps {
   tabs: readonly TabState[]
@@ -376,6 +377,7 @@ const TabItem = forwardRef<HTMLDivElement, TabItemProps>(function TabItem({
   const { t } = useTranslation()
   // Get file extension for icon
   const extension = tab.path?.split('.').pop() || ''
+  const nonFileMeta = NON_FILE_CONTENT_META[tab.type]
 
   // Handle middle-click to close tab
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -420,10 +422,9 @@ const TabItem = forwardRef<HTMLDivElement, TabItemProps>(function TabItem({
           <Loader2 className="w-4 h-4 animate-spin text-primary" />
         ) : tab.error ? (
           <AlertCircle className="w-4 h-4 text-destructive" />
-        ) : tab.type === 'goal' ? (
-          <Target className="w-4 h-4 text-primary" />
-        ) : tab.type === 'changes' ? (
-          <GitCompareArrows className="w-4 h-4 text-primary" />
+        ) : nonFileMeta ? (
+          // Softened like the colored file kinds, so it does not outshine the title.
+          <nonFileMeta.icon className={`w-4 h-4 opacity-80 ${nonFileMeta.color}`} strokeWidth={1.5} />
         ) : (
           <FileIcon
             extension={extension}
