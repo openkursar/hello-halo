@@ -230,7 +230,7 @@ export function AppModelSelector({
               </div>
             </button>
 
-            <div className="border-t border-border/50 my-0.5" />
+            <div className="border-t border-border-faint my-0.5" />
 
             {/* Per-source model lists */}
             {aiSources.sources.map(source => {
@@ -250,7 +250,7 @@ export function AppModelSelector({
                     onClick={() => setExpandedSection(prev => prev === source.id ? null : source.id)}
                   >
                     <div className="flex items-center gap-2">
-                      <ChevronDown className={`w-3 h-3 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                      <ChevronDown className={`w-3 h-3 transition-transform ${isExpanded ? '' : '-rotate-90'}`} />
                       <span>{displayName}</span>
                     </div>
                     {isSelectedSource && (
@@ -281,7 +281,7 @@ export function AppModelSelector({
                     </div>
                   )}
 
-                  <div className="border-t border-border/50" />
+                  <div className="border-t border-border-faint" />
                 </div>
               )
             })}

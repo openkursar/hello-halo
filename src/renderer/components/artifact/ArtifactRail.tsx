@@ -66,9 +66,6 @@ interface ArtifactRailProps {
   onWidthChange?: (width: number) => void  // Callback when user finishes resizing
   /** The width the rail takes when open: its stored width, or wider to fit its tabs. Reported at rest, not mid-drag. */
   onOpenWidthChange?: (width: number) => void
-  /** One-shot external tab request (e.g. a workspace card's asset chip) —
-   * every change switches to that tab, not just the first. */
-  initialTab?: RailTab
 }
 
 /** Tab strip — Files/Skill/MCP, each a sibling content component below. */
@@ -107,32 +104,22 @@ export function ArtifactRail({
   onExpandedChange,
   initialWidth,
   onWidthChange,
-  onOpenWidthChange,
-  initialTab
+  onOpenWidthChange
 }: ArtifactRailProps) {
   const { t } = useTranslation()
 
-  const [activeTab, setActiveTab] = useState<RailTab>(initialTab ?? 'files')
+  const [activeTab, setActiveTab] = useState<RailTab>('files')
   // Skill/MCP each do a real fetch (disk scan / IPC call) on mount, so they
   // must not mount until the user actually opens that tab — CSS-hidden
   // alone isn't enough, since hidden tabs still stay in the React tree and
   // run their effects. Once opened, a tab keeps its mount (added to this
   // set, never removed) so switching away and back doesn't refetch.
-  const [mountedTabs, setMountedTabs] = useState<Set<RailTab>>(() => new Set<RailTab>(['files', ...(initialTab ? [initialTab] : [])]))
+  const [mountedTabs, setMountedTabs] = useState<Set<RailTab>>(() => new Set<RailTab>(['files']))
 
   const handleTabChange = useCallback((tab: RailTab) => {
     setActiveTab(tab)
     setMountedTabs(prev => (prev.has(tab) ? prev : new Set(prev).add(tab)))
   }, [])
-
-  // The rail is a long-lived singleton (mounted once by SpacePage), so a
-  // later `initialTab` change — e.g. a workspace card's asset chip, clicked
-  // while already on this space — must still switch tabs, not just seed the
-  // first render.
-  useEffect(() => {
-    if (initialTab) handleTabChange(initialTab)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialTab])
 
   const isControlled = externalExpanded !== undefined
   const [internalExpanded, setInternalExpanded] = useState(true)
@@ -381,7 +368,7 @@ export function ArtifactRail({
   return (
     <div
       ref={railRef}
-      className={`h-full flex-shrink-0 flex flex-col relative overflow-hidden ${isExpanded ? 'border-l border-border/50 bg-card' : ''}`}
+      className={`h-full flex-shrink-0 flex flex-col relative overflow-hidden ${isExpanded ? 'border-l border-border-faint bg-card' : ''}`}
       style={{
         width: displayWidth,
         // Disable transition when: dragging OR Canvas is open (prevent layout flicker)
@@ -405,7 +392,7 @@ export function ArtifactRail({
           collapse direction — there's no icon-only strip to click when
           closed, matching the prototype's binary show/hide. */}
       {isExpanded && (
-        <div className="flex-shrink-0 pl-3 pr-1.5 h-10 border-b border-border/50 flex items-center justify-between">
+        <div className="flex-shrink-0 pl-3 pr-1.5 h-10 border-b border-border-faint flex items-center justify-between">
           <TabStrip active={activeTab} onChange={handleTabChange} stripRef={tabStripRef} />
           <button
             onClick={handleToggleExpanded}

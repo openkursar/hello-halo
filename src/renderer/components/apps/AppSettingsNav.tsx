@@ -46,17 +46,17 @@ export function AppSettingsNav({ items, activeId, onSelect }: AppSettingsNavProp
             <button
               key={item.id}
               onClick={() => onSelect(item.id)}
-              className={`flex max-sm:flex-shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-1.5 text-xs text-left transition-colors rounded-md sm:rounded-r-md sm:rounded-l-none sm:border-l-2 ${
+              className={`flex max-sm:flex-shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-1.5 text-xs text-left transition-colors rounded-md ${
                 active
-                  ? 'bg-primary/[0.08] text-primary font-medium sm:border-primary'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-secondary sm:border-transparent'
+                  ? 'bg-secondary text-foreground font-medium'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
               }`}
             >
               <span className="truncate">{item.label}</span>
               {item.alert && <span className="w-1.5 h-1.5 rounded-full bg-halo-warning flex-shrink-0" />}
               {item.dirty && <span className="w-1.5 h-1.5 rounded-full bg-halo-warning flex-shrink-0" />}
               {item.badge && (
-                <span className={`ml-auto tabular-nums ${active ? 'text-primary/80' : 'text-muted-foreground/70'}`}>
+                <span className={`ml-auto tabular-nums ${active ? 'text-muted-foreground' : 'text-muted-foreground/70'}`}>
                   {item.badge}
                 </span>
               )}

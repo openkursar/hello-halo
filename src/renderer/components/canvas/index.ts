@@ -22,6 +22,9 @@ export { viewerBringsFileList } from './viewer-registry'
 // Tab bar
 export { CanvasTabs, CanvasTabBar } from './CanvasTabs'
 
+// Icon and hue of the tabs that menus open, so a menu entry matches its tab
+export { BROWSER_META, TERMINAL_META, CHANGES_META } from './content-type-meta'
+
 // Viewers
 export { CodeViewer } from './viewers/CodeViewer'
 export { MarkdownViewer } from './viewers/MarkdownViewer'

@@ -1325,7 +1325,7 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
 
   return (
     <div className={`
-      ${standalone ? '' : isCompact ? 'border-t border-border/50 bg-background' : 'bg-gradient-to-b from-transparent to-background'}
+      ${standalone ? '' : isCompact ? 'border-t border-border-faint bg-background' : 'bg-gradient-to-b from-transparent to-background'}
       transition-[padding] duration-300 ease-out
       ${standalone ? '' : isCompact ? 'px-3 py-2' : 'pt-3 px-6 pb-[18px]'}
     `}>

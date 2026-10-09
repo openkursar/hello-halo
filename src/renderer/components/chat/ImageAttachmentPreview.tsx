@@ -53,7 +53,7 @@ export function ImageAttachmentPreview({
             {/* Image thumbnail - clickable to preview */}
             <div
               className="relative w-16 h-16 rounded-lg overflow-hidden bg-secondary/50
-                border border-border/50 transition-all duration-200
+                border border-border-faint transition-all duration-200
                 group-hover:border-primary/30 group-hover:shadow-sm
                 cursor-pointer"
               onClick={() => openViewer(index)}
@@ -96,7 +96,7 @@ export function ImageAttachmentPreview({
 
         {/* More images indicator */}
         {remainingCount > 0 && (
-          <div className="w-16 h-16 rounded-lg bg-secondary/50 border border-border/50
+          <div className="w-16 h-16 rounded-lg bg-secondary/50 border border-border-faint
             flex flex-col items-center justify-center text-muted-foreground">
             <ImageIcon size={16} />
             <span className="text-xs mt-0.5">+{remainingCount}</span>

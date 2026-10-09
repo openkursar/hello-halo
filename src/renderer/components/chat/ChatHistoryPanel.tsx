@@ -612,7 +612,7 @@ export function ChatHistoryPanel() {
             <div
               className={`
                 fixed inset-x-0 bottom-0 z-50
-                bg-card rounded-t-2xl border-t border-border/50
+                bg-card rounded-t-2xl border-t border-border-faint
                 shadow-2xl overflow-hidden
                 ${isAnimatingOut ? 'animate-slide-out-bottom' : 'animate-slide-in-bottom'}
               `}
@@ -624,7 +624,7 @@ export function ChatHistoryPanel() {
               </div>
 
               {/* Header */}
-              <div className="px-4 py-2 border-b border-border/50 flex items-center justify-between">
+              <div className="px-4 py-2 border-b border-border-faint flex items-center justify-between">
                 <div>
                   <h3 className="text-base font-semibold text-foreground">{spaceName}</h3>
                   <p className="text-xs text-muted-foreground">
@@ -659,7 +659,7 @@ export function ChatHistoryPanel() {
             <div
               className={`
                 fixed z-50
-                bg-card rounded-xl border border-border/50
+                bg-card rounded-xl border border-border-faint
                 shadow-2xl shadow-black/20 overflow-hidden
                 min-w-[320px] max-w-[400px]
                 ${isAnimatingOut ? 'animate-slide-out-top' : 'animate-slide-in-top'}
@@ -671,7 +671,7 @@ export function ChatHistoryPanel() {
               }}
             >
               {/* Header */}
-              <div className="px-4 py-3 border-b border-border/50 flex items-center justify-between">
+              <div className="px-4 py-3 border-b border-border-faint flex items-center justify-between">
                 <div>
                   <h3 className="text-sm font-semibold text-foreground">{spaceName}</h3>
                   <p className="text-xs text-muted-foreground mt-0.5">

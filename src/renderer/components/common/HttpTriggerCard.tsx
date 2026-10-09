@@ -115,7 +115,7 @@ export function HttpTriggerCard({ kind, id }: HttpTriggerCardProps) {
         <ChevronDown
           className={cn(
             'h-4 w-4 flex-shrink-0 text-muted-foreground transition-transform',
-            expanded && 'rotate-180',
+            !expanded && '-rotate-90',
           )}
         />
       </button>

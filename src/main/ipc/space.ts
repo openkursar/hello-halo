@@ -7,8 +7,6 @@ import {
   getHaloSpace,
   listSpaces,
   createSpace,
-  deleteSpace,
-  forgetSpace,
   getSpaceWithPreferences,
   openSpaceFolder,
   updateSpace,
@@ -71,15 +69,7 @@ export function registerSpaceHandlers(): void {
     },
 
     // Delete a space
-    deleteSpace: async (spaceId: string) => {
-      try {
-        const result = await deleteSpace(spaceId)
-        return { success: true, data: result }
-      } catch (error: unknown) {
-        const err = error as Error
-        return { success: false, error: err.message }
-      }
-    },
+    deleteSpace: async (spaceId: string) => spaceController.deleteSpace(spaceId),
 
     // Get a specific space (with preferences for UI)
     getSpace: async (spaceId: string) => {
@@ -174,15 +164,7 @@ export function registerSpaceHandlers(): void {
     },
 
     // Remove an unreachable space's registry entry (does not touch disk)
-    forgetSpace: async (spaceId: string) => {
-      try {
-        const result = forgetSpace(spaceId)
-        return { success: true, data: result }
-      } catch (error: unknown) {
-        const err = error as Error
-        return { success: false, error: err.message }
-      }
-    },
+    forgetSpace: async (spaceId: string) => spaceController.forgetSpace(spaceId),
   })
 
 }

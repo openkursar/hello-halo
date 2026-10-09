@@ -35,6 +35,14 @@ const sizeConfig = {
   },
 }
 
+/**
+ * Hover band for a row whose title and switch sit far apart, so the eye can
+ * tie one to the other. The switch inside deepens its unchecked track at the same
+ * time so the band never swallows it.
+ * Bleeds 8px past the row so its text keeps aligning with the content around it.
+ */
+export const switchRowHover = 'group/switch-row -mx-2 px-2 rounded-md transition-colors hover:bg-foreground/[0.025]'
+
 export function Switch({
   checked,
   onCheckedChange,
@@ -57,6 +65,7 @@ export function Switch({
         'relative inline-flex flex-shrink-0 rounded-full transition-colors focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background outline-none',
         cfg.track,
         checked ? 'bg-primary' : 'bg-muted',
+        !checked && !disabled && 'group-hover/switch-row:bg-muted-foreground/30',
         disabled && 'opacity-50 cursor-not-allowed',
         !disabled && 'cursor-pointer',
         className,

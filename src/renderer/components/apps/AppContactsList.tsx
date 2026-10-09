@@ -197,7 +197,8 @@ export function AppContactsList({ appId, instanceId, selectedKey, onSelect, onSe
               onClick={() => { if (!isEditing) onSelect(session) }}
               onKeyDown={(e) => { if (e.key === 'Enter' && !isEditing) onSelect(session) }}
               className={`group/contact flex flex-col gap-2 p-2.5 rounded-lg cursor-pointer transition-colors ${
-                isSelected ? 'bg-primary/10 ring-1 ring-primary' : 'hover:bg-secondary/60'
+                // Same quiet selection as the conversation list: a fill, no accent edge.
+                isSelected ? 'bg-secondary' : 'hover:bg-secondary/60'
               }`}
             >
               <div className="flex items-center gap-2.5">
@@ -285,23 +286,28 @@ export function AppContactsList({ appId, instanceId, selectedKey, onSelect, onSe
                 </div>
               </div>
 
-              {/* Auto-sync toggle: pushes the AI final reply to this contact at run end */}
-              <label className="flex flex-col gap-0.5 cursor-pointer select-none" onClick={(e) => e.stopPropagation()}>
-                <span className="flex items-center gap-2">
+              {/* Auto-sync toggle: pushes the AI final reply to this contact at run end.
+                  Only the checkbox and its label toggle; the rest of the row
+                  still selects the session. */}
+              <div className="flex flex-col gap-0.5">
+                <label className="group/sync flex w-fit items-center gap-2 cursor-pointer select-none" onClick={(e) => e.stopPropagation()}>
                   <input
                     type="checkbox"
                     checked={session.proactive === true}
                     onChange={() => handleToggleProactive(session)}
-                    className="w-3.5 h-3.5 rounded border-border accent-primary cursor-pointer flex-shrink-0"
+                    // Enter would reach the row and select the session; Space toggles.
+                    onKeyDown={(e) => { if (e.key === 'Enter') e.stopPropagation() }}
+                    // The ring marks the box as the target while the label is hovered.
+                    className="w-3.5 h-3.5 rounded border-border accent-primary cursor-pointer flex-shrink-0 ring-offset-1 ring-offset-background transition-shadow ease-halo group-hover/sync:ring-2 group-hover/sync:ring-primary/40 focus-visible:ring-2 focus-visible:ring-primary"
                   />
                   <span className="text-xs text-foreground">
                     {t('Auto-sync run result')}
                   </span>
-                </span>
+                </label>
                 <span className="text-xs text-muted-foreground/70 pl-[22px]">
                   {t('Send the AI final reply to this contact after each successful run')}
                 </span>
-              </label>
+              </div>
             </div>
           )
         })}

@@ -65,7 +65,7 @@ export function AppearanceSection({ config, setConfig }: AppearanceSectionProps)
   }
 
   return (
-    <section id="appearance" className="bg-card rounded-xl border border-border p-6">
+    <section id="appearance" className="bg-card rounded-xl border border-border-faint p-6">
       <h2 className="text-lg font-medium mb-4">{t('Appearance')}</h2>
 
       <div className="space-y-6">

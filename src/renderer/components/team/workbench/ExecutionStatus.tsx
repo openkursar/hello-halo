@@ -32,7 +32,7 @@ export function ExecutionStatus({ teamId, epochId, appId, remote, busy, latestRe
       <span className="min-w-0 flex-1 truncate font-medium">{label}</span>
       {!state.active && duration !== undefined && Number.isFinite(duration) && <span className="text-muted-foreground">{t('{{seconds}}s', { seconds: Math.round(duration) })}</span>}
       {!state.active && latestResult && <TaskTimestamp value={latestResult.timestamp} recordId={latestResult.id} format="datetime" className="shrink-0 text-[11px] text-muted-foreground" />}
-      <ChevronDown size={14} className="shrink-0 text-muted-foreground transition-transform group-open/execution:rotate-180" />
+      <ChevronDown size={14} className="shrink-0 text-muted-foreground -rotate-90 transition-transform group-open/execution:rotate-0" />
     </summary>
     {executionError && <p role="alert" className="px-3 pb-3 text-halo-warning">{executionError}</p>}
     {expanded && <div className="min-w-0 space-y-3 border-t border-border p-3 [overflow-wrap:anywhere]">

@@ -334,7 +334,7 @@ function BorrowedWorkRecord({ teamId, member }: { teamId: string; member: TeamMe
               {entries.map(entry => (
                 <div
                   key={entry.id}
-                  className="flex items-start gap-2 rounded-md border border-border/60 px-2 py-1.5"
+                  className="flex items-start gap-2 rounded-md border border-border-soft px-2 py-1.5"
                 >
                   <span
                     className={`mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full ${

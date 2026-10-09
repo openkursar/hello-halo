@@ -62,6 +62,8 @@ vi.mock('../../../src/renderer/components/memory/MemorySettingsPanel', () => ({ 
 
 import { WorkingDirUnavailableNotice } from '../../../src/renderer/components/chat/WorkingDirUnavailableNotice'
 import { EditSpaceDialog } from '../../../src/renderer/components/space/EditSpaceDialog'
+import { SpaceColorSwatch } from '../../../src/renderer/components/space/SpaceColorSwatch'
+import { SPACE_COLOR_CSS, spaceAvatarColor, type SpaceColorId } from '../../../src/renderer/components/space/spaceAvatarUtils'
 import { createAgentEventsSlice } from '../../../src/renderer/stores/chat/agent-events'
 import { createSessionSlice } from '../../../src/renderer/stores/chat/session'
 import { createEmptySessionState, type ChatState } from '../../../src/renderer/stores/chat/internal'
@@ -168,5 +170,19 @@ describe('the workspace dialog', () => {
     const tree = new HookRunner().render(() => EditSpaceDialog({ space: { ...space, workingDir: undefined }, onClose: () => {}, onSaved: () => {} }))
 
     expect(text(tree)).toContain('/halo/spaces/space-1')
+  })
+
+  it('starts on the color the workspace is shown in, also when none was ever picked', () => {
+    const pickedColor = (target: Space) => {
+      const tree = new HookRunner().render(() => EditSpaceDialog({ space: target, onClose: () => {}, onSaved: () => {} }))
+      const swatch = nodes(tree).find(node => node.type === SpaceColorSwatch) as { props: { value: string } }
+      return swatch.props.value
+    }
+
+    expect(pickedColor({ ...space, color: 'danger' })).toBe('danger')
+    for (const id of ['space-1', 'space-2', 'space-3', 'a', 'b']) {
+      const uncolored = { ...space, id, color: undefined }
+      expect(SPACE_COLOR_CSS[pickedColor(uncolored) as SpaceColorId]).toBe(spaceAvatarColor(uncolored))
+    }
   })
 })

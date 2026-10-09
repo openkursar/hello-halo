@@ -92,7 +92,7 @@ export function AppExternalChannelsCard({ appId, spaceId }: AppExternalChannelsC
       {instances.length === 0 ? (
         <button
           onClick={() => openAppConfigAt(appId, 'settings-group-notifications')}
-          className="w-full flex items-center gap-2 px-3.5 py-3 rounded-lg border border-dashed border-border/60 text-left text-xs text-muted-foreground hover:border-border hover:text-foreground transition-colors"
+          className="w-full flex items-center gap-2 px-3.5 py-3 rounded-lg border border-dashed border-border-soft text-left text-xs text-muted-foreground hover:border-border hover:text-foreground transition-colors"
         >
           <Radio className="w-3.5 h-3.5" />
           {t('No bot bound — configure in Settings')}
@@ -106,7 +106,7 @@ export function AppExternalChannelsCard({ appId, spaceId }: AppExternalChannelsC
               <button
                 key={instance.id}
                 onClick={() => openBotSessions(appId, instance.id)}
-                className="w-full flex items-center gap-2.5 px-3.5 py-3 rounded-lg border border-border/60 bg-card text-left transition-all hover:border-border hover:shadow-sm"
+                className="w-full flex items-center gap-2.5 px-3.5 py-3 rounded-lg border border-border-soft bg-card text-left transition-all hover:border-border hover:shadow-sm"
               >
                 <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${instance.connected ? 'bg-halo-success' : 'bg-muted-foreground/30'}`} />
                 <div className="flex-1 min-w-0">
@@ -124,7 +124,7 @@ export function AppExternalChannelsCard({ appId, spaceId }: AppExternalChannelsC
           })}
           <button
             onClick={() => openAppConfigAt(appId, 'settings-group-notifications')}
-            className="w-full flex items-center gap-2 px-3.5 py-3 rounded-lg border border-dashed border-border/60 text-left text-xs text-muted-foreground hover:border-border hover:text-foreground transition-colors"
+            className="w-full flex items-center gap-2 px-3.5 py-3 rounded-lg border border-dashed border-border-soft text-left text-xs text-muted-foreground hover:border-border hover:text-foreground transition-colors"
           >
             <Radio className="w-3.5 h-3.5" />
             {t('{{count}} bots bound — manage in Settings', { count: instances.length })}

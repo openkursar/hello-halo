@@ -14,7 +14,7 @@
  */
 
 import { useState } from 'react'
-import { AlertTriangle, HelpCircle, Plus, X } from 'lucide-react'
+import { AlertTriangle, Plus, X } from 'lucide-react'
 import {
   CAPABILITY_MCP_TOGGLES,
   CAPABILITY_TOOL_GROUPS,
@@ -32,7 +32,8 @@ import type {
   CapabilityPolicy,
   CapabilityToolGroup,
 } from '../../../shared/apps/capability-policy'
-import { Switch } from '../ui/Switch'
+import { Switch, switchRowHover } from '../ui/Switch'
+import { HelpHint } from '../ui/HelpHint'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { useAppsStore } from '../../stores/apps.store'
 import { useTranslation } from '../../i18n'
@@ -217,25 +218,8 @@ interface Ability {
   label: string
 }
 
-function HelpToggle({ text }: { text: string }) {
-  const { t } = useTranslation()
-  const [open, setOpen] = useState(false)
-  return (
-    <>
-      <button
-        type="button"
-        onClick={() => setOpen(o => !o)}
-        title={text}
-        aria-label={t('More about this group')}
-        aria-expanded={open}
-        className="rounded p-0.5 text-muted-foreground/70 transition-colors hover:text-foreground"
-      >
-        <HelpCircle className="h-3.5 w-3.5" />
-      </button>
-      {open && <p className="w-full text-xs text-muted-foreground">{text}</p>}
-    </>
-  )
-}
+const TOGGLE_ROW = `flex items-center justify-between gap-3 py-1.5 ${switchRowHover}`
+const TOGGLE_TITLE = 'text-sm text-foreground'
 
 export function CapabilityPolicyFields({
   policy,
@@ -388,12 +372,12 @@ export function CapabilityPolicyFields({
                   {t('Risky')}
                 </span>
               )}
-              <HelpToggle text={groupHelp[group]} />
+              <HelpHint label={t('More about this group')} text={groupHelp[group]} />
             </div>
             {groupRows.map(row => (
-              <label key={row.tools.join('+')} className="flex items-center justify-between gap-3">
+              <label key={row.tools.join('+')} className={`${TOGGLE_ROW} cursor-pointer`}>
                 <span className="min-w-0">
-                  <span className="block text-sm text-foreground">{row.name}</span>
+                  <span className={`block ${TOGGLE_TITLE}`}>{row.name}</span>
                   <span className="block text-xs text-muted-foreground">{row.description}</span>
                 </span>
                 <Switch size="sm" checked={rowOn(row)} onCheckedChange={next => setRow(row, next)} />
@@ -415,7 +399,8 @@ export function CapabilityPolicyFields({
         <div className="space-y-2 border-t border-border/40 pt-3">
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-xs font-medium text-muted-foreground">{t('Skills')}</span>
-            <HelpToggle
+            <HelpHint
+              label={t('More about this group')}
               text={t('Only the skills turned on here can be used. A skill can read its own folder; everything else it does, such as running commands, changing files or sending email, still needs the switches on this page. A skill that pre-approves more than they allow will not run.')}
             />
           </div>
@@ -423,11 +408,11 @@ export function CapabilityPolicyFields({
             <p className="text-xs text-muted-foreground/70">{t('This digital human has no skills yet.')}</p>
           )}
           {skills.map(skill => (
-            <label key={skill.dirName} className="flex items-center justify-between gap-3">
+            <label key={skill.dirName} className={`${TOGGLE_ROW} cursor-pointer`}>
               <span className="min-w-0">
-                <span className="block truncate text-sm text-foreground">{skill.name}</span>
+                <span className={`block truncate ${TOGGLE_TITLE}`}>{skill.name}</span>
                 {skill.description && (
-                  <span className="line-clamp-2 block text-xs text-muted-foreground">{skill.description}</span>
+                  <span className="line-clamp-2 text-xs text-muted-foreground">{skill.description}</span>
                 )}
               </span>
               <Switch
@@ -440,7 +425,7 @@ export function CapabilityPolicyFields({
         </div>
       )}
 
-      <div className="space-y-1.5 border-t border-border/40 pt-3">
+      <div className="space-y-0.5 border-t border-border/40 pt-3">
         {CAPABILITY_MCP_TOGGLES.map(({ key, label }) => {
           // A terminal runs whatever is typed into it, so a command whitelist
           // cannot reach it. Rather than let the switch be turned on and quietly
@@ -449,9 +434,9 @@ export function CapabilityPolicyFields({
           return (
             <label
               key={key}
-              className={`flex items-center justify-between gap-2 ${blockedByCommands ? 'opacity-60' : ''}`}
+              className={`${TOGGLE_ROW} ${blockedByCommands ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}`}
             >
-              <span className="min-w-0 text-sm text-foreground">
+              <span className={`min-w-0 ${TOGGLE_TITLE}`}>
                 {t(label)}
                 {blockedByCommands && (
                   <span className="mt-0.5 block text-xs text-muted-foreground">
@@ -469,19 +454,19 @@ export function CapabilityPolicyFields({
           )
         })}
         {extraToggles?.map(row => (
-          <label key={row.key} className="flex items-center justify-between gap-2">
-            <span className="text-sm text-foreground">{row.label}</span>
+          <label key={row.key} className={`${TOGGLE_ROW} cursor-pointer`}>
+            <span className={TOGGLE_TITLE}>{row.label}</span>
             <Switch size="sm" checked={row.checked} onCheckedChange={row.onToggle} />
           </label>
         ))}
       </div>
 
       {mcpApps.length > 0 && (
-        <div className="space-y-1.5 border-t border-border/40 pt-3">
+        <div className="space-y-0.5 border-t border-border/40 pt-3">
           <p className="text-xs text-muted-foreground">{t('MCP servers you installed')}</p>
           {mcpApps.map(app => (
-            <label key={app.specId} className="flex items-center justify-between gap-2">
-              <span className="truncate text-sm text-foreground">{app.spec.name}</span>
+            <label key={app.specId} className={`${TOGGLE_ROW} cursor-pointer`}>
+              <span className={`truncate ${TOGGLE_TITLE}`}>{app.spec.name}</span>
               <Switch
                 size="sm"
                 checked={allowsUserMcp(policy, app.specId, mode)}

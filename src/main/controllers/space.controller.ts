@@ -20,9 +20,9 @@ import {
   workingDirChangeProblem,
 } from '../services/space.service'
 import { getSpaceMemoryStatus as serviceGetSpaceMemoryStatus, consolidateSpaceMemoryNow } from '../services/memory-consolidation'
-import { copyStoredSessions, countSessionAcquisitions, invalidateSessionsForSpace, isSpaceBusy, retireWorkingDirs } from '../services/agent'
+import { closeSpaceSessions, copyStoredSessions, countSessionAcquisitions, invalidateSessionsForSpace, isSpaceBusy, retireWorkingDirs } from '../services/agent'
 import { rerootSpaceWatcher } from '../services/watcher-host.service'
-import { rerootSpaceCache } from '../services/artifact-cache.service'
+import { destroySpaceCache, rerootSpaceCache } from '../services/artifact-cache.service'
 import { listPinnedWorkDirs, repointSpaceEnvironments } from '../apps/runtime'
 import { resolve } from 'path'
 import type { MemorySettings } from '../../shared/types/memory'
@@ -31,7 +31,10 @@ export interface ControllerResponse<T = unknown> {
   success: boolean
   data?: T
   error?: string
+  code?: string
 }
+
+const SPACE_BUSY_DELETE = 'A reply, run or background task is still going in this workspace. Delete it once it has finished, or stop it first.'
 
 /**
  * Get the Halo temp space
@@ -78,10 +81,19 @@ export function createSpace(input: {
 }
 
 /**
- * Delete a space
+ * Delete a space. Refused while anything runs in it. Otherwise its engine
+ * processes and file watching stop first: Windows will not remove a folder
+ * that a live process works in.
  */
 export async function deleteSpace(spaceId: string): Promise<ControllerResponse> {
   try {
+    if (isSpaceBusy(spaceId)) return { success: false, error: SPACE_BUSY_DELETE, code: 'SPACE_BUSY' }
+    await closeSpaceSessions(spaceId, 'space deleted')
+    // Checked before the file cache goes too, so a refused delete leaves the open file tree live.
+    if (isSpaceBusy(spaceId)) return { success: false, error: SPACE_BUSY_DELETE, code: 'SPACE_BUSY' }
+    await destroySpaceCache(spaceId)
+    // And again right before the folder goes: tearing the cache down yields.
+    if (isSpaceBusy(spaceId)) return { success: false, error: SPACE_BUSY_DELETE, code: 'SPACE_BUSY' }
     const result = await serviceDeleteSpace(spaceId)
     return { success: result }
   } catch (error: unknown) {

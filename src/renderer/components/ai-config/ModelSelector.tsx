@@ -260,7 +260,7 @@ function ModelList({ onDone }: { onDone: () => void }) {
           {t('Configure AI Source')}
         </button>
       ) : (
-        <div className="mt-1 flex items-center justify-between border-t border-border/50 px-4 pt-2.5 pb-1.5">
+        <div className="mt-1 flex items-center justify-between border-t border-border-faint px-4 pt-2.5 pb-1.5">
           <button
             onClick={handleAddSource}
             className="text-left text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-2"
@@ -318,7 +318,7 @@ export function ModelSelectSheet({ onClose }: { onClose: () => void }) {
       <div
         className={`
           fixed inset-x-0 bottom-0 z-50
-          bg-card rounded-t-2xl border-t border-border/50
+          bg-card rounded-t-2xl border-t border-border-faint
           shadow-2xl overflow-hidden
           ${isAnimatingOut ? 'animate-slide-out-bottom' : 'animate-slide-in-bottom'}
         `}
@@ -330,7 +330,7 @@ export function ModelSelectSheet({ onClose }: { onClose: () => void }) {
         </div>
 
         {/* Header */}
-        <div className="px-4 py-2 border-b border-border/50 flex items-center justify-between">
+        <div className="px-4 py-2 border-b border-border-faint flex items-center justify-between">
           <div className="flex min-w-0 items-center gap-2">
             <Sparkles className="w-5 h-5 shrink-0 text-primary" />
             <div className="min-w-0">
@@ -346,7 +346,7 @@ export function ModelSelectSheet({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
-        <div className="px-4 py-3 border-b border-border/50">
+        <div className="px-4 py-3 border-b border-border-faint">
           <ConversationThinkingLevel />
         </div>
 

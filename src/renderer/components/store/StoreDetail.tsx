@@ -40,7 +40,7 @@ function formatVersionDate(iso: string): string {
  * inline) + reason as a sub-line, matching the mockup's `.req-card`. */
 function DependencyRow({ type, name, reason }: { type: AppType; name: string; reason?: string }) {
   return (
-    <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg border border-border/60 bg-card">
+    <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg border border-border-soft bg-card">
       <AppTypeIcon type={type} size="sm" />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5 min-w-0">
@@ -259,7 +259,7 @@ export function StoreDetail() {
           </div>
           <button
             onClick={() => storeSelectedSlug && void selectStoreApp(storeSelectedSlug)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground border border-border/60 rounded-lg hover:bg-secondary transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground border border-border-soft rounded-lg hover:bg-secondary transition-colors"
           >
             <RotateCcw className="w-3.5 h-3.5" />
             {t('Retry')}
@@ -289,7 +289,7 @@ export function StoreDetail() {
         {/* Fixed header — only the content region below scrolls, so the header
             stays put, never shows content bleeding under it, and needs no cover
             background (same gray as the page). */}
-        <div className="flex-shrink-0 w-full max-w-[880px] mx-auto px-4 sm:px-6 pt-5 pb-[18px] border-b border-border/60">
+        <div className="flex-shrink-0 w-full max-w-[880px] mx-auto px-4 sm:px-6 pt-5 pb-[18px] border-b border-border-soft">
             <BackToStore onClick={clearStoreSelection} />
             <div className="flex items-start gap-4 mt-3.5">
               <AppTypeIcon type={entry.type} icon={entry.icon} name={resolvedEntry?.name ?? entry.name} size="lg" />
@@ -341,7 +341,7 @@ export function StoreDetail() {
                   {installedApp && (entry.type === 'automation' || entry.type === 'skill') && (
                     <button
                       onClick={handleUse}
-                      className="px-4 py-2 text-sm font-medium border border-border/60 bg-background text-foreground rounded-lg hover:border-muted-foreground/40 transition-colors"
+                      className="px-4 py-2 text-sm font-medium border border-border-soft bg-background text-foreground rounded-lg hover:border-muted-foreground/40 transition-colors"
                     >
                       {t('Use')}
                     </button>
@@ -359,7 +359,7 @@ export function StoreDetail() {
                   ) : installedApp ? (
                     <button
                       disabled
-                      className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-background border border-border/60 text-muted-foreground rounded-lg cursor-default"
+                      className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-background border border-border-soft text-muted-foreground rounded-lg cursor-default"
                     >
                       <Check className="w-4 h-4" />
                       {installedVerb(t, entry.type)}
@@ -418,7 +418,7 @@ export function StoreDetail() {
               <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 {t('Configuration')}
               </h2>
-              <div className="rounded-lg border border-border/60 bg-card overflow-hidden divide-y divide-border/60">
+              <div className="rounded-lg border border-border-soft bg-card overflow-hidden divide-y divide-border-soft">
                 {(resolvedSpec?.config_schema ?? spec.config_schema)!.map(field => (
                   <div key={field.key} className="flex items-center gap-2.5 px-3.5 py-2.5">
                     <div className="min-w-0 flex-1">
@@ -430,7 +430,7 @@ export function StoreDetail() {
                         <p className="text-xs text-muted-foreground mt-0.5">{field.description}</p>
                       )}
                     </div>
-                    <span className="flex-shrink-0 text-[11px] font-mono px-1.5 py-0.5 rounded border border-border/60 bg-muted text-muted-foreground">
+                    <span className="flex-shrink-0 text-[11px] font-mono px-1.5 py-0.5 rounded border border-border-soft bg-muted text-muted-foreground">
                       {field.type}
                     </span>
                   </div>
@@ -490,7 +490,7 @@ export function StoreDetail() {
               <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 {t('System Prompt')}
               </h2>
-              <div className="rounded-lg border border-border/60 bg-card overflow-hidden">
+              <div className="rounded-lg border border-border-soft bg-card overflow-hidden">
                 <button
                   onClick={() => setShowSystemPrompt(!showSystemPrompt)}
                   className="flex w-full items-center gap-2 px-3.5 py-2.5 text-[13px] font-medium text-muted-foreground hover:text-foreground transition-colors"
@@ -503,7 +503,7 @@ export function StoreDetail() {
                   {t('View system prompt')}
                 </button>
                 {showSystemPrompt && (
-                  <pre className="text-xs leading-relaxed text-muted-foreground border-t border-border/60 px-4 py-3 whitespace-pre-wrap break-words font-mono">
+                  <pre className="text-xs leading-relaxed text-muted-foreground border-t border-border-soft px-4 py-3 whitespace-pre-wrap break-words font-mono">
                     {spec.system_prompt}
                   </pre>
                 )}
@@ -525,7 +525,7 @@ export function StoreDetail() {
                 <SkillFileTree paths={automationSkillFilePaths} />
               )}
               {entry.tags.length > 0 && (
-                <div className="rounded-[10px] border border-border/60 bg-card p-3.5 space-y-2.5">
+                <div className="rounded-[10px] border border-border-soft bg-card p-3.5 space-y-2.5">
                   <h4 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                     {t('Tags')}
                   </h4>
@@ -542,7 +542,7 @@ export function StoreDetail() {
                 </div>
               )}
 
-              <div className="rounded-[10px] border border-border/60 bg-card p-3.5 space-y-2.5">
+              <div className="rounded-[10px] border border-border-soft bg-card p-3.5 space-y-2.5">
                 <h4 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                   {t('Details')}
                 </h4>
@@ -568,7 +568,7 @@ export function StoreDetail() {
 
               {/* Version history — collapsed by default, expands into a timeline */}
               {versions.length > 0 && (
-                <div className="rounded-[10px] border border-border/60 bg-card overflow-hidden">
+                <div className="rounded-[10px] border border-border-soft bg-card overflow-hidden">
                   <button
                     onClick={() => setShowVersions(!showVersions)}
                     className="flex w-full items-center gap-2 px-3.5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors"
@@ -581,12 +581,12 @@ export function StoreDetail() {
                     {t('Version History')}
                   </button>
                   {showVersions && (
-                    <ul className="border-t border-border/60 pl-[21px] pr-3.5 pt-3.5 pb-1">
+                    <ul className="border-t border-border-soft pl-[21px] pr-3.5 pt-3.5 pb-1">
                       {versions.map((v, i) => (
                         <li
                           key={v.version}
                           className={`relative pl-4 border-l ${
-                            i === versions.length - 1 ? 'border-transparent pb-0' : 'border-border/60 pb-4'
+                            i === versions.length - 1 ? 'border-transparent pb-0' : 'border-border-soft pb-4'
                           }`}
                         >
                           <span

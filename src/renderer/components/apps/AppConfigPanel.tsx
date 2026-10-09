@@ -359,10 +359,10 @@ function SettingsGroup({ id, title, description, summary, dirty, children }: {
     <div
       id={id}
       className={`scroll-mt-4 bg-card border rounded-xl px-4 py-4 sm:px-5 transition-colors ${
-        dirty ? 'border-halo-warning/50' : 'border-border'
+        dirty ? 'border-halo-warning/50' : 'border-border-soft'
       }`}
     >
-      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 pb-3 border-b border-border/70">
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 pb-3 border-b border-border-faint">
         <h2 className="text-sm font-semibold text-foreground flex-shrink-0">{title}</h2>
         {summary && (
           <span className="ml-auto text-[11px] text-muted-foreground text-right">{summary}</span>
@@ -1040,7 +1040,7 @@ function SettingsTab({ app, appId, showWorkdayCalendar, spaceName, t, onRequireR
       </SettingsGroup>
 
       {/* ── Group 7: Advanced (collapsed by default) ── */}
-      <div id="settings-group-advanced" className="scroll-mt-4 bg-card border border-border rounded-xl px-4 py-4 sm:px-5">
+      <div id="settings-group-advanced" className="scroll-mt-4 bg-card border border-border-soft rounded-xl px-4 py-4 sm:px-5">
         <Disclosure title={t('Advanced')} persistKey={ADVANCED_EXPANDED_KEY}>
           <UpgradeSection app={app} appId={appId} t={t} />
 
@@ -1185,8 +1185,8 @@ function SettingsTab({ app, appId, showWorkdayCalendar, spaceName, t, onRequireR
           </div>
 
           {/* ── Danger Zone ── */}
-          <div className="space-y-2">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          <div className="space-y-2 rounded-lg bg-destructive/[0.02] p-3">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-destructive">
               {t('Danger zone')}
             </h3>
             {showClearMemoryConfirm ? (

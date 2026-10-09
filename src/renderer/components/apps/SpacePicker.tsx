@@ -55,7 +55,7 @@ export function SpacePicker({ selectedSpaceId, onSelect, label }: SpacePickerPro
         >
           <FolderOpen className="w-3.5 h-3.5" />
           <span>{t('New Space')}</span>
-          <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${showCreateSpaceForm ? 'rotate-180' : ''}`} />
+          <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${showCreateSpaceForm ? '' : '-rotate-90'}`} />
         </button>
         <div className={`grid transition-[grid-template-rows] duration-200 ease-out ${showCreateSpaceForm ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}>
           <div className="min-h-0 overflow-hidden">

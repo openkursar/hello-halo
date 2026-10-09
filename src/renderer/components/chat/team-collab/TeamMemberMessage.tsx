@@ -50,7 +50,7 @@ export function TeamMemberMessage({ message }: TeamMemberMessageProps) {
 
   return (
     <div className="flex justify-start animate-fade-in" data-message-id={message.id}>
-      <div className="max-w-[85%] min-w-0 rounded-xl bg-muted/15 border border-border/60 overflow-hidden">
+      <div className="max-w-[85%] min-w-0 rounded-xl bg-muted/15 border border-border-soft overflow-hidden">
         <button
           onClick={() => setIsExpanded(v => !v)}
           className={`w-full flex items-center gap-1.5 px-2.5 py-1.5 text-left transition-colors
@@ -79,7 +79,7 @@ export function TeamMemberMessage({ message }: TeamMemberMessageProps) {
             <div className="text-[13px] leading-[1.7] text-foreground/[0.88] whitespace-pre-wrap break-words">
               {message.content}
             </div>
-            <div className="mt-2 pt-1.5 border-t border-dashed border-border/50
+            <div className="mt-2 pt-1.5 border-t border-dashed border-border-faint
               flex flex-wrap items-center gap-x-1 gap-y-0.5 text-[10px] text-muted-foreground/80">
               <span>{t('Sent by a team member, not by you')}</span>
               <span>·</span>

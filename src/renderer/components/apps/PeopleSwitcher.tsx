@@ -9,9 +9,9 @@ import { useTeamStore } from '../../stores/team.store'
 import { visibleDigitalHumans } from '../../utils/people-model'
 import { resolveSpecI18n } from '../../utils/spec-i18n'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
-import { needsAttention } from '../../../shared/apps/app-types'
 import { AutomationAvatar } from './AutomationAvatar'
-import { AppStatusDot } from './AppStatusDot'
+import { PersonStatusDot } from './PersonStatusDot'
+import { automationStatusTextClass, describePersonStatus } from '../../utils/automation-status'
 import { DetailSwitcher, type DetailSwitcherItem } from './DetailSwitcher'
 
 interface PeopleSwitcherProps {
@@ -37,27 +37,41 @@ export function PeopleSwitcher({ selectedAppId, onSelect }: PeopleSwitcherProps)
     () => visibleDigitalHumans(apps, teams)
       .filter(app => app.status !== 'uninstalled')
       .map(app => {
-        const name = resolveSpecI18n(app.spec, language).name || app.id
+        const spec = resolveSpecI18n(app.spec, language)
+        const name = spec.name || app.id
         const state = appStates[app.id]
-        const flagged = needsAttention(state)
         const pending = state?.pendingDecisionCount ?? 0
+        const { effective, label, flag } = describePersonStatus(app.status, state, t)
+        const flagTone = flag === 'alert'
+          ? { text: 'text-halo-error', badge: 'bg-halo-error/15 text-halo-error' }
+          : { text: 'text-halo-warning', badge: 'bg-halo-warning/15 text-halo-warning' }
         return {
           id: app.id,
           name,
+          description: spec.description,
+          status: (
+            <>
+              <PersonStatusDot appStatus={app.status} effective={effective} flag={flag} />
+              <span className={flag ? flagTone.text : automationStatusTextClass(effective)}>{label}</span>
+            </>
+          ),
           // Same generated face as the directory card and detail header.
           icon: <AutomationAvatar name={name} size={26} />,
-          flagged,
+          flag,
           dimmed: app.status === 'paused',
-          trailing: flagged ? (
-            <span className="flex-shrink-0 rounded-full bg-halo-warning/15 px-1.5 text-[11px] tabular-nums text-halo-warning">
-              {pending > 0 ? pending : '!'}
-            </span>
+          // Same dot as every other row; only open questions add their count.
+          trailing: flag ? (
+            pending > 0 ? (
+              <span className={`flex-shrink-0 rounded-full px-1.5 text-[11px] tabular-nums ${flagTone.badge}`}>{pending}</span>
+            ) : (
+              <PersonStatusDot appStatus={app.status} effective={effective} flag={flag} />
+            )
           ) : (
-            <AppStatusDot status={app.status} runtimeStatus={state?.status} size="sm" className="flex-shrink-0" />
+            <PersonStatusDot appStatus={app.status} effective={effective} />
           ),
         }
       }),
-    [apps, appStates, teams, language]
+    [apps, appStates, teams, language, t]
   )
 
   return (

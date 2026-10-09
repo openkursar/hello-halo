@@ -287,7 +287,7 @@ export function SpaceSelector() {
               <Plus className="w-3.5 h-3.5" />
               {t('New Workspace')}
             </button>
-            <div className="my-1 border-t border-border/60" />
+            <div className="my-1 border-t border-border-soft" />
             <button
               onClick={handleGoToWorkspaces}
               className="w-full rounded-sm px-2.5 py-2 text-left text-[13px] text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors ease-halo flex items-center gap-2"

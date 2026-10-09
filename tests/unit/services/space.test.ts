@@ -5,9 +5,24 @@
  * Covers space creation, listing, and stats calculation.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import fs from 'fs'
 import path from 'path'
+
+// Lets a test make the index rename fail, the way a file held open by another
+// process (an antivirus scan on Windows) fails it.
+const renameFault = vi.hoisted(() => ({ failures: 0, code: 'EPERM' }))
+vi.mock('fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('fs')>()
+  const renameSync: typeof actual.renameSync = (from, to) => {
+    if (renameFault.failures > 0 && String(to).endsWith('spaces-index.json')) {
+      renameFault.failures--
+      throw Object.assign(new Error(`${renameFault.code}: operation not permitted, rename`), { code: renameFault.code })
+    }
+    return actual.renameSync(from, to)
+  }
+  return { ...actual, renameSync, default: { ...actual, renameSync } }
+})
 
 import {
   getHaloSpace,
@@ -20,6 +35,7 @@ import {
   touchSpaceActivity,
   flushSpaceActivity,
   reorderSpaces,
+  updateSpace,
   _resetSpaceRegistry,
   _resetActivityState
 } from '../../../src/main/services/space.service'
@@ -30,6 +46,7 @@ describe('Space Service', () => {
     // Reset the module-level registry so each test gets a fresh load from the new testDir
     _resetSpaceRegistry()
     _resetActivityState()
+    renameFault.failures = 0
     await initializeApp()
   })
 
@@ -185,6 +202,56 @@ describe('Space Service', () => {
         // Expected to throw for temp space
         expect(true).toBe(true)
       }
+    })
+
+    it('fails and keeps the space when the index cannot be written, also after a restart', async () => {
+      const space = createSpace({ name: 'Locked', icon: 'folder' })
+      renameFault.failures = Infinity
+
+      expect(await deleteSpace(space.id)).toBe(false)
+      expect(listSpaces().map(s => s.id)).toContain(space.id)
+      expect(fs.existsSync(path.join(space.path, '.halo'))).toBe(true)
+
+      renameFault.failures = 0
+      _resetSpaceRegistry()
+      expect(listSpaces().map(s => s.id)).toContain(space.id)
+    })
+
+    it('rides out a briefly locked index and stays deleted after a restart', async () => {
+      const space = createSpace({ name: 'Briefly locked', icon: 'folder' })
+      renameFault.failures = 2
+
+      expect(await deleteSpace(space.id)).toBe(true)
+      _resetSpaceRegistry()
+      expect(listSpaces().map(s => s.id)).not.toContain(space.id)
+      expect(fs.existsSync(space.path)).toBe(false)
+    })
+  })
+
+  describe('index write failures', () => {
+    it('a space whose creation cannot be recorded is not created', () => {
+      expect(listSpaces()).toHaveLength(0) // registry loaded, as at app start
+      renameFault.failures = Infinity
+      expect(() => createSpace({ name: 'Unrecorded', icon: 'folder' })).toThrow()
+      expect(listSpaces()).toHaveLength(0)
+      expect(fs.readdirSync(getSpacesDir())).toHaveLength(0)
+    })
+
+    it('a rename that cannot be recorded is undone', () => {
+      const space = createSpace({ name: 'Before', icon: 'folder' })
+      renameFault.failures = Infinity
+      expect(updateSpace(space.id, { name: 'After' })).toBeNull()
+      expect(getSpace(space.id)?.name).toBe('Before')
+    })
+
+    it('activity that cannot be recorded is written by the next flush', () => {
+      const space = createSpace({ name: 'Busy', icon: 'folder' })
+      renameFault.failures = Infinity
+      touchSpaceActivity(space.id)
+      renameFault.failures = 0
+      flushSpaceActivity()
+      _resetSpaceRegistry()
+      expect(getSpace(space.id)?.lastActiveAt).toBeTruthy()
     })
   })
 

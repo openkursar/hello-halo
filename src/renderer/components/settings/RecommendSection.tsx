@@ -115,7 +115,7 @@ export function RecommendSection() {
 
   return (
     <>
-      <section id="recommend" className="bg-card rounded-xl border border-border p-6">
+      <section id="recommend" className="bg-card rounded-xl border border-border-faint p-6">
         <h2 className="text-lg font-medium mb-2">{t('Recommend Halo')}</h2>
         <p className="text-sm text-muted-foreground mb-4">
           {t('Like it? Help spread the word')}

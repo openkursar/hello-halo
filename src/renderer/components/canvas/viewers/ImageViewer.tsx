@@ -190,28 +190,28 @@ export function ImageViewer({ tab }: ImageViewerProps) {
             className="p-1.5 rounded hover:bg-secondary transition-colors"
             title={t('Zoom out')}
           >
-            <ZoomOut className="w-4 h-4 text-muted-foreground" />
+            <ZoomOut className="w-3.5 h-3.5 text-muted-foreground" strokeWidth={1.5} />
           </button>
           <button
             onClick={zoomIn}
             className="p-1.5 rounded hover:bg-secondary transition-colors"
             title={t('Zoom in')}
           >
-            <ZoomIn className="w-4 h-4 text-muted-foreground" />
+            <ZoomIn className="w-3.5 h-3.5 text-muted-foreground" strokeWidth={1.5} />
           </button>
           <button
             onClick={fitToWindow}
             className="p-1.5 rounded hover:bg-secondary transition-colors"
             title={t('Fit to window')}
           >
-            <Maximize className="w-4 h-4 text-muted-foreground" />
+            <Maximize className="w-3.5 h-3.5 text-muted-foreground" strokeWidth={1.5} />
           </button>
           <button
             onClick={resetZoom}
             className="p-1.5 rounded hover:bg-secondary transition-colors"
             title={t('Reset')}
           >
-            <RotateCw className="w-4 h-4 text-muted-foreground" />
+            <RotateCw className="w-3.5 h-3.5 text-muted-foreground" strokeWidth={1.5} />
           </button>
 
           <div className="w-px h-4 bg-border mx-1" />
@@ -223,7 +223,7 @@ export function ImageViewer({ tab }: ImageViewerProps) {
               className="p-1.5 rounded hover:bg-secondary transition-colors"
               title={t('Download')}
             >
-              <Download className="w-4 h-4 text-muted-foreground" />
+              <Download className="w-3.5 h-3.5 text-muted-foreground" strokeWidth={1.5} />
             </button>
           )}
 
@@ -234,7 +234,7 @@ export function ImageViewer({ tab }: ImageViewerProps) {
               className="p-1.5 rounded hover:bg-secondary transition-colors"
               title={t('Open in external application')}
             >
-              <ExternalLink className="w-4 h-4 text-muted-foreground" />
+              <ExternalLink className="w-3.5 h-3.5 text-muted-foreground" strokeWidth={1.5} />
             </button>
           )}
         </div>

@@ -172,7 +172,7 @@ export default function PdfViewer({ tab }: PdfViewerProps) {
             className="p-1.5 rounded hover:bg-secondary transition-colors disabled:opacity-40 disabled:pointer-events-none"
             title={t('Previous page')}
           >
-            <ChevronLeft className="w-4 h-4 text-muted-foreground" />
+            <ChevronLeft className="w-3.5 h-3.5 text-muted-foreground" strokeWidth={1.5} />
           </button>
           <span className="text-xs text-muted-foreground tabular-nums px-1">
             {doc ? t('{{current}} / {{total}}', { current: pageNum, total: doc.numPages }) : '—'}
@@ -183,7 +183,7 @@ export default function PdfViewer({ tab }: PdfViewerProps) {
             className="p-1.5 rounded hover:bg-secondary transition-colors disabled:opacity-40 disabled:pointer-events-none"
             title={t('Next page')}
           >
-            <ChevronRight className="w-4 h-4 text-muted-foreground" />
+            <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" strokeWidth={1.5} />
           </button>
         </div>
 
@@ -194,7 +194,7 @@ export default function PdfViewer({ tab }: PdfViewerProps) {
             className="p-1.5 rounded hover:bg-secondary transition-colors disabled:opacity-40 disabled:pointer-events-none"
             title={t('Zoom out')}
           >
-            <ZoomOut className="w-4 h-4 text-muted-foreground" />
+            <ZoomOut className="w-3.5 h-3.5 text-muted-foreground" strokeWidth={1.5} />
           </button>
           <span className="text-xs text-muted-foreground tabular-nums w-10 text-center">
             {Math.round(zoom * 100)}%
@@ -205,14 +205,14 @@ export default function PdfViewer({ tab }: PdfViewerProps) {
             className="p-1.5 rounded hover:bg-secondary transition-colors disabled:opacity-40 disabled:pointer-events-none"
             title={t('Zoom in')}
           >
-            <ZoomIn className="w-4 h-4 text-muted-foreground" />
+            <ZoomIn className="w-3.5 h-3.5 text-muted-foreground" strokeWidth={1.5} />
           </button>
           <button
             onClick={() => setZoom(1)}
             className="p-1.5 rounded hover:bg-secondary transition-colors"
             title={t('Fit width')}
           >
-            <Maximize className="w-4 h-4 text-muted-foreground" />
+            <Maximize className="w-3.5 h-3.5 text-muted-foreground" strokeWidth={1.5} />
           </button>
         </div>
       </div>

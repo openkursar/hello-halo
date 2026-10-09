@@ -10,7 +10,7 @@
 
 import { useTranslation } from '../../i18n'
 import { HelpHint } from '../ui/HelpHint'
-import { Switch } from '../ui/Switch'
+import { Switch, switchRowHover } from '../ui/Switch'
 
 interface ImProcessingNoticeRowProps {
   /** The stored choice: on unless explicitly turned off */
@@ -23,16 +23,16 @@ interface ImProcessingNoticeRowProps {
 export function ImProcessingNoticeRow({ on, streaming, onToggle }: ImProcessingNoticeRowProps) {
   const { t } = useTranslation()
   return (
-    <div className="flex items-center justify-between gap-3">
+    <div className={`flex items-center justify-between gap-3 py-1.5 ${switchRowHover}`}>
       <div className="min-w-0 space-y-0.5">
         <div className="flex items-center gap-1">
-          <p className="text-sm text-muted-foreground">{t('Processing Notice')}</p>
+          <p className="text-sm text-foreground">{t('Processing Notice')}</p>
           <HelpHint
             label={t('About this setting')}
             text={t('Only applies while streaming is off. On: if there is no reply within 5 seconds, a short "received, working on it" notice is sent first, so the sender knows the message arrived. Off: only the final reply is sent.')}
           />
         </div>
-        <p className="text-xs text-muted-foreground/70">
+        <p className="text-xs text-muted-foreground">
           {streaming
             ? t('Streaming already shows this status in the reply itself')
             : on

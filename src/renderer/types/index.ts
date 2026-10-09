@@ -816,9 +816,7 @@ export type AgentEvent =
 
 export type AppView = 'splash' | 'gitBashSetup' | 'setup' | 'space' | 'settings' | 'apps' | 'tlon' | 'store' | 'spaces' | 'serverConnect' | 'serverList';
 
-// ArtifactRail's tab strip — shared with space.store's `pendingArtifactRailTab`
-// (the workspace management page's asset chips request a tab from outside
-// the rail component itself, see SpacePage/ArtifactRail).
+// ArtifactRail's tab strip.
 export type ArtifactRailTab = 'files' | 'digital-humans' | 'skill' | 'mcp';
 
 export interface AppState {

@@ -184,7 +184,7 @@ export function AppBotBindingSection({ appId, appName, spaceId }: AppBotBindingS
       {loading ? (
         <p className="text-xs text-muted-foreground">{t('Loading...')}</p>
       ) : bound.length > 0 ? (
-        <div className="rounded-lg border border-border/60 divide-y divide-border/60">
+        <div className="rounded-lg border border-border-soft divide-y divide-border-soft">
           {bound.map(instance => {
             const contactCount = sessions.filter(s => s.instanceId === instance.id).length
             return (

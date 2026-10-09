@@ -336,7 +336,7 @@ export function ImChatView({ appId, spaceId, session, clearKey, footerAction }: 
           (fork to client) — owned by the caller, not this view. */}
       {(messages.length > 0 || hasStreamingContent) && (
         <div className="flex-shrink-0 px-4 sm:px-10 py-2.5">
-          <div className="flex items-center gap-2 rounded-2xl border border-border bg-muted/40 px-3 py-2">
+          <div className="flex items-center gap-2 rounded-2xl border border-border-soft bg-muted/40 px-3 py-2">
             <span className="flex-1 min-w-0 truncate text-xs text-muted-foreground">
               {t('Read-only IM session · copy the context to continue in a client chat')}
             </span>
@@ -374,7 +374,7 @@ function ImChatInfoBar({ name, channel, chatType, source, isGenerating, hasMessa
     ? t('Read-only · Interact via API')
     : t('Read-only · Interact via IM channel')
   return (
-    <div className="flex items-center gap-2 px-4 sm:px-10 py-2 border-b border-border bg-muted/30 flex-shrink-0">
+    <div className="flex items-center gap-2 px-4 sm:px-10 py-2 border-b border-border-faint bg-muted/30 flex-shrink-0">
       <div className="flex items-center gap-2 flex-1 min-w-0">
         <span className="text-sm font-medium truncate">{name}</span>
         <span className="text-[11px] text-muted-foreground">

@@ -135,7 +135,7 @@ export function AskUserQuestionCard({ pendingQuestion, onAnswer }: AskUserQuesti
       className={`
         ask-question-card mt-3 rounded-xl border overflow-hidden
         transition-all duration-300
-        ${isCancelled ? 'border-border/50 bg-card/30 opacity-50' : 'border-primary/40 bg-gradient-to-br from-primary/5 via-background to-primary/3 animate-fade-in'}
+        ${isCancelled ? 'border-border-faint bg-card/30 opacity-50' : 'border-primary/40 bg-gradient-to-br from-primary/5 via-background to-primary/3 animate-fade-in'}
       `}
     >
       {/* Header */}
@@ -251,7 +251,7 @@ export function AskUserQuestionCard({ pendingQuestion, onAnswer }: AskUserQuesti
                           onChange={e => setOtherTexts(prev => ({ ...prev, [key]: e.target.value }))}
                           onKeyDown={handleOtherKeyDown}
                           placeholder="Type your answer..."
-                          className="w-full px-3 py-1.5 text-sm bg-background border border-border/50 rounded-md
+                          className="w-full px-3 py-1.5 text-sm bg-background border border-border-faint rounded-md
                             focus:outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20
                             placeholder:text-muted-foreground/40 transition-all duration-150"
                         />

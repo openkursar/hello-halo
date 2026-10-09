@@ -41,12 +41,17 @@ export function spaceAvatarLetter(space: Pick<Space, 'name' | 'isTemp'>): string
   return trimmed ? trimmed[0].toUpperCase() : '?'
 }
 
-export function spaceAvatarColor(space: Pick<Space, 'id' | 'isTemp' | 'color'>): string {
+/** The color a space is shown in; the edit dialog starts from it so saving keeps it. */
+export function spaceColorId(space: Pick<Space, 'id' | 'isTemp' | 'color'>): SpaceColorId {
   // The pinned Halo Space is a single fixed singleton, not user-colorable —
   // it always gets the brand color (primary blue).
-  if (space.isTemp) return SPACE_COLOR_CSS.primary
-  if (space.color && isSpaceColorId(space.color)) return SPACE_COLOR_CSS[space.color]
+  if (space.isTemp) return 'primary'
+  if (space.color && isSpaceColorId(space.color)) return space.color
   // No color chosen (space predates this field) — derive a stable one from
   // the id so the same space always renders the same color.
-  return SPACE_COLOR_CSS[SPACE_COLOR_IDS[hashToIndex(space.id, SPACE_COLOR_IDS.length)]]
+  return SPACE_COLOR_IDS[hashToIndex(space.id, SPACE_COLOR_IDS.length)]
+}
+
+export function spaceAvatarColor(space: Pick<Space, 'id' | 'isTemp' | 'color'>): string {
+  return SPACE_COLOR_CSS[spaceColorId(space)]
 }

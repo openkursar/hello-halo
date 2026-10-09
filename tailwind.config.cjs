@@ -6,7 +6,13 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        border: 'hsl(var(--border))',
+        border: {
+          DEFAULT: 'hsl(var(--border))',
+          // Per-theme dividers (see globals.css): alphas of --border in light,
+          // solid in dark. No alpha modifier — the value already carries it.
+          soft: 'var(--border-soft)',
+          faint: 'var(--border-faint)',
+        },
         input: 'hsl(var(--input))',
         ring: 'hsl(var(--ring))',
         background: 'hsl(var(--background))',
@@ -249,5 +255,9 @@ module.exports = {
   },
   plugins: [
     require('@tailwindcss/typography'),
+    // `dark-ui:` targets the app's dark theme: <html> without `.light`, which
+    // follows the theme setting (Tailwind's own `dark:` follows only the OS).
+    // Its selector outranks plain state variants, so restate them under it.
+    ({ addVariant }) => addVariant('dark-ui', ':root:not(.light) &'),
   ],
 }

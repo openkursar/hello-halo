@@ -390,7 +390,7 @@ export const ThoughtProcess = memo(function ThoughtProcess({ thoughts, isThinkin
       {hasBodyContent && (
         <ChevronDown
           size={16}
-          className={`text-muted-foreground transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`}
+          className={`text-muted-foreground transition-transform duration-200 ${isExpanded ? '' : '-rotate-90'}`}
         />
       )}
     </>
@@ -411,7 +411,7 @@ export const ThoughtProcess = memo(function ThoughtProcess({ thoughts, isThinkin
             ? 'border-primary/40'
             : errorCount > 0
               ? 'border-destructive/40'
-              : 'border-border/50'
+              : 'border-border-faint'
           }
         `}
       >

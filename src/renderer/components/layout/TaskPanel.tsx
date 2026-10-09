@@ -69,7 +69,7 @@ export function TaskPanel() {
           className="fixed inset-0 bg-black/40 z-40 animate-fade-in"
           style={{ animationDuration: '0.2s' }}
         />
-        <div className="fixed inset-x-0 bottom-0 z-50 bg-card rounded-t-2xl border-t border-border/50 shadow-2xl overflow-hidden flex flex-col max-h-[70vh] animate-slide-in-bottom">
+        <div className="fixed inset-x-0 bottom-0 z-50 bg-card rounded-t-2xl border-t border-border-faint shadow-2xl overflow-hidden flex flex-col max-h-[70vh] animate-slide-in-bottom">
           <div className="flex justify-center py-2 flex-shrink-0">
             <div className="w-10 h-1 bg-muted-foreground/30 rounded-full" />
           </div>
@@ -81,7 +81,7 @@ export function TaskPanel() {
   }
 
   return (
-    <div className="w-[340px] h-full flex-shrink-0 bg-card border-r border-border/50 flex flex-col animate-fade-up">
+    <div className="w-[340px] h-full flex-shrink-0 bg-card border-r border-border-faint flex flex-col animate-fade-up">
       {header}
       <PulseList />
     </div>

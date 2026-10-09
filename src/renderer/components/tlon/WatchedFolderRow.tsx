@@ -19,7 +19,7 @@ export function WatchedFolderRow({ dir, retrying, onRetry, onRemove }: WatchedFo
   const pause = dir.watching ? dir.learningPaused : undefined
 
   return (
-    <div className="group flex items-center gap-2.5 px-3 py-2.5 rounded-lg border border-border/60 bg-background">
+    <div className="group flex items-center gap-2.5 px-3 py-2.5 rounded-lg border border-border-soft bg-background">
       <FolderOpen className="w-4 h-4 text-muted-foreground flex-shrink-0" />
       <div className="min-w-0 flex-1">
         <p className="text-sm truncate">{dir.label}</p>

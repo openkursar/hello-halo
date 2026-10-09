@@ -28,6 +28,7 @@
 
 4. **No hardcoded colors. Ever.**
    - Use theme tokens/classes: `bg-background`, `text-foreground`, `border-border`, `hsl(var(--primary))`, `hsl(var(--muted-foreground))`
+   - Softer dividers use `border-border-soft` / `border-border-faint`; never put `/NN` on `border-border` (alpha borders vanish in dark). Dark-only adjustments use `dark-ui:`, not `dark:` (ARCHITECTURE §11).
    - Never use: `#ffffff`, `rgb(0,0,0)`, `bg-gray-100`, `text-white` (except on explicitly colored backgrounds like `bg-primary`)
    - Do not use Tailwind palette colors (e.g. `bg-slate-100`, `bg-zinc-800`) as substitutes for theme tokens. Palette colors are fine for functional/semantic purposes (e.g. `bg-red-500` for error indicators).
    ```tsx

@@ -97,7 +97,7 @@ export function TaskConversation({ messages, activities, epochId, appId, detail,
       const preview = updates.slice(-COLLABORATION_PREVIEW_LIMIT)
       return <details key={row.id} className="group min-w-0 overflow-hidden rounded-xl border border-dashed border-border text-xs text-muted-foreground open:border-solid">
         <summary className="flex cursor-pointer list-none items-start gap-2.5 px-3 py-3 transition-colors hover:bg-secondary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary sm:px-4">
-          <ChevronDown size={14} className="mt-0.5 shrink-0 transition-transform group-open:rotate-180" />
+          <ChevronDown size={14} className="mt-0.5 shrink-0 -rotate-90 transition-transform group-open:rotate-0" />
           <span className="min-w-0 flex-1">
             <span className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
               <span className="font-medium text-foreground">{t('{{count}} collaboration messages', { count: updates.length })}</span>

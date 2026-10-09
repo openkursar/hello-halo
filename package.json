@@ -203,7 +203,6 @@
     "@types/uuid": "^11.0.0",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^4.2.0",
-    "7zip-bin": "5.2.0",
     "autoprefixer": "^10.4.16",
     "cross-env": "^10.1.0",
     "dotenv": "^17.2.4",

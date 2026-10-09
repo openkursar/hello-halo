@@ -49,7 +49,7 @@ export function AppBotSessionsView({ appId, spaceId, instanceId }: AppBotSession
     <div className="flex flex-col h-full min-h-0">
       <ImNameResolutionBanner appId={appId} instanceId={instanceId} />
       <div className="flex flex-1 min-h-0">
-        <div className="w-72 flex-shrink-0 border-r border-border overflow-y-auto px-3 py-3">
+        <div className="w-72 flex-shrink-0 border-r border-border-faint overflow-y-auto px-3 py-3">
           <AppContactsList
             appId={appId}
             instanceId={instanceId}

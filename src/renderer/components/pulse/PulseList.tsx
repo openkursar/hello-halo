@@ -267,7 +267,7 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
           px, py,
           isSelected
             ? 'border-primary/40 bg-background'
-            : cn('border-border/60 bg-background hover:bg-secondary', isSeen && 'opacity-[.62] hover:opacity-100')
+            : cn('border-border-soft bg-background hover:bg-secondary', isSeen && 'opacity-[.62] hover:opacity-100')
         )}
       >
         {/* Identity icon — the rail's conversation glyph, Users for a team,

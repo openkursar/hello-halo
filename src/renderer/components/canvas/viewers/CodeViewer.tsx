@@ -16,7 +16,7 @@ import {
   Copy,
   Check,
   ExternalLink,
-  Pencil,
+  Pen,
   Save,
   X,
   FileCode,
@@ -214,7 +214,7 @@ export function CodeViewer({
       <div className="flex h-9 items-center justify-between px-3 border-b border-border">
         {/* Left: File info */}
         <div className="flex items-center gap-2 text-xs text-subtle-foreground">
-          <FileCode className="w-3.5 h-3.5 text-subtle-foreground" />
+          <FileCode className="w-3.5 h-3.5 text-subtle-foreground" strokeWidth={1.5} />
           <span className="font-mono text-[10px] px-1.5 rounded bg-secondary text-subtle-foreground">{tab.language || 'text'}</span>
           <span className="text-muted-foreground/50">·</span>
           <span>{t('{{count}} lines', { count: lineCount })}</span>
@@ -279,7 +279,7 @@ export function CodeViewer({
                   className="p-1.5 rounded-sm text-subtle-foreground hover:bg-secondary hover:text-foreground transition-colors ease-halo"
                   title={t('Edit file')}
                 >
-                  <Pencil className="w-4 h-4" />
+                  <Pen className="w-3.5 h-3.5" strokeWidth={1.5} />
                 </button>
               )}
 
@@ -290,9 +290,9 @@ export function CodeViewer({
                 title={t('Copy code')}
               >
                 {copied ? (
-                  <Check className="w-4 h-4 text-green-500" />
+                  <Check className="w-3.5 h-3.5 text-green-500" strokeWidth={1.5} />
                 ) : (
-                  <Copy className="w-4 h-4" />
+                  <Copy className="w-3.5 h-3.5" strokeWidth={1.5} />
                 )}
               </button>
 
@@ -303,7 +303,7 @@ export function CodeViewer({
                   className="p-1.5 rounded-sm text-subtle-foreground hover:bg-secondary hover:text-foreground transition-colors ease-halo"
                   title={t('Open in external application')}
                 >
-                  <ExternalLink className="w-4 h-4" />
+                  <ExternalLink className="w-3.5 h-3.5" strokeWidth={1.5} />
                 </button>
               )}
             </>

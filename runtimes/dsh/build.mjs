@@ -386,7 +386,9 @@ function installNativeCompanions() {
         renameSync(path.join(cacheDir, packed), tarball)
       }
       mkdirSync(dest, { recursive: true })
-      execFileSync('tar', ['-xzf', tarball, '-C', dest, '--strip-components=1'])
+      // GNU tar reads `D:` in an archive path as a remote host, so it is given the
+      // bare file name from its own directory.
+      execFileSync('tar', ['-xzf', path.basename(tarball), '-C', dest, '--strip-components=1'], { cwd: path.dirname(tarball) })
       count++
     }
   }

@@ -57,8 +57,11 @@ it('lists a stopped person as needing the owner and says so on the card', () => 
   const labels = nodes(tree).filter(node => node.type === 'h2').map(node => node.props.children).flat(Infinity)
   expect(labels).toContain('Needs you')
   expect(labels).not.toContain('Paused')
-  // Stopping turns automatic tasks off, so the card must not read as paused.
-  expect(nodes(tree).some(node => node.type === 'span' && node.props.children === 'Stopped, waiting for you')).toBe(true)
+  // Stopping turns automatic tasks off, so the card must not read as paused:
+  // it reads as the stop, in the detail header's words.
+  const texts = nodes(tree).filter(node => node.type === 'span').map(node => node.props.children)
+  expect(texts).toContain('Encountered an issue')
+  expect(texts).not.toContain('Automatic tasks paused')
 })
 
 it('keeps the requests inbox reachable when everyone waiting is on another page', () => {

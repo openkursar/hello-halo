@@ -105,7 +105,7 @@ export function BrowserAllowlistCard() {
   if (!editable) return null
 
   return (
-    <section id="browser-allowlist" className="bg-card rounded-xl border border-border p-6">
+    <section id="browser-allowlist" className="bg-card rounded-xl border border-border-faint p-6">
       <div className="flex items-center gap-2 mb-1">
         <Globe className="w-5 h-5 text-muted-foreground" />
         <h2 className="text-lg font-medium">{t('Browser Allowed Sites')}</h2>
@@ -125,7 +125,7 @@ export function BrowserAllowlistCard() {
           }}
           onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
           placeholder={t('example.com or *.example.com')}
-          className="flex-1 px-3 py-1.5 text-sm bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 font-mono"
+          className="flex-1 px-3 py-1.5 text-sm bg-secondary border border-transparent rounded-lg focus:outline-none focus:border-primary/50 font-mono"
         />
         <button
           onClick={handleAdd}

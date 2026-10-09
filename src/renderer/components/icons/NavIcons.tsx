@@ -1,6 +1,6 @@
 /**
  * Glyphs for the rail's destinations (conversation / digital humans /
- * knowledge base / store) and the task panel. Each keeps a distinct outer
+ * knowledge base / store), the task panel and settings. Each keeps a distinct outer
  * silhouette so they tell apart at a glance in one column.
  *
  * Each has an outline form and a solid `active` form — the selected
@@ -156,6 +156,32 @@ export const StoreNavIcon: FC<NavIconProps> = ({ className, active }) => {
         <rect x="3" y="12.8" width="8.2" height="8.2" rx="2.4" />
         <path d={STAR_SOLID} />
       </g>
+    </Glyph>
+  )
+}
+
+/** Lucide's gear outline, so the rest form matches the icon it replaces. */
+const GEAR = 'M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915'
+
+export const SettingsNavIcon: FC<NavIconProps> = ({ className, active }) => {
+  const mask = useMaskId()
+  if (!active) {
+    return (
+      <Glyph className={className}>
+        <path d={GEAR} />
+        <circle cx="12" cy="12" r="3" />
+      </Glyph>
+    )
+  }
+  return (
+    <Glyph className={className}>
+      <mask id={mask}>
+        <rect width="24" height="24" fill="white" />
+        {/* stroke="none": mask contents inherit the glyph's stroke otherwise. */}
+        <circle cx="12" cy="12" r="3.2" fill="black" stroke="none" />
+      </mask>
+      {/* The stroke thickens the fill to the outline's outer edge. */}
+      <path d={GEAR} fill="currentColor" mask={`url(#${mask})`} />
     </Glyph>
   )
 }

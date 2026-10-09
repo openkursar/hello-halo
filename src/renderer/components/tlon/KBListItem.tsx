@@ -118,7 +118,7 @@ export function KBListItem({ kb, onOpen }: KBListItemProps) {
       tabIndex={0}
       onClick={onOpen}
       onKeyDown={e => { if (e.key === 'Enter') onOpen() }}
-      className="group relative flex h-full flex-col text-left bg-card border border-border rounded-lg p-4 transition-colors cursor-pointer hover:border-primary
+      className="group relative flex h-full flex-col text-left bg-card border border-border-soft rounded-lg p-4 transition-[border-color,box-shadow] ease-halo cursor-pointer hover:border-border hover:shadow-sm
         focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
     >
       {/* Header row */}
@@ -176,7 +176,7 @@ export function KBListItem({ kb, onOpen }: KBListItemProps) {
                   <span className="flex items-center gap-2"><Star className="w-3.5 h-3.5 text-muted-foreground" /> {t('Set as default')}</span>
                   {kb.isDefault && <Check className="w-3.5 h-3.5 text-primary" />}
                 </button>
-                <div className="my-1 border-t border-border/60" />
+                <div className="my-1 border-t border-border-soft" />
                 <button onClick={handleDelete} className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-red-500/10 text-red-500 transition-colors">
                   <Trash2 className="w-3.5 h-3.5" /> {t('Delete')}
                 </button>

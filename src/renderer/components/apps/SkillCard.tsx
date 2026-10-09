@@ -132,7 +132,7 @@ export function SkillCard({ app, spaceMap, usageCount, onOpen }: SkillCardProps)
           ? 'border-dashed opacity-60 hover:opacity-100'
           : isError
             ? 'border-halo-error/40'
-            : 'border-border/60 hover:border-border hover:shadow-sm'}`}
+            : 'border-border-soft hover:border-border hover:shadow-sm'}`}
     >
 
       <div className="flex items-start gap-2.5">
@@ -196,7 +196,7 @@ export function SkillCard({ app, spaceMap, usageCount, onOpen }: SkillCardProps)
                     <button onClick={() => setMenuView('move')} className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-muted/60 transition-colors">
                       <Globe className="w-3.5 h-3.5 text-muted-foreground" /> {t('Move to workspace')}
                     </button>
-                    <div className="my-1 border-t border-border/60" />
+                    <div className="my-1 border-t border-border-soft" />
                     <button onClick={handleUninstall} className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-halo-error hover:bg-halo-error/10 transition-colors">
                       <Trash2 className="w-3.5 h-3.5" /> {t('Uninstall')}
                     </button>
