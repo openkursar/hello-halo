@@ -229,12 +229,12 @@ export function WeixinIlinkInstanceCard({
       : t('Not connected')
 
   return (
-    <div className="border border-border/60 rounded-lg overflow-hidden bg-card/50">
+    <div className="rounded-lg bg-card">
       {/* Instance header */}
       <button
         type="button"
         onClick={onToggle}
-        className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-muted/30 transition-colors"
+        className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg"
       >
         <div className="flex items-center gap-2.5 min-w-0">
           <div className={`w-2 h-2 rounded-full flex-shrink-0 ${statusDot}`} />
@@ -293,14 +293,14 @@ export function WeixinIlinkInstanceCard({
             )}
           </div>
           <ChevronDown
-            className={`w-3.5 h-3.5 text-muted-foreground transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`}
+            className={`w-3.5 h-3.5 text-muted-foreground transition-transform duration-200 ${isExpanded ? '' : '-rotate-90'}`}
           />
         </div>
       </button>
 
       {/* Instance body */}
       {isExpanded && (
-        <div className="px-3 pb-3 pt-2 border-t border-border/60 space-y-3 animate-in slide-in-from-top-1 duration-150">
+        <div className="px-3 pb-3 pt-1 space-y-3 animate-in slide-in-from-top-1 duration-150">
           {/* Auth flow */}
           <div className="flex flex-col items-center gap-3 py-2">
             {authState.status === 'idle' && (

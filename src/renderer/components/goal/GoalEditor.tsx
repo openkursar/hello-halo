@@ -428,7 +428,7 @@ function GoalEditorForm({ tab, spaceId, conversationId }: { tab: TabState; space
         <div ref={formRef} className="mx-auto w-full max-w-3xl px-5 py-6">
           <header
             key={refreshFlash}
-            className={`border-b border-border/60 pb-5 ${refreshFlash ? 'animate-[pulse-highlight_600ms_ease-in-out_1]' : ''}`}
+            className={`border-b border-border-soft pb-5 ${refreshFlash ? 'animate-[pulse-highlight_600ms_ease-in-out_1]' : ''}`}
           >
             <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
               <h1 className="flex items-center gap-2 text-sm font-semibold text-foreground">

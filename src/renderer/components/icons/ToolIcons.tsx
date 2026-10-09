@@ -14,7 +14,6 @@ import {
   ListTodo,
   MessageSquare,
   GitBranch,
-  Database,
   Braces,
   FileCode,
   FolderOpen,
@@ -59,6 +58,11 @@ import {
   HardDrive,
   Pencil,
   Target,
+  File,
+  FileCode2,
+  FileImage,
+  FileSpreadsheet,
+  FileArchive,
   type LucideIcon
 } from 'lucide-react'
 
@@ -182,160 +186,49 @@ export function StatusIcon({ status, className = '', size = 16 }: StatusIconProp
 // File Type Icons
 // ============================================
 
-// File extension to icon mapping
-export const fileIconMap: Record<string, LucideIcon> = {
-  // Web
-  html: Globe,
-  htm: Globe,
-  css: Palette,
-  scss: Palette,
-  less: Palette,
-  // JavaScript/TypeScript
-  js: FileCode,
-  jsx: FileCode,
-  ts: FileCode,
-  tsx: FileCode,
-  // Data
-  json: FileJson,
-  // Documentation
-  md: Book,
-  markdown: Book,
-  txt: FileText,
-  // Python
-  py: FileCode,
-  // Rust
-  rs: Cpu,
-  // Go
-  go: FileCode,
-  // Java
-  java: Coffee,
-  // C/C++
-  cpp: Cpu,
-  c: Cpu,
-  h: Cpu,
-  hpp: Cpu,
-  // Ruby
-  rb: Gem,
-  // Swift
-  swift: Apple,
-  // SQL
-  sql: Database,
-  // Shell
-  sh: Terminal,
-  bash: Terminal,
-  zsh: Terminal,
-  // Config
-  yaml: FileJson,
-  yml: FileJson,
-  xml: FileJson,
-  // Images
-  svg: Image,
-  png: Image,
-  jpg: Image,
-  jpeg: Image,
-  gif: Image,
-  webp: Image,
-  ico: Image,
-  // Documents
-  pdf: Book,
-  doc: FileText,
-  docx: FileText,
-  xls: Database,
-  xlsx: Database,
-  // Archives
-  zip: Package,
-  tar: Package,
-  gz: Package,
-  rar: Package,
-  // Default
-  default: FileText,
+// Every file type shares the same page outline; only the glyph inside it says
+// which kind. Grouped by kind rather than by language: a tree of mixed files
+// should read as one list, not a palette.
+const FILE_KINDS = {
+  code: ['js', 'jsx', 'ts', 'tsx', 'mjs', 'cjs', 'py', 'go', 'rs', 'java', 'c', 'cpp', 'h', 'hpp', 'rb', 'swift',
+    'kt', 'php', 'cs', 'sh', 'bash', 'zsh', 'sql', 'html', 'htm', 'css', 'scss', 'less', 'vue', 'svelte',
+    'json', 'yaml', 'yml', 'xml', 'toml', 'ini'],
+  text: ['md', 'markdown', 'txt', 'rst', 'log', 'doc', 'docx', 'rtf'],
+  image: ['svg', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'bmp', 'avif'],
+  sheet: ['csv', 'tsv', 'xls', 'xlsx'],
+  archive: ['zip', 'tar', 'gz', 'tgz', 'rar', '7z'],
+  pdf: ['pdf'],
+} as const
+type FileKind = keyof typeof FILE_KINDS | 'other'
+
+const FILE_KIND_ICON: Record<FileKind, LucideIcon> = {
+  code: FileCode2,
+  text: FileText,
+  pdf: FileText,
+  image: FileImage,
+  sheet: FileSpreadsheet,
+  archive: FileArchive,
+  other: File,
 }
 
-// Get file icon by extension
-export function getFileTypeIcon(extension: string): LucideIcon {
-  const ext = extension.toLowerCase().replace('.', '')
-  return fileIconMap[ext] || fileIconMap.default
+// Muted by default; only the four kinds people scan a tree for get a light tint.
+const FILE_KIND_COLOR: Record<FileKind, string> = {
+  code: 'text-muted-foreground',
+  text: 'text-muted-foreground',
+  other: 'text-muted-foreground',
+  image: 'text-pink-500/80',
+  sheet: 'text-green-600/80',
+  archive: 'text-amber-600/80',
+  pdf: 'text-red-500/80',
 }
 
-// Professional color palette for file types
-export const fileIconColors: Record<string, string> = {
-  // Web - official brand colors
-  html: 'text-orange-500',         // HTML5 orange
-  htm: 'text-orange-500',
-  css: 'text-blue-500',            // CSS3 blue
-  scss: 'text-pink-500',           // Sass pink
-  less: 'text-indigo-500',
-  // JavaScript/TypeScript
-  js: 'text-yellow-500',           // JS yellow
-  jsx: 'text-cyan-400',            // React cyan
-  ts: 'text-blue-600',             // TypeScript blue
-  tsx: 'text-blue-500',            // React + TS
-  // Data
-  json: 'text-emerald-500',        // Data green
-  // Documentation
-  md: 'text-slate-500',            // Markdown neutral
-  markdown: 'text-slate-500',
-  txt: 'text-gray-500',
-  // Python
-  py: 'text-sky-500',              // Python blue
-  // Rust
-  rs: 'text-orange-600',           // Rust orange
-  // Go
-  go: 'text-cyan-500',             // Go cyan
-  // Java
-  java: 'text-red-500',            // Java red
-  // C/C++
-  cpp: 'text-blue-700',
-  c: 'text-blue-600',
-  h: 'text-violet-500',
-  hpp: 'text-violet-600',
-  // Ruby
-  rb: 'text-red-600',              // Ruby red
-  // Swift
-  swift: 'text-orange-500',        // Swift orange
-  // SQL
-  sql: 'text-amber-600',           // Database amber
-  // Shell
-  sh: 'text-green-600',            // Terminal green
-  bash: 'text-green-600',
-  zsh: 'text-green-500',
-  // Config
-  yaml: 'text-red-400',
-  yml: 'text-red-400',
-  xml: 'text-orange-400',
-  // Images
-  svg: 'text-amber-500',
-  png: 'text-pink-500',
-  jpg: 'text-pink-500',
-  jpeg: 'text-pink-500',
-  gif: 'text-purple-500',
-  webp: 'text-indigo-500',
-  ico: 'text-blue-400',
-  // Documents
-  pdf: 'text-red-500',             // PDF red
-  doc: 'text-blue-600',            // Word blue
-  docx: 'text-blue-600',
-  xls: 'text-green-600',           // Excel green
-  xlsx: 'text-green-600',
-  // Archives
-  zip: 'text-amber-600',
-  tar: 'text-amber-600',
-  gz: 'text-amber-500',
-  rar: 'text-purple-600',
-  // Default
-  default: 'text-slate-500',
-  // Folder — neutral gray rather than the generic OS yellow or the app accent.
-  // A folder icon repeats on nearly every tree row, so a saturated color there
-  // is noise; structure is already carried by the icon shape and the bolder
-  // folder label. One tier above the chevrons so it doesn't go faint.
-  folder: 'text-muted-foreground',
-}
+const KIND_BY_EXT: Record<string, FileKind> = Object.fromEntries(
+  (Object.entries(FILE_KINDS) as [FileKind, readonly string[]][])
+    .flatMap(([kind, exts]) => exts.map(ext => [ext, kind]))
+)
 
-// Get file icon color
-export function getFileIconColor(extension: string, isFolder: boolean = false): string {
-  if (isFolder) return fileIconColors.folder
-  const ext = extension.toLowerCase().replace('.', '')
-  return fileIconColors[ext] || fileIconColors.default
+function fileKind(extension: string): FileKind {
+  return KIND_BY_EXT[extension.toLowerCase().replace('.', '')] ?? 'other'
 }
 
 // File icon component with color
@@ -349,14 +242,13 @@ interface FileIconProps {
 }
 
 export function FileIcon({ extension, isFolder = false, isOpen = false, className = '', size = 16, colored = true }: FileIconProps) {
-  const colorClass = colored ? getFileIconColor(extension, isFolder) : ''
-
   if (isFolder) {
     const FolderIcon = isOpen ? FolderOpen : Folder
-    return <FolderIcon className={`${colorClass} ${className}`} size={size} />
+    return <FolderIcon className={`${colored ? 'text-muted-foreground' : ''} ${className}`} size={size} strokeWidth={1.5} />
   }
-  const Icon = getFileTypeIcon(extension)
-  return <Icon className={`${colorClass} ${className}`} size={size} />
+  const kind = fileKind(extension)
+  const Icon = FILE_KIND_ICON[kind]
+  return <Icon className={`${colored ? FILE_KIND_COLOR[kind] : ''} ${className}`} size={size} strokeWidth={1.5} />
 }
 
 // ============================================

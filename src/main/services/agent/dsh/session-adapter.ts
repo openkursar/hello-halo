@@ -263,6 +263,10 @@ export class DshSession {
   // V2SDKSession surface
   // --------------------------------------------------------------------------
 
+  get pid(): number | null {
+    return this.client?.pid ?? null
+  }
+
   send(message: any): void {
     if (this.closed) throw new Error('dsh session is closed')
     this.queue.push({ contentBlocks: toContentBlocks(message) })

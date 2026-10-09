@@ -260,6 +260,8 @@ export type V2SDKSession = {
   getGoal?: () => Goal | null
   /** Throws TypeError on a blank objective. */
   setGoal?: (goal: GoalInput | null) => Goal | null
+  /** The engine's child process, while it runs; lets a caller wait for it to exit after close(). */
+  readonly pid?: number | null
 }
 
 /**

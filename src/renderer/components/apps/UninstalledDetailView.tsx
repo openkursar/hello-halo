@@ -116,7 +116,7 @@ export function UninstalledDetailView({ appId, spaceName }: UninstalledDetailVie
           {builtinProtected ? (
             <div
               title={t('Built-in apps are bundled with Halo and cannot be deleted permanently')}
-              className="w-full flex items-center justify-center gap-2 px-4 py-2 text-sm text-muted-foreground/60 border border-border/50 rounded-lg cursor-not-allowed select-none"
+              className="w-full flex items-center justify-center gap-2 px-4 py-2 text-sm text-muted-foreground/60 border border-border-faint rounded-lg cursor-not-allowed select-none"
             >
               <Trash2 className="w-4 h-4" />
               {t('Delete Permanently')}

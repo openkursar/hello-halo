@@ -18,7 +18,7 @@ function categoryChipClass(active: boolean): string {
   return `flex-shrink-0 flex items-center gap-1.5 px-3.5 py-1.5 text-xs rounded-full border transition-colors ${
     active
       ? 'bg-primary text-primary-foreground border-primary font-medium'
-      : 'bg-background text-muted-foreground border-border/60 hover:text-foreground hover:border-muted-foreground/40'
+      : 'bg-background text-muted-foreground border-border-soft hover:text-foreground hover:border-muted-foreground/40'
   }`
 }
 

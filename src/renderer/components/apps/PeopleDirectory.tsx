@@ -11,6 +11,8 @@ import { openDigitalHumanChat } from '../../utils/conversation-navigation'
 import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { AutomationAvatar } from './AutomationAvatar'
+import { PersonStatusDot } from './PersonStatusDot'
+import { describePersonStatus } from '../../utils/automation-status'
 import { WorkspaceMigrationDialog } from './WorkspaceMigrationDialog'
 import { needsAttention } from '../../../shared/apps/app-types'
 import type { PeopleDirectoryQuery, PeopleDirectorySummary } from '../../../shared/apps/people-directory'
@@ -96,13 +98,13 @@ export function PeopleDirectory({ spaceMap, onCreate }: { spaceMap: Record<strin
     <div>
       <header className="mb-6 flex flex-wrap items-start justify-between gap-4"><div><h1 className="text-xl font-semibold mb-1">{t('My Digital Humans')} <span className="text-sm font-normal text-muted-foreground">{total}</span></h1><p className="text-[13px] text-muted-foreground">{t('Your digital humans, their work, and the teams they belong to.')}</p></div><button onClick={onCreate} className="flex min-h-10 items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground"><Plus size={16} />{t('Create Digital Human')}</button></header>
       <div className="mb-5 flex flex-wrap gap-2">
-        <label className="relative min-w-0 grow sm:max-w-sm"><Search size={16} className="absolute left-3 top-3 text-muted-foreground" /><input aria-label={t('Search digital humans')} placeholder={t('Search names, roles, or teams')} value={prefs.query} onChange={event => prefs.setFilters({ query: event.target.value })} className="min-h-10 w-full rounded-lg border border-border/60 bg-card py-2 pl-9 pr-3 text-sm focus:outline-none focus:border-primary" /></label>
+        <label className="relative min-w-0 grow sm:max-w-sm"><Search size={16} className="absolute left-3 top-3 text-muted-foreground" /><input aria-label={t('Search digital humans')} placeholder={t('Search names, roles, or teams')} value={prefs.query} onChange={event => prefs.setFilters({ query: event.target.value })} className="min-h-10 w-full rounded-lg border border-border-soft bg-card py-2 pl-9 pr-3 text-sm focus:outline-none focus:border-primary" /></label>
         <div className="relative max-w-full">
-          <select aria-label={t('Filter by team')} value={prefs.team} onChange={event => prefs.setFilters({ team: event.target.value })} className="min-h-10 w-full appearance-none rounded-lg border border-border/60 bg-card pl-3 pr-9 text-xs hover:border-border transition-colors focus:outline-none focus:ring-1 focus:ring-primary"><option value="">{t('All teams')}</option>{teams.map(team => <option value={team.id} key={team.id}>{team.name}</option>)}</select>
+          <select aria-label={t('Filter by team')} value={prefs.team} onChange={event => prefs.setFilters({ team: event.target.value })} className="min-h-10 w-full appearance-none rounded-lg border border-border-soft bg-card pl-3 pr-9 text-xs hover:border-border transition-colors focus:outline-none focus:ring-1 focus:ring-primary"><option value="">{t('All teams')}</option>{teams.map(team => <option value={team.id} key={team.id}>{team.name}</option>)}</select>
           <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
         </div>
         <div className="relative max-w-full">
-          <select aria-label={t('Filter by workspace')} value={prefs.space} onChange={event => prefs.setFilters({ space: event.target.value })} className="min-h-10 w-full appearance-none rounded-lg border border-border/60 bg-card pl-3 pr-9 text-xs hover:border-border transition-colors focus:outline-none focus:ring-1 focus:ring-primary"><option value="">{t('All workspaces')}</option>{Object.entries(spaceMap).map(([id, name]) => <option value={id} key={id}>{name}</option>)}</select>
+          <select aria-label={t('Filter by workspace')} value={prefs.space} onChange={event => prefs.setFilters({ space: event.target.value })} className="min-h-10 w-full appearance-none rounded-lg border border-border-soft bg-card pl-3 pr-9 text-xs hover:border-border transition-colors focus:outline-none focus:ring-1 focus:ring-primary"><option value="">{t('All workspaces')}</option>{Object.entries(spaceMap).map(([id, name]) => <option value={id} key={id}>{name}</option>)}</select>
           <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
         </div>
         {/* The only way into the requests inbox. `waiting` counts the whole
@@ -224,10 +226,10 @@ function PersonCard({ app, spaceMap, onOpen }: {
   return (
     <article
       onClick={() => onOpen(app)}
-      className={`group min-w-0 cursor-pointer rounded-xl border bg-card p-5 transition-[border-color,opacity] ${app.status === 'uninstalled' ? 'border-dashed border-border opacity-60 hover:opacity-100' : 'border-border hover:border-primary/40'}`}
+      className={`avatar-alive-host group min-w-0 cursor-pointer rounded-xl border bg-card p-5 transition-[border-color,box-shadow,opacity] ${app.status === 'uninstalled' ? 'border-dashed border-border-soft opacity-60 hover:opacity-100' : 'border-border-soft hover:border-border hover:shadow-sm'}`}
     >
       <div className="flex min-w-0 items-center gap-3">
-        <button onClick={event => { event.stopPropagation(); onOpen(app) }} className="flex min-w-0 flex-1 items-center gap-3 text-left"><AutomationAvatar name={app.name} size={42} /><h2 className="min-w-0 truncate font-medium" title={app.name}>{app.name}</h2></button>
+        <button onClick={event => { event.stopPropagation(); onOpen(app) }} className="flex min-w-0 flex-1 items-center gap-3 text-left"><span className="avatar-alive-on-hover flex shrink-0"><AutomationAvatar name={app.name} size={42} /></span><h2 className="min-w-0 truncate font-medium" title={app.name}>{app.name}</h2></button>
         <div className="flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100 max-sm:opacity-100">
           {app.spaceId && app.status !== 'uninstalled' && (
             <button aria-label={t('Chat with {{name}}', { name: app.name })} onClick={event => { event.stopPropagation(); onOpen(app, true) }} className="rounded-lg p-2 text-muted-foreground hover:bg-secondary"><MessageSquare size={16} /></button>
@@ -237,11 +239,32 @@ function PersonCard({ app, spaceMap, onOpen }: {
       </div>
       <p className="my-3 min-w-0 flex-1 truncate text-sm text-muted-foreground" title={app.description}>{app.description || t('Digital human')}</p>
       <button onClick={event => { event.stopPropagation(); useAppsPageStore.getState().openAppTeams(app.id) }} className="flex max-w-full items-center gap-1.5 text-xs text-muted-foreground hover:text-primary"><Users size={14} /><span className="truncate">{memberships.length ? memberships.slice(0, 2).map(team => team.name).join(' · ') : t('No teams yet')}</span>{memberships.length > 2 && <span>+{memberships.length - 2}</span>}</button>
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3 text-xs text-muted-foreground"><span>{app.spaceId ? spaceMap[app.spaceId] ?? t('Workspace unavailable') : t('Global')}</span>{/* Ordered so the strongest claim wins: stopping a person also turns its
-          automatic tasks off, so in any other order a stop reads as the owner's
-          own pause. */}
-      <span>{app.status === 'uninstalled' ? t('Uninstalled') : state?.blocked ? t('Stopped, waiting for you') : (state?.pendingDecisionCount ?? 0) > 0 ? t('{{count}} waiting', { count: state!.pendingDecisionCount }) : state?.status === 'running' ? t('Working') : state?.automaticEnabled === false || app.status === 'paused' ? t('Automatic tasks paused') : !state ? t('Status unavailable') : t('Ready')}</span></div>
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border-soft pt-3 text-xs text-muted-foreground"><span title={app.spaceId ? t('Workspace: {{name}}', { name: spaceMap[app.spaceId] ?? t('Workspace unavailable') }) : t('Global — runs outside any workspace')}>{app.spaceId ? spaceMap[app.spaceId] ?? t('Workspace unavailable') : t('Global')}</span>      <PersonStatus app={app} /></div>
     </article>
+  )
+}
+
+/**
+ * A card's status line, from describePersonStatus like the switcher. Only
+ * states a live person never has (removed, no runtime state yet) are decided here.
+ */
+function PersonStatus({ app }: { app: PeopleDirectorySummary }) {
+  const { t } = useTranslation()
+  const state = app.state
+  if (app.status === 'uninstalled' || !state) {
+    return (
+      <span className="flex items-center gap-1.5">
+        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/40" />
+        <span>{app.status === 'uninstalled' ? t('Uninstalled') : t('Status unavailable')}</span>
+      </span>
+    )
+  }
+  const { effective, label, flag } = describePersonStatus(app.status, state, t)
+  return (
+    <span className="flex items-center gap-1.5">
+      <PersonStatusDot appStatus={app.status} effective={effective} flag={flag} />
+      <span>{label}</span>
+    </span>
   )
 }
 

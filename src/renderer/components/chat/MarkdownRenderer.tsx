@@ -39,7 +39,7 @@ function TableBlock({ children }: { children?: React.ReactNode }) {
 
   return (
     <div className="group/table relative my-3">
-      <div className="overflow-x-auto rounded-lg border border-border/50">
+      <div className="overflow-x-auto rounded-lg border border-border-faint">
         <table ref={tableRef} className="w-full text-sm">{children}</table>
       </div>
       {openTable && (
@@ -119,14 +119,14 @@ const components = {
     <thead className="bg-secondary/50">{children}</thead>
   ),
   th: ({ children }: { children?: React.ReactNode }) => (
-    <th className="px-4 py-2 text-left font-medium border-b border-border/50">{children}</th>
+    <th className="px-4 py-2 text-left font-medium border-b border-border-faint">{children}</th>
   ),
   td: ({ children }: { children?: React.ReactNode }) => (
     <td className="px-4 py-2 border-b border-border/30">{children}</td>
   ),
 
   // Horizontal rule
-  hr: () => <hr className="my-6 border-border/50" />,
+  hr: () => <hr className="my-6 border-border-faint" />,
 
   // Strong and emphasis
   strong: ({ children }: { children?: React.ReactNode }) => (

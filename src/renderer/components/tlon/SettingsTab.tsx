@@ -272,7 +272,7 @@ export function SettingsTab({ kb, onDeleted }: SettingsTabProps) {
                   className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border transition-colors ${
                     connected
                       ? 'bg-primary/[0.12] border-primary/[0.18] text-accent-on-dark'
-                      : 'bg-background border-border/60 text-muted-foreground hover:text-foreground hover:border-border'
+                      : 'bg-background border-border-soft text-muted-foreground hover:text-foreground hover:border-border'
                   }`}
                 >
                   {connected && <Check className="w-3.5 h-3.5" />}
@@ -296,7 +296,7 @@ export function SettingsTab({ kb, onDeleted }: SettingsTabProps) {
                 <button
                   key={app.id}
                   onClick={() => handleNavigateToApp(app.id)}
-                  className="group w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg border border-border/60 bg-background hover:border-border transition-colors text-left"
+                  className="group w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg border border-border-soft bg-background hover:border-border transition-colors text-left"
                 >
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium truncate">

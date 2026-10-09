@@ -236,7 +236,7 @@
 .canvas-tab-bar-actions {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
   padding: 0 6px;
   flex-shrink: 0;
   border-left: 1px solid hsl(var(--border) / 0.5);
@@ -258,13 +258,10 @@
   color: hsl(var(--foreground));
 }
 
-.canvas-tab-bar-action.danger {
-  color: hsl(var(--destructive) / 0.7);
-}
-
+/* Reads as a plain action until hovered: clearing tabs is routine, not an error. */
 .canvas-tab-bar-action.danger:hover {
-  background: hsl(var(--destructive));
-  color: #fff;
+  background: hsl(var(--destructive) / 0.1);
+  color: hsl(var(--destructive));
 }
 
 /* New tab button - inside tab list, follows tabs */

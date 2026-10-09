@@ -626,7 +626,17 @@ CSS variable-based theming. **Do not use hardcoded colors.**
 - Follows shadcn/ui design pattern
 - Uses CSS variables (`--background`, `--foreground`, `--primary`, etc.)
 - Components reference colors via `hsl(var(--xxx))`
-- Default system theme (respects OS preference), `.light` / `.dark` class overrides
+- Dark is the `:root` default; `<html class="light">` is set from the theme
+  setting (`system`, the default, follows the OS). Tailwind's `dark:` tracks
+  only the OS, so it is wrong whenever the user picks a theme explicitly.
+- Soft dividers: `border-border-soft` / `border-border-faint` (also `divide-`).
+  Light resolves them to `--border` at 0.6 / 0.5; dark uses solid colors,
+  because an alpha border vanishes on a near-black canvas. Put no `/NN` on
+  `border-border` or on these two (older `/20`–`/70` uses still fade in dark).
+- Dark-only tweaks: the `dark-ui:` variant (`:root:not(.light) &`). Its
+  selector outranks every plain state variant (`hover:`, `group-hover:`,
+  `data-[…]:`), so restate each state it overrides under `dark-ui:` too.
+  Changing one theme must leave the other identical.
 
 ```css
 /* Correct */

@@ -10,7 +10,7 @@
  */
 
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
-import { Copy, Check, Code, Eye, ExternalLink, Pencil } from 'lucide-react'
+import { Copy, Check, Code, Eye, ExternalLink, Pen } from 'lucide-react'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { Streamdown } from 'streamdown'
 import 'streamdown/styles.css'
@@ -293,7 +293,7 @@ export function MarkdownViewer({ tab, onScrollChange, onEditRequest }: MarkdownV
                 }
               `}
             >
-              <Eye className="w-3.5 h-3.5" />
+              <Eye className="w-3.5 h-3.5" strokeWidth={1.5} />
               {t('Preview')}
             </button>
             <button
@@ -306,7 +306,7 @@ export function MarkdownViewer({ tab, onScrollChange, onEditRequest }: MarkdownV
                 }
               `}
             >
-              <Code className="w-3.5 h-3.5" />
+              <Code className="w-3.5 h-3.5" strokeWidth={1.5} />
               {t('Source')}
             </button>
           </div>
@@ -320,7 +320,7 @@ export function MarkdownViewer({ tab, onScrollChange, onEditRequest }: MarkdownV
               className="p-1.5 rounded hover:bg-secondary transition-colors"
               title={t('Edit')}
             >
-              <Pencil className="w-4 h-4 text-muted-foreground" />
+              <Pen className="w-3.5 h-3.5 text-muted-foreground" strokeWidth={1.5} />
             </button>
           )}
 
@@ -331,9 +331,9 @@ export function MarkdownViewer({ tab, onScrollChange, onEditRequest }: MarkdownV
             title={t('Copy')}
           >
             {copied ? (
-              <Check className="w-4 h-4 text-green-500" />
+              <Check className="w-3.5 h-3.5 text-green-500" strokeWidth={1.5} />
             ) : (
-              <Copy className="w-4 h-4 text-muted-foreground" />
+              <Copy className="w-3.5 h-3.5 text-muted-foreground" strokeWidth={1.5} />
             )}
           </button>
 
@@ -344,7 +344,7 @@ export function MarkdownViewer({ tab, onScrollChange, onEditRequest }: MarkdownV
               className="p-1.5 rounded hover:bg-secondary transition-colors"
               title={t('Open in external application')}
             >
-              <ExternalLink className="w-4 h-4 text-muted-foreground" />
+              <ExternalLink className="w-3.5 h-3.5 text-muted-foreground" strokeWidth={1.5} />
             </button>
           )}
         </div>

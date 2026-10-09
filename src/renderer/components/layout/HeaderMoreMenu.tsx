@@ -7,12 +7,17 @@
  */
 
 import { useState } from 'react'
-import { Globe, TerminalSquare, Loader2, MoreHorizontal, GitCompareArrows } from 'lucide-react'
+import { Loader2, MoreHorizontal } from 'lucide-react'
+import { BROWSER_META, TERMINAL_META, CHANGES_META } from '../canvas'
 import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
 import { CHANGES_SHORTCUT_LABEL, useSpaceQuickActions } from '../../hooks/useSpaceQuickActions'
 import { useTranslation } from '../../i18n'
 import { trackHome } from '../../services/home-telemetry'
 import { trackToolOpen } from '../../services/tool-session-telemetry'
+
+const BrowserIcon = BROWSER_META.icon
+const TerminalIcon = TERMINAL_META.icon
+const ChangesIcon = CHANGES_META.icon
 
 export function HeaderMoreMenu() {
   const { t } = useTranslation()
@@ -62,7 +67,7 @@ export function HeaderMoreMenu() {
               onClick={handleOpenBrowser}
               className="w-full flex items-start gap-2.5 px-3 py-2 text-left hover:bg-secondary/80 transition-colors"
             >
-              <Globe className="w-4 h-4 text-blue-500 flex-shrink-0 mt-0.5" />
+              <BrowserIcon className={`w-4 h-4 ${BROWSER_META.color} flex-shrink-0 mt-0.5`} />
               <span>
                 <span className="block text-sm text-foreground">{t('Open browser')}</span>
                 <span className="block text-xs text-muted-foreground">{t('Built-in AI browser window')}</span>
@@ -78,7 +83,7 @@ export function HeaderMoreMenu() {
               {terminalCreating ? (
                 <Loader2 className="w-4 h-4 flex-shrink-0 mt-0.5 animate-spin" />
               ) : (
-                <TerminalSquare className="w-4 h-4 text-violet-500 flex-shrink-0 mt-0.5" />
+                <TerminalIcon className={`w-4 h-4 ${TERMINAL_META.color} flex-shrink-0 mt-0.5`} />
               )}
               <span>
                 <span className="block text-sm text-foreground">{t('Open terminal')}</span>
@@ -91,7 +96,7 @@ export function HeaderMoreMenu() {
               onClick={handleOpenChanges}
               className="w-full flex items-start gap-2.5 px-3 py-2 text-left hover:bg-secondary/80 transition-colors"
             >
-              <GitCompareArrows className="w-4 h-4 text-orange-500 flex-shrink-0 mt-0.5" />
+              <ChangesIcon className={`w-4 h-4 ${CHANGES_META.color} flex-shrink-0 mt-0.5`} />
               <span className="min-w-0 flex-1">
                 <span className="flex items-center justify-between gap-2 text-sm text-foreground">
                   {t('Changes')}

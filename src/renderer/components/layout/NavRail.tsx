@@ -15,8 +15,7 @@
  */
 
 import { useId, type ReactNode } from 'react'
-import { Settings } from 'lucide-react'
-import { ChatNavIcon, DigitalHumanNavIcon, KnowledgeNavIcon, StoreNavIcon, TasksNavIcon } from '../icons/NavIcons'
+import { ChatNavIcon, DigitalHumanNavIcon, KnowledgeNavIcon, SettingsNavIcon, StoreNavIcon, TasksNavIcon } from '../icons/NavIcons'
 import { useAppStore } from '../../stores/app.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useTaskPanelStore } from '../../stores/taskPanel.store'
@@ -91,7 +90,7 @@ function NavItem({ icon, label, tip, active, onClick, size = 'default', badge }:
         'group relative flex items-center justify-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-card',
         isLg ? 'w-11 h-11 rounded-lg' : 'w-10 h-10 rounded-md',
         active
-          ? 'bg-secondary text-primary'
+          ? 'bg-secondary dark-ui:bg-surface-hover text-primary'
           : 'text-subtle-foreground hover:bg-secondary hover:text-foreground'
       )}
     >
@@ -172,7 +171,7 @@ export function NavRail() {
     // a Header-height spacer.
     <div
       className={cn(
-        'flex flex-col items-center h-full flex-shrink-0 bg-card border-r border-border/50 pt-3 pb-3.5',
+        'flex flex-col items-center h-full flex-shrink-0 bg-card border-r border-border-faint pt-3 pb-3.5',
         !isMacElectron && 'w-14'
       )}
       // The macOS traffic-light group is wider than the prototype's 56px
@@ -230,7 +229,7 @@ export function NavRail() {
           onClick={handleToggleTasks}
         />
         <NavItem
-          icon={<Settings className="w-[22px] h-[22px]" strokeWidth={1.6} />}
+          icon={<SettingsNavIcon className="w-[22px] h-[22px]" active={view === 'settings'} />}
           label={t('Settings')}
           active={view === 'settings'}
           onClick={goSettings}

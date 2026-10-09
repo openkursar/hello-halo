@@ -256,7 +256,7 @@ export function CollapsedThoughtProcess({ thoughts, defaultExpanded = false, def
           transition-all duration-200 w-full border
           ${isExpanded
             ? 'bg-primary/[0.12] border-primary/25'
-            : 'bg-card/80 hover:bg-secondary/60 border-border/50'
+            : 'bg-card/80 hover:bg-secondary/60 border-border-faint'
           }
         `}
       >
@@ -284,7 +284,7 @@ export function CollapsedThoughtProcess({ thoughts, defaultExpanded = false, def
 
       {/* Expanded content */}
       {isExpanded && (
-        <div className="mt-1 py-2 bg-card/80 rounded-lg border border-border/50 animate-slide-down thought-content">
+        <div className="mt-1 py-2 bg-card/80 rounded-lg border border-border-faint animate-slide-down thought-content">
           {/* Thought items — lazy-loaded: only items near the scroll viewport are rendered */}
           {displayThoughts.length > 0 && (
             <div ref={scrollContainerRef} className={`${isMaximized ? 'max-h-[80vh]' : 'max-h-[300px]'} scrollbar-overlay px-3 transition-all duration-200`}>
@@ -373,7 +373,7 @@ export function LazyCollapsedThoughtProcess({ thoughtsSummary, onLoadThoughts }:
       <button
         onClick={handleClick}
         disabled={isLoading || unavailable}
-        className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs transition-all duration-200 w-full bg-card/80 hover:bg-secondary/60 border border-border/50 disabled:hover:bg-card/80"
+        className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs transition-all duration-200 w-full bg-card/80 hover:bg-secondary/60 border border-border-faint disabled:hover:bg-card/80"
       >
         {isLoading ? (
           <Loader2 size={12} className="text-muted-foreground animate-spin" />

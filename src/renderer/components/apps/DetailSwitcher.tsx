@@ -7,7 +7,8 @@
  * fold state are one preference shared by every detail page.
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { ChevronLeft, ChevronRight, Search } from 'lucide-react'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useTranslation } from '../../i18n'
@@ -27,10 +28,17 @@ export interface DetailSwitcherItem {
   icon: React.ReactNode
   /** Right edge of the row: a status dot or count badge. */
   trailing?: React.ReactNode
-  /** Waiting on the user — marked on the folded strip, where trailing is hidden. */
-  flagged?: boolean
+  /**
+   * Waiting on the user — marked on the folded strip, where trailing is hidden.
+   * `alert` is the severe kind (stopped until the user acts), `attention` the rest.
+   */
+  flag?: 'attention' | 'alert'
   /** Turned off; rendered faded. */
   dimmed?: boolean
+  /** Shown on the folded strip's hover card, under the name. */
+  description?: string
+  /** Shown on the hover card's last line, e.g. a status dot and label. */
+  status?: React.ReactNode
 }
 
 interface DetailSwitcherProps {
@@ -100,12 +108,80 @@ export function DetailSwitcher({ title, searchPlaceholder, items, selectedId, on
     selectedRef.current?.scrollIntoView({ block: 'nearest' })
   }, [selectedId, collapsed])
 
+  // Hovering a row shows who it is (the folded strip has only faces; the list
+  // truncates names). Fixed and portaled: the list scrolls and would clip it.
+  // Keyed by id, not a copy of the row: the card follows live status, and
+  // goes away if the row does (filtered out, removed) without a mouseleave.
+  const [hovered, setHovered] = useState<{ id: string; top: number; left: number } | null>(null)
+  const hoveredItem = hovered ? items.find(item => item.id === hovered.id) : undefined
+  const cardRef = useRef<HTMLDivElement>(null)
+  const cardId = useId()
+  const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useLayoutEffect(() => {
+    const el = cardRef.current
+    if (!el || !hovered) return
+    const margin = 8
+    el.style.top = `${Math.min(Math.max(hovered.top - el.offsetHeight / 2, margin), window.innerHeight - el.offsetHeight - margin)}px`
+  }, [hovered, hoveredItem])
+  const hideCard = () => {
+    if (openTimer.current) clearTimeout(openTimer.current)
+    openTimer.current = null
+    setHovered(null)
+  }
+  useEffect(() => hideCard, [])
+  // The hovered row went away without a mouseleave (filtered out, removed):
+  // forget it, so it can't pop back up if the row returns.
+  useEffect(() => { if (hovered && !hoveredItem) hideCard() }, [hovered, hoveredItem])
+  useEffect(() => { hideCard() }, [collapsed])
+  // A short delay keeps the card from flashing on every row the pointer
+  // crosses; once one is up, moving to a neighbour switches at once.
+  const showCard = (id: string, el: HTMLElement) => {
+    const r = el.getBoundingClientRect()
+    const next = { id, top: r.top + r.height / 2, left: r.right + 8 }
+    if (openTimer.current) clearTimeout(openTimer.current)
+    if (hovered) {
+      setHovered(next)
+      return
+    }
+    openTimer.current = setTimeout(() => {
+      openTimer.current = null
+      setHovered(next)
+    }, 300)
+  }
+  const cardHandlers = (id: string) => ({
+    onMouseEnter: (e: React.MouseEvent<HTMLElement>) => showCard(id, e.currentTarget),
+    onMouseLeave: hideCard,
+    onFocus: (e: React.FocusEvent<HTMLElement>) => showCard(id, e.currentTarget),
+    onBlur: hideCard,
+    'aria-describedby': hovered?.id === id ? cardId : undefined,
+  })
+
+  const hoverCard = hovered && hoveredItem && createPortal(
+    <div
+      ref={cardRef}
+      id={cardId}
+      role="tooltip"
+      style={{ top: hovered.top, left: hovered.left }}
+      className="pointer-events-none fixed z-[60] w-[240px] rounded-lg border border-border-faint bg-popover px-3.5 py-3 shadow-lg"
+    >
+      <div className="flex items-center gap-2.5">
+        <span className="flex-shrink-0">{hoveredItem.icon}</span>
+        <span className="min-w-0 truncate text-sm font-medium text-foreground">{hoveredItem.name}</span>
+      </div>
+      {hoveredItem.description && (
+        <p className="mt-2 text-xs leading-relaxed text-muted-foreground line-clamp-3">{hoveredItem.description}</p>
+      )}
+      {hoveredItem.status && <div className="mt-2 flex items-center gap-1.5 text-xs">{hoveredItem.status}</div>}
+    </div>,
+    document.body
+  )
+
   const trimmed = query.trim().toLowerCase()
   const listed = trimmed ? items.filter(item => item.name.toLowerCase().includes(trimmed)) : items
 
   if (collapsed) {
     return (
-      <div ref={containerRef} className="relative flex w-14 flex-shrink-0 flex-col items-center border-r border-border/50">
+      <div ref={containerRef} className="relative flex w-14 flex-shrink-0 flex-col items-center border-r border-border-faint">
         <button
           type="button"
           onClick={() => setCollapsed(false)}
@@ -127,7 +203,7 @@ export function DetailSwitcher({ title, searchPlaceholder, items, selectedId, on
                 ref={active ? selectedRef : undefined}
                 type="button"
                 onClick={() => onSelect(item.id)}
-                title={item.name}
+                {...cardHandlers(item.id)}
                 aria-label={item.name}
                 aria-current={active}
                 className="group relative flex h-9 w-9 flex-shrink-0 items-center justify-center"
@@ -136,24 +212,30 @@ export function DetailSwitcher({ title, searchPlaceholder, items, selectedId, on
                   'flex items-center justify-center transition-[opacity,transform] ease-halo',
                   active
                     ? item.dimmed ? 'opacity-60' : 'opacity-100'
-                    : cn('scale-[0.8] group-hover:scale-90 group-hover:opacity-100', item.dimmed ? 'opacity-30' : 'opacity-50')
+                    : cn('scale-[0.8] group-hover:scale-90 group-hover:opacity-100', item.dimmed ? 'opacity-30 dark-ui:opacity-50' : 'opacity-50 dark-ui:opacity-70', 'dark-ui:group-hover:opacity-100')
                 )}>
                   {item.icon}
                 </span>
-                {item.flagged && (
-                  <span className="absolute right-0.5 top-0.5 h-2 w-2 rounded-full bg-halo-warning ring-2 ring-background" />
+                {item.flag && (
+                  <span className={cn(
+                    'absolute rounded-full ring-2 ring-background transition-all ease-halo',
+                    // Scaled with its face: the receded ones are drawn smaller.
+                    active ? 'right-0.5 top-0.5 h-2 w-2' : 'right-1 top-1 h-1.5 w-1.5 group-hover:right-0.5 group-hover:top-0.5 group-hover:h-2 group-hover:w-2',
+                    item.flag === 'alert' ? 'bg-halo-error' : 'bg-halo-warning'
+                  )} />
                 )}
               </button>
             )
           })}
         </div>
         {dragHandle}
+        {hoverCard}
       </div>
     )
   }
 
   return (
-    <div ref={containerRef} className="relative flex flex-shrink-0 flex-col border-r border-border/50" style={{ width }}>
+    <div ref={containerRef} className="relative flex flex-shrink-0 flex-col border-r border-border-faint" style={{ width }}>
       <div className="flex items-center gap-2 px-3 pt-3 pb-2">
         <span className="flex-1 text-xs font-medium text-subtle-foreground">
           {title} <span className="tabular-nums">{items.length}</span>
@@ -192,6 +274,7 @@ export function DetailSwitcher({ title, searchPlaceholder, items, selectedId, on
               ref={active ? selectedRef : undefined}
               type="button"
               onClick={() => onSelect(item.id)}
+              {...cardHandlers(item.id)}
               aria-current={active}
               className={cn(
                 'relative flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[13px] transition-colors ease-halo',
@@ -210,6 +293,7 @@ export function DetailSwitcher({ title, searchPlaceholder, items, selectedId, on
         )}
       </div>
       {dragHandle}
+      {hoverCard}
     </div>
   )
 }

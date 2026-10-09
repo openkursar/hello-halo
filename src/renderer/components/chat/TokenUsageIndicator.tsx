@@ -146,7 +146,7 @@ export function TokenUsageIndicator({ tokenUsage, previousCost = 0, className = 
                 </div>
               )}
               {tokenUsage.totalCostUsd > 0 && (
-                <div className="flex justify-between text-muted-foreground pt-1 border-t border-border/50">
+                <div className="flex justify-between text-muted-foreground pt-1 border-t border-border-faint">
                   <span>{t('Current / total')}</span>
                   <span className="text-foreground">
                     {formatCost(currentCost)}/{formatCost(tokenUsage.totalCostUsd)}
@@ -157,7 +157,7 @@ export function TokenUsageIndicator({ tokenUsage, previousCost = 0, className = 
 
             {/* Warning if near limit */}
             {usagePercent >= 80 && (
-              <div className={`mt-2 pt-2 border-t border-border/50 text-xs ${
+              <div className={`mt-2 pt-2 border-t border-border-faint text-xs ${
                 usagePercent >= 95 ? 'text-red-500' : 'text-amber-500'
               }`}>
                 {usagePercent >= 95

@@ -5,7 +5,7 @@
 
 function SkeletonCard() {
   return (
-    <div className="rounded-[10px] border border-border/60 bg-card p-4 flex flex-col gap-2.5">
+    <div className="rounded-[10px] border border-border-soft bg-card p-4 flex flex-col gap-2.5">
       <div className="flex items-center gap-3">
         <div className="w-10 h-10 rounded-lg bg-muted animate-pulse" />
         <div className="flex-1 flex flex-col gap-2">

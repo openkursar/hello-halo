@@ -5,6 +5,7 @@
 
 import { useState, useEffect } from 'react'
 import { useTranslation } from '../../i18n'
+import { Switch, switchRowHover } from '../ui/Switch'
 import { api } from '../../api'
 import { useSecurityPolicy } from '../../hooks/useSecurityPolicy'
 import {
@@ -222,7 +223,7 @@ export function RemoteAccessSection({ config, setConfig }: RemoteAccessSectionPr
   }
 
   return (
-    <section id="remote" className="bg-card rounded-xl border border-border p-6">
+    <section id="remote" className="bg-card rounded-xl border border-border-faint p-6">
       <h2 className="text-lg font-medium mb-4">{t('Remote Access')}</h2>
 
       {/* Security Warning */}
@@ -240,29 +241,14 @@ export function RemoteAccessSection({ config, setConfig }: RemoteAccessSectionPr
 
       <div className="space-y-4">
         {/* Enable/Disable Toggle */}
-        <div className="flex items-center justify-between">
+        <div className={`flex items-center justify-between py-1.5 ${switchRowHover}`}>
           <div>
             <p className="font-medium">{t('Enable Remote Access')}</p>
             <p className="text-sm text-muted-foreground">
               {t('Allow access to Halo from other devices')}
             </p>
           </div>
-          <label className="relative inline-flex items-center cursor-pointer">
-            <input
-              type="checkbox"
-              checked={remoteStatus?.enabled || false}
-              onChange={handleToggleRemote}
-              disabled={isEnablingRemote}
-              className="sr-only peer"
-            />
-            <div className="w-11 h-6 bg-secondary rounded-full peer peer-checked:bg-primary transition-colors">
-              <div
-                className={`w-5 h-5 bg-white rounded-full shadow-md transform transition-transform ${
-                  remoteStatus?.enabled ? 'translate-x-5' : 'translate-x-0.5'
-                } mt-0.5`}
-              />
-            </div>
-          </label>
+          <Switch checked={remoteStatus?.enabled || false} onCheckedChange={() => handleToggleRemote()} disabled={isEnablingRemote} />
         </div>
 
         {enableError && (

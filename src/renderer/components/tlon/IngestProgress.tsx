@@ -7,7 +7,7 @@
 
 import { useState } from 'react'
 import { useTranslation } from '../../i18n'
-import { Loader2, CheckCircle2, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react'
+import { Loader2, CheckCircle2, AlertCircle, ChevronDown, ChevronRight } from 'lucide-react'
 import type { IngestProgressEvent } from '../../../shared/types/tlon'
 
 interface IngestProgressProps {
@@ -64,8 +64,8 @@ export function IngestProgress({ progress }: IngestProgressProps) {
             <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
             {t('{{count}} file(s) could not be learned', { count: errors.length })}
             {showErrors
-              ? <ChevronUp className="w-3.5 h-3.5 flex-shrink-0" />
-              : <ChevronDown className="w-3.5 h-3.5 flex-shrink-0" />}
+              ? <ChevronDown className="w-3.5 h-3.5 flex-shrink-0" />
+              : <ChevronRight className="w-3.5 h-3.5 flex-shrink-0" />}
           </button>
           {showErrors && (
             <ul className="mt-1.5 space-y-1">

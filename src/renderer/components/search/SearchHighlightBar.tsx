@@ -200,7 +200,7 @@ export function SearchHighlightBar() {
 
       {/* Hint text with background to prevent overlap */}
       <div className="mt-2 text-xs text-muted-foreground text-right">
-        <span className="bg-background/95 backdrop-blur-sm px-2 py-1 rounded border border-border/50">
+        <span className="bg-background/95 backdrop-blur-sm px-2 py-1 rounded border border-border-faint">
           {t('↑↓ Navigate · {{shortcut}} Edit · Esc Close', { shortcut: EDIT_SHORTCUT })}
         </span>
       </div>

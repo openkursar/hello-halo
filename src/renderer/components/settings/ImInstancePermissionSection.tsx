@@ -18,7 +18,7 @@ import { api } from '../../api'
 import type { ImChannelInstanceConfig } from '../../../shared/types/im-channel'
 import type { AvailableSkill } from '../../../shared/apps/app-types'
 import { CapabilityPolicyFields } from '../capability/CapabilityPolicyFields'
-import { Switch } from '../ui/Switch'
+import { Switch, switchRowHover } from '../ui/Switch'
 import { HelpHint } from '../ui/HelpHint'
 import { withGuestAccess } from '../../../shared/apps/capability-policy'
 
@@ -102,16 +102,16 @@ export function ImInstancePermissionSection({
   return (
     <div className="space-y-2">
       {/* Master toggle */}
-      <div className="flex items-center justify-between">
+      <div className={`flex items-center justify-between py-1.5 ${switchRowHover}`}>
         <div className="space-y-0.5">
           <div className="flex items-center gap-1">
-            <p className="text-sm text-muted-foreground">{t('Permission Control')}</p>
+            <p className="text-sm text-foreground">{t('Permission Control')}</p>
             <HelpHint
               label={t('About this setting')}
               text={t('On: owners can use everything, and guests — everyone who is not an owner — can use only what you allow below. Off: everyone is treated as an owner. Owners are the IDs in the owner list; while the list is empty, the first person to message the bot directly becomes its owner.')}
             />
           </div>
-          <p className="text-xs text-muted-foreground/70">
+          <p className="text-xs text-muted-foreground">
             {permissionEnabled
               ? t('Restrict access by owner/guest roles')
               : t('Everyone has full access')}
@@ -127,25 +127,25 @@ export function ImInstancePermissionSection({
           toggle stays editable — this documents the default, it does not
           enforce it. */}
       {permissionDefaults?.defaultEnabled && !permissionEnabled && (
-        <p className="text-xs text-amber-600 dark:text-amber-500 pl-0.5">
+        <p className="text-xs text-amber-600 dark:text-amber-500">
           {t('Permission control is on by default in this build — you have turned it off, so everyone has full access.')}
         </p>
       )}
       {!permissionDefaults?.defaultEnabled && permissionEnabled && (
-        <p className="text-xs text-muted-foreground/70 pl-0.5">
+        <p className="text-xs text-muted-foreground">
           {t('Permission control is off by default in this build — you have turned it on. Set an owner below; until one is set, the first user to direct-message this bot is bound as the owner.')}
         </p>
       )}
 
       {/* Permission details (only when enabled) */}
       {permissionEnabled && (
-        <div className="space-y-3 pl-1 animate-in slide-in-from-top-1 duration-150">
+        <div className="space-y-3 animate-in slide-in-from-top-1 duration-150">
           {/* Owners */}
           <div className="space-y-1">
-            <label className="text-sm text-muted-foreground">
+            <label className="text-sm text-foreground">
               {t('Owner User IDs')}
             </label>
-            <p className="text-xs text-muted-foreground/80">
+            <p className="text-xs text-muted-foreground">
               {t('Enter your own user ID on this IM platform. Separate multiple IDs with commas or new lines.')}
             </p>
             <textarea
@@ -154,7 +154,7 @@ export function ImInstancePermissionSection({
               onBlur={handleOwnersBlur}
               placeholder={permissionDefaults?.ownerIdHint || t('e.g. zhangsan, johndoe — ask the bot "what is my user ID" to look it up')}
               rows={2}
-              className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary resize-none"
+              className="w-full bg-secondary border border-transparent rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary resize-none"
             />
             <p className="text-xs text-muted-foreground">
               {t('Owners always have full access and are not restricted by the guest settings below.')}
@@ -176,22 +176,21 @@ export function ImInstancePermissionSection({
 
           {/* Guest section divider — makes the owner/guest boundary visually explicit */}
           {hasOwners && (
-            <div className="flex items-center gap-2 pt-1">
-              <div className="flex-1 border-t border-border/60" />
-              <span className="text-[10px] uppercase tracking-widest text-muted-foreground/50 px-1">
+            <div className="flex items-center gap-3 pt-1">
+              <span className="flex-shrink-0 text-xs text-muted-foreground">
                 {t('Guest Permissions')}
               </span>
-              <div className="flex-1 border-t border-border/60" />
+              <div className="h-px flex-1 bg-border-soft" />
             </div>
           )}
 
           {/* Guest access toggle (only when owners are set) */}
           {hasOwners && (
             <>
-              <div className="flex items-center justify-between">
+              <div className={`flex items-center justify-between py-1.5 ${switchRowHover}`}>
                 <div className="space-y-0.5">
-                  <p className="text-sm text-muted-foreground">{t('Guest Access')}</p>
-                  <p className="text-xs text-muted-foreground/70">
+                  <p className="text-sm text-foreground">{t('Guest Access')}</p>
+                  <p className="text-xs text-muted-foreground">
                     {guestAccessEnabled
                       ? t('Guests have limited access to selected tools below')
                       : t('Guests can only chat and use memory')}
@@ -202,7 +201,7 @@ export function ImInstancePermissionSection({
 
               {guestAccessEnabled && (
                 <div className="space-y-2">
-                  <label className="text-sm text-muted-foreground">
+                  <label className="text-sm text-foreground">
                     {t('Guest Allowed Tools')}
                   </label>
                   <CapabilityPolicyFields

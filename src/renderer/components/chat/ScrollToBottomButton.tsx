@@ -40,7 +40,7 @@ export function ScrollToBottomButton({
         'text-xs text-muted-foreground/70',
         // Hover state - subtle highlight
         'hover:bg-background/90 hover:text-muted-foreground',
-        'hover:border-border/50',
+        'hover:border-border-faint',
         // Transition
         'transition-all duration-200 ease-out',
         // Visibility animation

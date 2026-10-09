@@ -108,7 +108,7 @@ export function TodoCard({ todos, isAgentActive = true }: TodoCardProps) {
 
   return (
     <div className="animate-fade-in">
-      <div className="rounded-xl border border-border/50 bg-card/50 overflow-hidden">
+      <div className="rounded-xl border border-border-faint bg-card/50 overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border/30 bg-secondary/20">
           <div className="flex items-center gap-2">

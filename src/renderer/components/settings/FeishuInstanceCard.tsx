@@ -28,7 +28,7 @@ import type { ImPermissionDefaults } from './ImInstancePermissionSection'
 import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
 import { HelpHint } from '../ui/HelpHint'
 import { ImProcessingNoticeRow } from './ImProcessingNoticeRow'
-import { Switch } from '../ui/Switch'
+import { Switch, switchRowHover } from '../ui/Switch'
 
 export interface FeishuInstanceCardProps {
   instance: ImChannelInstanceConfig
@@ -191,12 +191,12 @@ export function FeishuInstanceCard({
   const appId = (currentCfg.appId as string) || ''
 
   return (
-    <div className="border border-border/60 rounded-lg overflow-hidden bg-card/50">
+    <div className="rounded-lg bg-card">
       {/* Instance header */}
       <button
         type="button"
         onClick={onToggle}
-        className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-muted/30 transition-colors"
+        className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg"
       >
         <div className="flex items-center gap-2.5 min-w-0">
           <div className={`w-2 h-2 rounded-full flex-shrink-0 ${statusDot}`} />
@@ -267,16 +267,16 @@ export function FeishuInstanceCard({
             </Popover>
           </div>
           <ChevronDown
-            className={`w-3.5 h-3.5 text-muted-foreground transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`}
+            className={`w-3.5 h-3.5 text-muted-foreground transition-transform duration-200 ${isExpanded ? '' : '-rotate-90'}`}
           />
         </div>
       </button>
 
       {/* Instance body */}
       {isExpanded && (
-        <div className="px-3 pb-3 pt-2 border-t border-border/60 space-y-3 animate-in slide-in-from-top-1 duration-150">
+        <div className="px-3 pb-3 pt-1 space-y-3 animate-in slide-in-from-top-1 duration-150">
           {/* Enable toggle */}
-          <div className="flex items-center justify-between">
+          <div className={`flex items-center justify-between py-1.5 ${switchRowHover}`}>
             <p className="text-sm text-muted-foreground">{t('Enabled')}</p>
             <Switch
               checked={isEnabled}
@@ -295,8 +295,8 @@ export function FeishuInstanceCard({
                 value={appId}
                 onChange={(e) => handleConfigChange('appId', e.target.value)}
                 placeholder="cli_xxxxxxxxxxxxxxxx"
-                className={`w-full bg-muted border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary ${
-                  duplicateWarning ? 'border-amber-500' : 'border-border'
+                className={`w-full bg-secondary border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary ${
+                  duplicateWarning ? 'border-amber-500' : 'border-transparent'
                 }`}
               />
               {duplicateWarning && (
@@ -311,7 +311,7 @@ export function FeishuInstanceCard({
                 type="password"
                 value={(currentCfg.appSecret as string) ?? ''}
                 onChange={(e) => handleConfigChange('appSecret', e.target.value)}
-                className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                className="w-full bg-secondary border border-transparent rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary"
               />
             </div>
             <div className="space-y-1">
@@ -322,7 +322,7 @@ export function FeishuInstanceCard({
                   ...instance,
                   config: { ...currentCfg, domain: e.target.value },
                 })}
-                className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary appearance-none cursor-pointer"
+                className="w-full bg-secondary border border-transparent rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary appearance-none cursor-pointer"
               >
                 <option value="feishu">{t('Feishu (China)')}</option>
                 <option value="lark">{t('Lark (International)')}</option>
@@ -349,7 +349,7 @@ export function FeishuInstanceCard({
                 ...instance,
                 replyScope: e.target.value as ImChannelInstanceConfig['replyScope'],
               })}
-              className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary appearance-none cursor-pointer"
+              className="w-full bg-secondary border border-transparent rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary appearance-none cursor-pointer"
             >
               <option value="all">{t('All messages')}</option>
               <option value="group">{t('Group chats only')}</option>
@@ -368,7 +368,7 @@ export function FeishuInstanceCard({
           </div>
 
           {/* Require @mention in group chats */}
-          <div className="flex items-center justify-between gap-3">
+          <div className={`flex items-center justify-between gap-3 py-1.5 ${switchRowHover}`}>
             <div className="space-y-0.5 min-w-0">
               <div className="flex items-center gap-1">
                 <p className="text-sm text-muted-foreground">{t('Require @mention in groups')}</p>
@@ -395,7 +395,7 @@ export function FeishuInstanceCard({
           </div>
 
           {/* Quote reply in group chats */}
-          <div className="flex items-center justify-between gap-3">
+          <div className={`flex items-center justify-between gap-3 py-1.5 ${switchRowHover}`}>
             <div className="space-y-0.5 min-w-0">
               <div className="flex items-center gap-1">
                 <p className="text-sm text-muted-foreground">{t('Quote Reply (Group)')}</p>
@@ -417,7 +417,7 @@ export function FeishuInstanceCard({
           </div>
 
           {/* Streaming */}
-          <div className="flex items-center justify-between gap-3">
+          <div className={`flex items-center justify-between gap-3 py-1.5 ${switchRowHover}`}>
             <div className="space-y-0.5 min-w-0">
               <div className="flex items-center gap-1">
                 <p className="text-sm text-muted-foreground">{t('Streaming')}</p>

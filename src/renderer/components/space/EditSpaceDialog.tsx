@@ -15,7 +15,7 @@ import { SpaceColorSwatch } from './SpaceColorSwatch'
 import { useChangeWorkingDir } from './useChangeWorkingDir'
 import { Disclosure } from '../ui/Disclosure'
 import { MemorySettingsPanel } from '../memory/MemorySettingsPanel'
-import { type SpaceColorId } from './spaceAvatarUtils'
+import { spaceColorId, type SpaceColorId } from './spaceAvatarUtils'
 import type { Space } from '../../types'
 import {
   resolveMemorySettings,
@@ -36,7 +36,7 @@ export function EditSpaceDialog({ space, onClose, onSaved }: EditSpaceDialogProp
   const updateSpacePreferences = useSpaceStore(state => state.updateSpacePreferences)
 
   const [name, setName] = useState(space.name)
-  const [color, setColor] = useState<SpaceColorId>((space.color as SpaceColorId) || 'primary')
+  const [color, setColor] = useState<SpaceColorId>(() => spaceColorId(space))
   const { change: changeWorkingDir, status: workingDirStatus, available: folderPickerAvailable } = useChangeWorkingDir(space.id)
   const workingDir = workingDirStatus.state === 'changed' ? workingDirStatus.workingDir : (space.workingDir || space.path)
   // The list entry carries no preferences, so the memory settings are read when

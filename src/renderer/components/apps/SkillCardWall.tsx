@@ -199,11 +199,11 @@ export function SkillCardWall({ spaceMap, onBrowseStore, onManualAdd }: SkillCar
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder={t('Search Skills')}
-            className="w-full pl-9 pr-3 py-2 text-[13px] bg-card border border-border/60 rounded-lg focus:outline-none focus:border-primary focus:shadow-[inset_0_0_0_1px_var(--primary)] text-foreground placeholder:text-muted-foreground/50"
+            className="w-full pl-9 pr-3 py-2 text-[13px] bg-card border border-border-soft rounded-lg focus:outline-none focus:border-primary focus:shadow-[inset_0_0_0_1px_var(--primary)] text-foreground placeholder:text-muted-foreground/50"
           />
         </div>
         <div className="relative flex-shrink-0">
-          <select value={scopeFilter} onChange={e => setScopeFilter(e.target.value)} aria-label={t('Scope')} className="appearance-none pl-3 pr-9 py-2 text-[13px] bg-card border border-border/60 rounded-lg text-muted-foreground hover:text-foreground hover:border-border transition-colors focus:outline-none focus:ring-1 focus:ring-primary">
+          <select value={scopeFilter} onChange={e => setScopeFilter(e.target.value)} aria-label={t('Scope')} className="appearance-none pl-3 pr-9 py-2 text-[13px] bg-card border border-border-soft rounded-lg text-muted-foreground hover:text-foreground hover:border-border transition-colors focus:outline-none focus:ring-1 focus:ring-primary">
             <option value="all">{t('All workspaces')}</option>
             <option value="global">{t('Global')}</option>
             {spaceOptions.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
@@ -211,7 +211,7 @@ export function SkillCardWall({ spaceMap, onBrowseStore, onManualAdd }: SkillCar
           <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
         </div>
         <div className="relative flex-shrink-0">
-          <select value={sourceFilter} onChange={e => setSourceFilter(e.target.value as InstallSourceFilter)} aria-label={t('Source')} className="appearance-none pl-3 pr-9 py-2 text-[13px] bg-card border border-border/60 rounded-lg text-muted-foreground hover:text-foreground hover:border-border transition-colors focus:outline-none focus:ring-1 focus:ring-primary">
+          <select value={sourceFilter} onChange={e => setSourceFilter(e.target.value as InstallSourceFilter)} aria-label={t('Source')} className="appearance-none pl-3 pr-9 py-2 text-[13px] bg-card border border-border-soft rounded-lg text-muted-foreground hover:text-foreground hover:border-border transition-colors focus:outline-none focus:ring-1 focus:ring-primary">
             <option value="all">{t('All sources')}</option>
             <option value="store">{t('Store')}</option>
             <option value="manual">{t('Custom')}</option>

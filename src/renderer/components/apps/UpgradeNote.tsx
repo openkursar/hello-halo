@@ -8,7 +8,7 @@
  */
 
 import { useState } from 'react'
-import { Check, ChevronDown, ChevronUp, Loader2 } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
 import type { TFunction } from 'i18next'
 import type { SpecUpgradeNote } from '../../../shared/apps/app-types'
 import type { AppSpec, SubscriptionDef } from '../../../shared/apps/spec-types'
@@ -142,7 +142,7 @@ export function UpgradeNote({ appId, entryId, note }: UpgradeNoteProps) {
           onClick={toggleAuthorVersion}
           className={`${actionClass} border border-border text-muted-foreground hover:text-foreground`}
         >
-          {open ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+          {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
           {open ? t('Hide the author’s version') : t('View the author’s version')}
         </button>
         {remaining.length > 0 && (

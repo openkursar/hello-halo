@@ -13,7 +13,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   AlertTriangle,
   ChevronDown,
-  ChevronUp,
+  ChevronRight,
   FolderInput,
   Package,
   Settings2,
@@ -67,7 +67,7 @@ function Panel({
           <span className="font-medium text-sm">{title}</span>
           {badge}
         </div>
-        {open ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+        {open ? <ChevronDown className="w-4 h-4 text-muted-foreground" /> : <ChevronRight className="w-4 h-4 text-muted-foreground" />}
       </button>
       {open && (
         <div className="p-4 border-t border-border space-y-3">
@@ -293,7 +293,7 @@ function CLIConfigSectionInner() {
                   value={customDir}
                   onChange={e => { setCustomDir(e.target.value); setConfigDirResult(null) }}
                   placeholder={paths?.haloDefault ?? '/path/to/claude-config'}
-                  className="mt-2 w-full px-3 py-1.5 text-xs font-mono bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50"
+                  className="mt-2 w-full px-3 py-1.5 text-xs font-mono bg-secondary border border-transparent rounded-lg focus:outline-none focus:border-primary/50"
                   onClick={e => e.stopPropagation()}
                 />
               )}
@@ -398,7 +398,7 @@ function CLIConfigSectionInner() {
                   <select
                     value={skillsMigration.actions[skill.name] ?? 'skip'}
                     onChange={e => skillsMigration.setAction(skill.name, e.target.value as CliSkillAction)}
-                    className="text-xs bg-secondary border border-border rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/50"
+                    className="text-xs bg-secondary border border-transparent rounded px-2 py-1 focus:outline-none focus:border-primary"
                   >
                     <option value="skip">{t('Skip')}</option>
                     <option value="overwrite">{t('Overwrite')}</option>
@@ -515,7 +515,7 @@ function CLIConfigSectionInner() {
                   <select
                     value={mcpMigration.actions[s.name] ?? 'skip'}
                     onChange={e => mcpMigration.setAction(s.name, e.target.value as CliMcpAction)}
-                    className="text-xs bg-secondary border border-border rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/50"
+                    className="text-xs bg-secondary border border-transparent rounded px-2 py-1 focus:outline-none focus:border-primary"
                   >
                     <option value="skip">{t('Skip')}</option>
                     <option value="overwrite">{t('Overwrite')}</option>

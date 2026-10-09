@@ -2,13 +2,13 @@
   <title id="t">Halo App Icon</title>
   <desc id="d">A big round digital-human head peeking in from the left of a rounded tile, cropped by the tile, with capsule eyes and a smile</desc>
   <!-- The head is cropped by the tile, leaving a sliver of the tile color at the top right (same in light and dark).
-       Generic version: full-bleed rounded square (corner ≈ 22.4%); each platform adds its own mask or shadow. -->
+       Generic version: full-bleed rounded square (corner ≈ 22.4%); each platform adds its own mask or shadow.
+       The tile takes the head color and the sliver is laid on top, so the outer edge has no pale rim. -->
   <defs>
     <clipPath id="tile"><rect x="0" y="0" width="1024" height="1024" rx="229"/></clipPath>
   </defs>
-  <rect x="0" y="0" width="1024" height="1024" rx="229" fill="#F3F5F9"/>
+  <rect x="0" y="0" width="1024" height="1024" rx="229" fill="#84B9EF"/>
   <g clip-path="url(#tile)">
-    <g transform="translate(0 0)"><g transform="scale(28.444444)"><rect width="36" height="36" rx="36" fill="#84B9EF" transform="translate(-12 0) scale(1.22)"/><g transform="translate(-3 1) rotate(-10 18 17) translate(18 17) scale(1.9) translate(-18 -17)"><rect x="13" y="14" width="1.5" height="2" rx="1" fill="#000000"/><rect x="21" y="14" width="1.5" height="2" rx="1" fill="#000000"/><path d="M15 19 c2 1 4 1 6 0" stroke="#000000" stroke-width="0.95" fill="none" stroke-linecap="round"/></g></g></g>
+    <g transform="translate(0 0)"><g transform="scale(28.444444)"><path d="M-1 -1H37V37H-1Z M9.96 0A21.96 21.96 0 1 0 9.96 43.92A21.96 21.96 0 1 0 9.96 0Z" fill="#F3F5F9" fill-rule="evenodd"/><g transform="translate(-3 1) rotate(-10 18 17) translate(18 17) scale(1.9) translate(-18 -17)"><rect x="13" y="14" width="1.5" height="2" rx="1" fill="#000000"/><rect x="21" y="14" width="1.5" height="2" rx="1" fill="#000000"/><path d="M15 19 c2 1 4 1 6 0" stroke="#000000" stroke-width="0.95" fill="none" stroke-linecap="round"/></g></g></g>
   </g>
-  <rect x="1.5" y="1.5" width="1021" height="1021" rx="227.5" fill="none" stroke="rgba(255,255,255,.55)" stroke-width="3"/>
 </svg>

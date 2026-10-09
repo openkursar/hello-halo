@@ -11,7 +11,7 @@ export function ChatCapsule() {
     <button
       type="button"
       onClick={() => setMaximized(false)}
-      className="fixed left-3 top-1/2 -translate-y-1/2 z-50 w-11 h-11 flex items-center justify-center rounded-full bg-primary text-primary-foreground border border-border/50 shadow-pop hover:scale-110 active:scale-95 transition-transform duration-200"
+      className="fixed left-3 top-1/2 -translate-y-1/2 z-50 w-11 h-11 flex items-center justify-center rounded-full bg-primary text-primary-foreground border border-border-faint shadow-pop hover:scale-110 active:scale-95 transition-transform duration-200"
       title={t('Return to conversation')}
       aria-label={t('Exit fullscreen and return to chat')}
     >

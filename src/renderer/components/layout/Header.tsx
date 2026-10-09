@@ -179,7 +179,7 @@ export function HeaderShell({ children }: HeaderShellProps) {
           style={chromeInset}
           className={`
             flex items-center justify-between h-10 flex-shrink-0
-            border-b border-border/50 ${dragClass}
+            border-b border-border-faint ${dragClass}
             ${platformPadding}
           `.trim().replace(/\s+/g, ' ')}
         >

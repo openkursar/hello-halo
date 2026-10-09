@@ -2,14 +2,14 @@
   <title id="t">Halo App Icon · macOS</title>
   <desc id="d">A big round digital-human head peeking in from the left of a rounded tile, cropped by the tile, with capsule eyes and a smile</desc>
   <!-- The head is cropped by the tile, leaving a sliver of the tile color at the top right (same in light and dark).
-       macOS icon grid: an 824 tile with a 185 corner on the 1024 canvas, 100 on each side left for the shadow. -->
+       macOS icon grid: an 824 tile with a 185 corner on the 1024 canvas, 100 on each side left for the shadow.
+       The tile takes the head color and the sliver is laid on top, so the outer edge has no pale rim. -->
   <defs>
     <clipPath id="tile"><rect x="100" y="100" width="824" height="824" rx="185"/></clipPath>
     <filter id="icon-shadow" x="-10%" y="-10%" width="120%" height="125%"><feDropShadow dx="0" dy="14" stdDeviation="16" flood-color="#0b1a3a" flood-opacity=".22"/></filter>
   </defs>
-  <rect x="100" y="100" width="824" height="824" rx="185" fill="#F3F5F9" filter="url(#icon-shadow)"/>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="#84B9EF" filter="url(#icon-shadow)"/>
   <g clip-path="url(#tile)">
-    <g transform="translate(100 100)"><g transform="scale(22.888889)"><rect width="36" height="36" rx="36" fill="#84B9EF" transform="translate(-12 0) scale(1.22)"/><g transform="translate(-3 1) rotate(-10 18 17) translate(18 17) scale(1.9) translate(-18 -17)"><rect x="13" y="14" width="1.5" height="2" rx="1" fill="#000000"/><rect x="21" y="14" width="1.5" height="2" rx="1" fill="#000000"/><path d="M15 19 c2 1 4 1 6 0" stroke="#000000" stroke-width="0.95" fill="none" stroke-linecap="round"/></g></g></g>
+    <g transform="translate(100 100)"><g transform="scale(22.888889)"><path d="M-1 -1H37V37H-1Z M9.96 0A21.96 21.96 0 1 0 9.96 43.92A21.96 21.96 0 1 0 9.96 0Z" fill="#F3F5F9" fill-rule="evenodd"/><g transform="translate(-3 1) rotate(-10 18 17) translate(18 17) scale(1.9) translate(-18 -17)"><rect x="13" y="14" width="1.5" height="2" rx="1" fill="#000000"/><rect x="21" y="14" width="1.5" height="2" rx="1" fill="#000000"/><path d="M15 19 c2 1 4 1 6 0" stroke="#000000" stroke-width="0.95" fill="none" stroke-linecap="round"/></g></g></g>
   </g>
-  <rect x="101.5" y="101.5" width="821" height="821" rx="183.5" fill="none" stroke="rgba(255,255,255,.55)" stroke-width="3"/>
 </svg>

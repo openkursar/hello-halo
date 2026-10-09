@@ -35,7 +35,7 @@ export function ProxyBypassField({ config, setConfig }: ProxyBypassFieldProps) {
   }
 
   return (
-    <div className="mt-3 pt-3 border-t border-border/50">
+    <div className="mt-3 pt-3 border-t border-border-faint">
       <p className="text-sm font-medium">{t("Don't use the proxy for")}</p>
       <p className="text-xs text-muted-foreground">
         {t('Separate entries with commas. .example.com covers its subdomains only; add example.com for the domain itself. IP ranges such as 10.0.0.0/8 work too.')}
@@ -54,7 +54,7 @@ export function ProxyBypassField({ config, setConfig }: ProxyBypassFieldProps) {
           onKeyDown={(e) => e.key === 'Enter' && handleSave()}
           placeholder=".example.com, intranet.example.com"
           aria-label={t("Don't use the proxy for")}
-          className="flex-1 min-w-0 px-3 py-1.5 text-sm bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 font-mono"
+          className="flex-1 min-w-0 px-3 py-1.5 text-sm bg-secondary border border-transparent rounded-lg focus:outline-none focus:border-primary/50 font-mono"
         />
         <button
           onClick={handleSave}

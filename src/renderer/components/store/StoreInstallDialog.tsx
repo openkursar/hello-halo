@@ -192,11 +192,11 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
       <div
-        className="relative w-full max-w-2xl mx-4 bg-background border border-border/60 rounded-xl shadow-xl flex flex-col max-h-[85vh]"
+        className="relative w-full max-w-2xl mx-4 bg-background border border-border-soft rounded-xl shadow-xl flex flex-col max-h-[85vh]"
         onMouseDown={e => e.stopPropagation()}
       >
         {/* Header — app icon + name + step/context meta (matches the mockup) */}
-        <div className="relative flex-shrink-0 px-7 pt-6 pb-[18px] border-b border-border/60">
+        <div className="relative flex-shrink-0 px-7 pt-6 pb-[18px] border-b border-border-soft">
           <div className="flex items-start gap-4 pr-8">
             <AppTypeIcon type={detail.entry.type} icon={detail.entry.icon} name={detail.entry.name} size="lg" />
             <div className="min-w-0 flex-1">
@@ -212,7 +212,7 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
           </div>
           <button
             onClick={onClose}
-            className="absolute top-4 right-4 flex h-7 w-7 items-center justify-center rounded-md border border-border/60 bg-background text-muted-foreground hover:text-foreground hover:border-border transition-colors"
+            className="absolute top-4 right-4 flex h-7 w-7 items-center justify-center rounded-md border border-border-soft bg-background text-muted-foreground hover:text-foreground hover:border-border transition-colors"
             aria-label={t('Close')}
           >
             <X className="w-3.5 h-3.5" />
@@ -243,7 +243,7 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
                 />
               )}
               {/* What the scope choice means */}
-              <div className="rounded-lg border border-border/60 bg-muted/30 px-3.5 py-2.5 text-xs leading-relaxed text-muted-foreground">
+              <div className="rounded-lg border border-border-soft bg-muted/30 px-3.5 py-2.5 text-xs leading-relaxed text-muted-foreground">
                 {showGlobalOption
                   ? t('Global installs it once and makes it available across every workspace. Installing into a single workspace keeps it available only there — pick which workspace to scope it to.')
                   : t('The app is installed into the selected workspace and runs and is managed within that workspace; other workspaces are not affected.')}
@@ -276,7 +276,7 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
 
         {/* Install progress bar (shown while downloading) */}
         {loading && progress && (
-          <div className="px-4 pt-2 pb-1 space-y-1 border-t border-border/60 flex-shrink-0">
+          <div className="px-4 pt-2 pb-1 space-y-1 border-t border-border-soft flex-shrink-0">
             <div className="flex items-center justify-between text-xs text-muted-foreground">
               <span>{progress.message}</span>
               {progress.filesTotal > 0 && (
@@ -293,19 +293,19 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
         )}
 
         {/* Footer */}
-        <div className="flex items-center gap-3 px-7 py-4 border-t border-border/60 flex-shrink-0">
+        <div className="flex items-center gap-3 px-7 py-4 border-t border-border-soft flex-shrink-0">
           {step === 'config' ? (
             <button
               onClick={() => { setStep('scope'); setError(null) }}
               disabled={loading}
-              className="flex-1 px-5 py-2.5 text-[13px] text-muted-foreground border border-border/60 rounded-lg hover:text-foreground hover:border-border transition-colors disabled:opacity-50"
+              className="flex-1 px-5 py-2.5 text-[13px] text-muted-foreground border border-border-soft rounded-lg hover:text-foreground hover:border-border transition-colors disabled:opacity-50"
             >
               {t('Back')}
             </button>
           ) : (
             <button
               onClick={onClose}
-              className="flex-1 px-5 py-2.5 text-[13px] text-muted-foreground border border-border/60 rounded-lg hover:text-foreground hover:border-border transition-colors"
+              className="flex-1 px-5 py-2.5 text-[13px] text-muted-foreground border border-border-soft rounded-lg hover:text-foreground hover:border-border transition-colors"
             >
               {t('Cancel')}
             </button>
@@ -414,7 +414,7 @@ function SpaceSelect({ value, onChange, haloSpace, spaces, showGlobalOption, inv
         ref={triggerRef}
         type="button"
         onClick={openList}
-        className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-sm bg-muted/40 border rounded-lg text-left focus:outline-none focus:ring-1 focus:ring-primary ${invalid ? 'border-red-400 ring-1 ring-red-400/40' : 'border-border/60'}`}
+        className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-sm bg-muted/40 border rounded-lg text-left focus:outline-none focus:ring-1 focus:ring-primary ${invalid ? 'border-red-400 ring-1 ring-red-400/40' : 'border-border-soft'}`}
       >
         <span className={`truncate ${currentLabel ? 'text-foreground' : 'text-muted-foreground/50'}`}>
           {currentLabel || t('Select a workspace')}
@@ -426,7 +426,7 @@ function SpaceSelect({ value, onChange, haloSpace, spaces, showGlobalOption, inv
         <div
           ref={listRef}
           style={{ position: 'fixed', top: anchor.top, left: anchor.left, width: anchor.width }}
-          className="z-[60] max-h-56 overflow-y-auto rounded-lg border border-border/60 bg-background shadow-lg py-1"
+          className="z-[60] max-h-56 overflow-y-auto rounded-lg border border-border-soft bg-background shadow-lg py-1"
         >
           {showGlobalOption && <Row id={GLOBAL_SCOPE} label={t('Global (all workspaces)')} />}
           {haloSpace && <Row id={haloSpace.id} label={haloLabel} />}
@@ -473,7 +473,7 @@ interface ConfigFieldProps {
 function ConfigField({ field, value, invalid, onChange }: ConfigFieldProps) {
   const { t } = useTranslation()
 
-  const inputClasses = `w-full px-3 py-2 text-sm bg-muted/40 border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground placeholder:text-muted-foreground/50 ${invalid ? 'border-red-400 ring-1 ring-red-400/40' : 'border-border/60'}`
+  const inputClasses = `w-full px-3 py-2 text-sm bg-muted/40 border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground placeholder:text-muted-foreground/50 ${invalid ? 'border-red-400 ring-1 ring-red-400/40' : 'border-border-soft'}`
 
   switch (field.type) {
     case 'boolean':
@@ -484,7 +484,7 @@ function ConfigField({ field, value, invalid, onChange }: ConfigFieldProps) {
               type="checkbox"
               checked={!!value}
               onChange={e => onChange(e.target.checked)}
-              className={`rounded ${invalid ? 'border-red-400 ring-1 ring-red-400/40' : 'border-border/60'}`}
+              className={`rounded ${invalid ? 'border-red-400 ring-1 ring-red-400/40' : 'border-border-soft'}`}
             />
             {field.label}
             {field.required && <span className="text-red-400">*</span>}

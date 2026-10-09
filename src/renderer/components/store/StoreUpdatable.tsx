@@ -21,10 +21,10 @@ export function StoreUpdatable() {
       <div className="mb-3">
         <h2 className="text-[13px] font-semibold tracking-[0.5px] text-foreground">{t('Apps to update')}</h2>
       </div>
-      <div className="overflow-x-auto rounded-[10px] border border-border/60 bg-card">
+      <div className="overflow-x-auto rounded-[10px] border border-border-soft bg-card">
         <table className="w-full text-sm">
           <thead>
-            <tr className="text-left text-xs text-muted-foreground border-b border-border/60">
+            <tr className="text-left text-xs text-muted-foreground border-b border-border-soft">
               <th className="font-medium py-2.5 px-3">{t('App')}</th>
               <th className="font-medium py-2.5 px-3">{t('Current version')}</th>
               <th className="font-medium py-2.5 px-3">{t('Latest version')}</th>
@@ -57,7 +57,7 @@ function UpdatableRow({ update }: { update: UpdateInfo }) {
 
   return (
     <>
-      <tr className="border-b border-border/60 last:border-0">
+      <tr className="border-b border-border-soft last:border-0">
         <td className="py-2.5 px-3">
           <div className="flex items-center gap-2 min-w-0">
             <AppTypeIcon type={update.entry.type} icon={update.entry.icon} name={name} size="sm" />
