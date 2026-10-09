@@ -1,6 +1,6 @@
 # Message Channels — WeCom Bot, WeChat iLink Bot, Feishu Bot, and IM Wiring
 
-Last updated: 2026-10-06
+Last updated: 2026-10-09
 
 Read this whenever the user wants a digital human reachable from an IM app (WeCom, WeChat,
 Feishu), asks "why isn't my bot replying", or confuses the available channel types. This document
@@ -133,7 +133,7 @@ Channels page has a **Feishu Bot** (飞书机器人) card (§1).
   calls `createAndStartInstance` when both are set (`manager.ts`).
 - **Processing Notice** (处理中提示, Halo 3.0 and later) — a switch on every bot card (WeCom,
   Feishu, WeChat), **on** by default. With Streaming off, a reply that has not arrived within 5
-  seconds is preceded by "✅ 已收到，正在处理…" so the sender knows the message arrived; a faster
+  seconds is preceded by "已收到，正在处理…" so the sender knows the message arrived; a faster
   reply comes alone. Switched off, only the final reply is ever sent. While Streaming is on the
   switch is greyed out: the streaming message itself shows the status. Before 3.0 that notice was
   sent at once for every message and could not be turned off.
@@ -141,28 +141,51 @@ Channels page has a **Feishu Bot** (飞书机器人) card (§1).
   each have a **?** that opens a short explanation, and it opens with a tap on a phone or in the
   remote web page too. Point the user at it rather than paraphrasing a setting from memory.
 - **Answering the digital human's questions in IM** (Halo 3.0 and later). When the digital human
-  asks for a decision, the bot bound to it (or the bot serving its team) sends the question at once:
-  - **The owner's direct chat** gets the full question with a number and the options, e.g.
-    "【name】需要你决定（编号 12）…". The owner replies `/answer 12 B` — an option letter, the
-    option's text, or an answer in their own words. With only one question waiting, the number
-    may be left out; with several, Halo lists the numbers and asks which one.
-  - **Group chats** — those with **Auto-sync run result** (自动同步运行结果) on in the digital
-    human's bot sessions, and the group a team's work came from — get only "有一个问题在等主人回复
-    （编号 12）", never the question itself.
-  - **Who counts as the owner**: with permission control on, the IDs in the owner list, answering
-    from any chat; anyone else is told only the owner can answer. With permission control off there
-    is no owner list: the question goes only to direct chats with **Auto-sync run result** on, and
-    answers are accepted only in direct chats, never in groups.
-  - The first answer wins, from IM or Halo alike, and the task carries on; the bot confirms with
-    "已收到，任务继续". An answer to a question already answered, expired or closed gets a short
-    explanation instead.
-  - A bot limited to group chats (Reply Scope "group only") with permission control off cannot take
-    answers in IM at all — answer in Halo. The question also stays answerable in Halo whenever the
-    bot was offline.
-  - Halo learns which direct chat is the owner's from a message the owner sends there. A Feishu
-    owner whose direct chat gets no questions should message the bot once.
-  - Only messages that start with `/answer` (in a group, right after the @mention) count as
-    answers; they never reach the AI.
+  asks for a decision, the bot bound to it (or the bot serving its team) sends the question privately:
+  - **Who receives the question and answer action**: only known direct chats for the current bot
+    instance and its bound digital human qualify. With permission control on, the contact must be
+    a listed owner; with it off, the chat must have **Auto-sync run result** (自动同步运行结果,
+    `proactive`) on. Guest chats and groups never qualify for this private-question path.
+  - **What the person does**: reads the question and replies naturally, e.g. "华东吧" — no question
+    ID, command or special format. The AI uses Halo's relay context to match the reply, asks for
+    clarification if the target or answer is unclear, and never decides for the owner.
+  - **Only the originating team group gets a waiting line**, such as "这项工作在等主人决定",
+    without the question or an ID. Groups selected merely to receive run results get no question
+    notice, even with **Auto-sync run result** on. No originating team group means no group notice.
+  - **Recipient selection is not general permission control.** With permission control off,
+    ordinary chat still gives everyone owner-level access; only private questions and their answer
+    actions require the selected recipient. A group-only bot admits eligible recipients' private
+    messages while its digital human or team has an open question, including clarification. This
+    does not permanently enable direct chats or grant guests owner authority. The owner can still
+    stop or clear the active private turn after the question closes.
+  - **Use only the supplied answer action.** Delivery queues an invitation without credentials;
+    Halo supplies the bounded request when preparing an eligible recipient's inbound turn.
+    **Operate Halo** need not be on; there is no standing answer tool. Submit only what the person
+    actually said: `choice` must exactly match an offered option, while `text` accepts a free-form
+    answer even when options exist. Keep multiple answers in question order. Empty or malformed
+    answers are neither saved nor queued to continue the task; correct the format or clarify, then
+    retry with the same still-valid authorization. Check JSON `success` before confirming acceptance.
+  - **Authorization follows current access**, not the old invitation. Each use rechecks that the
+    bot is enabled, its app/team binding is unchanged, the direct chat still exists and qualifies,
+    the sender matches its contact, and the question is open. Removing the chat or ownership,
+    turning off **Auto-sync run result** while permission control is off, disabling/rebinding the
+    bot, or answering/closing/expiring the question denies the old action. Access withdrawn during
+    preparation also prevents the not-yet-started turn. The authorization covers one exact HTTP
+    method/path, is reusable for at most 24 hours from issuance and is invalid after restart; an old
+    request does not renew it. The grant registry is memory-only. Halo's human-readable user message
+    omits appended relay execution instructions, but raw engine history may retain the request.
+    The first valid answer wins, in IM or Halo.
+  - **If submission is unavailable, return to Halo.** A listener or authorization-issuance failure
+    gives the AI each affected question with instructions to answer in Halo, without dropping other
+    notifications. If its available tools cannot execute the HTTP request, or authorization is no
+    longer valid, the AI likewise directs the owner to Halo — never ask them to enable another
+    capability or claim submission succeeded. Report an already answered, closed or expired question
+    honestly instead of pretending it was accepted.
+  - **Halo keeps the full question.** Answer there if the bot is offline, delivery fails or no
+    eligible direct chat is known. For future questions, message the bot privately; after rebinding,
+    establish a direct chat with the currently bound digital human and, with permission control off,
+    select that chat again under **Auto-sync run result**. This never guarantees past questions are
+    resent. Long content or attachments may also require opening Halo.
 
 ## 3. Configuration — shortest path
 

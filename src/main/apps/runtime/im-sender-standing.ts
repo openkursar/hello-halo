@@ -9,7 +9,7 @@
  *   permissionEnabled=true, owners=[…] → only listed IDs are owners; others are guests
  */
 
-import type { ImChannelInstanceConfig } from '../../../shared/types/im-channel'
+import type { ImChannelInstanceConfig, ImSessionRecord } from '../../../shared/types/im-channel'
 import type { ImPermissionContext } from './im-permission-registry'
 
 export function resolveImPermission(
@@ -27,6 +27,18 @@ export function resolveImPermission(
     guestPolicy: permissionEnabled ? instanceConfig?.guestPolicy : undefined,
     ownerIds: hasOwnerRestriction ? owners! : undefined,
   }
+}
+
+/** Private questions follow the current owner roster, or the selected result recipients without one. */
+export function receivesImQuestions(
+  config: Pick<ImChannelInstanceConfig, 'id' | 'appId' | 'enabled' | 'permissionEnabled' | 'owners'>,
+  session: ImSessionRecord | undefined,
+): boolean {
+  if (!config.enabled || !session || session.instanceId !== config.id || session.appId !== config.appId ||
+    session.source !== 'im' || session.chatType !== 'direct') return false
+  return config.permissionEnabled
+    ? (config.owners ?? []).includes(session.contactId ?? session.chatId)
+    : session.proactive
 }
 
 type ChatSettings = Pick<ImChannelInstanceConfig, 'permissionEnabled' | 'owners' | 'replyScope'> | undefined

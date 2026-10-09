@@ -10,18 +10,18 @@
  * reaches the chat on the platform without a turn of that chat, so nothing else
  * would put it in the record its owner reads in Halo. It is written through the
  * chat's sink, the record's one writer, and moves the chat to the top of the
- * session list. The chat's AI is not told here: it learns of a push from the
- * relay spool (pending-relays) with the next message in the chat.
+ * session list. This never changes the AI's context. Only notify_bot messages
+ * and private questions for the owner also enter the relay spool; automatic
+ * run-result pushes remain solely in the record the person reads.
  */
 
-import { buildImSessionKey } from '../../../shared/apps/im-keys'
-import { buildTeamSessionKey, TEAM_EVENTS } from '../../../shared/apps/team-types'
+import { TEAM_EVENTS } from '../../../shared/apps/team-types'
 import { sendToRenderer } from '../../foundation/window.service'
 import { broadcastToAll } from '../../http/websocket'
 import { getSpace } from '../../services/space.service'
 import { getAppManager } from '../manager'
 import { getAppChatSink } from './app-chat-sink'
-import type { ChatPush } from './chat-push'
+import { chatPushConversationId, type ChatPush } from './chat-push'
 import { appChatRunId, legacySessionEnvironmentKey } from './execution-environment'
 import { getImSessionRegistry } from './im-session-registry'
 import { getActivityStore } from './index'
@@ -41,10 +41,9 @@ export function chatRecordPath(appId: string, conversationId: string, fallback: 
 export function writeChatPush(push: ChatPush): void {
   const registry = getImSessionRegistry()
   const session = registry?.findSession(push.appId, push.channel, push.chatId)
-  // A chat a team fronts is recorded in the team's conversation with it.
-  const conversationId = session?.teamContext
-    ? buildTeamSessionKey(push.appId, session.teamContext.teamId, session.teamContext.epochId)
-    : buildImSessionKey(push.appId, push.channel, push.chatType, push.chatId)
+  // A resolved push keeps its destination even if the registry changes before recording.
+  const teamContext = push.teamContext === undefined ? session?.teamContext : push.teamContext ?? undefined
+  const conversationId = chatPushConversationId(push, { teamContext })
 
   const manager = getAppManager()
   const app = manager?.getApp(push.appId)
@@ -68,23 +67,28 @@ export function writeChatPush(push: ChatPush): void {
     spacePath,
   }).writePush({ text: push.text, via: push.via, by })
 
-  const lastMessage = truncateUtf16Safe(push.text, 50)
-  const lastSender = by?.name ?? app?.spec.name
-  registry?.notePush(push.appId, push.channel, push.chatId, { lastSender, lastMessage })
-  const update = {
-    appId: push.appId,
-    channel: push.channel,
-    chatId: push.chatId,
-    chatType: push.chatType,
-    instanceId: session?.instanceId ?? '',
-    lastMessage,
-    lastSender,
+  const sessionRevision = registry?.getSessionRevision(push.appId, push.channel, push.chatId)
+  if (sessionRevision !== undefined && (push.sessionRevision === undefined || push.sessionRevision === sessionRevision)) {
+    const lastMessage = truncateUtf16Safe(push.text, 50)
+    const lastSender = by?.name ?? app?.spec.name
+    registry?.notePush(push.appId, push.channel, push.chatId, { lastSender, lastMessage })
+    const update = {
+      appId: push.appId,
+      channel: push.channel,
+      chatId: push.chatId,
+      chatType: push.chatType,
+      instanceId: session?.instanceId ?? '',
+      lastMessage,
+      lastSender,
+    }
+    sendToRenderer('app:im-session-updated', update)
+    broadcastToAll('app:im-session-updated', update)
+  } else if (push.sessionRevision) {
+    console.warn(`${LOG_TAG} Push recorded without refreshing session: target=${conversationId}, reason=session changed before recording`)
   }
-  sendToRenderer('app:im-session-updated', update)
-  broadcastToAll('app:im-session-updated', update)
-  if (session?.teamContext) {
+  if (teamContext) {
     // What an open view of the team's conversation reloads on.
-    const history = { teamId: session.teamContext.teamId, appId: push.appId, epochId: session.teamContext.epochId }
+    const history = { teamId: teamContext.teamId, appId: push.appId, epochId: teamContext.epochId }
     sendToRenderer(TEAM_EVENTS.memberHistory, history)
     broadcastToAll(TEAM_EVENTS.memberHistory, history)
   }

@@ -140,6 +140,14 @@ with the renderer); no caller — including answer validation — should branch 
 was written, and the legacy `content.question` field only exists for entries written before
 it moved into `summary`.
 
+The answer transaction validates runtime input before any write: answer objects and
+string fields, the exact question count, and a nonblank answer for each question.
+A nonblank `choice` must exactly match that question's offered choice; `text` remains
+a free-form answer even when choices exist, and may accompany a choice. Unfilled
+templates are rejected. Invalid input leaves both the answer and continuation untouched,
+so the same invitation can submit a correction. `EscalationAnswerValidationError` is
+exported so transports can return this already-logged refusal without duplicating it.
+
 **An app may hold several unanswered questions.** Because the escalating run ends, the app
 is idle from the executor's point of view, and a further trigger can produce a second
 question before the first is answered. Each is an independent `activity_entries` row keyed
@@ -154,37 +162,49 @@ Two consequences follow:
   the authority (`hasPendingSoloEscalation`). Open questions are
   closed only by their own deadline or explicit task closure, never by a person-level status change.
 
-**A question reaches IM, and is answered there** (`im-escalation.ts`). A person who works
-with a digital human only through an IM bot would otherwise never see that it stopped to
-ask. When the question is saved, `report-tool` hands it to `deliverEscalationToIm`, for
-every bot serving that digital human or fronting its team:
-- The full question goes only to owners' direct chats — a decision may carry private
-  details. An owner is read by who is on the other side of the chat
-  (`ImSessionRecord.contactId`, recorded as they write; some platforms give a direct chat
-  an ID of its own). With permission control off there is no owner list, so the direct
-  chats chosen to receive results stand for it, never every contact.
-- A group that receives results, and the group a team's work came from, is told only that
-  a question waits for the owner.
-- `/answer <number> <answer>` takes the path an answer given in Halo takes
-  (`respondToEscalation`), so the first answer wins wherever it was given. It is handled in
-  `dispatch-inbound` and never reaches the model. Only an owner answers (any chat); with
-  permission control off, only a direct chat does. The answer is read as a choice letter, a
-  choice's words or free text, one line per decision when several were asked.
-- Where a question or its notice says to answer, the answer is taken: the direct chat
-  takes `/answer` even on a bot that replies in groups only (the reply scope turns away
-  the rest of that chat). A group is never pointed to, so a bot that replies in direct
-  chats only still turns an answer there away.
-- Every escalation carries `content.number`, one past the highest any kept escalation holds
-  (`nextEscalationNumber`), so a later question never takes the number of one still kept.
-  (A number comes back only once the question holding the highest one is deleted — its
-  digital human removed, or pruned after the retention period.) A leading number is always
-  looked up as a number: one that names no question, or another bot's, is "not found" and
-  is never read as an answer to the question this bot has open. Without a number, the one
-  open question is meant. Answered, closed and expired questions only get an explanation;
-  questions asked before numbering existed are answered in Halo.
-- Each question logs one line on where it went, with its counts and, when it reached no
-  chat, why; each `/answer` logs one line with its outcome and the question it was for —
-  never the answer itself.
+**A question reaches IM, and the owner answers in ordinary words** (`im-escalation.ts`).
+When `report-tool` saves a question, it hands it to `deliverEscalationToIm` for bots
+serving that digital human or fronting its team:
+- The full question goes only to owners' direct chats, matched by `contactId` (or
+  `chatId` for older records). With permission control off, only direct chats chosen
+  to receive results are asked. Without a known owner chat the question stays in Halo.
+- Only the group the team's work came from receives a waiting notice. Groups chosen
+  to receive results receive neither the question nor a notice about it.
+- A successful private push records an action description in the relay spool. The
+  destination key is the chat's actual conversation, including a team-backed chat's
+  member session. Inbound messages and private questions share `im-team-session` to
+  resolve the current conversation rather than trust a cached, possibly cleared one.
+  The registry is refreshed without counting an inbound message, and the human-readable
+  push record pins that same destination across its asynchronous write. No credential
+  is persisted in the spool.
+- On the owner's next turn, `relay-actions` resolves that question and supplies its
+  choices and an executable request. It asks the injected HTTP grant issuer for an
+  exact-method, exact-path credential; bootstrap provides this dependency through
+  `InitAppRuntimeDeps`, so runtime never imports HTTP to obtain it. This is an
+  explicit runtime public-contract extension, not a new engine capability or tool.
+- The recipient gate precedes issuance. Guests, group chats and unselected private
+  contacts receive no action and cannot consume it. `receivesImQuestions` is shared
+  by delivery and inbound dispatch. Grants are registered only in process memory,
+  last at most 24 hours and permit retries and clarification turns. Every use rechecks
+  the sender's ownership, the current bot/app/team binding, the private session and
+  its recipient eligibility, as well as whether the decision is answered, closed or
+  expired. Removing the session or, without permission control, disabling its result
+  subscription also invalidates the action. The existing answer transaction still
+  decides races and resumes only the original run.
+- Listener startup is awaited only for actionable relays. Dispatch holds the chat's
+  existing turn-start lease through that wait so later messages buffer and stop/clear
+  can cancel preparation. Ordinary turns start no listener and carry no action guide.
+- The model submits only the owner's actual answer, asks back when the meaning or
+  target is unclear, and confirms success in ordinary words. No question numbers are
+  generated or looked up; legacy JSON fields need no migration. If this turn cannot
+  execute the supplied HTTP request, it asks the owner to answer in Halo, never to
+  enable another capability or to assume submission succeeded.
+- A groups-only bot accepts an owner's private message while it or its team has an
+  open question. With permission control off, this exception is limited to current
+  private result recipients. The owner can still stop/clear that active private turn
+  after the question closes; otherwise the configured reply scope is unchanged.
+- Delivery logs say where a question went and why it could not be sent. Grant refusals
+  say why without logging the credential or the owner's answer.
 
 ### 2.4 report_to_user as SDK MCP Server
 
@@ -710,8 +730,9 @@ the AI has no idea what it is a reply to, and cannot re-address the origin
 contact. Cross-session workflows (employee requests → admin approves →
 report back to employee) were structurally impossible.
 
-**Decision**: A persistent spool (`pending-relays.ts`) records each successful
-push against its **target** sessionKey. On the target's next inbound message,
+**Decision**: A persistent spool (`pending-relays.ts`) records successful
+`notify_bot` pushes and private owner questions against their **target** sessionKey.
+Automatic run-result pushes do not enter this spool. On the target's next inbound message,
 `dispatch-inbound` **appends** a `<relay-context>` block to the message text —
 the only engine-agnostic route into an engine's history (a string on a real
 inbound message; rides into whatever history the engine keeps).
@@ -740,12 +761,38 @@ inbound message; rides into whatever history the engine keeps).
   events queued, so relay context cannot be lost by a failed run. The reverse
   failure (accepted but not committed) re-delivers, which the model tolerates.
 - **Event shape**: a `push` variant `{ id, at, source{key,appId,runId,label},
-  subject?, originContact?, sourceOwner, message?, file?, quote? }` and a
+  subject?, originContact?, sourceOwner, message?, file?, quote?, action? }` and a
   `collapsed` variant `{ id, at, count }` for bound overflow — deliberately
   attribution-free, since a collapsed range has no single origin.
   `source.key` reuses the conversationId system (no new ID namespace).
   `originContact` is the exact `instanceId:chatId` the recipient AI needs to
   report an outcome back.
+- **Invited actions**: a question relay optionally carries
+  `action: {kind: 'answer-question', appId, entryId}`. The current private-recipient
+  gate precedes rendering and issuance. `relay-actions` resolves the question and
+  attaches instructions only to this relay, not the standing prompt. Bootstrap
+  supplies the HTTP dependency; the generic self-API grant knows only method, exact
+  path and an optional validity callback. The grant registry is memory-only, adds
+  no MCP tool and does not enable ordinary self-API access. Listener or grant failures
+  produce a per-question instruction to answer in Halo, keeping the question and other
+  notifications in the turn. The listener is attempted once per batch. These fallback
+  notes are consumed only on engine acceptance, just like successful instructions;
+  later unrelated messages do not retry them. Question-store failures use the already
+  delivered question text as fallback. Revoked authorization instead aborts the
+  not-yet-started turn and retains pending events. Grants capture memory-only session
+  and channel-authorization generations: deleting/clearing a session, changing its
+  recipient identity or selection, or changing a bot's binding/owner policy cannot
+  revive an old grant by restoring the previous values. The registry and channel
+  manager own these generations; they are not persisted or mirrored in HTTP.
+  Version 2 is retained: the
+  optional description is additive, old records mean no action, and validation rejects
+  malformed actions; no existing field changes meaning and no migration is needed.
+- **Human record versus model input**: IM dispatch captures the sender's message before
+  relay append and supplies it as `AppChatRequest.recorded.content`. Sender attribution,
+  attachments and merged supplements remain, but relay instructions and credentials
+  are not written as the user's words. `recorded.provenance` is optional: an IM message
+  is not a cross-conversation delivery. The model still receives the full relay, and
+  its own engine history may persist the executable request.
 - **Paths are never persisted**: transcript locations resolve at render time
   via `session-store.resolveTranscriptPath`, so directory rules stay private
   to session-store and stale keys cannot outlive a layout change.
@@ -768,17 +815,21 @@ inbound message; rides into whatever history the engine keeps).
   text carries runtime tags and, after a relay was consumed, the previous
   hop's block), never copied by the AI.
 - **No per-event TTL**: staleness is conveyed by the `at` timestamp and judged
-  by the model. Bounded instead: per-target cap (10) with oldest-event
-  collapse, and a target whose newest event is older than 90 days is dropped
-  (logged) — the number of targets is otherwise unbounded (chats that never
-  speak again).
+  by the model. Ordinary pushes have a per-target cap (10) with oldest-event
+  collapse. Question actions are exempt: later notifications must not discard
+  the address needed to answer a question already delivered to the owner. They
+  remain proportional to questions not yet handed to an accepted owner turn.
+  A target whose newest event is older than 90 days is dropped (logged) — the
+  number of targets is otherwise unbounded (chats that never speak again).
 - **Durability**: `~/.halo/im-pending-relays.json`, versioned (unknown
   versions rejected, never guessed), write-behind (im-session-registry
   pattern) plus a synchronous flush at shutdown. Survives restarts —
   notification-style pushes may wait weeks for consumption.
 - **Lifecycle**: cleared on `/halo-clear` (the conversation it belonged to is
-  gone) and cascaded on session removal, so a chat re-registered under the
-  same id never inherits stale relays.
+  gone) and cascaded on session removal. Removal clears both the ordinary chat key
+  and the exact team-member session recorded on that chat, never another chat's
+  relays or the underlying business question. Re-registering that chat cannot inherit
+  its removed conversation's pending invitations.
 - **Self-target skip**: pushes to the invoking session itself are not spooled
   (already in that session's tool history).
 
@@ -806,7 +857,18 @@ moves to the top of the session list (`ImSessionRegistry.notePush`, then
 - **One writer, one place**: the line goes through the chat's sink
   (`getAppChatSink`), the record's one writer, in the space the chat's session was
   pinned to (`chat-record.chatRecordPath`, which `app-chat` reads from as well). A
-  chat a team fronts is recorded in the team's conversation with it.
+  chat a team fronts is recorded in the team's conversation with it. `notify_bot`
+  and private questions resolve this destination from the live session and current
+  bot binding through `im-team-session`, not a tool-directory snapshot. The record
+  and relay share the captured destination even when a file send awaits; successful
+  delivery updates the registry without inventing an inbound message. If the session
+  or authorization generation changed while sending, only the delivered record is
+  retained at that captured destination: an old send must neither restore the registry
+  address nor repopulate pending context after a clear, removal or rebinding. The
+  deferred record writer checks the captured session generation before updating the
+  session-list summary; a delivered record can outlive the session it was sent to.
+  Team clear likewise resets activity only for the generation it started clearing,
+  never a successor created while the old member sessions were closing.
 - **Who sent it**: a digital human linked to another one's chat (`pushLinks`)
   pushes into that chat's record, since the chat's replies go to the chat's own
   digital human. The line then names the sender (`_pushedBy`: its id and its name
@@ -822,8 +884,9 @@ moves to the top of the session list (`ImSessionRegistry.notePush`, then
   large file is paged by the line a message starts on (§2.18), which a line in the
   middle of a turn would cut. Halo exiting mid-turn loses the held line, not the
   push; clearing the chat drops it.
-- **The AI is not told here**: the relay spool (§2.14) still carries the push into
-  the chat's next turn, and the AI's own history is unchanged.
+- **The AI is not told here**: these record writes never enter engine history.
+  Only `notify_bot` messages and private owner questions separately enter the relay
+  spool (§2.14). Automatic run-result pushes are for the person reading Halo only.
 - **What a record means**: the platform accepted the message for sending. A file
   `notify_bot` sent is named (`📎 name`), not stored.
 
@@ -1407,7 +1470,8 @@ src/main/apps/runtime/
   people-directory.ts        -- bounded directory page projection
   prompt.ts                  -- buildAppSystemPrompt() for automation (headless) sessions
   report-tool.ts             -- report_to_user SDK MCP tool
-  im-escalation.ts           -- A question asked over IM: who is asked, who is told, and `/answer` (§2.3)
+  im-escalation.ts           -- Private owner questions, originating-group notices and relay records (§2.3)
+  relay-actions.ts           -- Owner-only action instructions and injected, state-bound HTTP grant access (§2.14)
   escalation-cut.ts          -- when a turn that asked the user may be ended (§2.3); applied by execute.ts and app-chat-sink.ts
   notify-tool.ts             -- halo-notify SDK MCP tool (notify_channel + notify_bot)
   notify-availability.ts     -- resolveNotifyAvailability() — single source of truth for whether notify tools are actually loaded (mirrors notify-tool injection rules; consumed by chat + automation prompts)
@@ -1432,6 +1496,7 @@ src/main/apps/runtime/
   app-chat-live-turn.ts      -- The turn a chat is running RIGHT NOW: whether there is one (`isAppChatConversationGenerating` — the only truthful busy probe, counting a message still on its way to the engine (`beginAppChatTurnStart`, §2.12a) as well as a queued round and a live turn; app chat never writes the engine's legacy `activeSessions` map) and how to add a message to it (`injectIntoAppChat` for the team bus; `injectIntoAppChatWhenLive`, which waits for a starting turn to begin and answers delivered / no_turn / stopped, for the user adding to their own turn through `app:chat-inject` / `POST /chat/inject` — that path passes `{ source: 'injection' }`, which the transcript reader shows as an annotation on the reply), plus the change announcements everything waiting on a conversation is woken by (`onAppChatConversationChange`, §2.12a). Its own leaf module because the team layer asks both synchronously, and app-chat.ts imports the team runtime accessor — a static edge back would close that cycle
   config-defaults.ts         -- Merge App config_schema defaults into userConfig
   dispatch-inbound.ts        -- Route IM inbound messages into app-chat
+  im-team-session.ts         -- Resolve the current team chat for inbound turns and private questions
   chat-reset.ts              -- Clear all of a digital human's chats at once (default, local, IM), each as /clear does; API sessions, team chats, memory and reminders untouched; nothing posted into chats
   im-permission-registry.ts  -- The IM chat's last sender and their standing, read only as a turn with no sender of its own begins (a message's own turn carries its sender in `AppChatRequest.imPermission`; a tool asks app-chat for its turn's sender)
   im-sender-standing.ts      -- Under an instance's current settings: owner or guest (resolveImPermission), and which chats it answers (isOwnerUnbound, replyScopeCovers, instanceTakesChat); shared by inbound messages and reminders
@@ -1554,15 +1619,10 @@ addresses is part of it. (Feishu's SDK already removes the bot's own mention fro
 structured mention list; WeCom names nobody, and where a bot name ends cannot
 be told from the text, since names may contain spaces.) Commands are
 recognized in `dispatch-inbound.ts`: exact in a direct chat; in a group also
-when the command ends a message that starts with a mention. `/answer` carries
-its answer after it, so it starts a direct message, or in a group comes right
-after the mentions the message starts with — a WeCom mention ends with U+2005,
-one typed by hand at its first space. Where a mention without U+2005 ends cannot
-be told when the bot's name holds ordinary spaces, so there, as `/stop` counts at
-the end of such a message, `/answer` counts further into it when the number of
-its question follows ("@Halo AI Team /answer 3 A"); a sentence about answering
-names no question (`im-escalation.parseAnswerCommand`, §2.3). There is no "bot
-name" setting, and none is needed.
+when the command ends a message that starts with a mention. Only conversation
+controls (stop and clear) are parsed as commands. Answers to questions are ordinary
+messages interpreted by the digital human with the owner's relay action (§2.3).
+There is no "bot name" setting, and none is needed.
 
 ### 4.4 The processing notice
 

@@ -795,6 +795,28 @@ describe('ActivityStore', () => {
       expect(store.getEntry('nonexistent')).toBeNull()
     })
 
+    it('keeps legacy numbers as inert JSON while addressing decisions only by entry ID', () => {
+      for (const id of ['legacy-number', 'new-question']) {
+        store.insertEntry(createTestEntry({ id, appId: testAppId, runId, type: 'escalation', content: { summary: 'Proceed?' } }))
+      }
+      dbManager.getAppDatabase().prepare("UPDATE activity_entries SET content_json = json_set(content_json, '$.number', 23) WHERE id = ?").run('legacy-number')
+
+      expect(store).not.toHaveProperty('nextEscalationNumber')
+      expect(store).not.toHaveProperty('getEscalationByNumber')
+      expect(store.getEntry('legacy-number')?.content).toHaveProperty('number', 23)
+      expect(store.getEntry('new-question')?.content).not.toHaveProperty('number')
+      expect(store.getEntry('23')).toBeNull()
+      expect(store.getPendingEscalation(testAppId, '23')).toBeNull()
+      expect(() => store.acceptDecision(testAppId, '23', { text: 'Proceed' })).toThrow('Decision not found')
+      expect(store.getQueuedContinuations()).toEqual([])
+
+      const accepted = store.acceptDecision(testAppId, 'legacy-number', { text: 'Proceed' })
+      expect(accepted.content).toHaveProperty('number', 23)
+      expect(accepted.userResponse?.text).toBe('Proceed')
+      expect(store.getQueuedContinuations().map(entry => entry.id)).toEqual(['legacy-number'])
+      expect(store.getPendingEscalation(testAppId, 'new-question')).not.toBeNull()
+    })
+
     it('should get entries for app (default ordering and limit)', () => {
       for (let i = 0; i < 5; i++) {
         store.insertEntry({
@@ -3594,6 +3616,30 @@ describe('AppRuntimeService', () => {
       expect(vi.mocked(executeRun).mock.calls[1][0]).toMatchObject({ existingRunId: 'decision-run', existingSessionKey: 'original-session' })
       expect(store.getEntry('decision')?.userResponse?.text).toBe('Approved')
       expect(mockAppManager.updateStatus).not.toHaveBeenCalled()
+    })
+
+    it('rejects invalid runtime answers before publishing or starting a continuation', async () => {
+      seedQuestion()
+      const reconcileAwaitingDecision = vi.fn()
+      getActiveTeamRuntimeMock.mockReturnValue({ reconcileAwaitingDecision })
+      const service = createService()
+      const invalid = [null, { text: 5 }, { answers: [] }, { text: '<the owner’s answer>' }, { choice: 'Approve' }]
+      for (const response of invalid) {
+        await expect(service.respondToEscalation(app.id, 'decision', response as EscalationResponse)).rejects.toThrow()
+        expect(store.getEntry('decision')?.userResponse).toBeUndefined()
+        expect(store.getEntry('decision')?.continuation).toBeUndefined()
+        expect(store.getQueuedContinuations()).toEqual([])
+        expect(store.needsDecisionReceipt('decision')).toBe(false)
+        expect(executeRun).not.toHaveBeenCalled()
+        expect(reconcileAwaitingDecision).not.toHaveBeenCalled()
+        expect(mockAppManager.updateStatus).not.toHaveBeenCalled()
+      }
+
+      await service.respondToEscalation(app.id, 'decision', answer)
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(store.getEntry('decision')?.userResponse?.text).toBe('Approved')
+      expect(executeRun).toHaveBeenCalledTimes(1)
+      expect(reconcileAwaitingDecision).toHaveBeenCalledWith(app.id)
     })
 
     it('uses current permissions when queued execution finally obtains a resource slot', async () => {

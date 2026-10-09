@@ -29,7 +29,8 @@ import { getActiveImChannelManager } from './im-channels'
 import { FileExportGate, FileExportDeniedError } from './file-export-gate'
 import { getPendingRelayStore, type RelaySubject } from './pending-relays'
 import { recordChatPush } from './chat-push'
-import { buildImSessionKey } from '../../../shared/apps/im-keys'
+import { getImSessionRegistry } from './im-session-registry'
+import { resolveImPushConversation } from './im-team-session'
 import type { NotificationChannelType } from '../../../shared/types/notification-channels'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
 import { getImSessionDisplayName } from '../../../shared/types/im-channel'
@@ -274,11 +275,11 @@ function buildNotifyBotTool(context: NotifyToolContext) {
         )
       }
 
-      // Find the matching session to get chatType
-      const session = context.imSessions!.find(
+      const listedSession = context.imSessions!.find(
         s => s.instanceId === instanceId && s.chatId === chatId
       )
-      if (!session) {
+      if (!listedSession) {
+        console.warn(`[Runtime][${runTag}] notify_bot refused: target=${input.to}, reason=contact not in directory`)
         return textResult(
           `Contact not found: "${input.to}". The contact may have been removed. ` +
           'Check the available contacts in the tool description.',
@@ -286,14 +287,31 @@ function buildNotifyBotTool(context: NotifyToolContext) {
         )
       }
 
-      // Get the IM channel instance
-      const manager = getActiveImChannelManager()
-      if (!manager) {
-        return textResult('IM channel manager is not available.', true)
+      // The directory belongs to the tool's creation, not to this delivery.
+      const registry = getImSessionRegistry()
+      if (!registry) {
+        console.warn(`[Runtime][${runTag}] notify_bot refused: target=${input.to}, reason=session registry unavailable`)
+        return textResult('IM session registry is not available.', true)
+      }
+      const session = registry.findSession(listedSession.appId, listedSession.channel, listedSession.chatId)
+      if (!session || session.instanceId !== instanceId) {
+        console.warn(`[Runtime][${runTag}] notify_bot refused: target=${input.to}, appId=${listedSession.appId}, reason=${session ? 'session instance changed' : 'session removed'}`)
+        return textResult(`Contact "${input.to}" is no longer registered to this Bot. Nothing was sent.`, true)
       }
 
+      const manager = getActiveImChannelManager()
+      if (!manager) {
+        console.warn(`[Runtime][${runTag}] notify_bot refused: target=${input.to}, reason=IM channel manager unavailable`)
+        return textResult('IM channel manager is not available.', true)
+      }
+      const config = manager.getInstanceConfig(instanceId)
+      if (!config) {
+        console.warn(`[Runtime][${runTag}] notify_bot refused: target=${input.to}, reason=instance configuration removed`)
+        return textResult(`IM channel configuration "${instanceId}" is no longer available. Nothing was sent.`, true)
+      }
       const instance = manager.getInstance(instanceId)
       if (!instance) {
+        console.warn(`[Runtime][${runTag}] notify_bot refused: target=${input.to}, reason=IM channel instance unavailable`)
         return textResult(
           `IM channel instance "${instanceId}" not found. The Bot may have been reconfigured.`,
           true
@@ -301,12 +319,19 @@ function buildNotifyBotTool(context: NotifyToolContext) {
       }
 
       if (!instance.isConnected()) {
+        console.warn(`[Runtime][${runTag}] notify_bot refused: target=${input.to}, reason=IM channel disconnected`)
         return textResult(
           `IM channel "${instanceId}" is currently disconnected. The message cannot be delivered.`,
           true
         )
       }
+      const destination = resolveImPushConversation(session, config)
+      if (!destination) {
+        return textResult(`The conversation for "${input.to}" is no longer available under this Bot's current binding. Nothing was sent.`, true)
+      }
 
+      const sessionRevision = registry.getSessionRevision(session.appId, session.channel, session.chatId)
+      const authorizationRevision = manager.getAuthorizationRevision(instanceId)
       const results: string[] = []
       let sentMessage = false
       let sentFile: { name: string } | undefined
@@ -319,6 +344,12 @@ function buildNotifyBotTool(context: NotifyToolContext) {
       // succeeded regardless.
       const recordDelivery = () => {
         if (!sentMessage && !sentFile) return
+        const stillCurrent = sessionRevision !== undefined && authorizationRevision !== undefined &&
+          getImSessionRegistry()?.getSessionRevision(session.appId, session.channel, session.chatId) === sessionRevision &&
+          getActiveImChannelManager()?.getAuthorizationRevision(instanceId) === authorizationRevision
+        if (stillCurrent) {
+          registry.setTeamContext(session.appId, session.channel, session.chatId, destination.teamContext ?? undefined)
+        }
         recordChatPush({
           appId: session.appId,
           channel: session.channel,
@@ -327,13 +358,21 @@ function buildNotifyBotTool(context: NotifyToolContext) {
           text: [sentMessage ? input.message : '', sentFile ? `📎 ${sentFile.name}` : ''].filter(Boolean).join('\n\n'),
           via: 'message',
           pushedBy: context.appId,
+          teamContext: destination.teamContext,
+          ...(!stillCurrent ? { sessionRevision: null } : {}),
         })
+        if (!stillCurrent) {
+          console.warn(`[Runtime][${runTag}] notify_bot delivered without relay context: target=${destination.conversationId}, reason=chat or authorization changed during delivery`)
+          return
+        }
         try {
-          const targetKey = buildImSessionKey(
-            session.appId, session.channel, session.chatType, session.chatId
-          )
-          if (targetKey === context.relay.sessionKey) return
-          getPendingRelayStore()?.append(targetKey, {
+          if (destination.conversationId === context.relay.sessionKey) return
+          const spool = getPendingRelayStore()
+          if (!spool) {
+            console.warn(`[Runtime][${runTag}] notify_bot delivered without relay context: target=${destination.conversationId}, reason=relay spool unavailable`)
+            return
+          }
+          spool.append(destination.conversationId, {
             kind: 'push',
             id: randomUUID(),
             at: Date.now(),
@@ -350,8 +389,8 @@ function buildNotifyBotTool(context: NotifyToolContext) {
             file: sentFile,
             quote: context.relay.quote,
           })
-        } catch (err) {
-          console.error(`[Runtime][${runTag}] Failed to record relay event:`, err)
+        } catch {
+          console.error(`[Runtime][${runTag}] notify_bot delivered without relay context: target=${destination.conversationId}, reason=relay recording failed`)
         }
       }
 

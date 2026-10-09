@@ -1829,7 +1829,7 @@
   "Online": "Online",
   "Only a folder can become a workspace": "Nur ein Ordner kann zu einem Arbeitsbereich werden",
   "Only answers group messages that @ the bot": "Beantwortet nur Gruppennachrichten, die den Bot @-erwähnen",
-  "Only applies while streaming is off. On: if there is no reply within 5 seconds, a short \"received, working on it\" notice is sent first, so the sender knows the message arrived. Off: only the final reply is sent.": "",
+  "Only applies while streaming is off. On: if there is no reply within 5 seconds, a short \"received, working on it\" notice is sent first, so the sender knows the message arrived. Off: only the final reply is sent.": "Gilt nur, wenn Streaming deaktiviert ist. Ein: Wenn innerhalb von 5 Sekunden keine Antwort vorliegt, wird zunächst eine kurze Mitteilung „empfangen, wird bearbeitet“ gesendet, damit der Absender weiß, dass die Nachricht angekommen ist. Aus: Es wird nur die endgültige Antwort gesendet.",
   "Only edits made with file tools are shown. Changes made by commands aren't included.": "Es werden nur Bearbeitungen angezeigt, die mit Dateiwerkzeugen vorgenommen wurden. Änderungen durch Befehle sind nicht enthalten.",
   "Only inside this workspace. The workspace's internal data — every conversation's record — stays closed; memory stays open.": "Nur innerhalb dieses Arbeitsbereichs. Die internen Daten des Arbeitsbereichs – die Aufzeichnung jeder Unterhaltung – bleiben geschlossen; das Gedächtnis bleibt offen.",
   "Only on mainland China working days": "Nur an Werktagen in Festlandchina",

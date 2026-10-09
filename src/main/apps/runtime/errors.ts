@@ -64,6 +64,11 @@ export class EscalationNotFoundError extends Error {
   }
 }
 
+/** An invalid answer rejected and logged by the decision transaction. */
+export class EscalationAnswerValidationError extends Error {
+  readonly name = 'EscalationAnswerValidationError'
+}
+
 /**
  * Thrown when an App execution fails due to an Agent/SDK error.
  */

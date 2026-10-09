@@ -309,12 +309,8 @@ export interface AppChatRequest {
    * before reaching the engine.
    */
   onMessageAccepted?: () => void
-  /**
-   * What the transcript keeps for this message when it differs from the text the
-   * model reads — a delivery from another conversation is framed for the model
-   * but shown as its sender wrote it, with its provenance.
-   */
-  recorded?: { content: string; provenance: TranscriptProvenance }
+  /** The human-readable message, without instructions appended only for the model. */
+  recorded?: { content: string; provenance?: TranscriptProvenance }
 }
 
 // ============================================

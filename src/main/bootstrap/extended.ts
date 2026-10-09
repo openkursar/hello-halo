@@ -246,7 +246,13 @@ async function initPlatformAndApps(): Promise<void> {
   // ── Phase 3: App Runtime ─────────────────────────────────────────────────
   // initAppRuntime creates the EventRouter internally, wires source adapters
   // (FileWatcherSource, WebhookSource), activates Apps, and starts the router.
-  const runtime = await initAppRuntime({ db, appManager, scheduler, memory, background })
+  const runtime = await initAppRuntime({
+    db, appManager, scheduler, memory, background,
+    relayActionAccess: {
+      ensureServer: async () => (await import('../http/self-api')).ensureSelfApiServer(),
+      issueGrant: async request => (await import('../http/self-api')).issueSelfApiGrant(request),
+    },
+  })
 
   // Digital-human chats can only be judged once the manager and the session
   // registry are up.

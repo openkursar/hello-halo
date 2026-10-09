@@ -369,6 +369,50 @@ test.describe('digital-human conversation on the chat page', () => {
     }
   })
 
+  for (const width of [390, 1280]) {
+    test(`folds long user messages at 24 rows and previews 20 at ${width}px without folding the AI reply`, async () => {
+      test.setTimeout(90000)
+      const session = await launch({ width, height: 844 })
+      try {
+        const { window, seeded } = session
+        const short = Array.from({ length: 24 }, (_, i) => `short-row-${i + 1}`).join('\n')
+        const long = Array.from({ length: 25 }, (_, i) => `long-row-${i + 1}`).join('\n')
+        const answer = Array.from({ length: 25 }, (_, i) => `answer-row-${i + 1}`).join('\n\n')
+        fs.writeFileSync(seeded.transcriptPath, [
+          userLine(short, '2026-09-01T10:00:00.000Z'),
+          replyLine('Read the short message.', '2026-09-01T10:00:01.000Z'),
+          userLine(long, '2026-09-01T10:00:02.000Z'),
+          replyLine(answer, '2026-09-01T10:00:03.000Z'),
+        ].join('\n') + '\n')
+        await window.waitForSelector('textarea', { timeout: 20000 })
+        if (width < 640) await window.getByTitle('Conversation history', { exact: true }).click()
+        await openSeededConversation(session)
+        await expect(window.locator(SCROLLER)).toBeVisible({ timeout: 15000 })
+
+        const shortRow = window.locator('[data-message-id]').filter({ hasText: 'short-row-1' })
+        const longRow = window.locator('[data-message-id]').filter({ hasText: 'long-row-1' })
+        const answerRow = window.locator('[data-message-id]').filter({ hasText: 'answer-row-1' })
+        await expect(shortRow.locator('[data-message-content]')).toHaveText(short)
+        await expect(shortRow.locator('button[aria-expanded]')).toHaveCount(0)
+        await expect(longRow.locator('[data-message-content]')).toHaveText(long.split('\n').slice(0, 20).join('\n') + '…')
+        await expect(answerRow).toContainText('answer-row-25')
+        await expect(answerRow.locator('button[aria-expanded]')).toHaveCount(0)
+
+        await longRow.locator('button[aria-expanded="false"]').click()
+        await expect(longRow.locator('[data-message-content]')).toHaveText(long)
+        await expect(longRow.locator('button[aria-expanded="true"]')).toHaveCount(2)
+        await longRow.locator('button[aria-expanded="true"]').last().click()
+        await expect(longRow.locator('[data-message-content]')).not.toContainText('long-row-21')
+        await longRow.locator('button[aria-expanded="false"]').click()
+        await longRow.locator('button[aria-expanded="true"]').first().click()
+        await expect(longRow.locator('[data-message-content]')).not.toContainText('long-row-21')
+        expect(await window.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0)
+      } finally {
+        await session.close()
+      }
+    })
+  }
+
   test('is usable at phone width: its conversations are in the history sheet, and @ starts a new one', async () => {
     test.setTimeout(90000)
     const session = await launch({ width: 390, height: 844 })

@@ -18,6 +18,7 @@ import { API_REF_GROUP_IDS } from '../../services/api-ref/groups'
 import { getApiRefPath } from '../../services/api-ref/resource-path'
 import { classify } from './scope'
 import { resolveSelfApiToken } from './token-store'
+import { resolveSelfApiGrant, SELF_API_GRANT_PREFIX } from './grant-store'
 
 const BEARER_PATTERN = /^Bearer\s+(\S.*)$/i
 
@@ -33,6 +34,18 @@ function extractToken(req: Request): string | null {
   if (!header) return null
   const match = BEARER_PATTERN.exec(header)
   return match ? match[1].trim() : null
+}
+
+function grantDeniedBody(code: string, reason?: string) {
+  return {
+    success: false,
+    code: `halo.self_api.${code}`,
+    error:
+      (reason ? `${reason} ` : '') +
+      'This temporary grant is limited to the invited action and expires after 24h or a Halo restart. ' +
+      'If it is unavailable or the action is no longer valid, ask the owner to finish in Halo. ' +
+      'Do not try other actions, ask for a secret, or enable another capability.',
+  }
 }
 
 function unauthorizedBody() {
@@ -90,11 +103,15 @@ function unknownEndpointBody() {
  */
 export function rejectNonApi(req: Request, res: Response, next: NextFunction): void {
   if (req.path.startsWith('/api/')) return next()
-  res.status(404).json({
-    success: false,
-    code: 'halo.self_api.unknown_endpoint',
-    error: 'Unknown endpoint. This server only serves /api/*. Check the path prefix before retrying.',
-  })
+  const isGrant = extractToken(req)?.startsWith(SELF_API_GRANT_PREFIX)
+  if (isGrant) console.warn('[SelfApi] grant-scope: refused a non-API request')
+  res.status(404).json(isGrant
+    ? grantDeniedBody('unknown_endpoint')
+    : {
+      success: false,
+      code: 'halo.self_api.unknown_endpoint',
+      error: 'Unknown endpoint. This server only serves /api/*. Check the path prefix before retrying.',
+    })
 }
 
 /**
@@ -103,9 +120,8 @@ export function rejectNonApi(req: Request, res: Response, next: NextFunction): v
  * it arrives with `/api` already stripped and matches nothing in a scope
  * table whose entries all begin with `/api/`.
  */
-function requestPath(req: Request): string {
-  const full = req.originalUrl || req.url || `${req.baseUrl ?? ''}${req.path ?? ''}`
-  return full.split('?')[0]
+function requestTarget(req: Request): string {
+  return req.originalUrl || req.url || `${req.baseUrl ?? ''}${req.path ?? ''}`
 }
 
 /**
@@ -134,21 +150,32 @@ export function selfApiErrorHandler(
 
 export function selfApiAuthMiddleware(req: Request, res: Response, next: NextFunction): void {
   const token = extractToken(req)
-  if (!token || !resolveSelfApiToken(token)) {
+  const isGrant = token?.startsWith(SELF_API_GRANT_PREFIX) ?? false
+  if (isGrant) {
+    const result = resolveSelfApiGrant(token!, req.method, requestTarget(req))
+    if (result.decision !== 'allowed') {
+      const status = result.decision === 'unavailable' ? 401 : 403
+      res.status(status).json(grantDeniedBody(
+        `grant_${result.decision}`,
+        result.decision === 'invalid' ? result.reason : undefined,
+      ))
+      return
+    }
+  } else if (!token || !resolveSelfApiToken(token)) {
     res.status(401).json(unauthorizedBody())
     return
   }
 
-  const rawPath = requestPath(req)
+  const rawPath = requestTarget(req).split('?')[0]
   let decodedPath: string
   try {
     decodedPath = decodeURIComponent(rawPath)
   } catch {
-    res.status(404).json(unknownEndpointBody())
+    res.status(404).json(isGrant ? grantDeniedBody('unknown_endpoint') : unknownEndpointBody())
     return
   }
   if (decodedPath.includes('..')) {
-    res.status(404).json(unknownEndpointBody())
+    res.status(404).json(isGrant ? grantDeniedBody('unknown_endpoint') : unknownEndpointBody())
     return
   }
 
@@ -166,15 +193,18 @@ export function selfApiAuthMiddleware(req: Request, res: Response, next: NextFun
           ? decodedResult
           : { decision: 'unknown' as const, group: undefined }
 
+  if (isGrant && result.decision !== 'allowed') {
+    console.warn('[SelfApi] grant-scope: refused an unexposed or unknown action', { method: req.method, path: rawPath })
+  }
   if (result.decision === 'forbidden') {
-    res.status(403).json(notExposedBody(result.group))
+    res.status(403).json(isGrant ? grantDeniedBody('not_exposed') : notExposedBody(result.group))
     return
   }
   if (result.decision === 'unknown') {
-    res.status(404).json(unknownEndpointBody())
+    res.status(404).json(isGrant ? grantDeniedBody('unknown_endpoint') : unknownEndpointBody())
     return
   }
 
-  // Space is deliberately not a bound here — `scope.json` is the only one.
+  // Regular tokens remain space-independent; grants add only their literal action bound.
   next()
 }

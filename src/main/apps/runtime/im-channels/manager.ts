@@ -14,6 +14,7 @@
  * Thread safety: All mutations are synchronous (single Node.js event loop).
  */
 
+import { isDeepStrictEqual } from 'node:util'
 import type {
   ImChannelProvider,
   ImChannelInstance,
@@ -34,6 +35,8 @@ export class ImChannelManager {
   private instances = new Map<string, ImChannelInstance>()
   /** Current config snapshot (for change detection) */
   private currentConfigs: ImChannelInstanceConfig[] = []
+  /** Opaque identities retained only for currently configured instances. */
+  private authorizationRevisions = new Map<string, object>()
   /**
    * Last failure reason per instance id (invalid/undecodable config, missing
    * provider, creation error). Provider-agnostic; surfaced in status so a
@@ -97,6 +100,13 @@ export class ImChannelManager {
     const oldConfigMap = new Map<string, ImChannelInstanceConfig>()
     for (const c of this.currentConfigs) {
       oldConfigMap.set(c.id, c)
+    }
+
+    for (const id of this.authorizationRevisions.keys()) {
+      if (!newConfigMap.has(id)) this.authorizationRevisions.delete(id)
+    }
+    for (const cfg of configs) {
+      this.updateAuthorizationRevision(oldConfigMap.get(cfg.id), cfg)
     }
 
     // 1. Stop + remove instances that no longer exist in config. Genuine
@@ -169,7 +179,7 @@ export class ImChannelManager {
     }
 
     // Save current config snapshot
-    this.currentConfigs = configs.map(c => ({ ...c, config: { ...c.config } }))
+    this.currentConfigs = configs.map(c => this.snapshotConfig(c))
 
     // Drop failure reasons for instances no longer in config.
     for (const id of Array.from(this.statusReasons.keys())) {
@@ -196,7 +206,8 @@ export class ImChannelManager {
     if (idx === -1) {
       return false
     }
-    this.currentConfigs[idx] = { ...cfg, config: { ...cfg.config } }
+    this.updateAuthorizationRevision(this.currentConfigs[idx], cfg)
+    this.currentConfigs[idx] = this.snapshotConfig(cfg)
     return true
   }
 
@@ -217,6 +228,7 @@ export class ImChannelManager {
    * Stop all instances and clear state. Called during shutdown.
    */
   stopAll(): void {
+    this.authorizationRevisions.clear()
     for (const [id] of this.instances) {
       this.stopInstance(id)
     }
@@ -265,6 +277,11 @@ export class ImChannelManager {
    */
   getInstanceConfig(instanceId: string): ImChannelInstanceConfig | undefined {
     return this.currentConfigs.find(c => c.id === instanceId)
+  }
+
+  /** Memory-only authorization identity; restoring old config values never restores an old identity. */
+  getAuthorizationRevision(instanceId: string): object | undefined {
+    return this.authorizationRevisions.get(instanceId)
   }
 
   /**
@@ -402,6 +419,25 @@ export class ImChannelManager {
       }
     }
     return refused
+  }
+
+  private snapshotConfig(cfg: ImChannelInstanceConfig): ImChannelInstanceConfig {
+    return { ...cfg, owners: cfg.owners?.slice(), config: structuredClone(cfg.config) }
+  }
+
+  private updateAuthorizationRevision(oldCfg: ImChannelInstanceConfig | undefined, cfg: ImChannelInstanceConfig): void {
+    if (
+      !oldCfg ||
+      oldCfg.enabled !== cfg.enabled ||
+      oldCfg.type !== cfg.type ||
+      oldCfg.appId !== cfg.appId ||
+      oldCfg.teamId !== cfg.teamId ||
+      oldCfg.permissionEnabled !== cfg.permissionEnabled ||
+      !isDeepStrictEqual(oldCfg.owners, cfg.owners) ||
+      !isDeepStrictEqual(oldCfg.config, cfg.config)
+    ) {
+      this.authorizationRevisions.set(cfg.id, {})
+    }
   }
 
   /**

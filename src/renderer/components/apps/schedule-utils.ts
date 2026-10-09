@@ -13,7 +13,7 @@ import 'cronstrue/locales/ja'
 import 'cronstrue/locales/es'
 import 'cronstrue/locales/fr'
 import 'cronstrue/locales/de'
-import type { SubscriptionDef } from '../../../shared/apps/spec-types'
+import { usesWorkdayCalendar, type SubscriptionDef } from '../../../shared/apps/spec-types'
 
 // ============================================
 // Shared Constants
@@ -82,6 +82,23 @@ export function applyWorkdayCalendar(sub: SubscriptionDef, enabled: boolean): Su
     ...sub,
     source: { type: 'schedule' as const, config: enabled ? { ...timing, workday_calendar: true } : timing },
   }
+}
+
+/** Mainland China's time zones as `Intl` reports them; it folds aliases such as `PRC` or `Asia/Chongqing` into these. */
+const MAINLAND_CHINA_TIME_ZONES = new Set(['Asia/Shanghai', 'Asia/Urumqi'])
+
+/**
+ * Whether to offer the mainland China working-days switch: to people likely in
+ * mainland China (Simplified Chinese, or a mainland time zone for those who keep
+ * another language), and wherever the option is already on so it can still be
+ * turned off.
+ */
+export function offersWorkdayCalendar(
+  sub: SubscriptionDef,
+  language: string,
+  timeZone: string = Intl.DateTimeFormat().resolvedOptions().timeZone,
+): boolean {
+  return usesWorkdayCalendar(sub) || language === 'zh-CN' || MAINLAND_CHINA_TIME_ZONES.has(timeZone)
 }
 
 // ============================================

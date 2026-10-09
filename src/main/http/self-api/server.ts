@@ -114,15 +114,17 @@ async function start(): Promise<string> {
  * Starts the listener on first call, in-process idempotent thereafter — every
  * agent session past the first reuses the same one. Call before assembling
  * SDK env for a session; never at app boot, so a user who never chats never
- * pays for it. Returns the space's token alongside — reused across sessions in
- * that space, which is authority-equivalent since a token carries nothing else.
+ * pays for it. With a spaceId, returns that space's reused regular token;
+ * without one, starts or reuses the listener without issuing any credential.
  *
  * On listener-start failure, `starting` is cleared so the next call retries
  * from scratch instead of replaying the same rejection for the rest of the
  * process lifetime — a transient port conflict must not permanently disable
  * the self-API for every future session.
  */
-export async function ensureSelfApiServer(spaceId: string): Promise<SelfApiInfo> {
+export function ensureSelfApiServer(): Promise<{ url: string }>
+export function ensureSelfApiServer(spaceId: string): Promise<SelfApiInfo>
+export async function ensureSelfApiServer(spaceId?: string): Promise<{ url: string } | SelfApiInfo> {
   if (!listenerUrl) {
     if (!starting) {
       starting = start().catch((error) => {
@@ -132,5 +134,7 @@ export async function ensureSelfApiServer(spaceId: string): Promise<SelfApiInfo>
     }
     listenerUrl = await starting
   }
-  return { url: listenerUrl, token: issueSelfApiToken(spaceId) }
+  return spaceId === undefined
+    ? { url: listenerUrl }
+    : { url: listenerUrl, token: issueSelfApiToken(spaceId) }
 }

@@ -17,6 +17,8 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest'
+import type { ImChannelInstanceConfig, ImSessionRecord } from '../../../../src/shared/types/im-channel'
+import type { ImSessionRegistry } from '../../../../src/main/apps/runtime/im-session-registry'
 
 // ============================================
 // Mocks (must be declared before importing the modules under test)
@@ -213,7 +215,32 @@ vi.mock('../../../../src/main/apps/runtime/person-context-tool', () => ({
 vi.mock('../../../../src/main/apps/runtime/report-tool', () => ({
   createReportToolServer: () => ({ _isMcpServer: true, name: 'halo-report' }),
 }))
-vi.mock('../../../../src/main/apps/runtime/im-session-registry', () => ({ getImSessionRegistry: () => null }))
+const { sessions, registry } = vi.hoisted(() => {
+  const sessions = new Map<string, ImSessionRecord>()
+  return {
+    sessions,
+    registry: {
+      register: (...args: Parameters<ImSessionRegistry['register']>) => {
+        const [appId, channel, chatId, chatType, instanceId, opts] = args
+        const key = `${appId}:${channel}:${chatId}`
+        const existing = sessions.get(key)
+        const record: ImSessionRecord = {
+          appId, channel, chatId, chatType, source: 'im', proactive: false,
+          displayName: opts?.displayName ?? chatId, ...existing,
+          instanceId, lastActiveAt: Date.now(), ...opts,
+        }
+        if (existing) Object.assign(existing, record)
+        else sessions.set(key, record)
+      },
+      findSession: (appId: string, channel: string, chatId: string) => sessions.get(`${appId}:${channel}:${chatId}`),
+      getSessionRevision: (appId: string, channel: string, chatId: string) => sessions.get(`${appId}:${channel}:${chatId}`),
+      getPushableSessions: (appId: string) => [...sessions.values()].filter(session => session.appId === appId),
+      clearPendingResume: vi.fn(),
+      resetActivity: vi.fn(),
+    },
+  }
+})
+vi.mock('../../../../src/main/apps/runtime/im-session-registry', () => ({ getImSessionRegistry: () => registry }))
 vi.mock('../../../../src/main/apps/runtime/session-store', () => ({
   loadChatSessionId: vi.fn(() => undefined),
   saveChatSessionId: vi.fn(),
@@ -283,12 +310,13 @@ vi.mock('../../../../src/main/services/memory-consolidation', () => ({ requestCo
 
 /** The IM channel the chat lives on: its config and what it pushed to the chat. */
 const channel = vi.hoisted(() => ({
-  config: {} as Record<string, unknown>,
+  config: { id: 'inst-1', type: 'wecom-bot', enabled: true, appId: 'app-1', config: {} } as ImChannelInstanceConfig,
   pushed: [] as string[],
 }))
 vi.mock('../../../../src/main/apps/runtime/im-channels', () => ({
   getActiveImChannelManager: () => ({
     getInstanceConfig: () => channel.config,
+    getAuthorizationRevision: () => channel.config,
     getInstance: () => ({
       providerType: 'wecom-bot',
       pushToChat: vi.fn(async (_chatId: string, text: string) => { channel.pushed.push(text); return true }),
@@ -297,6 +325,35 @@ vi.mock('../../../../src/main/apps/runtime/im-channels', () => ({
 }))
 vi.mock('../../../../src/main/apps/runtime/im-channels/owner-claim', () => ({ maybeClaimOwner: vi.fn(async () => false) }))
 
+const relays = vi.hoisted(() => ({
+  pending: false,
+  openQuestion: false,
+  preparation: null as Promise<void> | null,
+  release: () => {},
+  commit: vi.fn(),
+}))
+vi.mock('../../../../src/main/apps/runtime/pending-relays', async importOriginal => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  getPendingRelayStore: () => ({
+    peek: () => relays.pending ? [{ kind: 'push', id: 'question', at: Date.now(), source: { key: 'run', appId: 'app-1', runId: 'run-1' }, sourceOwner: true, message: 'Which region?', action: { kind: 'answer-question', appId: 'app-1', entryId: 'q-1' } }] : [],
+    commit: () => { relays.pending = false; relays.commit() },
+    clear: () => { relays.pending = false },
+  }),
+}))
+vi.mock('../../../../src/main/apps/runtime/relay-actions', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../../src/main/apps/runtime/relay-actions')>()
+  return {
+    ...actual,
+    hasOpenImQuestion: () => relays.openQuestion,
+    prepareRelayActions: async (_events: unknown[], isAuthorized: () => boolean) => {
+      if (!isAuthorized()) throw new actual.RelayActionUnauthorizedError()
+      if (relays.preparation) await relays.preparation
+      if (!isAuthorized()) throw new actual.RelayActionUnauthorizedError()
+      return new Map([['question', 'Submit the actual owner answer with the limited grant.']])
+    },
+  }
+})
+
 // ============================================
 // Imports (after all mocks)
 // ============================================
@@ -304,8 +361,9 @@ vi.mock('../../../../src/main/apps/runtime/im-channels/owner-claim', () => ({ ma
 import { dispatchInboundMessage, releaseSupplementsWhenIdle } from '../../../../src/main/apps/runtime/dispatch-inbound'
 import { clearAllImPermissionContexts } from '../../../../src/main/apps/runtime/im-permission-registry'
 import { disposeAppChatSink } from '../../../../src/main/apps/runtime/app-chat-sink'
-import { beginAppChatTurnStart } from '../../../../src/main/apps/runtime/app-chat-live-turn'
+import { beginAppChatTurnStart, isAppChatConversationGenerating } from '../../../../src/main/apps/runtime/app-chat-live-turn'
 import { sendAppChatMessage } from '../../../../src/main/apps/runtime/app-chat'
+import { clearAllImStreamHandles, getImStreamHandle } from '../../../../src/main/apps/runtime/im-stream-registry'
 import type { InboundMessage, ReplyHandle } from '../../../../src/shared/types/inbound-message'
 
 // ============================================
@@ -313,6 +371,7 @@ import type { InboundMessage, ReplyHandle } from '../../../../src/shared/types/i
 // ============================================
 
 const CHAT = 'app-chat:app-1:wecom-bot:group:g-1'
+const DIRECT_CHAT = 'app-chat:app-1:wecom-bot:direct:boss'
 
 function message(body: string, from = 'u1'): InboundMessage {
   return { body, from, fromName: from, channel: 'wecom-bot', chatType: 'group', chatId: 'g-1', timestamp: Date.now() }
@@ -348,14 +407,21 @@ afterAll(() => {
 
 beforeEach(() => {
   engine.reset()
-  channel.config = {}
+  channel.config = { id: 'inst-1', type: 'wecom-bot', enabled: true, appId: 'app-1', config: {} }
   channel.pushed.length = 0
+  sessions.clear()
   buildUserSessionSdkOptions.mockClear()
+  relays.pending = false
+  relays.openQuestion = false
+  relays.preparation = null
+  relays.commit.mockClear()
 })
 
 afterEach(() => {
   disposeAppChatSink(CHAT)
+  disposeAppChatSink(DIRECT_CHAT)
   clearAllImPermissionContexts()
+  clearAllImStreamHandles()
 })
 
 // ============================================
@@ -407,7 +473,7 @@ describe('a second IM message arriving while the first is still starting', () =>
   })
 
   it('runs under its own sender: a guest’s message is not run as the owner who wrote right after', async () => {
-    channel.config = { permissionEnabled: true, owners: ['boss'], guestPolicy: { allowedTools: ['Read'] } }
+    channel.config = { ...channel.config, permissionEnabled: true, owners: ['boss'], guestPolicy: { allowedTools: ['Read'] } }
     engine.holdCredentials()
 
     void dispatchInboundMessage(message('read my notes', 'stranger'), replyTo(), 'app-1', 'inst-1')
@@ -491,6 +557,94 @@ describe('a message stopped or failing on its way to the engine', () => {
 
     await vi.waitFor(() => expect(second.sent.some(isAnswer)).toBe(true))
     expect(first.sent.some((text) => text.includes('No usable credentials'))).toBe(true)
+  })
+})
+
+describe('a relay action whose listener is still starting', () => {
+  function directMessage(body: string): InboundMessage {
+    return { ...message(body, 'boss'), chatType: 'direct', chatId: 'boss' }
+  }
+
+  function directReply(): ReplyHandle & { sent: string[] } {
+    return { ...replyTo(), chatId: 'boss' }
+  }
+
+  beforeEach(() => {
+    channel.config = { ...channel.config, permissionEnabled: true, owners: ['boss'] }
+    relays.pending = true
+    relays.openQuestion = true
+    relays.preparation = new Promise(resolve => { relays.release = resolve })
+  })
+
+  it('holds the conversation before awaiting so a second message buffers', async () => {
+    const first = directReply()
+    const second = directReply()
+    void dispatchInboundMessage(directMessage('华东吧'), first, 'app-1', 'inst-1')
+    await settle()
+    expect(isAppChatConversationGenerating(DIRECT_CHAT)).toBe(true)
+    void dispatchInboundMessage(directMessage('按刚才说的继续'), second, 'app-1', 'inst-1')
+    await settle()
+    expect(channel.pushed.some(text => text.includes('已收到补充'))).toBe(true)
+    expect(engine.state.answered).toEqual([])
+    relays.release()
+    await vi.waitFor(() => expect(second.sent.some(isAnswer)).toBe(true))
+    expect(engine.state.answered).toHaveLength(2)
+    expect(engine.state.answered[0][0]).toContain('华东吧')
+    expect(engine.state.answered[1][0]).toContain('按刚才说的继续')
+  })
+
+  it.each([
+    { command: '/stop', confirmation: 'Generation stopped.', retained: true },
+    { command: '/clear', confirmation: 'Context cleared. Starting a fresh conversation.', retained: false },
+  ])('honors $command while awaiting and disposes the unanswered stream', async ({ command, confirmation, retained }) => {
+    channel.config = { ...channel.config, streaming: true }
+    const first = directReply()
+    first.streaming = { update: vi.fn(async () => {}), finish: vi.fn(async () => {}), dispose: vi.fn() }
+    const control = directReply()
+    const dispatch = dispatchInboundMessage(directMessage('华东吧'), first, 'app-1', 'inst-1')
+    await settle()
+    expect(isAppChatConversationGenerating(DIRECT_CHAT)).toBe(true)
+    expect(getImStreamHandle(DIRECT_CHAT)).toBe(first.streaming)
+
+    await dispatchInboundMessage(directMessage(command), control, 'app-1', 'inst-1')
+    expect(control.sent).toContain(confirmation)
+    relays.release()
+    await dispatch
+
+    expect(engine.state.answered).toEqual([])
+    expect(relays.commit).not.toHaveBeenCalled()
+    expect(relays.pending).toBe(retained)
+    expect(first.sent).toEqual([])
+    expect(first.streaming.dispose).toHaveBeenCalledOnce()
+    expect(first.streaming.finish).not.toHaveBeenCalled()
+    expect(getImStreamHandle(DIRECT_CHAT)).toBeUndefined()
+    expect(isAppChatConversationGenerating(DIRECT_CHAT)).toBe(false)
+  })
+
+  it.each([
+    { command: '/stop', confirmation: 'Generation stopped.' },
+    { command: '/clear', confirmation: 'Context cleared. Starting a fresh conversation.' },
+  ])('accepts the active owner’s private $command after the question was answered elsewhere', async ({ command, confirmation }) => {
+    channel.config = { ...channel.config, replyScope: 'group', permissionEnabled: true, owners: ['boss'] }
+    engine.holdCredentials()
+    const first = directReply()
+    const control = directReply()
+    const dispatch = dispatchInboundMessage(directMessage('华东吧'), first, 'app-1', 'inst-1')
+    relays.release()
+    await settle()
+    expect(isAppChatConversationGenerating(DIRECT_CHAT)).toBe(true)
+    expect(engine.state.answered).toEqual([])
+    relays.openQuestion = false
+
+    await dispatchInboundMessage(directMessage(command), control, 'app-1', 'inst-1')
+    expect(control.sent).toContain(confirmation)
+    engine.state.releaseCredentials()
+    await dispatch
+
+    expect(engine.state.answered).toEqual([])
+    expect(first.sent).toEqual([])
+    expect(relays.commit).not.toHaveBeenCalled()
+    expect(isAppChatConversationGenerating(DIRECT_CHAT)).toBe(false)
   })
 })
 

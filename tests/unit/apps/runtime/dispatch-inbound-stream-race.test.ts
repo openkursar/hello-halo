@@ -14,17 +14,46 @@
  * would silently break under future refactors without this test.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { InboundMessage, ReplyHandle, StreamingHandle } from '../../../../src/shared/types/inbound-message'
+import type { RelayEvent } from '../../../../src/main/apps/runtime/pending-relays'
+import type { ImChannelInstanceConfig, ImSessionRecord } from '../../../../src/shared/types/im-channel'
+import type { ImSessionRegistry } from '../../../../src/main/apps/runtime/im-session-registry'
 
 // ============================================
 // Mocks (must be declared before importing dispatch-inbound)
 // ============================================
 
-const { setImStreamHandle, getImStreamHandle, clearImStreamHandle } = vi.hoisted(() => ({
-  setImStreamHandle: vi.fn(),
-  getImStreamHandle: vi.fn(() => undefined),
-  clearImStreamHandle: vi.fn(),
+const { streamHandles, setImStreamHandle, getImStreamHandle, clearImStreamHandle } = vi.hoisted(() => {
+  const streamHandles = new Map<string, StreamingHandle>()
+  return {
+    streamHandles,
+    setImStreamHandle: vi.fn((conversationId: string, handle: StreamingHandle) => { streamHandles.set(conversationId, handle) }),
+    getImStreamHandle: vi.fn((conversationId: string) => streamHandles.get(conversationId)),
+    clearImStreamHandle: vi.fn((conversationId: string) => { streamHandles.delete(conversationId) }),
+  }
+})
+
+const { pendingRelays, commitRelays, prepareActions, turnHold } = vi.hoisted(() => ({
+  pendingRelays: [] as RelayEvent[],
+  commitRelays: vi.fn(),
+  prepareActions: vi.fn(async (_events: RelayEvent[], _isAuthorized: () => boolean) => new Map<string, string>()),
+  turnHold: { cancelled: false, end: vi.fn() },
+}))
+
+vi.mock('../../../../src/main/apps/runtime/app-chat-live-turn', () => ({
+  beginAppChatTurnStart: () => turnHold,
+}))
+
+vi.mock('../../../../src/main/apps/runtime/pending-relays', async importOriginal => ({
+  ...(await importOriginal<typeof import('../../../../src/main/apps/runtime/pending-relays')>()),
+  getPendingRelayStore: () => ({ peek: () => pendingRelays, commit: commitRelays }),
+}))
+
+vi.mock('../../../../src/main/apps/runtime/relay-actions', async importOriginal => ({
+  ...(await importOriginal<typeof import('../../../../src/main/apps/runtime/relay-actions')>()),
+  hasOpenImQuestion: () => false,
+  prepareRelayActions: prepareActions,
 }))
 
 const { sendAppChatMessage, clearImSession, buildImSessionKey, isAppChatConversationGenerating } = vi.hoisted(() => ({
@@ -37,16 +66,37 @@ const { sendAppChatMessage, clearImSession, buildImSessionKey, isAppChatConversa
   isAppChatConversationGenerating: vi.fn(() => false),
 }))
 
-const { getImSessionRegistry } = vi.hoisted(() => ({
-  getImSessionRegistry: vi.fn(() => null),
-}))
+const { sessions, registry } = vi.hoisted(() => {
+  const sessions = new Map<string, ImSessionRecord>()
+  return {
+    sessions,
+    registry: {
+      register: (...args: Parameters<ImSessionRegistry['register']>) => {
+        const [appId, channel, chatId, chatType, instanceId, opts] = args
+        const key = `${appId}:${channel}:${chatId}`
+        sessions.set(key, {
+          appId, channel, chatId, chatType, source: 'im', proactive: false,
+          displayName: opts?.displayName ?? chatId, ...sessions.get(key),
+          instanceId, lastActiveAt: Date.now(), ...opts,
+        })
+      },
+      findSession: (appId: string, channel: string, chatId: string) => sessions.get(`${appId}:${channel}:${chatId}`),
+      getSessionRevision: (appId: string, channel: string, chatId: string) => sessions.get(`${appId}:${channel}:${chatId}`),
+    },
+  }
+})
 
-const { getActiveImChannelManager } = vi.hoisted(() => ({
-  getActiveImChannelManager: vi.fn(() => ({
-    getInstance: vi.fn(() => undefined),
-    getInstanceConfig: vi.fn(() => ({ streaming: true })), // streaming enabled
-  })),
-}))
+const { getActiveImChannelManager, getInstanceConfig } = vi.hoisted(() => {
+  const getInstanceConfig = vi.fn<[], ImChannelInstanceConfig>()
+  return {
+    getInstanceConfig,
+    getActiveImChannelManager: vi.fn(() => ({
+      getInstance: vi.fn(() => undefined),
+      getInstanceConfig,
+      getAuthorizationRevision: () => getInstanceConfig(),
+    })),
+  }
+})
 
 const { stopGeneration } = vi.hoisted(() => ({
   stopGeneration: vi.fn(async () => {}),
@@ -66,7 +116,7 @@ vi.mock('../../../../src/main/apps/runtime/app-chat', () => ({
 }))
 
 vi.mock('../../../../src/main/apps/runtime/im-session-registry', () => ({
-  getImSessionRegistry,
+  getImSessionRegistry: () => registry,
 }))
 
 vi.mock('../../../../src/main/apps/runtime/im-channels', () => ({
@@ -138,7 +188,8 @@ vi.mock('../../../../src/main/apps/runtime/file-export-gate', () => ({
   FileExportGate: vi.fn(() => ({})),
 }))
 
-import { dispatchInboundMessage } from '../../../../src/main/apps/runtime/dispatch-inbound'
+import { clearSupplementBuffer, dispatchInboundMessage } from '../../../../src/main/apps/runtime/dispatch-inbound'
+import { RelayActionUnauthorizedError } from '../../../../src/main/apps/runtime/relay-actions'
 
 // ============================================
 // Helpers
@@ -177,15 +228,31 @@ function makeMsg(overrides: Partial<InboundMessage> = {}): InboundMessage {
 // Tests
 // ============================================
 
-describe('dispatchInboundMessage — stream-handle race regression', () => {
-  beforeEach(() => {
-    setImStreamHandle.mockClear()
-    getImStreamHandle.mockClear()
-    clearImStreamHandle.mockClear()
-    sendAppChatMessage.mockClear()
-    isAppChatConversationGenerating.mockReturnValue(false)
-    ;(getActiveImChannelManager as any).mockClear()
+const CONVERSATION = 'app-chat:app-1:wecom-bot:group:room-1'
+const DIRECT_CONVERSATION = 'app-chat:app-1:wecom-bot:direct:room-1'
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  streamHandles.clear()
+  pendingRelays.length = 0
+  turnHold.cancelled = false
+  prepareActions.mockReset().mockResolvedValue(new Map())
+  isAppChatConversationGenerating.mockReturnValue(false)
+  sessions.clear()
+  getInstanceConfig.mockReturnValue({
+    id: 'inst-1', type: 'wecom-bot', enabled: true, appId: 'app-1', config: {},
+    streaming: true, permissionEnabled: true, owners: ['user-1'],
   })
+})
+
+afterEach(() => {
+  clearSupplementBuffer(CONVERSATION)
+  clearSupplementBuffer(DIRECT_CONVERSATION)
+  streamHandles.clear()
+  vi.restoreAllMocks()
+})
+
+describe('dispatchInboundMessage — stream-handle race regression', () => {
 
   it('does NOT call setImStreamHandle when the message is buffered as a supplement', async () => {
     // Simulate an active round — the supplement-buffer busy-check will buffer
@@ -238,9 +305,8 @@ describe('dispatchInboundMessage — stream-handle race regression', () => {
   })
 
   it('strips streaming when instance has not enabled it (default off) and does not register', async () => {
-    ;(getActiveImChannelManager as any).mockReturnValue({
-      getInstance: vi.fn(() => undefined),
-      getInstanceConfig: vi.fn(() => ({})), // streaming !== true
+    getInstanceConfig.mockReturnValue({
+      id: 'inst-1', type: 'wecom-bot', enabled: true, appId: 'app-1', config: {},
     })
 
     const handle = makeStreamingHandle()
@@ -254,5 +320,101 @@ describe('dispatchInboundMessage — stream-handle race regression', () => {
     // Streaming was stripped by the instance-config disable check before
     // reaching the registry set, so setImStreamHandle must not fire.
     expect(setImStreamHandle).not.toHaveBeenCalled()
+  })
+})
+
+describe('dispatchInboundMessage — cancellation during relay preparation', () => {
+  beforeEach(() => {
+    pendingRelays.push({
+      kind: 'push', id: 'question', at: Date.now(),
+      source: { key: 'app-run:app-1:run-1', appId: 'app-1', runId: 'run-1' },
+      sourceOwner: true, message: 'Which region?',
+      action: { kind: 'answer-question', appId: 'app-1', entryId: 'q-1' },
+    })
+  })
+
+  it.each([
+    { label: 'the stopped handle is still registered', replacement: false, failDispose: false },
+    { label: 'a replacement handle is registered', replacement: true, failDispose: false },
+    { label: 'disposing the registered handle throws', replacement: false, failDispose: true },
+    { label: 'disposing an old handle throws after replacement', replacement: true, failDispose: true },
+  ])('cleans up only its own stream when $label', async ({ replacement, failDispose }) => {
+    const handle = makeStreamingHandle()
+    const disposeError = new Error('stream dispose failed')
+    handle.dispose = vi.fn(() => { if (failDispose) throw disposeError })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const reply = makeReply(handle)
+    let finish!: (actions: Map<string, string>) => void
+    prepareActions.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const dispatch = dispatchInboundMessage(makeMsg({ chatType: 'direct' }), reply, 'app-1', 'inst-1')
+    expect(prepareActions).toHaveBeenCalledWith(pendingRelays, expect.any(Function))
+    expect(prepareActions.mock.calls[0][1]()).toBe(true)
+    expect(streamHandles.get(DIRECT_CONVERSATION)).toBe(handle)
+    expect(sendAppChatMessage).not.toHaveBeenCalled()
+    expect(turnHold.end).not.toHaveBeenCalled()
+
+    turnHold.cancelled = true
+    const nextHandle = makeStreamingHandle()
+    if (replacement) setImStreamHandle(DIRECT_CONVERSATION, nextHandle)
+    finish(new Map())
+    await dispatch
+
+    expect(handle.dispose).toHaveBeenCalledOnce()
+    expect(handle.finish).not.toHaveBeenCalled()
+    expect(reply.send).not.toHaveBeenCalled()
+    expect(sendAppChatMessage).not.toHaveBeenCalled()
+    expect(commitRelays).not.toHaveBeenCalled()
+    expect(pendingRelays).toHaveLength(1)
+    expect(turnHold.end).toHaveBeenCalledOnce()
+    expect(getImStreamHandle).toHaveBeenCalledWith(DIRECT_CONVERSATION)
+    if (replacement) {
+      expect(clearImStreamHandle).not.toHaveBeenCalled()
+      expect(streamHandles.get(DIRECT_CONVERSATION)).toBe(nextHandle)
+      expect(nextHandle.dispose).not.toHaveBeenCalled()
+      expect(nextHandle.finish).not.toHaveBeenCalled()
+    } else {
+      expect(clearImStreamHandle).toHaveBeenCalledOnce()
+      expect(clearImStreamHandle).toHaveBeenCalledWith(DIRECT_CONVERSATION)
+      expect(streamHandles.has(DIRECT_CONVERSATION)).toBe(false)
+    }
+    if (failDispose) {
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('Stopped reply stream could not be disposed'), disposeError)
+    }
+  })
+
+  it.each([
+    { label: 'unexpected failure', error: new Error('unexpected preparation failure'), replacement: false },
+    { label: 'authorization revocation', error: new RelayActionUnauthorizedError(), replacement: false },
+    { label: 'unexpected failure after stream replacement', error: new Error('unexpected preparation failure'), replacement: true },
+    { label: 'authorization revocation after stream replacement', error: new RelayActionUnauthorizedError(), replacement: true },
+  ])('silently disposes only the stopped stream on $label', async ({ error, replacement }) => {
+    const handle = makeStreamingHandle()
+    const reply = makeReply(handle)
+    let reject!: (error: Error) => void
+    prepareActions.mockImplementationOnce(() => new Promise((_resolve, rejectPreparation) => { reject = rejectPreparation }))
+    const dispatch = dispatchInboundMessage(makeMsg({ chatType: 'direct' }), reply, 'app-1', 'inst-1')
+    expect(prepareActions).toHaveBeenCalledOnce()
+
+    turnHold.cancelled = true
+    const nextHandle = makeStreamingHandle()
+    if (replacement) setImStreamHandle(DIRECT_CONVERSATION, nextHandle)
+    reject(error)
+    await dispatch
+
+    expect.soft(handle.dispose).toHaveBeenCalledOnce()
+    expect.soft(handle.finish).not.toHaveBeenCalled()
+    if (replacement) {
+      expect(clearImStreamHandle).not.toHaveBeenCalled()
+      expect(streamHandles.get(DIRECT_CONVERSATION)).toBe(nextHandle)
+      expect(nextHandle.dispose).not.toHaveBeenCalled()
+      expect(nextHandle.finish).not.toHaveBeenCalled()
+    } else {
+      expect.soft(clearImStreamHandle).toHaveBeenCalledWith(DIRECT_CONVERSATION)
+      expect.soft(streamHandles.has(DIRECT_CONVERSATION)).toBe(false)
+    }
+    expect(reply.send).not.toHaveBeenCalled()
+    expect(sendAppChatMessage).not.toHaveBeenCalled()
+    expect(commitRelays).not.toHaveBeenCalled()
+    expect(turnHold.end).toHaveBeenCalledOnce()
   })
 })

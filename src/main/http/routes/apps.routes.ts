@@ -692,7 +692,7 @@ export function registerAppsRoutes(app: Express): void {
         ts: Date.now(),
         choice,
         text,
-        ...(answers ? { answers } : {}),
+        answers,
       }
       const entry = await runtime.respondToEscalation(appId, entryId, response)
       console.log('[HTTP] POST /api/apps/%s/escalation/%s/respond', appId, entryId)

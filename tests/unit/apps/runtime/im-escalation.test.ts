@@ -1,23 +1,16 @@
-/**
- * Unit tests for apps/runtime/im-escalation — a question a digital human asks,
- * over IM: who is asked, who is only told, and how an owner answers it there.
- *
- * Before this, a question reached Halo's own screens and the desktop only; a
- * person who works with the digital human through an IM bot never saw it and
- * had no way to answer, so the work stopped without a word.
- *
- * Answers run against a real activity store: `respond` is the store's
- * `acceptDecision`, the step every answer — Halo's own included — goes through.
- */
-
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { config, registrySessions, instances, epochs, recordChatPush } = vi.hoisted(() => ({
+const { config, registrySessions, instances, epochs, recordChatPush, appendRelay, available, teamState, ensureConversationEpoch, setTeamContext } = vi.hoisted(() => ({
   config: { imChannels: { instances: [] as Array<Record<string, unknown>> } },
   registrySessions: [] as Array<Record<string, unknown>>,
   instances: new Map<string, { providerType?: string; isConnected: () => boolean; pushToChat: (chatId: string, text: string, chatType: 'direct' | 'group') => boolean }>(),
   epochs: new Map<string, { chatKey?: string }>(),
   recordChatPush: vi.fn(),
+  appendRelay: vi.fn(),
+  available: { manager: true, registry: true, spool: true },
+  teamState: { store: true, runtime: true, exists: true, member: true, remote: false },
+  ensureConversationEpoch: vi.fn(),
+  setTeamContext: vi.fn(),
 }))
 
 vi.mock('../../../../src/main/foundation/config.service', async (importOriginal) => ({
@@ -25,28 +18,31 @@ vi.mock('../../../../src/main/foundation/config.service', async (importOriginal)
   getConfig: () => config,
 }))
 vi.mock('../../../../src/main/apps/runtime/im-channels', () => ({
-  getActiveImChannelManager: () => ({ getInstance: (id: string) => instances.get(id) }),
+  getActiveImChannelManager: () => available.manager ? { getInstance: (id: string) => instances.get(id) } : null,
 }))
 vi.mock('../../../../src/main/apps/runtime/im-session-registry', () => ({
-  getImSessionRegistry: () => ({ listAll: () => registrySessions.map(s => ({ ...s })) }),
+  getImSessionRegistry: () => available.registry ? { listAll: () => registrySessions.map(s => ({ ...s })), setTeamContext } : null,
 }))
 vi.mock('../../../../src/main/apps/team', () => ({
-  getTeamStore: () => ({ getEpochById: (id: string) => epochs.get(id) ?? null }),
+  getTeamStore: () => teamState.store ? {
+    getEpochById: (id: string) => epochs.get(id) ?? null,
+    getTeamById: (id: string) => teamState.exists ? { id, name: 'Release Team' } : null,
+    getMember: () => teamState.member ? { memberName: 'Lead', origin: teamState.remote ? 'remote' : 'local', ownerNodeId: 'other-machine' } : null,
+  } : null,
 }))
-vi.mock('../../../../src/main/apps/runtime/chat-push', () => ({ recordChatPush }))
+vi.mock('../../../../src/main/apps/runtime/team', () => ({
+  getActiveTeamRuntime: () => teamState.runtime ? { ensureConversationEpoch } : null,
+}))
+vi.mock('../../../../src/main/apps/runtime/chat-push', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../../src/main/apps/runtime/chat-push')>()),
+  recordChatPush,
+}))
+vi.mock('../../../../src/main/apps/runtime/pending-relays', () => ({
+  getPendingRelayStore: () => available.spool ? { append: appendRelay } : null,
+}))
 
-import {
-  answerEscalationFromIm,
-  deliverEscalationToIm,
-  parseAnswerCommand,
-  type AnswerDeps,
-  type AnswerSender,
-} from '../../../../src/main/apps/runtime/im-escalation'
-import { createDatabaseManager } from '../../../../src/main/platform/store/database-manager'
-import { migrations as managerMigrations } from '../../../../src/main/apps/manager/migrations'
-import { migrations } from '../../../../src/main/apps/runtime/migrations'
-import { ActivityStore } from '../../../../src/main/apps/runtime/store'
-import type { DatabaseManager } from '../../../../src/main/platform/store/types'
+import { deliverEscalationToIm, formatQuestion } from '../../../../src/main/apps/runtime/im-escalation'
+import { buildImSessionKey, buildRunSenderKey, buildTeamSessionKey } from '../../../../src/shared/apps/im-keys'
 import type { ActivityEntry } from '../../../../src/shared/apps/app-types'
 
 function bot(id: string, fields: Record<string, unknown>) {
@@ -60,10 +56,10 @@ function chat(instanceId: string, chatType: 'direct' | 'group', chatId: string, 
   registrySessions.push({ appId: 'dh', channel: 'wecom-bot', source: 'im', instanceId, chatType, chatId, proactive: false, ...extra })
 }
 
-function question(content: Partial<ActivityEntry['content']>, appId = 'dh'): ActivityEntry {
+function question(content: Partial<ActivityEntry['content']> = {}, appId = 'dh'): ActivityEntry {
   return {
     id: 'entry-1', appId, runId: 'run-1', type: 'escalation', ts: 1,
-    content: { summary: 'Ship the release tonight?', number: 7, ...content },
+    content: { summary: 'Ship the release tonight?', ...content },
   }
 }
 
@@ -72,348 +68,339 @@ beforeEach(() => {
   registrySessions.length = 0
   instances.clear()
   epochs.clear()
-  recordChatPush.mockClear()
+  recordChatPush.mockReset()
+  appendRelay.mockReset()
+  Object.assign(available, { manager: true, registry: true, spool: true })
+  Object.assign(teamState, { store: true, runtime: true, exists: true, member: true, remote: false })
+  ensureConversationEpoch.mockReset().mockReturnValue({ id: 'private-epoch' })
+  setTeamContext.mockReset().mockImplementation((appId, channel, chatId, teamContext) => {
+    const session = registrySessions.find(s => s.appId === appId && s.channel === channel && s.chatId === chatId)
+    if (session) session.teamContext = teamContext
+  })
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
 })
 
 describe('asking over IM', () => {
-  it('asks the owners in their direct chats, tells result groups only that a question waits, and no one else', () => {
+  it('sends the full question only to owner direct chats, with no notices to result groups', () => {
     const push = bot('i1', { appId: 'dh', permissionEnabled: true, owners: ['boss'] })
     chat('i1', 'direct', 'boss', { contactId: 'boss' })
     chat('i1', 'direct', 'customer', { contactId: 'customer', proactive: true })
     chat('i1', 'group', 'ops-group', { proactive: true })
     chat('i1', 'group', 'chatter-group')
 
-    deliverEscalationToIm(question({ choices: ['Yes', 'No'] }), 'Release Bot')
+    deliverEscalationToIm(question({ choices: ['Yes', 'No'], data: 'The tests are green.' }), 'Release Bot')
 
-    expect(push.mock.calls.map(([chatId, , type]) => [chatId, type])).toEqual([['boss', 'direct'], ['ops-group', 'group']])
-    const asked = push.mock.calls[0][1] as string
-    expect(asked).toContain('【Release Bot】需要你决定（编号 7）')
-    expect(asked).toContain('Ship the release tonight?')
+    expect(push.mock.calls.map(([chatId, , type]) => [chatId, type])).toEqual([['boss', 'direct']])
+    const asked = push.mock.calls[0][1]
+    expect(asked).toContain('「Release Bot」的任务需要你决定：Ship the release tonight?')
+    expect(asked).toContain('The tests are green.')
     expect(asked).toContain('A. Yes')
     expect(asked).toContain('B. No')
-    expect(asked).toContain('/answer 7')
-    const told = push.mock.calls[1][1] as string
-    expect(told).toContain('有一个问题在等主人回复（编号 7）')
-    expect(told).not.toContain('Ship the release')
+    expect(asked).toContain('直接回复我就行')
+    expect(asked).not.toMatch(/\/answer|编号|entry-1|run-1/)
+    expect(appendRelay).toHaveBeenCalledOnce()
   })
 
-  it('knows a direct chat\'s owner by who is on the other side, not by the chat\'s own id', () => {
+  it('matches the owner by contactId rather than a provider-specific conversation id', () => {
     const push = bot('i1', { appId: 'dh', permissionEnabled: true, owners: ['ou_boss'] })
     chat('i1', 'direct', 'oc_chat_42', { contactId: 'ou_boss' })
+    chat('i1', 'direct', 'ou_boss', { contactId: 'customer', proactive: true })
 
-    deliverEscalationToIm(question({}), 'Release Bot')
+    deliverEscalationToIm(question(), 'Release Bot')
 
+    expect(push).toHaveBeenCalledOnce()
     expect(push).toHaveBeenCalledWith('oc_chat_42', expect.stringContaining('需要你决定'), 'direct')
+    expect(appendRelay.mock.calls[0][0]).toBe(buildImSessionKey('dh', 'wecom-bot', 'direct', 'oc_chat_42'))
   })
 
-  it('with no owner list, asks the direct chats chosen to receive results, not every contact', () => {
-    const push = bot('i1', { appId: 'dh', permissionEnabled: false })
+  it('falls back to chatId for an older direct-chat record without contactId', () => {
+    const push = bot('i1', { appId: 'dh', permissionEnabled: true, owners: ['boss'] })
+    chat('i1', 'direct', 'boss')
+
+    deliverEscalationToIm(question(), 'Release Bot')
+
+    expect(push).toHaveBeenCalledOnce()
+    expect(push).toHaveBeenCalledWith('boss', expect.stringContaining('需要你决定'), 'direct')
+  })
+
+  it('with permission control off, asks only direct chats chosen to receive results', () => {
+    const push = bot('i1', { appId: 'dh', permissionEnabled: false, owners: ['passer-by'] })
     chat('i1', 'direct', 'follower', { proactive: true })
     chat('i1', 'direct', 'passer-by')
+    chat('i1', 'group', 'results', { proactive: true })
 
-    deliverEscalationToIm(question({}), 'Release Bot')
+    deliverEscalationToIm(question(), 'Release Bot')
 
-    expect(push.mock.calls.map(([chatId]) => chatId)).toEqual(['follower'])
+    expect(push.mock.calls.map(([chatId, , type]) => [chatId, type])).toEqual([['follower', 'direct']])
+    expect(appendRelay.mock.calls.map(([key]) => key)).toEqual([buildImSessionKey('dh', 'wecom-bot', 'direct', 'follower')])
   })
 
-  it('asks the owners of the bot a team works behind, and tells the group the work came from', () => {
+  it.each([{ owners: [] }, { owners: undefined }])('does not treat proactive contacts as owners when the enabled roster is $owners', ({ owners }) => {
+    const push = bot('i1', { appId: 'dh', permissionEnabled: true, owners })
+    chat('i1', 'direct', 'follower', { proactive: true })
+    chat('i1', 'group', 'results', { proactive: true })
+
+    deliverEscalationToIm(question(), 'Release Bot')
+
+    expect(push).not.toHaveBeenCalled()
+    expect(recordChatPush).not.toHaveBeenCalled()
+    expect(appendRelay).not.toHaveBeenCalled()
+  })
+
+  it('ignores sessions of another app, instance or non-IM source', () => {
+    const push = bot('i1', { appId: 'dh', permissionEnabled: true, owners: ['boss'] })
+    chat('i1', 'direct', 'boss', { appId: 'other' })
+    chat('other-instance', 'direct', 'boss')
+    chat('i1', 'direct', 'boss', { source: 'local', channel: 'local' })
+
+    deliverEscalationToIm(question(), 'Release Bot')
+
+    expect(push).not.toHaveBeenCalled()
+    expect(appendRelay).not.toHaveBeenCalled()
+  })
+
+  it('records each delivered question and spools an action naming its actual author and run', () => {
+    const push = bot('i1', { appId: 'dh', permissionEnabled: true, owners: ['boss', 'backup'] })
+    chat('i1', 'direct', 'boss')
+    chat('i1', 'direct', 'backup')
+    const entry = question()
+
+    deliverEscalationToIm(entry, 'Release Bot')
+
+    expect(recordChatPush.mock.calls.map(([sent]) => sent)).toEqual(['boss', 'backup'].map(chatId => ({
+      appId: 'dh', channel: 'wecom-bot', chatType: 'direct', chatId,
+      text: push.mock.calls[0][1], via: 'question', pushedBy: 'dh', teamContext: null,
+    })))
+    expect(appendRelay.mock.calls).toEqual(['boss', 'backup'].map(chatId => [
+      buildImSessionKey('dh', 'wecom-bot', 'direct', chatId),
+      {
+        kind: 'push', id: expect.any(String), at: expect.any(Number),
+        source: { key: buildRunSenderKey('dh', 'run-1'), appId: 'dh', runId: 'run-1', label: 'Release Bot' },
+        sourceOwner: false, message: push.mock.calls[0][1],
+        action: { kind: 'answer-question', appId: 'dh', entryId: 'entry-1' },
+      },
+    ]))
+    expect(new Set(appendRelay.mock.calls.map(([, event]) => event.id)).size).toBe(2)
+    expect(JSON.stringify(appendRelay.mock.calls)).not.toMatch(/Authorization|Bearer|curl|token|expiresAt/)
+    expect(entry.userResponse).toBeUndefined()
+  })
+
+  it('asks team owners privately, notices only the originating group, and attributes the member who asked', () => {
     const push = bot('team-bot', { appId: 'lead', teamId: 't1', permissionEnabled: true, owners: ['boss'] })
-    chat('team-bot', 'direct', 'boss', { appId: 'lead', contactId: 'boss' })
-    chat('team-bot', 'group', 'project-group', { appId: 'lead' })
+    chat('team-bot', 'direct', 'boss', { appId: 'lead', contactId: 'boss', teamContext: { teamId: 't1', epochId: 'private-epoch' } })
+    chat('team-bot', 'group', 'project-group', { appId: 'lead', teamContext: { teamId: 't1', epochId: 'e1' } })
+    chat('team-bot', 'group', 'results-group', { appId: 'lead', proactive: true })
+    const other = bot('other-team-bot', { appId: 'lead', teamId: 't1', permissionEnabled: true, owners: ['boss'] })
+    chat('other-team-bot', 'group', 'project-group', { appId: 'lead', proactive: true })
     epochs.set('e1', { chatKey: 'team-bot:group:project-group' })
+    const entry = question({ teamContext: { teamId: 't1', epochId: 'e1' }, data: 'Private release details' }, 'researcher')
+    entry.sessionKey = buildTeamSessionKey('researcher', 't1', 'e1')
+
+    deliverEscalationToIm(entry, 'Researcher')
+
+    expect(push.mock.calls.map(([chatId, , type]) => [chatId, type])).toEqual([['boss', 'direct'], ['project-group', 'group']])
+    expect(other).not.toHaveBeenCalled()
+    const notice = push.mock.calls[1][1]
+    expect(notice).toContain('「Researcher」的这项工作在等主人决定')
+    expect(notice).not.toMatch(/Ship the release|Private release details|\/answer|编号|entry-1/)
+    expect(recordChatPush.mock.calls.map(([sent]) => [sent.appId, sent.pushedBy, sent.chatId])).toEqual([
+      ['lead', 'researcher', 'boss'], ['lead', 'researcher', 'project-group'],
+    ])
+    expect(appendRelay).toHaveBeenCalledOnce()
+    expect(appendRelay).toHaveBeenCalledWith(buildTeamSessionKey('lead', 't1', 'private-epoch'), expect.objectContaining({
+      source: { key: entry.sessionKey, appId: 'researcher', runId: 'run-1', label: 'Researcher' },
+      action: { kind: 'answer-question', appId: 'researcher', entryId: 'entry-1' },
+    }))
+  })
+
+  it('resolves the current private team chat after its previous conversation was cleared', () => {
+    bot('team-bot', { appId: 'lead', teamId: 't1', permissionEnabled: true, owners: ['boss'] })
+    chat('team-bot', 'direct', 'boss', { appId: 'lead', teamContext: { teamId: 't1', epochId: 'cleared-epoch' } })
+    ensureConversationEpoch.mockReturnValue({ id: 'new-private-epoch' })
+
+    deliverEscalationToIm(question({ teamContext: { teamId: 't1', epochId: 'run-epoch' } }, 'researcher'), 'Researcher')
+
+    const teamContext = { teamId: 't1', epochId: 'new-private-epoch' }
+    expect(ensureConversationEpoch).toHaveBeenCalledWith('t1', 'team-bot:direct:boss', undefined, undefined, 'lead')
+    expect(setTeamContext).toHaveBeenCalledWith('lead', 'wecom-bot', 'boss', teamContext)
+    expect(registrySessions[0].teamContext).toEqual(teamContext)
+    expect(recordChatPush).toHaveBeenCalledWith(expect.objectContaining({ chatId: 'boss', teamContext }))
+    expect(appendRelay).toHaveBeenCalledWith(buildTeamSessionKey('lead', 't1', 'new-private-epoch'), expect.any(Object))
+    expect(appendRelay.mock.calls[0][0]).not.toContain('cleared-epoch')
+  })
+
+  it('clears the old team destination when the bot now serves a single digital human', () => {
+    bot('i1', { appId: 'dh', permissionEnabled: true, owners: ['boss'] })
+    chat('i1', 'direct', 'boss', { teamContext: { teamId: 'old-team', epochId: 'old-epoch' } })
+
+    deliverEscalationToIm(question(), 'Release Bot')
+
+    expect(ensureConversationEpoch).not.toHaveBeenCalled()
+    expect(setTeamContext).toHaveBeenCalledWith('dh', 'wecom-bot', 'boss', undefined)
+    expect(recordChatPush).toHaveBeenCalledWith(expect.objectContaining({ teamContext: null }))
+    expect(appendRelay).toHaveBeenCalledWith(buildImSessionKey('dh', 'wecom-bot', 'direct', 'boss'), expect.any(Object))
+  })
+
+  it.each(['store', 'runtime', 'exists', 'member', 'remote'] as const)('does not invite an answer to an unavailable team chat: %s', missing => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const push = bot('team-bot', { appId: 'lead', teamId: 't1', permissionEnabled: true, owners: ['boss'] })
+    chat('team-bot', 'direct', 'boss', { appId: 'lead', teamContext: { teamId: 't1', epochId: 'old-epoch' } })
+    teamState[missing] = missing === 'remote'
+
+    deliverEscalationToIm(question({ teamContext: { teamId: 't1', epochId: 'run-epoch' } }, 'researcher'), 'Researcher')
+
+    expect(push).not.toHaveBeenCalled()
+    expect(recordChatPush).not.toHaveBeenCalled()
+    expect(appendRelay).not.toHaveBeenCalled()
+    expect(setTeamContext).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/ImTeamSession.*team-bot:direct:boss.*teamId=t1/))
+  })
+
+  it('without an owner conversation, keeps the question private and sends only its originating group a notice', () => {
+    const push = bot('team-bot', { appId: 'lead', teamId: 't1', permissionEnabled: true, owners: ['boss'] })
+    chat('team-bot', 'direct', 'customer', { appId: 'lead', proactive: true })
+    chat('team-bot', 'group', 'results', { appId: 'lead', proactive: true })
+    epochs.set('e1', { chatKey: 'team-bot:group:origin' })
+
+    deliverEscalationToIm(question({ teamContext: { teamId: 't1', epochId: 'e1' }, data: 'Private details', choices: ['Confidential choice'] }, 'researcher'), 'Researcher')
+
+    expect(push).toHaveBeenCalledOnce()
+    expect(push).toHaveBeenCalledWith('origin', expect.stringContaining('等主人决定'), 'group')
+    expect(push.mock.calls[0][1]).not.toMatch(/Ship the release|Private details|Confidential choice/)
+    expect(recordChatPush).toHaveBeenCalledOnce()
+    expect(appendRelay).not.toHaveBeenCalled()
+  })
+
+  it.each([undefined, 'native:conversation', 'team-bot:direct:someone'])('does not notice unrelated groups for team origin %s', chatKey => {
+    const push = bot('team-bot', { appId: 'lead', teamId: 't1', permissionEnabled: true, owners: ['boss'] })
+    chat('team-bot', 'group', 'results', { appId: 'lead', proactive: true })
+    epochs.set('e1', { chatKey })
 
     deliverEscalationToIm(question({ teamContext: { teamId: 't1', epochId: 'e1' } }, 'researcher'), 'Researcher')
 
-    expect(push.mock.calls.map(([chatId, , type]) => [chatId, type])).toEqual([['boss', 'direct'], ['project-group', 'group']])
-    // Kept where the bot's chats are kept, and sent by: the digital human it serves.
-    expect(recordChatPush.mock.calls.map(([sent]) => [sent.appId, sent.pushedBy, sent.chatId])).toEqual([['lead', 'lead', 'boss'], ['lead', 'lead', 'project-group']])
+    expect(push).not.toHaveBeenCalled()
+    expect(appendRelay).not.toHaveBeenCalled()
   })
 
-  it('reaches no bot of another digital human, and none that is offline', () => {
+  it('records and spools only accepted private sends', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const push = bot('i1', { appId: 'dh', permissionEnabled: true, owners: ['unreachable', 'boss'] })
+    chat('i1', 'direct', 'unreachable')
+    chat('i1', 'direct', 'boss')
+    push.mockImplementation(chatId => chatId !== 'unreachable')
+
+    deliverEscalationToIm(question(), 'Release Bot')
+
+    expect(recordChatPush).toHaveBeenCalledOnce()
+    expect(recordChatPush).toHaveBeenCalledWith(expect.objectContaining({ chatId: 'boss', via: 'question' }))
+    expect(appendRelay).toHaveBeenCalledOnce()
+    expect(appendRelay).toHaveBeenCalledWith(buildImSessionKey('dh', 'wecom-bot', 'direct', 'boss'), expect.objectContaining({ action: { kind: 'answer-question', appId: 'dh', entryId: 'entry-1' } }))
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/Question entry-1 had rejected IM sends:.*asked=1, told=0, failed=1/))
+  })
+
+  it('keeps a rejected originating-group notice out of both record and spool', () => {
+    const push = bot('team-bot', { appId: 'lead', teamId: 't1', permissionEnabled: true, owners: ['boss'] })
+    epochs.set('e1', { chatKey: 'team-bot:group:origin' })
+    push.mockReturnValue(false)
+
+    deliverEscalationToIm(question({ teamContext: { teamId: 't1', epochId: 'e1' } }, 'researcher'), 'Researcher')
+
+    expect(push).toHaveBeenCalledOnce()
+    expect(recordChatPush).not.toHaveBeenCalled()
+    expect(appendRelay).not.toHaveBeenCalled()
+  })
+
+  it('reaches no unrelated, disabled or disconnected bot', () => {
     const other = bot('other', { appId: 'someone-else', permissionEnabled: true, owners: ['boss'] })
-    chat('other', 'direct', 'boss', { contactId: 'boss' })
+    const disabled = bot('disabled', { appId: 'dh', enabled: false, permissionEnabled: true, owners: ['boss'] })
     const offline = bot('i1', { appId: 'dh', permissionEnabled: true, owners: ['boss'] })
     instances.set('i1', { isConnected: () => false, pushToChat: offline })
-    chat('i1', 'direct', 'boss', { contactId: 'boss' })
+    for (const id of ['other', 'disabled', 'i1']) chat(id, 'direct', 'boss')
 
-    deliverEscalationToIm(question({}), 'Release Bot')
+    deliverEscalationToIm(question(), 'Release Bot')
 
-    expect(other).not.toHaveBeenCalled()
-    expect(offline).not.toHaveBeenCalled()
+    for (const push of [other, disabled, offline]) expect(push).not.toHaveBeenCalled()
+    expect(recordChatPush).not.toHaveBeenCalled()
+    expect(appendRelay).not.toHaveBeenCalled()
   })
 
-  it('logs where each question went, and why when it reached no chat', () => {
-    // "IM never got the question" has to be answerable from the log alone.
+  it('logs why a question reached nobody and where a later delivery went', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    try {
-      bot('i1', { appId: 'dh', permissionEnabled: true, owners: ['boss'] })
-      chat('i1', 'direct', 'stranger', { contactId: 'stranger' })
-      deliverEscalationToIm(question({}), 'Release Bot')
-      chat('i1', 'direct', 'boss', { contactId: 'boss' })
-      deliverEscalationToIm(question({}), 'Release Bot')
+    deliverEscalationToIm(question(), 'Release Bot')
+    bot('i1', { appId: 'dh', permissionEnabled: true, owners: ['boss'] })
+    deliverEscalationToIm(question(), 'Release Bot')
+    chat('i1', 'direct', 'boss')
+    deliverEscalationToIm(question(), 'Release Bot')
 
-      const lines = log.mock.calls.map(([line]) => String(line)).filter(line => line.includes('Question entry-1'))
-      expect(lines).toHaveLength(2)
-      expect(lines[0]).toContain('reached no IM chat (no owner direct chat known to its bots, and no group receives results)')
-      expect(lines[0]).toContain('bots=1, offline=0, ownerChats=0')
-      expect(lines[1]).toContain('sent to IM: bots=1, offline=0, ownerChats=1, groups=0, asked=1')
-    } finally {
-      log.mockRestore()
-    }
+    const lines = log.mock.calls.map(([line]) => String(line)).filter(line => line.includes('Question entry-1'))
+    expect(lines[0]).toContain('no enabled IM bot serves this digital human')
+    expect(lines[1]).toContain('no owner direct chat known to its bots, and no originating team group')
+    expect(lines[2]).toContain('sent to IM: bots=1, offline=0, ownerChats=1, groups=0, asked=1')
   })
 
-  it('logs a question no bot serves, and one whose bots are offline', () => {
+  it('logs when the serving bot is offline', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    try {
-      deliverEscalationToIm(question({}), 'Release Bot')
-      const offline = bot('i1', { appId: 'dh', permissionEnabled: true, owners: ['boss'] })
-      instances.set('i1', { isConnected: () => false, pushToChat: offline })
-      deliverEscalationToIm(question({}), 'Release Bot')
+    const push = bot('i1', { appId: 'dh', permissionEnabled: true, owners: ['boss'] })
+    instances.set('i1', { isConnected: () => false, pushToChat: push })
 
-      const lines = log.mock.calls.map(([line]) => String(line)).filter(line => line.includes('Question entry-1'))
-      expect(lines[0]).toContain('no enabled IM bot serves this digital human')
-      expect(lines[1]).toContain('its IM bots are not connected')
-    } finally {
-      log.mockRestore()
-    }
+    deliverEscalationToIm(question(), 'Release Bot')
+
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('its IM bots are not connected'))
+    expect(push).not.toHaveBeenCalled()
+    expect(appendRelay).not.toHaveBeenCalled()
   })
 
-  it('keeps what it sent in the record of each chat it reached, as a question pushed there', () => {
-    const push = bot('i1', { appId: 'dh', permissionEnabled: true, owners: ['boss'] })
-    chat('i1', 'direct', 'boss', { contactId: 'boss' })
-    chat('i1', 'group', 'ops-group', { proactive: true })
-    chat('i1', 'group', 'unreachable-group', { proactive: true })
-    push.mockImplementation((chatId: string) => chatId !== 'unreachable-group')
+  it.each(['manager', 'registry'] as const)('leaves questions in Halo when the %s is unavailable', missing => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    available[missing] = false
 
-    deliverEscalationToIm(question({}), 'Release Bot')
+    expect(() => deliverEscalationToIm(question(), 'Release Bot')).not.toThrow()
 
-    expect(recordChatPush.mock.calls.map(([sent]) => sent)).toEqual([
-      { appId: 'dh', channel: 'wecom-bot', chatType: 'direct', chatId: 'boss', text: push.mock.calls[0][1], via: 'question', pushedBy: 'dh' },
-      { appId: 'dh', channel: 'wecom-bot', chatType: 'group', chatId: 'ops-group', text: push.mock.calls[1][1], via: 'question', pushedBy: 'dh' },
-    ])
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('IM channels are not running'))
+    expect(recordChatPush).not.toHaveBeenCalled()
+    expect(appendRelay).not.toHaveBeenCalled()
   })
 
-  it('lists several decisions, and asks for one answer per line', () => {
+  it('records a delivered question but warns when relay context cannot be queued', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const push = bot('i1', { appId: 'dh', permissionEnabled: true, owners: ['boss'] })
-    chat('i1', 'direct', 'boss', { contactId: 'boss' })
+    chat('i1', 'direct', 'boss')
+    available.spool = false
 
-    deliverEscalationToIm(question({
+    expect(() => deliverEscalationToIm(question(), 'Release Bot')).not.toThrow()
+
+    expect(push).toHaveBeenCalledOnce()
+    expect(recordChatPush).toHaveBeenCalledOnce()
+    expect(appendRelay).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('without relay context: spool is unavailable'))
+  })
+})
+
+describe('the question the owner reads', () => {
+  it('includes every question and choice without imposing an answer command or line format', () => {
+    const text = formatQuestion(question({
       summary: 'Two things before the release',
       questions: [{ question: 'Ship tonight?', choices: ['Yes', 'No'] }, { question: 'Who signs off?' }],
     }), 'Release Bot')
 
-    const asked = push.mock.calls[0][1] as string
-    expect(asked).toContain('1. Ship tonight?')
-    expect(asked).toContain('   A. Yes')
-    expect(asked).toContain('2. Who signs off?')
-    expect(asked).toContain('每行写一个答案')
-  })
-})
-
-describe('what counts as an answer command', () => {
-  it('in a direct chat, a message that starts with it', () => {
-    expect(parseAnswerCommand('/answer 7 A', 'direct')).toBe('7 A')
-    expect(parseAnswerCommand('/Answer 7 A', 'direct')).toBe('7 A')
-    expect(parseAnswerCommand('/answer', 'direct')).toBe('')
-    expect(parseAnswerCommand('/answer 7\nA\nB', 'direct')).toBe('7\nA\nB')
+    expect(text).toContain('Two things before the release')
+    expect(text).toContain('1. Ship tonight?')
+    expect(text).toContain('   A. Yes')
+    expect(text).toContain('2. Who signs off?')
+    expect(text).toContain('直接回复我就行')
+    expect(text).not.toMatch(/\/answer|编号|每行写一个答案/)
   })
 
-  it('in a group, right after the mentions the message starts with', () => {
-    // WeCom ends a mention with U+2005, so a bot name may hold spaces.
-    expect(parseAnswerCommand('@Halo AI 团队\u2005/answer 7 A', 'group')).toBe('7 A')
-    expect(parseAnswerCommand('@Halo\u2005@张三\u2005 /answer 7 A', 'group')).toBe('7 A')
-    expect(parseAnswerCommand('@Halo /answer 7 A', 'group')).toBe('7 A')
-    expect(parseAnswerCommand('@Halo @张三 /answer 7 A', 'group')).toBe('7 A')
-    // The bot's own mention removed by the platform (Feishu).
-    expect(parseAnswerCommand('/answer 7 A', 'group')).toBe('7 A')
-  })
+  it('bounds supporting data without splitting a surrogate pair or exposing its local path', () => {
+    const text = formatQuestion(question({ data: 'x'.repeat(1499) + '\uD83D\uDE00'.repeat(10), dataPath: '/private/report.md' }), 'Release Bot')
 
-  it('never an ordinary message that mentions it, wherever it sits', () => {
-    expect(parseAnswerCommand('please /answer 7', 'direct')).toBeNull()
-    expect(parseAnswerCommand('hello /answer 7', 'group')).toBeNull()
-    expect(parseAnswerCommand('@bot 我晚点用 /answer 回复', 'group')).toBeNull()
-    expect(parseAnswerCommand('@Halo\u2005我想问 /answer 7 怎么用', 'group')).toBeNull()
-    expect(parseAnswerCommand('/answers 7', 'direct')).toBeNull()
-    expect(parseAnswerCommand('the answer is 7', 'direct')).toBeNull()
-  })
-
-  it('reads a bot name with ordinary spaces the way /stop does, once the answer names its question', () => {
-    // Where such a name ends cannot be told from the text. "/stop" counts when
-    // it ends the message; "/answer" counts when a question number follows it.
-    expect(parseAnswerCommand('@Halo AI Team /answer 3 A', 'group')).toBe('3 A')
-    expect(parseAnswerCommand('@Halo AI 团队 /answer 7\nA\nB', 'group')).toBe('7\nA\nB')
-    // Without a number it may as well be a sentence about answering.
-    expect(parseAnswerCommand('@Halo AI Team /answer A', 'group')).toBeNull()
-  })
-})
-
-describe('answering from IM', () => {
-  let manager: DatabaseManager
-  let store: ActivityStore
-  let deps: AnswerDeps
-
-  const owner: AnswerSender = { appId: 'dh', senderId: 'boss', chatType: 'direct', permissionEnabled: true, owners: ['boss'] }
-
-  function ask(id: string, content: Partial<ActivityEntry['content']> = {}, appId = 'dh'): number {
-    const number = store.nextEscalationNumber()
-    store.insertRun({ runId: id, appId, sessionKey: `session-${id}`, status: 'waiting_user', triggerType: 'manual', startedAt: Date.now() })
-    store.insertEntry({ id, appId, runId: id, type: 'escalation', ts: Date.now(), content: { summary: 'Ship tonight?', choices: ['Yes', 'No'], number, ...content } })
-    return number
-  }
-
-  beforeEach(() => {
-    manager = createDatabaseManager(':memory:')
-    const db = manager.getAppDatabase()
-    manager.runMigrations(db, 'app_manager', managerMigrations)
-    manager.runMigrations(db, 'app_runtime', migrations)
-    for (const id of ['dh', 'other']) {
-      db.prepare(`INSERT INTO installed_apps(id, spec_id, space_id, spec_json, installed_at) VALUES (?, ?, 'space', '{"type":"automation"}', 1)`).run(id, `spec-${id}`)
-    }
-    store = new ActivityStore(db)
-    deps = {
-      pendingEscalations: () => store.getAllPendingEscalations(),
-      escalationByNumber: number => store.getEscalationByNumber(number),
-      isRunClosed: runId => store.isRunClosed(runId),
-      respond: vi.fn(async (appId: string, entryId: string, response) => store.acceptDecision(appId, entryId, response)),
-    }
-  })
-
-  afterEach(() => manager.closeAll())
-
-  it('numbers questions in the order they are asked, and finds each by its number', () => {
-    const first = ask('a')
-    const second = ask('b')
-
-    expect(second).toBe(first + 1)
-    expect(store.getEscalationByNumber(second)?.id).toBe('b')
-    expect(store.getEscalationByNumber(second + 1)).toBeNull()
-  })
-
-  it('takes an owner\'s answer by number and letter, the way Halo takes an answer, and the work goes on', async () => {
-    const number = ask('a')
-
-    const { reply } = await answerEscalationFromIm(`${number} A`, owner, deps)
-
-    expect(reply).toBe(`已收到，任务继续。（编号 ${number} 的问题）`)
-    expect(store.getEntry('a')?.userResponse?.choice).toBe('Yes')
-    expect(store.getEntry('a')?.continuation?.status).toBe('queued')
-  })
-
-  it('takes the answer without a number while one question is open, in the owner\'s own words', async () => {
-    ask('a')
-
-    await answerEscalationFromIm('Yes, but after 10pm', owner, deps)
-
-    expect(store.getEntry('a')?.userResponse?.text).toBe('Yes, but after 10pm')
-  })
-
-  it('asks for the number when several questions are open, and answers none', async () => {
-    const one = ask('a')
-    const two = ask('b')
-
-    const { reply } = await answerEscalationFromIm('A', owner, deps)
-
-    expect(reply).toContain('有 2 个问题在等你回答')
-    expect(reply).toContain(`${one}、${two}`)
-    expect(deps.respond).not.toHaveBeenCalled()
-  })
-
-  it('answers only for an owner, and in a group only where there is an owner list', async () => {
-    ask('a')
-
-    expect((await answerEscalationFromIm('A', { ...owner, senderId: 'customer' }, deps)).reply).toBe('只有主人可以回答这个问题。')
-    expect((await answerEscalationFromIm('A', { ...owner, chatType: 'group', permissionEnabled: false, owners: [] }, deps)).reply)
-      .toBe('请在与机器人的私聊里回答。')
-    expect(deps.respond).not.toHaveBeenCalled()
-    // An owner in a group the bot serves is still the owner.
-    expect((await answerEscalationFromIm('A', { ...owner, chatType: 'group' }, deps)).reply).toContain('已收到')
-  })
-
-  it('says when a question was already answered, closed or expired, and changes nothing', async () => {
-    const answered = ask('a')
-    await answerEscalationFromIm(`${answered} A`, owner, deps)
-    expect((await answerEscalationFromIm(`${answered} B`, owner, deps)).reply).toBe(`编号 ${answered} 的问题已经回答过了。`)
-    expect(store.getEntry('a')?.userResponse?.choice).toBe('Yes')
-
-    const expired = ask('b', { deadlineAt: Date.now() - 1000 })
-    expect((await answerEscalationFromIm(`${expired} A`, owner, deps)).reply).toBe(`编号 ${expired} 的问题已过期。`)
-
-    const closed = ask('c')
-    store.closeRun('c')
-    expect((await answerEscalationFromIm(`${closed} A`, owner, deps)).reply).toBe(`编号 ${closed} 的问题已经关闭，不需要再回答。`)
-    expect(deps.respond).toHaveBeenCalledTimes(1)
-  })
-
-  it('never reads a number it cannot find as an answer to the one open question', async () => {
-    // A mistyped number, or a question since removed: "99 A" is no answer to #N.
-    const open = ask('a')
-
-    const result = await answerEscalationFromIm('99 A', owner, deps)
-    const bare = await answerEscalationFromIm('99', owner, deps)
-
-    expect(result).toMatchObject({ outcome: 'no_such_number' })
-    expect(result.reply).toContain('没有找到编号 99 的问题')
-    expect(result.reply).toContain(`/answer ${open} 你的答案`)
-    expect(bare.outcome).toBe('no_such_number')
-    expect(deps.respond).not.toHaveBeenCalled()
-    expect(store.getEntry('a')?.userResponse).toBeUndefined()
-  })
-
-  it('tells the outcome of every answer for the log, and the question it was for', async () => {
-    const number = ask('a')
-
-    expect(await answerEscalationFromIm(`${number} A`, { ...owner, senderId: 'customer' }, deps)).toMatchObject({ outcome: 'not_owner' })
-    expect(await answerEscalationFromIm(`${number} A`, owner, deps)).toMatchObject({ outcome: 'answered', entryId: 'a' })
-    expect(await answerEscalationFromIm(`${number} B`, owner, deps)).toMatchObject({ outcome: 'already_answered', entryId: 'a' })
-  })
-
-  it('says a failed submission in words the chat can use, and keeps the runtime\'s words for the log', async () => {
-    const number = ask('a')
-    deps.respond = vi.fn(async () => { throw new Error('This decision has already been answered differently') })
-
-    const result = await answerEscalationFromIm(`${number} A`, owner, deps)
-
-    expect(result.outcome).toBe('submit_failed')
-    expect(result.reply).toContain('请在 Halo 里查看')
-    expect(result.reply).not.toContain('decision')
-    expect(result.error).toBe('This decision has already been answered differently')
-  })
-
-  it('sends questions asked before numbering existed to Halo', async () => {
-    for (const id of ['old-1', 'old-2']) {
-      store.insertRun({ runId: id, appId: 'dh', sessionKey: `session-${id}`, status: 'waiting_user', triggerType: 'manual', startedAt: Date.now() })
-      store.insertEntry({ id, appId: 'dh', runId: id, type: 'escalation', ts: Date.now(), content: { summary: 'Old question' } })
-    }
-
-    const result = await answerEscalationFromIm('A', owner, deps)
-
-    expect(result.outcome).toBe('number_needed')
-    expect(result.reply).toContain('另有 2 个较早的问题没有编号，请在 Halo 里回答')
-  })
-
-  it('never lands an answer on another question: another digital human\'s number is not found here', async () => {
-    const elsewhere = ask('theirs', {}, 'other')
-    ask('mine')
-
-    const { reply } = await answerEscalationFromIm(`${elsewhere} A`, owner, deps)
-
-    expect(reply).toContain(`没有找到编号 ${elsewhere} 的问题`)
-    expect(deps.respond).not.toHaveBeenCalled()
-  })
-
-  it('reads one answer per line for several decisions, and says how when the lines do not match', async () => {
-    const number = ask('a', { choices: undefined, questions: [{ question: 'Ship tonight?', choices: ['Yes', 'No'] }, { question: 'Who signs off?' }] })
-
-    expect((await answerEscalationFromIm(`${number}\nB`, owner, deps)).reply).toContain('这个问题包含 2 项')
-    expect((await answerEscalationFromIm(`${number}\nB\nLin`, owner, deps)).reply).toContain('已收到')
-    expect(store.getEntry('a')?.userResponse?.answers).toEqual([{ choice: 'No' }, { text: 'Lin' }])
-  })
-
-  it('keeps a letter that starts a longer answer as words', async () => {
-    const number = ask('a')
-
-    await answerEscalationFromIm(`${number} A good plan, go ahead`, owner, deps)
-
-    expect(store.getEntry('a')?.userResponse).toMatchObject({ text: 'A good plan, go ahead' })
+    expect(text).toContain('x'.repeat(1499) + '…')
+    expect(text).not.toContain('\uD83D')
+    expect(text).toContain('完整内容请在 Halo 里查看')
+    expect(text).not.toContain('/private/report.md')
+    expect(text).toContain('直接回复我就行')
   })
 })

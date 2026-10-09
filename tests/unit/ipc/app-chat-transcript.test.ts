@@ -10,6 +10,7 @@ const env = vi.hoisted(() => ({
   handlers: {} as Record<string, (...args: any[]) => Promise<any>>,
   loadChatTranscriptForConversation: vi.fn(),
   loadChatMessageThoughts: vi.fn(),
+  respondToEscalation: vi.fn(),
   space: { id: 'space-a', path: '/spaces/a' } as { id: string; path: string } | null,
 }))
 
@@ -20,7 +21,9 @@ vi.mock('../../../src/main/services/security-policy', () => ({ MCP_COMMAND_BLOCK
 vi.mock('../../../src/main/apps/manager/skill-sync', () => ({ getSkillDir: vi.fn() }))
 vi.mock('../../../src/main/apps/spec/skill-identity', () => ({ deriveSkillCommandName: vi.fn() }))
 vi.mock('../../../src/main/apps/skill-discovery', () => ({ listAvailableSkills: vi.fn() }))
-vi.mock('../../../src/main/apps/runtime', () => ({
+vi.mock('../../../src/main/apps/runtime', async () => ({
+  EscalationAnswerValidationError: (await import('../../../src/main/apps/runtime/errors')).EscalationAnswerValidationError,
+  getAppRuntime: () => ({ respondToEscalation: env.respondToEscalation }),
   getAppChatConversationId: (appId: string) => `app-chat:${appId}`,
   loadChatTranscriptForConversation: (...args: unknown[]) => env.loadChatTranscriptForConversation(...args),
   loadChatMessageThoughts: (...args: unknown[]) => env.loadChatMessageThoughts(...args),
@@ -32,6 +35,7 @@ vi.mock('../../../src/main/services/analytics/analytics.service', () => ({ analy
 vi.mock('../../../src/main/ipc/rpc', () => ({ registerRawRpcHandlers: (_c: unknown, impl: any) => { env.handlers = impl } }))
 
 import { registerAppHandlers } from '../../../src/main/ipc/app'
+import { EscalationAnswerValidationError } from '../../../src/main/apps/runtime/errors'
 
 const EMPTY = { messages: [], hasMoreBefore: false, cursor: null, total: 0 }
 
@@ -39,6 +43,7 @@ beforeEach(() => {
   env.space = { id: 'space-a', path: '/spaces/a' }
   env.loadChatTranscriptForConversation.mockReset().mockReturnValue({ messages: [{ id: 'session-msg-1' }], hasMoreBefore: false, cursor: 'session-msg-1', total: 1 })
   env.loadChatMessageThoughts.mockReset().mockReturnValue([{ id: 't' }])
+  env.respondToEscalation.mockReset()
   vi.spyOn(console, 'error').mockImplementation(() => {})
   registerAppHandlers()
 })
@@ -75,4 +80,25 @@ it('loads one message thought process, defaulting to the default session', async
 it('answers no thoughts when the space is unknown', async () => {
   env.space = null
   expect(await env.handlers.appChatMessageThoughts({ appId: 'a1', spaceId: 'gone', messageId: 'm' })).toEqual({ success: true, data: [] })
+})
+
+it('returns an already-logged decision validation refusal without logging it twice', async () => {
+  env.respondToEscalation.mockRejectedValue(new EscalationAnswerValidationError('Answer every question before submitting'))
+  const response = { ts: 1, text: '' }
+  expect(await env.handlers.appRespondEscalation({ appId: 'a1', escalationId: 'q1', response })).toEqual({
+    success: false, error: 'Answer every question before submitting',
+  })
+  expect(env.respondToEscalation).toHaveBeenCalledWith('a1', 'q1', response)
+  expect(console.error).not.toHaveBeenCalled()
+})
+
+it('logs other decision failures with the app and entry, without the submitted answer', async () => {
+  env.respondToEscalation.mockRejectedValue(new Error('Database unavailable'))
+  expect(await env.handlers.appRespondEscalation({ appId: 'a1', escalationId: 'q1', response: { ts: 1, text: 'private-answer' } })).toEqual({
+    success: false, error: 'Database unavailable',
+  })
+  expect(console.error).toHaveBeenCalledTimes(1)
+  expect(console.error).toHaveBeenCalledWith(
+    '[AppIPC] app:respond-escalation error: appId=a1, entryId=q1', 'Database unavailable',
+  )
 })

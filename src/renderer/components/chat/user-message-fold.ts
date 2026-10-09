@@ -5,9 +5,9 @@
  */
 
 /** About this many lines of the bubble stay visible while folded. */
-const PREVIEW_ROWS = 8
+const PREVIEW_ROWS = 20
 /** Only a message clearly longer than its preview folds. */
-const FOLD_OVER_ROWS = 12
+const FOLD_OVER_ROWS = 24
 /** Characters per bubble line assumed for wrapping; a wide (CJK) character counts twice. */
 const ROW_WIDTH = 80
 

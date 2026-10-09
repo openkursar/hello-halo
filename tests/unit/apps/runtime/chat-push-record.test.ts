@@ -19,6 +19,7 @@ const { registry, sessionEnvironments, sentToRenderer, installedApps } = vi.hois
   } as Record<string, { id: string; spaceId: string; spec: { name: string } }>,
   registry: {
     sessions: new Map<string, Record<string, unknown>>(),
+    current: undefined as import('../../../../src/main/apps/runtime/im-session-registry').ImSessionRegistry | undefined,
     notePush: vi.fn(),
   },
   sessionEnvironments: new Map<string, { spacePath: string }>(),
@@ -26,8 +27,9 @@ const { registry, sessionEnvironments, sentToRenderer, installedApps } = vi.hois
 }))
 
 vi.mock('../../../../src/main/apps/runtime/im-session-registry', () => ({
-  getImSessionRegistry: () => ({
+  getImSessionRegistry: () => registry.current ?? ({
     findSession: (appId: string, channel: string, chatId: string) => registry.sessions.get(`${appId}:${channel}:${chatId}`),
+    getSessionRevision: (appId: string, channel: string, chatId: string) => registry.sessions.get(`${appId}:${channel}:${chatId}`),
     notePush: registry.notePush,
   }),
 }))
@@ -47,6 +49,7 @@ vi.mock('../../../../src/main/services/agent', () => ({ listResidentSessions: ()
 vi.mock('../../../../src/main/apps/runtime/im-channels', () => ({ getActiveImChannelManager: () => null }))
 
 import { writeChatPush } from '../../../../src/main/apps/runtime/chat-record'
+import { chatPushConversationId, recordChatPush } from '../../../../src/main/apps/runtime/chat-push'
 import { disposeAppChatSink, getAppChatSink } from '../../../../src/main/apps/runtime/app-chat-sink'
 import { openSessionWriter, readSessionMessages } from '../../../../src/main/apps/runtime/session-store'
 import { convertEventsToMessages, type StoredEvent } from '../../../../src/main/apps/runtime/session-transcript'
@@ -66,6 +69,7 @@ function readChat(spacePath: string, conversationId: string) {
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'chat-push-'))
   registry.sessions.clear()
+  registry.current = undefined
   registry.notePush.mockClear()
   sessionEnvironments.clear()
   sentToRenderer.mockClear()
@@ -76,8 +80,26 @@ afterEach(() => {
   for (const key of [
     buildImSessionKey('dh', 'wecom-bot', 'group', 'ops-group'),
     buildTeamSessionKey('dh', 'team-1', 'epoch-1'),
+    buildTeamSessionKey('dh', 'team-1', 'private-epoch'),
+    buildImSessionKey('dh', 'wecom-bot', 'direct', 'boss'),
   ]) disposeAppChatSink(key)
   rmSync(root, { recursive: true, force: true })
+})
+
+describe('the shared destination for a push record and relay', () => {
+  it.each(['direct', 'group'] as const)('uses the provider-qualified key for an ordinary %s chat', chatType => {
+    const push = { appId: 'dh', channel: 'wecom-bot', chatType, chatId: 'same-chat' }
+
+    expect(chatPushConversationId(push)).toBe(buildImSessionKey('dh', 'wecom-bot', chatType, 'same-chat'))
+    expect(chatPushConversationId(push, {})).toBe(buildImSessionKey('dh', 'wecom-bot', chatType, 'same-chat'))
+  })
+
+  it('uses the private team chat’s own epoch rather than an ordinary IM key', () => {
+    const push = { appId: 'dh', channel: 'wecom-bot', chatType: 'direct' as const, chatId: 'boss' }
+
+    expect(chatPushConversationId(push, { teamContext: { teamId: 'team-1', epochId: 'private-epoch' } }))
+      .toBe(buildTeamSessionKey('dh', 'team-1', 'private-epoch'))
+  })
 })
 
 describe('a push in the record of the chat it went to', () => {
@@ -135,6 +157,167 @@ describe('a push in the record of the chat it went to', () => {
 
     expect(readChat(pinned, conversationId).map(m => m.content)).toEqual(['Moved but still here'])
     expect(existsSync(join(spaceDir(), '.halo'))).toBe(false)
+  })
+
+  it('keeps a member’s private question in the owner chat’s team epoch under the asking member’s name', () => {
+    const teamContext = { teamId: 'team-1', epochId: 'private-epoch' }
+    registry.sessions.set('dh:wecom-bot:boss', {
+      appId: 'dh', channel: 'wecom-bot', chatType: 'direct', chatId: 'boss', instanceId: 'inst-1', teamContext,
+    })
+    const push = {
+      appId: 'dh', channel: 'wecom-bot', chatType: 'direct' as const, chatId: 'boss',
+      text: '「Ops Bot」的任务需要你决定：Ship tonight? 直接回复我就行。', via: 'question' as const, pushedBy: 'ops-dh',
+    }
+    const conversationId = chatPushConversationId(push, { teamContext })
+    const pinned = join(root, 'old-space')
+    sessionEnvironments.set(conversationId, { spacePath: pinned })
+
+    writeChatPush(push)
+
+    const [message] = readChat(pinned, conversationId)
+    expect(message).toMatchObject({
+      role: 'assistant', content: push.text, source: 'push',
+      metadata: { pushVia: 'question', pushedByAppId: 'ops-dh', pushedByName: 'Ops Bot' },
+    })
+    expect(readChat(pinned, buildImSessionKey('dh', 'wecom-bot', 'direct', 'boss'))).toEqual([])
+    expect(readChat(pinned, buildTeamSessionKey('dh', 'team-1', 'epoch-1'))).toEqual([])
+    expect(existsSync(join(spaceDir(), '.halo'))).toBe(false)
+    expect(registry.notePush).toHaveBeenCalledWith('dh', 'wecom-bot', 'boss', expect.objectContaining({ lastSender: 'Ops Bot' }))
+    expect(sentToRenderer).toHaveBeenCalledWith('team:member-history', { teamId: 'team-1', appId: 'dh', epochId: 'private-epoch' })
+  })
+
+  it('pins a question to its resolved destination even when asynchronous recording sees a different registry context', () => {
+    registry.sessions.set('dh:wecom-bot:boss', {
+      appId: 'dh', channel: 'wecom-bot', chatType: 'direct', chatId: 'boss', instanceId: 'inst-1',
+      teamContext: { teamId: 'team-1', epochId: 'epoch-1' },
+    })
+    const teamContext = { teamId: 'team-1', epochId: 'private-epoch' }
+
+    writeChatPush({ appId: 'dh', channel: 'wecom-bot', chatType: 'direct', chatId: 'boss',
+      text: 'A new private question', via: 'question', pushedBy: 'ops-dh', teamContext })
+
+    expect(readChat(spaceDir(), buildTeamSessionKey('dh', 'team-1', 'private-epoch')).map(m => m.content)).toEqual(['A new private question'])
+    expect(readChat(spaceDir(), buildTeamSessionKey('dh', 'team-1', 'epoch-1'))).toEqual([])
+    expect(sentToRenderer).toHaveBeenCalledWith('team:member-history', { ...teamContext, appId: 'dh' })
+  })
+
+  it.each(['recreated', 'cleared', 'rebound', 'removed'] as const)('does not refresh a session %s before the deferred push write', async change => {
+    const teamContext = { teamId: 'team-1', epochId: 'private-epoch' }
+    const key = 'dh:wecom-bot:boss'
+    const original = {
+      appId: 'dh', channel: 'wecom-bot', chatType: 'direct', chatId: 'boss', instanceId: 'inst-1', teamContext,
+    }
+    registry.sessions.set(key, original)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      recordChatPush({ appId: 'dh', channel: 'wecom-bot', chatType: 'direct', chatId: 'boss',
+        text: 'Delivered before the session changed', via: 'message', pushedBy: 'dh',
+        ...(change === 'rebound' ? {} : { teamContext }) })
+      const successor = { ...original, lastMessage: 'New conversation', lastActiveAt: 42, messageCount: 1,
+        ...(change === 'rebound' ? { teamContext: { teamId: 'team-1', epochId: 'epoch-1' } } : {}) }
+      if (change === 'removed') registry.sessions.delete(key)
+      else registry.sessions.set(key, successor)
+
+      await vi.dynamicImportSettled()
+
+      expect(readChat(spaceDir(), buildTeamSessionKey('dh', 'team-1', 'private-epoch')).map(m => m.content))
+        .toEqual(['Delivered before the session changed'])
+      expect(registry.notePush).not.toHaveBeenCalled()
+      expect(sentToRenderer).not.toHaveBeenCalledWith('app:im-session-updated', expect.anything())
+      expect(sentToRenderer).toHaveBeenCalledWith('team:member-history', { ...teamContext, appId: 'dh' })
+      expect(registry.sessions.get(key)).toBe(change === 'removed' ? undefined : successor)
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('reason=session changed before recording'))
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('records a previously invalidated delivery without changing the current session list', () => {
+    registry.sessions.set('dh:wecom-bot:boss', {
+      appId: 'dh', channel: 'wecom-bot', chatId: 'boss', instanceId: 'inst-1',
+      teamContext: { teamId: 'team-1', epochId: 'epoch-1' },
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      writeChatPush({ appId: 'dh', channel: 'wecom-bot', chatType: 'direct', chatId: 'boss',
+        text: 'Already delivered', via: 'message', pushedBy: 'dh',
+        teamContext: { teamId: 'team-1', epochId: 'private-epoch' }, sessionRevision: null })
+
+      expect(readChat(spaceDir(), buildTeamSessionKey('dh', 'team-1', 'private-epoch')).map(m => m.content)).toEqual(['Already delivered'])
+      expect(registry.notePush).not.toHaveBeenCalled()
+      expect(sentToRenderer).not.toHaveBeenCalledWith('app:im-session-updated', expect.anything())
+      expect(sentToRenderer).toHaveBeenCalledWith('team:member-history', { teamId: 'team-1', epochId: 'private-epoch', appId: 'dh' })
+      expect(warn).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it.each(['cleared', 'new epoch', 'recreated'] as const)('preserves real registry activity when the delivery’s session was %s', async change => {
+    const { ImSessionRegistry } = await vi.importActual<typeof import('../../../../src/main/apps/runtime/im-session-registry')>(
+      '../../../../src/main/apps/runtime/im-session-registry',
+    )
+    const { AtomicFileWriter } = await import('../../../../src/main/apps/runtime/atomic-file-writer')
+    const persist = vi.spyOn(AtomicFileWriter.prototype, 'write').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const current = new ImSessionRegistry(join(root, 'sessions.json'))
+      registry.current = current
+      const teamContext = { teamId: 'team-1', epochId: 'private-epoch' }
+      current.register('dh', 'wecom-bot', 'boss', 'direct', 'inst-1', { teamContext, lastMessage: 'Original' })
+      const originalRevision = current.getSessionRevision('dh', 'wecom-bot', 'boss')
+      recordChatPush({ appId: 'dh', channel: 'wecom-bot', chatType: 'direct', chatId: 'boss',
+        text: 'A delivered file', via: 'message', pushedBy: 'dh', teamContext })
+      if (change === 'cleared') current.resetActivity('dh', 'wecom-bot', 'boss')
+      else {
+        if (change === 'recreated') current.removeSession('dh', 'wecom-bot', 'boss')
+        current.register('dh', 'wecom-bot', 'boss', 'direct', 'inst-1', {
+          teamContext: change === 'new epoch' ? { teamId: 'team-1', epochId: 'epoch-1' } : teamContext,
+          lastMessage: 'Successor conversation',
+        })
+      }
+      const successor = current.findSession('dh', 'wecom-bot', 'boss')
+      const revision = current.getSessionRevision('dh', 'wecom-bot', 'boss')
+      expect(revision).not.toBe(originalRevision)
+
+      await vi.dynamicImportSettled()
+
+      expect(readChat(spaceDir(), buildTeamSessionKey('dh', 'team-1', 'private-epoch')).map(m => m.content)).toEqual(['A delivered file'])
+      expect(current.findSession('dh', 'wecom-bot', 'boss')).toEqual(successor)
+      expect(current.getSessionRevision('dh', 'wecom-bot', 'boss')).toBe(revision)
+      expect(sentToRenderer).not.toHaveBeenCalledWith('app:im-session-updated', expect.anything())
+      expect(sentToRenderer).toHaveBeenCalledWith('team:member-history', { ...teamContext, appId: 'dh' })
+    } finally {
+      await Promise.resolve()
+      registry.current = undefined
+      persist.mockRestore()
+      warn.mockRestore()
+    }
+  })
+
+  it('refreshes the same session after deferred recording', async () => {
+    registry.sessions.set('dh:wecom-bot:boss', { appId: 'dh', channel: 'wecom-bot', chatId: 'boss', instanceId: 'inst-1' })
+
+    recordChatPush({ appId: 'dh', channel: 'wecom-bot', chatType: 'direct', chatId: 'boss',
+      text: 'Still current', via: 'message', pushedBy: 'dh', teamContext: null })
+    await vi.dynamicImportSettled()
+
+    expect(registry.notePush).toHaveBeenCalledWith('dh', 'wecom-bot', 'boss', { lastSender: 'Release Bot', lastMessage: 'Still current' })
+    expect(sentToRenderer).toHaveBeenCalledWith('app:im-session-updated', expect.objectContaining({ lastMessage: 'Still current' }))
+  })
+
+  it('keeps an explicitly non-team question out of a cached team conversation', () => {
+    registry.sessions.set('dh:wecom-bot:boss', {
+      appId: 'dh', channel: 'wecom-bot', chatType: 'direct', chatId: 'boss', instanceId: 'inst-1',
+      teamContext: { teamId: 'team-1', epochId: 'epoch-1' },
+    })
+
+    writeChatPush({ appId: 'dh', channel: 'wecom-bot', chatType: 'direct', chatId: 'boss',
+      text: 'A solo question', via: 'question', pushedBy: 'dh', teamContext: null })
+
+    expect(readChat(spaceDir(), buildImSessionKey('dh', 'wecom-bot', 'direct', 'boss')).map(m => m.content)).toEqual(['A solo question'])
+    expect(readChat(spaceDir(), buildTeamSessionKey('dh', 'team-1', 'epoch-1'))).toEqual([])
+    expect(sentToRenderer).not.toHaveBeenCalledWith('team:member-history', expect.anything())
   })
 
   it('goes into the team\'s conversation with a chat a team fronts', () => {
@@ -220,7 +403,7 @@ describe('a push read back from the record', () => {
       { _ts: at(1), type: 'user', _isTrigger: true, message: { role: 'user', content: [{ type: 'text', text: 'Go' }] } },
       { _ts: at(2), type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Working…' }] } },
       // A pusher without a name is not one the reader can show.
-      { _ts: at(3), type: 'push', _pushVia: 'question', _pushedBy: { appId: 'ops-dh' }, message: { role: 'assistant', content: [{ type: 'text', text: 'Ship tonight? /answer 7' }] } } as StoredEvent,
+      { _ts: at(3), type: 'push', _pushVia: 'question', _pushedBy: { appId: 'ops-dh' }, message: { role: 'assistant', content: [{ type: 'text', text: 'Ship tonight? You can reply here.' }] } } as StoredEvent,
       { _ts: at(4), type: 'user', _isTrigger: true, message: { role: 'user', content: [{ type: 'text', text: 'Status?' }] } },
     ]
 
@@ -228,7 +411,7 @@ describe('a push read back from the record', () => {
     expect(messages.map(m => [m.id, m.content, m.source, m.metadata?.pushVia])).toEqual([
       ['session-msg-1', 'Go', undefined, undefined],
       ['session-msg-2', 'Working…', undefined, undefined],
-      ['session-msg-3', 'Ship tonight? /answer 7', 'push', 'question'],
+      ['session-msg-3', 'Ship tonight? You can reply here.', 'push', 'question'],
       ['session-msg-4', 'Status?', undefined, undefined],
     ])
     expect(messages[2].metadata).toEqual({ pushVia: 'question' })

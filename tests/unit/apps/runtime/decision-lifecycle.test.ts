@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createDatabaseManager } from '../../../../src/main/platform/store/database-manager'
 import { migrations as managerMigrations } from '../../../../src/main/apps/manager/migrations'
 import { migrations } from '../../../../src/main/apps/runtime/migrations'
 import { ActivityStore } from '../../../../src/main/apps/runtime/store'
 import { Semaphore } from '../../../../src/main/apps/runtime/concurrency'
 import type { DatabaseManager } from '../../../../src/main/platform/store/types'
+import type { EscalationAnswerPayload } from '../../../../src/shared/apps/app-types'
 
 describe('durable decisions', () => {
   let manager: DatabaseManager
@@ -17,7 +18,10 @@ describe('durable decisions', () => {
     db.prepare(`INSERT INTO installed_apps(id, spec_id, space_id, spec_json, installed_at) VALUES ('person', 'spec', 'space', '{"type":"automation"}', 1)`).run()
     store = new ActivityStore(db)
   })
-  afterEach(() => manager.closeAll())
+  afterEach(() => {
+    vi.restoreAllMocks()
+    manager.closeAll()
+  })
 
   function question(id: string, deadlineAt?: number, team?: string): void {
     store.insertRun({ runId: id, appId: 'person', sessionKey: `session-${id}`, status: 'waiting_user', triggerType: 'manual', startedAt: Date.now() })
@@ -58,13 +62,176 @@ describe('durable decisions', () => {
     asked('one', [{ question: 'Which fix path?' }])
     expect(() => store.acceptDecision('person', 'one', { ts: 1, text: '   ' })).toThrow(/every question/)
     expect(() => store.acceptDecision('person', 'one', { ts: 1, answers: [{ choice: 'A' }, { choice: 'B' }] })).toThrow(/every question/)
-    asked('two', [{ question: 'Fix path?' }, { question: 'Release window?' }])
+    asked('two', [{ question: 'Fix path?', choices: ['A', 'B'] }, { question: 'Release window?' }])
     expect(() => store.acceptDecision('person', 'two', { ts: 1, choice: 'A' })).toThrow(/every question/)
     expect(() => store.acceptDecision('person', 'two', { ts: 1, answers: [{ choice: 'A' }, {}] })).toThrow(/every question/)
     expect(store.acceptDecision('person', 'two', { ts: 1, answers: [{ choice: 'A' }, { text: 'Before 10.30' }] }).continuation?.status).toBe('queued')
     question('legacy')
     expect(() => store.acceptDecision('person', 'legacy', { ts: 1 })).toThrow(/every question/)
     expect(store.getEntry('one')?.userResponse).toBeUndefined()
+  })
+
+  it.each([
+    ['null response', null, 'objects'],
+    ['missing response', undefined, 'objects'],
+    ['string response', 'Approve', 'objects'],
+    ['number response', 42, 'objects'],
+    ['boolean response', false, 'objects'],
+    ['array response', [], 'objects'],
+    ['numeric choice', { choice: 1 }, 'strings'],
+    ['null choice', { choice: null, text: 'Approve' }, 'strings'],
+    ['object choice', { choice: {}, text: 'Approve' }, 'strings'],
+    ['boolean text', { choice: 'Approve', text: false }, 'strings'],
+    ['null text', { choice: 'Approve', text: null }, 'strings'],
+    ['array text', { choice: 'Approve', text: [] }, 'strings'],
+    ['empty answers with flat fallback', { text: 'Approve', answers: [] }, 'non-empty array'],
+    ['null answers with flat fallback', { text: 'Approve', answers: null }, 'non-empty array'],
+    ['false answers with flat fallback', { text: 'Approve', answers: false }, 'non-empty array'],
+    ['string answers', { answers: 'Approve' }, 'non-empty array'],
+    ['array-like answers', { answers: { 0: { text: 'Approve' }, length: 1 } }, 'non-empty array'],
+    ['null answer item', { answers: [null] }, 'objects'],
+    ['missing answer item', { answers: [undefined] }, 'objects'],
+    ['sparse answers', { answers: new Array(1) }, 'objects'],
+    ['array answer item', { answers: [[]] }, 'objects'],
+    ['string answer item', { answers: ['Approve'] }, 'objects'],
+    ['numeric answer item', { answers: [1] }, 'objects'],
+    ['numeric nested text', { answers: [{ text: 1 }] }, 'strings'],
+    ['object nested choice', { answers: [{ choice: {}, text: 'Approve' }] }, 'strings'],
+    ['invalid unused flat text', { text: null, answers: [{ choice: 'Approve' }] }, 'strings'],
+    ['empty flat answer', {}, 'every question'],
+    ['blank flat answer', { choice: ' \t', text: '\n ' }, 'every question'],
+    ['empty answer item', { answers: [{}] }, 'every question'],
+    ['blank answer item', { answers: [{ choice: '', text: ' \n' }] }, 'every question'],
+    ['too many answers', { answers: [{ choice: 'Approve' }, { text: 'Later' }] }, 'every question'],
+    ['unknown choice', { choice: 'Other' }, 'exactly match'],
+    ['different choice case', { choice: 'approve' }, 'exactly match'],
+    ['padded choice', { choice: ' Approve ' }, 'exactly match'],
+    ['unknown choice with valid text', { choice: 'Other', text: 'Approve' }, 'exactly match'],
+    ['unknown flat choice with valid answers', { choice: 'Other', answers: [{ choice: 'Approve' }] }, 'exactly match'],
+  ] as Array<[string, unknown, string]>)('rejects %s without writing or queueing, then accepts a corrected answer', (_label, response, reason) => {
+    asked('invalid', [{ question: 'Proceed?', choices: ['Approve', 'Reject'] }])
+    const log = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const before = manager.getAppDatabase().prepare('SELECT total_changes() AS count').get()
+
+    expect(() => store.acceptDecision('person', 'invalid', response)).toThrow(reason)
+
+    expect(manager.getAppDatabase().prepare('SELECT total_changes() AS count').get()).toEqual(before)
+    expect(store.getEntry('invalid')?.userResponse).toBeUndefined()
+    expect(store.getEntry('invalid')?.continuation).toBeUndefined()
+    expect(store.getQueuedContinuations()).toEqual([])
+    expect(store.getPendingEscalation('person', 'invalid')).not.toBeNull()
+    expect(log).toHaveBeenCalledTimes(1)
+    expect(log).toHaveBeenCalledWith('[Runtime] Decision answer rejected', {
+      appId: 'person', entryId: 'invalid', reason: expect.stringContaining(reason),
+    })
+
+    const accepted = store.acceptDecision('person', 'invalid', { choice: 'Approve' })
+    expect(accepted.userResponse?.choice).toBe('Approve')
+    expect(accepted.continuation?.status).toBe('queued')
+    expect(store.getQueuedContinuations()).toHaveLength(1)
+  })
+
+  it.each(['<exact choice selected by the owner>', '<the owner’s answer>'])(
+    'rejects the exact trimmed template %s in either field without losing the next real answer', placeholder => {
+      asked('template', [{ question: 'Proceed?', choices: ['Approve', placeholder] }])
+      const log = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+      const invalid: EscalationAnswerPayload[] = [
+        { choice: ` ${placeholder}\n` },
+        { text: `\t${placeholder} ` },
+        { choice: placeholder, text: 'Proceed tomorrow' },
+        { choice: 'Approve', text: placeholder },
+        { answers: [{ choice: placeholder }] },
+        { answers: [{ text: placeholder }] },
+        { text: placeholder, answers: [{ choice: 'Approve' }] },
+      ]
+      const before = manager.getAppDatabase().prepare('SELECT total_changes() AS count').get()
+      for (const response of invalid) {
+        expect(() => store.acceptDecision('person', 'template', response)).toThrow(/answer template/)
+      }
+      expect(manager.getAppDatabase().prepare('SELECT total_changes() AS count').get()).toEqual(before)
+      expect(log).toHaveBeenCalledTimes(invalid.length)
+      expect(store.getEntry('template')?.userResponse).toBeUndefined()
+      expect(store.getQueuedContinuations()).toEqual([])
+      expect(store.acceptDecision('person', 'template', { text: 'Proceed tomorrow' }).continuation?.status).toBe('queued')
+    },
+  )
+
+  it('matches each choice to its own question and rejects choices for free-form questions', () => {
+    asked('mixed', [
+      { question: 'Proceed?', choices: ['Approve', 'Reject'] },
+      { question: 'When?', choices: ['Now', 'Later'] },
+      { question: 'Anything else?' },
+    ])
+    const invalid = [
+      [{ choice: 'Now' }, { choice: 'Approve' }, { text: 'No' }],
+      [{ choice: 'Approve' }, { choice: 'Later' }, { choice: 'Anything', text: 'No' }],
+    ]
+    for (const answers of invalid) {
+      expect(() => store.acceptDecision('person', 'mixed', { answers })).toThrow(/exactly match/)
+      expect(store.getEntry('mixed')?.userResponse).toBeUndefined()
+      expect(store.getEntry('mixed')?.continuation).toBeUndefined()
+    }
+    question('free-form')
+    expect(() => store.acceptDecision('person', 'free-form', { choice: 'Yes' })).toThrow(/exactly match/)
+    const answers = [{ choice: 'Approve', text: 'After review' }, { text: 'Tomorrow' }, { text: 'No' }]
+    expect(store.acceptDecision('person', 'mixed', { answers }).userResponse?.answers).toEqual(answers)
+    expect(store.getQueuedContinuations()).toHaveLength(1)
+  })
+
+  it.each([
+    { text: 'Choose a different approach' },
+    { choice: 'Approve', text: 'After the review' },
+    { choice: '', text: 'Choose a different approach' },
+    { choice: ' \t', text: 'Choose a different approach' },
+    { choice: 'Approve', text: ' \n' },
+    { text: ' <the owner’s answer> is a literal example, not my answer ' },
+    { text: "<the owner's answer>" },
+    { text: '<exact choice selected by the owner> with additional instructions' },
+    { text: '待确认' },
+  ])('preserves free text and choice-plus-text in both single-question shapes: %j', answer => {
+    for (const shape of ['flat', 'list']) {
+      asked(shape, [{ question: 'Proceed?', choices: ['Approve', 'Reject'] }])
+      const payload = shape === 'flat' ? answer : { answers: [answer] }
+      const accepted = store.acceptDecision('person', shape, payload)
+      expect(accepted.userResponse).toEqual({ ...payload, ts: expect.any(Number) })
+      const retry = shape === 'flat' ? { answers: [answer] } : answer
+      expect(store.acceptDecision('person', shape, retry)).toEqual(accepted)
+      expect(() => store.acceptDecision('person', shape, { text: 'Changed my mind' })).toThrow(/differently/)
+      expect(store.getEntry(shape)?.userResponse).toEqual(accepted.userResponse)
+    }
+    expect(store.getQueuedContinuations()).toHaveLength(2)
+  })
+
+  it('preserves valid flat fields when an answers list supplies the effective answer', () => {
+    asked('combined', [{ question: 'Proceed?', choices: ['Approve', 'Reject'] }])
+    const response = { choice: 'Approve', text: 'Additional context', answers: [{ text: 'Proceed tomorrow' }] }
+    const accepted = store.acceptDecision('person', 'combined', response)
+    expect(accepted.userResponse).toEqual({ ...response, ts: expect.any(Number) })
+    expect(store.acceptDecision('person', 'combined', { answers: response.answers })).toEqual(accepted)
+    expect(store.getQueuedContinuations()).toHaveLength(1)
+  })
+
+  it('keeps legacy single-question choices and ignores malformed retry attempts', () => {
+    store.insertEntry({ id: 'legacy-choice', appId: 'person', runId: 'chat', type: 'escalation', ts: Date.now(),
+      content: { summary: 'Proceed?', question: 'Which path?', choices: ['A', 'B'] } })
+    expect(() => store.acceptDecision('person', 'legacy-choice', { choice: 'C' })).toThrow(/exactly match/)
+    const accepted = store.acceptDecision('person', 'legacy-choice', { choice: 'A', text: 'After review' })
+    expect(() => store.acceptDecision('person', 'legacy-choice', { answers: [null] })).toThrow(/objects/)
+    expect(store.getEntry('legacy-choice')).toEqual(accepted)
+    expect(store.getQueuedContinuations()).toHaveLength(1)
+  })
+
+  it('logs only decision identity and reason, never the invalid answer or extra credentials', () => {
+    asked('private', [{ question: 'Proceed?', choices: ['Approve', 'Reject'] }])
+    const log = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    expect(() => store.acceptDecision('person', 'private', {
+      choice: 'private-owner-answer', text: 'private-owner-explanation', token: 'private-credential-marker',
+    })).toThrow(/exactly match/)
+    expect(log).toHaveBeenCalledTimes(1)
+    expect(log).toHaveBeenCalledWith('[Runtime] Decision answer rejected', {
+      appId: 'person', entryId: 'private',
+      reason: 'Decision choice must exactly match an offered choice; use text for a free-form answer',
+    })
   })
 
   it('rolls the answer back when scheduling cannot persist', () => {

@@ -867,6 +867,21 @@ listener (`src/main/http/self-api/`) reached with curl.
   given and its manual entry has to say so. The injection silently narrowed
   list responses, leaving the agent to under-report against the window the
   user was looking at.
+- **An invited action is not a standing capability.** An owner's IM relay note
+  may carry a temporary HTTP grant even with `halo-api-ref` off. `http/self-api`
+  issues and validates it: one exact method and path, a memory-only grant registry,
+  reusable for 24 hours at most, always intersected with `scope.json`. Runtime owns
+  the action and its current validity (owner and private-recipient eligibility,
+  live session, bot/app/team binding, open question). Opaque in-memory revisions owned
+  by the session registry and channel manager prevent revoked grants from reviving
+  when a chat or old settings are restored. Bootstrap injects the issuer through
+  `InitAppRuntimeDeps.relayActionAccess`. Infrastructure failures leave an
+  instruction to answer in Halo without dropping other relay context; revoked
+  authorization aborts preparation. The human-readable IM record excludes appended
+  relay instructions through `AppChatRequest.recorded`, though engine history may
+  retain them. Ordinary turns receive neither a grant nor an action guide, and
+  guests never receive either. No engine or MCP surface is added. See apps/runtime
+  DESIGN §2.3 and §2.14.
 - **Adding a route** means adding its meta entry too — `npm run test:api-ref`
   fails the build when the generated tree and the routes have drifted.
 - **A capability group is described in one file and furnished in another.**

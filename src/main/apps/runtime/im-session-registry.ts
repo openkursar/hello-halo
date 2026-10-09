@@ -21,6 +21,7 @@
 import { readFileSync, renameSync } from 'fs'
 import type { ImPushLink, ImSessionRecord } from '../../../shared/types/im-channel'
 import { classifySessionSource, LOCAL_SESSION_CHANNEL } from '../../../shared/types/im-channel'
+import { buildTeamSessionKey } from '../../../shared/apps/im-keys'
 import { truncateUtf16Safe } from './text-truncate'
 import { getPendingRelayStore } from './pending-relays'
 import { getConversationReminders } from './reminders'
@@ -83,6 +84,7 @@ function readPushLinks(value: unknown, ownAppId: string): ImPushLink[] {
 export class ImSessionRegistry {
   /** In-memory session store, keyed by "{appId}:{channel}:{chatId}" */
   private sessions = new Map<SessionKey, ImSessionRecord>()
+  private sessionRevisions = new WeakMap<ImSessionRecord, object>()
 
   /** File path for JSON persistence */
   private filePath: string
@@ -132,15 +134,18 @@ export class ImSessionRegistry {
     const existing = this.sessions.get(key)
 
     if (existing) {
+      const archiveChanged = existing.teamContext?.epochId !== opts?.teamContext?.epochId || existing.teamContext?.teamId !== opts?.teamContext?.teamId
+      const contactChanged = !!opts?.contactId && existing.contactId !== opts.contactId
+      if (existing.instanceId !== instanceId || archiveChanged || contactChanged) {
+        this.sessionRevisions.delete(existing)
+      }
       // displayName is intentionally NOT updated — stable after first registration
       existing.lastActiveAt = Date.now()
       existing.instanceId = instanceId // Always update to latest instance
-      const archiveChanged = existing.teamContext?.epochId !== opts?.teamContext?.epochId || existing.teamContext?.teamId !== opts?.teamContext?.teamId
       existing.teamContext = opts?.teamContext
       existing.messageCount = (existing.messageCount ?? 0) + 1
       if (opts?.lastSender !== undefined) existing.lastSender = opts.lastSender
       if (opts?.lastMessage !== undefined) existing.lastMessage = truncateUtf16Safe(opts.lastMessage, 50)
-      const contactChanged = !!opts?.contactId && existing.contactId !== opts.contactId
       if (contactChanged) existing.contactId = opts!.contactId
       this.requestPersist(archiveChanged || contactChanged)
     } else {
@@ -168,6 +173,19 @@ export class ImSessionRegistry {
       // New session is a structural change → persist promptly.
       this.requestPersist(true)
     }
+  }
+
+  /** Refresh a push destination without pretending an inbound message arrived. */
+  setTeamContext(appId: string, channel: string, chatId: string, teamContext: ImSessionRecord['teamContext']): void {
+    const session = this.sessions.get(this.buildKey(appId, channel, chatId))
+    if (!session) {
+      console.warn(`[ImSessionRegistry] Cannot refresh missing chat destination: appId=${appId}, channel=${channel}, chatId=${chatId}`)
+      return
+    }
+    if (session.teamContext?.teamId === teamContext?.teamId && session.teamContext?.epochId === teamContext?.epochId) return
+    this.sessionRevisions.delete(session)
+    session.teamContext = teamContext ? { ...teamContext } : undefined
+    this.requestPersist(true)
   }
 
   // ── Native local sessions (source === 'local') ───────
@@ -261,6 +279,7 @@ export class ImSessionRegistry {
   resetActivity(appId: string, channel: string, chatId: string): void {
     const session = this.sessions.get(this.buildKey(appId, channel, chatId))
     if (!session) return
+    this.sessionRevisions.delete(session)
     session.lastMessage = undefined
     session.messageCount = 0
     this.requestPersist(true)
@@ -336,6 +355,7 @@ export class ImSessionRegistry {
     const session = this.sessions.get(key)
     if (!session) return false
 
+    if (session.proactive !== proactive) this.sessionRevisions.delete(session)
     session.proactive = proactive
     this.requestPersist(true)
     return true
@@ -440,6 +460,18 @@ export class ImSessionRegistry {
     return session ? { ...session } : undefined
   }
 
+  /** Memory-only identity invalidated by recipient changes, selection changes or chat clearing. */
+  getSessionRevision(appId: string, channel: string, chatId: string): object | undefined {
+    const session = this.sessions.get(this.buildKey(appId, channel, chatId))
+    if (!session) return undefined
+    let revision = this.sessionRevisions.get(session)
+    if (!revision) {
+      revision = {}
+      this.sessionRevisions.set(session, revision)
+    }
+    return revision
+  }
+
   /**
    * Get all known sessions for a given app.
    * Used by the settings UI to display the session list.
@@ -474,16 +506,14 @@ export class ImSessionRegistry {
    */
   removeSession(appId: string, channel: string, chatId: string): boolean {
     const key = this.buildKey(appId, channel, chatId)
-    const deleted = this.sessions.delete(key)
-    if (deleted) {
-      this.requestPersist(true)
-      // Cascade: undelivered relay context and reminders are keyed by session
-      // and must not outlive it, or a chat re-registered under the same id
-      // would inherit them.
-      getPendingRelayStore()?.clearForChat(appId, channel, chatId)
-      getConversationReminders()?.removeForChat(appId, channel, chatId)
-    }
-    return deleted
+    const session = this.sessions.get(key)
+    if (!session) return false
+    this.sessions.delete(key)
+    this.requestPersist(true)
+    // Re-registering the chat must not inherit its pending context or reminders.
+    this.clearPendingRelays(session)
+    getConversationReminders()?.removeForChat(appId, channel, chatId)
+    return true
   }
 
   /**
@@ -496,7 +526,7 @@ export class ImSessionRegistry {
     for (const [key, session] of this.sessions) {
       if (session.appId === appId) {
         this.sessions.delete(key)
-        getPendingRelayStore()?.clearForChat(session.appId, session.channel, session.chatId)
+        this.clearPendingRelays(session)
         getConversationReminders()?.removeForChat(session.appId, session.channel, session.chatId)
         count++
       } else if (pushLinkOf(session, appId)) {
@@ -511,6 +541,18 @@ export class ImSessionRegistry {
       this.requestPersist(true)
     }
     return count
+  }
+
+  private clearPendingRelays(session: ImSessionRecord): void {
+    const spool = getPendingRelayStore()
+    if (!spool) {
+      console.warn(`[ImSessionRegistry] Pending relay cleanup unavailable: appId=${session.appId}, channel=${session.channel}, chatId=${session.chatId}, reason=relay spool unavailable`)
+      return
+    }
+    spool.clearForChat(session.appId, session.channel, session.chatId)
+    if (session.teamContext) {
+      spool.clear(buildTeamSessionKey(session.appId, session.teamContext.teamId, session.teamContext.epochId))
+    }
   }
 
   // ── Bounds enforcement (HTTP sessions) ───────────────

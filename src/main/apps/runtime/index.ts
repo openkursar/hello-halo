@@ -55,6 +55,7 @@ import { WebhookSource, type WebhookSecretResolver } from './sources/webhook.sou
 import { ImChannelManager, WecomBotProvider, WeixinIlinkBotProvider, FeishuBotProvider, setActiveImChannelManager } from './im-channels'
 import { ImSessionRegistry, setImSessionRegistry } from './im-session-registry'
 import { PendingRelayStore, setPendingRelayStore, getPendingRelayStore } from './pending-relays'
+import { setRelayActionAccess, type RelayActionAccess } from './relay-actions'
 import { createConversationReminders, setConversationReminders } from './reminders'
 import { deliverReminder } from './reminders/delivery'
 import { getAppChatConversationId, parseAppChatKey } from '../../../shared/apps/im-keys'
@@ -107,6 +108,7 @@ export {
   AppNotRunnableError,
   ConcurrencyLimitError,
   EscalationNotFoundError,
+  EscalationAnswerValidationError,
   RunExecutionError,
   RunProcessClearedError,
 } from './errors'
@@ -218,6 +220,8 @@ interface InitAppRuntimeDeps {
   memory: MemoryService
   /** Background service */
   background: BackgroundService
+  /** Lazy, scoped HTTP access for actions carried by owner relay notes. */
+  relayActionAccess?: RelayActionAccess
 }
 
 /**
@@ -298,6 +302,7 @@ export async function initAppRuntime(
   // Create the activity store
   const store = new ActivityStore(appDb)
   activityStoreRef = store
+  setRelayActionAccess(deps.relayActionAccess ?? null, store)
 
   // ── Create and wire EventRouter ──────────────────────────────────────
   const eventRouter = createEventRouter()
@@ -610,6 +615,7 @@ export async function shutdownAppRuntime(): Promise<void> {
   // since its target may not send another message for weeks.
   getPendingRelayStore()?.flush()
   setPendingRelayStore(null)
+  setRelayActionAccess(null, null)
   setConversationReminders(null)
 
   // Clear all IM permission contexts (in-memory only, no persistence needed)

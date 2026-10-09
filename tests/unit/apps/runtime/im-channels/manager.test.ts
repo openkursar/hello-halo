@@ -205,6 +205,185 @@ describe('ImChannelManager.applyConfig — diff engine', () => {
   })
 })
 
+describe('ImChannelManager — authorization revisions', () => {
+  let manager: ImChannelManager
+  let provider: FakeProvider
+  let cfg: ImChannelInstanceConfig
+
+  beforeEach(() => {
+    manager = new ImChannelManager()
+    provider = makeProvider()
+    manager.registerProvider(provider)
+    manager.registerProvider(makeProvider({ type: 'feishu-bot' }))
+    cfg = makeConfig('i1', {
+      teamId: 'team-1', permissionEnabled: true, owners: ['owner-1'],
+      config: { botId: 'b1', secret: 'fixture-credential' },
+    })
+  })
+
+  it('returns undefined for unknown configs and opaque, distinct identities for current configs', () => {
+    expect(manager.getAuthorizationRevision('i1')).toBeUndefined()
+    expect(manager.updateInstanceConfigSnapshot(cfg)).toBe(false)
+    expect(manager.getAuthorizationRevision('i1')).toBeUndefined()
+    manager.applyConfig([cfg, makeConfig('i2', { enabled: false })], noopInbound)
+    const revision = manager.getAuthorizationRevision('i1')!
+    expect(revision).toEqual({})
+    expect(Reflect.ownKeys(revision)).toEqual([])
+    expect(manager.getAuthorizationRevision('i1')).toBe(revision)
+    expect(manager.getAuthorizationRevision('i2')).toBeDefined()
+    expect(manager.getAuthorizationRevision('i2')).not.toBe(revision)
+    expect(manager.getAuthorizationRevision('unknown')).toBeUndefined()
+  })
+
+  describe.each(['applyConfig', 'updateInstanceConfigSnapshot'] as const)('%s', method => {
+    function update(next: ImChannelInstanceConfig): void {
+      if (method === 'applyConfig') manager.applyConfig([next], noopInbound)
+      else expect(manager.updateInstanceConfigSnapshot(next)).toBe(true)
+    }
+
+    it.each<[string, Partial<ImChannelInstanceConfig>]>([
+      ['enabled', { enabled: false }],
+      ['provider type', { type: 'feishu-bot' }],
+      ['app binding', { appId: 'app-2' }],
+      ['team binding', { teamId: 'team-2' }],
+      ['team removal', { teamId: undefined }],
+      ['permission switch', { permissionEnabled: false }],
+      ['permission removal', { permissionEnabled: undefined }],
+      ['owner removal', { owners: [] }],
+      ['owner roster removal', { owners: undefined }],
+      ['owner replacement', { owners: ['owner-2'] }],
+      ['bot identity', { config: { botId: 'b2', secret: 'fixture-credential' } }],
+      ['credentials', { config: { botId: 'b1', secret: 'changed-fixture-credential' } }],
+    ])('never revives a revision after %s changes and reverts without an intervening lookup', (_name, change) => {
+      manager.applyConfig([cfg], noopInbound)
+      const revision = manager.getAuthorizationRevision('i1')
+      update({ ...cfg, ...change })
+      update(cfg)
+      const current = manager.getAuthorizationRevision('i1')
+      expect(current).toBeDefined()
+      expect(current).not.toBe(revision)
+      expect(manager.getAuthorizationRevision('i1')).toBe(current)
+      expect(manager.getInstanceConfig('i1')).toEqual(cfg)
+    })
+
+    it('preserves revisions for no-change saves and unrelated dispatch or guest-policy edits', () => {
+      manager.applyConfig([cfg], noopInbound)
+      const revision = manager.getAuthorizationRevision('i1')
+      const instance = manager.getInstance('i1')
+      for (let i = 0; i < 3; i++) {
+        update({ ...cfg, owners: [...cfg.owners!], config: { ...cfg.config } })
+        expect(manager.getAuthorizationRevision('i1')).toBe(revision)
+      }
+      const unrelated: Partial<ImChannelInstanceConfig> = {
+        streaming: true, processingNotice: false, replyScope: 'direct',
+        guestPolicy: { allowedTools: ['Read'] }, savedGuestPolicy: { allowedTools: [] },
+      }
+      update({ ...cfg, ...unrelated })
+      expect(manager.getAuthorizationRevision('i1')).toBe(revision)
+      expect(manager.getInstanceConfig('i1')).toMatchObject(unrelated)
+      expect(manager.getInstance('i1')).toBe(instance)
+      expect(provider.created).toHaveLength(1)
+      update({ ...cfg, config: { secret: cfg.config.secret, botId: cfg.config.botId } })
+      expect(manager.getAuthorizationRevision('i1')).toBe(revision)
+    })
+
+    it('compares owner rosters against an isolated snapshot even when the input array is reused', () => {
+      manager.applyConfig([cfg], noopInbound)
+      const revision = manager.getAuthorizationRevision('i1')
+      cfg.owners!.splice(0, 1)
+      expect(manager.getInstanceConfig('i1')?.owners).toEqual(['owner-1'])
+      update(cfg)
+      cfg.owners!.push('owner-1')
+      expect(manager.getInstanceConfig('i1')?.owners).toEqual([])
+      update(cfg)
+      expect(manager.getAuthorizationRevision('i1')).not.toBe(revision)
+    })
+
+    it('compares nested provider credentials against an isolated snapshot', () => {
+      const credentials = { secret: 'fixture-credential' }
+      cfg = { ...cfg, config: { botId: 'b1', credentials } }
+      manager.applyConfig([cfg], noopInbound)
+      const revision = manager.getAuthorizationRevision('i1')
+      credentials.secret = 'changed-fixture-credential'
+      expect(manager.getInstanceConfig('i1')?.config.credentials).toEqual({ secret: 'fixture-credential' })
+      update(cfg)
+      credentials.secret = 'fixture-credential'
+      expect(manager.getInstanceConfig('i1')?.config.credentials).toEqual({ secret: 'changed-fixture-credential' })
+      update(cfg)
+      expect(manager.getAuthorizationRevision('i1')).not.toBe(revision)
+    })
+  })
+
+  it.each([true, false])('forgets removed configs and never revives their revisions after recreation (enabled=%s)', enabled => {
+    cfg = { ...cfg, enabled }
+    const other = makeConfig('i2', { config: { botId: 'b2' } })
+    manager.applyConfig([cfg, other], noopInbound)
+    const revision = manager.getAuthorizationRevision('i1')
+    const otherRevision = manager.getAuthorizationRevision('i2')
+    manager.applyConfig([other], noopInbound)
+    manager.applyConfig([cfg, other], noopInbound)
+    expect(manager.getAuthorizationRevision('i1')).toBeDefined()
+    expect(manager.getAuthorizationRevision('i1')).not.toBe(revision)
+    expect(manager.getAuthorizationRevision('i2')).toBe(otherRevision)
+    manager.applyConfig([other], noopInbound)
+    expect(manager.getAuthorizationRevision('i1')).toBeUndefined()
+  })
+
+  it('clears all revisions on stopAll and never revives them on restart', () => {
+    const configs = [cfg, makeConfig('i2', { enabled: false })]
+    manager.applyConfig(configs, noopInbound)
+    const revisions = configs.map(config => manager.getAuthorizationRevision(config.id))
+    manager.stopAll()
+    manager.applyConfig(configs, noopInbound)
+    for (const [index, config] of configs.entries()) {
+      expect(manager.getAuthorizationRevision(config.id)).toBeDefined()
+      expect(manager.getAuthorizationRevision(config.id)).not.toBe(revisions[index])
+    }
+    manager.stopAll()
+    expect(manager.getAuthorizationRevision('i1')).toBeUndefined()
+    expect(manager.getAuthorizationRevision('i2')).toBeUndefined()
+  })
+
+  it('invalidates provider credential hot updates without changing the connection lifecycle', () => {
+    manager = new ImChannelManager()
+    provider = makeProvider({ hotUpdatableConfigKeys: ['secret'] })
+    manager.registerProvider(provider)
+    manager.applyConfig([cfg], noopInbound)
+    const revision = manager.getAuthorizationRevision('i1')
+    const instance = manager.getInstance('i1') as FakeInstance
+    manager.applyConfig([{ ...cfg, config: { ...cfg.config, secret: 'changed-fixture-credential' } }], noopInbound)
+    manager.applyConfig([cfg], noopInbound)
+    expect(manager.getAuthorizationRevision('i1')).not.toBe(revision)
+    expect(manager.getInstance('i1')).toBe(instance)
+    expect(instance.stopped).toBe(false)
+    expect(instance.updateConfigCalls).toHaveLength(2)
+  })
+
+  it('keeps revisions stable during reconnect and repeated normal inbound messages', () => {
+    const onInbound = vi.fn()
+    manager.applyConfig([cfg], onInbound)
+    const revision = manager.getAuthorizationRevision('i1')
+    const instance = manager.getInstance('i1') as FakeInstance
+    manager.reconnectInstance('i1')
+    for (let i = 0; i < 5; i++) {
+      instance.inboundHandler!({ text: `Message ${i}` }, { kind: 'reply' })
+      expect(manager.getAuthorizationRevision('i1')).toBe(revision)
+    }
+    expect(onInbound).toHaveBeenCalledTimes(5)
+  })
+
+  it('invalidates a changed authorization before lifecycle teardown callbacks run', () => {
+    manager.applyConfig([cfg], noopInbound)
+    const revision = manager.getAuthorizationRevision('i1')
+    const onStop = vi.fn(() => manager.getAuthorizationRevision('i1'))
+    manager.setOnInstanceStop(onStop)
+    manager.applyConfig([{ ...cfg, appId: 'app-2' }], noopInbound)
+    expect(onStop).toHaveBeenCalledOnce()
+    expect(onStop.mock.results[0].value).toBeDefined()
+    expect(onStop.mock.results[0].value).not.toBe(revision)
+  })
+})
+
 describe('ImChannelManager.configEqual (via applyConfig recreate behavior)', () => {
   let manager: ImChannelManager
   let provider: FakeProvider

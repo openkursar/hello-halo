@@ -48,6 +48,12 @@ export interface ImNotifyContext {
 
 const NO_NOTIFY_TOOLS: ImNotifyContext = { channelsConfigured: false, notifyBotAvailable: false }
 
+/** Appended only with an invited action, never paid for by ordinary IM turns. */
+export function buildRelayActionInstructions(): string {
+  return 'Use this action only to submit what the owner actually said, never decide for them. ' +
+    'If the target or meaning is unclear, ask first. Confirm success naturally; report an already answered, closed or expired question honestly.'
+}
+
 /**
  * Cross-session relay semantics. Rendered for every IM session (not gated on
  * owners) because the tag contract must be defined wherever the tag can
@@ -64,8 +70,8 @@ function buildRelayContextSection(notifyBotAvailable: boolean): string {
     '### Messages You Pushed Here Earlier',
     '',
     'A `<relay-context>` block may be appended at the END of a message. It lists',
-    'messages YOU pushed into this chat earlier from other sessions via',
-    '`notify_bot`, which produced no record here at the time:',
+    'messages YOU pushed via `notify_bot`, or private questions for the owner,',
+    'delivered without a turn here:',
     '',
     '- `<pushed>` / `<pushed-file>` — what was delivered to this chat',
     '- `at` — when it was delivered; judge for yourself whether it is still relevant',

@@ -33,7 +33,7 @@ vi.mock('../../../../src/main/services/notify-channels', () => ({
 // initialized, so the mutable holder itself must be created inside a hoisted
 // block for the factory to safely close over it.
 const configHolder = vi.hoisted(() => ({
-  channels: undefined as Record<string, { enabled?: boolean }> | undefined,
+  channels: undefined as NotificationChannelsConfig | undefined,
 }))
 vi.mock('../../../../src/main/foundation/config.service', () => ({
   getConfig: vi.fn(() => ({ notificationChannels: configHolder.channels })),
@@ -64,6 +64,10 @@ vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
   })),
 }))
 
+vi.mock('../../../../src/main/apps/runtime/im-team-session', () => ({ resolveImPushConversation: vi.fn() }))
+vi.mock('../../../../src/main/apps/runtime/im-session-registry', () => ({ getImSessionRegistry: () => null }))
+vi.mock('../../../../src/main/apps/runtime/im-channels', () => ({ getActiveImChannelManager: () => null }))
+
 import { resolveNotifyAvailability } from '../../../../src/main/apps/runtime/notify-availability'
 import { createNotifyToolServer } from '../../../../src/main/apps/runtime/notify-tool'
 import type { NotificationChannelsConfig } from '../../../../src/shared/types/notification-channels'
@@ -85,7 +89,7 @@ function baseContext(overrides: Record<string, unknown> = {}) {
     runId: 'run-1',
     usesImPush: false,
     exportGate: {} as any,
-    relay: { sessionKey: 'run-1' },
+    relay: { sessionKey: 'run-1', isOwner: true },
     ...overrides,
   }
 }

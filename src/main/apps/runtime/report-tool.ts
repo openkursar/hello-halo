@@ -253,8 +253,6 @@ export function createReportToolServer(
       // the framing, so a top-level `choices` has no question to belong to.
       if (input.choices && askedQuestions.length === 0) content.choices = input.choices
       if (askedQuestions.length > 0) content.questions = askedQuestions
-      // What an owner answers it by from an IM chat (im-escalation).
-      if (safeType === 'escalation') content.number = store.nextEscalationNumber()
 
       // ── Team-channel routing ────────────────────────────────────────────────
       // In a team turn, report_to_user keeps its ORIGINAL purpose: escalation

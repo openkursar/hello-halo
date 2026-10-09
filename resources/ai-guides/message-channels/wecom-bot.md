@@ -1,5 +1,7 @@
 # WeCom Intelligent Bot (企业微信智能机器人) — Setup, Permissions, Diagnosis
 
+Last updated: 2026-10-09
+
 Provider type: `wecom-bot`. Source: `src/main/apps/runtime/im-channels/wecom-bot.provider.ts`,
 `wecom-bot-scan-auth.ts`, `wecom-bot-default-spec.ts`, `owner-claim.ts`. UI:
 `src/renderer/components/settings/MessageChannelsSection.tsx` (`InstanceCard`),
@@ -59,7 +61,11 @@ digital human at a time; the second instance simply won't be able to claim the W
 
 - **Reply Scope** (`replyScope`): `all` (default for new manual instances) / `group` only /
   `direct` only. A message outside scope gets a bilingual rejection reply, not silence
-  (`DM_REJECTED_MESSAGE` / `GROUP_REJECTED_MESSAGE` in `dispatch-inbound.ts`).
+  (`DM_REJECTED_MESSAGE` / `GROUP_REJECTED_MESSAGE` in `dispatch-inbound.ts`). Exception: while
+  the digital human or its team has an open question, a group-only bot accepts private replies
+  and clarification from eligible question recipients (§3). With permission control off, the
+  known direct chat for the current bot/digital human must have **Auto-sync run result** on;
+  ordinary owner-level access alone is not enough. This does not permanently enable direct chats.
 - **Quote Reply** (`quoteReply`, config field, default **on**): group replies carry WeCom's
   quote-bubble UI. Turning it off routes group replies through a plain push instead
   (`wecom-bot.provider.ts` `buildReplyHandle`). Direct messages always keep the quote bubble
@@ -139,10 +145,19 @@ off** by default:
   may hear about skills that are switched off — using them is still refused.
 - Before 3.0, guests on a permission-controlled bot could not use skills at all.
 
-**Questions from the digital human** (Halo 3.0 and later): when the bound digital human asks for a
-decision, owners get the full question in their direct chat with the bot and answer with
-`/answer <number> <answer>`; groups only learn that a question is waiting. Who receives it and who
-may answer depends on permission control — see `message-channels/index.md` §2.
+**Questions from the digital human** (Halo 3.0 and later): questions and answer actions go only
+to known direct chats for the current bot instance and its bound digital human — listed owners
+with permission control on, or chats with **Auto-sync run result** on with it off. This is not a
+general access switch: ordinary chat still gives everyone owner-level access with permission
+control off. The recipient replies naturally, without a question ID or command; the AI clarifies
+if needed and uses only Halo's supplied answer action. **Operate Halo** need not be on. Only the
+originating team group gets a waiting line; groups merely receiving results get no question notice.
+Removing the chat or, with permission control off, deselecting it denies old actions. After rebinding,
+message the bot privately to establish a chat with the current digital human; with permission control
+off, select that chat again under **Auto-sync run result**. Past questions are not guaranteed to be
+resent. If delivery or submission is unavailable, answer in Halo — never ask to enable another
+capability or claim an answer was submitted when it was not. See `message-channels/index.md` §2 for
+answer validation, current-access checks and authorization limits; the group-only exception is in §2.
 
 **The defaults applied to a *new* instance are build-specific, not fixed.** `defaultEnabled`,
 `defaultGuestAccess`, `defaultGuestPolicy`, `ownerIdHint`, and `ownerSetupGuideUrl`
@@ -232,8 +247,10 @@ bug — do not diagnose it as a connection failure.
 | Owner claimed the wrong user | First DM sender ≠ intended owner | Manually edit **Owner User IDs** in the Permission Control section; replaces the auto-claimed value |
 | `notify_bot` / scheduled push to a chat never delivers | That chat has never messaged the bot before | A chat only becomes a known, pushable session after at least one real inbound message (`ImSessionRegistry`, registered in `dispatch-inbound.ts`) — have the target person or group `@`-mention the bot once first. On 3.0 and later, a chat that already talks to another bot on this machine can instead be added from the digital human's **Reachable Contacts** → **Add from existing chats**; see `create-digital-human/im-triggers.md` §B |
 | A guest is told a skill cannot be used | The skill is switched off for guests, or its own pre-approvals go beyond the guest switches (the reason names them) | §3 "Skills for guests" — switch it on, or allow the named rule, or remove it from the skill |
-| The owner never gets the digital human's question in IM | Permission control is off and no direct chat has **Auto-sync run result** on, or the bot was offline when the question was asked | `message-channels/index.md` §2 — the question is still open in Halo either way |
-| Every reply is preceded by "✅ 已收到，正在处理…", or the user wants it gone | Processing Notice is on (the default) and the reply took over 5 seconds | §2 — switch **Processing Notice** off, or turn Streaming on |
+| The owner never gets the digital human's question in IM | No eligible direct chat for the current bot/digital human; permission control is off and that chat is not selected under **Auto-sync run result**; or delivery failed / the bot was offline | Answer in Halo. After rebinding, establish a new direct chat and, with permission control off, select it again; earlier questions are not guaranteed to be resent (§3) |
+| A group-only bot accepts an eligible recipient's private message while a question is waiting | Expected exception to Reply Scope; with permission control off it requires the selected current direct chat, not just owner-level access | §2 — reply or clarify naturally; ordinary private replies stop when no question remains open, but the owner can still stop or clear the active turn |
+| The AI says an old question's authorization is no longer valid | Authorization expired or Halo restarted; bot binding or recipient eligibility changed; the chat was removed; or the question is no longer open | Answer any still-open question in Halo; enabling **Operate Halo** does not renew the old authorization (`message-channels/index.md` §2) |
+| Every reply is preceded by "已收到，正在处理…", or the user wants it gone | Processing Notice is on (the default) and the reply took over 5 seconds | §2 — switch **Processing Notice** off, or turn Streaming on |
 
 ## Do not ask / do not assume
 

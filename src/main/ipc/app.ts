@@ -62,6 +62,7 @@ import {
   moveAppDefaultSpace,
   readAppRunMessages,
   RunProcessClearedError,
+  EscalationAnswerValidationError,
   sendAppChatMessage,
   stopAppChat,
   stopAppChatConversation,
@@ -482,7 +483,9 @@ export function registerAppHandlers(): void {
         return { success: true, data: entry }
       } catch (error: unknown) {
         const err = error as Error
-        console.error('[AppIPC] app:respond-escalation error:', err.message)
+        if (!(err instanceof EscalationAnswerValidationError)) {
+          console.error(`[AppIPC] app:respond-escalation error: appId=${input.appId}, entryId=${input.escalationId}`, err.message)
+        }
         return { success: false, error: err.message }
       }
     },

@@ -1,5 +1,7 @@
 # WeChat Bot / iLink (微信机器人) — Setup, Limits, Diagnosis
 
+Last updated: 2026-10-09
+
 Provider type: `weixin-ilink-bot`. Source: `src/main/apps/runtime/im-channels/weixin-ilink.provider.ts`,
 `ilink-api.ts`, `ilink-media.ts`, `src/main/ipc/weixin-ilink.ts`. UI:
 `src/renderer/components/settings/WeixinIlinkInstanceCard.tsx`.
@@ -61,13 +63,19 @@ QR flow, including reconnecting after a session expiry.
 - **Media items degrade gracefully.** A failed image/file/video download becomes a text
   placeholder (`[Image — download failed]` etc.) rather than dropping the whole message.
 - **Processing Notice** (处理中提示, Halo 3.0 and later) is the one reply setting on this card: on by
-  default, a reply slower than 5 seconds is preceded by "✅ 已收到，正在处理…"; off, only the final
+  default, a reply slower than 5 seconds is preceded by "已收到，正在处理…"; off, only the final
   reply is sent (`message-channels/index.md` §2).
-- **The digital human's questions** (Halo 3.0 and later): with no permission control there is no
-  owner list, so a question is sent only to the direct chats that have **Auto-sync run result**
-  (自动同步运行结果) on in the digital human's bot sessions, and `/answer <number> <answer>` is
-  accepted from any direct chat with this account — like every other ability here, anyone who can
-  message it can answer. Details in `message-channels/index.md` §2.
+- **The digital human's questions** (Halo 3.0 and later): with permission control off, only known
+  direct chats for the current bot instance and its bound digital human with **Auto-sync run result**
+  (自动同步运行结果, `proactive`) on receive questions and answer actions. Recipients reply naturally;
+  the AI clarifies if needed and submits only their actual answer using Halo's bounded action — no
+  question ID, command, **Operate Halo** permission or standing answer tool. Removing the chat or
+  deselecting it denies old actions. After rebinding, message the currently bound digital human
+  privately and select the new chat again; past questions are not guaranteed to be resent. If
+  delivery or submission is unavailable, authorization is invalid, or the AI lacks a tool to execute
+  the request, answer in Halo — never enable another capability or claim an unsubmitted answer was
+  accepted. These recipient rules do not change ordinary chat's unrestricted access (§3). See
+  `message-channels/index.md` §2 for answer validation, current-access checks and authorization limits.
 
 ## 5. Diagnosis
 

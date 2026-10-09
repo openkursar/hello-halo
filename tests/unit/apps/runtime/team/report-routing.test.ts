@@ -60,7 +60,6 @@ function makeStore() {
       getAllPendingEscalations: vi.fn(() =>
         entries.filter((e) => e.type === 'escalation' && !e.userResponse)
       ),
-      nextEscalationNumber: vi.fn(() => entries.filter((e) => e.type === 'escalation').length + 1),
     } as any,
   }
 }
@@ -320,9 +319,7 @@ describe('report routing (§5.3)', () => {
     expect(res.content[0].text).toMatch(/report saved/i)
   })
 
-  it('numbers each question and asks it over IM too, while other reports stay off IM', async () => {
-    // A question must reach a person who works with the digital human only
-    // through an IM bot, and carry the number they answer it by there.
+  it('asks each question over IM by entry identity without assigning numbers, while other reports stay off IM', async () => {
     deliverEscalationToIm.mockClear()
     const { store, entries } = makeStore()
     const ctx: ReportToolContext = { appId: 'app-solo', appName: 'Solo', runId: 'run-1', sessionKey: 'session-1' }
@@ -333,9 +330,11 @@ describe('report routing (§5.3)', () => {
     await handler({ type: 'escalation', message: 'And the hotfix?' })
     await vi.waitFor(() => expect(deliverEscalationToIm).toHaveBeenCalledTimes(2))
 
-    expect(entries.filter(e => e.type === 'escalation').map(e => e.content.number)).toEqual([1, 2])
-    expect(entries.find(e => e.type === 'run_complete')?.content.number).toBeUndefined()
-    expect(deliverEscalationToIm).toHaveBeenCalledWith(expect.objectContaining({ id: entries[0].id }), 'Solo')
+    expect(entries.map(entry => entry.type)).toEqual(['escalation', 'run_complete', 'escalation'])
+    expect(new Set(entries.map(entry => entry.id)).size).toBe(3)
+    for (const entry of entries) expect(entry.content).not.toHaveProperty('number')
+    expect(deliverEscalationToIm).toHaveBeenNthCalledWith(1, entries[0], 'Solo')
+    expect(deliverEscalationToIm).toHaveBeenNthCalledWith(2, entries[2], 'Solo')
   })
 })
 

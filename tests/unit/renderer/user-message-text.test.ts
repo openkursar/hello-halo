@@ -53,8 +53,8 @@ function mount(text: string, messageId = 'm1') {
   return { runner, render }
 }
 
-const LOG = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join('\n')
-const PREVIEW = Array.from({ length: 8 }, (_, i) => `line ${i + 1}`).join('\n')
+const LOG = Array.from({ length: 25 }, (_, i) => `line ${i + 1}`).join('\n')
+const PREVIEW = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join('\n')
 
 beforeEach(() => {
   vi.stubGlobal('window', new EventTarget())
@@ -70,29 +70,82 @@ it('shows a short message whole, with nothing to open', () => {
   expect(buttons(tree)).toEqual([])
 })
 
-it('folds a long message to its first lines, and opens and folds it from either end', () => {
+it('shows exactly 24 logical rows whole, with nothing to open', () => {
+  const text = Array.from({ length: 24 }, (_, i) => `line ${i + 1}`).join('\n')
+  const tree = mount(text).render()
+  expect(shownText(tree)).toBe(text)
+  expect(buttons(tree)).toEqual([])
+})
+
+it('folds 25 logical rows to the first 20, and opens and folds from either end', () => {
   const { render } = mount(LOG)
   let tree = render()
   expect(shownText(tree)).toBe(`${PREVIEW}…`)
-  expect(buttons(tree).map(label)).toEqual(['Show all (20 lines)'])
+  expect(buttons(tree).map(label)).toEqual(['Show all (25 lines)'])
+  expect(buttons(tree)[0].props['aria-expanded']).toBe(false)
 
   buttons(tree)[0].props.onClick()
   tree = render()
   expect(shownText(tree)).toBe(LOG)
   expect(buttons(tree).map(label)).toEqual(['Collapse', 'Collapse'])
+  expect(buttons(tree).map(button => button.props['aria-expanded'])).toEqual([true, true])
+  expect(tree.props.children).toEqual([buttons(tree)[0], contents(tree)[0], buttons(tree)[1]])
 
   buttons(tree)[1].props.onClick()
   tree = render()
   expect(shownText(tree)).toBe(`${PREVIEW}…`)
 
-  buttons(render())[0].props.onClick()
-  buttons(render())[0].props.onClick()
-  expect(shownText(render())).toBe(`${PREVIEW}…`)
+  buttons(tree)[0].props.onClick()
+  tree = render()
+  expect(shownText(tree)).toBe(LOG)
+  buttons(tree)[0].props.onClick()
+  tree = render()
+  expect(shownText(tree)).toBe(`${PREVIEW}…`)
+  expect(buttons(tree)[0].props['aria-expanded']).toBe(false)
 })
 
 it('offers "Show all" without a line count for one long paragraph', () => {
   const tree = mount('word '.repeat(400).trim()).render()
+  expect(shownText(tree)).toBe(`${'word '.repeat(320).trimEnd()}…`)
   expect(buttons(tree).map(label)).toEqual(['Show all'])
+})
+
+it.each([
+  { name: 'ASCII', char: 'x', columns: 1 },
+  { name: 'CJK', char: '字', columns: 2 },
+  { name: 'supplementary CJK', char: '\u{20000}', columns: 2 },
+])('cuts a long $name line at 20 estimated rows and expands it intact', ({ char, columns }) => {
+  const whole = char.repeat(1920 / columns)
+  const shortTree = mount(whole).render()
+  expect(shownText(shortTree)).toBe(whole)
+  expect(buttons(shortTree)).toEqual([])
+
+  const text = whole + char
+  const preview = `${char.repeat(1600 / columns)}…`
+  const { render } = mount(text)
+  let tree = render()
+  expect(shownText(tree)).toBe(preview)
+  expect(buttons(tree).map(label)).toEqual(['Show all'])
+
+  buttons(tree)[0].props.onClick()
+  tree = render()
+  expect(shownText(tree)).toBe(text)
+  buttons(tree)[1].props.onClick()
+  expect(shownText(render())).toBe(preview)
+})
+
+it('keeps whitespace-preserving wrapping without a fixed line clamp', () => {
+  const { render } = mount(LOG)
+  let tree = render()
+  expect(contents(tree)[0].props.className).toBe('break-words leading-relaxed')
+  expect(contents(tree)[0].props.style).toBeUndefined()
+  expect(contents(tree)[0].props.children.props.className).toBe('whitespace-pre-wrap')
+
+  buttons(tree)[0].props.onClick()
+  tree = render()
+  expect(contents(tree)[0].props.className).toBe('break-words leading-relaxed')
+  expect(contents(tree)[0].props.style).toBeUndefined()
+  expect(contents(tree)[0].props.children.props.className).toBe('whitespace-pre-wrap')
 })
 
 it('keeps the buttons outside the text element and gives the text a new element on every open and fold', () => {
@@ -104,6 +157,10 @@ it('keeps the buttons outside the text element and gives the text a new element 
   const opened = render()
   expect(buttons(contents(opened)[0])).toEqual([])
   expect(contents(opened)[0].key).not.toBe(contents(folded)[0].key)
+  buttons(opened)[0].props.onClick()
+  const refolded = render()
+  expect(buttons(contents(refolded)[0])).toEqual([])
+  expect(contents(refolded)[0].key).not.toBe(contents(opened)[0].key)
 })
 
 it('opens when a search jumps to this message, and only this one', () => {
@@ -112,7 +169,7 @@ it('opens when a search jumps to this message, and only this one', () => {
   const cleanups = runner.effects.map((effect) => effect())
   window.dispatchEvent(new CustomEvent('search:navigate-to-message', { detail: { messageId: 'm2', query: 'line' } }))
   expect(shownText(render())).toBe(`${PREVIEW}…`)
-  window.dispatchEvent(new CustomEvent('search:navigate-to-message', { detail: { messageId: 'm1', query: 'line 17' } }))
+  window.dispatchEvent(new CustomEvent('search:navigate-to-message', { detail: { messageId: 'm1', query: 'line 25' } }))
   expect(shownText(render())).toBe(LOG)
   for (const cleanup of cleanups) if (typeof cleanup === 'function') cleanup()
 })

@@ -1,8 +1,8 @@
 /**
  * apps/runtime -- Pending Relay Spool
  *
- * Cross-session awareness for notify_bot pushes. When the AI pushes a message
- * to an IM contact via notify_bot, the target session's AI context knows
+ * Cross-session awareness for notify_bot pushes and private owner questions.
+ * When a message reaches an IM contact outside a turn, its AI context knows
  * nothing about it — the push is pure SDK transport. This spool records each
  * push against the target sessionKey; dispatch-inbound appends a
  * <relay-context> block to the target's next inbound message text, which is
@@ -15,7 +15,8 @@
  *   confirms it accepted the message. Any failure before that leaves them
  *   queued, so a failed run can never lose relay context.
  * - No TTL: staleness is conveyed via the `at` timestamp and judged by the
- *   model. Bounded instead by a per-target cap with oldest-event collapse.
+ *   model. Ordinary pushes use a per-target cap with oldest-event collapse;
+ *   private question actions are retained for the owner's next accepted turn.
  * - Durable: persisted as a small JSON file (im-session-registry write-behind
  *   pattern) so pushes survive app restarts. This is IM runtime scheduling
  *   state, not conversation storage.
@@ -49,7 +50,7 @@ export interface RelaySubject {
   name: string
 }
 
-/** One recorded notify_bot push awaiting injection into the target session. */
+/** A pushed message or private question awaiting injection into the target session. */
 export interface RelayPushEvent {
   kind: 'push'
   /** Unique event id — the commit handle, also used for log correlation */
@@ -75,6 +76,8 @@ export interface RelayPushEvent {
   file?: { name: string }
   /** Source-context snapshot captured by the runtime at push time (plain text) */
   quote?: string
+  /** An invited action, not a credential; authority is issued only on an owner's turn. */
+  action?: { kind: 'answer-question'; appId: string; entryId: string }
 }
 
 /**
@@ -106,8 +109,8 @@ const FILE_VERSION = 2
 // Bounds
 // ============================================
 
-/** Max retained events per target session; older events collapse into a placeholder. */
-const MAX_EVENTS_PER_TARGET = 10
+/** Ordinary pushes are bounded; question actions survive until the owner's next accepted turn. */
+const MAX_ORDINARY_EVENTS_PER_TARGET = 10
 
 /** Cap for stored push text — full text is always available in the source transcript. */
 const MESSAGE_CAP = 2000
@@ -135,8 +138,8 @@ const SWEEP_INTERVAL_MS = 60 * 60 * 1000
  *
  * Persistence follows the im-session-registry pattern: load once at startup,
  * mutate in memory, coalesced fire-and-forget full-file writes, plus a
- * synchronous {@link flush} at shutdown. Volume is bounded (targets ×
- * MAX_EVENTS_PER_TARGET), so full-file writes stay cheap.
+ * synchronous {@link flush} at shutdown. Ordinary traffic is capped per target;
+ * question actions track the decisions not yet handed to that chat's owner.
  */
 export class PendingRelayStore {
   private pending = new Map<string, RelayEvent[]>()
@@ -172,7 +175,7 @@ export class PendingRelayStore {
 
     const events = this.pending.get(targetKey) ?? []
     events.push(capped)
-    this.collapseOverflow(events)
+    this.collapseOverflow(targetKey, events)
     this.pending.set(targetKey, events)
     if (this.now() - this.lastSweepAt >= SWEEP_INTERVAL_MS) this.sweepExpired()
     this.requestPersist()
@@ -279,27 +282,19 @@ export class PendingRelayStore {
 
   // ── Overflow collapse ────────────────────────────────
 
-  /**
-   * Enforce MAX_EVENTS_PER_TARGET in place, replacing the oldest events with a
-   * single placeholder that only states how many were dropped.
-   */
-  private collapseOverflow(events: RelayEvent[]): void {
-    if (events.length <= MAX_EVENTS_PER_TARGET) return
+  /** Ordinary pushes must not evict a question the owner has not had a turn to answer. */
+  private collapseOverflow(targetKey: string, events: RelayEvent[]): void {
+    if (events.length <= MAX_ORDINARY_EVENTS_PER_TARGET) return
+    const ordinary = events.filter(event => event.kind !== 'push' || !event.action)
+    if (ordinary.length <= MAX_ORDINARY_EVENTS_PER_TARGET) return
 
-    const overflow = events.splice(0, events.length - (MAX_EVENTS_PER_TARGET - 1))
-    // A previous placeholder counts for the pushes it already stood for;
-    // every other overflow entry counts for itself.
-    const count = overflow.reduce(
-      (n, e) => n + (e.kind === 'collapsed' ? e.count : 1),
-      0
-    )
-
-    events.unshift({
-      kind: 'collapsed',
-      id: randomUUID(),
-      at: overflow[0].at,
-      count,
-    })
+    const overflow = ordinary.slice(0, ordinary.length - (MAX_ORDINARY_EVENTS_PER_TARGET - 1))
+    const dropped = new Set(overflow.map(event => event.id))
+    const count = overflow.reduce((n, event) => n + (event.kind === 'collapsed' ? event.count : 1), 0)
+    const kept = events.filter(event => !dropped.has(event.id))
+    kept.splice(events.indexOf(overflow[0]), 0, { kind: 'collapsed', id: randomUUID(), at: overflow[0].at, count })
+    events.splice(0, events.length, ...kept)
+    console.warn(`[PendingRelays] Collapsed ${overflow.length} ordinary event(s): target=${targetKey}, questionActions=${events.length - MAX_ORDINARY_EVENTS_PER_TARGET}`)
   }
 
   // ── Persistence ──────────────────────────────────────
@@ -318,6 +313,9 @@ export class PendingRelayStore {
       for (const [key, events] of Object.entries(parsed.pending)) {
         if (!Array.isArray(events)) continue
         const valid = events.filter(isValidEvent)
+        if (valid.length !== events.length) {
+          console.warn(`[PendingRelays] Dropped ${events.length - valid.length} malformed event(s): target=${key}`)
+        }
         if (valid.length === 0) continue
         this.pending.set(key, valid)
         total += valid.length
@@ -368,7 +366,13 @@ function isValidEvent(event: unknown): event is RelayEvent {
   if (!event || typeof event !== 'object') return false
   const e = event as Partial<RelayPushEvent> & Partial<RelayCollapsedEvent>
   if (typeof e.id !== 'string' || !Number.isFinite(e.at)) return false
-  if (e.kind === 'push') return typeof e.source?.key === 'string'
+  if (e.kind === 'push') {
+    return typeof e.source?.key === 'string' && (e.action === undefined || (
+      e.action?.kind === 'answer-question' &&
+      typeof e.action.appId === 'string' && e.action.appId.length > 0 &&
+      typeof e.action.entryId === 'string' && e.action.entryId.length > 0
+    ))
+  }
   if (e.kind === 'collapsed') return Number.isFinite(e.count)
   return false
 }
@@ -387,6 +391,7 @@ const RUNTIME_TAGS = [
   'relay-context',
   'relay-from',
   'relay-collapsed',
+  'relay-action',
   'pushed',
   'pushed-file',
   'quote',
@@ -430,6 +435,8 @@ export interface RelayRenderOptions {
    * between push and consumption.
    */
   resolveTranscriptPath?: (event: RelayPushEvent) => string | undefined
+  /** Already prepared instructions, present only for the owner's invited actions. */
+  actions?: ReadonlyMap<string, string>
 }
 
 /** Escape a string for use inside a double-quoted XML attribute. */
@@ -479,6 +486,9 @@ function renderPushEvent(event: RelayPushEvent, options: RelayRenderOptions): st
   if (options.includeOrigin && event.quote !== undefined) {
     body.push(`<quote>${sanitizeRuntimeTags(event.quote)}</quote>`)
   }
+
+  const action = options.includeOrigin && event.action ? options.actions?.get(event.id) : undefined
+  if (action) body.push(`<relay-action>\n${sanitizeRuntimeTags(action)}\n</relay-action>`)
 
   return `<relay-from ${attrs.join(' ')}>\n${body.join('\n')}\n</relay-from>`
 }

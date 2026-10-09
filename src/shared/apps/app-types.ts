@@ -243,11 +243,6 @@ export interface ActivityEntryContent {
   dataPath?: string
   /** Question for the user (escalation only) */
   question?: string
-  /**
-   * Escalation only: the number it is answered by from an IM chat
-   * (`/answer <number> …`). One past the highest any kept escalation holds.
-   */
-  number?: number
   /** Preset choices for escalation */
   choices?: string[]
   /**

@@ -463,6 +463,35 @@ describe('a kept digital human retains persistent memory through native file too
   })
 })
 
+describe('model-only relay context stays out of the human-readable record', () => {
+  it.each(['native', 'im'] as const)('records clean content without invented provenance for a %s owner turn', async surface => {
+    keptMemberContext()
+    sink.writeUserMessage.mockClear()
+    loadChatSessionId.mockReturnValue('saved-sdk-session')
+    const register = vi.fn()
+    sessionRegistry.current = { register, getPushableSessions: () => [] }
+    const content = 'Use the attached report.\n\n[Attached files — use the Read tool to access their content]\n- [file] report.txt: /tmp/report.txt'
+    const message = `${content}\n\n<relay-context>\n<relay-action>curl -H "Authorization: Bearer test-only-grant"</relay-action>\n</relay-context>`
+    const images = [{ id: 'chart', type: 'image' as const, mediaType: 'image/png' as const, data: 'Y2hhcnQ=' }]
+    const conversationId = surface === 'im' ? `app-chat:${app.id}:wecom-bot:direct:owner` : `app-chat:${app.id}`
+
+    await sendAppChatMessage({
+      appId: app.id, spaceId: 'space-1', conversationId,
+      message, recorded: { content }, images, attachedFiles: ['/tmp/report.txt'],
+    })
+
+    expect(send).toHaveBeenCalledWith(message, expect.any(Function))
+    expect(sink.writeUserMessage).toHaveBeenCalledOnce()
+    expect(sink.writeUserMessage).toHaveBeenCalledWith(content, images, undefined, undefined, undefined)
+    expect(sink.writeUserMessage.mock.calls[0][0]).not.toMatch(/curl|test-only-grant|<relay-/)
+    if (surface === 'native') {
+      expect(register).toHaveBeenCalledWith(app.id, 'native', 'default', 'direct', '', expect.objectContaining({ lastMessage: content }))
+    } else {
+      expect(register).not.toHaveBeenCalled()
+    }
+  })
+})
+
 describe('memory context across session lifecycles', () => {
   beforeEach(() => {
     keptMemberContext()

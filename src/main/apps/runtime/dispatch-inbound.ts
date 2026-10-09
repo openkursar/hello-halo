@@ -17,14 +17,12 @@
  * - No direct dependency on any specific adapter
  */
 
-import { randomUUID } from 'crypto'
 import type { InboundMessage, ReplyHandle, ProgressEvent } from '../../../shared/types/inbound-message'
-import type { TeamTriggerContext } from '../../../shared/apps/team-types'
-import { buildTeamSessionKey, isRemoteMember } from '../../../shared/apps/team-types'
+import { buildTeamSessionKey } from '../../../shared/apps/team-types'
 import { buildTeamChatKey } from '../../../shared/apps/im-keys'
 import { getAppManager } from '../manager'
-import { getTeamStore } from '../team'
 import { getActiveTeamRuntime } from './team'
+import { resolveTeamBacking, type TeamBacking } from './im-team-session'
 import {
   sendAppChatMessage,
   buildImSessionKey,
@@ -39,8 +37,8 @@ import { getActiveImChannelManager } from './im-channels'
 import { sendToRenderer } from '../../foundation/window.service'
 import { broadcastToAll } from '../../http/websocket'
 import { setImPermissionContext, clearImPermissionContext, type ImPermissionContext } from './im-permission-registry'
-import { isOwnerUnbound, replyScopeCovers, resolveImPermission } from './im-sender-standing'
-import { setImStreamHandle } from './im-stream-registry'
+import { isOwnerUnbound, receivesImQuestions, replyScopeCovers, resolveImPermission } from './im-sender-standing'
+import { setImStreamHandle, getImStreamHandle, clearImStreamHandle } from './im-stream-registry'
 import { analytics } from '../../services/analytics/analytics.service'
 import { AnalyticsEvents } from '../../services/analytics/types'
 import { truncateUtf16Safe } from './text-truncate'
@@ -58,7 +56,8 @@ import { resolveImFileSend } from './im-channels/file-send-resolve'
 import { maybeClaimOwner } from './im-channels/owner-claim'
 import { resolveInboundIdentity } from './im-channels/identity-resolve'
 import { getImChannelsPermissionDefaults } from '../../foundation/product-config'
-import { answerEscalationFromIm, parseAnswerCommand, runtimeAnswerDeps } from './im-escalation'
+import { hasOpenImQuestion, prepareRelayActions, RelayActionUnauthorizedError } from './relay-actions'
+import { beginAppChatTurnStart } from './app-chat-live-turn'
 
 // ============================================
 // Constants
@@ -78,7 +77,7 @@ const EMPTY_RESPONSE_NOTICE = 'The model returned an empty response. Please send
  * separate message later. Hardcoded Chinese like buildSupplementAck because
  * the backend does not have renderer i18n loaded.
  */
-const PROCESSING_ACK = '✅ 已收到，正在处理…'
+const PROCESSING_ACK = '已收到，正在处理…'
 
 /** How long a one-shot reply may take before the sender is told their message is being worked on. */
 const PROCESSING_NOTICE_DELAY_MS = 5_000
@@ -212,77 +211,24 @@ function shouldSendNoOwnerGuide(instanceId: string, chatId: string): boolean {
   return true
 }
 
-// ============================================
-// Helpers
-// ============================================
-
-// ============================================
-// Team backing (team-backed IM instance)
-// ============================================
-
-/** Resolution of a team-backed IM instance for one inbound message. */
-interface TeamBacking {
-  teamId: string
-  /** The long-lived 'conversation' epoch this chat runs in. */
-  epochId: string
-  /** Per-turn team context handed to app-chat (team tools + Entry + report routing). */
-  teamContext: TeamTriggerContext
-}
-
-/**
- * Resolve a team-backed instance: confirm the bound member still serves this
- * team from this machine, then get the long-lived conversation epoch FOR THIS
- * CHAT (one per chat, created on first message and reused after — so each chat
- * keeps its own context).
- *
- * The binding is a (team, member) pair, so this is also the trust boundary for
- * it: config.json is user-editable and a roster changes after binding. Returns
- * null — the caller drops the message — when the coordination layer is not
- * ready, the team or the membership is gone, or the member runs on someone
- * else's machine (its app is not installed here, so nothing local can run it).
- *
- * @param memberAppId - The bound member, i.e. the instance config's appId.
- * @param chatKey - Stable per-chat key (`${instanceId}:${chatType}:${chatId}`).
- */
-function resolveTeamBacking(teamId: string, memberAppId: string, chatKey: string): TeamBacking | null {
-  const store = getTeamStore()
-  const runtime = getActiveTeamRuntime()
-  if (!store || !runtime) {
-    console.warn(`${LOG_TAG} Team backing unavailable (store/runtime not ready): teamId=${teamId}`)
-    return null
-  }
-  const team = store.getTeamById(teamId)
-  if (!team) {
-    console.warn(`${LOG_TAG} Team-backed instance points at a missing team: teamId=${teamId}`)
-    return null
-  }
-  const member = memberAppId ? store.getMember(teamId, memberAppId) : null
-  if (!member) {
-    console.warn(
-      `${LOG_TAG} Bound member is not in team "${team.name}" (${teamId}): appId=${memberAppId}`
-    )
-    return null
-  }
-  if (isRemoteMember(member)) {
-    console.warn(
-      `${LOG_TAG} Bound member "${member.memberName}" runs on another machine ` +
-      `(owner=${member.ownerNodeId}); only its owner can serve IM with it: teamId=${teamId}`
-    )
-    return null
-  }
-  const epoch = runtime.ensureConversationEpoch(teamId, chatKey, undefined, undefined, memberAppId)
-  return {
-    teamId,
-    epochId: epoch.id,
-    teamContext: {
-      teamId,
-      epochId: epoch.id,
-      correlationId: randomUUID(),
-      fromAppId: null,
-      wait: false,
-      // A real person in a chat window, reaching this member directly.
-      kind: 'human_message',
-    },
+// Grants outlive the turn; retain identifiers, not its message, attachments or app configuration.
+function relayOwnerValidator(
+  instanceId: string, appId: string, teamId: string | undefined,
+  channel: string, chatId: string, senderId: string, senderName: string,
+): () => boolean {
+  const authorizationRevision = getActiveImChannelManager()?.getAuthorizationRevision(instanceId)
+  const sessionRevision = getImSessionRegistry()?.getSessionRevision(appId, channel, chatId)
+  return () => {
+    const manager = getActiveImChannelManager()
+    const registry = getImSessionRegistry()
+    const current = manager?.getInstanceConfig(instanceId)
+    const session = registry?.findSession(appId, channel, chatId)
+    return authorizationRevision !== undefined && sessionRevision !== undefined &&
+      manager?.getAuthorizationRevision(instanceId) === authorizationRevision &&
+      registry?.getSessionRevision(appId, channel, chatId) === sessionRevision &&
+      !!current?.enabled && current.appId === appId && current.teamId === teamId &&
+      resolveImPermission(current, senderId, senderName).isOwner &&
+      receivesImQuestions(current, session) && (session?.contactId ?? session?.chatId) === senderId
   }
 }
 
@@ -606,13 +552,7 @@ export async function dispatchInboundMessage(
     // (woken) replies back to this exact chat.
     const chatKey = buildTeamChatKey(instanceId, msg.chatType, msg.chatId)
     teamBacking = resolveTeamBacking(instanceCfg.teamId, appId, chatKey)
-    if (!teamBacking) {
-      console.log(
-        `${LOG_TAG} Team-backed instance cannot serve: ` +
-        `instanceId=${instanceId}, teamId=${instanceCfg.teamId}, appId=${appId}`
-      )
-      return
-    }
+    if (!teamBacking) return // The resolver logs the rejected chat and binding.
   }
 
   const app = manager.getApp(appId)
@@ -699,14 +639,22 @@ export async function dispatchInboundMessage(
     }
   }
 
+  const conversationId = teamBacking
+    ? buildTeamSessionKey(app.id, teamBacking.teamId, teamBacking.epochId)
+    : buildImSessionKey(app.id, msg.channel, msg.chatType, msg.chatId)
+
   // ── Reply scope check ──────────────────────────────────────────
-  // Not for an answer in a direct chat: questions are asked there, and every
-  // notice of one points there, whatever the scope (im-escalation). The owner
-  // gate above and this check are also what a reminder coming due in this chat
-  // meets (im-sender-standing `instanceTakesChat`).
-  const answerArgs = parseAnswerCommand(msg.body, msg.chatType)
-  const answersInDirectChat = msg.chatType === 'direct' && answerArgs !== null
-  if (!replyScopeCovers(instanceCfg, msg.chatType) && !answersInDirectChat) {
+  // Stopping a private turn remains possible after its question was answered.
+  const registry = getImSessionRegistry()
+  const scopeCoversChat = replyScopeCovers(instanceCfg, msg.chatType)
+  const answersInDirectChat = !scopeCoversChat && msg.chatType === 'direct' &&
+    resolveImPermission(instanceCfg, msg.from, msg.fromName ?? msg.from).isOwner &&
+    (((isStopCommand(msg.body, msg.chatType) || isClearCommand(msg.body, msg.chatType)) &&
+      isAppChatConversationGenerating(conversationId)) ||
+      (!!instanceCfg && (instanceCfg.permissionEnabled ||
+        receivesImQuestions(instanceCfg, registry?.findSession(app.id, msg.channel, msg.chatId))) &&
+        hasOpenImQuestion(app.id, instanceCfg.teamId)))
+  if (!scopeCoversChat && !answersInDirectChat) {
     const rejectionMsg = msg.chatType === 'direct' ? DM_REJECTED_MESSAGE : GROUP_REJECTED_MESSAGE
     console.log(
       `${LOG_TAG} Blocked by replyScope: scope=${replyScope}, chatType=${msg.chatType}, ` +
@@ -724,15 +672,7 @@ export async function dispatchInboundMessage(
     reply = { ...reply, streaming: undefined }
   }
 
-  // Build the session key. Team-backed chats resume the bound member's
-  // long-lived conversation epoch (so context persists across messages and the
-  // member has team tools); single-human chats use the per-chat IM session key.
-  const conversationId = teamBacking
-    ? buildTeamSessionKey(app.id, teamBacking.teamId, teamBacking.epochId)
-    : buildImSessionKey(app.id, msg.channel, msg.chatType, msg.chatId)
-
   // Register session in ImSessionRegistry (idempotent — updates lastActiveAt on repeat)
-  const registry = getImSessionRegistry()
   if (registry) {
     const displayName = msg.chatName ?? msg.fromName ?? msg.chatId
     registry.register(app.id, msg.channel, msg.chatId, msg.chatType, instanceId, {
@@ -795,9 +735,20 @@ export async function dispatchInboundMessage(
         // Team-backed: seal THIS chat's conversation epoch so the next message
         // starts a fresh one (the team's equivalent of clearing chat context).
         // Only this chat's epoch is affected — other chats keep their context.
+        const sessionRevision = registry?.getSessionRevision(app.id, msg.channel, msg.chatId)
         await getActiveTeamRuntime()?.sealConversationEpoch(
           teamBacking.teamId, teamBacking.epochId, 'cleared', 'Cleared by user'
         )
+        // Member-session closure can yield to a successor at the same registry address.
+        if (sessionRevision !== undefined && registry?.getSessionRevision(app.id, msg.channel, msg.chatId) === sessionRevision) {
+          registry.resetActivity(app.id, msg.channel, msg.chatId)
+        } else {
+          console.warn(
+            `${LOG_TAG} Skipped stale clear activity reset: session=${conversationId}, ` +
+            `appId=${app.id}, channel=${msg.channel}, chatId=${msg.chatId}, instanceId=${instanceId}, ` +
+            'reason=session revision changed or is missing'
+          )
+        }
       } else {
         await clearImSession(app.id, app.spaceId!, msg.channel, msg.chatType, msg.chatId)
       }
@@ -809,33 +760,6 @@ export async function dispatchInboundMessage(
       console.error(`${LOG_TAG} Failed to clear context: session=${conversationId}`, err)
       await reply.send('Failed to clear context. Please try again.').catch(() => {})
     }
-    return
-  }
-
-  // ── Answer command: a question this digital human asked, answered here ──
-  // Never reaches the model: it is the owner answering through Halo's own
-  // answer path, not a message to the digital human (im-escalation).
-  if (answerArgs !== null) {
-    const deps = await runtimeAnswerDeps()
-    const result = deps
-      ? await answerEscalationFromIm(answerArgs, {
-          appId: app.id,
-          ...(instanceCfg?.teamId ? { teamId: instanceCfg.teamId } : {}),
-          senderId: msg.from,
-          chatType: msg.chatType,
-          permissionEnabled: instanceCfg?.permissionEnabled ?? false,
-          owners: instanceCfg?.owners ?? [],
-        }, deps)
-      : { reply: '现在无法处理回答，请稍后再试。', outcome: 'runtime_unavailable' as const }
-    // The outcome, never the answer: whether an owner's answer was taken or
-    // refused, and why, has to be readable from the log alone.
-    console.log(
-      `${LOG_TAG} Answer command: instanceId=${instanceId}, chatType=${msg.chatType}, chatId=${msg.chatId}, ` +
-      `sender=${msg.from}, outcome=${result.outcome}` +
-      `${'entryId' in result && result.entryId ? `, entry=${result.entryId}` : ''}` +
-      `${'error' in result && result.error ? `, error="${result.error}"` : ''}`
-    )
-    await reply.send(result.reply).catch(() => {})
     return
   }
 
@@ -948,10 +872,8 @@ export async function dispatchInboundMessage(
   }
 
   // ── Cross-session relay context ───────────────────────
-  // Messages previously pushed to THIS chat via notify_bot (from other
-  // sessions) left no trace in this session's AI context — the push was pure
-  // SDK transport. Append them so they ride this inbound message into the
-  // engine's history, the only engine-agnostic route in.
+  // Only notify_bot pushes and private owner questions enter the AI's context;
+  // automatic run results remain in the record the person reads.
   //
   // Appended, never prefixed: position 0 belongs to <msg-sender> (the identity
   // rules define authority by position), and a prefix would also break slash
@@ -959,31 +881,13 @@ export async function dispatchInboundMessage(
   //
   // Events are committed only once the engine accepts the message, so any
   // failure in between re-delivers them with the next inbound message.
+  const recordedMessage = messageText
   const relayStore = getPendingRelayStore()
-  const pendingRelays = relayStore?.peek(conversationId) ?? []
+  const receivesActions = msg.chatType === 'direct' && isOwner && !!instanceCfg &&
+    receivesImQuestions(instanceCfg, registry?.findSession(app.id, msg.channel, msg.chatId))
+  const pendingRelays = (relayStore?.peek(conversationId) ?? [])
+    .filter(event => receivesActions || event.kind !== 'push' || !event.action)
   let relayIdsToCommit: string[] = []
-  if (pendingRelays.length > 0) {
-    try {
-      const spacePath = getSpace(app.spaceId!)?.path ?? ''
-      const relayContext = renderRelayContext(pendingRelays, {
-        includeOrigin: isOwner,
-        allowTranscript: hasOwnerRestriction && isOwner,
-        resolveTranscriptPath: spacePath
-          ? (e) => resolveTranscriptPath(spacePath, e.source.appId, e.source.runId)
-          : undefined,
-      })
-      messageText += `\n\n${relayContext}`
-      relayIdsToCommit = pendingRelays.map(e => e.id)
-      console.log(
-        `${LOG_TAG} Appended ${pendingRelays.length} relay event(s): session=${conversationId}, ` +
-        `origin=${isOwner}, transcript=${hasOwnerRestriction && isOwner}`
-      )
-    } catch (err) {
-      // Never let relay rendering cost the user their message; with nothing to
-      // commit the events stay queued for the next inbound message.
-      console.error(`${LOG_TAG} Relay rendering failed: session=${conversationId}`, err)
-    }
-  }
 
   // Resolve file-send capability for this chat (absent for text-only channels).
   // A later runtime-woken turn of a team-backed chat must resolve this the same
@@ -1041,11 +945,51 @@ export async function dispatchInboundMessage(
   }
   if (processingNotice) pendingProcessingNotices.set(conversationId, settleProcessingNotice)
 
+  // Listener startup may await; the existing hold keeps supplements and stop/clear safe.
+  const turnStart = beginAppChatTurnStart(conversationId)
   try {
+    if (pendingRelays.length > 0) {
+      try {
+        const actions = receivesActions && pendingRelays.some(event => event.kind === 'push' && event.action)
+          ? await prepareRelayActions(pendingRelays, relayOwnerValidator(
+            instanceId, app.id, instanceCfg?.teamId, msg.channel, msg.chatId, msg.from, senderName,
+          ))
+          : undefined
+        const spacePath = getSpace(app.spaceId!)?.path ?? ''
+        const relayContext = renderRelayContext(pendingRelays, {
+          includeOrigin: isOwner,
+          allowTranscript: hasOwnerRestriction && isOwner,
+          resolveTranscriptPath: spacePath
+            ? (e) => resolveTranscriptPath(spacePath, e.source.appId, e.source.runId)
+            : undefined,
+          actions,
+        })
+        messageText += `\n\n${relayContext}`
+        relayIdsToCommit = pendingRelays.map(e => e.id)
+      } catch (err) {
+        if (!turnStart.cancelled) {
+          if (err instanceof RelayActionUnauthorizedError) throw err
+          throw new Error('The question context could not be prepared; pending messages are retained. Please answer in Halo.')
+        }
+      }
+    }
+    if (turnStart.cancelled) {
+      console.warn(`${LOG_TAG} Message stopped during relay preparation: session=${conversationId}`)
+      try {
+        reply.streaming?.dispose?.()
+      } catch (err) {
+        console.warn(`${LOG_TAG} Stopped reply stream could not be disposed: session=${conversationId}`, err)
+      } finally {
+        if (reply.streaming && getImStreamHandle(conversationId) === reply.streaming) clearImStreamHandle(conversationId)
+      }
+      return
+    }
     await sendAppChatMessage({
+      turnStart,
       appId: app.id,
       spaceId: app.spaceId,
       message: messageText,
+      recorded: { content: recordedMessage },
       conversationId,
       images: msg.images,
       attachedFiles: msg.attachments?.map(a => a.localPath),
@@ -1149,5 +1093,6 @@ export async function dispatchInboundMessage(
     }
   } finally {
     settleProcessingNotice()
+    turnStart.end()
   }
 }

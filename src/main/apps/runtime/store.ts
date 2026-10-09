@@ -24,7 +24,8 @@ import type {
 } from './types'
 import type { AppStatus } from '../manager'
 import { BLOCKED_STATUSES, blockedReason } from './app-state'
-import type { EscalationAnswer, RunTokenUsage } from '../../../shared/apps/app-types'
+import { EscalationAnswerValidationError } from './errors'
+import type { EscalationAnswer, EscalationAnswerPayload, RunTokenUsage } from '../../../shared/apps/app-types'
 import { addRunTokenUsage, getEscalationAnswers, getEscalationQuestions } from '../../../shared/apps/app-types'
 
 // ============================================
@@ -118,6 +119,43 @@ function rowToEntry(row: EntryRow): ActivityEntry {
     userResponse: row.user_response_json
       ? (JSON.parse(row.user_response_json) as EscalationResponse)
       : undefined,
+  }
+}
+
+function validateDecisionResponse(response: unknown, content: ActivityEntryContent): asserts response is EscalationAnswerPayload {
+  function validateAnswer(value: unknown): asserts value is EscalationAnswer {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error('Decision answers must be objects')
+    }
+    const answer = value as Record<string, unknown>
+    for (const field of ['choice', 'text']) {
+      const text = answer[field]
+      if (text === undefined) continue
+      if (typeof text !== 'string') throw new Error('Decision choice and text must be strings')
+      const trimmed = text.trim()
+      if (trimmed === '<exact choice selected by the owner>' || trimmed === '<the owner’s answer>') {
+        throw new Error('Replace the answer template with the owner’s answer')
+      }
+    }
+  }
+
+  validateAnswer(response)
+  const payload = response as Record<string, unknown>
+  if (payload.answers !== undefined) {
+    if (!Array.isArray(payload.answers) || payload.answers.length === 0) {
+      throw new Error('Decision answers must be a non-empty array')
+    }
+    for (const answer of payload.answers) validateAnswer(answer)
+  }
+
+  const answers = getEscalationAnswers(response as EscalationAnswerPayload)
+  const questions = getEscalationQuestions(content)
+  if (answers.length !== questions.length || answers.some(answer => !answer.choice?.trim() && !answer.text?.trim())) {
+    throw new Error('Answer every question before submitting')
+  }
+  if ((response.choice?.trim() && !questions[0].choices?.includes(response.choice)) ||
+      answers.some((answer, index) => answer.choice?.trim() && !questions[index].choices?.includes(answer.choice))) {
+    throw new Error('Decision choice must exactly match an offered choice; use text for a free-form answer')
   }
 }
 
@@ -484,24 +522,6 @@ export class ActivityStore {
     return row ? this.withContinuation(rowToEntry(row)) : null
   }
 
-  /**
-   * The number the next escalation is answered by from an IM chat: one past
-   * the highest any escalation holds, so a late answer to an earlier question
-   * can never land on a newer one.
-   */
-  nextEscalationNumber(): number {
-    const row = this.db.prepare(`SELECT MAX(CAST(json_extract(content_json, '$.number') AS INTEGER)) AS top
-      FROM activity_entries WHERE type = 'escalation'`).get() as { top: number | null }
-    return (row.top ?? 0) + 1
-  }
-
-  /** The escalation answered by this number, answered or not. */
-  getEscalationByNumber(number: number): ActivityEntry | null {
-    const row = this.db.prepare(`SELECT * FROM activity_entries WHERE type = 'escalation'
-      AND CAST(json_extract(content_json, '$.number') AS INTEGER) = ? LIMIT 1`).get(number) as EntryRow | undefined
-    return row ? this.withContinuation(rowToEntry(row)) : null
-  }
-
   /** Get entries for an App with optional filtering */
   getEntriesForApp(appId: string, options?: ActivityQueryOptions): ActivityEntry[] {
     const limit = Math.min(500, Math.max(1, Math.floor(options?.limit || 50)))
@@ -685,6 +705,18 @@ export class ActivityStore {
       LIMIT 1`).get(...(epochId ? [appId, teamId, epochId] : [appId, teamId]))
   }
 
+  /** Whether this bot can take an owner's private reply despite a groups-only reply scope. */
+  hasOpenImQuestion(appId: string, teamId?: string): boolean {
+    return !!this.db.prepare(`SELECT 1 FROM activity_entries e
+      WHERE e.type = 'escalation' AND e.user_response_json IS NULL
+        AND json_extract(e.content_json, '$.resolution') IS NULL
+        AND COALESCE(json_extract(e.content_json, '$.deadlineReviewRequired'), 0) = 0
+        AND (json_extract(e.content_json, '$.deadlineAt') IS NULL OR json_extract(e.content_json, '$.deadlineAt') > ?)
+        AND (e.app_id = ? OR (? IS NOT NULL AND json_extract(e.content_json, '$.teamContext.teamId') = ?))
+        AND NOT EXISTS (SELECT 1 FROM runtime_closed_runs r WHERE r.run_id = e.run_id)
+      LIMIT 1`).get(Date.now(), appId, teamId ?? null, teamId ?? null)
+  }
+
   closeTaskEscalations(teamId: string, epochId: string): ActivityEntry[] {
     return this.db.transaction(() => {
       const ids = this.db.prepare(`SELECT id FROM activity_entries WHERE json_extract(content_json, '$.teamContext.teamId') = ?
@@ -700,10 +732,17 @@ export class ActivityStore {
     return entry
   }
 
-  acceptDecision(appId: string, entryId: string, response: EscalationResponse): ActivityEntry {
+  acceptDecision(appId: string, entryId: string, response: unknown): ActivityEntry {
     return this.db.transaction(() => {
       const entry = this.getEntry(entryId)
       if (!entry || entry.appId !== appId || entry.type !== 'escalation') throw new Error('Decision not found')
+      try {
+        validateDecisionResponse(response, entry.content)
+      } catch (error) {
+        const reason = (error as Error).message
+        console.warn('[Runtime] Decision answer rejected', { appId, entryId, reason })
+        throw new EscalationAnswerValidationError(reason)
+      }
       const answers = getEscalationAnswers(response)
       if (entry.userResponse) {
         const same = (value: EscalationAnswer[]) => JSON.stringify(value.map(({ choice, text }) => ({ choice, text })))
@@ -713,9 +752,6 @@ export class ActivityStore {
       if (entry.content.resolution || this.isRunClosed(entry.runId)) throw new Error('This decision is closed')
       if (entry.content.deadlineReviewRequired) throw new Error('Confirm the historical deadline before answering')
       if (entry.content.deadlineAt !== undefined && entry.content.deadlineAt <= Date.now()) throw new Error('This decision has expired')
-      if (answers.length !== getEscalationQuestions(entry.content).length || answers.some(answer => !answer.choice?.trim() && !answer.text?.trim())) {
-        throw new Error('Answer every question before submitting')
-      }
       const now = Date.now()
       this.stmtUpdateEntryResponse.run(JSON.stringify({ ...response, ts: now }), entryId)
       this.db.prepare(`INSERT INTO decision_continuations(entry_id, app_id, status, updated_at) VALUES (?, ?, 'queued', ?)`).run(entryId, appId, now)

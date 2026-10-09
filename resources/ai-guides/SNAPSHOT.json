@@ -1,6 +1,16 @@
 {
-  "syncedAt": "2026-10-06",
-  "source": "/Volumes/s790/Halo/halo-release/docs-src/public/ai-guides",
+  "syncedAt": "2026-10-09",
+  "source": "../halo-website/docs-src/public/ai-guides (partial refresh)",
+  "refreshedFiles": [
+    "create-digital-human/im-triggers.md",
+    "message-channels/index.md",
+    "message-channels/wecom-bot.md",
+    "message-channels/weixin-ilink.md"
+  ],
+  "retainedSnapshot": {
+    "syncedAt": "2026-10-06",
+    "source": "/Volumes/s790/Halo/halo-release/docs-src/public/ai-guides"
+  },
   "files": [
     "ai-browser/index.md",
     "ai-browser/scripting.md",

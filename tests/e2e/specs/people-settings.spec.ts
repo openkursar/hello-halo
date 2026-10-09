@@ -96,6 +96,50 @@ test('the work activity tab opens on the compact run summary band', async ({ win
   await expect(band).toContainText(`succeeded in the last ${runs.length} runs`)
 })
 
+for (const width of [1280, 375]) {
+  test(`a working-days switch stays reversible outside China at ${width}px`, async ({ window }) => {
+    const cdp = await window.context().newCDPSession(window)
+    await cdp.send('Emulation.setTimezoneOverride', { timezoneId: 'Europe/Berlin' })
+    await window.setViewportSize({ width, height: 900 })
+    await navigateToApps(window)
+    const seeded = await window.evaluate(async () => (globalThis.window as unknown as { halo: HaloAPI }).halo.appUpdateSpec({
+      appId: 'person-000',
+      specPatch: { subscriptions: [{ id: 'daily', source: { type: 'schedule', config: { cron: '0 9 * * *', workday_calendar: true } } }] },
+    }))
+    expect(seeded.success).toBe(true)
+    await window.reload()
+    await openSettings(window)
+
+    const label = window.getByText('Only on mainland China working days', { exact: true })
+    const control = label.locator('../..').getByRole('switch')
+    const saved = async () => window.evaluate(async () => {
+      const result = await (globalThis.window as unknown as { halo: HaloAPI }).halo.appGet('person-000')
+      const app = result.data as { spec: { subscriptions: Array<{ source: { config: { workday_calendar?: boolean } } }> } }
+      return app.spec.subscriptions[0].source.config.workday_calendar === true
+    })
+    await expect(control).toHaveAttribute('aria-checked', 'true')
+    await control.click()
+    await expect.poll(saved).toBe(false)
+    await expect(control).toHaveAttribute('aria-checked', 'false')
+    await expect(label).toBeVisible()
+    await control.click()
+    await expect.poll(saved).toBe(true)
+    await expect(control).toHaveAttribute('aria-checked', 'true')
+    await control.click()
+    await expect.poll(saved).toBe(false)
+    await expect(control).toHaveAttribute('aria-checked', 'false')
+    const dimensions = await window.evaluate(() => ({ content: document.documentElement.scrollWidth, viewport: document.documentElement.clientWidth }))
+    expect(dimensions.content).toBeLessThanOrEqual(dimensions.viewport + 1)
+    await expect(control).toHaveClass(/bg-muted/)
+    await window.screenshot({ path: `tests/e2e/results/workday-reversible-${width}.png`, animations: 'disabled' })
+
+    await window.reload()
+    await openSettings(window)
+    await expect(window.locator('#settings-group-trigger')).toBeVisible()
+    await expect(label).toHaveCount(0)
+  })
+}
+
 test('the nav collapses to a scrolling strip and the panel stays inside the viewport at 375px', async ({ window }) => {
   await openSettings(window)
   const nav = window.locator('nav').filter({ hasText: 'Identity & Instructions' })

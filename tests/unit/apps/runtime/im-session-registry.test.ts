@@ -9,11 +9,19 @@
  *   - getProactiveSessions→ proactive && source==='im' (auto-sync targets)
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { writeFileSync, readFileSync, readdirSync, rmSync, mkdtempSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { ImSessionRegistry } from '../../../../src/main/apps/runtime/im-session-registry'
+import { AtomicFileWriter } from '../../../../src/main/apps/runtime/atomic-file-writer'
+import { PendingRelayStore, setPendingRelayStore, type RelayPushEvent } from '../../../../src/main/apps/runtime/pending-relays'
+import { buildImSessionKey, buildTeamSessionKey } from '../../../../src/shared/apps/im-keys'
+
+const { removeForChat } = vi.hoisted(() => ({ removeForChat: vi.fn() }))
+vi.mock('../../../../src/main/apps/runtime/reminders', () => ({
+  getConversationReminders: () => ({ removeForChat }),
+}))
 
 describe('ImSessionRegistry — channel source classification', () => {
   let dir: string
@@ -80,6 +88,168 @@ describe('ImSessionRegistry — channel source classification', () => {
 
     const reg = new ImSessionRegistry(file)
     expect(reg.findSession('app1', 'feishu-bot', 'room-1')?.source).toBe('im')
+  })
+})
+
+describe('ImSessionRegistry — session revisions', () => {
+  let dir: string
+  let file: string
+  let reg: ImSessionRegistry
+  const teamContext = { teamId: 'team-1', epochId: 'epoch-1' }
+  const original = { contactId: 'owner-1', teamContext }
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'im-reg-revisions-'))
+    file = join(dir, 'sessions.json')
+    reg = new ImSessionRegistry(file)
+    setPendingRelayStore(new PendingRelayStore(join(dir, 'relays.json')))
+  })
+
+  afterEach(async () => {
+    setPendingRelayStore(null)
+    await new Promise(resolve => setTimeout(resolve, 50))
+    rmSync(dir, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  it('returns undefined for missing sessions and distinct opaque identities per session', () => {
+    expect(reg.getSessionRevision('app1', 'wecom-bot', 'chat-1')).toBeUndefined()
+    reg.register('app1', 'wecom-bot', 'chat-1', 'direct', 'inst-1')
+    reg.register('app1', 'wecom-bot', 'chat-2', 'direct', 'inst-1')
+    const revision = reg.getSessionRevision('app1', 'wecom-bot', 'chat-1')!
+    expect(revision).toEqual({})
+    expect(Reflect.ownKeys(revision)).toEqual([])
+    expect(reg.getSessionRevision('app1', 'wecom-bot', 'chat-1')).toBe(revision)
+    expect(reg.getSessionRevision('app1', 'wecom-bot', 'chat-2')).not.toBe(revision)
+    expect(reg.getSessionRevision('app2', 'wecom-bot', 'chat-1')).toBeUndefined()
+    expect(reg.getSessionRevision('app1', 'feishu-bot', 'chat-1')).toBeUndefined()
+  })
+
+  it('preserves revisions across normal repeated inbound messages, pushes, names and unrelated edits', () => {
+    reg.register('app1', 'wecom-bot', 'chat-1', 'direct', 'inst-1', original)
+    reg.setProactive('app1', 'wecom-bot', 'chat-1', true)
+    const revision = reg.getSessionRevision('app1', 'wecom-bot', 'chat-1')
+    for (let i = 0; i < 5; i++) {
+      reg.register('app1', 'wecom-bot', 'chat-1', 'direct', 'inst-1', {
+        contactId: i % 2 ? undefined : 'owner-1', teamContext: { ...teamContext },
+        displayName: `Name ${i}`, lastSender: `Sender ${i}`, lastMessage: `Message ${i}`,
+      })
+      expect(reg.getSessionRevision('app1', 'wecom-bot', 'chat-1')).toBe(revision)
+    }
+    reg.notePush('app1', 'wecom-bot', 'chat-1', { lastSender: 'Bot', lastMessage: 'A push' })
+    reg.setCustomName('app1', 'wecom-bot', 'chat-1', 'A custom name')
+    reg.setResolvedName('app1', 'wecom-bot', 'chat-1', 'A resolved name')
+    reg.setProactive('app1', 'wecom-bot', 'chat-1', true)
+    reg.setTeamContext('app1', 'wecom-bot', 'chat-1', { ...teamContext })
+    reg.setPushLink('app2', { appId: 'app1', channel: 'wecom-bot', chatId: 'chat-1' }, { autoSync: true })
+    reg.register('app2', 'wecom-bot', 'chat-1', 'direct', 'inst-2')
+    reg.resetActivity('app2', 'wecom-bot', 'chat-1')
+    reg.removeAllForApp('app2')
+    expect(reg.getSessionRevision('app1', 'wecom-bot', 'chat-1')).toBe(revision)
+    expect(reg.findSession('app1', 'wecom-bot', 'chat-1')).toMatchObject({
+      messageCount: 7, contactId: 'owner-1', displayName: 'chat-1', lastMessage: 'A push',
+    })
+  })
+
+  it.each([
+    ['instance', 'inst-2', original],
+    ['contact', 'inst-1', { ...original, contactId: 'owner-2' }],
+    ['team', 'inst-1', { ...original, teamContext: { teamId: 'team-2', epochId: 'epoch-1' } }],
+    ['epoch', 'inst-1', { ...original, teamContext: { teamId: 'team-1', epochId: 'epoch-2' } }],
+    ['team removal', 'inst-1', { contactId: 'owner-1', teamContext: undefined }],
+  ] as const)('never revives a revision after %s changes and reverts without an intervening lookup', (_name, instanceId, opts) => {
+    reg.register('app1', 'wecom-bot', 'chat-1', 'direct', 'inst-1', original)
+    const revision = reg.getSessionRevision('app1', 'wecom-bot', 'chat-1')
+    reg.register('app1', 'wecom-bot', 'chat-1', 'direct', instanceId, opts)
+    reg.register('app1', 'wecom-bot', 'chat-1', 'direct', 'inst-1', original)
+    const current = reg.getSessionRevision('app1', 'wecom-bot', 'chat-1')
+    expect(current).toBeDefined()
+    expect(current).not.toBe(revision)
+    expect(reg.findSession('app1', 'wecom-bot', 'chat-1')).toMatchObject({ instanceId: 'inst-1', ...original })
+  })
+
+  it.each([
+    { teamId: 'team-2', epochId: 'epoch-1' },
+    { teamId: 'team-1', epochId: 'epoch-2' },
+    undefined,
+  ])('never revives a revision after a push destination refresh to %j and back', changed => {
+    reg.register('app1', 'wecom-bot', 'chat-1', 'direct', 'inst-1', original)
+    const before = reg.findSession('app1', 'wecom-bot', 'chat-1')
+    const revision = reg.getSessionRevision('app1', 'wecom-bot', 'chat-1')
+    reg.setTeamContext('app1', 'wecom-bot', 'chat-1', changed)
+    reg.setTeamContext('app1', 'wecom-bot', 'chat-1', { ...teamContext })
+    expect(reg.getSessionRevision('app1', 'wecom-bot', 'chat-1')).not.toBe(revision)
+    expect(reg.findSession('app1', 'wecom-bot', 'chat-1')).toEqual(before)
+  })
+
+  it('never revives a revision when proactive selection is disabled and restored', () => {
+    reg.register('app1', 'wecom-bot', 'chat-1', 'direct', 'inst-1', original)
+    reg.setProactive('app1', 'wecom-bot', 'chat-1', true)
+    const revision = reg.getSessionRevision('app1', 'wecom-bot', 'chat-1')
+    reg.setProactive('app1', 'wecom-bot', 'chat-1', false)
+    reg.setProactive('app1', 'wecom-bot', 'chat-1', true)
+    expect(reg.getSessionRevision('app1', 'wecom-bot', 'chat-1')).not.toBe(revision)
+    expect(reg.findSession('app1', 'wecom-bot', 'chat-1')?.proactive).toBe(true)
+  })
+
+  it('invalidates on every clear, including an already empty transcript', () => {
+    reg.register('app1', 'wecom-bot', 'chat-1', 'direct', 'inst-1', { ...original, lastMessage: 'Message' })
+    reg.setProactive('app1', 'wecom-bot', 'chat-1', true)
+    const revision = reg.getSessionRevision('app1', 'wecom-bot', 'chat-1')
+    reg.resetActivity('app1', 'wecom-bot', 'chat-1')
+    reg.register('app1', 'wecom-bot', 'chat-1', 'direct', 'inst-1', { ...original, lastMessage: 'Message' })
+    const afterMessage = reg.getSessionRevision('app1', 'wecom-bot', 'chat-1')
+    expect(afterMessage).not.toBe(revision)
+    reg.resetActivity('app1', 'wecom-bot', 'chat-1')
+    const afterClear = reg.getSessionRevision('app1', 'wecom-bot', 'chat-1')
+    expect(afterClear).not.toBe(afterMessage)
+    reg.resetActivity('app1', 'wecom-bot', 'chat-1')
+    expect(reg.getSessionRevision('app1', 'wecom-bot', 'chat-1')).not.toBe(afterClear)
+    expect(reg.findSession('app1', 'wecom-bot', 'chat-1')).toMatchObject({ ...original, proactive: true, messageCount: 0, lastMessage: undefined })
+  })
+
+  it.each(['removeSession', 'removeAllForApp'] as const)('never revives a revision after %s and recreation', removal => {
+    reg.register('app1', 'wecom-bot', 'chat-1', 'direct', 'inst-1', original)
+    reg.register('app2', 'wecom-bot', 'chat-1', 'direct', 'inst-2')
+    const revision = reg.getSessionRevision('app1', 'wecom-bot', 'chat-1')
+    const otherRevision = reg.getSessionRevision('app2', 'wecom-bot', 'chat-1')
+    if (removal === 'removeSession') reg.removeSession('app1', 'wecom-bot', 'chat-1')
+    else reg.removeAllForApp('app1')
+    reg.register('app1', 'wecom-bot', 'chat-1', 'direct', 'inst-1', original)
+    expect(reg.getSessionRevision('app1', 'wecom-bot', 'chat-1')).not.toBe(revision)
+    expect(reg.getSessionRevision('app2', 'wecom-bot', 'chat-1')).toBe(otherRevision)
+    reg.removeSession('app1', 'wecom-bot', 'chat-1')
+    expect(reg.getSessionRevision('app1', 'wecom-bot', 'chat-1')).toBeUndefined()
+  })
+
+  it('restores records with fresh identities but preserves existing records on a no-op restore', () => {
+    reg.register('app1', 'wecom-bot', 'chat-1', 'direct', 'inst-1', original)
+    const record = reg.findSession('app1', 'wecom-bot', 'chat-1')!
+    const revision = reg.getSessionRevision('app1', 'wecom-bot', 'chat-1')
+    expect(reg.restoreSession(record)).toBe(false)
+    expect(reg.getSessionRevision('app1', 'wecom-bot', 'chat-1')).toBe(revision)
+    reg.removeSession('app1', 'wecom-bot', 'chat-1')
+    expect(reg.restoreSession(record)).toBe(true)
+    expect(reg.getSessionRevision('app1', 'wecom-bot', 'chat-1')).not.toBe(revision)
+  })
+
+  it('keeps revision lookups memory-only and does not add fields to persisted sessions', async () => {
+    reg.register('app1', 'wecom-bot', 'chat-1', 'direct', 'inst-1', original)
+    await vi.waitFor(() => expect(JSON.parse(readFileSync(file, 'utf8'))).toHaveLength(1))
+    const persisted = readFileSync(file, 'utf8')
+    const write = vi.spyOn(AtomicFileWriter.prototype, 'write')
+    const revision = reg.getSessionRevision('app1', 'wecom-bot', 'chat-1')!
+    for (let i = 0; i < 10; i++) expect(reg.getSessionRevision('app1', 'wecom-bot', 'chat-1')).toBe(revision)
+    await Promise.resolve()
+    expect(write).not.toHaveBeenCalled()
+    expect(readFileSync(file, 'utf8')).toBe(persisted)
+    expect(reg.findSession('app1', 'wecom-bot', 'chat-1')).toEqual(JSON.parse(persisted)[0])
+    const reloaded = new ImSessionRegistry(file)
+    expect(reloaded.getSessionRevision('app1', 'wecom-bot', 'chat-1')).toBeDefined()
+    expect(reloaded.getSessionRevision('app1', 'wecom-bot', 'chat-1')).not.toBe(revision)
+    reg.setCustomName('app1', 'wecom-bot', 'chat-1', 'Renamed')
+    await vi.waitFor(() => expect(JSON.parse(readFileSync(file, 'utf8'))[0].customName).toBe('Renamed'))
+    expect(JSON.parse(readFileSync(file, 'utf8'))[0]).toEqual({ ...JSON.parse(persisted)[0], customName: 'Renamed' })
   })
 })
 
@@ -279,6 +449,142 @@ describe('ImSessionRegistry — native local sessions', () => {
   })
 })
 
+describe('ImSessionRegistry — pending relay cleanup', () => {
+  let dir: string
+  let reg: ImSessionRegistry
+  let spool: PendingRelayStore
+
+  function enqueue(target: string, id = target, action?: RelayPushEvent['action']) {
+    spool.append(target, {
+      kind: 'push', id, at: Date.now(),
+      source: { key: 'app-run:author:run-1', appId: 'author', runId: 'run-1' },
+      sourceOwner: false, message: 'Waiting for a reply', action,
+    })
+  }
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'im-reg-relay-'))
+    reg = new ImSessionRegistry(join(dir, 'sessions.json'))
+    spool = new PendingRelayStore(join(dir, 'relays.json'))
+    setPendingRelayStore(spool)
+    removeForChat.mockClear()
+  })
+
+  afterEach(async () => {
+    setPendingRelayStore(null)
+    await new Promise(resolve => setTimeout(resolve, 50))
+    rmSync(dir, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  it('clears ordinary pending relays for only the removed chat, including both chat types', () => {
+    reg.register('app1', 'wecom-bot', 'boss', 'direct', 'inst-1')
+    const removed = ['direct', 'group'].map(type => buildImSessionKey('app1', 'wecom-bot', type as 'direct' | 'group', 'boss'))
+    const kept = [
+      buildImSessionKey('app1', 'wecom-bot', 'direct', 'other-chat'),
+      buildImSessionKey('app1', 'feishu-bot', 'direct', 'boss'),
+      buildImSessionKey('app2', 'wecom-bot', 'direct', 'boss'),
+    ]
+    for (const target of [...removed, ...kept]) enqueue(target)
+
+    expect(reg.removeSession('app1', 'wecom-bot', 'boss')).toBe(true)
+
+    for (const target of removed) expect(spool.peek(target)).toEqual([])
+    for (const target of kept) expect(spool.count(target)).toBe(1)
+    expect(removeForChat).toHaveBeenCalledWith('app1', 'wecom-bot', 'boss')
+    reg.register('app1', 'wecom-bot', 'boss', 'direct', 'inst-1')
+    for (const target of removed) expect(spool.peek(target)).toEqual([])
+  })
+
+  it('clears only the removed member conversation and ordinary alias, preserving other members, chats and accepted history', async () => {
+    reg.register('app1', 'wecom-bot', 'boss', 'direct', 'inst-1', { teamContext: { teamId: 'team-1', epochId: 'private-epoch' } })
+    const teamTarget = buildTeamSessionKey('app1', 'team-1', 'private-epoch')
+    const ordinaryTarget = buildImSessionKey('app1', 'wecom-bot', 'direct', 'boss')
+    const kept = [
+      buildTeamSessionKey('app2', 'team-1', 'private-epoch'),
+      buildTeamSessionKey('app1', 'team-1', 'other-chat-epoch'),
+      buildTeamSessionKey('app1', 'other-team', 'private-epoch'),
+      buildImSessionKey('app1', 'wecom-bot', 'direct', 'other-chat'),
+    ]
+    const questionAction: RelayPushEvent['action'] = { kind: 'answer-question', appId: 'author', entryId: 'open-question' }
+    enqueue(teamTarget, 'accepted')
+    const accepted = spool.peek(teamTarget)
+    spool.commit(teamTarget, ['accepted'])
+    const history = join(dir, 'accepted-history.jsonl')
+    writeFileSync(history, JSON.stringify(accepted))
+    enqueue(teamTarget, 'unanswered', questionAction)
+    enqueue(ordinaryTarget)
+    for (const target of kept) enqueue(target)
+
+    expect(reg.removeSession('app1', 'wecom-bot', 'boss')).toBe(true)
+
+    expect(spool.peek(teamTarget)).toEqual([])
+    expect(spool.peek(ordinaryTarget)).toEqual([])
+    for (const target of kept) expect(spool.count(target)).toBe(1)
+    expect(readFileSync(history, 'utf8')).toBe(JSON.stringify(accepted))
+    expect(questionAction).toEqual({ kind: 'answer-question', appId: 'author', entryId: 'open-question' })
+    reg.register('app1', 'wecom-bot', 'boss', 'direct', 'inst-1', { teamContext: { teamId: 'team-1', epochId: 'private-epoch' } })
+    await new Promise(resolve => setTimeout(resolve, 50))
+    const reloaded = new PendingRelayStore(join(dir, 'relays.json'))
+    expect(reloaded.peek(teamTarget)).toEqual([])
+    expect(reloaded.peek(ordinaryTarget)).toEqual([])
+    for (const target of kept) expect(reloaded.count(target)).toBe(1)
+  })
+
+  it('removes all registered app destinations without clearing another member or an unregistered conversation', () => {
+    reg.register('app1', 'wecom-bot', 'boss', 'direct', 'inst-1', { teamContext: { teamId: 'team-1', epochId: 'private-epoch' } })
+    reg.register('app1', 'feishu-bot', 'group', 'group', 'inst-2', { teamContext: { teamId: 'team-2', epochId: 'group-epoch' } })
+    reg.register('app1', 'wecom-bot', 'ordinary', 'direct', 'inst-1')
+    reg.register('app2', 'wecom-bot', 'boss', 'direct', 'inst-3', { teamContext: { teamId: 'team-1', epochId: 'private-epoch' } })
+    reg.setPushLink('app1', { appId: 'app2', channel: 'wecom-bot', chatId: 'boss' }, { autoSync: true })
+    const removed = [
+      buildTeamSessionKey('app1', 'team-1', 'private-epoch'),
+      buildTeamSessionKey('app1', 'team-2', 'group-epoch'),
+      buildImSessionKey('app1', 'wecom-bot', 'direct', 'boss'),
+      buildImSessionKey('app1', 'feishu-bot', 'group', 'group'),
+      buildImSessionKey('app1', 'wecom-bot', 'direct', 'ordinary'),
+    ]
+    const kept = [
+      buildTeamSessionKey('app2', 'team-1', 'private-epoch'),
+      buildImSessionKey('app2', 'wecom-bot', 'direct', 'boss'),
+      buildTeamSessionKey('app1', 'team-1', 'unregistered-epoch'),
+    ]
+    for (const target of [...removed, ...kept]) enqueue(target)
+
+    expect(reg.removeAllForApp('app1')).toBe(3)
+
+    expect(reg.getAllSessions('app1')).toEqual([])
+    expect(reg.findSession('app2', 'wecom-bot', 'boss')?.pushLinks).toBeUndefined()
+    for (const target of removed) expect(spool.peek(target)).toEqual([])
+    for (const target of kept) expect(spool.count(target)).toBe(1)
+    expect(removeForChat.mock.calls).toEqual([
+      ['app1', 'wecom-bot', 'boss'], ['app1', 'feishu-bot', 'group'], ['app1', 'wecom-bot', 'ordinary'],
+    ])
+    reg.register('app1', 'wecom-bot', 'boss', 'direct', 'inst-1', { teamContext: { teamId: 'team-1', epochId: 'private-epoch' } })
+    expect(spool.peek(removed[0])).toEqual([])
+  })
+
+  it('leaves pending relays alone when no registry session was removed', () => {
+    const target = buildImSessionKey('app1', 'wecom-bot', 'direct', 'unknown')
+    enqueue(target)
+
+    expect(reg.removeSession('app1', 'wecom-bot', 'unknown')).toBe(false)
+    expect(reg.removeAllForApp('app1')).toBe(0)
+    expect(spool.count(target)).toBe(1)
+    expect(removeForChat).not.toHaveBeenCalled()
+  })
+
+  it('reports the removed destination when cleanup cannot reach the relay spool', () => {
+    reg.register('app1', 'wecom-bot', 'boss', 'direct', 'inst-1')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    setPendingRelayStore(null)
+
+    expect(reg.removeSession('app1', 'wecom-bot', 'boss')).toBe(true)
+    expect(warn).toHaveBeenCalledOnce()
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('appId=app1, channel=wecom-bot, chatId=boss, reason=relay spool unavailable'))
+  })
+})
+
 describe('ImSessionRegistry — persistence', () => {
   let dir: string
   let file: string
@@ -361,6 +667,34 @@ describe('ImSessionRegistry — a push to a chat', () => {
     const sessions = reg.getAllSessions('app1')
     expect(sessions[0]).toMatchObject({ chatId: 'ops-group', lastSender: 'Release Bot', lastMessage: 'Nightly report: 3 failures', messageCount: 2 })
     expect(sessions[1].chatId).toBe('boss')
+  })
+
+  it('persists a refreshed team destination without counting another message or changing activity', async () => {
+    const file = join(dir, 'sessions.json')
+    const reg = new ImSessionRegistry(file)
+    reg.register('app1', 'wecom-bot', 'boss', 'direct', 'inst-1', {
+      lastMessage: 'old question', lastSender: 'Boss', teamContext: { teamId: 't1', epochId: 'cleared' },
+    })
+    const before = reg.findSession('app1', 'wecom-bot', 'boss')!
+    const teamContext = { teamId: 't1', epochId: 'current' }
+
+    reg.setTeamContext('app1', 'wecom-bot', 'boss', teamContext)
+    teamContext.epochId = 'not-the-stored-context'
+
+    expect(reg.findSession('app1', 'wecom-bot', 'boss')).toEqual({ ...before, teamContext: { teamId: 't1', epochId: 'current' } })
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(new ImSessionRegistry(file).findSession('app1', 'wecom-bot', 'boss')?.teamContext).toEqual({ teamId: 't1', epochId: 'current' })
+
+    reg.setTeamContext('app1', 'wecom-bot', 'boss', undefined)
+    expect(reg.findSession('app1', 'wecom-bot', 'boss')).toEqual({ ...before, teamContext: undefined })
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(new ImSessionRegistry(file).findSession('app1', 'wecom-bot', 'boss')?.teamContext).toBeUndefined()
+  })
+
+  it('does not create a chat while refreshing a missing destination', () => {
+    const reg = new ImSessionRegistry(join(dir, 'sessions.json'))
+    reg.setTeamContext('app1', 'wecom-bot', 'unknown', { teamId: 't1', epochId: 'current' })
+    expect(reg.listAll()).toEqual([])
   })
 
   it('leaves an unknown chat alone', () => {
