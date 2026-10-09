@@ -174,7 +174,7 @@ export function SubAgentTimeline({ thoughts, parentToolUseId, taskProgress, isTh
         {/* Expand/collapse chevron */}
         <ChevronDown
           size={12}
-          className={`text-muted-foreground/50 transition-transform duration-150 ${isExpanded ? 'rotate-180' : ''}`}
+          className={`text-muted-foreground/50 transition-transform duration-150 ${isExpanded ? '' : '-rotate-90'}`}
         />
       </button>
 

@@ -1734,6 +1734,41 @@ export function isSpaceBusy(spaceId: string): boolean {
 }
 
 /**
+ * Close every session of a space that is safe to close, and resolve once
+ * their engine processes have exited or `timeoutMs` passed. Windows will not
+ * remove a folder that a live process works in, so a space's folder can only
+ * be deleted after this. Busy sessions are left running: check isSpaceBusy first.
+ */
+export async function closeSpaceSessions(spaceId: string, reason: string, timeoutMs = 3000): Promise<void> {
+  const pids: number[] = []
+  for (const [conversationId, info] of Array.from(v2Sessions.entries())) {
+    if (info.spaceId !== spaceId || isEvictionUnsafe(conversationId)) continue
+    // Read before closing: adapters drop their process handle on close().
+    const pid = info.session.pid
+    if (typeof pid === 'number') pids.push(pid)
+    closeV2SessionForRebuild(conversationId, reason)
+  }
+  if (pids.length === 0) return
+
+  const isAlive = (pid: number) => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+  const deadline = Date.now() + timeoutMs
+  while (pids.some(isAlive) && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  const lingering = pids.filter(isAlive)
+  if (lingering.length > 0) {
+    console.warn(`[Agent] Space ${spaceId}: engine process(es) ${lingering.join(', ')} still running ${timeoutMs}ms after close`)
+  }
+}
+
+/**
  * Invalidate all IM channel sessions (but not native Halo chat sessions).
  * Called when IM channel config is reloaded, so permission changes take effect
  * on the next inbound message without requiring a manual /halo-clear.

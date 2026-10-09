@@ -361,17 +361,6 @@ export function SpacePage() {
     touchedFilesBaselineRef.current = { conversationId: activeConversationId, size: touchedFiles.size }
   }, [touchedFiles, activeConversationId, effectiveRailExpanded, setRailExpanded, railMayAutoOpen])
 
-  // Consume a workspace card's asset-chip request (space.store's
-  // pendingArtifactRailTab, set by SpacesPage before switching here) — force
-  // the rail open on the requested tab, then clear so a later manual
-  // collapse doesn't get silently re-opened by a stale pending value.
-  const pendingArtifactRailTab = useSpaceStore(state => state.pendingArtifactRailTab)
-  useEffect(() => {
-    if (!pendingArtifactRailTab) return
-    setRailByUser(true)
-    useSpaceStore.getState().setPendingArtifactRailTab(null)
-  }, [pendingArtifactRailTab, setRailByUser])
-
   // Setup search shortcuts
   useSearchShortcuts({
     enabled: true,
@@ -551,8 +540,7 @@ export function SpacePage() {
           )}
 
           {/* Artifact rail - defaults collapsed and auto-opens when the
-              conversation writes/edits files, or a workspace card's asset chip
-              asks for a specific tab (both effects above); otherwise follows
+              conversation writes/edits files (effect above); otherwise follows
               the user's own toggle, persisted per space. Exceptions: forced
               closed while the canvas is maximized (see useEffect above),
               restoring on exit, and hidden while it steps aside for the
@@ -561,7 +549,6 @@ export function SpacePage() {
             <ArtifactRail
               externalExpanded={railShown}
               onExpandedChange={setRailByUser}
-              initialTab={pendingArtifactRailTab ?? undefined}
               initialWidth={artifactRailWidthConfig}
               onWidthChange={handleArtifactRailWidthChange}
               onOpenWidthChange={setRailWidth}

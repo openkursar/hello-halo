@@ -1181,8 +1181,8 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart, onRestartAgen
           </div>
 
           {/* ── Danger Zone ── */}
-          <div className="space-y-2">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          <div className="space-y-2 rounded-lg bg-destructive/[0.02] p-3">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-destructive">
               {t('Danger zone')}
             </h3>
             {showClearMemoryConfirm ? (

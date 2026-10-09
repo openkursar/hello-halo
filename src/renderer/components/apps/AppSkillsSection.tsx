@@ -100,13 +100,20 @@ function SkillRow({
           </button>
         )}
 
-        <span className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full font-medium border flex-shrink-0
-          ${isGlobal
-            ? 'bg-primary/10 text-primary border-primary/25'
-            : 'bg-muted/60 text-muted-foreground border-border/40'}`}
-        >
-          {isGlobal && <Globe className="w-3 h-3" />}
-          {isGlobal ? t('Global') : t('This workspace')}
+        {/* Both labels share one grid cell so the badge width is constant and the folder icons line up. */}
+        <span className="grid flex-shrink-0 text-[11px] font-medium">
+          <span aria-hidden className="invisible col-start-1 row-start-1 inline-flex items-center gap-1 px-2 py-0.5 border">
+            <Globe className="w-3 h-3" />{t('Global')}
+          </span>
+          <span aria-hidden className="invisible col-start-1 row-start-1 px-2 py-0.5 border">{t('This workspace')}</span>
+          <span className={`col-start-1 row-start-1 inline-flex items-center justify-center gap-1 px-2 py-0.5 rounded-full border
+            ${isGlobal
+              ? 'bg-primary/10 text-primary border-primary/25'
+              : 'bg-muted/60 text-muted-foreground border-border/40'}`}
+          >
+            {isGlobal && <Globe className="w-3 h-3" />}
+            {isGlobal ? t('Global') : t('This workspace')}
+          </span>
         </span>
       </div>
 

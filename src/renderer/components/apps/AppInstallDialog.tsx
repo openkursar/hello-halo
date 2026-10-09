@@ -890,7 +890,7 @@ export function AppInstallDialog({ onClose, onInstalled }: AppInstallDialogProps
                   <FolderOpen className="w-3.5 h-3.5" />
                   <span>{t('New Workspace')}</span>
                   <ChevronDown
-                    className={`w-3 h-3 transition-transform duration-200 ${showCreateSpaceForm ? 'rotate-180' : ''}`}
+                    className={`w-3 h-3 transition-transform duration-200 ${showCreateSpaceForm ? '' : '-rotate-90'}`}
                   />
                 </button>
 

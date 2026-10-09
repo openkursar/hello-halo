@@ -214,7 +214,7 @@ export default function XlsxViewer({ tab, onScrollChange }: XlsxViewerProps) {
               className="p-1.5 rounded hover:bg-secondary transition-colors"
               title={t('Open in external application')}
             >
-              <ExternalLink className="w-4 h-4 text-muted-foreground" />
+              <ExternalLink className="w-3.5 h-3.5 text-muted-foreground" strokeWidth={1.5} />
             </button>
           )}
         </div>

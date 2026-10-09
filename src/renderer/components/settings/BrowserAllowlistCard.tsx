@@ -125,7 +125,7 @@ export function BrowserAllowlistCard() {
           }}
           onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
           placeholder={t('example.com or *.example.com')}
-          className="flex-1 px-3 py-1.5 text-sm bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 font-mono"
+          className="flex-1 px-3 py-1.5 text-sm bg-secondary border border-transparent rounded-lg focus:outline-none focus:border-primary/50 font-mono"
         />
         <button
           onClick={handleAdd}

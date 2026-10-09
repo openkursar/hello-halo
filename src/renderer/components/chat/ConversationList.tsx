@@ -14,6 +14,10 @@ import { useChatStore, useAllConversationStatuses } from '../../stores/chat.stor
 import { useSpaceStore } from '../../stores/space.store'
 import { useAppStore } from '../../stores/app.store'
 import { useAppChatPinsStore } from '../../stores/app-chat-pins.store'
+import {
+  useConversationListPrefs, isSectionOpen, type ConversationSection,
+} from '../../stores/conversation-list-prefs.store'
+import { ROW_HEIGHT, usePaneResize, PaneResizeHandle } from './conversation-list-panes'
 import { api } from '../../api'
 import { cn } from '../../lib/utils'
 import { TaskStatusDot } from '../pulse/TaskStatusDot'
@@ -23,7 +27,7 @@ import { useAppChatConversationRows, type AppChatConversationRow } from '../../h
 import { appChatSessionLabel, formatRowTime } from './conversation-row-format'
 import { parseAppChatKey } from '../../../shared/apps/im-keys'
 import { NATIVE_SESSION_CHANNEL, NATIVE_DEFAULT_CHAT_ID } from '../../../shared/types/im-channel'
-import type { ConversationMeta } from '../../types'
+import type { ConversationMeta, TaskStatus } from '../../types'
 import { markEntry, trackHome, trackNavigate } from '../../services/home-telemetry'
 import { openDigitalHumanChat } from '../../utils/conversation-navigation'
 import { openPersonActivity } from '../../utils/people-navigation'
@@ -76,28 +80,32 @@ function hoverCardFor(
   }
 }
 
-/** Flattened row fed to `Virtuoso` — headers and items share one list instead
- * of nested groups, matching the existing flat-row approach (see history:
+/** Flattened row fed to `Virtuoso` — a digital human's sub-header and its
+ * sessions share one list instead of nested groups (see history:
  * `GroupedVirtuoso`'s separate groups API had a rendering bug where
  * header/item data could desync). */
 type ConversationRow =
-  /** `hint` is hover-only: the distinction between sections is one-time
-   *  knowledge, not worth permanent vertical space in a 140px-wide sidebar.
-   *  Omitted where the label already says everything. */
-  | { type: 'header'; key: string; section: ConversationSection; label: string; hint?: string; collapsed: boolean; afterCollapsed: boolean }
   | { type: 'item'; key: string; conversation: ConversationMeta }
   | { type: 'dh-header'; key: string; appId: string; name: string; uninstalled: boolean; collapsed: boolean }
   /** `standalone` rows sit outside their digital human's section (i.e. in
    *  Pinned), so they carry the avatar/name context the section header would
    *  otherwise provide. */
   | { type: 'dh-item'; key: string; row: AppChatConversationRow; standalone: boolean }
-  /** Reveals the next page of a long Pinned section. */
-  | { type: 'more'; key: string; remaining: number }
 
-type ConversationSection = 'pinned' | 'digital-humans' | 'conversations'
+type PinnedRow = Extract<ConversationRow, { type: 'item' | 'dh-item' }>
 
-/** Pinned rows shown per page, so a long pin list doesn't push the rest out of view. */
-const PINNED_PAGE_SIZE = 5
+/** Which status the folded digital-humans header shows when several sessions need attention. */
+const ATTENTION_ORDER: TaskStatus[] = ['waiting', 'error', 'completed-unseen', 'generating']
+
+const EMPTY_SECTION_CHOICES: Partial<Record<ConversationSection, boolean>> = {}
+const EMPTY_GROUP_CHOICES: Record<string, boolean> = {}
+
+/** The digital-humans section and groups the list opened on its own (not the user). */
+interface AutoOpen {
+  section: boolean
+  apps: ReadonlySet<string>
+}
+const NO_AUTO_OPEN: AutoOpen = { section: false, apps: new Set() }
 
 /**
  * The scroller takes no padding: Virtuoso's viewport is absolutely positioned
@@ -124,6 +132,42 @@ const ROW_TITLE = 'flex-1 min-w-0 overflow-hidden whitespace-nowrap [mask-image:
 const ROW_ACTIONS = 'absolute inset-y-0 right-1.5 flex items-center gap-0.5 pl-5 bg-[linear-gradient(to_right,transparent,hsl(var(--secondary))_20px)] opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto group-data-[menu-open]:opacity-100 group-data-[menu-open]:pointer-events-auto has-[:focus-visible]:opacity-100 has-[:focus-visible]:pointer-events-auto'
 // `dark-ui:` rows outrank plain state variants, so the open-menu text is restated for dark.
 const ROW_HIGHLIGHT = 'data-[menu-open]:bg-secondary data-[menu-open]:text-foreground dark-ui:data-[menu-open]:text-foreground has-[:focus-visible]:bg-secondary'
+
+/**
+ * A top-level section's fold toggle; its open-state arrow shows while the
+ * pointer is anywhere in its own section (the `group/section` container).
+ * No uppercase/letter-spacing: both are no-ops on CJK labels and only loosen them oddly.
+ */
+function SectionHeaderButton({ section, label, hint, collapsed, attention, onToggle }: {
+  section: ConversationSection
+  label: string
+  /** Hover-only: the distinction between sections is one-time knowledge, not worth permanent space. */
+  hint?: string
+  collapsed: boolean
+  /** Shown while folded, so a session needing the user isn't hidden with it. */
+  attention?: TaskStatus
+  onToggle: (section: ConversationSection) => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        trackHome('home.conversation.section', { section, action: collapsed ? 'expand' : 'collapse' })
+        onToggle(section)
+      }}
+      aria-expanded={!collapsed}
+      title={hint}
+      className="group flex w-full items-center gap-1 rounded-sm px-1.5 pb-1 text-xs font-medium text-subtle-foreground/70 dark-ui:text-subtle-foreground hover:text-subtle-foreground dark-ui:hover:text-muted-foreground transition-colors ease-halo"
+    >
+      <span>{label}</span>
+      {collapsed && attention && <TaskStatusDot status={attention} size="sm" />}
+      <ChevronRight className={cn(
+        'ml-auto w-3 h-3 shrink-0 transition-[transform,opacity]',
+        collapsed ? 'opacity-100' : 'rotate-90 opacity-0 group-hover/section:opacity-100 group-focus-visible:opacity-100'
+      )} />
+    </button>
+  )
+}
 
 /** A digital human's face, clickable through to its page (activity thread). */
 function PersonAvatarLink({ appId, name, size, dimmed, disabled, className }: {
@@ -162,89 +206,47 @@ function PersonAvatarLink({ appId, name, size, dimmed, disabled, className }: {
 }
 
 /**
- * Build the full flat row list:
- *   Pinned (flat, mixes regular + digital-human items)
- *   → Digital humans (per-app collapsible sub-header, its sessions beneath)
- *   → Conversations (regular ones, newest first)
- *
- * Empty sections are dropped entirely.
+ * Pinned rows, regular and digital-human mixed in one recency order so
+ * neither kind pushes the other out of view. Rendered in their own fixed area
+ * above the scrolling list.
  */
-function buildConversationRows(
-  conversations: ConversationMeta[],
+function buildPinnedRows(conversations: ConversationMeta[], appChatRows: AppChatConversationRow[]): PinnedRow[] {
+  return [
+    ...conversations.filter(conv => conv.starred)
+      .map(conv => ({ at: Date.parse(conv.updatedAt) || 0, row: { type: 'item' as const, key: conv.id, conversation: conv } })),
+    ...appChatRows.filter(row => row.starred)
+      .map(row => ({ at: row.updatedAt, row: { type: 'dh-item' as const, key: row.id, row, standalone: true } })),
+  ].sort((a, b) => b.at - a.at).map(entry => entry.row)
+}
+
+/** Unpinned digital-human sessions under a collapsible sub-header per digital human. */
+function buildDigitalHumanRows(
   appChatRows: AppChatConversationRow[],
-  collapsedApps: Set<string>,
-  collapsedSections: Set<ConversationSection>,
-  pinnedShown: number,
-  /** The open conversation's id; always listed even past the Pinned page. */
-  activeId: string | undefined,
-  t: (key: string) => string
+  isAppGroupOpen: (appId: string, rows: AppChatConversationRow[]) => boolean,
 ): ConversationRow[] {
-  const pinnedConvs: ConversationMeta[] = []
-  const rest: ConversationMeta[] = []
-
-  for (const conv of conversations) {
-    if (conv.starred) pinnedConvs.push(conv)
-    else rest.push(conv)
-  }
-
-  const pinnedDh: AppChatConversationRow[] = []
   const byApp = new Map<string, AppChatConversationRow[]>()
   for (const row of appChatRows) {
-    if (row.starred) {
-      pinnedDh.push(row)
-      continue
-    }
+    if (row.starred) continue
     const list = byApp.get(row.appId) ?? []
     list.push(row)
     byApp.set(row.appId, list)
   }
 
   const out: ConversationRow[] = []
-
-  let previousCollapsed = false
-  const header = (section: ConversationSection, label: string, hint?: string): boolean => {
-    const collapsed = collapsedSections.has(section)
-    out.push({ type: 'header', key: `header:${section}`, section, label, hint, collapsed, afterCollapsed: previousCollapsed })
-    previousCollapsed = collapsed
-    return !collapsed
-  }
-
-  if ((pinnedConvs.length || pinnedDh.length) && header('pinned', t('Pinned'))) {
-    // One recency order across both kinds, so neither can push the other
-    // entirely past the first page.
-    const pinned = [
-      ...pinnedConvs.map(conv => ({ at: Date.parse(conv.updatedAt) || 0, row: { type: 'item' as const, key: conv.id, conversation: conv } })),
-      ...pinnedDh.map(row => ({ at: row.updatedAt, row: { type: 'dh-item' as const, key: row.id, row, standalone: true } })),
-    ].sort((a, b) => b.at - a.at).map(entry => entry.row as ConversationRow)
-    const shown = pinned.slice(0, pinnedShown)
-    const active = pinned.slice(pinnedShown).find(row => row.key === activeId)
-    if (active) shown.push(active)
-    out.push(...shown)
-    if (pinned.length > shown.length) out.push({ type: 'more', key: 'more:pinned', remaining: pinned.length - shown.length })
-  }
-
-  if (byApp.size > 0 && header('digital-humans', t('Digital Humans'), t('Conversations with digital humans available in this workspace'))) {
-    for (const [appId, rows] of byApp) {
-      if (rows.length === 0) continue
-      const collapsed = collapsedApps.has(appId)
-      out.push({
-        type: 'dh-header',
-        key: `dh-header:${appId}`,
-        appId,
-        name: rows[0].digitalHumanName,
-        uninstalled: rows[0].uninstalled,
-        collapsed,
-      })
-      if (!collapsed) {
-        for (const row of rows) out.push({ type: 'dh-item', key: row.id, row, standalone: false })
-      }
+  for (const [appId, rows] of byApp) {
+    const collapsed = !isAppGroupOpen(appId, rows)
+    out.push({
+      type: 'dh-header',
+      key: `dh-header:${appId}`,
+      appId,
+      name: rows[0].digitalHumanName,
+      uninstalled: rows[0].uninstalled,
+      collapsed,
+    })
+    if (!collapsed) {
+      for (const row of rows) out.push({ type: 'dh-item', key: row.id, row, standalone: false })
     }
   }
-
-  if (rest.length && header('conversations', t('Conversations'), t('Your direct conversations with Halo'))) {
-    for (const conv of rest) out.push({ type: 'item', key: conv.id, conversation: conv })
-  }
-
   return out
 }
 
@@ -272,33 +274,78 @@ export const ConversationList = memo(function ConversationList({
   const allAppChatRows = useAppChatConversationRows(currentSpaceId)
   const toggleAppChatPin = useAppChatPinsStore(s => s.toggleAppChatPin)
 
-  // Which digital-human sub-groups are collapsed (their session rows hidden).
-  // Not persisted — a purely transient viewing preference.
-  const [collapsedApps, setCollapsedApps] = useState<Set<string>>(new Set())
-  const toggleAppCollapsed = useCallback((appId: string) => {
-    setCollapsedApps(prev => {
-      const next = new Set(prev)
-      if (next.has(appId)) next.delete(appId)
-      else next.add(appId)
-      return next
-    })
-  }, [])
-  // Transient like the collapse state; switching spaces starts from one page.
-  const [pinnedShown, setPinnedShown] = useState(PINNED_PAGE_SIZE)
-  useEffect(() => { setPinnedShown(PINNED_PAGE_SIZE) }, [currentSpaceId])
-  // Collapsed top-level sections; transient like the sub-groups above.
-  const [collapsedSections, setCollapsedSections] = useState<Set<ConversationSection>>(new Set())
-  const toggleSection = useCallback((section: ConversationSection) => {
-    setCollapsedSections(prev => {
-      const next = new Set(prev)
-      if (next.has(section)) next.delete(section)
-      else next.add(section)
-      return next
-    })
-  }, [])
-
+  const spaceKey = currentSpaceId ?? ''
+  const sectionChoices = useConversationListPrefs(s => s.sectionOpen[spaceKey]) ?? EMPTY_SECTION_CHOICES
+  const appGroupChoices = useConversationListPrefs(s => s.appGroupOpen[spaceKey]) ?? EMPTY_GROUP_CHOICES
+  const setAppGroupOpen = useConversationListPrefs(s => s.setAppGroupOpen)
+  const setSectionOpen = useConversationListPrefs(s => s.setSectionOpen)
   // Single batch subscription for all conversation statuses (replaces N individual hooks)
   const conversationStatuses = useAllConversationStatuses()
+
+  // What the list opens on its own, kept in memory only: the stored prefs hold
+  // nothing but the user's own clicks. `section` and `apps` override a stored
+  // fold until the user toggles that section or group again.
+  const [autoOpen, setAutoOpen] = useState<AutoOpen & { space: string }>(() => ({ space: spaceKey, ...NO_AUTO_OPEN }))
+  const auto: AutoOpen = autoOpen.space === spaceKey ? autoOpen : NO_AUTO_OPEN
+  const updateAutoOpen = useCallback((change: (prev: AutoOpen) => AutoOpen) => {
+    setAutoOpen(prev => {
+      const base = prev.space === spaceKey ? prev : { space: spaceKey, ...NO_AUTO_OPEN }
+      const next = change(base)
+      return next.section === base.section && next.apps === base.apps ? base : { space: spaceKey, ...next }
+    })
+  }, [spaceKey])
+
+  const pinnedOpen = isSectionOpen(sectionChoices, 'pinned')
+  const digitalHumansOpen = auto.section || isSectionOpen(sectionChoices, 'digital-humans')
+  const conversationsOpen = isSectionOpen(sectionChoices, 'conversations')
+  const toggleSection = useCallback((section: ConversationSection) => {
+    const open = section === 'digital-humans'
+      ? auto.section || isSectionOpen(sectionChoices, section)
+      : isSectionOpen(sectionChoices, section)
+    if (section === 'digital-humans') updateAutoOpen(prev => (prev.section ? { ...prev, section: false } : prev))
+    setSectionOpen(spaceKey, section, !open)
+  }, [setSectionOpen, spaceKey, sectionChoices, auto.section, updateAutoOpen])
+
+  // A digital human's group starts closed and opens on its own when it holds the
+  // open conversation or a session needs attention; that stays until the user folds it.
+  const selectedAppId = selectedAppChat?.appId
+  const isAppGroupOpen = useCallback((appId: string, groupRows: AppChatConversationRow[]) => {
+    if (auto.apps.has(appId)) return true
+    const choice = appGroupChoices[appId]
+    if (choice !== undefined) return choice
+    return appId === selectedAppId || groupRows.some(row => conversationStatuses.has(row.id))
+  }, [auto.apps, appGroupChoices, selectedAppId, conversationStatuses])
+  const toggleAppCollapsed = useCallback((appId: string, open: boolean) => {
+    updateAutoOpen(prev => {
+      if (!prev.apps.has(appId)) return prev
+      const apps = new Set(prev.apps)
+      apps.delete(appId)
+      return { ...prev, apps }
+    })
+    setAppGroupOpen(spaceKey, appId, !open)
+  }, [setAppGroupOpen, spaceKey, updateAutoOpen])
+  // Opening a conversation (from here or e.g. the task panel) shows its section
+  // and group even if the user had folded them; pinned sessions already show.
+  const selectedAppChatId = selectedAppChat?.conversationId
+  const selectedAppChatPinned = !!selectedAppChatId && allAppChatRows.some(row => row.id === selectedAppChatId && row.starred)
+  useEffect(() => {
+    if (!selectedAppId || !selectedAppChatId || selectedAppChatPinned) return
+    updateAutoOpen(prev => (prev.section && prev.apps.has(selectedAppId)
+      ? prev
+      : { section: true, apps: new Set(prev.apps).add(selectedAppId) }))
+  }, [selectedAppId, selectedAppChatId, selectedAppChatPinned, updateAutoOpen])
+  // A group that needs attention stays open after the session settles, unless the user folded it.
+  useEffect(() => {
+    const waiting = allAppChatRows.filter(row =>
+      !row.starred && conversationStatuses.has(row.id) && appGroupChoices[row.appId] === undefined)
+    if (waiting.length === 0) return
+    updateAutoOpen(prev => {
+      if (waiting.every(row => prev.apps.has(row.appId))) return prev
+      const apps = new Set(prev.apps)
+      for (const row of waiting) apps.add(row.appId)
+      return { ...prev, apps }
+    })
+  }, [allAppChatRows, conversationStatuses, appGroupChoices, updateAutoOpen])
 
   // Width state - initialized from persisted config
   const initialWidth = layoutConfig?.sidebarWidth
@@ -362,13 +409,36 @@ export const ConversationList = memo(function ConversationList({
     el.style.top = `${top}px`
   }, [hoverCard])
 
-  const rows = useMemo<ConversationRow[]>(
-    () => buildConversationRows(
-      conversations, allAppChatRows, collapsedApps, collapsedSections, pinnedShown,
-      selectedAppChat?.conversationId ?? currentConversationId, t
-    ),
-    [conversations, allAppChatRows, collapsedApps, collapsedSections, pinnedShown, selectedAppChat?.conversationId, currentConversationId, t]
+  const pinnedRows = useMemo(() => buildPinnedRows(conversations, allAppChatRows), [conversations, allAppChatRows])
+  const digitalHumanRows = useMemo(() => buildDigitalHumanRows(allAppChatRows, isAppGroupOpen), [allAppChatRows, isAppGroupOpen])
+  const conversationRows = useMemo<ConversationRow[]>(
+    () => conversations.filter(conv => !conv.starred).map(conv => ({ type: 'item', key: conv.id, conversation: conv })),
+    [conversations]
   )
+  // The icon strip has no headers to unfold, so a session needing the user shows there even when folded.
+  const stripDigitalHumanRows = useMemo(() => {
+    const listed = new Set(digitalHumansOpen ? digitalHumanRows.map(row => row.key) : [])
+    return buildDigitalHumanRows(allAppChatRows, () => true)
+      .filter(row => row.type === 'dh-item' && (listed.has(row.key) || conversationStatuses.has(row.key)))
+  }, [allAppChatRows, digitalHumanRows, digitalHumansOpen, conversationStatuses])
+  // Its most urgent session status, for the folded digital-humans header.
+  const digitalHumanAttention = useMemo(() => {
+    const statuses = new Set(allAppChatRows.filter(row => !row.starred).map(row => conversationStatuses.get(row.id)))
+    return ATTENTION_ORDER.find(status => statuses.has(status))
+  }, [allAppChatRows, conversationStatuses])
+
+  // ── Panes: pinned and digital humans have their own height; conversations take the rest ──
+  const listColumnRef = useRef<HTMLDivElement>(null)
+  const pinnedScrollRef = useRef<HTMLDivElement>(null)
+  const pinnedResize = usePaneResize('pinned', pinnedScrollRef, listColumnRef, () => pinnedScrollRef.current?.scrollHeight ?? 0)
+
+  const digitalHumanPaneRef = useRef<HTMLDivElement>(null)
+  // Virtuoso doesn't size itself to its rows, so the pane is held at the smaller of
+  // the rows' total height and the pane height.
+  const [digitalHumanListHeight, setDigitalHumanListHeight] = useState(0)
+  const digitalHumanResize = usePaneResize('digital-humans', digitalHumanPaneRef, listColumnRef, () => digitalHumanListHeight)
+  // With the conversations pane folded or empty there is nothing to leave room for.
+  const digitalHumansFill = !conversationsOpen || conversationRows.length === 0
 
   // Handle drag resize
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -559,12 +629,7 @@ export const ConversationList = memo(function ConversationList({
     if (!spaceId) return
     trackHome('home.conversation.create', { surface: 'dh_group' })
     // Starting one under a collapsed group should still show it.
-    setCollapsedApps(prev => {
-      if (!prev.has(appId)) return prev
-      const next = new Set(prev)
-      next.delete(appId)
-      return next
-    })
+    setAppGroupOpen(spaceId, appId, true)
     void openDigitalHumanChat(appId, spaceId)
   }
 
@@ -621,9 +686,9 @@ export const ConversationList = memo(function ConversationList({
           ROW_HIGHLIGHT,
           isActive
             ? 'bg-secondary text-foreground font-medium'
-            // Dark theme: rows are read, not just scanned, so they stay at the
-            // brighter secondary tone; the selected one is marked by its fill.
-            : 'text-subtle-foreground hover:bg-secondary hover:text-foreground dark-ui:text-muted-foreground dark-ui:hover:text-foreground'
+            // Rows are read, not just scanned: darker than the section labels in
+            // light, the brighter secondary tone in dark; the selected one is marked by its fill.
+            : 'text-foreground/80 hover:bg-secondary hover:text-foreground dark-ui:text-muted-foreground dark-ui:hover:text-foreground'
         )}
       >
 
@@ -717,9 +782,9 @@ export const ConversationList = memo(function ConversationList({
             : 'cursor-pointer',
           isActive && !row.uninstalled
             ? 'bg-secondary text-foreground font-medium'
-            // Dark theme: rows are read, not just scanned, so they stay at the
-            // brighter secondary tone; the selected one is marked by its fill.
-            : 'text-subtle-foreground hover:bg-secondary hover:text-foreground dark-ui:text-muted-foreground dark-ui:hover:text-foreground'
+            // Rows are read, not just scanned: darker than the section labels in
+            // light, the brighter secondary tone in dark; the selected one is marked by its fill.
+            : 'text-foreground/80 hover:bg-secondary hover:text-foreground dark-ui:text-muted-foreground dark-ui:hover:text-foreground'
         )}
       >
 
@@ -809,6 +874,64 @@ export const ConversationList = memo(function ConversationList({
     document.body
   )
 
+  const renderDigitalHumanHeader = (row: Extract<ConversationRow, { type: 'dh-header' }>) => {
+    const toggle = () => {
+      trackHome('home.dh_group.toggle', { collapsed: !row.collapsed })
+      toggleAppCollapsed(row.appId, !row.collapsed)
+    }
+    return (
+      <div className={cn(
+        'group flex w-full items-center gap-0.5 rounded-sm pr-1 mt-0.5 transition-colors ease-halo',
+        row.uninstalled ? 'opacity-40' : 'hover:bg-secondary'
+      )}>
+        <PersonAvatarLink
+          appId={row.appId}
+          name={row.name}
+          size={18}
+          dimmed={selectedAppChat?.appId !== row.appId}
+          disabled={row.uninstalled}
+          className="ml-1.5"
+        />
+        <button
+          type="button"
+          onClick={toggle}
+          aria-expanded={!row.collapsed}
+          className={cn(
+            'flex flex-1 min-w-0 items-center pl-1.5 py-1.5 text-[13px] font-medium',
+            // A group label, not a row to read: in the dark theme it sits with its sessions' tone.
+            row.uninstalled ? 'cursor-not-allowed' : 'text-foreground dark-ui:text-muted-foreground'
+          )}
+        >
+          <span className="flex-1 min-w-0 truncate text-left">{row.name}</span>
+        </button>
+        {!row.uninstalled && (
+          <button
+            type="button"
+            onClick={() => handleNewAppChat(row.appId)}
+            title={t('New conversation with {{name}}', { name: row.name })}
+            aria-label={t('New conversation with {{name}}', { name: row.name })}
+            className="flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-subtle-foreground pointer-events-none opacity-0 transition-opacity hover:bg-background hover:text-foreground group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100"
+          >
+            <Plus className="w-3.5 h-3.5" />
+          </button>
+        )}
+        {/* A second hit area for the same toggle; the name button carries it for keyboard users. */}
+        <button type="button" tabIndex={-1} aria-hidden="true" onClick={toggle} className="flex h-5 w-5 shrink-0 items-center justify-center">
+          <ChevronRight className={cn(
+            'w-3 h-3 text-subtle-foreground transition-[transform,opacity]',
+            row.collapsed ? 'opacity-100' : 'rotate-90 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
+          )} />
+        </button>
+      </div>
+    )
+  }
+
+  const renderListRow = (row: ConversationRow) => {
+    if (row.type === 'dh-header') return renderDigitalHumanHeader(row)
+    if (row.type === 'dh-item') return renderAppChatItem(row.row, row.standalone)
+    return renderConversationItem(row.conversation)
+  }
+
   if ((collapsed && !expandedOverCanvas) || isDragCollapsed) {
     return (
       <div
@@ -831,8 +954,12 @@ export const ConversationList = memo(function ConversationList({
             this column scrolls, and a scroll container clips anything
             reaching past its edge. */}
         <div className="flex-1 w-full overflow-y-auto px-2 py-1 flex flex-col items-center gap-0.5">
-          {rows.map(row => {
-            if (row.type === 'header' || row.type === 'dh-header' || row.type === 'more') return null
+          {[
+            ...(pinnedOpen ? pinnedRows : []),
+            ...stripDigitalHumanRows,
+            ...(conversationsOpen ? conversationRows : []),
+          ].map(row => {
+            if (row.type === 'dh-header') return null
             const isAppChat = row.type === 'dh-item'
             const id = isAppChat ? row.row.id : row.conversation.id
             const active = isAppChat
@@ -901,113 +1028,116 @@ export const ConversationList = memo(function ConversationList({
         </button>
       </div>
 
-      {/* Conversation list - virtualized for performance with large lists */}
-      <div className="flex-1 overflow-hidden">
-        <Virtuoso
-            data={rows}
-            overscan={200}
-            // Virtuoso's scroller only sets overflow-y, which leaves overflow-x
-            // resolving to `auto` — a stray pixel of row width then shows a
-            // horizontal scrollbar under a list that never scrolls sideways.
-            className="overflow-x-hidden"
-            components={listComponents}
-            itemContent={(index, row) => {
-              if (row.type === 'header') {
-                // No uppercase/letter-spacing: both are no-ops on CJK labels
-                // and only loosen them oddly.
-                return (
-                  // After a folded section the divider is dropped but the spacing kept.
-                  <div className={cn('bg-background', index === 0 ? 'pt-1' : cn('mt-4 pt-2.5', !row.afterCollapsed && 'border-t border-border-faint'))}>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        trackHome('home.conversation.section', { section: row.section, action: row.collapsed ? 'expand' : 'collapse' })
-                        toggleSection(row.section)
-                      }}
-                      aria-expanded={!row.collapsed}
-                      title={row.hint}
-                      className="group flex w-full items-center gap-1 rounded-sm px-1.5 pb-1 text-xs font-medium text-subtle-foreground/70 dark-ui:text-subtle-foreground hover:text-subtle-foreground dark-ui:hover:text-muted-foreground transition-colors ease-halo"
-                    >
-                      <span>{row.label}</span>
-                      <ChevronRight className={cn(
-                        'ml-auto w-3 h-3 shrink-0 transition-[transform,opacity]',
-                        row.collapsed ? 'opacity-100' : 'rotate-90 opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100'
-                      )} />
-                    </button>
-                  </div>
-                )
-              }
-              if (row.type === 'dh-header') {
-                const toggle = () => {
-                  trackHome('home.dh_group.toggle', { collapsed: !row.collapsed })
-                  toggleAppCollapsed(row.appId)
-                }
-                return (
-                  <div className={cn(
-                    'group flex w-full items-center gap-0.5 rounded-sm pr-1 mt-0.5 transition-colors ease-halo',
-                    row.uninstalled ? 'opacity-40' : 'hover:bg-secondary'
-                  )}>
-                    <PersonAvatarLink
-                      appId={row.appId}
-                      name={row.name}
-                      size={18}
-                      dimmed={selectedAppChat?.appId !== row.appId}
-                      disabled={row.uninstalled}
-                      className="ml-1.5"
-                    />
-                    <button
-                      type="button"
-                      onClick={toggle}
-                      aria-expanded={!row.collapsed}
-                      className={cn(
-                        'flex flex-1 min-w-0 items-center pl-1.5 py-1.5 text-[13px] font-medium',
-                        // A group label, not a row to read: in the dark theme it sits with its sessions' tone.
-                        row.uninstalled ? 'cursor-not-allowed' : 'text-foreground dark-ui:text-muted-foreground'
-                      )}
-                    >
-                      <span className="flex-1 min-w-0 truncate text-left">{row.name}</span>
-                    </button>
-                    {!row.uninstalled && (
-                      <button
-                        type="button"
-                        onClick={() => handleNewAppChat(row.appId)}
-                        title={t('New conversation with {{name}}', { name: row.name })}
-                        aria-label={t('New conversation with {{name}}', { name: row.name })}
-                        className="flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-subtle-foreground pointer-events-none opacity-0 transition-opacity hover:bg-background hover:text-foreground group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100"
-                      >
-                        <Plus className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                    {/* A second hit area for the same toggle; the name button carries it for keyboard users. */}
-                    <button type="button" tabIndex={-1} aria-hidden="true" onClick={toggle} className="flex h-5 w-5 shrink-0 items-center justify-center">
-                      <ChevronRight className={cn(
-                        'w-3 h-3 text-subtle-foreground transition-[transform,opacity]',
-                        row.collapsed ? 'opacity-100' : 'rotate-90 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
-                      )} />
-                    </button>
-                  </div>
-                )
-              }
-              if (row.type === 'more') {
-                return (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      trackHome('home.conversation.section', { section: 'pinned', action: 'more' })
-                      setPinnedShown(n => n + PINNED_PAGE_SIZE)
-                    }}
-                    className="w-full rounded-sm pl-2.5 py-1 text-left text-xs text-subtle-foreground hover:text-foreground transition-colors ease-halo"
-                  >
-                    {t('Show more ({{count}})', { count: row.remaining })}
-                  </button>
-                )
-              }
-              if (row.type === 'dh-item') {
-                return renderAppChatItem(row.row, row.standalone)
-              }
-              return renderConversationItem(row.conversation)
-            }}
-        />
+      <div ref={listColumnRef} className="flex-1 min-h-0 flex flex-col">
+      {pinnedRows.length > 0 && (
+        // Shrinkable like the digital-humans pane, so a saved height never pushes the panes below off a shorter window.
+        <div className="group/section relative flex min-h-0 flex-col pb-2">
+          <div className="flex-shrink-0 px-2 pt-1">
+            <SectionHeaderButton section="pinned" label={t('Pinned')} collapsed={!pinnedOpen} onToggle={toggleSection} />
+          </div>
+          {pinnedOpen && (
+            <div ref={pinnedScrollRef} className="min-h-8 overflow-y-auto overflow-x-hidden" style={{ maxHeight: pinnedResize.height }}>
+              {pinnedRows.map(row => (
+                <div key={row.key} className="px-2 pb-0.5">
+                  {row.type === 'dh-item' ? renderAppChatItem(row.row, row.standalone) : renderConversationItem(row.conversation)}
+                </div>
+              ))}
+            </div>
+          )}
+          {pinnedOpen && (
+            <PaneResizeHandle label={t('Resize pinned list')} height={pinnedResize.height} dragging={pinnedResize.dragging} handleProps={pinnedResize.handleProps} />
+          )}
+        </div>
+      )}
+
+      {digitalHumanRows.length > 0 && (
+        <div
+          data-fill-pane={digitalHumansOpen && digitalHumansFill ? '' : undefined}
+          className={cn(
+            'group/section relative flex flex-col pb-1',
+            pinnedRows.length > 0 && 'border-t border-border-faint',
+            // Otherwise shrinkable, so a short window squeezes this pane rather than overflowing the sidebar.
+            digitalHumansOpen && digitalHumansFill ? 'flex-1 min-h-[68px]' : 'min-h-0'
+          )}
+        >
+          <div className={cn('flex-shrink-0 px-2', pinnedRows.length > 0 ? 'pt-2.5' : 'pt-1')}>
+            <SectionHeaderButton
+              section="digital-humans"
+              label={t('Digital Humans')}
+              hint={t('Conversations with digital humans available in this workspace')}
+              collapsed={!digitalHumansOpen}
+              attention={digitalHumanAttention}
+              onToggle={toggleSection}
+            />
+          </div>
+          {digitalHumansOpen && (
+            <div
+              ref={digitalHumanPaneRef}
+              className={digitalHumansFill ? 'flex-1 min-h-0' : 'min-h-8'}
+              style={digitalHumansFill ? undefined : {
+                flex: `0 1 ${Math.min(digitalHumanResize.height, digitalHumanListHeight || digitalHumanRows.length * ROW_HEIGHT)}px`,
+              }}
+            >
+              <Virtuoso
+                data={digitalHumanRows}
+                overscan={200}
+                totalListHeightChanged={setDigitalHumanListHeight}
+                style={{ height: '100%' }}
+                className="overflow-x-hidden"
+                components={listComponents}
+                itemContent={(_, row) => renderListRow(row)}
+              />
+            </div>
+          )}
+          {digitalHumansOpen && !digitalHumansFill && (
+            <PaneResizeHandle
+              label={t('Resize digital humans list')}
+              height={digitalHumanResize.height}
+              dragging={digitalHumanResize.dragging}
+              handleProps={digitalHumanResize.handleProps}
+            />
+          )}
+        </div>
+      )}
+
+      {conversationRows.length > 0 && (
+        <div
+          data-fill-pane={conversationsOpen ? '' : undefined}
+          className={cn(
+            'group/section flex flex-col',
+            (pinnedRows.length > 0 || digitalHumanRows.length > 0) && 'border-t border-border-faint',
+            // Open, it keeps its header and one row however the panes above are sized; folded, it is the
+            // sidebar's last line and gets the same bottom room the list's footer gives rows.
+            conversationsOpen ? 'flex-1 min-h-[68px]' : 'flex-shrink-0 pb-3'
+          )}
+        >
+          <div className={cn('flex-shrink-0 px-2', pinnedRows.length > 0 || digitalHumanRows.length > 0 ? 'pt-2.5' : 'pt-1')}>
+            <SectionHeaderButton
+              section="conversations"
+              label={t('Conversations')}
+              hint={t('Your direct conversations with Halo')}
+              collapsed={!conversationsOpen}
+              onToggle={toggleSection}
+            />
+          </div>
+          {/* Virtualized for performance with large lists */}
+          {conversationsOpen && (
+            <div className="flex-1 min-h-0">
+              <Virtuoso
+                data={conversationRows}
+                overscan={200}
+                style={{ height: '100%' }}
+                // Virtuoso's scroller only sets overflow-y, which leaves overflow-x
+                // resolving to `auto` — a stray pixel of row width then shows a
+                // horizontal scrollbar under a list that never scrolls sideways.
+                className="overflow-x-hidden"
+                components={listComponents}
+                itemContent={(_, row) => renderListRow(row)}
+              />
+            </div>
+          )}
+        </div>
+      )}
       </div>
 
       {/* Drag handle - on right side */}

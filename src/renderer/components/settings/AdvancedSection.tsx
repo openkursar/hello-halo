@@ -4,12 +4,12 @@
  */
 
 import { useEffect, useState } from 'react'
-import { AlertTriangle, ChevronDown, ChevronUp, Cpu, Puzzle, RefreshCw, Terminal } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronRight, Cpu, Puzzle, RefreshCw, Terminal } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
 import type { EngineAvailabilityReport, EngineId, HaloConfig } from '../../types'
 import { CLIConfigSection } from './CLIConfigSection'
-import { Switch } from '../ui/Switch'
+import { Switch, switchRowHover } from '../ui/Switch'
 import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 import { DEFAULT_DISABLED_TOOLS } from '../../../shared/constants/disabled-tools'
 import { DEFAULT_MAX_TURNS } from '../../../shared/constants/agent-limits'
@@ -477,8 +477,8 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
                 <span className="font-medium text-sm">{t('Built-in MCP Extensions')}</span>
               </div>
               {capsPanelOpen
-                ? <ChevronUp className="w-4 h-4 text-muted-foreground" />
-                : <ChevronDown className="w-4 h-4 text-muted-foreground" />
+                ? <ChevronDown className="w-4 h-4 text-muted-foreground" />
+                : <ChevronRight className="w-4 h-4 text-muted-foreground" />
               }
             </button>
 
@@ -494,21 +494,18 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
                   {CAPABILITY_GROUPS.map((group, idx) => {
                     const enabled = isCapabilityEnabled(group)
                     return (
-                      <div
-                        key={group.id}
-                        className={`flex items-center justify-between py-3 ${
-                          idx > 0 ? 'border-t border-border' : ''
-                        }`}
-                      >
-                        <div className="flex-1 min-w-0 mr-3">
-                          <p className="font-medium text-sm">{t(group.labelKey)}</p>
-                          <p className="text-xs text-muted-foreground">{t(group.descKey)}</p>
+                      <div key={group.id} className={`py-1.5 ${idx > 0 ? 'border-t border-border' : ''}`}>
+                        <div className={`flex items-center justify-between py-1.5 ${switchRowHover}`}>
+                          <div className="flex-1 min-w-0 mr-3">
+                            <p className="font-medium text-sm">{t(group.labelKey)}</p>
+                            <p className="text-xs text-muted-foreground">{t(group.descKey)}</p>
+                          </div>
+                          <Switch
+                            checked={enabled}
+                            onCheckedChange={(checked) => handleCapabilityToggle(group, checked)}
+                            size="sm"
+                          />
                         </div>
-                        <Switch
-                          checked={enabled}
-                          onCheckedChange={(checked) => handleCapabilityToggle(group, checked)}
-                          size="sm"
-                        />
                       </div>
                     )
                   })}
@@ -551,7 +548,7 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
                 handleMaxTurnsChange(val)
               }
             }}
-            className="w-24 px-3 py-1.5 text-sm bg-secondary border border-border rounded-lg text-right focus:outline-none focus:ring-2 focus:ring-primary/50"
+            className="w-24 px-3 py-1.5 text-sm bg-secondary border border-transparent rounded-lg text-right focus:outline-none focus:border-primary/50"
           />
         </div>
 
@@ -588,7 +585,7 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
                 handleTeamTurnTimeoutChange(val)
               }
             }}
-            className="w-24 self-end sm:self-auto px-3 py-1.5 text-sm bg-secondary border border-border rounded-lg text-right focus:outline-none focus:ring-2 focus:ring-primary/50"
+            className="w-24 self-end sm:self-auto px-3 py-1.5 text-sm bg-secondary border border-transparent rounded-lg text-right focus:outline-none focus:border-primary/50"
           />
         </div>
 
@@ -624,7 +621,7 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
                   const val = parseInt(e.target.value, 10)
                   if (!isNaN(val)) handleTeamCircuitLimitChange({ maxMessages: val })
                 }}
-                className="w-full px-3 py-1.5 text-sm bg-secondary border border-border rounded-lg text-right focus:outline-none focus:ring-2 focus:ring-primary/50"
+                className="mt-auto w-full px-3 py-1.5 text-sm bg-secondary border border-transparent rounded-lg text-right focus:outline-none focus:border-primary/50"
               />
             </label>
             <label className="flex flex-col gap-1">
@@ -645,7 +642,7 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
                   const val = parseInt(e.target.value, 10)
                   if (!isNaN(val)) handleTeamCircuitLimitChange({ maxForwardDepth: val })
                 }}
-                className="w-full px-3 py-1.5 text-sm bg-secondary border border-border rounded-lg text-right focus:outline-none focus:ring-2 focus:ring-primary/50"
+                className="mt-auto w-full px-3 py-1.5 text-sm bg-secondary border border-transparent rounded-lg text-right focus:outline-none focus:border-primary/50"
               />
             </label>
           </div>
@@ -684,7 +681,7 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
                 handleTeamMaxConcurrentTurnsChange(val)
               }
             }}
-            className="w-24 self-end sm:self-auto px-3 py-1.5 text-sm bg-secondary border border-border rounded-lg text-right focus:outline-none focus:ring-2 focus:ring-primary/50"
+            className="w-24 self-end sm:self-auto px-3 py-1.5 text-sm bg-secondary border border-transparent rounded-lg text-right focus:outline-none focus:border-primary/50"
           />
         </div>
 
@@ -713,33 +710,35 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
                 handleMaxResidentSessionsChange(val)
               }
             }}
-            className="w-24 self-end sm:self-auto px-3 py-1.5 text-sm bg-secondary border border-border rounded-lg text-right focus:outline-none focus:ring-2 focus:ring-primary/50"
+            className="w-24 self-end sm:self-auto px-3 py-1.5 text-sm bg-secondary border border-transparent rounded-lg text-right focus:outline-none focus:border-primary/50"
           />
         </div>
 
         {/* Developer Mode */}
-        <div className="flex items-start justify-between pt-4 border-t border-border">
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-1">
-              <Terminal className="w-4 h-4 text-muted-foreground shrink-0" />
-              <p className="font-medium">{t('Developer Mode')}</p>
-              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 shrink-0">
-                {t('Dev')}
-              </span>
+        <div className="pt-4 border-t border-border">
+          <div className={`flex items-start justify-between py-1.5 ${switchRowHover}`}>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 mb-1">
+                <Terminal className="w-4 h-4 text-muted-foreground shrink-0" />
+                <p className="font-medium">{t('Developer Mode')}</p>
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 shrink-0">
+                  {t('Dev')}
+                </span>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                {t('Enable verbose logging for troubleshooting: HTTP request payloads, session lifecycle, stream events, and scheduler diagnostics.')}
+              </p>
+              <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                {t('Generates large log files and may affect performance. Disable after troubleshooting.')}
+              </p>
             </div>
-            <p className="text-sm text-muted-foreground">
-              {t('Enable verbose logging for troubleshooting: HTTP request payloads, session lifecycle, stream events, and scheduler diagnostics.')}
-            </p>
-            <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
-              {t('Generates large log files and may affect performance. Disable after troubleshooting.')}
-            </p>
+            <Switch
+              checked={developerMode}
+              onCheckedChange={handleDeveloperModeChange}
+              size="sm"
+              className="ml-4 mt-0.5"
+            />
           </div>
-          <Switch
-            checked={developerMode}
-            onCheckedChange={handleDeveloperModeChange}
-            size="sm"
-            className="ml-4 mt-0.5"
-          />
         </div>
 
         {/* Claude CLI Integration */}

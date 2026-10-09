@@ -54,7 +54,7 @@ export function ProxyBypassField({ config, setConfig }: ProxyBypassFieldProps) {
           onKeyDown={(e) => e.key === 'Enter' && handleSave()}
           placeholder=".example.com, intranet.example.com"
           aria-label={t("Don't use the proxy for")}
-          className="flex-1 min-w-0 px-3 py-1.5 text-sm bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 font-mono"
+          className="flex-1 min-w-0 px-3 py-1.5 text-sm bg-secondary border border-transparent rounded-lg focus:outline-none focus:border-primary/50 font-mono"
         />
         <button
           onClick={handleSave}

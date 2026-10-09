@@ -1,21 +1,18 @@
 /**
  * SpaceCard
  *
- * Grid card for one workspace on the management page (SpacesPage). The
- * whole point of this card over the header dropdown's row is the asset
- * chip strip: a
- * workspace isn't just a name and a folder, it's files + digital humans +
- * skills + MCP servers, and the chips make that visible without opening it.
+ * Grid card for one workspace on the management page (SpacesPage): its
+ * name, folder and last activity, with edit / reveal / delete in its menu.
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { FolderOpen, MoreHorizontal, Pencil, Trash2, Unplug } from 'lucide-react'
-import type { Space, ArtifactRailTab } from '../../types'
+import { FolderOpen, MoreVertical, Pencil, Trash2, Unplug } from 'lucide-react'
+import type { Space } from '../../types'
 import { SpaceAvatar } from './SpaceAvatar'
-import { SpaceAssetChips } from './SpaceAssetChips'
 import { EditSpaceDialog } from './EditSpaceDialog'
 import { useSpaceStore } from '../../stores/space.store'
 import { useConfirmDialog } from '../../hooks/useConfirmDialog'
+import { useNotificationStore } from '../../stores/notification.store'
 import { useTranslation } from '../../i18n'
 import { formatTimeAgo } from '../../utils/format-time'
 import { trackHome } from '../../services/home-telemetry'
@@ -24,12 +21,13 @@ interface SpaceCardProps {
   space: Space
   /** Switch to this workspace and enter it. */
   onOpen: () => void
-  /** Switch to this workspace, enter it, and land the resource rail on a
-   * specific tab — the asset chips' click target. */
-  onOpenTab: (tab: ArtifactRailTab) => void
 }
 
-export function SpaceCard({ space, onOpen, onOpenTab }: SpaceCardProps) {
+function notifyFailure(title: string) {
+  useNotificationStore.getState().show({ title, variant: 'error', duration: 6000 })
+}
+
+export function SpaceCard({ space, onOpen }: SpaceCardProps) {
   const { t } = useTranslation()
   const { openSpaceFolder, deleteSpace, forgetSpace } = useSpaceStore()
   const { showConfirm, DialogComponent } = useConfirmDialog()
@@ -72,7 +70,9 @@ export function SpaceCard({ space, onOpen, onOpenTab }: SpaceCardProps) {
     })
     if (!confirmed) return
     trackHome('home.space.action', { action: 'delete', surface: 'manage' })
-    await deleteSpace(space.id)
+    const result = await deleteSpace(space.id)
+    if (result === 'busy') notifyFailure(t('This workspace is still running a reply or task. Stop it or wait for it to finish, then delete again.'))
+    else if (result === 'failed') notifyFailure(t('Could not delete this workspace. Please try again.'))
   }, [space, showConfirm, t, deleteSpace])
 
   const handleForget = useCallback(async () => {
@@ -86,7 +86,7 @@ export function SpaceCard({ space, onOpen, onOpenTab }: SpaceCardProps) {
     })
     if (!confirmed) return
     trackHome('home.space.action', { action: 'forget', surface: 'manage' })
-    await forgetSpace(space.id)
+    if (!(await forgetSpace(space.id))) notifyFailure(t('Could not remove this workspace from the list. Please try again.'))
   }, [space.id, showConfirm, t, forgetSpace])
 
   const name = space.isTemp ? t('Halo Workspace') : space.name
@@ -122,13 +122,13 @@ export function SpaceCard({ space, onOpen, onOpenTab }: SpaceCardProps) {
 
         {/* isTemp can only be shown in its folder: Halo owns it, so there is
             nothing to rename or delete. isMissing can only be removed. */}
-        <div ref={menuRef} className="relative flex-shrink-0 opacity-0 group-hover:opacity-100 max-sm:opacity-100 transition-opacity">
+        <div ref={menuRef} className="relative -mt-1 flex-shrink-0 opacity-0 group-hover:opacity-100 max-sm:opacity-100 transition-opacity">
           <button
             onClick={(e) => { e.stopPropagation(); setMenuOpen(v => !v) }}
             title={t('More')}
             className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-md transition-colors"
           >
-            <MoreHorizontal className="w-3.5 h-3.5" />
+            <MoreVertical className="w-3.5 h-3.5" />
           </button>
           {menuOpen && (
             <div onClick={e => e.stopPropagation()} className="absolute right-0 top-full mt-1 z-20 min-w-[180px] bg-popover border border-border rounded-lg shadow-lg py-1 text-sm">
@@ -159,12 +159,8 @@ export function SpaceCard({ space, onOpen, onOpenTab }: SpaceCardProps) {
         </div>
       </div>
 
-      <div className="mt-3">
-        <SpaceAssetChips onSelectTab={onOpenTab} />
-      </div>
-
       {metaLine && (
-        <p className="mt-2 text-[11px] text-muted-foreground tabular-nums">{metaLine}</p>
+        <p className="mt-3 text-[11px] text-muted-foreground tabular-nums">{metaLine}</p>
       )}
 
       {/* Dialogs render as React children of this clickable card, so a click

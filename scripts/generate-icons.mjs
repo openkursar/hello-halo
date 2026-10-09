@@ -11,18 +11,18 @@
  *   resources/icon-1024.png       -> resources/icon.ico     (Windows, 16..256)
  *                                 -> resources/linux/*.png  (Linux, 16..512)
  *
- * The macOS source is a separate file so it can carry the platform's safe-area
- * padding. The current artwork fills the canvas on every platform, so the two
- * sources are identical for now.
+ * The macOS source is a separate file because it carries the platform's
+ * safe-area inset and shadow (resources/icon-macos.svg); the other platforms'
+ * artwork fills the canvas.
  *
- * The .icns is produced by app-builder, the same converter electron-builder
- * validates icons with, so the artifact cannot drift from what the packager
- * accepts. The .ico is assembled here because app-builder writes a single
- * 256px entry, while Windows picks the rung it needs from the full ladder.
- * PNG rungs are scaled with macOS `sips`.
+ * PNG rungs are scaled with macOS `sips`, the .icns is packed by `iconutil`,
+ * and the .ico is assembled here so Windows can pick the rung it needs from
+ * the full ladder. electron-builder's own converter downloads a toolset on
+ * first use, so it is only used for the check below, which needs no download.
  *
- * The last step re-resolves all three artifacts exactly as electron-builder
- * does and fails if any of them would fall back to the Electron default.
+ * The last step re-resolves all three artifacts through electron-builder's
+ * icon converter and fails if any of them would fall back to the Electron
+ * default.
  *
  * Usage: node scripts/generate-icons.mjs
  * Exit codes:
@@ -58,11 +58,22 @@ const log = {
   err: (m) => console.error(`[generate-icons] ERROR ${m}`),
 }
 
-/** app-builder is the icon converter electron-builder itself shells out to. */
-function appBuilder(args) {
-  const binary = require('app-builder-bin').appBuilderPath
-  const stdout = execFileSync(binary, args, { encoding: 'utf-8', maxBuffer: 64 * 1024 * 1024 })
-  return JSON.parse(stdout)
+/** The converter PlatformPackager.resolveIcon calls, resolved through electron-builder. */
+function loadIconConverter() {
+  const builderRequire = createRequire(require.resolve('electron-builder'))
+  return builderRequire('app-builder-lib/out/util/iconConverter.js')
+}
+
+/** Each @2x slot doubles its base size; iconutil reads the slot from the file name. */
+const ICNS_BASE_SIZES = [16, 32, 128, 256, 512]
+
+function buildIcns(source, iconsetDir, output) {
+  mkdirSync(iconsetDir)
+  for (const size of ICNS_BASE_SIZES) {
+    resize(source, size, join(iconsetDir, `icon_${size}x${size}.png`))
+    resize(source, size * 2, join(iconsetDir, `icon_${size}x${size}@2x.png`))
+  }
+  execFileSync('iconutil', ['-c', 'icns', iconsetDir, '-o', output], { stdio: 'ignore' })
 }
 
 /** Scale one source PNG to `size`x`size`; sips only writes square output via -z. */
@@ -112,30 +123,21 @@ function scaleLadder(source, sizes, outputDir) {
 }
 
 /**
- * Mirror of PlatformPackager.resolveIcon: same roots, same inputs. Anything
- * other than isFallback:false means the packager would ship Electron's icon.
+ * Mirror of PlatformPackager.resolveIcon: same roots, same sources, no
+ * fallbacks. An empty result means the packager would ship Electron's icon.
  */
-function verifyElectronBuilderWouldAccept({ format, inputs, label }) {
-  const out = mkdtempSync(join(tmpdir(), 'halo-icon-verify-'))
+async function verifyElectronBuilderWouldAccept(convertIcon, { format, sources, label }) {
+  const outDir = mkdtempSync(join(tmpdir(), 'halo-icon-verify-'))
   try {
-    const result = appBuilder([
-      'icon',
-      '--format', format,
-      '--root', RESOURCES_DIR,
-      '--root', PROJECT_ROOT,
-      '--out', out,
-      ...inputs.flatMap((input) => ['--input', input]),
-    ])
-    if (result.error) throw new Error(result.error)
-    if (result.isFallback) throw new Error('resolved to the default Electron icon')
-    if (!result.icons || result.icons.length === 0) throw new Error('no icon produced')
+    const result = await convertIcon({ sources, fallbackSources: [], roots: [RESOURCES_DIR, PROJECT_ROOT], format, outDir })
+    if (result.isFallback || result.icons.length === 0) throw new Error(`${label}: resolved to the default Electron icon`)
     log.info(`${label}: ${result.icons.length} icon file(s), no fallback`)
   } finally {
-    rmSync(out, { recursive: true, force: true })
+    rmSync(outDir, { recursive: true, force: true })
   }
 }
 
-function main() {
+async function main() {
   if (process.platform !== 'darwin') {
     log.err('sips (macOS) is required to scale the PNG ladder')
     process.exit(1)
@@ -152,17 +154,7 @@ function main() {
     const generic = scaleLadder(GENERIC_SOURCE, LINUX_SIZES, staging)
     const bySize = new Map(generic.map((entry) => [entry.size, entry.data]))
 
-    const icnsStaging = join(staging, 'icns')
-    mkdirSync(icnsStaging)
-    const icns = appBuilder([
-      'icon',
-      '--format', 'icns',
-      '--root', RESOURCES_DIR,
-      '--out', icnsStaging,
-      '--input', 'icon-macos-1024.png',
-    ])
-    if (icns.isFallback || !icns.icons?.[0]) throw new Error('app-builder refused the macOS source image')
-    copyFileSync(icns.icons[0].file, ICNS_OUT)
+    buildIcns(MACOS_SOURCE, join(staging, 'icon.iconset'), ICNS_OUT)
     log.info(`icon.icns <- icon-macos-1024.png`)
 
     mkdirSync(LINUX_DIR, { recursive: true })
@@ -174,12 +166,16 @@ function main() {
     writeFileSync(ICO_OUT, buildIco(WINDOWS_SIZES.map((size) => ({ size, data: bySize.get(size) }))))
     log.info(`icon.ico <- icon-1024.png (${WINDOWS_SIZES.join(', ')})`)
 
-    verifyElectronBuilderWouldAccept({ format: 'icns', inputs: ['icon.icns'], label: 'macOS' })
-    verifyElectronBuilderWouldAccept({ format: 'ico', inputs: ['icon.ico'], label: 'Windows' })
-    verifyElectronBuilderWouldAccept({ format: 'set', inputs: ['linux'], label: 'Linux' })
+    const { convertIcon } = loadIconConverter()
+    await verifyElectronBuilderWouldAccept(convertIcon, { format: 'icns', sources: ['icon.icns'], label: 'macOS' })
+    await verifyElectronBuilderWouldAccept(convertIcon, { format: 'ico', sources: ['icon.ico'], label: 'Windows' })
+    await verifyElectronBuilderWouldAccept(convertIcon, { format: 'set', sources: ['linux'], label: 'Linux' })
   } finally {
     rmSync(staging, { recursive: true, force: true })
   }
 }
 
-main()
+main().catch((error) => {
+  log.err(error.message)
+  process.exit(1)
+})

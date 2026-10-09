@@ -12,7 +12,7 @@
  * IM Sessions are NOT shown here — they live in the digital human config.
  */
 
-import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
+import { useState, useCallback, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import type { TFunction } from 'i18next'
 import {
   Mail, MessageSquare, Bell, Webhook, Loader2,
@@ -21,6 +21,7 @@ import {
   QrCode, ExternalLink, UserCheck, Eye, EyeOff,
 } from 'lucide-react'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
+import { Switch, switchRowHover } from '../ui/Switch'
 import { api } from '../../api'
 import { useAppsStore } from '../../stores/apps.store'
 import { useTeamStore } from '../../stores/team.store'
@@ -90,7 +91,7 @@ interface NotifyChannelDef {
   notifyType: NotificationChannelType
   icon: typeof Mail
   labelKey: string
-  descriptionKey: string
+  description: string
   fields: FieldDef[]
 }
 
@@ -98,7 +99,7 @@ interface NotifyChannelDef {
 // Notification Channel Definitions
 // ============================================
 
-/** Labels are literal t() calls so the translation extractor finds them; sample values stay as typed. */
+/** Labels and descriptions are literal t() calls so the translation extractor finds them; sample values stay as typed. */
 function buildNotifyChannelDefs(t: TFunction): NotifyChannelDef[] {
   return [
     {
@@ -106,7 +107,7 @@ function buildNotifyChannelDefs(t: TFunction): NotifyChannelDef[] {
       notifyType: 'email',
       icon: Mail,
       labelKey: NOTIFICATION_CHANNEL_META.email.labelKey,
-      descriptionKey: NOTIFICATION_CHANNEL_META.email.descriptionKey,
+      description: t('Send notifications via SMTP email'),
       fields: [
         { key: 'smtp.host', label: t('SMTP Host'), type: 'text', placeholder: 'smtp.gmail.com', required: true, nested: 'smtp.host' },
         { key: 'smtp.port', label: t('SMTP Port'), type: 'number', required: true, nested: 'smtp.port' },
@@ -123,7 +124,7 @@ function buildNotifyChannelDefs(t: TFunction): NotifyChannelDef[] {
       notifyType: 'wecom',
       icon: MessageSquare,
       labelKey: NOTIFICATION_CHANNEL_META.wecom.labelKey,
-      descriptionKey: NOTIFICATION_CHANNEL_META.wecom.descriptionKey,
+      description: t('Send notifications via WeChat Work (企业微信)'),
       fields: [
         { key: 'corpId', label: t('Corp ID'), type: 'text', placeholder: 'ww...', required: true },
         { key: 'agentId', label: t('Agent ID'), type: 'number', placeholder: '1000002', required: true },
@@ -137,7 +138,7 @@ function buildNotifyChannelDefs(t: TFunction): NotifyChannelDef[] {
       notifyType: 'dingtalk',
       icon: Bell,
       labelKey: NOTIFICATION_CHANNEL_META.dingtalk.labelKey,
-      descriptionKey: NOTIFICATION_CHANNEL_META.dingtalk.descriptionKey,
+      description: t('Send notifications via DingTalk (钉钉)'),
       fields: [
         { key: 'appKey', label: t('App Key'), type: 'text', required: true },
         { key: 'appSecret', label: t('App Secret'), type: 'password', required: true },
@@ -151,7 +152,7 @@ function buildNotifyChannelDefs(t: TFunction): NotifyChannelDef[] {
       notifyType: 'feishu',
       icon: MessageSquare,
       labelKey: NOTIFICATION_CHANNEL_META.feishu.labelKey,
-      descriptionKey: NOTIFICATION_CHANNEL_META.feishu.descriptionKey,
+      description: t('Send notifications via Feishu/Lark (飞书)'),
       fields: [
         { key: 'appId', label: t('App ID'), type: 'text', required: true },
         { key: 'appSecret', label: t('App Secret'), type: 'password', required: true },
@@ -164,7 +165,7 @@ function buildNotifyChannelDefs(t: TFunction): NotifyChannelDef[] {
       notifyType: 'webhook',
       icon: Webhook,
       labelKey: NOTIFICATION_CHANNEL_META.webhook.labelKey,
-      descriptionKey: NOTIFICATION_CHANNEL_META.webhook.descriptionKey,
+      description: t('Send notifications via HTTP webhook'),
       fields: [
         { key: 'url', label: t('URL'), type: 'text', placeholder: 'https://example.com/webhook', required: true },
         {
@@ -229,23 +230,9 @@ function ChannelField({ field, value, onChange, docs }: ChannelFieldProps) {
   if (field.type === 'toggle') {
     const checked = Boolean(value)
     return (
-      <div className="flex items-center justify-between">
+      <div className={`flex items-center justify-between py-1.5 ${switchRowHover}`}>
         <label className="text-sm text-muted-foreground">{field.label}</label>
-        <label className="relative inline-flex items-center cursor-pointer">
-          <input
-            type="checkbox"
-            checked={checked}
-            onChange={(e) => onChange(e.target.checked)}
-            className="sr-only peer"
-          />
-          <div className="w-11 h-6 bg-secondary rounded-full peer peer-checked:bg-primary transition-colors">
-            <div
-              className={`w-5 h-5 bg-white rounded-full shadow-md transform transition-transform ${
-                checked ? 'translate-x-5' : 'translate-x-0.5'
-              } mt-0.5`}
-            />
-          </div>
-        </label>
+        <Switch checked={checked} onCheckedChange={onChange} />
       </div>
     )
   }
@@ -257,7 +244,7 @@ function ChannelField({ field, value, onChange, docs }: ChannelFieldProps) {
         <select
           value={(value as string) || field.options?.[0]?.value || ''}
           onChange={(e) => onChange(e.target.value)}
-          className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+          className="w-full bg-secondary border border-transparent rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary"
         >
           {field.options?.map((opt) => (
             <option key={opt.value} value={opt.value}>
@@ -311,7 +298,7 @@ function ChannelField({ field, value, onChange, docs }: ChannelFieldProps) {
         onChange={(e) => handleChange(e.target.value)}
         onBlur={handleBlur}
         placeholder={field.placeholder}
-        className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+        className="w-full bg-secondary border border-transparent rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary"
       />
       {docs && (
         <button
@@ -353,8 +340,8 @@ function SmtpPortField({ label, value, invalid, onChange, onBlur }: SmtpPortFiel
         onChange={(e) => onChange(e.target.value)}
         onBlur={onBlur}
         aria-invalid={invalid}
-        className={`w-full bg-muted border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary ${
-          invalid ? 'border-red-500' : 'border-border'
+        className={`w-full bg-secondary border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary ${
+          invalid ? 'border-red-500' : 'border-transparent'
         }`}
       />
       {invalid && <p className="text-xs text-red-500">{t('Please enter the SMTP port')}</p>}
@@ -398,7 +385,7 @@ function NameResolutionField({ value, onChange, status }: NameResolutionFieldPro
     <div className="space-y-1">
       <div className="flex items-center gap-1.5">
         <UserCheck className="w-3.5 h-3.5 text-muted-foreground" />
-        <label className="text-sm text-muted-foreground">{t('Name Resolution URL')}</label>
+        <label className="text-sm text-foreground">{t('Name Resolution URL')}</label>
         <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">
           {t('Optional')}
         </span>
@@ -409,7 +396,7 @@ function NameResolutionField({ value, onChange, status }: NameResolutionFieldPro
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder="https://qyapi.weixin.qq.com/mcp/v2/bot/msg?apikey=..."
-          className="w-full bg-muted border border-border rounded-lg px-3 py-2 pr-10 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+          className="w-full bg-secondary border border-transparent rounded-lg px-3 py-2 pr-10 text-sm focus:outline-none focus:border-primary"
         />
         <button
           type="button"
@@ -595,14 +582,10 @@ function InstanceCard({
   const replyScope = instance.replyScope ?? 'all'
 
   return (
-    <div className="border border-border-soft rounded-lg overflow-hidden bg-card/50">
-      {/* Instance header */}
-      <button
-        type="button"
-        onClick={onToggle}
-        className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-muted/30 transition-colors"
-      >
-        <div className="flex items-center gap-2.5 min-w-0">
+    <div className="rounded-lg bg-card">
+      {/* Instance header — the enable switch lives here, so it works without opening the card */}
+      <div className="flex items-center justify-between gap-2 px-3 py-2.5 rounded-lg">
+        <button type="button" onClick={onToggle} aria-expanded={isExpanded} className="flex flex-1 items-center gap-2.5 min-w-0">
           <div className={`w-2 h-2 rounded-full flex-shrink-0 ${statusDot}`} />
           <div className="text-left min-w-0">
             <p className="text-sm font-medium truncate">
@@ -613,99 +596,106 @@ function InstanceCard({
               {!isEnabled ? '' : isConnected ? '' : ` · ${statusText}`}
             </p>
           </div>
-        </div>
+        </button>
         <div className="flex items-center gap-1.5 flex-shrink-0">
-          {/* Context menu. Popover renders the panel through a portal so it
-              escapes this card's `overflow-hidden`, which previously clipped
-              the dropdown. The wrapper stops clicks from toggling the header. */}
-          <div onClick={(e) => e.stopPropagation()}>
-            <Popover
-              open={showMenu}
-              onOpenChange={(open) => {
-                setShowMenu(open)
-                if (!open) setShowDeleteConfirm(false)
-              }}
-            >
-              <PopoverTrigger className="p-1 rounded hover:bg-muted transition-colors">
-                <MoreVertical className="w-3.5 h-3.5 text-muted-foreground" />
-              </PopoverTrigger>
-              <PopoverContent align="end" className="min-w-[140px] py-1">
+          <label className="flex items-center gap-1.5 cursor-pointer">
+            <span aria-hidden className="hidden sm:inline text-xs text-muted-foreground">{isEnabled ? t('Enabled') : t('Disabled')}</span>
+            <Switch checked={isEnabled} onCheckedChange={() => handleEnabledChange()} ariaLabel={t('Enable this channel')} />
+          </label>
+          <Popover
+            open={showMenu}
+            onOpenChange={(open) => {
+              setShowMenu(open)
+              if (!open) setShowDeleteConfirm(false)
+            }}
+          >
+            <PopoverTrigger className="p-1 rounded hover:bg-muted transition-colors">
+              <MoreVertical className="w-3.5 h-3.5 text-muted-foreground" />
+            </PopoverTrigger>
+            <PopoverContent align="end" className="min-w-[140px] py-1">
+              <button
+                type="button"
+                onClick={() => { setShowMenu(false); onReconnect() }}
+                className="w-full text-left px-3 py-1.5 text-sm hover:bg-muted transition-colors flex items-center gap-2"
+                disabled={!isEnabled}
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                {t('Reconnect')}
+              </button>
+              {showDeleteConfirm ? (
+                // Inline confirmation — avoids misclick on a destructive action
+                <div className="px-3 py-2 space-y-1.5">
+                  <p className="text-xs text-muted-foreground">{t('Delete this instance?')}</p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => { setShowMenu(false); setShowDeleteConfirm(false); onDelete() }}
+                      className="flex-1 px-2 py-1 text-xs rounded bg-destructive/10 text-destructive hover:bg-destructive/20 transition-colors"
+                    >
+                      {t('Confirm')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowDeleteConfirm(false)}
+                      className="flex-1 px-2 py-1 text-xs rounded hover:bg-muted text-muted-foreground transition-colors"
+                    >
+                      {t('Cancel')}
+                    </button>
+                  </div>
+                </div>
+              ) : (
                 <button
                   type="button"
-                  onClick={() => { setShowMenu(false); onReconnect() }}
-                  className="w-full text-left px-3 py-1.5 text-sm hover:bg-muted transition-colors flex items-center gap-2"
-                  disabled={!isEnabled}
+                  onClick={() => setShowDeleteConfirm(true)}
+                  className="w-full text-left px-3 py-1.5 text-sm hover:bg-muted text-destructive transition-colors flex items-center gap-2"
                 >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  {t('Reconnect')}
+                  <Trash2 className="w-3.5 h-3.5" />
+                  {t('Delete')}
                 </button>
-                {showDeleteConfirm ? (
-                  // Inline confirmation — avoids misclick on a destructive action
-                  <div className="px-3 py-2 space-y-1.5">
-                    <p className="text-xs text-muted-foreground">{t('Delete this instance?')}</p>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => { setShowMenu(false); setShowDeleteConfirm(false); onDelete() }}
-                        className="flex-1 px-2 py-1 text-xs rounded bg-destructive/10 text-destructive hover:bg-destructive/20 transition-colors"
-                      >
-                        {t('Confirm')}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setShowDeleteConfirm(false)}
-                        className="flex-1 px-2 py-1 text-xs rounded hover:bg-muted text-muted-foreground transition-colors"
-                      >
-                        {t('Cancel')}
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => setShowDeleteConfirm(true)}
-                    className="w-full text-left px-3 py-1.5 text-sm hover:bg-muted text-destructive transition-colors flex items-center gap-2"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    {t('Delete')}
-                  </button>
-                )}
-              </PopoverContent>
-            </Popover>
-          </div>
-          <ChevronDown
-            className={`w-3.5 h-3.5 text-muted-foreground transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`}
-          />
+              )}
+            </PopoverContent>
+          </Popover>
+          <button type="button" onClick={onToggle} tabIndex={-1} aria-hidden="true" className="p-1">
+            <ChevronDown
+              className={`w-3.5 h-3.5 text-muted-foreground transition-transform duration-200 ${isExpanded ? '' : '-rotate-90'}`}
+            />
+          </button>
         </div>
-      </button>
+      </div>
 
-      {/* Instance body */}
+      {/* Instance body: connection, replies, permissions */}
       {isExpanded && (
-        <div className="px-3 pb-3 pt-2 border-t border-border-soft space-y-3 animate-in slide-in-from-top-1 duration-150">
-          {/* Enable toggle */}
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-muted-foreground">{t('Enabled')}</p>
-            <label className="relative inline-flex items-center cursor-pointer">
-              <input
-                type="checkbox"
-                checked={isEnabled}
-                onChange={handleEnabledChange}
-                className="sr-only peer"
-              />
-              <div className="w-11 h-6 bg-secondary rounded-full peer peer-checked:bg-primary transition-colors">
-                <div
-                  className={`w-5 h-5 bg-white rounded-full shadow-md transform transition-transform ${
-                    isEnabled ? 'translate-x-5' : 'translate-x-0.5'
-                  } mt-0.5`}
-                />
+        <div className="px-3 pb-3 pt-1 space-y-4 animate-in slide-in-from-top-1 duration-150">
+          {/* Only states that need action are called out; "connected" is the header's dot. */}
+          {isEnabled && isStandby && (
+            <div className="space-y-2 rounded-lg bg-sky-500/10 border border-sky-500/30 px-3 py-2">
+              <div className="flex items-center gap-1.5 text-sm text-sky-500">
+                <div className="w-2 h-2 rounded-full bg-sky-500" />
+                <span>{t('In use on another device')}</span>
               </div>
-            </label>
-          </div>
+              <p className="text-xs text-muted-foreground">
+                {t('This bot is currently active on another device. Take over to use it here — the other device will switch to standby.')}
+              </p>
+              <button
+                type="button"
+                onClick={onReconnect}
+                className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                {t('Use on this device')}
+              </button>
+            </div>
+          )}
+          {isEnabled && !isStandby && !isConnected && (
+            <div className="flex items-center gap-1.5 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark-ui:text-amber-500">
+              <div className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+              {t('Disconnected')}
+            </div>
+          )}
 
-          {/* Config fields */}
-          <div className="space-y-2.5">
+          <InstanceSection title={t('Connection')} first>
             <div className="space-y-1">
-              <label className="text-sm text-muted-foreground">
+              <label className="text-sm text-foreground">
                 Bot ID <span className="text-red-400">*</span>
               </label>
               <input
@@ -713,8 +703,8 @@ function InstanceCard({
                 value={(currentCfg.botId as string) ?? ''}
                 onChange={(e) => handleConfigChange('botId', e.target.value)}
                 placeholder="aib-xxx"
-                className={`w-full bg-muted border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary ${
-                  duplicateWarning ? 'border-amber-500' : 'border-border'
+                className={`w-full bg-secondary border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary ${
+                  duplicateWarning ? 'border-amber-500' : 'border-transparent'
                 }`}
               />
               {duplicateWarning && (
@@ -722,180 +712,166 @@ function InstanceCard({
               )}
             </div>
             <div className="space-y-1">
-              <label className="text-sm text-muted-foreground">
+              <label className="text-sm text-foreground">
                 Secret <span className="text-red-400">*</span>
               </label>
               <input
                 type="password"
                 value={(currentCfg.secret as string) ?? ''}
                 onChange={(e) => handleConfigChange('secret', e.target.value)}
-                className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                className="w-full bg-secondary border border-transparent rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary"
               />
             </div>
             <div className="space-y-1">
-              <label className="text-sm text-muted-foreground">WebSocket URL</label>
+              <label className="text-sm text-foreground">WebSocket URL</label>
               <input
                 type="text"
                 value={(currentCfg.wsUrl as string) ?? ''}
                 onChange={(e) => handleConfigChange('wsUrl', e.target.value)}
                 placeholder="wss://openws.work.weixin.qq.com"
-                className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                className="w-full bg-secondary border border-transparent rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary"
               />
             </div>
-          </div>
+            <NameResolutionField
+              value={(currentCfg.nameResolveUrl as string) ?? ''}
+              onChange={(v) => handleConfigChange('nameResolveUrl', v)}
+              status={status?.identityResolution}
+            />
+          </InstanceSection>
 
-          {/* Name resolution — optional, resolves anonymized sender IDs to real names */}
-          <NameResolutionField
-            value={(currentCfg.nameResolveUrl as string) ?? ''}
-            onChange={(v) => handleConfigChange('nameResolveUrl', v)}
-            status={status?.identityResolution}
-          />
-
-          <ChannelBackendSelect
-            value={instance}
-            automationApps={automationApps}
-            teams={teams}
-            onChange={handleTargetChange}
-          />
-
-          {/* Reply scope */}
-          <div className="space-y-1">
-            <div className="flex items-center gap-1">
-              <label className="text-sm text-muted-foreground">{t('Reply Scope')}</label>
-              <HelpHint label={t('About this setting')} text={t('Decides where the digital human replies. All messages: it replies when @mentioned in groups and to direct messages. Group chats only: direct messages are declined. Direct messages only: group messages get no reply.')} />
-            </div>
-            <select
-              value={replyScope}
-              onChange={(e) => handleReplyScopeChange(e.target.value)}
-              className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary appearance-none cursor-pointer"
-            >
-              <option value="all">{t('All messages')}</option>
-              <option value="group">{t('Group chats only')}</option>
-              <option value="direct">{t('Direct messages only')}</option>
-            </select>
-            {replyScope === 'all' && (
-              <p className="text-xs text-muted-foreground">
-                {t('Enabling direct messages allows any user to interact with this digital human privately')}
-              </p>
-            )}
-            {replyScope === 'group' && (
-              <p className="text-xs text-muted-foreground">
-                {t('Private messages will be rejected for security')}
-              </p>
-            )}
-          </div>
-
-          {/* Streaming toggle */}
-          <div className="flex items-center justify-between">
-            <div className="space-y-0.5">
+          <InstanceSection title={t('Replies')}>
+            <ChannelBackendSelect
+              value={instance}
+              automationApps={automationApps}
+              teams={teams}
+              onChange={handleTargetChange}
+            />
+            {/* Reply scope */}
+            <div className="space-y-1">
               <div className="flex items-center gap-1">
-                <p className="text-sm text-muted-foreground">{t('Streaming')}</p>
-                <HelpHint label={t('About this setting')} text={t('On: the reply is written into one message as it is produced. Off: one complete reply is sent when it is done. In group chats, Quote Reply must be on as well.')} />
+                <label className="text-sm text-foreground">{t('Reply Scope')}</label>
+                <HelpHint label={t('About this setting')} text={t('Decides where the digital human replies. All messages: it replies when @mentioned in groups and to direct messages. Group chats only: direct messages are declined. Direct messages only: group messages get no reply.')} />
               </div>
-              <p className="text-xs text-muted-foreground/70">
-                {isStreamingEnabled
-                  ? t('Shows thinking process in real-time')
-                  : t('Only sends the final reply')}
-              </p>
-              {!isQuoteReplyEnabled && (
-                <p className="text-xs text-amber-500">
-                  {t('Streaming requires Quote Reply (group chats)')}
+              <select
+                value={replyScope}
+                onChange={(e) => handleReplyScopeChange(e.target.value)}
+                className="w-full bg-secondary border border-transparent rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary appearance-none cursor-pointer"
+              >
+                <option value="all">{t('All messages')}</option>
+                <option value="group">{t('Group chats only')}</option>
+                <option value="direct">{t('Direct messages only')}</option>
+              </select>
+              {replyScope === 'all' && (
+                <p className="text-xs text-muted-foreground">
+                  {t('Enabling direct messages allows any user to interact with this digital human privately')}
+                </p>
+              )}
+              {replyScope === 'group' && (
+                <p className="text-xs text-muted-foreground">
+                  {t('Private messages will be rejected for security')}
                 </p>
               )}
             </div>
-            <label className={`relative inline-flex items-center ${!isQuoteReplyEnabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
-              <input
-                type="checkbox"
-                checked={isStreamingEnabled}
-                onChange={handleStreamingChange}
-                disabled={!isQuoteReplyEnabled}
-                className="sr-only peer"
-              />
-              <div className="w-11 h-6 bg-secondary rounded-full peer peer-checked:bg-primary transition-colors">
-                <div
-                  className={`w-5 h-5 bg-white rounded-full shadow-md transform transition-transform ${
-                    isStreamingEnabled ? 'translate-x-5' : 'translate-x-0.5'
-                  } mt-0.5`}
-                />
-              </div>
-            </label>
-          </div>
-
-          {/* Quote Reply toggle */}
-          <div className="flex items-center justify-between">
-            <div className="space-y-0.5">
-              <div className="flex items-center gap-1">
-                <p className="text-sm text-muted-foreground">{t('Quote Reply (Group)')}</p>
-                <HelpHint label={t('About this setting')} text={t('On: a reply in a group quotes the message it answers, so it is clear whom it answers. Off: replies are sent as plain messages, and streaming cannot be used.')} />
-              </div>
-              <p className="text-xs text-muted-foreground/70">
-                {isQuoteReplyEnabled
-                  ? t('Group replies quote the original message')
-                  : t('Group replies are sent as plain text without quote bubbles')}
-              </p>
-            </div>
-            <label className="relative inline-flex items-center cursor-pointer">
-              <input
-                type="checkbox"
-                checked={isQuoteReplyEnabled}
-                onChange={handleQuoteReplyChange}
-                className="sr-only peer"
-              />
-              <div className="w-11 h-6 bg-secondary rounded-full peer peer-checked:bg-primary transition-colors">
-                <div
-                  className={`w-5 h-5 bg-white rounded-full shadow-md transform transition-transform ${
-                    isQuoteReplyEnabled ? 'translate-x-5' : 'translate-x-0.5'
-                  } mt-0.5`}
-                />
-              </div>
-            </label>
-          </div>
-
-          <ImProcessingNoticeRow
-            on={instance.processingNotice !== false}
-            streaming={isStreamingEnabled}
-            onToggle={handleProcessingNoticeChange}
-          />
-
-          {/* ── Permission Control ── */}
-          <ImInstancePermissionSection instance={instance} onChange={onChange} onDebouncedChange={scheduleChange} permissionDefaults={permissionDefaults} />
-
-          {/* Connection status */}
-          {isEnabled && (
-            isStandby ? (
-              <div className="space-y-2 rounded-lg bg-sky-500/10 border border-sky-500/30 px-3 py-2">
-                <div className="flex items-center gap-1.5 text-sm text-sky-500">
-                  <div className="w-2 h-2 rounded-full bg-sky-500" />
-                  <span>{t('In use on another device')}</span>
+            {/* Streaming toggle */}
+            <div className={`flex items-center justify-between py-1.5 ${switchRowHover}`}>
+              <div className="space-y-0.5">
+                <div className="flex items-center gap-1">
+                  <p className="text-sm text-foreground">{t('Streaming')}</p>
+                  <HelpHint label={t('About this setting')} text={t('On: the reply is written into one message as it is produced. Off: one complete reply is sent when it is done. In group chats, Quote Reply must be on as well.')} />
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  {t('This bot is currently active on another device. Take over to use it here — the other device will switch to standby.')}
+                  {isStreamingEnabled
+                    ? t('Shows thinking process in real-time')
+                    : t('Only sends the final reply')}
                 </p>
-                <button
-                  type="button"
-                  onClick={onReconnect}
-                  className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  {t('Use on this device')}
-                </button>
+                {!isQuoteReplyEnabled && (
+                  <p className="text-xs text-amber-500">
+                    {t('Streaming requires Quote Reply (group chats)')}
+                  </p>
+                )}
               </div>
-            ) : (
-              <div className={`flex items-center gap-1.5 text-sm ${isConnected ? 'text-green-500' : 'text-amber-500'}`}>
-                <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-amber-500'}`} />
-                <span>{isConnected ? t('Connected') : t('Disconnected')}</span>
+              <Switch checked={isStreamingEnabled} onCheckedChange={() => handleStreamingChange()} disabled={!isQuoteReplyEnabled} />
+            </div>
+            {/* Quote Reply toggle */}
+            <div className={`flex items-center justify-between py-1.5 ${switchRowHover}`}>
+              <div className="space-y-0.5">
+                <div className="flex items-center gap-1">
+                  <p className="text-sm text-foreground">{t('Quote Reply (Group)')}</p>
+                  <HelpHint label={t('About this setting')} text={t('On: a reply in a group quotes the message it answers, so it is clear whom it answers. Off: replies are sent as plain messages, and streaming cannot be used.')} />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {isQuoteReplyEnabled
+                    ? t('Group replies quote the original message')
+                    : t('Group replies are sent as plain text without quote bubbles')}
+                </p>
               </div>
-            )
-          )}
+              <Switch checked={isQuoteReplyEnabled} onCheckedChange={() => handleQuoteReplyChange()} />
+            </div>
+            <ImProcessingNoticeRow
+              on={instance.processingNotice !== false}
+              streaming={isStreamingEnabled}
+              onToggle={handleProcessingNoticeChange}
+            />
+          </InstanceSection>
+
+          <InstanceSection title={t('Permissions')}>
+            <ImInstancePermissionSection instance={instance} onChange={onChange} onDebouncedChange={scheduleChange} permissionDefaults={permissionDefaults} />
+          </InstanceSection>
         </div>
       )}
     </div>
   )
 }
 
+/** One titled group inside an expanded instance; the rule runs on from its title. */
+function InstanceSection({ title, first, children }: { title: string; first?: boolean; children: ReactNode }) {
+  return (
+    <section className={`space-y-3 ${first ? '' : 'pt-2'}`}>
+      <div className="flex items-center gap-3">
+        <h4 className="flex-shrink-0 text-[13px] font-semibold text-foreground">{title}</h4>
+        <div className="h-px flex-1 bg-border-soft" />
+      </div>
+      {children}
+    </section>
+  )
+}
+
 // ============================================
 // Notification Channel Card
 // ============================================
+
+/** Scan-first add actions for a multi-instance channel. */
+function AddInstanceActions({ onScan, onManual, hint }: {
+  onScan: () => void
+  onManual: () => void
+  hint: string
+}) {
+  const { t } = useTranslation()
+
+  return (
+    <>
+      <div className="flex flex-col sm:flex-row items-stretch gap-2 pt-1">
+        <button
+          type="button"
+          onClick={onScan}
+          className="flex-1 flex items-center justify-center gap-2 px-3 py-2 text-sm bg-primary/10 text-primary rounded-lg hover:bg-primary/15 transition-colors font-medium"
+        >
+          <QrCode className="w-4 h-4" />
+          {t('Scan to add')}
+        </button>
+        <button
+          type="button"
+          onClick={onManual}
+          className="flex items-center justify-center gap-2 px-3 py-2 text-sm border border-border rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
+        >
+          <Plus className="w-4 h-4" />
+          {t('Manual setup')}
+        </button>
+      </div>
+      <p className="text-[11px] text-muted-foreground text-center pt-0.5">{hint}</p>
+    </>
+  )
+}
 
 interface NotifyChannelCardProps {
   def: NotifyChannelDef
@@ -1042,29 +1018,24 @@ function NotifyChannelCard({
                 {t('One-way')}
               </span>
             </div>
-            <p className="text-xs text-muted-foreground mt-0.5 hidden sm:block">{t(def.descriptionKey)}</p>
+            <p className="text-xs text-muted-foreground mt-0.5 hidden sm:block">{def.description}</p>
           </div>
         </div>
         <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
           <span className="text-xs text-muted-foreground hidden sm:inline">{statusLabel}</span>
           <div className={`w-2 h-2 rounded-full ${statusColor}`} />
-          <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
+          <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform duration-200 ${isExpanded ? '' : '-rotate-90'}`} />
         </div>
       </button>
 
       {isExpanded && (
         <div className="px-4 pb-4 pt-2 border-t border-border space-y-4 animate-in slide-in-from-top-1 duration-150">
-          <div className="flex items-center justify-between">
+          <div className={`flex items-center justify-between py-1.5 ${switchRowHover}`}>
             <div>
               <p className="text-sm font-medium">{t('Enabled')}</p>
               <p className="text-xs text-muted-foreground">{t('Enable this channel')}</p>
             </div>
-            <label className="relative inline-flex items-center cursor-pointer">
-              <input type="checkbox" checked={isEnabled} onChange={handleToggleEnabled} className="sr-only peer" />
-              <div className="w-11 h-6 bg-secondary rounded-full peer peer-checked:bg-primary transition-colors">
-                <div className={`w-5 h-5 bg-white rounded-full shadow-md transform transition-transform ${isEnabled ? 'translate-x-5' : 'translate-x-0.5'} mt-0.5`} />
-              </div>
-            </label>
+            <Switch checked={isEnabled} onCheckedChange={() => handleToggleEnabled()} />
           </div>
 
           <div className="space-y-3">
@@ -1553,13 +1524,13 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
             <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
               <span className="text-xs text-muted-foreground hidden sm:inline">{weixinStatusSummary}</span>
               <div className={`w-2 h-2 rounded-full ${weixinStatusColor}`} />
-              <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform duration-200 ${isWeixinExpanded ? 'rotate-180' : ''}`} />
+              <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform duration-200 ${isWeixinExpanded ? '' : '-rotate-90'}`} />
             </div>
           </button>
 
           {/* Instance list */}
           {isWeixinExpanded && (
-            <div className="px-4 pb-4 pt-2 border-t border-border space-y-2.5 animate-in slide-in-from-top-1 duration-150">
+            <div className="px-4 pb-4 pt-3 border-t border-border bg-secondary/70 space-y-2.5 animate-in slide-in-from-top-1 duration-150">
               {weixinIlinkInstances.length === 0 && (
                 <p className="text-sm text-muted-foreground py-2 text-center">
                   {t('No Bot instances configured. Click the button below to add one.')}
@@ -1619,13 +1590,13 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
             <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
               <span className="text-xs text-muted-foreground hidden sm:inline">{feishuStatusSummary}</span>
               <div className={`w-2 h-2 rounded-full ${feishuStatusColor}`} />
-              <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform duration-200 ${isFeishuExpanded ? 'rotate-180' : ''}`} />
+              <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform duration-200 ${isFeishuExpanded ? '' : '-rotate-90'}`} />
             </div>
           </button>
 
           {/* Instance list */}
           {isFeishuExpanded && (
-            <div className="px-4 pb-4 pt-2 border-t border-border space-y-2.5 animate-in slide-in-from-top-1 duration-150">
+            <div className="px-4 pb-4 pt-3 border-t border-border bg-secondary/70 space-y-2.5 animate-in slide-in-from-top-1 duration-150">
               {feishuInstances.length === 0 && (
                 <p className="text-sm text-muted-foreground py-2 text-center">
                   {t('No Bot instances configured. Click the button below to add one.')}
@@ -1650,28 +1621,11 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
                 />
               ))}
 
-              {/* Add instance — scan QR (primary) + manual setup (secondary) */}
-              <div className="flex flex-col sm:flex-row items-stretch gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => setFeishuScanDialogOpen(true)}
-                  className="flex-1 flex items-center justify-center gap-2 px-3 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors font-medium"
-                >
-                  <QrCode className="w-4 h-4" />
-                  {t('Scan to add')}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleAddFeishuInstance}
-                  className="flex items-center justify-center gap-2 px-3 py-2 text-sm border border-border rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
-                >
-                  <Plus className="w-4 h-4" />
-                  {t('Manual setup')}
-                </button>
-              </div>
-              <p className="text-[11px] text-muted-foreground text-center pt-0.5">
-                {t('Scanning creates the Feishu app for you — no developer console, no permission setup.')}
-              </p>
+              <AddInstanceActions
+                onScan={() => setFeishuScanDialogOpen(true)}
+                onManual={handleAddFeishuInstance}
+                hint={t('Scanning creates the Feishu app for you — no developer console, no permission setup.')}
+              />
             </div>
           )}
         </div>
@@ -1682,6 +1636,7 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
           <button
             type="button"
             onClick={() => toggleExpanded('im-wecom-bot')}
+            aria-expanded={isImExpanded}
             className="w-full flex items-center justify-between px-4 py-3 hover:bg-muted/30 transition-colors"
           >
             <div className="flex items-center gap-3 min-w-0">
@@ -1701,13 +1656,13 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
             <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
               <span className="text-xs text-muted-foreground hidden sm:inline">{wecomStatusSummary}</span>
               <div className={`w-2 h-2 rounded-full ${wecomStatusColor}`} />
-              <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform duration-200 ${isImExpanded ? 'rotate-180' : ''}`} />
+              <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform duration-200 ${isImExpanded ? '' : '-rotate-90'}`} />
             </div>
           </button>
 
           {/* Instance list */}
           {isImExpanded && (
-            <div className="px-4 pb-4 pt-2 border-t border-border space-y-2.5 animate-in slide-in-from-top-1 duration-150">
+            <div className="px-4 pb-4 pt-3 border-t border-border bg-secondary/70 space-y-2.5 animate-in slide-in-from-top-1 duration-150">
               {wecomInstances.length === 0 && (
                 <p className="text-sm text-muted-foreground py-2 text-center">
                   {t('No Bot instances configured. Click the button below to add one.')}
@@ -1732,28 +1687,11 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
                 />
               ))}
 
-              {/* Add instance — scan QR (primary) + manual setup (secondary) */}
-              <div className="flex flex-col sm:flex-row items-stretch gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => setScanDialogOpen(true)}
-                  className="flex-1 flex items-center justify-center gap-2 px-3 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors font-medium"
-                >
-                  <QrCode className="w-4 h-4" />
-                  {t('Scan to add')}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleAddInstance}
-                  className="flex items-center justify-center gap-2 px-3 py-2 text-sm border border-border rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
-                >
-                  <Plus className="w-4 h-4" />
-                  {t('Manual setup')}
-                </button>
-              </div>
-              <p className="text-[11px] text-muted-foreground text-center pt-0.5">
-                {t('Recommended: scan to add — auto-creates a default digital human and binds it in one step.')}
-              </p>
+              <AddInstanceActions
+                onScan={() => setScanDialogOpen(true)}
+                onManual={handleAddInstance}
+                hint={t('Recommended: scan to add — auto-creates a default digital human and binds it in one step.')}
+              />
             </div>
           )}
         </div>

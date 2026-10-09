@@ -212,11 +212,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
     return (
       <div
         key={source.id}
-        className={`border rounded-lg transition-all ${
-          isCurrent
-            ? 'border-primary bg-primary/5'
-            : 'border-border bg-surface-secondary'
-        }`}
+        className={`border rounded-lg transition-colors ${isCurrent ? 'border-primary/50 bg-primary/[0.04] dark-ui:bg-primary/10' : 'border-border bg-card'}`}
       >
         {/* Header */}
         <div
@@ -239,28 +235,26 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
           </button>
 
           {/* Icon */}
-          <div className={`w-8 h-8 shrink-0 rounded-lg flex items-center justify-center ${
-            isCurrent ? 'bg-primary/20' : 'bg-surface-tertiary'
-          }`}>
+          <div className="w-8 h-8 shrink-0 rounded-lg flex items-center justify-center bg-secondary">
             {(() => {
               const Brand = getBrandIcon(source.provider)
-              if (Brand) return <Brand size={18} className="text-text-secondary" />
+              if (Brand) return <Brand size={18} className="text-muted-foreground" />
               return isCredentialless
-                ? <Globe size={18} className="text-text-secondary" />
-                : <Key size={18} className="text-text-secondary" />
+                ? <Globe size={18} className="text-muted-foreground" />
+                : <Key size={18} className="text-muted-foreground" />
             })()}
           </div>
 
           {/* Name & Model */}
           <div className="flex-1 min-w-0">
-            <div className="font-medium text-text-primary truncate">
+            <div className="font-medium text-foreground truncate">
               {displayInfo.name}
             </div>
-            <div className="text-xs text-text-tertiary truncate">
+            <div className="text-xs text-muted-foreground truncate">
               {source.model || t('No model selected')}
             </div>
             {isCredentialless && source.user?.name && (
-              <div className="text-xs text-text-secondary truncate" title={source.user.name}>
+              <div className="text-xs text-muted-foreground truncate" title={source.user.name}>
                 {source.user.name}
               </div>
             )}
@@ -269,7 +263,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
           {/* Expand arrow */}
           <ChevronRight
             size={18}
-            className={`shrink-0 text-text-tertiary transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+            className={`shrink-0 text-muted-foreground transition-transform ${isExpanded ? 'rotate-90' : ''}`}
           />
         </div>
 
@@ -279,14 +273,14 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
             <div className="pt-3 space-y-2">
               {/* Provider */}
               <div className="flex justify-between text-sm">
-                <span className="text-text-secondary">{t('Provider')}</span>
-                <span className="text-text-primary">{source.provider}</span>
+                <span className="text-muted-foreground">{t('Provider')}</span>
+                <span className="text-foreground">{source.provider}</span>
               </div>
 
               {/* Auth Type */}
               <div className="flex justify-between text-sm">
-                <span className="text-text-secondary">{t('Auth Type')}</span>
-                <span className="text-text-primary">
+                <span className="text-muted-foreground">{t('Auth Type')}</span>
+                <span className="text-foreground">
                   {isDelegated ? t('Claude Code CLI') : isOAuth ? t('OAuth') : t('API Key')}
                 </span>
               </div>
@@ -294,8 +288,8 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
               {/* API URL — only sources that own an endpoint */}
               {!isCredentialless && (
                 <div className="flex justify-between text-sm">
-                  <span className="text-text-secondary">{t('API URL')}</span>
-                  <span className="text-text-primary truncate max-w-[200px]">
+                  <span className="text-muted-foreground">{t('API URL')}</span>
+                  <span className="text-foreground truncate max-w-[200px]">
                     {source.apiUrl}
                   </span>
                 </div>
@@ -317,7 +311,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
                     <button onClick={handleRenameSource} disabled={renaming || !renameSource.name.trim()} className="px-3 py-2 bg-primary text-primary-foreground rounded-md text-sm disabled:opacity-50">
                       {t('Save')}
                     </button>
-                    <button onClick={() => setRenameSource(null)} disabled={renaming} className="px-3 py-2 bg-surface-tertiary rounded-md text-sm">
+                    <button onClick={() => setRenameSource(null)} disabled={renaming} className="px-3 py-2 bg-secondary rounded-md text-sm">
                       {t('Cancel')}
                     </button>
                   </div>
@@ -331,16 +325,16 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
                     <button
                       onClick={() => oauth.start(source.provider, source.id)}
                       disabled={!!oauth.login}
-                      className="flex items-center gap-1 px-3 py-1.5 text-sm text-text-secondary
-                               bg-surface-tertiary hover:bg-surface-primary rounded-md transition-colors disabled:opacity-50"
+                      className="flex items-center gap-1 px-3 py-1.5 text-sm text-muted-foreground
+                               bg-secondary hover:bg-surface-hover rounded-md transition-colors disabled:opacity-50"
                     >
                       <RefreshCw size={14} />
                       {t('Reauthenticate')}
                     </button>
                     <button
                       onClick={() => setRenameSource({ sourceId: source.id, name: source.name })}
-                      className="flex items-center gap-1 px-3 py-1.5 text-sm text-text-secondary
-                               bg-surface-tertiary hover:bg-surface-primary rounded-md transition-colors"
+                      className="flex items-center gap-1 px-3 py-1.5 text-sm text-muted-foreground
+                               bg-secondary hover:bg-surface-hover rounded-md transition-colors"
                     >
                       <Edit2 size={14} />
                       {t('Rename')}
@@ -368,8 +362,8 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
                   <>
                     <button
                       onClick={() => setEditingSourceId(source.id)}
-                      className="flex items-center gap-1 px-3 py-1.5 text-sm text-text-secondary
-                               bg-surface-tertiary hover:bg-surface-primary rounded-md transition-colors"
+                      className="flex items-center gap-1 px-3 py-1.5 text-sm text-muted-foreground
+                               bg-secondary hover:bg-surface-hover rounded-md transition-colors"
                     >
                       <Edit2 size={14} />
                       {t('Edit')}
@@ -401,7 +395,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
         : t('Add AI Provider')
     return (
       <div className="space-y-4">
-        <h3 className="font-medium text-text-primary">{title}</h3>
+        <h3 className="font-medium text-foreground">{title}</h3>
         <ProviderSelector
           aiSources={aiSources}
           onSave={handleSaveSource}
@@ -421,15 +415,15 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
   if (deletingSourceId) {
     const sourceToDelete = aiSources.sources.find(s => s.id === deletingSourceId)
     return (
-      <div className="p-4 bg-surface-secondary rounded-lg border border-border space-y-4">
-        <h3 className="font-medium text-text-primary">{t('Confirm Delete')}</h3>
-        <p className="text-text-secondary">
+      <div className="p-4 bg-card rounded-lg border border-border space-y-4">
+        <h3 className="font-medium text-foreground">{t('Confirm Delete')}</h3>
+        <p className="text-muted-foreground">
           {t('Are you sure you want to delete')} <strong>{sourceToDelete?.name}</strong>?
         </p>
         <div className="flex gap-3">
           <button
             onClick={() => setDeletingSourceId(null)}
-            className="flex-1 px-4 py-2 text-text-secondary hover:bg-surface-tertiary rounded-md"
+            className="flex-1 px-4 py-2 text-muted-foreground hover:bg-secondary rounded-md"
           >
             {t('Cancel')}
           </button>
@@ -447,7 +441,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
   if (oauth.login?.redirect) {
     const provider = oauthProviders.find(entry => entry.type === oauth.login?.provider)
     return (
-      <div className="min-w-0 p-4 bg-surface-secondary rounded-lg border border-border">
+      <div className="min-w-0 p-4 bg-card rounded-lg border border-border">
         <OAuthRedirectLogin
           title={provider ? getLocalizedText(provider.displayName) : oauth.login.provider}
           redirect={oauth.login.redirect}
@@ -468,14 +462,14 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
       ? t('Starting login...')
       : userCode ? t('Enter the code in your browser') : t('Waiting for login...')
     return (
-      <div className="p-4 bg-surface-secondary rounded-lg border border-border space-y-4">
+      <div className="p-4 bg-card rounded-lg border border-border space-y-4">
         <div className="flex items-center gap-3">
           <Loader2 size={20} className="animate-spin text-primary" />
-          <span className="text-text-primary">{status}</span>
+          <span className="text-foreground">{status}</span>
         </div>
         {userCode && (
-          <div className="p-3 bg-surface-tertiary rounded-md text-center">
-            <p className="text-sm text-text-secondary mb-2">{t('Your code')}:</p>
+          <div className="p-3 bg-secondary rounded-md text-center">
+            <p className="text-sm text-muted-foreground mb-2">{t('Your code')}:</p>
             <p className="text-2xl font-mono font-bold text-primary">{userCode}</p>
             {verificationUri && (
               <a
@@ -489,7 +483,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
             )}
           </div>
         )}
-        <button onClick={oauth.cancel} className="w-full px-4 py-2 text-sm text-text-secondary hover:bg-surface-tertiary rounded-md">
+        <button onClick={oauth.cancel} className="w-full px-4 py-2 text-sm text-muted-foreground hover:bg-secondary rounded-md">
           {t('Cancel')}
         </button>
       </div>
@@ -509,7 +503,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
           {aiSources.sources.map(renderSourceCard)}
         </div>
       ) : (
-        <div className="p-6 text-center text-text-tertiary bg-surface-secondary rounded-lg border border-border">
+        <div className="p-6 text-center text-muted-foreground bg-card rounded-lg border border-border">
           {t('No AI sources configured')}
         </div>
       )}
@@ -518,7 +512,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
       <button
         onClick={() => setShowAddForm(true)}
         className="w-full flex items-center justify-center gap-2 px-4 py-3 border-2 border-dashed
-                 border-border hover:border-primary text-text-secondary hover:text-primary
+                 border-border hover:border-primary text-muted-foreground hover:text-primary
                  rounded-lg transition-colors"
       >
         <Plus size={18} />
@@ -562,15 +556,15 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
             <button
               key={provider.type}
               onClick={onClick}
-              className="flex items-center gap-3 w-full p-3 bg-surface-secondary hover:bg-surface-tertiary
+              className="flex items-center gap-3 w-full p-3 bg-card hover:bg-secondary
                        border border-border rounded-lg transition-colors"
             >
               <ProviderIconTile provider={provider} size="md" />
               <div className="flex-1 min-w-0 text-left">
-                <div className="font-medium text-text-primary truncate">
+                <div className="font-medium text-foreground truncate">
                   {getLocalizedText(provider.displayName)}
                 </div>
-                <div className="text-xs text-text-secondary break-words">
+                <div className="text-xs text-muted-foreground break-words">
                   {!provider.preset && provider.type !== CLI_DELEGATED_PROVIDER_ID && aiSources.sources.some(s => s.provider === provider.type)
                     ? t('Add another account')
                     : getLocalizedText(provider.description)}
@@ -584,7 +578,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
           <div className="pt-4 border-t border-border space-y-4">
             {availablePresetProviders.length > 0 && (
               <div>
-                <h4 className="text-sm font-medium text-text-secondary mb-3">
+                <h4 className="text-sm font-medium text-muted-foreground mb-3">
                   {t('Preset API')}
                 </h4>
                 <div className="space-y-2">
@@ -596,7 +590,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
             )}
             {availableOAuthProviders.length > 0 && (
               <div>
-                <h4 className="text-sm font-medium text-text-secondary mb-3">
+                <h4 className="text-sm font-medium text-muted-foreground mb-3">
                   {t('OAuth Login')}
                 </h4>
                 <div className="space-y-2">

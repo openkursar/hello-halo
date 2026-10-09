@@ -65,6 +65,8 @@ export interface DshRuntimeClient {
   onExit(handler: (error?: Error) => void): () => void
   /** Resolves once the child has actually exited. Idempotent. */
   close(): Promise<void>
+  /** The child's process id while it runs. */
+  readonly pid?: number | null
 }
 
 /** Halo-facing SDK module contract, same surface `resolved-sdk.ts` expects. */

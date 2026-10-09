@@ -2,9 +2,8 @@
  * Spaces Page - Workspace management
  *
  * The workspace management surface the SpaceSelector dropdown's own doc
- * comment used to apologize for not having: rename/delete/reorder, an
- * asset overview per workspace (files/digital humans/skills/MCP — see
- * SpaceCard), and a recovery path for a disconnected workspace. The
+ * comment used to apologize for not having: rename/delete/reorder and a
+ * recovery path for a disconnected workspace. The
  * dropdown itself stays a pure switcher (see SpaceSelector.tsx).
  *
  * Not a two-level "cards → detail page" surface like Apps/Tlon: a
@@ -26,7 +25,7 @@ import { useAppStore } from '../stores/app.store'
 import { api } from '../api'
 import { useTranslation } from '../i18n'
 import { capCount, takeEntry, trackHome, trackHomeThrottled } from '../services/home-telemetry'
-import type { Space, ArtifactRailTab } from '../types'
+import type { Space } from '../types'
 
 const GRID_CLASSES = 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5'
 
@@ -45,7 +44,6 @@ export function SpacesPage() {
     setCurrentSpace,
     refreshCurrentSpace,
     reorderSpaces,
-    setPendingArtifactRailTab,
   } = useSpaceStore()
 
   const [searchQuery, setSearchQuery] = useState('')
@@ -76,10 +74,9 @@ export function SpacesPage() {
   const trimmedQuery = searchQuery.trim().toLowerCase()
   const isSearching = trimmedQuery.length > 0
 
-  // Card / asset-chip click: switch to the workspace, optionally requesting
-  // a resource-rail tab, then enter it. Disconnected workspaces can only be
-  // managed from their own `⋯` menu (SpaceCard) — not opened.
-  const openSpace = useCallback((space: Space, tab?: ArtifactRailTab) => {
+  // Card click: switch to the workspace and enter it. Disconnected workspaces
+  // can only be managed from their own `⋯` menu (SpaceCard) — not opened.
+  const openSpace = useCallback((space: Space) => {
     if (space.isMissing) return
     if (space.id !== currentSpace?.id) {
       trackHome('home.space.switch', {
@@ -92,9 +89,8 @@ export function SpacesPage() {
       setCurrentSpace(space)
       void refreshCurrentSpace()
     }
-    if (tab) setPendingArtifactRailTab(tab)
     navigate('space')
-  }, [currentSpace, haloSpace, spaceCount, isSearching, setCurrentSpace, refreshCurrentSpace, setPendingArtifactRailTab, navigate])
+  }, [currentSpace, haloSpace, spaceCount, isSearching, setCurrentSpace, refreshCurrentSpace, navigate])
 
   const openCreateDialog = (folder?: string) => {
     trackHome('home.space.action', { action: 'create_open', surface: 'manage' })
@@ -146,7 +142,6 @@ export function SpacesPage() {
       key={space.id}
       space={space}
       onOpen={() => openSpace(space)}
-      onOpenTab={(tab) => openSpace(space, tab)}
     />
   )
 

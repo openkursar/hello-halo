@@ -24,7 +24,7 @@
  */
 
 import { useState, useRef, useCallback, useEffect, forwardRef, type ReactNode } from 'react'
-import { X, Loader2, AlertCircle, Plus, XCircle, Maximize2, Minimize2, RefreshCw, Target, GitCompareArrows } from 'lucide-react'
+import { X, Loader2, AlertCircle, Plus, Maximize2, Minimize2, Target, GitCompareArrows } from 'lucide-react'
 import { type TabState } from '../../services/canvas-lifecycle'
 import { useActiveTabId, useCanvasActions, useTabList } from '../../hooks/useCanvasLifecycle'
 import { useCanvasStore } from '../../stores/canvas.store'
@@ -46,7 +46,7 @@ interface CanvasTabsProps {
   onCloseAll?: () => void
   isMaximized?: boolean
   onToggleMaximize?: () => void
-  /** Hides the canvas while keeping its tabs; placed before "close all". */
+  /** Hides the canvas while keeping its tabs; placed last, after "close canvas". */
   collapseControl?: ReactNode
 }
 
@@ -166,13 +166,6 @@ export function CanvasTabs({
       }, i * 50)
     })
   }, [handleTabClose])
-
-  // Refresh active tab handler
-  const handleRefreshActive = useCallback(() => {
-    if (activeTabId && onRefresh) {
-      onRefresh(activeTabId)
-    }
-  }, [activeTabId, onRefresh])
 
   // Copy path handler
   const handleCopyPath = useCallback(async (path: string) => {
@@ -311,17 +304,6 @@ export function CanvasTabs({
 
       {/* Right-side action buttons */}
       <div className="canvas-tab-bar-actions">
-        {/* Refresh active tab button */}
-        {onRefresh && activeTabId && (
-          <button
-            onClick={handleRefreshActive}
-            className="canvas-tab-bar-action"
-            title={t('Refresh')}
-          >
-            <RefreshCw className="w-4 h-4" />
-          </button>
-        )}
-
         {/* Maximize/Minimize toggle button */}
         {onToggleMaximize && (
           <button
@@ -330,25 +312,27 @@ export function CanvasTabs({
             title={isMaximized ? t('Exit fullscreen') : t('Enter fullscreen')}
           >
             {isMaximized ? (
-              <Minimize2 className="w-4 h-4" />
+              <Minimize2 className="w-4 h-4" strokeWidth={1.5} />
             ) : (
-              <Maximize2 className="w-4 h-4" />
+              <Maximize2 className="w-4 h-4" strokeWidth={1.5} />
             )}
           </button>
         )}
-
-        {collapseControl}
 
         {/* Close all tabs button */}
         {onCloseAll && tabs.length > 0 && (
           <button
             onClick={onCloseAll}
             className="canvas-tab-bar-action danger"
-            title={t('Close all tabs')}
+            title={t('Close canvas (clears all tabs)')}
+            aria-label={t('Close canvas (clears all tabs)')}
           >
-            <XCircle className="w-5 h-5" />
+            <X className="w-4 h-4" strokeWidth={1.5} />
           </button>
         )}
+
+        {/* In the corner where the collapsed canvas's expand handle appears, so the two toggle in place. */}
+        {collapseControl}
       </div>
     </div>
   )

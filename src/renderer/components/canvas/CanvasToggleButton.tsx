@@ -1,12 +1,12 @@
-import { PanelRightClose, PanelRightOpen } from 'lucide-react'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useCanvasActions, useCanvasIsOpen, useTabCount } from '../../hooks/useCanvasLifecycle'
 import { useTranslation } from '../../i18n'
 
 const PLACEMENT_CLASS = {
   // Among the tab bar's own actions, while the canvas is open
   'tab-bar': 'canvas-tab-bar-action',
-  // On the right edge of the area the canvas folded away from, while it is collapsed
-  edge: 'absolute right-0 top-1/2 -translate-y-1/2 z-20 flex items-center gap-1 rounded-l-lg border border-r-0 border-border-soft bg-card/90 px-1.5 py-2 text-xs text-muted-foreground shadow-sm hover:bg-secondary hover:text-foreground transition-colors',
+  // Flush with the top-right corner of the area the canvas folded away from, as tall as its tab bar (38px)
+  edge: 'absolute right-0 top-0 z-20 flex h-[38px] items-center gap-0.5 rounded-bl-md border-b border-l border-border-soft bg-card/90 px-1.5 text-xs text-muted-foreground shadow-sm hover:bg-secondary hover:text-foreground transition-colors',
 } as const
 
 /**
@@ -26,10 +26,10 @@ export function CanvasToggleButton({ placement }: { placement: keyof typeof PLAC
   return (
     <button onClick={toggleOpen} className={PLACEMENT_CLASS[placement]} title={label} aria-label={label}>
       {isOpen ? (
-        <PanelRightClose className="w-4 h-4" />
+        <ChevronRight className="w-4 h-4" strokeWidth={1.5} />
       ) : (
         <>
-          <PanelRightOpen className="w-4 h-4" />
+          <ChevronLeft className="w-3.5 h-3.5" />
           <span>{tabCount}</span>
         </>
       )}

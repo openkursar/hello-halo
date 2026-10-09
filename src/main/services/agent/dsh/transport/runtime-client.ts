@@ -91,6 +91,10 @@ class ChildProcessRuntimeClient implements DshRuntimeClient {
     return () => this.handlers.delete(handler)
   }
 
+  get pid(): number | null {
+    return this.connection.pid
+  }
+
   isAlive(): boolean {
     // Tracked from the exit event rather than read off the connection, so the
     // answer is also correct in the window before `start()` has spawned

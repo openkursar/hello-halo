@@ -97,6 +97,8 @@ export {
 // A space's sessions rebuild after their current turn, e.g. once its working directory moved;
 // whether anything in a space is running or about to, and whether anything started since
 export { invalidateSessionsForSpace, isSpaceBusy, countSessionAcquisitions } from './session-manager'
+// Close a space's idle sessions and wait for their processes to exit, before its folder is deleted
+export { closeSpaceSessions } from './session-manager'
 
 // Delete a stored session that will never be resumed (CC-protocol engines);
 // copy a working directory's stored sessions to the one a space moved to

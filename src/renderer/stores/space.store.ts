@@ -6,7 +6,8 @@ import { useCallback } from 'react'
 import { create } from 'zustand'
 import { api } from '../api'
 import { useChatStore } from './chat.store'
-import type { Space, CreateSpaceInput, SpacePreferences, ArtifactRailTab } from '../types'
+import { useConversationListPrefs } from './conversation-list-prefs.store'
+import type { Space, CreateSpaceInput, SpacePreferences } from '../types'
 
 /** A summary is a filesystem scan per workspace; the selector dropdown asks
  * for one every time it opens, so repeat opens reuse the last result. */
@@ -16,11 +17,6 @@ interface SpaceState {
   haloSpace: Space | null
   spaces: Space[]
   currentSpace: Space | null
-
-  /** One-shot: a workspace card's asset chip asked to land on a specific
-   * rail tab. SpacePage consumes and clears this after switching space. */
-  pendingArtifactRailTab: ArtifactRailTab | null
-  setPendingArtifactRailTab: (tab: ArtifactRailTab | null) => void
 
   // Loading states
   isLoading: boolean
@@ -46,7 +42,8 @@ interface SpaceState {
   updateSpace: (spaceId: string, updates: { name?: string; icon?: string; color?: string }) => Promise<Space | null>
   /** Point the space at another folder; resolves to the reason it could not, or null. */
   setSpaceWorkingDir: (spaceId: string, workingDir: string) => Promise<string | null>
-  deleteSpace: (spaceId: string) => Promise<boolean>
+  /** 'busy' while a reply, run or background task is going in the space. */
+  deleteSpace: (spaceId: string) => Promise<'deleted' | 'busy' | 'failed'>
   /** Remove an unreachable space's registry entry — does not touch disk. */
   forgetSpace: (spaceId: string) => Promise<boolean>
   openSpaceFolder: (spaceId: string) => Promise<void>
@@ -66,8 +63,6 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
   haloSpace: null,
   spaces: [],
   currentSpace: null,
-  pendingArtifactRailTab: null,
-  setPendingArtifactRailTab: (tab) => set({ pendingArtifactRailTab: tab }),
   isLoading: false,
   error: null,
 
@@ -228,14 +223,15 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
         // Clean up chat store state for the deleted space
         // (removes orphan pinned conversations, cached metadata, etc.)
         useChatStore.getState().resetSpace(spaceId)
+        useConversationListPrefs.getState().forgetSpace(spaceId)
 
-        return true
+        return 'deleted'
       }
 
-      return false
+      return response.code === 'SPACE_BUSY' ? 'busy' : 'failed'
     } catch (error) {
       console.error('Failed to delete space:', error)
-      return false
+      return 'failed'
     }
   },
 
@@ -249,6 +245,7 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
           spaces: state.spaces.filter((s) => s.id !== spaceId)
         }))
         useChatStore.getState().resetSpace(spaceId)
+        useConversationListPrefs.getState().forgetSpace(spaceId)
         return true
       }
 

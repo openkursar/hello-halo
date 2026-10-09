@@ -78,9 +78,11 @@ interface PopoverTriggerProps {
   className?: string
   /** Tooltip text; also used as the accessible name for icon-only triggers */
   title?: string
+  /** Accessible name without a native tooltip, for triggers whose popover already explains them */
+  ariaLabel?: string
 }
 
-export function PopoverTrigger({ children, className, title }: PopoverTriggerProps) {
+export function PopoverTrigger({ children, className, title, ariaLabel }: PopoverTriggerProps) {
   const { setOpen, open, triggerRef } = usePopoverCtx()
 
   return (
@@ -89,7 +91,9 @@ export function PopoverTrigger({ children, className, title }: PopoverTriggerPro
       role="button"
       tabIndex={0}
       title={title}
-      aria-label={title}
+      aria-label={ariaLabel ?? title}
+      aria-haspopup="dialog"
+      aria-expanded={open}
       onClick={() => setOpen(!open)}
       onKeyDown={e => {
         if (e.key === 'Enter' || e.key === ' ') {
@@ -117,6 +121,9 @@ interface PopoverContentProps {
   /** Gap between trigger and content (px) */
   sideOffset?: number
   className?: string
+  /** The content is portalled out of the trigger's tree, so hover-driven triggers track it here. */
+  onPointerEnter?: (e: React.PointerEvent<HTMLDivElement>) => void
+  onPointerLeave?: (e: React.PointerEvent<HTMLDivElement>) => void
 }
 
 export function PopoverContent({
@@ -125,6 +132,8 @@ export function PopoverContent({
   side = 'bottom',
   sideOffset = 4,
   className,
+  onPointerEnter,
+  onPointerLeave,
 }: PopoverContentProps) {
   const { open, setOpen, triggerRef } = usePopoverCtx()
   const contentRef = useRef<HTMLDivElement>(null!)
@@ -220,6 +229,8 @@ export function PopoverContent({
         className,
       )}
       style={{ top: pos.top, left: pos.left }}
+      onPointerEnter={onPointerEnter}
+      onPointerLeave={onPointerLeave}
     >
       {children}
     </div>,

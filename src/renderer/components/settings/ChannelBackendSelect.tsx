@@ -104,7 +104,7 @@ export function ChannelBackendSelect({
 
   return (
     <div className="space-y-1">
-      <label className="text-sm text-muted-foreground">
+      <label className="text-sm text-foreground">
         {t('Backend')} <span className="text-red-400">*</span>
       </label>
       <div className="relative">
@@ -112,7 +112,7 @@ export function ChannelBackendSelect({
         <select
           value={selected}
           onChange={(e) => onChange(decodeTarget(e.target.value))}
-          className="w-full bg-muted border border-border rounded-lg pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary appearance-none cursor-pointer"
+          className="w-full bg-secondary border border-transparent rounded-lg pl-9 pr-3 py-2 text-sm focus:outline-none focus:border-primary appearance-none cursor-pointer"
         >
           <option value="">{t('Select a digital human or team member')}</option>
           {danglingBinding && (

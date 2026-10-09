@@ -250,7 +250,7 @@ export function AppModelSelector({
                     onClick={() => setExpandedSection(prev => prev === source.id ? null : source.id)}
                   >
                     <div className="flex items-center gap-2">
-                      <ChevronDown className={`w-3 h-3 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                      <ChevronDown className={`w-3 h-3 transition-transform ${isExpanded ? '' : '-rotate-90'}`} />
                       <span>{displayName}</span>
                     </div>
                     {isSelectedSource && (

@@ -282,7 +282,6 @@ export class CodexAppServerSession {
       reflect(ServerNotifications.TurnStarted)(params)
     })
     rpc.onNotification(ServerNotifications.ItemStarted, reflect(ServerNotifications.ItemStarted))
-    rpc.onNotification(ServerNotifications.ItemUpdated, reflect(ServerNotifications.ItemUpdated))
     rpc.onNotification(ServerNotifications.ItemCompleted, reflect(ServerNotifications.ItemCompleted))
     rpc.onNotification(ServerNotifications.AgentMessageDelta, reflect(ServerNotifications.AgentMessageDelta))
     rpc.onNotification(ServerNotifications.ReasoningTextDelta, reflect(ServerNotifications.ReasoningTextDelta))
@@ -305,6 +304,10 @@ export class CodexAppServerSession {
   // --------------------------------------------------------------------------
   // V2SDKSession surface
   // --------------------------------------------------------------------------
+
+  get pid(): number | null {
+    return this.connection?.pid ?? null
+  }
 
   send(message: any): void {
     if (this.closed) throw new Error('Codex session is closed')

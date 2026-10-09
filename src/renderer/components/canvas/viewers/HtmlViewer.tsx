@@ -140,7 +140,7 @@ export function HtmlViewer({ tab }: HtmlViewerProps) {
                 }
               `}
             >
-              <Eye className="w-3.5 h-3.5" />
+              <Eye className="w-3.5 h-3.5" strokeWidth={1.5} />
               {t('Preview')}
             </button>
             <button
@@ -153,7 +153,7 @@ export function HtmlViewer({ tab }: HtmlViewerProps) {
                 }
               `}
             >
-              <Code className="w-3.5 h-3.5" />
+              <Code className="w-3.5 h-3.5" strokeWidth={1.5} />
               {t('Source')}
             </button>
           </div>
@@ -173,7 +173,7 @@ export function HtmlViewer({ tab }: HtmlViewerProps) {
               className="flex items-center gap-1.5 px-2 py-1 rounded text-xs bg-primary/10 hover:bg-primary/20 text-primary transition-colors"
               title={t('Open in browser mode (full render)')}
             >
-              <Globe className="w-3.5 h-3.5" />
+              <Globe className="w-3.5 h-3.5" strokeWidth={1.5} />
               {t('Browser mode')}
             </button>
           )}
@@ -184,7 +184,7 @@ export function HtmlViewer({ tab }: HtmlViewerProps) {
             className="p-1.5 rounded hover:bg-secondary transition-colors"
             title={t('Open in external browser')}
           >
-            <ExternalLink className="w-4 h-4 text-muted-foreground" />
+            <ExternalLink className="w-3.5 h-3.5 text-muted-foreground" strokeWidth={1.5} />
           </button>
 
           {/* Copy button */}
@@ -194,9 +194,9 @@ export function HtmlViewer({ tab }: HtmlViewerProps) {
             title={t('Copy code')}
           >
             {copied ? (
-              <Check className="w-4 h-4 text-green-500" />
+              <Check className="w-3.5 h-3.5 text-green-500" strokeWidth={1.5} />
             ) : (
-              <Copy className="w-4 h-4 text-muted-foreground" />
+              <Copy className="w-3.5 h-3.5 text-muted-foreground" strokeWidth={1.5} />
             )}
           </button>
         </div>

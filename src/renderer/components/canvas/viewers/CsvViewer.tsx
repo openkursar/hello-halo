@@ -185,7 +185,7 @@ export function CsvViewer({ tab, onScrollChange }: CsvViewerProps) {
               }`}
               title={t('Table view')}
             >
-              <Table className="w-3.5 h-3.5" />
+              <Table className="w-3.5 h-3.5" strokeWidth={1.5} />
             </button>
             <button
               onClick={() => setViewMode('source')}
@@ -196,7 +196,7 @@ export function CsvViewer({ tab, onScrollChange }: CsvViewerProps) {
               }`}
               title={t('Source view')}
             >
-              <Code2 className="w-3.5 h-3.5" />
+              <Code2 className="w-3.5 h-3.5" strokeWidth={1.5} />
             </button>
           </div>
 
@@ -207,9 +207,9 @@ export function CsvViewer({ tab, onScrollChange }: CsvViewerProps) {
             title={t('Copy')}
           >
             {copied ? (
-              <Check className="w-4 h-4 text-green-500" />
+              <Check className="w-3.5 h-3.5 text-green-500" strokeWidth={1.5} />
             ) : (
-              <Copy className="w-4 h-4 text-muted-foreground" />
+              <Copy className="w-3.5 h-3.5 text-muted-foreground" strokeWidth={1.5} />
             )}
           </button>
 
@@ -220,7 +220,7 @@ export function CsvViewer({ tab, onScrollChange }: CsvViewerProps) {
               className="p-1.5 rounded hover:bg-secondary transition-colors"
               title={t('Open in external application')}
             >
-              <ExternalLink className="w-4 h-4 text-muted-foreground" />
+              <ExternalLink className="w-3.5 h-3.5 text-muted-foreground" strokeWidth={1.5} />
             </button>
           )}
         </div>

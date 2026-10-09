@@ -6,6 +6,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Plus, Trash2, Loader2, Key } from 'lucide-react'
 import { useTranslation } from '../../i18n'
+import { Switch } from '../ui/Switch'
 import { api } from '../../api'
 import type { RegistrySource } from '../../../shared/store/store-types'
 import { useAppsPageStore } from '../../stores/apps-page.store'
@@ -215,21 +216,7 @@ export function RegistrySection() {
 
                   <div className="flex items-center gap-3 ml-4 shrink-0">
                     {/* Toggle switch */}
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={registry.enabled}
-                        onChange={() => handleToggle(registry.id, !registry.enabled)}
-                        className="sr-only peer"
-                      />
-                      <div className="w-11 h-6 bg-secondary rounded-full peer peer-checked:bg-primary transition-colors">
-                        <div
-                          className={`w-5 h-5 bg-white rounded-full shadow-md transform transition-transform ${
-                            registry.enabled ? 'translate-x-5' : 'translate-x-0.5'
-                          } mt-0.5`}
-                        />
-                      </div>
-                    </label>
+                    <Switch checked={registry.enabled} onCheckedChange={() => handleToggle(registry.id, !registry.enabled)} />
 
                     {/* Delete button — hidden for builtins */}
                     {!isBuiltin(registry) && (
@@ -260,7 +247,7 @@ export function RegistrySection() {
                         setApiKeyEditing(prev => ({ ...prev, [registry.id]: e.target.value }))
                       }
                       placeholder={t('Smithery API key (optional)')}
-                      className="flex-1 px-2.5 py-1.5 text-xs bg-muted border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary"
+                      className="flex-1 px-2.5 py-1.5 text-xs bg-secondary border border-transparent rounded-lg focus:outline-none focus:border-primary"
                     />
                     {apiKeyEditing[registry.id] !== undefined && (
                       <button
@@ -298,7 +285,7 @@ export function RegistrySection() {
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
                   placeholder={t('Registry name')}
-                  className="w-full px-3 py-2 bg-muted border border-border rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                  className="w-full px-3 py-2 bg-secondary border border-transparent rounded-lg text-sm focus:outline-none focus:border-primary"
                 />
               </div>
               <div className="space-y-1">
@@ -311,7 +298,7 @@ export function RegistrySection() {
                   value={newUrl}
                   onChange={(e) => setNewUrl(e.target.value)}
                   placeholder={t('https://example.com/registry')}
-                  className="w-full px-3 py-2 bg-muted border border-border rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                  className="w-full px-3 py-2 bg-secondary border border-transparent rounded-lg text-sm focus:outline-none focus:border-primary"
                 />
               </div>
 

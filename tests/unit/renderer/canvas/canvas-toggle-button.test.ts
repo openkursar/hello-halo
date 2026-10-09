@@ -67,7 +67,7 @@ describe('collapsing and restoring the canvas', () => {
     expect(canvas.toggleOpen).toHaveBeenCalledTimes(1)
   })
 
-  it('places the collapse control in the tab bar right before "close all"', () => {
+  it('places the collapse control last in the tab bar, after "close canvas"', () => {
     const tab = { id: 'tab-1', type: 'browser', title: 'Docs', path: undefined, isLoading: false, isDirty: false, error: undefined }
     const markup = renderToStaticMarkup(createElement(CanvasTabs, {
       tabs: [tab] as never,
@@ -78,7 +78,8 @@ describe('collapsing and restoring the canvas', () => {
       collapseControl: createElement('i', { id: 'collapse' }),
     }))
     const actions = markup.slice(markup.indexOf('canvas-tab-bar-actions'))
-    expect(actions.indexOf('<i id="collapse"></i>')).toBeGreaterThan(-1)
-    expect(actions.indexOf('<i id="collapse"></i>')).toBeLessThan(actions.indexOf('title="Close all tabs"'))
+    const closeCanvas = actions.indexOf('title="Close canvas (clears all tabs)"')
+    expect(closeCanvas).toBeGreaterThan(-1)
+    expect(actions.indexOf('<i id="collapse"></i>')).toBeGreaterThan(closeCanvas)
   })
 })
