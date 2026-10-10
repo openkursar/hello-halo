@@ -44,7 +44,7 @@ jobs:
         run: |
           npm ci --ignore-scripts --legacy-peer-deps
           if [ ! -e node_modules/@hello-halo/agent-sdk ]; then rm -f node_modules/@hello-halo/agent-sdk; fi
-          node scripts/postinstall.mjs
+          PATH="$PWD/node_modules/.bin:$PATH" node scripts/postinstall.mjs
 
       # Pull requests are checked against their base, pushes against the commit
       # they replaced; deleted files are left out because there is nothing left
