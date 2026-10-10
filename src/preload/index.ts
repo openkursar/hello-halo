@@ -39,6 +39,7 @@ import { systemRpc } from '../shared/rpc/contracts/system.contract'
 import { healthRpc } from '../shared/rpc/contracts/health.contract'
 import { canvasPreviewRpc } from '../shared/rpc/contracts/canvas-preview.contract'
 import { gitRpc } from '../shared/rpc/contracts/git.contract'
+import { browserRpc } from '../shared/rpc/contracts/browser.contract'
 import { codeReviewRpc } from '../shared/rpc/contracts/code-review.contract'
 import { configRpc } from '../shared/rpc/contracts/config.contract'
 import { agentRpc } from '../shared/rpc/contracts/agent.contract'
@@ -375,6 +376,7 @@ export interface HaloAPI extends BrowserHostBridge {
   onDisplayScale: (callback: (factor: number) => void) => () => void
 
   // Browser (embedded browser for Content Canvas)
+  clearBrowserData: RpcClient<typeof browserRpc>['clearBrowserData']
   getBrowserHomepage: () => Promise<IpcResponse>
   createBrowserView: (viewId: string, url?: string) => Promise<IpcResponse>
   onBrowserPageGone: (callback: (data: BrowserPageGone) => void) => () => void
@@ -956,6 +958,7 @@ const api: HaloAPI = {
   getDisplayScale: () => ipcRenderer.invoke('display:get-scale'),
   setDisplayScale: (factor) => ipcRenderer.invoke('display:set-scale', factor),
   onDisplayScale: (callback) => createEventListener('display:scale-changed', callback),
+  ...bindRpc(browserRpc),
   getBrowserHomepage: () => ipcRenderer.invoke('browser:get-homepage'),
   createBrowserView: (viewId, url) => ipcRenderer.invoke('browser:create', { viewId, url }),
   onBrowserPageGone: (callback) => createEventListener('browser:page-gone', callback),
