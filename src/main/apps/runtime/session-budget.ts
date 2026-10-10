@@ -3,7 +3,7 @@
  *
  * Every resident chat session (space chat, digital-human chat, IM, team member)
  * is one engine process, so this is the first resource to run out as digital
- * humans multiply. The budget is the configured maximum (Settings, default 10),
+ * humans multiply. The budget is the configured maximum (Settings, default 20),
  * halved while system memory pressure is above normal. Renderer memory is not
  * counted: closing engine processes does not shrink the window. The limit is pushed down to the
  * engine, which applies it before creating any new session; automation runs,
@@ -32,10 +32,6 @@ export function computeResidentSessionLimit(configured: unknown, pressure: Memor
 let currentLimit: number | null = null
 let disposers: Array<() => void> = []
 
-function currentComputedLimit(): number {
-  return computeResidentSessionLimit(getConfig().agent?.maxResidentSessions, getSystemMemoryPressure())
-}
-
 /** Evict idle resident sessions beyond `limit`, least recently used first. */
 function trimTo(limit: number, reason: string): number {
   const idle = listResidentSessions()
@@ -53,8 +49,8 @@ function trimTo(limit: number, reason: string): number {
   return evicted
 }
 
-function apply(trigger: string): void {
-  const limit = currentComputedLimit()
+function apply(trigger: string, configured: unknown): void {
+  const limit = computeResidentSessionLimit(configured, getSystemMemoryPressure())
   if (limit === currentLimit) return
   const previous = currentLimit
   currentLimit = limit
@@ -66,10 +62,10 @@ function apply(trigger: string): void {
 
 export function initSessionBudget(): void {
   disposeSessionBudget()
-  apply('init')
+  apply('init', getConfig().agent?.maxResidentSessions)
   disposers = [
-    onAgentConfigChange(() => apply('config')),
-    onSystemMemoryPressure((level) => apply(`system memory ${level}`)),
+    onAgentConfigChange((agent) => apply('config', agent?.maxResidentSessions)),
+    onSystemMemoryPressure((level) => apply(`system memory ${level}`, getConfig().agent?.maxResidentSessions)),
   ]
 }
 

@@ -78,6 +78,23 @@ afterAll(() => {
 })
 
 describe('resident session limit', () => {
+  it.each([20, 10])('keeps and reuses all %d sessions while switching conversations within budget', async (limit) => {
+    setResidentSessionLimit(limit)
+    for (let i = 0; i < limit; i++) await resident(`c${i}`, i)
+    const sessions = [...v2Sessions.values()].map((s) => s.session)
+    createSession.mockClear()
+
+    for (let round = 0; round < 3; round++) {
+      for (let i = 0; i < limit; i++) {
+        await getOrCreateV2Session('space', `c${i}`, { systemPrompt: 'p', model: 'm' })
+      }
+    }
+
+    expect(createSession).not.toHaveBeenCalled()
+    expect(v2Sessions.size).toBe(limit)
+    for (const session of sessions) expect(session.close).not.toHaveBeenCalled()
+  })
+
   it('null limit never evicts (unchanged behavior)', async () => {
     for (let i = 0; i < 5; i++) await resident(`c${i}`, i)
     expect(v2Sessions.size).toBe(5)

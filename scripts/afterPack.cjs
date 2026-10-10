@@ -972,10 +972,28 @@ function validateDshRuntimeBundle(context) {
   console.log(`[afterPack] ${key}: dsh runtime bundle present (${sizeMB} MB)`);
 }
 
+function validateWindowsConsoleBootstrap(context, pkg) {
+  if (context.electronPlatformName !== 'win32') return;
+  const cliPath = 'node_modules/@anthropic-ai/claude-code/cli.js';
+  if (!pkg.exists(cliPath)) {
+    console.log('[afterPack] Claude Code CLI not bundled — no Windows console bootstrap required');
+    return;
+  }
+  const bootstrapPath = 'node_modules/@anthropic-ai/claude-code/windows-hide.cjs';
+  if (!pkg.exists(bootstrapPath) || !pkg.read(cliPath).toString('utf-8').includes("import '../claude-code/windows-hide.cjs';")) {
+    throw new Error(
+      '[afterPack] Windows Claude Code console bootstrap is missing or not loaded. ' +
+      'Run postinstall to apply the CLI patch before packaging.'
+    );
+  }
+  console.log('[afterPack] Windows Claude Code console bootstrap present');
+}
+
 function validatePackagedArtifact(context) {
   console.log('[afterPack] Validating packaged artifact...');
   const pkg = createPackageReader(context);
   validateEngineRuntimes(pkg);
+  validateWindowsConsoleBootstrap(context, pkg);
   const product = validateProductConfig(pkg);
   validateUpdaterConfig(context);
   validateUpdateHelper(context, product);

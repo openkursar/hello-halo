@@ -66,7 +66,8 @@ function forkHost(): ChildProcess {
 
   const child = fork(workerPath, [], {
     stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
-    env: { ...process.env }
+    env: { ...process.env },
+    windowsHide: true,
   })
 
   child.on('message', (msg: PtyHostToMainMessage) => {
