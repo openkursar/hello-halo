@@ -35,13 +35,11 @@ test('inbox includes dedicated coordinators, pages requests, and retains unsent 
   await expect(window.locator('article')).toHaveCount(34)
   await expect(window.getByRole('button', { name: 'System coordinator', exact: true })).toBeVisible()
   const first = window.locator('article').first()
-  await first.getByRole('button', { name: 'Review and answer', exact: true }).click()
   const draft = first.getByRole('textbox')
   await draft.fill('Preserve this decision draft')
   await first.getByRole('button', { name: 'Analyst 000', exact: true }).click()
   await expect(window.getByRole('textbox').filter({ hasText: 'Preserve this decision draft' })).toHaveCount(1)
   await window.getByRole('button', { name: 'Return to requests', exact: true }).click()
-  await window.locator('article').first().getByRole('button', { name: 'Review and answer', exact: true }).click()
   await expect(window.locator('article').first().getByRole('textbox')).toHaveValue('Preserve this decision draft')
 })
 

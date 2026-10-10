@@ -22,7 +22,6 @@ export function PeopleInbox() {
   const [cursor, setCursor] = useState<PendingDecisionQuery | null>(null)
   const [loading, setLoading] = useState(false)
   const [failed, setFailed] = useState(false)
-  const [expanded, setExpanded] = useState<string | null>(null)
   const [received, setReceived] = useState(false)
   const generation = useRef(0)
   // Who this list shows as stopped, and why — a status push that does not change
@@ -89,7 +88,7 @@ export function PeopleInbox() {
     </article>)}
     {entries.filter(isPendingDecision).map(entry => {
       const app = apps.find(item => item.id === entry.appId)
-      return <article key={entry.id} className="mb-4 rounded-xl border border-border border-l-[3px] border-l-halo-warning/60 p-4"><button onClick={() => { usePeopleViewStore.setState({ returnInbox: true, returnTeam: null, focusEntry: { appId: entry.appId, entryId: entry.id } }); useAppsPageStore.getState().openActivityThread(entry.appId); useAppsPageStore.getState().setCurrentTab('my-digital-humans') }} className="mb-3 flex min-h-9 items-center gap-2 text-sm"><AutomationAvatar name={names[entry.appId] ?? app?.spec.name ?? entry.appId} size={28} /><span>{names[entry.appId] ?? app?.spec.name ?? t('Digital human')}</span><ArrowUpRight size={13} className="text-muted-foreground" /></button><ActivitySource entry={entry} />{expanded === entry.id ? <EscalationCard entry={entry} appId={entry.appId} onResolved={() => { setReceived(true); setExpanded(null); void load() }} /> : <><p className="whitespace-pre-wrap break-words text-sm">{entry.content.summary}</p><button onClick={() => setExpanded(entry.id)} className="mt-3 min-h-9 rounded-lg bg-primary px-3 py-2 text-xs text-primary-foreground">{t('Review and answer')}</button></>}</article>
+      return <article key={entry.id} className="mb-4 rounded-xl border border-border border-l-[3px] border-l-halo-warning/60 p-4"><button onClick={() => { usePeopleViewStore.setState({ returnInbox: true, returnTeam: null, focusEntry: { appId: entry.appId, entryId: entry.id } }); useAppsPageStore.getState().openActivityThread(entry.appId); useAppsPageStore.getState().setCurrentTab('my-digital-humans') }} className="mb-3 flex min-h-9 items-center gap-2 text-sm"><AutomationAvatar name={names[entry.appId] ?? app?.spec.name ?? entry.appId} size={28} /><span>{names[entry.appId] ?? app?.spec.name ?? t('Digital human')}</span><ArrowUpRight size={13} className="text-muted-foreground" /></button><ActivitySource entry={entry} /><EscalationCard entry={entry} appId={entry.appId} onResolved={() => { setReceived(true); void load() }} /></article>
     })}
     {cursor && <button disabled={loading} onClick={() => void load(cursor)} className="min-h-10 w-full rounded-lg border border-border text-sm disabled:opacity-50">{loading ? t('Loading…') : t('Load more requests')}</button>}
   </div></div>

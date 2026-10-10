@@ -137,16 +137,9 @@ interface AppsPageState {
   initialAppId: string | null
   showInstallDialog: boolean
   /**
-   * Set by the task panel when a `waiting_user` digital-human item is
-   * clicked, so the activity thread can scroll to and highlight the
-   * specific EscalationCard instead of just landing on the feed's top.
-   * Consumed once (mirrors storeAutoInstall).
-   */
-  pendingActivityScrollId: string | null
-  /**
    * Set by a detail surface so the Settings tab can scroll to and briefly
-   * highlight the settings group it summarizes (mirrors
-   * pendingActivityScrollId). Consumed once.
+   * highlight the settings group it summarizes. Consumed once (mirrors
+   * storeAutoInstall).
    */
   pendingConfigScrollId: string | null
 
@@ -195,10 +188,6 @@ interface AppsPageState {
   openAppConfig: (appId: string) => void
   openAppTeams: (appId: string) => void
   setInitialAppId: (appId: string | null) => void
-  /** Navigate to an app's activity thread and scroll to a specific entry once there. */
-  openActivityThreadAt: (appId: string, entryId: string) => void
-  /** Consume the pending scroll-to-entry intent (returns it once, then clears). */
-  consumePendingActivityScrollId: () => string | null
   /** Navigate to an app's Settings tab and scroll to a specific group once there. */
   openAppConfigAt: (appId: string, groupId: string) => void
   /** Consume the pending scroll-to-group intent (returns it once, then clears). */
@@ -250,7 +239,6 @@ export const useAppsPageStore = create<AppsPageState>()(
     (set, get) => ({
   selectedAppId: null,
   detailView: null,
-  pendingActivityScrollId: null,
   pendingConfigScrollId: null,
   initialAppId: null,
   showInstallDialog: false,
@@ -311,15 +299,6 @@ export const useAppsPageStore = create<AppsPageState>()(
   openActivityThread: (appId) =>
     set({ selectedAppId: appId, detailView: { type: 'activity-thread', appId } }),
 
-  openActivityThreadAt: (appId, entryId) =>
-    set({ selectedAppId: appId, detailView: { type: 'activity-thread', appId }, pendingActivityScrollId: entryId }),
-
-  consumePendingActivityScrollId: () => {
-    const id = get().pendingActivityScrollId
-    if (id) set({ pendingActivityScrollId: null })
-    return id
-  },
-
   openSessionDetail: (appId, runId, sessionKey) =>
     set({ selectedAppId: appId, detailView: { type: 'session-detail', appId, runId, sessionKey } }),
 
@@ -352,7 +331,6 @@ export const useAppsPageStore = create<AppsPageState>()(
     set({
       selectedAppId: null,
       detailView: null,
-      pendingActivityScrollId: null,
       pendingConfigScrollId: null,
       initialAppId: null,
       showInstallDialog: false,

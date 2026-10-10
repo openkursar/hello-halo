@@ -860,10 +860,13 @@ export default function App() {
   const showToast = useNotificationStore((s) => s.show)
   useEffect(() => {
     const unsub = api.onNotificationToast((data) => {
-      const { id, title, body, bodyFormat, variant, duration, appId, action } = data as ToastPayload
+      const { id, title, body, bodyFormat, variant, duration, appId, entryId, teamId, epochId, runId, action } = data as ToastPayload
 
       // A declared link action wins over app deep-navigation: the sender asked
-      // for a specific destination, which appId can only approximate.
+      // for a specific destination, which appId can only approximate. Routing
+      // through the same resolver as the OS-notification click keeps the two
+      // paths landing in the same place — the exact request, not whatever tab
+      // this app was last left on.
       const resolvedAction = action
         ? { label: action.label, onClick: () => { window.open(action.url, '_blank') } }
         : appId
@@ -871,8 +874,7 @@ export default function App() {
             label: t('View'),
             onClick: () => {
               trackNavigate('apps', 'notification', 'notification')
-              setInitialAppId(appId)
-              navigate('apps')
+              void openWorkNotification({ appId, entryId, teamId, epochId, runId })
             },
           }
           : undefined
@@ -888,7 +890,7 @@ export default function App() {
       })
     })
     return () => { unsub() }
-  }, [showToast, setInitialAppId, navigate, t])
+  }, [showToast, t])
 
   // Handle search result navigation from highlight bar
   // This handles the complete navigation flow when user clicks [↑][↓] or uses arrow keys

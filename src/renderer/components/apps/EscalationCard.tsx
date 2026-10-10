@@ -93,6 +93,9 @@ export function EscalationCard({ entry, appId, onResolved, compactResolved = fal
   </div>
   return <div className="space-y-4 rounded-xl border border-halo-warning/30 bg-halo-warning/5 p-4">
     <MarkdownRenderer content={current.content.summary} className="text-sm font-medium" />
+    {/* A stale deadline carried from before a review was required would contradict
+        the new-deadline prompt below it, so it only shows once review is settled. */}
+    {current.content.deadlineAt && !current.content.deadlineReviewRequired && <p className="text-xs text-muted-foreground">{t('Due {{date}}', { date: new Date(current.content.deadlineAt).toLocaleString() })}</p>}
     {current.content.dataPath && <button onClick={async () => {
       setFileError(false)
       try {

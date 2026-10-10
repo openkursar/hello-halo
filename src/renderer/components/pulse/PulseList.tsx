@@ -29,6 +29,7 @@ import { useTaskItems } from '../../stores/task.store'
 import { useTeamStore } from '../../stores/team.store'
 import { useAppStore } from '../../stores/app.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
+import { openWorkNotification } from '../../utils/people-navigation'
 import { navigateToAppChat, navigateToConversation } from '../../utils/conversation-navigation'
 import { AutomationAvatar } from '../apps/AutomationAvatar'
 import { markEntry, trackHome, trackNavigate } from '../../services/home-telemetry'
@@ -104,17 +105,18 @@ function navigateToTeam(teamId: string) {
 /**
  * Navigate to a digital human's activity thread. Every automation status
  * lands here (including 'running', which already surfaces a live "Working…"
- * card with its own link into session detail) — a `waiting` item additionally
- * deep-links to its EscalationCard when one is pending.
+ * card with its own link into session detail) — a `waiting` item instead
+ * deep-links to its pending request via the same resolver a notification
+ * click uses, which also sends a team-sourced one to the team workbench.
  */
 function navigateToAutomation(item: TaskItem) {
   if (!item.appId) return
-  useAppsPageStore.getState().setCurrentTab('my-digital-humans')
   if (item.status === 'waiting' && item.escalationId) {
-    useAppsPageStore.getState().openActivityThreadAt(item.appId, item.escalationId)
-  } else {
-    useAppsPageStore.getState().openActivityThread(item.appId)
+    void openWorkNotification({ appId: item.appId, entryId: item.escalationId })
+    return
   }
+  useAppsPageStore.getState().setCurrentTab('my-digital-humans')
+  useAppsPageStore.getState().openActivityThread(item.appId)
   useAppStore.getState().navigate('apps')
 }
 
