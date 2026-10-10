@@ -1,6 +1,6 @@
 /** Browser page state and policy, independent of the guest's DOM host. */
 
-import { BrowserWindow, type WebContents } from 'electron'
+import { BrowserWindow, session, type WebContents } from 'electron'
 import { browserHostManager, captureBrowserPage } from './browser-host'
 import { isUrlAllowedByPolicy } from './browser-policy.service'
 import { resolveUserAgent } from './user-agent-resolver'
@@ -1042,3 +1042,16 @@ class BrowserPageManager {
 
 // Singleton instance
 export const browserViewManager = new BrowserPageManager()
+
+let browserDataCleanup: Promise<void> | null = null
+
+/** Clears only the shared browser session; concurrent callers share completion or failure. */
+export function clearBrowserData(): Promise<void> {
+  if (browserDataCleanup) return browserDataCleanup
+  browserDataCleanup = (async () => {
+    const browserSession = session.fromPartition('persist:browser')
+    await browserSession.clearStorageData()
+    await browserSession.clearCache()
+  })().finally(() => { browserDataCleanup = null })
+  return browserDataCleanup
+}

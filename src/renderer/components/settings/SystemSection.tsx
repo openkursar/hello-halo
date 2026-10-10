@@ -3,7 +3,7 @@
  * Manages permissions, auto-launch, logs, and diagnostics
  */
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import {
   FolderOpen, Activity, Loader2, AlertTriangle, CheckCircle,
   XOctagon, ChevronRight, Copy, FileText, RotateCcw, RefreshCw, Save, Power
@@ -27,6 +27,36 @@ interface SystemSectionProps {
 export function SystemSection({ config, setConfig }: SystemSectionProps) {
   const { t } = useTranslation()
   const { showConfirm, DialogComponent: RestartDialogComponent } = useConfirmDialog()
+
+  const { showConfirm: confirmBrowserCleanup, DialogComponent: BrowserCleanupDialog } = useConfirmDialog()
+  const browserCleanupPending = useRef(false)
+  const [clearingBrowserData, setClearingBrowserData] = useState(false)
+  const [browserCleanupResult, setBrowserCleanupResult] = useState<'success' | 'error' | null>(null)
+
+  const handleClearBrowserData = async () => {
+    if (browserCleanupPending.current) return
+    browserCleanupPending.current = true
+    try {
+      const confirmed = await confirmBrowserCleanup({
+        title: t('Clear browser data?'),
+        message: t('This clears cookies, site storage and cache for the shared browser. ALL shared browser site logins, including those used by digital humans, will be signed out. Halo data and other browser sessions are kept. This cannot be undone.'),
+        confirmLabel: t('Clear browser data'),
+        cancelLabel: t('Cancel'),
+        variant: 'danger',
+      })
+      if (!confirmed) return
+      setClearingBrowserData(true)
+      setBrowserCleanupResult(null)
+      const result = await api.clearBrowserData()
+      setBrowserCleanupResult(result.success ? 'success' : 'error')
+    } catch (error) {
+      console.error('[SystemSection] Browser cleanup request failed:', error)
+      setBrowserCleanupResult('error')
+    } finally {
+      browserCleanupPending.current = false
+      setClearingBrowserData(false)
+    }
+  }
 
   // Build-time security policy. Used to hide tunnel-related diagnostics
   // rows when the tunnel feature is disabled by product config.
@@ -323,6 +353,33 @@ export function SystemSection({ config, setConfig }: SystemSectionProps) {
       {/* System Section */}
       <section id="system" className="bg-card rounded-xl border border-border-faint p-6">
         <h2 className="text-lg font-medium mb-4">{t('System')}</h2>
+
+        <div className="border-b border-border pb-4 mb-4">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+            <div className="flex-1 min-w-0">
+              <h3 className="font-medium">{t('Browser data')}</h3>
+              <p className="text-sm text-muted-foreground mt-1">
+                {t('Clear cookies, site storage and cache for all sites in the shared browser, including sites used by digital humans.')}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleClearBrowserData}
+              disabled={clearingBrowserData}
+              className="w-full sm:w-auto shrink-0 px-4 py-2 text-sm rounded-lg border border-border text-destructive hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {clearingBrowserData ? t('Clearing browser data...') : t('Clear browser data')}
+            </button>
+          </div>
+          {browserCleanupResult && (
+            <p role={browserCleanupResult === 'error' ? 'alert' : 'status'} className="mt-3 text-sm text-muted-foreground">
+              {browserCleanupResult === 'success'
+                ? t('Browser data cleared.')
+                : t('Could not clear all browser data. Please try again.')}
+            </p>
+          )}
+          {BrowserCleanupDialog}
+        </div>
 
         <div className="space-y-4">
           {/* Auto Launch */}

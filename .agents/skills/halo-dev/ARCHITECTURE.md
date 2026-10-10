@@ -927,6 +927,11 @@ before the main window loads; the hidden host uses a minimal sandbox-compatible
 preload with this protocol alone. Guest attachment is authorized in main; guests
 never receive Halo's preload. The `browser:page-gone` event tells the main
 renderer that a page was closed or lost, so Canvas can drop or recreate its tab.
+`browser:clear-data` is a desktop-only typed request from System Settings. The
+public browser service clears storage and HTTP cache only in `persist:browser`,
+shares concurrent cleanup requests and propagates failure. Settings confirms the
+all-site logout (including digital humans) before requesting cleanup; transport
+only forwards the request. No startup cleanup or remote endpoint is registered.
 Existing `browser:*` business methods retain their legacy names and response
 shapes. The fullscreen chat capsule is ordinary DOM.
 

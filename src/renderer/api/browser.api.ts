@@ -1,3 +1,5 @@
+import type { RpcClient } from '../../shared/rpc/define'
+import type { browserRpc } from '../../shared/rpc/contracts/browser.contract'
 import type { BrowserPageGone } from '../../shared/types/browser-host'
 import { ensureExtendedServicesReady } from './bootstrap-ready'
 /**
@@ -14,6 +16,11 @@ import type {
 import type { AIBrowserActiveView, AIBrowserConversationReleased, AIBrowserLivePage, AIBrowserStopResult, AIBrowserViewGone } from '../../shared/types/ai-browser'
 
 export const browserApi = {
+  clearBrowserData: (async () => {
+    if (!isElectron()) return { success: false, error: 'Only available in desktop app' }
+    return window.halo.clearBrowserData()
+  }) satisfies RpcClient<typeof browserRpc>['clearBrowserData'],
+
   // ===== Browser (Embedded Browser for Content Canvas) =====
   // Note: Browser features only available in desktop app (not remote mode)
 
