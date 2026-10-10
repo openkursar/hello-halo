@@ -42,7 +42,7 @@ jobs:
       # before the native rebuild walks the dependency tree.
       - name: Install dependencies
         run: |
-          npm ci --ignore-scripts
+          npm ci --ignore-scripts --legacy-peer-deps
           if [ ! -e node_modules/@hello-halo/agent-sdk ]; then rm -f node_modules/@hello-halo/agent-sdk; fi
           node scripts/postinstall.mjs
 
