@@ -267,4 +267,24 @@ describe('team invite generation + join (P2)', () => {
     })
     expect(res).toEqual({ success: false, error: 'AUTH_REJECTED' })
   })
+
+  it('propagates the version-mismatch detail on a VERSION_INCOMPATIBLE failure', async () => {
+    appMap.set('app-1', { id: 'app-1', spaceId: 'space-1', spec: { name: 'Analyst' } })
+    fedManager.joinOffice.mockResolvedValue({
+      ok: false,
+      reason: 'VERSION_INCOMPATIBLE',
+      detail: { direction: 'peer', peerName: 'Alice' },
+    })
+    const res = await joinTeamOffice({
+      officeId: TEAM_ID,
+      serverUrl: 'http://host:3017',
+      inviteToken: 'tok',
+      bringAppIds: ['app-1'],
+    })
+    expect(res).toEqual({
+      success: false,
+      error: 'VERSION_INCOMPATIBLE',
+      detail: { direction: 'peer', peerName: 'Alice' },
+    })
+  })
 })

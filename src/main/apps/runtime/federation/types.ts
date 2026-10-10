@@ -89,6 +89,13 @@ export interface JoinReject {
     | 'OFFICE_MISMATCH'
     | 'MALFORMED'
     | 'VERSION_INCOMPATIBLE'
+  /**
+   * The rejecting side's own FEDERATION_PROTOCOL_VERSION. Lets a joiner refused
+   * as VERSION_INCOMPATIBLE tell which side is actually behind instead of just
+   * "not equal". Absent on a reject from an older build that predates this
+   * field — callers must treat that as "direction unknown", never as a guess.
+   */
+  pv?: number
 }
 
 /**

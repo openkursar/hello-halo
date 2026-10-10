@@ -10,6 +10,7 @@ import type { TeamStore } from '../apps/team'
 import { getFederationManager } from '../apps/runtime/federation/manager'
 import { getFederationStore } from '../apps/federation'
 import { joinTeamOffice } from '../controllers/team-invite.controller'
+import type { TeamVersionMismatch } from '../../shared/apps/team-types'
 
 /**
  * Owned offices (host_node_id null) are re-hosted directly; joined offices are
@@ -23,7 +24,7 @@ export function recoverPersistedOffices(
   teamStore: TeamStore | null,
   opts: {
     /** A re-join refused because this machine and the office run different Halo versions. */
-    onUpdateRequired?: (officeId: string) => void
+    onUpdateRequired?: (officeId: string, detail?: TeamVersionMismatch) => void
   } = {}
 ): void {
   if (!teamStore) {
@@ -61,7 +62,7 @@ export function recoverPersistedOffices(
       .then((res) => {
         // Unlike other refusals, waiting cannot fix this one, and at boot there is
         // no join dialog to say so: the user must hear it now.
-        if (!res.success && res.error === 'VERSION_INCOMPATIBLE') opts.onUpdateRequired?.(conn.officeId)
+        if (!res.success && res.error === 'VERSION_INCOMPATIBLE') opts.onUpdateRequired?.(conn.officeId, res.detail)
         return res.success
           ? console.log(`[Bootstrap] Re-joined office=${conn.officeId}`)
           : // A re-join failure is NOT a safe purge trigger: AUTH_REJECTED here fires

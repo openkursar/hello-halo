@@ -54,7 +54,7 @@ import { createCtrlFeed, type CtrlFeed } from './ctrl-feed'
 import { createSessionFeed, historyCacheKey, isSessionFeedFrame, type SessionFeed } from './session-feed'
 import { isFeedSyncFrame, parseFeedIdKey, type FeedSyncFrame } from './log/types'
 import { getFeedStore, type AuthorityStore, type FeedStore } from '../../federation'
-import { SELF_NODE_ID, type TeamMemberRuntimeStatus, type TeamStatus } from '../../../../shared/apps/team-types'
+import { SELF_NODE_ID, type TeamMemberRuntimeStatus, type TeamStatus, type TeamVersionMismatch } from '../../../../shared/apps/team-types'
 import { parseTeamSessionKey } from '../../../../shared/apps/im-keys'
 import type {
   FederationMessage,
@@ -341,9 +341,10 @@ export interface FederationManagerDeps {
    * Joiner role: a recovery re-join was rejected AFTER the initial join had
    * settled — this node lost office membership (e.g. the authority no longer
    * recognizes it). Fired once per loss (re-armed by a later grant) so
-   * bootstrap can tell the user instead of failing silently.
+   * bootstrap can tell the user instead of failing silently. `detail` is set
+   * only when `reason` is VERSION_INCOMPATIBLE and direction was resolvable.
    */
-  onOfficeAccessLost?: (officeId: string, reason: string) => void
+  onOfficeAccessLost?: (officeId: string, reason: string, detail?: TeamVersionMismatch) => void
   /**
    * Transport-only re-form seam: resolve a sender to a newly-elected authority
    * after a host loss. See {@link PeerDialer}. Absent → {@link NO_PEER_DIALER}.
@@ -387,6 +388,29 @@ export interface JoinOfficeParams {
 }
 
 /**
+ * Resolves a VERSION_INCOMPATIBLE reject into which side is behind and, when
+ * it is the team's current host, that person's display name — read from this
+ * node's last-synced roster, since the reject frame itself carries no
+ * identity. Undefined when the peer did not report its own version (an older
+ * build that predates the `pv` field on join-reject/join-grant). Takes
+ * `teamStore` explicitly (rather than closing over `deps`) so it is a plain
+ * function a unit test can call directly, with no coordinator/socket needed.
+ */
+export function resolveVersionMismatchDetail(
+  teamStore: TeamStore,
+  officeId: string,
+  peerPv: number | undefined
+): TeamVersionMismatch | undefined {
+  if (peerPv === undefined || peerPv === FEDERATION_PROTOCOL_VERSION) return undefined
+  if (peerPv > FEDERATION_PROTOCOL_VERSION) return { direction: 'self' }
+  const hostNodeId = teamStore.getTeamById(officeId)?.hostNodeId
+  const peerName = hostNodeId
+    ? teamStore.listMembersByTeam(officeId).find((m) => m.ownerNodeId === hostNodeId)?.ownerDisplayName ?? null
+    : null
+  return { direction: 'peer', peerName }
+}
+
+/**
  * Result of a member-history fetch. `stale` is true only when the messages are a
  * cached copy served because the owner was unreachable (or went silent mid-fetch)
  * — they may be missing the owner's latest messages, and the UI must say so. A
@@ -403,7 +427,7 @@ export interface FederationManager {
   /** Route an inbound host-side federation frame to the office's host coordinator. */
   handleHostInbound(ctx: { clientId: string; officeId: string; frame: unknown }): void
   /** Join a remote office over an outbound WS client; resolve on grant/reject/timeout. */
-  joinOffice(params: JoinOfficeParams): Promise<{ ok: boolean; reason?: string }>
+  joinOffice(params: JoinOfficeParams): Promise<{ ok: boolean; reason?: string; detail?: TeamVersionMismatch }>
   /** Stop + tear down a hosted or joined office. */
   leaveOffice(officeId: string): void
   /**
@@ -2137,7 +2161,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     authority?.handle(from, frame)
   }
 
-  async function joinOffice(params: JoinOfficeParams): Promise<{ ok: boolean; reason?: string }> {
+  async function joinOffice(params: JoinOfficeParams): Promise<{ ok: boolean; reason?: string; detail?: TeamVersionMismatch }> {
     const { officeId, serverUrl, credentialToken, selfContext, bringMembers } = params
 
     // A re-join replaces any prior client/coordinator for the same office. This
@@ -2145,13 +2169,13 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     // new grant), so use teardown rather than leaveOffice.
     teardownOffice(officeId)
 
-    return await new Promise<{ ok: boolean; reason?: string }>((resolve) => {
+    return await new Promise<{ ok: boolean; reason?: string; detail?: TeamVersionMismatch }>((resolve) => {
       let settled = false
       let authedOnce = false
       // One access-lost notice per loss: re-armed by a later grant, so a flap
       // that recovers stays quiet while a real loss is never silent.
       let accessLostNotified = false
-      const finish = (result: { ok: boolean; reason?: string }) => {
+      const finish = (result: { ok: boolean; reason?: string; detail?: TeamVersionMismatch }) => {
         if (settled) return
         settled = true
         clearTimeout(timer)
@@ -2357,16 +2381,17 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
           // grant time.)
           finish({ ok: true })
         },
-        onJoinReject: (reason) => {
+        onJoinReject: (reason, peerPv) => {
           console.warn(`${LOG_TAG} join rejected office=${officeId} reason=${reason}`)
+          const detail = reason === 'VERSION_INCOMPATIBLE' ? resolveVersionMismatchDetail(deps.teamStore, officeId, peerPv) : undefined
           // A reject after the join settled is a lost membership (the authority
           // no longer recognizes this node) — surface it instead of leaving the
           // user with a silently wrong presence view.
           if (settled && !accessLostNotified) {
             accessLostNotified = true
-            deps.onOfficeAccessLost?.(officeId, reason)
+            deps.onOfficeAccessLost?.(officeId, reason, detail)
           }
-          finish({ ok: false, reason })
+          finish({ ok: false, reason, detail })
         },
         onWake: deps.runLocalTurn
           ? (request) => deps.runLocalTurn!(request)

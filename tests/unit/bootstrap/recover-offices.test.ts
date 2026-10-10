@@ -177,16 +177,21 @@ describe('startup office recovery (H-1)', () => {
       { officeId: 'office-old', serverUrl: 'http://host:3017', inviteToken: 't1', bringAppIds: ['app-1'], createdAt: 1, updatedAt: 1 },
       { officeId: 'office-down', serverUrl: 'http://host:3018', inviteToken: 't2', bringAppIds: ['app-1'], createdAt: 2, updatedAt: 2 },
     ]
+    const detail = { direction: 'peer' as const, peerName: 'Alice' }
     fedManager.joinOffice.mockImplementation(async (req: { officeId: string }) =>
-      req.officeId === 'office-old' ? { ok: false, reason: 'VERSION_INCOMPATIBLE' } : { ok: false, reason: 'AUTH_REJECTED' }
+      req.officeId === 'office-old'
+        ? { ok: false, reason: 'VERSION_INCOMPATIBLE', detail }
+        : { ok: false, reason: 'AUTH_REJECTED' }
     )
-    const updateRequired: string[] = []
+    const updateRequired: Array<{ officeId: string; detail: unknown }> = []
 
-    recoverPersistedOffices(fakeTeamStore([]), { onUpdateRequired: (officeId) => updateRequired.push(officeId) })
+    recoverPersistedOffices(fakeTeamStore([]), {
+      onUpdateRequired: (officeId, detail) => updateRequired.push({ officeId, detail }),
+    })
 
-    await vi.waitFor(() => expect(updateRequired).toEqual(['office-old']))
+    await vi.waitFor(() => expect(updateRequired).toEqual([{ officeId: 'office-old', detail }]))
     await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(updateRequired).toEqual(['office-old'])
+    expect(updateRequired).toEqual([{ officeId: 'office-old', detail }])
   })
 
   it('a connection whose appIds no longer resolve does not abort the others', async () => {

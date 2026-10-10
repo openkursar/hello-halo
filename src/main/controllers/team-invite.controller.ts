@@ -26,7 +26,7 @@ import { sendToRenderer } from '../foundation/window.service'
 import { TEAM_EVENTS } from '../../shared/apps/team-types'
 import type { JoinMember } from '../apps/runtime/federation/types'
 import type { OfficeScope } from '../apps/federation/index'
-import type { TeamUpdatedEvent } from '../../shared/apps/team-types'
+import type { TeamUpdatedEvent, TeamVersionMismatch } from '../../shared/apps/team-types'
 
 const LOG_TAG = '[TeamInvite]'
 
@@ -124,7 +124,7 @@ export interface JoinOfficeInput {
  */
 export async function joinTeamOffice(
   input: JoinOfficeInput
-): Promise<{ success: true } | { success: false; error: string }> {
+): Promise<{ success: true } | { success: false; error: string; detail?: TeamVersionMismatch }> {
   const appManager = getAppManager()
   const bringMembers: JoinMember[] = []
   for (const appId of input.bringAppIds) {
@@ -155,7 +155,7 @@ export async function joinTeamOffice(
     bringMembers,
   })
 
-  return result.ok ? { success: true } : { success: false, error: result.reason ?? 'JOIN_FAILED' }
+  return result.ok ? { success: true } : { success: false, error: result.reason ?? 'JOIN_FAILED', detail: result.detail }
 }
 
 /**
