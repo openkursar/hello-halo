@@ -6,7 +6,7 @@ import { tags } from '@lezer/highlight'
 
 const ADD = 'var(--diff-add)'
 const DEL = 'var(--diff-del)'
-const MONO = "'SF Mono', 'Fira Code', 'JetBrains Mono', Menlo, Monaco, 'Courier New', monospace"
+const MONO = "'SF Mono', 'Fira Code', 'JetBrains Mono', Menlo, Monaco, 'Cascadia Mono', Consolas, 'Courier New', monospace"
 
 export const diffHighlightStyle = HighlightStyle.define([
   { tag: [tags.name, tags.operator, tags.punctuation, tags.meta], color: 'hsl(var(--foreground))' },

@@ -165,7 +165,10 @@ function commonExtensions(spec: DiffEditorSpec): Extension[] {
     spec.lineNumbers ? lineNumbers() : [],
     highlightSpecialChars(),
     drawSelection(),
-    EditorView.lineWrapping,
+    // No lineWrapping: off-screen wrapped lines are only height-estimated, the
+    // estimate undercounts wide CJK glyphs, and the shortfall keeps the tail of
+    // a long diff out of the viewport forever. Unwrapped lines are one uniform
+    // height, so the estimates are exact; long lines scroll horizontally.
     syntaxHighlighting(diffHighlightStyle),
     language ?? [],
     markField,
