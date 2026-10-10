@@ -19,6 +19,8 @@ export function resolveScope(stored: StoredCompareScope, review: GitReviewRecord
       return review ? { kind: 'since-review', snapshot: review.snapshot } : { kind: 'uncommitted' }
     case 'revision':
       return { kind: 'revision', revision: stored.revision, mergeBase: stored.mergeBase }
+    case 'commit':
+      return { kind: 'commit', revision: stored.revision }
     default:
       return { kind: stored.kind }
   }
@@ -40,6 +42,7 @@ export function scopeLabel(scope: StoredCompareScope | GitCompareScope, t: Trans
     case 'staged': return t('Staged changes')
     case 'since-review': return t('Since last review')
     case 'revision': return t('Compared with {{revision}}', { revision: revisionName(scope.revision) })
+    case 'commit': return t('Commit {{revision}}', { revision: revisionName(scope.revision) })
   }
 }
 
@@ -50,6 +53,7 @@ export function scopeShortLabel(scope: StoredCompareScope | GitCompareScope, t: 
     case 'staged': return t('Staged')
     case 'since-review': return t('Since review')
     case 'revision': return revisionName(scope.revision)
+    case 'commit': return revisionName(scope.revision)
   }
 }
 
@@ -58,6 +62,7 @@ export function scopeKey(scope: GitCompareScope): string {
   switch (scope.kind) {
     case 'since-review': return `since-review:${scope.snapshot}`
     case 'revision': return `revision:${scope.mergeBase ? 'base' : 'tip'}:${scope.revision}`
+    case 'commit': return `commit:${scope.revision}`
     default: return scope.kind
   }
 }
@@ -65,5 +70,6 @@ export function scopeKey(scope: GitCompareScope): string {
 export function sameStoredScope(a: StoredCompareScope, b: StoredCompareScope): boolean {
   if (a.kind !== b.kind) return false
   if (a.kind === 'revision' && b.kind === 'revision') return a.revision === b.revision && a.mergeBase === b.mergeBase
+  if (a.kind === 'commit' && b.kind === 'commit') return a.revision === b.revision
   return true
 }

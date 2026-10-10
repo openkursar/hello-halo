@@ -1,5 +1,5 @@
 /**
- * Change lists for the four compare scopes.
+ * Change lists for the five compare scopes.
  *
  * Every scope is one tree-ish (`beforeRevision`) against the working tree or
  * the index, read with `--raw --numstat` in a single run, plus the untracked
@@ -47,6 +47,8 @@ export function assertCompareScope(value: unknown): GitCompareScope {
     case 'revision':
       if (typeof scope.mergeBase !== 'boolean') throw invalid('A revision scope needs mergeBase')
       return { kind: 'revision', revision: assertRevisionSyntax(scope.revision), mergeBase: scope.mergeBase }
+    case 'commit':
+      return { kind: 'commit', revision: assertRevisionSyntax(scope.revision) }
     default:
       throw invalid('Unknown compare scope')
   }
@@ -166,6 +168,16 @@ export async function readChangeList(ctx: RepoContext, scope: GitCompareScope): 
       const commit = await resolveCommit(ctx, scope.revision)
       beforeRevision = scope.mergeBase ? await resolveMergeBase(ctx, commit, scope.revision) : commit
       diff = await againstWorkingTree(ctx, beforeRevision)
+      break
+    }
+    case 'commit': {
+      const commit = await resolveCommit(ctx, scope.revision)
+      beforeRevision = (await readText(ctx, ['rev-parse', '-q', '--verify', `${commit}^`], { okExitCodes: [0, 1] })).trim()
+      diff = await diffFiles(ctx, beforeRevision
+        ? ['diff-tree', '-r', ...DIFF_ARGS, beforeRevision, commit, '--']
+        // A root commit has no parent; --root diffs it against the empty tree.
+        : ['diff-tree', '-r', '--root', ...DIFF_ARGS, commit, '--'])
+      if (!beforeRevision) beforeRevision = await emptyTree(ctx)
       break
     }
   }

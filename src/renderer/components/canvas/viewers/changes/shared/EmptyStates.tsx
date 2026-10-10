@@ -40,7 +40,8 @@ export function NoChangesState({ scope }: { scope: StoredCompareScope }) {
   const title = scope.kind === 'staged' ? t('Nothing staged')
     : scope.kind === 'since-review' ? t('No changes since the last review')
       : scope.kind === 'revision' ? t('No differences from {{revision}}', { revision: revisionName(scope.revision) })
-        : t('No changes')
+        : scope.kind === 'commit' ? t('Empty commit')
+          : t('No changes')
   return (
     <Shell icon={<CheckCircle2 size={20} />} title={title}>
       {scope.kind === 'uncommitted' && <p className="text-[13px] text-subtle-foreground">{t('The working tree matches HEAD.')}</p>}

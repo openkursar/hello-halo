@@ -6,7 +6,7 @@
  */
 
 import { useRef, useState, type KeyboardEvent } from 'react'
-import { AlertCircle, ArrowDown, ArrowUp, Check, ChevronDown, GitBranch, Loader2, UploadCloud, X } from 'lucide-react'
+import { AlertCircle, ArrowDown, ArrowUp, Check, ChevronDown, GitBranch, GitCommitHorizontal, Loader2, UploadCloud, X } from 'lucide-react'
 import type { GitRepository } from '../../../../../../shared/types/git'
 import { useTranslation } from '../../../../../i18n'
 import type { GitErrorText } from '../state/git-errors'
@@ -16,6 +16,8 @@ import { IconButton, isCoarsePointer, isMacPlatform } from '../shared/parts'
 interface CommitBoxProps {
   repo: GitRepository
   stagedCount: number
+  /** Subject of the commit a graph click is comparing, if that is the scope. */
+  viewedSubject?: string
   /** The draft kept for the tab, shown when the box appears. */
   initialMessage: string
   /** Every edit of the draft, to keep it for the tab; the view does not re-render for it. */
@@ -30,7 +32,7 @@ interface CommitBoxProps {
 
 const COMMIT_KEY = isMacPlatform ? '⌘↵' : 'Ctrl+Enter'
 
-export function CommitBox({ repo, stagedCount, initialMessage, onDraftChange, operation, onCommit, onSync, error, onDismissError }: CommitBoxProps) {
+export function CommitBox({ repo, stagedCount, viewedSubject, initialMessage, onDraftChange, operation, onCommit, onSync, error, onDismissError }: CommitBoxProps) {
   const { t } = useTranslation()
   const [message, setMessage] = useState(initialMessage)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -62,6 +64,12 @@ export function CommitBox({ repo, stagedCount, initialMessage, onDraftChange, op
 
   return (
     <div className="flex flex-col gap-1.5 border-t border-border p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+      {viewedSubject && (
+        <div className="flex min-h-[20px] items-center gap-1.5 text-[12px] text-muted-foreground">
+          <GitCommitHorizontal size={13} className="shrink-0 text-faint-foreground" aria-hidden />
+          <span className="min-w-0 flex-1 truncate" title={viewedSubject}>{viewedSubject}</span>
+        </div>
+      )}
       <div className="flex min-h-[24px] items-center gap-1.5 text-[12px] text-muted-foreground">
         <GitBranch size={13} className="shrink-0 text-faint-foreground" aria-hidden />
         <span className="min-w-0 flex-1 truncate" title={repo.branch ?? undefined}>

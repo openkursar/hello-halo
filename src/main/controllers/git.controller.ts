@@ -13,6 +13,7 @@ import {
   createSnapshot,
   discardPaths,
   getChangeList,
+  getCommitGraph,
   getWorkingTreeStatus,
   isGitError,
   listRepositories,
@@ -25,11 +26,13 @@ import {
 import type { GitRpcResponse } from '../../shared/rpc/contracts/git.contract'
 import type {
   GitChangeList,
+  GitCommitGraph,
   GitCommitRequest,
   GitCommitResult,
   GitCompareScope,
   GitFileContents,
   GitFileContentsRequest,
+  GitGraphQuery,
   GitRepositoryList,
   GitRevisionOption,
   GitSnapshot,
@@ -69,6 +72,10 @@ export function getGitFileContents(spaceId: unknown, repoRoot: unknown, request:
 
 export function listGitRevisionOptions(spaceId: unknown, repoRoot: unknown): Promise<GitRpcResponse<GitRevisionOption[]>> {
   return respond('revision options', () => listRevisionOptions(spaceId as string, repoRoot as string))
+}
+
+export function getGitCommitGraph(spaceId: unknown, repoRoot: unknown, query: unknown): Promise<GitRpcResponse<GitCommitGraph>> {
+  return respond('commit graph', () => getCommitGraph(spaceId as string, repoRoot as string, query as GitGraphQuery))
 }
 
 export function stageGitPaths(spaceId: unknown, repoRoot: unknown, paths: unknown): Promise<GitRpcResponse<void>> {
