@@ -69,13 +69,14 @@ export async function navigateToRemoteSettings(window: Page) {
   await expect(window.locator('#remote').getByRole('heading', { name: 'Remote Access', exact: true })).toBeVisible()
 }
 
-/** Click the visible switch label and verify its asynchronous state change. */
+/** Toggle remote access and wait for the accessible state to change. */
 export async function clickRemoteToggle(window: Page) {
-  const checkbox = window.locator('#remote input[type="checkbox"]')
-  const enabled = await checkbox.isChecked()
-  await expect(checkbox).toBeEnabled()
-  await window.locator('#remote label').filter({ has: window.locator('input[type="checkbox"]') }).click()
-  await expect(checkbox).toBeChecked({ checked: !enabled })
+  const toggle = window.locator('#remote').getByRole('switch')
+  await expect(toggle).toHaveAttribute('aria-checked', /^(true|false)$/)
+  const enabled = await toggle.getAttribute('aria-checked') === 'true'
+  await expect(toggle).toBeEnabled()
+  await toggle.click()
+  await expect(toggle).toHaveAttribute('aria-checked', String(!enabled))
 }
 
 /**
