@@ -100,7 +100,13 @@ export interface FederationCoordinatorDeps {
    * as a VERSION_INCOMPATIBLE reject instead.
    */
   onJoinGrant?: (assignedNodeId: NodeId) => void
-  onJoinReject?: (reason: JoinReject['reason']) => void
+  /**
+   * `peerPv` is the other side's own FEDERATION_PROTOCOL_VERSION when the
+   * reason is VERSION_INCOMPATIBLE (from the reject frame's `pv`, or from the
+   * mismatched grant's `pv` when we refused their grant) — undefined for every
+   * other reason, and also undefined if the other side predates this field.
+   */
+  onJoinReject?: (reason: JoinReject['reason'], peerPv?: number) => void
   /**
    * Host-side notification of a brought member's spaceId, when the joiner
    * supplied one. The spaceId is not persisted on the member row (no schema
@@ -430,6 +436,9 @@ export function createFederationCoordinator(
       kind: 'join-reject',
       officeId,
       reason,
+      // Always this node's own version (mirrors JoinGrant's unconditional pv),
+      // not just on VERSION_INCOMPATIBLE — one shape, no reason-conditional branch.
+      pv: FEDERATION_PROTOCOL_VERSION,
     })
   }
 
@@ -1000,7 +1009,7 @@ export function createFederationCoordinator(
         if (!isSameProtocol(msg.pv)) {
           console.warn(`${LOG_TAG} join grant refused: authority protocol ${msg.pv} ≠ ${FEDERATION_PROTOCOL_VERSION} office=${officeId}`)
           joinRejectedTerminally = true
-          onJoinReject?.('VERSION_INCOMPATIBLE')
+          onJoinReject?.('VERSION_INCOMPATIBLE', msg.pv)
           break
         }
         console.log(`${LOG_TAG} join granted assignedNodeId=${msg.assignedNodeId}`)
@@ -1029,7 +1038,7 @@ export function createFederationCoordinator(
         // Latch (see joinRejectedTerminally above); every reject reason is
         // terminal for the request as sent.
         joinRejectedTerminally = true
-        onJoinReject?.(msg.reason)
+        onJoinReject?.(msg.reason, msg.pv)
         break
       case 'heartbeat':
         handleHeartbeat(msg.fromNode, msg.ts)

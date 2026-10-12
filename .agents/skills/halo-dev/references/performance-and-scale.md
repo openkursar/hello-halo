@@ -143,8 +143,8 @@
 ## 6. Runtime, processes, and resources
 
 - One engine session = one child process. Every session entry is bounded by
-  `apps/runtime/session-budget` through the engine's resident limit (default 10, 5 under memory
-  pressure, user-adjustable). Eviction never touches a busy session and never refuses a turn;
+  `apps/runtime/session-budget` through the engine's resident limit (default 20, 10 under system
+  memory pressure, user-adjustable). Eviction never touches a busy session and never refuses a turn;
   an evicted session resumes on its next turn.
 - ⚙ Health sampling (`services/health`) is the only producer of resource numbers; budgets,
   degradation and telemetry consume it. Memory pressure is memory-only (available RAM — on

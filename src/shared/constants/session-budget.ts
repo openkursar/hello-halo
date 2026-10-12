@@ -4,7 +4,7 @@
  * least-recently-used first and resume transparently on their next turn.
  */
 
-export const DEFAULT_MAX_RESIDENT_SESSIONS = 10
+export const DEFAULT_MAX_RESIDENT_SESSIONS = 20
 export const MIN_MAX_RESIDENT_SESSIONS = 2
 export const MAX_MAX_RESIDENT_SESSIONS = 50
 

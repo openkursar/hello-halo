@@ -30,14 +30,17 @@ export function ActivityThread({ appId }: { appId: string }) {
   const [source, setSource] = useState('all')
   const [initialLoading, setInitialLoading] = useState(true)
   const [historySnapshot, setHistorySnapshot] = useState<string[] | null>(null)
-  const [expanded, setExpanded] = useState<string | null>(null)
+  // The entry a notification/task-panel click deep-linked to: pulled to the
+  // front of the visible slice and scrolled into view below. The card itself
+  // is always open now, so this no longer toggles anything.
+  const [focusedId, setFocusedId] = useState<string | null>(null)
   const [pendingLimit, setPendingLimit] = useState(5)
   const [loading, setLoading] = useState(false)
   const scroll = useRef<HTMLDivElement>(null)
   const refresh = () => Promise.all([useAppsStore.getState().loadActivity(appId), useAppsStore.getState().loadPending(appId), useAppsStore.getState().loadAppState(appId)])
   useEffect(() => {
     let disposed = false
-    setInitialLoading(true); setHistorySnapshot(null); setExpanded(null); setPendingLimit(5)
+    setInitialLoading(true); setHistorySnapshot(null); setFocusedId(null); setPendingLimit(5)
     void refresh().finally(() => { if (!disposed) setInitialLoading(false) })
     const off = api.onAppEscalationResolved(event => {
       const payload = event as { appId?: string }
@@ -54,7 +57,7 @@ export function ActivityThread({ appId }: { appId: string }) {
       if (disposed) return
       if (!result.success || !result.data) throw new Error(result.error ?? 'Requested record unavailable')
       useAppsStore.getState().handleNewActivityEntry(appId, result.data)
-      setExpanded(focusEntry.entryId)
+      setFocusedId(focusEntry.entryId)
       requestAnimationFrame(() => {
         const target = document.getElementById(`activity-${focusEntry.entryId}`)
         target?.scrollIntoView({ block: 'center' })
@@ -69,7 +72,7 @@ export function ActivityThread({ appId }: { appId: string }) {
   useLayoutEffect(() => { if (scroll.current) scroll.current.scrollTop = usePeopleViewStore.getState().scrolls[`activity:${appId}`] ?? 0 }, [appId])
   const active = pending.filter(isPendingDecision)
   const visiblePending = active.slice(0, pendingLimit)
-  const focusedPending = active.find(entry => entry.id === expanded)
+  const focusedPending = active.find(entry => entry.id === focusedId)
   if (focusedPending && !visiblePending.some(entry => entry.id === focusedPending.id)) visiblePending.unshift(focusedPending)
   const newCount = historySnapshot ? entries.filter(entry => !historySnapshot.includes(entry.id)).length : 0
   const history = entries.filter(entry => !historySnapshot || historySnapshot.includes(entry.id)).filter(entry => !active.some(item => item.id === entry.id)).filter(entry => source === 'all' || activitySourceKind(entry) === source)
@@ -84,7 +87,7 @@ export function ActivityThread({ appId }: { appId: string }) {
         <section className="mb-7" aria-label={t('Needs you')}><h2 className="mb-4 text-base font-medium">{t('Needs you')} <span className="ml-2 text-sm text-muted-foreground">{(state?.pendingDecisionCount ?? active.length) + (state?.blocked ? 1 : 0)}</span></h2>
           {state?.blocked && <div className="mb-3"><BlockedCard appId={appId} reason={state.blocked} message={state.lastError} onResumed={() => void refresh()} /></div>}
           {!active.length && !state?.blocked && !failed && !initialLoading && <p className="rounded-xl border border-dashed border-border-soft p-5 text-sm text-muted-foreground">{t('Nothing is waiting for you.')}</p>}
-          {visiblePending.map(entry => <div key={entry.id} id={`activity-${entry.id}`} tabIndex={-1} className="mb-3 rounded-xl border border-border-soft border-l-[3px] border-l-halo-warning/60 p-4"><ActivitySource entry={entry} /><h3 className="mb-2 whitespace-pre-wrap break-words text-sm font-medium">{entry.content.summary}</h3>{expanded === entry.id ? <EscalationCard entry={entry} appId={appId} onResolved={() => { setExpanded(null); setHistorySnapshot(null); void refresh() }} /> : <div className="mt-3 flex flex-wrap items-center justify-between gap-2"><span className="text-xs text-muted-foreground">{entry.content.deadlineAt ? t('Due {{date}}', { date: new Date(entry.content.deadlineAt).toLocaleString() }) : t('Waiting for your decision')}</span><button onClick={() => setExpanded(entry.id)} className="min-h-9 rounded-lg bg-primary px-3 py-2 text-xs text-primary-foreground">{t('Review and answer')}</button></div>}</div>)}
+          {visiblePending.map(entry => <div key={entry.id} id={`activity-${entry.id}`} tabIndex={-1} className="mb-3 rounded-xl border border-border-soft border-l-[3px] border-l-halo-warning/60 p-4"><ActivitySource entry={entry} /><EscalationCard entry={entry} appId={appId} onResolved={() => { setFocusedId(null); setHistorySnapshot(null); void refresh() }} /></div>)}
           {(active.length > pendingLimit || pendingHasMore) && <button disabled={pendingLoading} onClick={async () => { if (active.length <= pendingLimit && pendingHasMore) { setPendingLoading(true); try { await useAppsStore.getState().loadMorePending(appId) } finally { setPendingLoading(false) } } setPendingLimit(value => value + 10) }} className="min-h-9 text-sm text-primary">{t('Show more requests')}</button>}
           {(state?.continuationCount ?? 0) > 0 && <p className="mt-3 flex items-start gap-2 text-xs text-primary"><AlertCircle size={14} className="shrink-0" />{t('{{count}} answered requests are waiting to continue', { count: state!.continuationCount })}</p>}
         </section>

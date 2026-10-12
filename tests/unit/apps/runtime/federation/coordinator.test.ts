@@ -252,9 +252,22 @@ describe('FederationCoordinator', () => {
       expect(reject?.msg).toMatchObject({
         kind: 'join-reject',
         reason: 'VERSION_INCOMPATIBLE',
+        // The host's OWN version, not Bob's — so the refused joiner can tell
+        // which side is actually behind instead of just "not equal".
+        pv: FEDERATION_PROTOCOL_VERSION,
       })
       expect(federationStore.getNode(OFFICE, BOB)).toBeNull()
       expect(teamStore.listMembersByTeam(OFFICE)).toHaveLength(0)
+    })
+
+    it('a reject always carries the rejecting side\'s own pv, whatever the reason', () => {
+      makeHost()
+      const bob = recordingPeer(hub, BOB)
+
+      bob.link.send(HOST, makeJoinRequest({ officeId: 'wrong-office' }))
+
+      const reject = bob.received.find((r) => r.msg.kind === 'join-reject')
+      expect(reject?.msg).toMatchObject({ kind: 'join-reject', reason: 'OFFICE_MISMATCH', pv: FEDERATION_PROTOCOL_VERSION })
     })
 
     it('admits a join that omits pv (in-process link)', () => {
@@ -500,7 +513,7 @@ describe('FederationCoordinator', () => {
     ])('a joiner refuses a grant from an authority on an %s protocol version', (_label, pv) => {
       const sent: FederationMessage[] = []
       let inbound: (from: string, msg: FederationMessage) => void = () => {}
-      const rejects: string[] = []
+      const rejects: Array<[string, number | undefined]> = []
       let granted = 0
       const joiner = createFederationCoordinator({
         context: { officeId: OFFICE, selfNodeId: BOB },
@@ -515,7 +528,7 @@ describe('FederationCoordinator', () => {
         verifyCredential: () => null,
         now,
         onJoinGrant: () => { granted += 1 },
-        onJoinReject: (reason) => rejects.push(reason),
+        onJoinReject: (reason, peerPv) => rejects.push([reason, peerPv]),
       })
       joiner.start()
       coordinators.push(joiner)
@@ -523,7 +536,9 @@ describe('FederationCoordinator', () => {
 
       inbound(HOST, { kind: 'join-grant', officeId: OFFICE, assignedNodeId: BOB, pv })
 
-      expect(rejects).toEqual(['VERSION_INCOMPATIBLE'])
+      // peerPv is the authority's own version from the grant it sent — exactly
+      // the mismatched `pv` this test made it announce.
+      expect(rejects).toEqual([['VERSION_INCOMPATIBLE', pv]])
       expect(granted).toBe(0)
       // Terminal: a heartbeat from the host does not re-drive the join.
       const joins = sent.filter((m) => m.kind === 'join-request').length

@@ -165,7 +165,7 @@ function satisfiesMinNode(version: string | undefined): boolean {
 
 function probeSystemNodeVersion(): string | null {
   try {
-    return execFileSync('node', ['--version'], { encoding: 'utf-8', timeout: 3000 }).trim()
+    return execFileSync('node', ['--version'], { encoding: 'utf-8', timeout: 3000, windowsHide: true }).trim()
   } catch {
     return null
   }

@@ -283,17 +283,34 @@ speaks exactly `FEDERATION_PROTOCOL_VERSION`
 (`src/shared/federation/protocol-version.ts`). The joiner sends it in its
 `join-request`; the authority refuses any other version with a
 `VERSION_INCOMPATIBLE` join-reject; a joiner refuses a
-`join-grant` whose version differs from its own. Either refusal is terminal and
-the user sees "This team requires everyone to update Halo to the latest
-version" with a check-for-updates action (on a manual join in the join dialog;
-on a re-join, including the one at startup, as an `update-required` office
-status). A join that carries no version at all is admitted: every socket-borne
-join sets one, so only an in-process link omits it. `isSameProtocol` in
-`protocol-m2.ts` is the single place where this decision is made. Keep the gate
-there, and keep it small. A refused node that keeps its socket open is not in
-the office until a join of its is admitted: the host drops its other frames
-(heartbeats included, so it goes suspect → offline as usual) and never wires
-its ctrl feed, so no wake is pushed to a node that cannot answer it.
+`join-grant` whose version differs from its own. Either refusal is terminal. A
+join that carries no version at all is admitted: every socket-borne join sets
+one, so only an in-process link omits it. `isSameProtocol` in `protocol-m2.ts`
+is the single place where this gate decision is made. Keep the gate there, and
+keep it small. A refused node that keeps its socket open is not in the office
+until a join of its is admitted: the host drops its other frames (heartbeats
+included, so it goes suspect → offline as usual) and never wires its ctrl
+feed, so no wake is pushed to a node that cannot answer it.
+
+Both `join-reject` and `join-grant` always carry the sender's own `pv`
+(`types.ts`), so whichever side is refused can tell which one is actually
+behind instead of just "not equal" — `manager.ts`'s `resolveVersionMismatchDetail`
+compares it to `FEDERATION_PROTOCOL_VERSION` and, when the far side is behind,
+resolves its owner's display name from this node's last-synced roster
+(`Team.hostNodeId` → the member whose `ownerNodeId` matches). The result rides
+the `update-required` office status as `versionMismatch` (`shared/apps/team-types.ts`
+`TeamVersionMismatch`) on both paths that can produce it — a startup re-join
+(`office-recovery.ts`) and a live reconnect after a prior successful join
+(`onOfficeAccessLost`) — so the renderer shows "you are behind, update" with a
+working check-for-updates action only when THIS machine is the one behind, and
+names the lagging teammate with no such action (checking for updates here
+cannot fix a mismatch on someone else's machine) when they are. `versionMismatch`
+is absent — and the renderer falls back to the old direction-less copy — when
+the far side predates the `pv` field. The `joinTeamOffice` IPC/HTTP response
+already carries `detail` structurally (both routes pass the controller's
+result through unchanged), but the one-time manual "join a team" dialog
+(`TeamJoinDialog.tsx`) does not read it yet and still shows the plain generic
+message on `VERSION_INCOMPATIBLE`.
 
 This holds because federation ships only on internal experience builds whose
 users upgrade together. A breaking wire or semantic change ships by bumping the

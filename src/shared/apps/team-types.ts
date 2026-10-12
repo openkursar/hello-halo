@@ -1187,9 +1187,29 @@ export interface TeamPresenceEvent {
  */
 export type TeamOfficeStatusKind = 'paused' | 'resumed' | 'authority-changed' | 'access-lost' | 'update-required'
 
+/**
+ * Resolved once a join/re-join is refused as VERSION_INCOMPATIBLE: which side
+ * is actually behind, so the renderer is never left guessing.
+ *   'self' — this machine's Halo is the one behind; a check-for-updates action
+ *            is genuinely useful.
+ *   'peer' — the team's current host is behind; `peerName` is that person's
+ *            display name from this node's last-synced roster when known
+ *            (null if the roster has no owner name for that node) — checking
+ *            for updates on THIS machine cannot help, so no action is offered.
+ * Absent on the office-status event entirely when the other side's version
+ * could not be read (an older build that predates this field) — the renderer
+ * then falls back to the direction-less message.
+ */
+export interface TeamVersionMismatch {
+  direction: 'self' | 'peer'
+  peerName?: string | null
+}
+
 export interface TeamOfficeStatusEvent {
   teamId: string
   kind: TeamOfficeStatusKind
+  /** Present only when kind is 'update-required' and direction was determinable. */
+  versionMismatch?: TeamVersionMismatch
 }
 
 // ── Name constants (frozen — do not rename) ──

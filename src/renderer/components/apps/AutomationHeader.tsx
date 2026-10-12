@@ -48,7 +48,7 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
   const { openAppConfig, openActivityThread, openAppTeams, openAppSessions, selectApp, detailView } = useAppsPageStore()
   const { showConfirm, DialogComponent } = useConfirmDialog()
   // Presence of bound IM bots decides whether the IM sessions tab exists.
-  const { instances: imInstances } = useAppImInstances(appId)
+  const { instances: imInstances, loading: imInstancesLoading } = useAppImInstances(appId)
   const app = apps.find(a => a.id === appId)
   const runtimeState = appStates[appId]
 
@@ -109,6 +109,15 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
     if (detailView?.type === 'app-sessions' || detailView?.type === 'bot-sessions') return 'sessions'
     return 'activity'
   }, [detailView])
+
+  // `lastAutomationTab` (apps-page.store.ts selectApp) restores the sessions
+  // tab blind to whether this particular app has a bot bound. Once this app's
+  // own bindings are known, bounce a stale sessions tab back to activity
+  // instead of leaving the tab bar with nothing selected.
+  const hasSessionsTab = imInstances.length > 0 && !!app?.spaceId
+  useEffect(() => {
+    if (currentTab === 'sessions' && !imInstancesLoading && !hasSessionsTab) openActivityThread(appId)
+  }, [currentTab, imInstancesLoading, hasSessionsTab, appId, openActivityThread])
 
   if (!app) return null
 
@@ -204,7 +213,7 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
   const tabs: { key: AutomationTab; label: string; icon: typeof MessageSquare; onClick: () => void }[] = [
     { key: 'activity', label: t('Work activity'), icon: Activity, onClick: handleTabActivity },
     // Only a digital human with a bound bot carries external traffic worth a tab.
-    ...(imInstances.length > 0 && app.spaceId
+    ...(hasSessionsTab
       ? [{ key: 'sessions' as const, label: t('IM sessions'), icon: MessagesSquare, onClick: () => openAppSessions(appId) }]
       : []),
     { key: 'teams', label: t('Participating teams'), icon: Users, onClick: () => openAppTeams(appId) },

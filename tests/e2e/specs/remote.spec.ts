@@ -56,7 +56,7 @@ test.describe('Remote Access', () => {
     await expect(address).toBeVisible()
     await clickRemoteToggle(window)
     await expect(address).toHaveCount(0)
-    await expect(window.locator('#remote input[type="checkbox"]')).not.toBeChecked()
+    await expect(window.locator('#remote').getByRole('switch')).toHaveAttribute('aria-checked', 'false')
     await window.screenshot({ path: testInfo.outputPath('remote-disabled.png') })
   })
 

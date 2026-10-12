@@ -1,0 +1,42 @@
+diff --git a/node_modules/@anthropic-ai/claude-code/cli.js b/node_modules/@anthropic-ai/claude-code/cli.js
+--- a/node_modules/@anthropic-ai/claude-code/cli.js
++++ b/node_modules/@anthropic-ai/claude-code/cli.js
+@@ -1,5 +1,6 @@
+ #!/usr/bin/env node
+ // (c) Anthropic PBC. All rights reserved. Use is subject to the Legal Agreements outlined here: https://code.claude.com/docs/en/legal-and-compliance.
++import '../claude-code/windows-hide.cjs';
+
+ // Version: 2.1.89
+
+diff --git a/node_modules/@anthropic-ai/claude-code/windows-hide.cjs b/node_modules/@anthropic-ai/claude-code/windows-hide.cjs
+new file mode 100644
+--- /dev/null
++++ b/node_modules/@anthropic-ai/claude-code/windows-hide.cjs
+@@ -0,0 +1,27 @@
++// This CLI runs inside a GUI app. Its nested probes, tools and MCP servers must
++// hide their consoles too; the parent's windowsHide flag is not inherited.
++if (process.platform === 'win32') {
++  const childProcess = require('node:child_process');
++  const { syncBuiltinESMExports } = require('node:module');
++  const spawn = childProcess.ChildProcess.prototype.spawn;
++
++  childProcess.ChildProcess.prototype.spawn = function (options) {
++    return spawn.call(this, { ...options, windowsHide: true });
++  };
++
++  for (const name of ['spawnSync', 'execFileSync', 'execSync']) {
++    const original = childProcess[name];
++    childProcess[name] = function (...args) {
++      const index = name !== 'execSync' && (Array.isArray(args[1]) || (args[1] == null && args.length > 2)) ? 2 : 1;
++      const options = args[index];
++      if (options != null && typeof options !== 'object') {
++        return original.apply(this, args);
++      }
++      args[index] = { ...options, windowsHide: true };
++      return original.apply(this, args);
++    };
++  }
++
++  // The CLI mixes CommonJS and named ESM imports of the same Node built-ins.
++  syncBuiltinESMExports();
++}

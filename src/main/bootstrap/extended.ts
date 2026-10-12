@@ -80,7 +80,7 @@ import { createFederationManager, setFederationManager, getFederationManager, ma
 import { getRemoteAccessStatus } from '../services/remote'
 import type { OwnerStatus, MemberWriteRecord, ArtifactRef } from '../apps/runtime/federation'
 import { SELF_NODE_ID, TEAM_EVENTS, buildTeamSessionKey } from '../../shared/apps/team-types'
-import type { BlackboardTask, BlackboardFinding, TaskStatus, TeamActivity, TeamUpdatedEvent, TeamEpoch, TeamCheck, TeamOfficeStatusKind } from '../../shared/apps/team-types'
+import type { BlackboardTask, BlackboardFinding, TaskStatus, TeamActivity, TeamUpdatedEvent, TeamEpoch, TeamCheck, TeamOfficeStatusKind, TeamVersionMismatch } from '../../shared/apps/team-types'
 import { parseTeamSessionKey, parseTeamChatKey, nativeChatAppId, isSpaceConversationId } from '../../shared/apps/im-keys'
 import { createTeamRuntime, setActiveTeamRuntime, getActiveTeamRuntime, createTeamTriggerScheduler, createDefaultSessionDeps, createTeamArtifactReader, createTeamMemberRecordReader, createTeamArtifactOpener, createLocalArtifactResolver, createLocalArtifactPathResolver, createMemberWorkDirResolver, RemoteArtifactError, pruneSharedFileCopies, defaultSharedCopyRoot, teamFolderDir } from '../apps/runtime/team'
 import { readTeamMemberMessages, isAppChatConversationGenerating } from '../apps/runtime/app-chat'
@@ -140,10 +140,16 @@ let flushRelayCapture: (() => void) | null = null
 let onSystemResume: (() => void) | null = null
 let taskStateService: Awaited<ReturnType<typeof initTaskState>> | null = null
 
-/** Tell every window and remote client how an office stands (see TeamOfficeStatusKind). */
-function emitOfficeStatus(teamId: string, kind: TeamOfficeStatusKind): void {
-  broadcastToAll('team:office-status', { teamId, kind })
-  sendToRenderer('team:office-status', { teamId, kind })
+/**
+ * Tell every window and remote client how an office stands (see
+ * TeamOfficeStatusKind). `versionMismatch` is only meaningful for
+ * 'update-required' and is omitted from the payload (not sent as `undefined`)
+ * when direction could not be resolved.
+ */
+function emitOfficeStatus(teamId: string, kind: TeamOfficeStatusKind, versionMismatch?: TeamVersionMismatch): void {
+  const payload = versionMismatch ? { teamId, kind, versionMismatch } : { teamId, kind }
+  broadcastToAll('team:office-status', payload)
+  sendToRenderer('team:office-status', payload)
 }
 
 /**
@@ -732,9 +738,9 @@ async function initPlatformAndApps(): Promise<void> {
         // the renderer tells the user to rejoin with a fresh invite. The wire
         // reason stays in the log only — the kind is code-only, per the event's
         // no-technical-words contract.
-        onOfficeAccessLost: (officeId, reason) => {
+        onOfficeAccessLost: (officeId, reason, detail) => {
           console.warn(`[Bootstrap] office access lost office=${officeId} reason=${reason}`)
-          emitOfficeStatus(officeId, reason === 'VERSION_INCOMPATIBLE' ? 'update-required' : 'access-lost')
+          emitOfficeStatus(officeId, reason === 'VERSION_INCOMPATIBLE' ? 'update-required' : 'access-lost', detail)
         },
         // Owner-side transcript reader: serve a member's team-channel history to a
         // viewer over the office link. Reuses the same read as the IPC/HTTP chat
@@ -1381,7 +1387,7 @@ async function initPlatformAndApps(): Promise<void> {
   // after boot is in time.
   registerIdleTask('recover-offices', () => {
     recoverPersistedOffices(teamStore, {
-      onUpdateRequired: (officeId) => emitOfficeStatus(officeId, 'update-required'),
+      onUpdateRequired: (officeId, detail) => emitOfficeStatus(officeId, 'update-required', detail),
     })
   })
 

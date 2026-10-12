@@ -245,8 +245,10 @@ lane; accepted answer continuations take the next free opportunity before new tr
 team member) keeps one engine process alive between turns, so their number is
 the first resource to run out as digital humans multiply. `session-budget.ts`
 owns the policy: limit = `agent.maxResidentSessions` (Settings → Advanced,
-clamped 2–50, default 10 — `shared/constants/session-budget.ts`), halved while
-memory pressure (`platform/background/memory-pressure`) is above normal. The
+clamped 2–50, default 20 — `shared/constants/session-budget.ts`), halved while
+system memory pressure (`platform/background/memory-pressure`) is above normal
+(20 → 10 with the default).
+Renderer-only pressure does not lower the engine budget. The
 limit is pushed down to the engine (`setResidentSessionLimit`), which enforces it
 before creating any NEW session by closing least-recently-used idle ones; the
 policy re-pushes on config and pressure changes and trims immediately when the

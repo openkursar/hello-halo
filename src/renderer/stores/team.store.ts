@@ -1063,6 +1063,24 @@ export const useTeamStore = create<TeamState>((set, get) => ({
 
     if (kind === 'update-required') {
       const name = get().teams.find(tm => tm.id === teamId)?.name
+      const mismatch = event.versionMismatch
+      // A teammate's machine is the one behind — "check for updates" would find
+      // nothing (the fix is on THEIR end), so naming them replaces the action
+      // instead of offering a button that silently cannot help.
+      if (mismatch?.direction === 'peer') {
+        useNotificationStore.getState().show({
+          id: `team-update-required-${teamId}`,
+          title: mismatch.peerName
+            ? i18n.t('Waiting on {{person}} to update', { person: mismatch.peerName })
+            : i18n.t('Waiting on a teammate to update'),
+          body: name
+            ? i18n.t('Someone in {{office}} is running a different Halo version. This clears automatically once everyone matches.', { office: name })
+            : i18n.t('Someone in this team is running a different Halo version. This clears automatically once everyone matches.'),
+          variant: 'warning',
+          duration: 0,
+        })
+        return
+      }
       useNotificationStore.getState().show({
         id: `team-update-required-${teamId}`,
         title: name

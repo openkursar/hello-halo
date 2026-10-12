@@ -1,5 +1,5 @@
 /**
- * Session budget: configured maximum (clamped, default 10) halved under system
+ * Session budget: configured maximum (clamped, default 20) halved under system
  * memory pressure, pushed to the engine, lowered budgets trimmed right away (idle
  * sessions only, least recently used first), transient runs make room.
  */
@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const state = vi.hoisted(() => ({
   config: { agent: {} as Record<string, unknown> },
   pressure: 'normal' as 'normal' | 'low' | 'critical',
-  configHandlers: [] as Array<() => void>,
+  configHandlers: [] as Array<(agent: Record<string, unknown>) => void>,
   pressureHandlers: [] as Array<(level: string) => void>,
   resident: [] as Array<{ conversationId: string; spaceId: string; lastUsedAt: number; busy: boolean }>,
   limit: undefined as number | null | undefined,
@@ -18,7 +18,7 @@ const state = vi.hoisted(() => ({
 
 vi.mock('../../../../src/main/foundation/config.service', () => ({
   getConfig: () => state.config,
-  onAgentConfigChange: (handler: () => void) => {
+  onAgentConfigChange: (handler: (agent: Record<string, unknown>) => void) => {
     state.configHandlers.push(handler)
     return () => { state.configHandlers = state.configHandlers.filter((h) => h !== handler) }
   },
@@ -64,15 +64,17 @@ beforeEach(() => {
 
 describe('computeResidentSessionLimit', () => {
   it.each([
-    [undefined, 'normal', 10],
-    [undefined, 'low', 5],
-    [undefined, 'critical', 5],
+    [undefined, 'normal', 20],
+    [undefined, 'low', 10],
+    [undefined, 'critical', 10],
     [20, 'normal', 20],
     [20, 'low', 10],
     [7, 'critical', 4],
     [1, 'normal', 2],
     [500, 'normal', 50],
-    ['12', 'normal', 10],
+    ['12', 'normal', 20],
+    [10, 'normal', 10],
+    [10, 'low', 5],
   ] as const)('configured=%s pressure=%s → %d', (configured, pressure, expected) => {
     expect(computeResidentSessionLimit(configured, pressure)).toBe(expected)
   })
@@ -81,28 +83,53 @@ describe('computeResidentSessionLimit', () => {
 describe('session budget wiring', () => {
   it('pushes the default limit to the engine on init and clears it on dispose', () => {
     initSessionBudget()
-    expect(state.limit).toBe(10)
+    expect(state.limit).toBe(20)
     disposeSessionBudget()
     expect(state.limit).toBeNull()
   })
 
   it('halves under memory pressure and trims idle sessions least recently used first', () => {
-    state.resident = Array.from({ length: 8 }, (_, i) => session(`c${i}`, i, i === 0))
+    state.resident = Array.from({ length: 13 }, (_, i) => session(`c${i}`, i, i === 0))
     initSessionBudget()
 
     state.pressure = 'low'
     state.pressureHandlers.forEach((h) => h('low'))
 
-    expect(state.limit).toBe(5)
+    expect(state.limit).toBe(10)
     // c0 is busy and oldest: skipped; the next three oldest idle ones go.
     expect(state.evicted).toEqual(['c1', 'c2', 'c3'])
   })
 
-  it('follows a config change', () => {
+  it('applies the notified config before it is persisted', () => {
     initSessionBudget()
-    state.config = { agent: { maxResidentSessions: 4 } }
-    state.configHandlers.forEach((h) => h())
+    state.configHandlers.forEach((h) => h({ maxResidentSessions: 4 }))
+    expect(state.config.agent).toEqual({})
     expect(state.limit).toBe(4)
+  })
+
+  it('restores the default when an override is removed before persistence', () => {
+    state.config = { agent: { maxResidentSessions: 4 } }
+    initSessionBudget()
+    state.configHandlers.forEach((h) => h({}))
+    expect(state.config.agent.maxResidentSessions).toBe(4)
+    expect(state.limit).toBe(20)
+  })
+
+  it('keeps ten resident chats under system pressure without recycling them', () => {
+    state.resident = Array.from({ length: 10 }, (_, i) => session(`c${i}`, i))
+    initSessionBudget()
+    state.pressure = 'low'
+    state.pressureHandlers.forEach((h) => h('low'))
+    expect(state.limit).toBe(10)
+    expect(state.evicted).toEqual([])
+  })
+
+  it('does not evict resident chats for a transient run below the doubled default', () => {
+    state.resident = Array.from({ length: 19 }, (_, i) => session(`c${i}`, i))
+    initSessionBudget()
+    admitTransientSession('run')
+    expect(state.limit).toBe(20)
+    expect(state.evicted).toEqual([])
   })
 
   it('a transient run makes room for itself', () => {

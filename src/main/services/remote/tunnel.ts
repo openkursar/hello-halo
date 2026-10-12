@@ -195,7 +195,7 @@ export async function startNamedTunnel(localPort: number, grant: NamedTunnelGran
       const proc = spawn(
         binPath,
         ['tunnel', '--config', configPath, '--protocol', 'http2', '--no-autoupdate', 'run'],
-        { stdio: ['ignore', 'pipe', 'pipe'] }
+        { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }
       )
 
       attachProcess(proc)
@@ -309,7 +309,8 @@ export async function startTunnel(localPort: number): Promise<string> {
       // Spawn cloudflared directly with quick tunnel args
       // Use --protocol http2 to avoid QUIC/UDP being blocked by firewalls/proxies
       const proc = spawn(binPath, ['tunnel', '--url', `http://localhost:${localPort}`, '--protocol', 'http2', '--no-autoupdate'], {
-        stdio: ['ignore', 'pipe', 'pipe']
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
       })
 
       attachProcess(proc)

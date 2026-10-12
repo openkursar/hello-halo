@@ -75,7 +75,7 @@ test.describe('Page Navigation', () => {
   test('can navigate back from Settings to the previous conversation view', async ({ window }) => {
     await navigateToChat(window)
     await navigateToSettings(window)
-    await window.locator('header').getByRole('button', { name: 'Settings', exact: true }).click()
+    await window.getByRole('button', { name: 'Conversation', exact: true }).first().click()
 
     await expect(window.locator('textarea')).toBeVisible()
     await expect(window.locator('#ai-model')).toHaveCount(0)
