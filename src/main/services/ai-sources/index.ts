@@ -7,6 +7,7 @@
 
 // Manager
 export { getAISourceManager, AISourceManager } from './manager'
+export { watchCatalogSignals, type CatalogSignal } from './catalog-signals'
 
 // Auth Loader (for dynamic provider loading)
 export {

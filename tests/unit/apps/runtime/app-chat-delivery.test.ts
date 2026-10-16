@@ -24,7 +24,7 @@ vi.mock('../../../../src/main/services/agent', () => ({
 vi.mock('../../../../src/main/apps/runtime/app-chat-live-turn', () => ({
   isAppChatConversationGenerating: () => env.busy,
   getAppChatTurnIdentity: () => env.identity,
-  appChatMessageIdentity: (permission: any, external: boolean) => permission?.isOwner === false ? `guest:${JSON.stringify(permission.guestPolicy ?? {})}` : external ? 'external' : 'owner',
+  appChatMessageIdentity: (permission: any, origin?: string) => permission?.isOwner === false ? `guest:${JSON.stringify(permission.guestPolicy ?? {})}` : origin ?? 'owner',
   injectIntoAppChatBatch: env.inject,
   keepStoppedInputs: (_key: string, records: unknown[], unwritten: Array<Record<string, unknown>> = []) => {
     if (records.length) env.markInputsStopped(records)
@@ -48,7 +48,6 @@ vi.mock('../../../../src/main/apps/runtime/app-chat-sink', () => ({
   }),
 }))
 vi.mock('../../../../src/main/apps/runtime/im-permission-registry', () => ({ getImPermissionContext: () => undefined }))
-vi.mock('../../../../src/main/apps/runtime/team/external-origin', () => ({ peekTurnOrigin: (_key: string, trigger: any) => trigger.external === true }))
 
 import { createAppChatDelivery } from '../../../../src/main/apps/runtime/app-chat-delivery'
 
@@ -139,7 +138,7 @@ describe('digital-human message admission', () => {
     const results = [vi.fn(), vi.fn()]
     const replies = [vi.fn(), vi.fn()]
     const sent = ['remote first', 'remote second'].map((text, index) => delivery.send(request(text, {
-      teamContext: { teamId: 't', epochId: 'e', correlationId: `c${index}`, fromAppId: null, wait: true, kind: 'message', external: true },
+      teamContext: { teamId: 't', epochId: 'e', correlationId: `c${index}`, fromAppId: null, wait: true, kind: 'message', origin: 'colleague' },
       onResult: results[index], onReply: replies[index],
     })))
     await idle()
@@ -174,7 +173,7 @@ describe('digital-human message admission', () => {
     const run = vi.fn(async (_request: AppChatRequest) => {})
     const delivery = createAppChatDelivery(run)
     const sent = delivery.send(request('remote report', {
-      teamContext: { teamId: 'team', epochId: 'epoch', correlationId: 'message', fromAppId: 'other', wait: false, kind: 'message', external: true },
+      teamContext: { teamId: 'team', epochId: 'epoch', correlationId: 'message', fromAppId: 'other', wait: false, kind: 'message', origin: 'colleague' },
     }))
     expect(env.inject).not.toHaveBeenCalled()
     await idle()
@@ -221,7 +220,7 @@ describe('digital-human message admission', () => {
 
   it('keeps only the latest waiting reminder and rechecks cancellation before dispatch', async () => {
     env.busy = true
-    env.identity = 'external'
+    env.identity = 'colleague'
     const run = vi.fn(async (_request: AppChatRequest) => {})
     const delivery = createAppChatDelivery(run)
     const old = delivery.send(request('old check', { coalescingKey: 'check' }))
@@ -236,7 +235,7 @@ describe('digital-human message admission', () => {
 
   it('rejects pending owner messages on stop without starting them afterward', async () => {
     env.busy = true
-    env.identity = 'external'
+    env.identity = 'colleague'
     const run = vi.fn(async (_request: AppChatRequest) => {})
     const delivery = createAppChatDelivery(run)
     const sent = delivery.send(request('pending owner request'))
@@ -249,7 +248,7 @@ describe('digital-human message admission', () => {
 
   it('keeps a due reminder and a teammate message waiting through a stop, and runs them afterwards', async () => {
     env.busy = true
-    env.identity = 'external'
+    env.identity = 'colleague'
     const run = vi.fn(async (_request: AppChatRequest) => {})
     const delivery = createAppChatDelivery(run)
     let reminderRequest!: AppChatRequest
@@ -267,7 +266,7 @@ describe('digital-human message admission', () => {
     env.busy = true
     env.identity = 'owner'
     const teammate = delivery.send(request('teammate update', {
-      teamContext: { teamId: 't', epochId: 'e', correlationId: 'c', fromAppId: 'peer', wait: false, kind: 'message', external: true },
+      teamContext: { teamId: 't', epochId: 'e', correlationId: 'c', fromAppId: 'peer', wait: false, kind: 'message', origin: 'colleague' },
     }))
     delivery.discard(KEY)
     await idle()
@@ -297,7 +296,7 @@ describe('deferred notice authority and delivery lifetime', () => {
 
   it('keeps a refreshed earlier notice ahead of newer messages in its new permission group', async () => {
     env.busy = true
-    env.identity = 'external'
+    env.identity = 'colleague'
     let permission: typeof guest | undefined
     const refresh = () => request('earlier reminder', { imPermission: permission, refreshBeforeDelivery: refresh })
     const run = vi.fn(async (_request: AppChatRequest) => {})
@@ -361,7 +360,7 @@ describe('deferred notice authority and delivery lifetime', () => {
 describe('chat delivery admission failures', () => {
   it('reports mailbox capacity refusal once to the conversation and rejects its caller', async () => {
     env.busy = true
-    env.identity = 'external'
+    env.identity = 'colleague'
     const delivery = createAppChatDelivery(vi.fn(async () => {}))
     const pending = Array.from({ length: 128 }, (_, index) => delivery.send(request(`pending ${index}`)).catch(() => {}))
     await expect(delivery.send(request('over capacity'))).rejects.toThrow('mailbox is full')
@@ -383,7 +382,7 @@ describe('chat delivery admission failures', () => {
 describe('a person stopping the chat', () => {
   it('voids their own waiting message, keeping it in the record, and holds the rest without starting a turn', async () => {
     env.busy = true
-    env.identity = 'external'
+    env.identity = 'colleague'
     const run = vi.fn(async (_request: AppChatRequest) => {})
     const delivery = createAppChatDelivery(run)
     let reminderRequest!: AppChatRequest
@@ -427,7 +426,7 @@ describe('a person stopping the chat', () => {
 
   async function heldBackBatch(records: (request: AppChatRequest) => Array<{ id: string }>) {
     env.busy = true
-    env.identity = 'external'
+    env.identity = 'colleague'
     let finish!: () => void
     const run = vi.fn((_request: AppChatRequest) => new Promise<void>(resolve => { finish = resolve }))
     const delivery = createAppChatDelivery(run)

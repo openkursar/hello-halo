@@ -10,11 +10,10 @@
  */
 
 import { z } from 'zod'
-import { randomUUID } from 'node:crypto'
 import { tool } from '../../agent/resolved-sdk'
 import type { BrowserContext } from '../context'
 import { browserViewManager, type DeviceMode } from '../../browser-view.service'
-import { textResult, NAV_TIMEOUT } from './helpers'
+import { textResult, NAV_TIMEOUT, BACKGROUND_PAGE_NOTE } from './helpers'
 
 const log = (...args: unknown[]) => console.log('[AI Browser][tab]', ...args)
 
@@ -79,20 +78,14 @@ The last remaining tab cannot be closed.`,
         const deviceMode: DeviceMode = args.device ?? 'pc'
 
         try {
-          const viewId = `ai-browser-${randomUUID()}`
-          await browserViewManager.create(viewId, args.url, {
-            offscreen: !ctx.hasUi,
-            deviceMode,
-          })
-          ctx.trackView(viewId)
-          ctx.setActiveViewId(viewId)
+          const { viewId, fellBack } = await ctx.openPage(args.url, deviceMode)
           await ctx.waitForNavigation(timeout)
 
           const finalState = browserViewManager.getState(viewId)
           const modeLabel = deviceMode === 'h5' ? ' [H5 mobile mode]' : ''
           log(`new page: ${viewId}, deviceMode=${deviceMode}`)
           return textResult(
-            `Created page${modeLabel}: ${finalState?.title || 'Untitled'} - ${finalState?.url || args.url}`
+            `Created page${modeLabel}: ${finalState?.title || 'Untitled'} - ${finalState?.url || args.url}${fellBack ? BACKGROUND_PAGE_NOTE : ''}`
           )
         } catch (error) {
           return textResult(`Failed to create page: ${(error as Error).message}`, true)

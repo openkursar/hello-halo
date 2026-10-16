@@ -1,27 +1,22 @@
 import { useLayoutEffect, type RefObject } from 'react'
+import { fitTextareaHeight } from '../utils/textarea-height'
 
 /**
- * Auto-resizes a textarea element to fit its content.
+ * Keeps a textarea as tall as its text, up to `maxHeight` when given (CSS
+ * max-height on the element works too). Runs before paint, so a change in
+ * height never shows a frame late.
  *
- * Uses useLayoutEffect for synchronous DOM measurement before paint,
- * eliminating height-jump flicker on content changes.
- *
- * Strategy: reset height to 'auto' each cycle so scrollHeight reflects
- * true content size, then pin height to that value. CSS max-height + overflow
- * on the element controls the scroll-cap — this hook does not impose limits.
- *
- * @param ref   - Ref to the textarea element
- * @param value - Current value (used as dependency to trigger recalculation)
+ * @param ref       - Ref to the textarea element
+ * @param value     - Current value (used as dependency to trigger recalculation)
+ * @param maxHeight - Cap in px
  */
 export function useAutoResize(
   ref: RefObject<HTMLTextAreaElement | null>,
-  value: string
+  value: string,
+  maxHeight?: number
 ): void {
   useLayoutEffect(() => {
     const el = ref.current
-    if (!el) return
-    // Reset first so scrollHeight reflects content, not previous height
-    el.style.height = 'auto'
-    el.style.height = `${el.scrollHeight}px`
-  }, [ref, value])
+    if (el) fitTextareaHeight(el, maxHeight)
+  }, [ref, value, maxHeight])
 }

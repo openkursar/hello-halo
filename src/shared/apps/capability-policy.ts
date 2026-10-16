@@ -4,7 +4,10 @@
  *
  * Two scenarios share this shape, and must keep sharing it:
  *   - an IM guest talking to a digital human (`GuestPolicy`),
- *   - a teammate waking a digital human inside a team (`TeamDelegatedPolicy`).
+ *   - a request from outside the owner's machine reaching a team member — a
+ *     teammate on another machine, or a guest of an IM chat the team answers
+ *     (`TeamDelegatedPolicy`). The owner's own digital humans working for each
+ *     other are not held to it.
  *
  * Renderer-safe: pure data + pure functions, no Node/Electron imports. The
  * renderer drives its switches from the same tables the main process enforces
@@ -243,11 +246,11 @@ const CAPABILITY_FOLLOWS_BUILTIN: ReadonlyMap<CapabilityToggleKey, string> = new
 
 /**
  * How an unstated permission is read:
- *   'strict'     — nothing is granted unless the policy says so. An IM guest is
- *                  a stranger, so silence means no.
- *   'permissive' — everything is granted unless the policy withholds it. A
- *                  teammate is invited into the team by the owner, so silence
- *                  means yes and the switches only ever take capabilities away.
+ *   'strict'     — nothing is granted unless the policy says so. Every caller
+ *                  that is held to a policy at all is read this way: nobody here
+ *                  vouched for them, so silence means no.
+ *   'permissive' — everything is granted unless the policy withholds it, so the
+ *                  switches only ever take capabilities away.
  */
 export type CapabilityMode = 'strict' | 'permissive'
 
@@ -330,6 +333,94 @@ export function allowsUserMcp(
   const listed = policy?.allowedUserMcp
   if (listed === undefined) return mode === 'permissive'
   return listed.includes(specId)
+}
+
+/**
+ * What a policy can lend beyond its switches, as this machine has it now — the
+ * names `allowedSkills` and `allowedUserMcp` list.
+ */
+export interface LendableInventory {
+  /** Folder names of the skills the digital human's space can load. */
+  skills: readonly string[]
+  /** Ids of the user-installed MCP servers its sessions get. */
+  userMcp: readonly string[]
+}
+
+/**
+ * Whether a saved policy grants everything a policy screen can grant: every
+ * switchable built-in tool, commands not narrowed to a list, every capability
+ * switch on, and every skill and installed MCP server — an unset list, or one
+ * naming all of `inventory`. Without an inventory only unset lists qualify: a
+ * written list cannot be shown to cover what is not known.
+ *
+ * A field of `inventory` is read only once every switch is on, and only for a
+ * list actually written, so a caller for whom it is costly can supply it lazily.
+ *
+ * The one definition of "everything", shared by enforcement and the settings
+ * screens (see {@link colleagueReach}).
+ */
+export function grantsEverything(policy: CapabilityPolicy, inventory?: LendableInventory): boolean {
+  if (!DELEGABLE_BUILTIN_TOOLS.every((tool) => allowsBuiltin(policy, tool.name, 'strict'))) return false
+  if (resolveBashAccess(policy, 'strict').scope !== 'full') return false
+  if (!CAPABILITY_MCP_TOGGLES.every((toggle) => allowsCapability(policy, toggle.key, 'strict'))) return false
+  if (policy.allowedSkills !== undefined && !coversAll(policy.allowedSkills, inventory?.skills)) return false
+  return policy.allowedUserMcp === undefined || coversAll(policy.allowedUserMcp, inventory?.userMcp)
+}
+
+function coversAll(listed: readonly string[], available: readonly string[] | undefined): boolean {
+  return !!available && available.every((name) => listed.includes(name))
+}
+
+/**
+ * How a request from another machine reads the policy a member's owner saved:
+ *
+ *   'full'   — never saved, or saved granting everything: nothing is
+ *              withheld, so the turn has the reach the owner's own turns have.
+ *   'strict' — anything else: nothing the policy does not name.
+ *
+ * Never how a guest's request reads it — for a guest, silence refuses whether
+ * or not anything was saved.
+ */
+export type ColleagueReach = 'full' | 'strict'
+
+export function colleagueReach(
+  policy: CapabilityPolicy | null | undefined,
+  inventory?: LendableInventory
+): ColleagueReach {
+  return !policy || grantsEverything(policy, inventory) ? 'full' : 'strict'
+}
+
+/**
+ * What two policies both grant, each read strictly, as one policy read
+ * strictly: for a request that two owners' settings must each allow — a guest's
+ * request reaching a team member is held to the member's delegated policy and to
+ * that chat's guest policy at once.
+ *
+ * Command whitelists meet rule by rule, keeping only rules both name: whether
+ * one rule covers another is the engine's question, so a command allowed by two
+ * different rules is refused rather than guessed at.
+ */
+export function intersectPolicies(a: CapabilityPolicy, b: CapabilityPolicy): CapabilityPolicy {
+  const both = (x: readonly string[] | undefined, y: readonly string[] | undefined): string[] =>
+    [...new Set(x ?? [])].filter((name) => (y ?? []).includes(name))
+  const tools = (policy: CapabilityPolicy): string[] => (policy.allowedTools ?? []).map(canonicalBuiltinTool)
+  const result: CapabilityPolicy = {
+    allowedTools: both(tools(a), tools(b)),
+    allowedSkills: both(a.allowedSkills, b.allowedSkills),
+    allowedUserMcp: both(a.allowedUserMcp, b.allowedUserMcp),
+  }
+  for (const toggle of CAPABILITY_MCP_TOGGLES) {
+    result[toggle.key] = allowsCapability(a, toggle.key, 'strict') && allowsCapability(b, toggle.key, 'strict')
+  }
+  const bashA = resolveBashAccess(a, 'strict')
+  const bashB = resolveBashAccess(b, 'strict')
+  if (bashA.scope === 'listed' || bashB.scope === 'listed') {
+    result.bashScope = 'listed'
+    result.bashRules = bashA.scope === 'full' ? bashB.rules
+      : bashB.scope === 'full' ? bashA.rules
+      : both(bashA.rules, bashB.rules)
+  }
+  return result
 }
 
 /** A policy that explicitly grants everything a policy screen can grant. */

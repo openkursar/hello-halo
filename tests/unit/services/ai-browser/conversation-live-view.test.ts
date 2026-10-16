@@ -3,9 +3,9 @@
  * conversation's id — that is what lets a digital-human chat offer a live view
  * of its own page and no other chat's.
  *
- * Rules under test: conversation-bound contexts (space chat, digital-human chat)
- * announce; an automation run (scoped, no conversation) stays silent; a page
- * destroyed by ANY path — including its context ending — is announced gone
+ * Rules under test: contexts someone can watch (space chat, a scoped context
+ * created with a live view) announce; any other scoped context stays silent; a
+ * page destroyed by ANY path — including its context ending — is announced gone
  * exactly once; a late client can ask for the current pages.
  */
 
@@ -75,7 +75,7 @@ describe('conversation-tagged active-view events', () => {
   })
 
   it('tags a digital-human chat page with its conversation id', () => {
-    const ctx = createScopedBrowserContext({ conversationId: 'app-chat:dh1', spaceId: 'space-1' })
+    const ctx = createScopedBrowserContext({ liveView: { conversationId: 'app-chat:dh1', spaceId: 'space-1' } })
     openTab('view-1')
     ctx.trackView('view-1')
     ctx.setActiveViewId('view-1')
@@ -121,8 +121,8 @@ describe('conversation-tagged active-view events', () => {
   })
 
   it('does not let one chat’s page be attributed to another', () => {
-    const a = createScopedBrowserContext({ conversationId: 'app-chat:a' })
-    const b = createScopedBrowserContext({ conversationId: 'app-chat:b' })
+    const a = createScopedBrowserContext({ liveView: { conversationId: 'app-chat:a', spaceId: 'space-1' } })
+    const b = createScopedBrowserContext({ liveView: { conversationId: 'app-chat:b', spaceId: 'space-1' } })
     openTab('a-1')
     openTab('b-1')
     a.trackView('a-1')
@@ -148,7 +148,7 @@ describe('a chat page going away', () => {
   })
 
   it('is announced when its context is destroyed (session deleted, app uninstalled)', () => {
-    const ctx = createScopedBrowserContext({ conversationId: 'app-chat:dh1' })
+    const ctx = createScopedBrowserContext({ liveView: { conversationId: 'app-chat:dh1', spaceId: 'space-1' } })
     openTab('view-1')
     ctx.trackView('view-1')
     ctx.setActiveViewId('view-1')
@@ -162,7 +162,7 @@ describe('a chat page going away', () => {
   })
 
   it('is announced when the page is closed by any other path, and only once', () => {
-    const ctx = createScopedBrowserContext({ conversationId: 'app-chat:dh1' })
+    const ctx = createScopedBrowserContext({ liveView: { conversationId: 'app-chat:dh1', spaceId: 'space-1' } })
     openTab('view-1')
     ctx.trackView('view-1')
     ctx.setActiveViewId('view-1')
@@ -178,7 +178,7 @@ describe('a chat page going away', () => {
   })
 
   it('is announced for a page the chat opened earlier and moved away from', () => {
-    const ctx = createScopedBrowserContext({ conversationId: 'app-chat:dh1' })
+    const ctx = createScopedBrowserContext({ liveView: { conversationId: 'app-chat:dh1', spaceId: 'space-1' } })
     openTab('page-a')
     openTab('page-b')
     ctx.trackView('page-a')
@@ -196,7 +196,7 @@ describe('a chat page going away', () => {
   })
 
   it('announces every page when a chat with several ends, each once', () => {
-    const ctx = createScopedBrowserContext({ conversationId: 'app-chat:dh1' })
+    const ctx = createScopedBrowserContext({ liveView: { conversationId: 'app-chat:dh1', spaceId: 'space-1' } })
     openTab('page-a')
     openTab('page-b')
     ctx.trackView('page-a')
@@ -209,7 +209,7 @@ describe('a chat page going away', () => {
   })
 
   it('says nothing for a page no context with a UI held', () => {
-    const ctx = createScopedBrowserContext({ conversationId: 'app-chat:dh1' })
+    const ctx = createScopedBrowserContext({ liveView: { conversationId: 'app-chat:dh1', spaceId: 'space-1' } })
     openTab('page-a')
     openTab('someone-else')
     ctx.trackView('page-a')
@@ -240,7 +240,7 @@ describe('live-page snapshot for a late client', () => {
   })
 
   it('lists every page a conversation holds, marks the active one, and skips silent contexts', () => {
-    const dh = createScopedBrowserContext({ conversationId: 'app-chat:dh1', spaceId: 'space-1' })
+    const dh = createScopedBrowserContext({ liveView: { conversationId: 'app-chat:dh1', spaceId: 'space-1' } })
     const auto = createScopedBrowserContext()
     openTab('dh-view')
     openTab('auto-view')
@@ -260,7 +260,7 @@ describe('live-page snapshot for a late client', () => {
   })
 
   it('omits a context whose page is already gone', () => {
-    const dh = createScopedBrowserContext({ conversationId: 'app-chat:dh1' })
+    const dh = createScopedBrowserContext({ liveView: { conversationId: 'app-chat:dh1', spaceId: 'space-1' } })
     openTab('dh-view')
     dh.trackView('dh-view')
     dh.setActiveViewId('dh-view')
@@ -274,7 +274,7 @@ describe('live-page snapshot for a late client', () => {
 describe('being watched', () => {
   it('reports whether the user has one of the context’s tabs on screen', () => {
     states.clear()
-    const dh = createScopedBrowserContext({ conversationId: 'app-chat:dh1' })
+    const dh = createScopedBrowserContext({ liveView: { conversationId: 'app-chat:dh1', spaceId: 'space-1' } })
     openTab('dh-view')
     dh.trackView('dh-view')
 
@@ -358,7 +358,7 @@ describe('a conversation’s context ending', () => {
   })
 
   it('is announced when a digital-human chat is destroyed', () => {
-    const dh = createScopedBrowserContext({ conversationId: 'app-chat:dh1', spaceId: 's1' })
+    const dh = createScopedBrowserContext({ liveView: { conversationId: 'app-chat:dh1', spaceId: 's1' } })
     dh.destroy()
     expect(released).toEqual(['app-chat:dh1'])
   })

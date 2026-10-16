@@ -387,6 +387,13 @@ Renderer live placement uses the existing source styles and a bounded transient
 overlay; normal transcript reads reconcile temporary app record IDs. See the
 chat-store and app-runtime DESIGN documents for arrival and storage contracts.
 
+Model lists (each AI source's catalog) are kept fresh by main, not by the
+renderer: startup, window focus, wake from sleep and a model picker opening
+(`ai-sources:refresh-stale-catalogs`) ask `AISourceManager.refreshStaleCatalogs`,
+and `services/ai-sources/catalog-schedule.ts` decides which sources are due. A
+refresh that changed a stored list emits `ai-sources:catalog-changed` (IPC + WS)
+and every client re-reads its AI sources. Do not add renderer-driven refresh loops.
+
 Two types:
 - **Request/Response** (renderer → main): registered via `ipcMain.handle()`
 - **Events** (main → renderer): pushed via `sendToRenderer()` / `broadcastToAll()`

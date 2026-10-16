@@ -1,8 +1,8 @@
 /**
  * ErrorContent — Production-grade error message renderer for thought timelines.
  *
- * Used by ThoughtProcess (live) and CollapsedThoughtProcess (history) when
- * rendering thoughts of type 'error'. Provides:
+ * Used by the thought panel (live and history alike) when rendering thoughts
+ * of type 'error'. Provides:
  * - Generous default preview (errors are critical info, not chatter)
  * - Expand/collapse for very long errors
  * - One-click copy of the full raw error message
@@ -22,8 +22,6 @@ const PREVIEW_CHAR_LIMIT = 600
 
 interface ErrorContentProps {
   content: string
-  /** Compact mode — smaller text for history view. */
-  compact?: boolean
 }
 
 /**
@@ -62,7 +60,7 @@ function tryFormatJson(text: string): { prefix: string; json: string; suffix: st
   return null
 }
 
-export function ErrorContent({ content, compact }: ErrorContentProps) {
+export function ErrorContent({ content }: ErrorContentProps) {
   const { t } = useTranslation()
   const [isExpanded, setIsExpanded] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -91,30 +89,28 @@ export function ErrorContent({ content, compact }: ErrorContentProps) {
     }
   }, [trimmed])
 
-  const textSize = compact ? 'text-xs' : 'text-sm'
-
   return (
     <div className="flex flex-col gap-1.5 min-w-0">
       {showFull && formatted ? (
         <>
           {formatted.prefix && (
-            <div className={`${textSize} text-foreground/85 whitespace-pre-wrap break-words`}>
+            <div className="text-sm text-foreground/85 whitespace-pre-wrap break-words">
               {formatted.prefix}
             </div>
           )}
           <pre
-            className={`${textSize} text-foreground/85 bg-muted/40 border border-border/40 rounded-md px-2.5 py-2 overflow-x-auto whitespace-pre-wrap break-words font-mono leading-relaxed`}
+            className="text-sm text-foreground/85 bg-muted/40 border border-border/40 rounded-md px-2.5 py-2 overflow-x-auto whitespace-pre-wrap break-words font-mono leading-relaxed"
           >
             {formatted.json}
           </pre>
           {formatted.suffix && (
-            <div className={`${textSize} text-foreground/85 whitespace-pre-wrap break-words`}>
+            <div className="text-sm text-foreground/85 whitespace-pre-wrap break-words">
               {formatted.suffix}
             </div>
           )}
         </>
       ) : (
-        <div className={`${textSize} text-foreground/85 whitespace-pre-wrap break-words`}>
+        <div className="text-sm text-foreground/85 whitespace-pre-wrap break-words">
           {showFull ? trimmed : previewText}
         </div>
       )}

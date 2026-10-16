@@ -6,6 +6,7 @@ import { useTranslation } from '../../../i18n'
 import { useTeamArtifacts } from '../TeamArtifacts'
 import { WorkbenchDrawer } from './WorkbenchDrawer'
 import { useTaskReports } from './useTaskReports'
+import { reportGaps, taskParticipants } from './model'
 import type { TaskBoardState } from './useTaskBoard'
 import { TaskExecutionView } from './TaskExecutionView'
 import { TaskActivityTimeline } from './TaskActivityTimeline'
@@ -35,6 +36,16 @@ export function TeamActivityDrawer({ detail, task, onClose, onDecision, boardSta
   const artifacts = useTeamArtifacts(detail.team.id, task.epochId, `${activities.length}:${reload}`)
   const busy = detail.roster.filter(member => member.busy?.some(row => row.epochId === task.epochId))
   const statusLabels = { pending: t('Pending'), in_progress: t('Working'), blocked: t('Blocked'), done: t('Completed'), rejected: t('Rejected') }
+  const participants = useMemo(() => taskParticipants({
+    epochId: task.epochId, activities, tasks, findings, roster: detail.roster, reports: reports.reports,
+    memberAppIds: [
+      ...(detail.pendingEscalations ?? []).filter(row => row.epochId === task.epochId).map(row => row.appId),
+      ...(task.waitingMemberAppIds ?? []),
+      ...(task.memberAppId ? [task.memberAppId] : []),
+    ],
+  }), [task.epochId, task.waitingMemberAppIds, task.memberAppId, activities, tasks, findings, detail.roster, detail.pendingEscalations, reports.reports])
+  const gaps = useMemo(() => reportGaps(reports.unavailable, detail.roster, participants), [reports.unavailable, detail.roster, participants])
+  const ownerLabel = (owner: string | null) => owner ?? t('A teammate')
   const retry = () => { setReload(value => value + 1); boardState.retry() }
   const inspected = detail.roster.find(member => member.appId === executionMember)
   if (inspected) return <WorkbenchDrawer title={t('Task execution')} onClose={onClose}>
@@ -83,9 +94,14 @@ export function TeamActivityDrawer({ detail, task, onClose, onDecision, boardSta
       <section><h3 className="mb-2 text-xs font-medium">{t('Member executions')}</h3><div className="grid grid-cols-1 gap-2 sm:grid-cols-2">{detail.roster.map(member => <button key={member.appId} onClick={() => setExecutionMember(member.appId)} className="flex min-h-11 items-center gap-2 rounded-lg border border-border p-2 text-left text-xs hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"><AutomationAvatar name={member.memberName} size={22} /><span className="min-w-0 flex-1 truncate">{member.memberName}</span>{member.busy?.some(row => row.epochId === task.epochId) && <span className="h-2 w-2 rounded-full bg-halo-success" />}<ArrowRight size={13} /></button>)}</div></section>
       <section><h3 className="mb-3 flex items-center gap-2 text-xs font-medium"><MessageSquare size={14} className="text-muted-foreground" />{t('Collaboration history')}</h3>
         {reports.loading && !reports.reports.length && <p role="status" className="mb-3 flex items-center gap-2 text-xs text-muted-foreground"><Loader2 size={13} className="animate-spin" />{t('Loading task…')}</p>}
-        {reports.failed && <p role="alert" className="mb-3 rounded-lg bg-halo-warning/10 p-3 text-xs text-halo-warning">{t('Some member reports could not be refreshed.')} <button className="underline" onClick={retry}>{t('Retry')}</button></p>}
-        {board && !reports.loading && !reports.failed && !activities.length && !reports.reports.length && <div className="rounded-xl border border-dashed border-border px-4 py-8 text-center"><MessageSquare size={22} className="mx-auto mb-2 text-muted-foreground/50" /><p className="text-xs text-muted-foreground">{t('No activity yet')}</p></div>}
-        <TaskActivityTimeline focusActivityId={activities.find(activity => activity.id === activityTarget || activity.refId === activityTarget)?.id ?? activityTarget} messages={reports.reports} activities={activities} detail={detail} showEmpty={false} canOpenArtifact={ref => { const finding = findings.find(row => row.id === ref); return !!finding?.ref && artifacts.has(finding.ref) }} openArtifact={ref => { const finding = findings.find(row => row.id === ref); if (finding?.ref) artifacts.open(finding.ref) }} />
+        {(gaps.offline.length > 0 || gaps.failed.length > 0) && <div role="alert" className="mb-3 space-y-1 rounded-lg bg-halo-warning/10 p-3 text-xs leading-5 text-halo-warning">
+          {gaps.offline.map(group => <p key={group.owner ?? ''} className="break-words">{t('{{owner}}’s computer is offline, so reports from {{members}} may be incomplete.', { owner: ownerLabel(group.owner), members: group.members.join(', ') })}</p>)}
+          {gaps.failed.length > 0 && <p className="break-words">{t('Reports from {{members}} could not be refreshed.', { members: gaps.failed.join(', ') })}</p>}
+          <button className="underline" onClick={retry}>{t('Retry')}</button>
+        </div>}
+        {gaps.elsewhere.length > 0 && <p className="mb-3 break-words text-xs leading-5 text-muted-foreground">{t('Reports from members on offline computers are not shown: {{owners}}.', { owners: gaps.elsewhere.map(ownerLabel).join(', ') })}</p>}
+        {board && !reports.loading && !reports.unavailable.length && !activities.length && !reports.reports.length && <div className="rounded-xl border border-dashed border-border px-4 py-8 text-center"><MessageSquare size={22} className="mx-auto mb-2 text-muted-foreground/50" /><p className="text-xs text-muted-foreground">{t('No activity yet')}</p></div>}
+        <TaskActivityTimeline focusActivityId={activities.find(activity => activity.id === activityTarget || activity.refId === activityTarget)?.id ?? activityTarget} messages={reports.reports} activities={activities} detail={detail} showEmpty={false} taskCompleted={!!task.completed} canOpenArtifact={ref => { const finding = findings.find(row => row.id === ref); return !!finding?.ref && artifacts.has(finding.ref) }} openArtifact={ref => { const finding = findings.find(row => row.id === ref); if (finding?.ref) artifacts.open(finding.ref) }} />
       </section>
     </div>
   </WorkbenchDrawer>

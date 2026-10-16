@@ -1076,17 +1076,25 @@ JSONL storage is unchanged (append-only, written by `session-store`).
 ### 2.19 Chat Browser Contexts (Resident vs Per-Turn, Live View)
 
 **Decision**: each chat's AI browser context lives in `app-chat-browser.ts`, not
-in a map inside `app-chat.ts`, and its lifetime depends on who is chatting:
+in a map inside `app-chat.ts`, and who is chatting decides both who can watch
+its pages and how long they live:
 
-| Session | Context lifetime |
-|---|---|
-| default (`app-chat:{appId}`) and local (`…:local:direct:{uuid}`) | **resident** — survives the turn, so the next message continues on the same page and the user can open the live view between turns |
-| IM, HTTP, team | **per-turn** — destroyed in `runAppChatTurn`'s `finally`; nobody can watch them and they can be minted without limit |
+| Session | Live view | Context lifetime |
+|---|---|---|
+| default (`app-chat:{appId}`) and local (`…:local:direct:{uuid}`) | **yes** — pages in the main window, announced under the chat's key | **resident** — survives the turn, so the next message continues on the same page and the user can open the live view between turns |
+| IM, HTTP, team | **no** — pages in the hidden host, nothing announced, like an automation run | **per-turn** — destroyed in `runAppChatTurn`'s `finally`; they can be minted without limit |
 
-Every context is created with `createScopedBrowserContext({ conversationId })`,
-which is what makes `services/ai-browser` announce its active page under that
-conversation (see that module's DESIGN, "Live view"). The renderer's "view live
-feed" button for a digital-human chat depends on this and on nothing else here.
+Only a native chat's context is created with
+`createScopedBrowserContext({ liveView: { conversationId, spaceId } })`, which is
+what makes `services/ai-browser` host its pages in the main window and announce
+them under that conversation (see that module's DESIGN, "Context Model"). The
+renderer's "view live feed" button and tray rows for a digital-human chat depend
+on this and on nothing else here. IM, HTTP and team turns mostly run while
+nobody is at the computer, when the main window has been seen to fail every new
+page; their surfaces never offered a live view anyway. A native chat woken then
+(a reminder, a patrol) is covered by `services/ai-browser`: a page the main
+window cannot attach in time opens in the hidden host, unwatchable, rather than
+failing the step.
 
 **Resident is bounded**, because every page is a Chromium renderer and local
 sessions are unbounded (`MAX_RESIDENT_BROWSER_CONTEXTS`, `RESIDENT_BROWSER_IDLE_MS`):
@@ -1104,7 +1112,8 @@ sessions are unbounded (`MAX_RESIDENT_BROWSER_CONTEXTS`, `RESIDENT_BROWSER_IDLE_
   reclaimed by the same sweep.
 
 **Teardown paths** (each one goes through `destroyChatBrowserContext`, which logs
-the reason and closes the pages, and the pages' destruction announces `view-gone`):
+the reason and closes the pages; a native chat's page destruction announces
+`view-gone`, a per-turn chat's says nothing):
 session cleared/deleted (`clearSessionByConversationId`), team session closed,
 manual "Restart agent" (`restartAppChat` with `interruptActive`; automatic
 config-change restarts deliberately leave the pages), app uninstalled
@@ -1928,11 +1937,12 @@ Remote, tool-started and scheduled runs keep their pages in the hidden host.
   (`userOverrides.memory`).
 - Its space's topics: offered read-only when `spaceMemoryAccess` is on and the
   space has memory on. Writes are refused by the write guard.
-- A strict turn (an IM guest — of the digital human's own chat or of a chat it
-  fronts for a team — or a teammate's turn on work that entered from outside) is
-  held to `turn-file-access.ts`, enforced by a pre-tool hook and the delegation
-  gate alike. A teammate from this machine is the owner's own: held to the tool
-  switches only, with no path boundary, as before.
+- A restricted turn (an IM guest — of the digital human's own chat or of a chat
+  it fronts for a team — or a team turn serving a request from outside that its
+  delegated policy restricts) is held to `turn-file-access.ts`, enforced by a
+  pre-tool hook and the delegation gate alike. The owner's own digital humans
+  working for each other are not restricted at all (team DESIGN "Where a request
+  came from").
   - memory content (memory.md + topics; the space's topics per the rule above)
     and the files handed to the turn (IM attachments, persisted images) — always,
     even for a chat-only guest (`keepFileTools` keeps the file tools in the pool);
@@ -2002,8 +2012,8 @@ Remote, tool-started and scheduled runs keep their pages in the hidden host.
 ## Skills on a borrowed turn
 
 An owner allows skills one by one (`CapabilityPolicy.allowedSkills`, folder
-names): an IM guest gets none until listed, a teammate keeps all until a list
-is written. The panel offers one switch per skill the digital human can load
+names): a restricted caller gets none until listed; a colleague whose member
+grants everything — or was never configured — is not restricted at all. The panel offers one switch per skill the digital human can load
 (`skill-discovery`, global + space), next to the tool switches. The skill tool
 itself has no switch: it exists for a caller exactly when some skill does.
 
@@ -2013,8 +2023,8 @@ itself has no switch: it exists for a caller exactly when some skill does.
   no pre-approvals of its own without asking the gate. A name resolves as the
   engine resolves it — folder or frontmatter name, a leading "/" ignored — and
   every skill it could mean must be allowed. A skill Halo does not list (built
-  into the engine, from a plugin) has no switch, so only a teammate whose skills
-  were never listed may load one.
+  into the engine, from a plugin) has no switch, so no restricted caller may load
+  one.
 - **A skill grants nothing beyond itself.** Each tool call it makes is judged by
   the policy like any other. What the engine lets a loaded skill do without
   asking — run the tools its `allowed-tools` pre-approve for the rest of the

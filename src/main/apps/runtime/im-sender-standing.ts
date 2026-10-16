@@ -9,7 +9,7 @@
  *   permissionEnabled=true, owners=[…] → only listed IDs are owners; others are guests
  */
 
-import type { ImChannelInstanceConfig, ImSessionRecord } from '../../../shared/types/im-channel'
+import type { GuestPolicy, ImChannelInstanceConfig, ImSessionRecord } from '../../../shared/types/im-channel'
 import type { ImPermissionContext } from './im-permission-registry'
 
 export function resolveImPermission(
@@ -24,9 +24,19 @@ export function resolveImPermission(
     senderId,
     senderName,
     isOwner: !permissionEnabled || (hasOwnerRestriction && owners!.includes(senderId)),
-    guestPolicy: permissionEnabled ? instanceConfig?.guestPolicy : undefined,
+    guestPolicy: currentGuestPolicy(instanceConfig),
     ownerIds: hasOwnerRestriction ? owners! : undefined,
   }
+}
+
+/**
+ * What a chat's guests may use right now; undefined when the chat has no guest
+ * access — then nobody is a guest there, and nothing is lent to one either.
+ */
+export function currentGuestPolicy(
+  instanceConfig: Pick<ImChannelInstanceConfig, 'permissionEnabled' | 'guestPolicy'> | undefined
+): GuestPolicy | undefined {
+  return instanceConfig?.permissionEnabled ? instanceConfig.guestPolicy : undefined
 }
 
 /** Private questions follow the current owner roster, or the selected result recipients without one. */

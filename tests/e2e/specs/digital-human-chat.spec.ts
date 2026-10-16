@@ -23,7 +23,7 @@ import {
   launchElectronApp,
 } from '../fixtures/electron'
 import { seedDigitalHumanChat, userLine, replyLine, type SeededDigitalHumanChat } from '../fixtures/seed-digital-human-chat'
-import { navigateToChat } from '../fixtures/helpers'
+import { navigateToChat, openDigitalHumanConversation } from '../fixtures/helpers'
 
 const SCROLLER = '[data-testid="transcript-scroller"]'
 
@@ -92,9 +92,14 @@ async function launch(options: { width?: number; height?: number } = {}): Promis
   }
 }
 
-/** Click the seeded conversation's row in the list (desktop layouts). */
+/** The seeded conversation's row text in the conversation list and the history sheet. */
+function seededRow(session: Session): string {
+  return session.seeded.turns[2].reply.slice(0, 20)
+}
+
+/** Open the seeded conversation from the sidebar's conversation list (desktop layouts). */
 async function openSeededConversation(session: Session): Promise<void> {
-  await session.window.getByText(session.seeded.turns[2].reply.slice(0, 20)).first().click()
+  await openDigitalHumanConversation(session.window, session.seeded.name, seededRow(session))
 }
 
 const MARK_COMPOSER = () => {
@@ -385,8 +390,12 @@ test.describe('digital-human conversation on the chat page', () => {
           replyLine(answer, '2026-09-01T10:00:03.000Z'),
         ].join('\n') + '\n')
         await window.waitForSelector('textarea', { timeout: 20000 })
-        if (width < 640) await window.getByTitle('Conversation history', { exact: true }).click()
-        await openSeededConversation(session)
+        if (width < 640) {
+          await window.getByTitle('Conversation history', { exact: true }).click()
+          await window.getByText(seededRow(session)).first().click()
+        } else {
+          await openSeededConversation(session)
+        }
         await expect(window.locator(SCROLLER)).toBeVisible({ timeout: 15000 })
 
         const shortRow = window.locator('[data-message-id]').filter({ hasText: 'short-row-1' })

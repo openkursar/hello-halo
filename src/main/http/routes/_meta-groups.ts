@@ -50,7 +50,21 @@ export const GROUPS: Record<GroupId, GroupMeta> = {
       'files a digital human produced': 'workspace',
       'installing from the app store': 'store',
       'knowledge a digital human reads': 'knowledge-base',
+      'several digital humans working together': 'team',
     },
+  },
+  team: {
+    notHere: {
+      'one digital human on its own schedule': 'digital-human',
+      'installing a digital human to use as a member': 'digital-human',
+      'binding an IM chat to a team member': 'channels',
+      'assembling a temporary team inside this conversation': 'tool:collab_start',
+    },
+    withheld: [
+      'Invite people from other computers into a team, revoke an invite, or join a team hosted on someone else\'s computer — each one decides who can reach this machine, so the user does it from the team\'s settings in the Halo app.',
+      'Set what teammates on other computers may make a member do (its delegated permissions) — that is the owner\'s consent for their own machine, set from the member\'s settings in the Halo app. Member and team writes refuse the delegatedPolicy field for that reason.',
+      'Add, change, pause or resume a webhook trigger — it lets anyone who can reach this computer start the team with the owner\'s permissions, so the trigger write refuses sourceType webhook. Tell the user this is something you cannot set up for them, and offer a schedule or file trigger if one fits.',
+    ],
   },
   'knowledge-base': {
     notHere: {

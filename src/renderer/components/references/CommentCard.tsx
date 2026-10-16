@@ -12,6 +12,7 @@ import { MessageSquare } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { useAppStore } from '../../stores/app.store'
 import { useIsMobile } from '../../hooks/useIsMobile'
+import { useAutoResize } from '../../hooks/useAutoResize'
 import { REFERENCE_LIMITS } from '../../../shared/types/content-reference'
 import { setEditText, startEditing, stopEditing, useEditText } from './comment-edits'
 import { claimCommentFocus, focusCommentIn } from './comment-focus'
@@ -129,12 +130,7 @@ function CommentEditor({ id, text, autoFocus, onSave, onCancel }: {
     el.setSelectionRange(el.value.length, el.value.length)
   }, [autoFocus])
 
-  useLayoutEffect(() => {
-    const el = ref.current
-    if (!el) return
-    el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, 200)}px`
-  }, [text])
+  useAutoResize(ref, text, 200)
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     // Typing here is for the comment only: not the editor's keys, the view's shortcuts or the canvas.

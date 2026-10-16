@@ -7,6 +7,8 @@ import type { CollabMode, EscalationRouting } from '../../../../shared/apps/team
 import type { TeamFolderPaths } from './team-folder'
 
 export interface TeamPromptRosterEntry {
+  /** Never rendered; names who a turn's request came from (see `buildRestrictionNotice`). */
+  appId: string
   memberName: string
   role: string
   /**
@@ -70,6 +72,11 @@ export interface TeamPromptContext {
    * directory, never at a folder the member cannot write to.
    */
   teamFolder: TeamFolderPaths | null
+  /**
+   * The conversation the session serves, when it is an IM chat's — whose guest
+   * settings bound a guest's request reaching this member. Never rendered.
+   */
+  chatKey: string | null
 }
 
 // ── Entry layer ──
@@ -405,4 +412,47 @@ function buildTeamRules(ctx: TeamPromptContext): string {
   }
 
   return lines.join('\n')
+}
+
+// ── Restricted turn notice ──
+
+/** Who the request a restricted turn serves came from. */
+export type RestrictionRequester =
+  | { origin: 'colleague'; member?: Pick<TeamPromptRosterEntry, 'memberName' | 'owner' | 'sameMachine'> }
+  | { origin: 'guest' }
+
+/**
+ * What a turn serving a request from outside is told about its limits. Per turn,
+ * so it opens the turn's message and never enters the system prompt (see the
+ * INVARIANT on TeamPromptContext). Without it a digital human that finds a tool
+ * missing reports a fault — a command tool that "hangs", hooks to repair —
+ * instead of the setting it is, and nobody learns what to switch on.
+ */
+export function buildRestrictionNotice(requester: RestrictionRequester, withheld: readonly string[]): string {
+  const setting = 'your owner\u2019s "What others can ask it to do" setting for you in this team'
+  const lines = requester.origin === 'guest'
+    ? [
+        'This request comes from a guest in an IM chat your team answers, not from your owner.',
+        `It may use only what both ${setting} and that chat\u2019s guest settings allow.`,
+      ]
+    : [
+        `This request comes from ${describeColleague(requester.member)}.`,
+        `It may use only what ${setting} allows.`,
+      ]
+  return [
+    '[Limited permissions for this turn]',
+    ...lines,
+    ...(withheld.length > 0 ? ['Off for this request:', ...withheld.map((item) => `- ${item}`)] : []),
+    'This is your owner\u2019s setting, not a fault. If the request needs something that is off, tell the ' +
+      'requester which one, and that your owner can turn it on there. Do not guess at other causes, and do ' +
+      'not ask anyone to change hooks or settings files.',
+  ].join('\n')
+}
+
+function describeColleague(member: Pick<TeamPromptRosterEntry, 'memberName' | 'owner' | 'sameMachine'> | undefined): string {
+  if (!member) return 'someone on another machine in this team'
+  if (member.sameMachine !== false) return `${member.memberName}, passing on work that came from another machine`
+  return member.owner
+    ? `${member.memberName}, ${member.owner}\u2019s digital human on another machine`
+    : `${member.memberName}, a teammate\u2019s digital human on another machine`
 }

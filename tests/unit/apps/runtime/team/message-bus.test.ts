@@ -124,8 +124,9 @@ function makeHooks(options: MakeHooksOptions = {}) {
       })
       if (options.midTurn) busy.add(params.sessionKey)
     }),
-    // A turn a teammate woke runs delegated; see appChatMessageIdentity.
-    getTurnIdentity: () => 'delegated',
+    // A turn the owner's own digital humans woke runs as the owner; see
+    // appChatMessageIdentity.
+    getTurnIdentity: () => 'owner',
     isBusy: (sessionKey: string) => busy.has(sessionKey),
     checkReachable: (appId: string) => !unreachable.has(appId),
     ...(options.midTurn
@@ -665,10 +666,9 @@ describe('MessageBus', () => {
       expect(midTurnDeliveries[0].envelope.body).toBe('stop, the plan changed')
     })
 
-    it('never injects an EXTERNAL message into a running turn — it queues for a normal wake', async () => {
-      // Injection skips turn-origin resolution: the running turn keeps its
-      // strictness and the sticky origin is never updated, so an injected
-      // external message would run under whatever the turn started with.
+    it('never injects an outside request into the owner\u2019s running turn — it queues for a normal wake', async () => {
+      // A running turn keeps the permissions it started with, so an outside
+      // request joining the owner's own turn would run with the owner's reach.
       // It must buffer instead and enter through the wake path.
       seedTeam(store, 'free')
       const { hooks, wakes, midTurnDeliveries, busy } = makeHooks({ midTurn: true })
@@ -683,43 +683,42 @@ describe('MessageBus', () => {
         fromAppId: LEAD_APP,
         to: 'researcher',
         message: 'from another machine',
-        external: true,
+        origin: 'colleague',
       })
 
       expect(midTurnDeliveries).toHaveLength(0)
       expect('messageId' in second && second.delivery).toBe('queued')
       expect(bus.hasBufferedMessages(EPOCH_ID)).toBe(true)
 
-      // The buffered message is delivered as a WAKE when the turn ends, with
-      // its external origin intact for resolveTurnOrigin to act on.
+      // The buffered message is delivered as a WAKE when the turn ends, with its
+      // origin intact for the turn it starts to be held to.
       const researcherKey = buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, EPOCH_ID)
       busy.delete(researcherKey)
       bus.completeTurn({ sessionKey: researcherKey, trigger: wakes[0].trigger, outcome: { kind: 'result', content: 'done' } })
       await Promise.resolve()
       expect(wakes).toHaveLength(2)
       expect(wakes[1].envelope.body).toBe('from another machine')
-      expect(wakes[1].trigger.external).toBe(true)
+      expect(wakes[1].trigger.origin).toBe('colleague')
     })
 
-    it('injects external messages into an external turn, including a turn started outside this bus', async () => {
+    it('injects a colleague\u2019s messages into a colleague\u2019s turn, including a turn started outside this bus', async () => {
       seedTeam(store, 'free')
       const { hooks, busy, wakes, midTurnDeliveries } = makeHooks({ midTurn: true })
-      hooks.getTurnIdentity = () => 'external'
+      hooks.getTurnIdentity = () => 'colleague'
       const sessionKey = buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, EPOCH_ID)
       busy.add(sessionKey)
       const bus = createMessageBus({ store, hooks })
       const sent = await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP,
-        to: 'researcher', message: 'external update', external: true })
+        to: 'researcher', message: 'external update', origin: 'colleague' })
       expect('messageId' in sent && sent.delivery).toBe('mid_turn')
       expect(wakes).toHaveLength(0)
       expect(midTurnDeliveries).toHaveLength(1)
       expect(bus.hasBufferedMessages(EPOCH_ID)).toBe(false)
     })
 
-    it("queues a teammate's message behind the owner's own turn instead of joining it", async () => {
-      // The owner's own chat runs with the owner's reach; a teammate's request is
-      // held to the delegated policy. Merging them would hand the teammate the
-      // owner's permissions (HEAD refused this too).
+    it("hands the owner's own digital human's message to the owner's running turn", async () => {
+      // Both run with the owner's reach, so a message one of their digital humans
+      // sends is heard at once, like the owner's own words.
       seedTeam(store, 'free')
       const { hooks, busy, wakes, midTurnDeliveries } = makeHooks({ midTurn: true })
       hooks.getTurnIdentity = () => 'owner'
@@ -728,10 +727,37 @@ describe('MessageBus', () => {
       const bus = createMessageBus({ store, hooks })
       const sent = await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP,
         to: 'researcher', message: 'teammate request' })
+      expect('messageId' in sent && sent.delivery).toBe('mid_turn')
+      expect(midTurnDeliveries).toHaveLength(1)
+      expect(wakes).toHaveLength(0)
+    })
+
+    it.each(['colleague', 'guest'] as const)("queues a %s request behind the owner's own turn instead of joining it", async (origin) => {
+      // Merging would hand an outside request the owner's permissions.
+      seedTeam(store, 'free')
+      const { hooks, busy, wakes, midTurnDeliveries } = makeHooks({ midTurn: true })
+      hooks.getTurnIdentity = () => 'owner'
+      const sessionKey = buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, EPOCH_ID)
+      busy.add(sessionKey)
+      const bus = createMessageBus({ store, hooks })
+      const sent = await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP,
+        to: 'researcher', message: 'outside request', origin })
       expect('messageId' in sent && sent.delivery).toBe('queued')
       expect(midTurnDeliveries).toHaveLength(0)
       expect(wakes).toHaveLength(0)
       expect(bus.hasBufferedMessages(EPOCH_ID)).toBe(true)
+    })
+
+    it("never merges a guest's request into a colleague's turn", async () => {
+      seedTeam(store, 'free')
+      const { hooks, busy, midTurnDeliveries } = makeHooks({ midTurn: true })
+      hooks.getTurnIdentity = () => 'colleague'
+      busy.add(buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, EPOCH_ID))
+      const bus = createMessageBus({ store, hooks })
+      const sent = await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP,
+        to: 'researcher', message: 'from a chat guest', origin: 'guest' })
+      expect('messageId' in sent && sent.delivery).toBe('queued')
+      expect(midTurnDeliveries).toHaveLength(0)
     })
 
     it('holds unknown-authority work until ready, then injects all compatible mail in order', async () => {
@@ -745,7 +771,7 @@ describe('MessageBus', () => {
       for (const message of ['first', 'second']) await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID,
         fromAppId: LEAD_APP, to: 'researcher', message })
       expect(midTurnDeliveries).toHaveLength(0)
-      identity = 'delegated'
+      identity = 'owner'
       bus.notifySessionReady(sessionKey)
       expect(wakes).toHaveLength(0)
       expect(midTurnDeliveries).toHaveLength(1)

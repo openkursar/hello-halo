@@ -124,6 +124,38 @@ POST   /api/apps/<appId>/im-chat/stop                              [ai]       di
 POST   /api/apps/<appId>/sessions/create                           [ai]       digital-human           Start a new chat thread with a digital human
 POST   /api/apps/<appId>/sessions/fork                             [ai]       digital-human           Branch an existing chat thread into a new one, copying its history
 POST   /api/apps/<appId>/sessions/delete                           [ai]       digital-human           Delete a chat thread with a digital human
+GET    /api/teams                                                  [ai]       team                    List teams, optionally only those owned by one space
+POST   /api/teams                                                  [ai]       team                    Create a persistent team, with a lead provisioned for it
+POST   /api/teams/propose-members                                  [ai]       team                    Draft AI member roles for a team goal (creates nothing)
+GET    /api/teams/collab-for-conversation/<conversationId>         [ai]       team                    Get the temporary collaboration started from one conversation
+POST   /api/teams/<teamId>/save-collab                             [ai]       team                    Keep a temporary collaboration as a persistent team
+GET    /api/teams/<teamId>                                         [ai]       team                    Get one team's own record
+GET    /api/teams/<teamId>/detail                                  [ai]       team                    Get a team with members, edges, roster status, board and decisions
+GET    /api/teams/<teamId>/chat-messages                           [ai]       team                    Read one member's transcript within a team
+POST   /api/teams/<teamId>/members/<appId>/send                    [ai]       team                    Send a message to one team member and wait for its reply
+POST   /api/teams/<teamId>/members/<appId>/stop                    [ai]       team                    Stop the turn one team member is running
+GET    /api/teams/<teamId>/artifacts                               [ai]       team                    List files each member produced in the current or latest run
+GET    /api/teams/<teamId>/conversations                           [ai]       team                    List a team's open conversations, newest first
+POST   /api/teams/<teamId>/conversations                           [ai]       team                    Open a new team conversation
+PATCH  /api/teams/<teamId>/conversations/<epochId>                 [ai]       team                    Rename a team conversation
+DELETE /api/teams/<teamId>/conversations/<epochId>                 [ai]       team                    Archive (close) a team conversation
+GET    /api/teams/<teamId>/epochs                                  [ai]       team                    List a team's runs and conversations (history), newest first
+GET    /api/teams/<teamId>/epochs/<epochId>/board                  [ai]       team                    Get the tasks, findings and members of one run
+GET    /api/teams/<teamId>/epochs/<epochId>/artifacts              [ai]       team                    List files produced during one run
+PATCH  /api/teams/<teamId>                                         [ai]       team                    Edit a team's name, goal, mode, escalation routing or lead
+DELETE /api/teams/<teamId>                                         [ai]       team                    Dissolve a team
+POST   /api/teams/<teamId>/members                                 [ai]       team                    Add an existing digital human to a team
+PATCH  /api/teams/<teamId>/members/<appId>                         [ai]       team                    Rewrite what a member is responsible for in this team
+DELETE /api/teams/<teamId>/checks/<checkId>                        [ai]       team                    Stop one periodic check a member set inside a team
+DELETE /api/teams/<teamId>/members/<appId>                         [ai]       team                    Remove a member from a team
+PUT    /api/teams/<teamId>/edges                                   [ai]       team                    Replace who hands work to whom in a structured team
+POST   /api/teams/<teamId>/run                                     [ai]       team                    Start a team run on its goal
+POST   /api/teams/<teamId>/pause                                   [ai]       team                    Stop the team's current run
+GET    /api/teams/<teamId>/triggers                                [ai]       team                    List a team's schedules and other triggers
+POST   /api/teams/<teamId>/triggers                                [ai]       team                    Add a schedule, file or WeCom trigger to a team, or change one
+POST   /api/teams/<teamId>/leave                                   [ai]       team                    Leave a team hosted on someone else's computer
+GET    /api/teams/<teamId>/federation/presence                     [ai]       team                    See which computers of a shared team are online
+DELETE /api/teams/<teamId>/triggers/<triggerId>                    [ai]       team                    Remove a schedule or other trigger from a team
 POST   /api/store/query                                            [ai]       store                   Paginated search over store listings (primary browse endpoint)
 GET    /api/store/apps                                             [ai]       store                   List store listings (legacy, non-paginated; prefer POST /api/store/query)
 GET    /api/store/apps/<slug>                                      [ai]       store                   Get full detail for one store listing by slug

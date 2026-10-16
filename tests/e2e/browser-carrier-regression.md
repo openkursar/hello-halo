@@ -54,6 +54,8 @@ a DOM node, or a Playwright result influenced by focus emulation, is not enough.
 | The production MCP tools act on the watched guest, including upload, silent download, drag, keyboard and editing in iframes | `browser-view-reveal` |
 | Editing shortcuts and paste respect the page's own cancellation and never touch the host editor | `browser-view-reveal` |
 | Unattended runs use the hidden host and survive a main-renderer reload | `browser-view-reveal` |
+| With the main window minimized or hidden, a new unattended page opens in the hidden host and a watchable one in the main host | `browser-view-reveal` |
+| When the main renderer stops attaching new pages, a watchable context still opens them in the hidden host, unlisted, paying the timeout once; showing the window restores main-host pages | `browser-view-reveal` |
 | Tab ownership isolates automation; destroying a guest reconciles the AI pointer | `browser-view-reveal` |
 | Cancellation returns frames, pressed input and remote objects; late replies cannot start input or revive a guest | `browser-view-reveal` |
 | Browser policy blocks creation, navigation, redirects and popups | `browser-view-reveal` |

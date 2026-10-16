@@ -18,7 +18,7 @@ import type { BoardArchive } from './board-archive'
 import type { ReadTeamArtifact } from './index'
 import type { TeamFolderPaths, TeamFolders } from './team-folder'
 import { renderMemberRecord, type ReadTeamMemberRecord } from './member-record'
-import type { CollabMode, TaskStatus, TeamCheckSchedule } from '../../../../shared/apps/team-types'
+import type { CollabMode, TaskStatus, TeamCheckSchedule, TeamRequestOrigin } from '../../../../shared/apps/team-types'
 
 const LOG_TAG = '[TeamTools]'
 
@@ -81,11 +81,13 @@ export interface TeamMcpContext {
    */
   forwardDepth?: number
   /**
-   * The turn these tools serve was set in motion from another machine. Stamped
-   * onto every message it sends, so passing a stranger's request through one of
-   * the owner's own digital humans does not turn it into the owner's.
+   * The turn these tools serve runs restricted for a request from outside.
+   * Stamped onto every check it sets. A message carries only a guest's: the
+   * owner's own digital humans asking each other is the owner's own work, but a
+   * stranger's request must not become the owner's by being passed along.
+   * Absent for a turn with the owner's full reach, which hands nothing on.
    */
-  external?: boolean
+  origin?: TeamRequestOrigin
   /**
    * The turn serves a guest of an IM chat this member fronts. Periodic checks
    * are standing instructions that keep spending the owner's model allowance
@@ -241,7 +243,7 @@ function buildSendTool(resolve: ResolveTeamMcpContext) {
           to: input.to,
           message: input.message,
           forwardDepth: ctx.forwardDepth,
-          ...(ctx.external ? { external: true } : {}),
+          ...(ctx.origin === 'guest' ? { origin: ctx.origin } : {}),
         })
         // A teammate send is always async; the sync receipt shape is unreachable
         // from here (only a person's 1:1 chat asks for one).
@@ -608,9 +610,9 @@ function buildReadMemberTool(resolve: ResolveTeamMcpContext) {
       if (!ctx.selfIsLead) {
         return textResult('Only the team lead can read a member\u2019s record (team_read_member).', true)
       }
-      if (ctx.external) {
+      if (ctx.origin) {
         return textResult(
-          'A member\u2019s record is not available in a turn that was started from another machine.',
+          'A member\u2019s record is not available while serving a request from outside your owner\u2019s machine.',
           true
         )
       }
@@ -689,9 +691,9 @@ function buildScheduleTool(resolve: ResolveTeamMcpContext) {
           createdByAppId: ctx.callerAppId,
           targetAppId,
           instruction: input.instruction,
-          // Same taint team_send stamps on messages: a standing instruction set
-          // in an externally-driven turn stays a stranger's instruction.
-          ...(ctx.external ? { external: true } : {}),
+          // Same origin team_send stamps on messages: a standing instruction set
+          // while serving an outside request stays that request's.
+          ...(ctx.origin ? { origin: ctx.origin } : {}),
           schedule,
         })
         record(ctx, {

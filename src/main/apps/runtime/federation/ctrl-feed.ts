@@ -116,8 +116,12 @@ export interface CtrlFeed {
   ensurePeerSubscribed(peer: NodeId): void
   /** Route one inbound feed-sync frame from a peer. */
   handleFrame(from: NodeId, frame: FeedSyncFrame): void
-  /** Forget a disconnected peer's producer subscriptions. */
-  dropPeer(peer: NodeId): void
+  /**
+   * Stop all ctrl-feed traffic with `peer`, both ways, without telling it: a node
+   * refused admission is not in the office, and what is addressed to it goes
+   * nowhere (a relay has already dropped it). A later admission subscribes afresh.
+   */
+  forgetPeer(peer: NodeId): void
   /**
    * Highest seq of THIS node's ctrl feed the peer has acked — i.e. the delivery
    * watermark. A publishWake/publishTurnComplete result is `delivered` once this
@@ -362,7 +366,10 @@ export function createCtrlFeed(deps: CtrlFeedDeps): CtrlFeed {
       }
       feed.handleInbound(from, frame)
     },
-    dropPeer: (peer) => feed.dropPeer(peer),
+    forgetPeer: (peer) => {
+      feed.dropPeer(peer)
+      feed.forgetRemote(peer, kindFor(selfNodeId))
+    },
     deliveredUpTo,
     peerDelivery,
     retransmitTick: () => feed.retransmitTick(),

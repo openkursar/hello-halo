@@ -16,6 +16,7 @@ export type {
   CodexCatalogEntry,
   ModelCatalogCache,
   ModelRefreshSummary,
+  ModelCatalogChangedEvent,
   AISourceUser,
   AISource,
   AISourcesConfig,

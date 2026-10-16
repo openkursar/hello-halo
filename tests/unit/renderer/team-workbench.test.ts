@@ -1,9 +1,9 @@
 import { taskTime } from '../../../src/renderer/components/team/workbench/time'
 import { executionTurns } from '../../../src/renderer/components/team/workbench/model'
 import { describe, expect, it } from 'vitest'
-import { taskConversationRows, COLLABORATION_PREVIEW_LIMIT, conversationMessages, activityLevel, taskGroup, visibleTasks, taskActivityRows, taskReportMessages, isTeamBackgroundTurn, decisionMessageId, sharedTaskDecisions } from '../../../src/renderer/components/team/workbench/model'
+import { taskConversationRows, COLLABORATION_PREVIEW_LIMIT, conversationMessages, activityLevel, taskGroup, visibleTasks, taskActivityRows, taskReportMessages, isTeamBackgroundTurn, decisionMessageId, sharedTaskDecisions, undeliveredParties, taskParticipants, reportGaps } from '../../../src/renderer/components/team/workbench/model'
 import { conversationLabel } from '../../../src/renderer/components/team/run-history'
-import type { TeamConversation, TeamActivity } from '../../../src/shared/apps/team-types'
+import type { TeamConversation, TeamActivity, RosterMember, BlackboardTask, BlackboardFinding } from '../../../src/shared/apps/team-types'
 import type { ActivityEntry } from '../../../src/shared/apps/app-types'
 const task = (patch: Partial<TeamConversation> = {}): TeamConversation => ({ epochId: 'task', teamId: 'team', kind: 'native', label: 'Task', readonly: false, startedAt: 1, lastActivityAt: 1, ...patch })
 describe('task workbench projection', () => {
@@ -290,5 +290,52 @@ describe('the owner’s additions to a member’s running work, read back', () =
     const reply = { ...first, timestamp: at(5) }
     const rows = taskConversationRows([human, addition, another, reply], [], 'task', 'kb')
     expect(rows.map(row => row.message?.id ?? row.additions?.map(message => message.id))).toEqual(['human', ['addition', 'another'], 'first'])
+  })
+})
+
+describe('a message that did not arrive', () => {
+  const failed = (patch: Partial<TeamActivity>): TeamActivity => ({ id: 'fate', teamId: 'team', epochId: 'task', kind: 'reply', actorAppId: 'design',
+    targetAppId: 'requirements', subject: 'The message was not delivered', body: null, refId: null, correlationId: 'c-1', status: 'undelivered', createdAt: 1000, ...patch })
+
+  it('reads a failed fate as the message it was, from its sender to the member it never reached', () => {
+    expect(undeliveredParties(failed({}))).toEqual({ senderAppId: 'requirements', recipientAppId: 'design' })
+    expect(undeliveredParties(failed({ kind: 'message', actorAppId: 'requirements', targetAppId: 'design' })))
+      .toEqual({ senderAppId: 'requirements', recipientAppId: 'design' })
+    expect(undeliveredParties(failed({ status: 'timeout' }))).toBeNull()
+  })
+})
+
+describe('reports that cannot be read', () => {
+  const member = (appId: string, patch: Partial<RosterMember> = {}): RosterMember => ({ appId, memberName: appId, role: '', isLead: false, spaceId: null, status: 'idle', sameMachine: true, presence: 'online', ...patch })
+  const roster = [
+    member('design'),
+    member('requirements', { sameMachine: false, owner: 'Jane', presence: 'online' }),
+    member('security', { sameMachine: false, owner: 'Jie', presence: 'offline' }),
+    member('sonar', { sameMachine: false, owner: 'Jie', presence: 'offline' }),
+    member('pm', { sameMachine: false, owner: 'Mo', presence: 'offline' }),
+    member('tester', { sameMachine: false, owner: 'Harper', presence: 'offline' }),
+  ]
+
+  it('counts a member as taking part only on a trace it left in this task', () => {
+    const ids = taskParticipants({
+      epochId: 'task',
+      activities: [{ actorAppId: 'requirements', targetAppId: 'design' } as TeamActivity],
+      tasks: [{ createdByAppId: 'lead', assigneeAppId: 'tester' } as BlackboardTask],
+      findings: [{ authorAppId: 'writer' } as BlackboardFinding],
+      roster: [member('busy', { busy: [{ epochId: 'task', label: 'Task', kind: 'conversation' }] }), member('elsewhere', { busy: [{ epochId: 'other', label: 'Other', kind: 'conversation' }] })],
+      reports: [{ appId: 'reporter', message: { id: 'm', role: 'assistant', content: 'done', timestamp: '' } }],
+      memberAppIds: ['deciding'],
+    })
+    expect([...ids].sort()).toEqual(['busy', 'deciding', 'design', 'lead', 'reporter', 'requirements', 'tester', 'writer'])
+  })
+
+  it('warns about members of the task, by whose computer is offline, and only names uninvolved offline computers', () => {
+    const gaps = reportGaps(['security', 'sonar', 'pm', 'tester'], roster, new Set(['design', 'requirements', 'tester']))
+    expect(gaps).toEqual({ offline: [{ owner: 'Harper', members: ['tester'] }], failed: [], elsewhere: ['Jie', 'Mo'] })
+  })
+
+  it('never lowers a failure while the computer is reachable, involved or not', () => {
+    const gaps = reportGaps(['design', 'requirements'], roster, new Set())
+    expect(gaps).toEqual({ offline: [], failed: ['design', 'requirements'], elsewhere: [] })
   })
 })

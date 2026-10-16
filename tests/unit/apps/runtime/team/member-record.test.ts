@@ -195,8 +195,8 @@ describe('team_read_member tool', () => {
     expect(readMemberRecord).toHaveBeenCalledWith({ teamId: 't', epochId: 'e', memberAppId: 'app-local', before: 31 })
   })
 
-  it('does not read the record of a run started from another machine', async () => {
-    const { tool, readMemberRecord } = serverFor({ external: true })
+  it.each(['colleague', 'guest'] as const)('does not read the record while serving a %s request restricted', async (origin) => {
+    const { tool, readMemberRecord } = serverFor({ origin })
     const res = await tool!.handler({ member: 'writer' })
     expect(res.isError).toBe(true)
     expect(readMemberRecord).not.toHaveBeenCalled()

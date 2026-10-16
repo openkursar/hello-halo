@@ -723,6 +723,39 @@ describe('TeamService', () => {
     })
   })
 
+  describe('setTrigger', () => {
+    const webhook = { sourceType: 'webhook' as const, config: { path: 'deploys', secret: 's3cret' } }
+    const schedule = { sourceType: 'schedule' as const, config: { every: '1h' } }
+
+    it('adds and changes any kind for Halo\u2019s own clients, a webhook included', async () => {
+      const team = await ctx.service.createTeam(manualInput())
+      const hook = ctx.service.setTrigger(team.id, webhook)
+      expect(hook).toMatchObject({ sourceType: 'webhook', config: webhook.config, enabled: true })
+
+      const paused = ctx.service.setTrigger(team.id, { ...webhook, enabled: false }, hook.id)
+      expect(paused).toMatchObject({ id: hook.id, sourceType: 'webhook', enabled: false })
+      const timer = ctx.service.setTrigger(team.id, schedule)
+      expect(ctx.service.setTrigger(team.id, { ...schedule, config: { cron: '0 9 * * 1' } }, timer.id).config)
+        .toEqual({ cron: '0 9 * * 1' })
+    })
+
+    it('refuses a change that names another kind than the trigger has, and leaves it as it was', async () => {
+      const team = await ctx.service.createTeam(manualInput())
+      const hook = ctx.service.setTrigger(team.id, webhook)
+      const timer = ctx.service.setTrigger(team.id, schedule)
+
+      expect(() => ctx.service.setTrigger(team.id, { sourceType: 'schedule', config: { path: 'deploys' } }, hook.id))
+        .toThrow(/is a webhook trigger and its type cannot be changed/)
+      expect(() => ctx.service.setTrigger(team.id, webhook, timer.id))
+        .toThrow(/is a schedule trigger and its type cannot be changed/)
+      // A body that names no kind at all is no different.
+      expect(() => ctx.service.setTrigger(team.id, { config: {}, enabled: true } as never, hook.id)).toThrow(/cannot be changed/)
+
+      expect(ctx.store.getTriggerById(hook.id)).toMatchObject({ sourceType: 'webhook', config: webhook.config, enabled: true })
+      expect(ctx.store.getTriggerById(timer.id)).toMatchObject({ sourceType: 'schedule', config: schedule.config })
+    })
+  })
+
   describe('setEdges + listTeamItems', () => {
     it('setEdges replaces topology and normalizes teamId', async () => {
       const team = await ctx.service.createTeam(manualInput({ collabMode: 'free' }))

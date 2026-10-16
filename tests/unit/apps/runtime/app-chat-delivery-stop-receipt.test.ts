@@ -32,13 +32,10 @@ vi.mock('../../../../src/main/apps/runtime/session-store', () => ({
 vi.mock('../../../../src/main/apps/runtime/im-session-registry', () => ({ getImSessionRegistry: () => null }))
 vi.mock('../../../../src/main/apps/runtime/im-channels', () => ({ getActiveImChannelManager: () => null }))
 vi.mock('../../../../src/main/apps/runtime/im-permission-registry', () => ({ getImPermissionContext: () => undefined }))
-vi.mock('../../../../src/main/apps/runtime/team/external-origin', () => ({
-  peekTurnOrigin: (_key: string, trigger: { external?: boolean }) => trigger.external === true,
-}))
 vi.mock('../../../../src/main/apps/runtime/app-chat-live-turn', () => ({
   isAppChatConversationGenerating: () => env.busy,
   getAppChatTurnIdentity: () => env.identity,
-  appChatMessageIdentity: (_permission: unknown, external: boolean) => (external ? 'external' : 'owner'),
+  appChatMessageIdentity: (_permission: unknown, origin?: string) => origin ?? 'owner',
   injectIntoAppChatBatch: (_key: string, _messages: unknown[], onTakenBack: (indexes: readonly number[]) => void) => {
     env.takenBack.push(onTakenBack)
     return true
@@ -62,7 +59,7 @@ function remoteWake(message: string, correlationId: string, hooks: Pick<AppChatR
     spaceId: 'space',
     conversationId: KEY,
     message,
-    teamContext: { teamId: 'team-1', epochId: 'epoch-1', correlationId, fromAppId: 'lead', wait: true, kind: 'message', external: true },
+    teamContext: { teamId: 'team-1', epochId: 'epoch-1', correlationId, fromAppId: 'lead', wait: true, kind: 'message', origin: 'colleague' },
     ...hooks,
   }
 }
@@ -104,7 +101,7 @@ describe('a wake a person stopped before the member read it', () => {
     const first = sink.beginRound({ onReply: vi.fn(), onResult: firstResult })
     sink.onTurnStart()
     env.busy = true
-    env.identity = 'external'
+    env.identity = 'colleague'
 
     const run = vi.fn(async (_request: AppChatRequest) => {})
     const delivery = createAppChatDelivery(run)

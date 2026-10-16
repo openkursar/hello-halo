@@ -83,7 +83,7 @@ export function TaskRoom({ detail, task, selectedAppId, onSelectMember, onCreate
   </div>
   const timeline = (messages: import('../../../types').Message[], liveThoughts: import('../../../types').Thought[] = []) => <>
     <TaskConversation messages={messages} activities={boardState.activities} epochId={epochId} appId={appId ?? undefined} detail={detail} showEmpty={!!appId && !!epochId && !boardState.failed && !!boardState.board} onActivity={onActivity}
-      emptyActions={emptyActions} onHumanConversation={rememberConversation} focusDecision={focusedDecision} onDecisionFocused={() => setFocusedDecision(null)} decisions={decisions.filter(entry => (entry.appId === appId || !ids.includes(entry.appId)) && !decisionHasReceipt(entry, liveThoughts))} onAnswered={entry => { decisionHistory.answered(entry); refresh() }} />
+      taskCompleted={!!task?.completed} emptyActions={emptyActions} onHumanConversation={rememberConversation} focusDecision={focusedDecision} onDecisionFocused={() => setFocusedDecision(null)} decisions={decisions.filter(entry => (entry.appId === appId || !ids.includes(entry.appId)) && !decisionHasReceipt(entry, liveThoughts))} onAnswered={entry => { decisionHistory.answered(entry); refresh() }} />
     {epochId && member && appId && isTeamBackgroundTurn(messages) && <ExecutionStatus teamId={detail.team.id} epochId={epochId} appId={appId} remote={member.sameMachine === false} busy={!!member.busy?.some(row => row.epochId === epochId)} latestResult={[...messages].reverse().find(message => message.role === 'assistant')} onOpen={() => onExecution(appId)} />}
   </>
   const memberLabel = member ? <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground" title={member.memberName}>

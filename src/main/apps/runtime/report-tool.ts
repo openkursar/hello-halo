@@ -283,7 +283,7 @@ export function createReportToolServer(
           teamId: team.teamId,
           epochId: team.epochId,
           ...(team.taskId ? { taskId: team.taskId } : {}),
-          ...(team.external ? { external: true } : {}),
+          ...(team.origin ? { origin: team.origin } : {}),
         }
         getActiveTeamRuntime()?.captureReport(team.correlationId, {
           kind: 'escalation',

@@ -18,12 +18,15 @@ import type { CapabilityPresetId } from '../../../shared/apps/capability-policy'
 import { useTranslation } from '../../i18n'
 
 interface DelegationPresetPickerProps {
-  value: CapabilityPresetId
+  /** Null when what is saved now matches none of the answers. */
+  value: CapabilityPresetId | null
   onChange: (preset: CapabilityPresetId) => void
   /** What the choice is about, in this screen's words. */
   title: string
   /** Who the permission is being granted to. */
   subtitle: string
+  /** Shown above the answers, e.g. why none of them is selected. */
+  notice?: string
 }
 
 export function DelegationPresetPicker({
@@ -31,6 +34,7 @@ export function DelegationPresetPicker({
   onChange,
   title,
   subtitle,
+  notice,
 }: DelegationPresetPickerProps) {
   const { t } = useTranslation()
 
@@ -45,7 +49,7 @@ export function DelegationPresetPicker({
     },
     full: {
       label: t('Everything it can normally do'),
-      description: t('The same reach it has when you work with it yourself, including running commands.'),
+      description: t('The same reach it has when you work with it yourself, including running commands. Operating Halo itself stays yours.'),
     },
   }
 
@@ -53,6 +57,7 @@ export function DelegationPresetPicker({
     <div>
       <p className="mb-1 text-xs font-medium text-muted-foreground">{title}</p>
       <p className="mb-1.5 text-xs text-muted-foreground/70">{subtitle}</p>
+      {notice && <p className="mb-1.5 text-xs text-foreground">{notice}</p>}
       <div className="flex flex-col gap-1.5">
         {CAPABILITY_PRESET_IDS.map(id => {
           const selected = value === id
@@ -60,6 +65,7 @@ export function DelegationPresetPicker({
             <button
               key={id}
               type="button"
+              aria-pressed={selected}
               onClick={() => onChange(id)}
               className={`rounded-lg border px-3 py-2 text-left transition-colors ${
                 selected ? 'border-primary bg-primary/5' : 'border-border hover:bg-secondary/50'

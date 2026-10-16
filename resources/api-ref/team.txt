@@ -1,0 +1,323 @@
+## team — teams of digital humans that work toward one goal together
+covers: list, create and dissolve teams, edit name and goal, add, remove and
+        re-brief members, collaboration topology, start and stop a run,
+        schedules and other triggers, message or stop one member, run history,
+        boards, conversations and produced files, save a temporary
+        collaboration as a team
+not here:
+  one digital human on its own schedule -> digital-human
+  installing a digital human to use as a member -> digital-human
+  binding an IM chat to a team member -> channels
+  assembling a temporary team inside this conversation -> use the collab_start tool
+
+operations on this page:
+  GET    /api/teams                                                  List teams, optionally only those owned by one space
+  POST   /api/teams                                                  Create a persistent team, with a lead provisioned for it
+  GET    /api/teams/<teamId>                                         Get one team's own record
+  PATCH  /api/teams/<teamId>                                         Edit a team's name, goal, mode, escalation routing or lead
+  DELETE /api/teams/<teamId>                                         Dissolve a team   !! destructive - narrower: DELETE /api/teams/<teamId>/members/<appId>
+  GET    /api/teams/<teamId>/artifacts                               List files each member produced in the current or latest run
+  GET    /api/teams/<teamId>/chat-messages                           Read one member's transcript within a team
+  DELETE /api/teams/<teamId>/checks/<checkId>                        Stop one periodic check a member set inside a team   !! destructive
+  GET    /api/teams/<teamId>/conversations                           List a team's open conversations, newest first
+  POST   /api/teams/<teamId>/conversations                           Open a new team conversation
+  PATCH  /api/teams/<teamId>/conversations/<epochId>                 Rename a team conversation
+  DELETE /api/teams/<teamId>/conversations/<epochId>                 Archive (close) a team conversation   !! destructive
+  GET    /api/teams/<teamId>/detail                                  Get a team with members, edges, roster status, board and decisions
+  PUT    /api/teams/<teamId>/edges                                   Replace who hands work to whom in a structured team
+  GET    /api/teams/<teamId>/epochs                                  List a team's runs and conversations (history), newest first
+  GET    /api/teams/<teamId>/epochs/<epochId>/artifacts              List files produced during one run
+  GET    /api/teams/<teamId>/epochs/<epochId>/board                  Get the tasks, findings and members of one run
+  GET    /api/teams/<teamId>/federation/presence                     See which computers of a shared team are online
+  POST   /api/teams/<teamId>/leave                                   Leave a team hosted on someone else's computer   !! destructive
+  POST   /api/teams/<teamId>/members                                 Add an existing digital human to a team
+  PATCH  /api/teams/<teamId>/members/<appId>                         Rewrite what a member is responsible for in this team
+  DELETE /api/teams/<teamId>/members/<appId>                         Remove a member from a team   !! destructive
+  POST   /api/teams/<teamId>/members/<appId>/send                    Send a message to one team member and wait for its reply
+  POST   /api/teams/<teamId>/members/<appId>/stop                    Stop the turn one team member is running
+  POST   /api/teams/<teamId>/pause                                   Stop the team's current run
+  POST   /api/teams/<teamId>/run                                     Start a team run on its goal
+  POST   /api/teams/<teamId>/save-collab                             Keep a temporary collaboration as a persistent team
+  GET    /api/teams/<teamId>/triggers                                List a team's schedules and other triggers
+  POST   /api/teams/<teamId>/triggers                                Add a schedule, file or WeCom trigger to a team, or change one
+  DELETE /api/teams/<teamId>/triggers/<triggerId>                    Remove a schedule or other trigger from a team   !! destructive - narrower: POST /api/teams/<teamId>/triggers
+  GET    /api/teams/collab-for-conversation/<conversationId>         Get the temporary collaboration started from one conversation
+  POST   /api/teams/propose-members                                  Draft AI member roles for a team goal (creates nothing)
+
+GET    /api/teams                                                  List teams, optionally only those owned by one space
+     curl -s "$HALO_API_URL/api/teams" -H "Authorization: Bearer $HALO_API_TOKEN" | head -c 4000
+     # out: {success:true,data:[{id,name,status:"idle"|"running"|"waiting_user"|"error",memberCount,hasWaitingUser,waitingCount?,leadAppId,localMembers:[{appId,memberName,isLead}],hostNodeId?,ephemeral?,updatedAt}]}
+     # note: Optional query: ?spaceId=. Omitting it lists every space, which is what the Halo app shows; pass $HALO_SPACE_ID to narrow it, and say which of the two you did.
+     # note: ephemeral:true is a temporary collaboration started from a conversation; it is hidden from the Teams page until saved (POST /api/teams/:teamId/save-collab).
+     # note: hostNodeId set means the team is hosted on someone else's computer and was joined from here — it can be read and its members messaged, but not edited or run.
+
+POST   /api/teams                                                  Create a persistent team, with a lead provisioned for it
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/teams" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"input":{"name":"Weekly market brief","goal":"Every Monday, summarise competitor moves into brief.md","owningSpaceId":"<spaceId — a uuid from GET /api/spaces>","memberSourcing":"manual","collabMode":"free","escalationRouting":"user","members":[{"appId":"<appId — a digital human from GET /api/apps>","memberName":"Researcher","role":"Research","duty":"Collects competitor news"}]}}'
+     # body: {"input": {"name": "Weekly market brief", "goal": "Every Monday, summarise competitor moves into brief.md", "owningSpaceId": "<spaceId — a uuid from GET /api/spaces>", "memberSourcing": "manual", "collabMode": "free", "escalationRouting": "user", "members": [{"appId": "<appId — a digital human from GET /api/apps>", "memberName": "Researcher", "role": "Research", "duty": "Collects competitor news"}]}}
+     # out: {success:true,data:{id,name,owningSpaceId,goal,leadAppId,memberSourcing,collabMode,escalationRouting,status,currentEpochId,createdAt,updatedAt}}
+     # note: memberSourcing "manual": members are existing digital humans (appId from GET /api/apps). memberSourcing "ai": omit members and send "confirmedProposal": [{memberName, role, responsibility}] (up to 5) beside "input" — POST /api/teams/propose-members drafts one; Halo creates a new digital human for each.
+     # note: collabMode: "free" (members contact anyone) or "structured" (edges are generated from the lead; edit them with PUT /api/teams/:teamId/edges). escalationRouting: "user" (questions go to the user) or "lead".
+     # note: Creates digital humans (the lead, and AI-sourced members) as a side effect; on any failure the whole team is rolled back.
+     # note: Create a persistent team only when the user asked for one. Members' delegated permissions are set in the Halo app — see this page's withheld list.
+
+GET    /api/teams/<teamId>                                         Get one team's own record
+     curl -s "$HALO_API_URL/api/teams/<teamId>" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:{id,name,owningSpaceId,goal,leadAppId,memberSourcing,collabMode,escalationRouting,status,currentEpochId,hostNodeId,ephemeral?,createdAt,updatedAt} | null}
+     # note: For members, edges, live board and waiting decisions use GET /api/teams/:teamId/detail.
+
+PATCH  /api/teams/<teamId>                                         Edit a team's name, goal, mode, escalation routing or lead
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX PATCH "$HALO_API_URL/api/teams/<teamId>" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"name":"New name","goal":"New goal"}'
+     # body: {"name": "New name", "goal": "New goal"}
+     # out: {success:true,data:{id,name,goal,collabMode,escalationRouting,leadAppId,...}}
+     # note: Only the fields sent change. Also accepts "collabMode": "free"|"structured", "escalationRouting": "user"|"lead", "leadAppId".
+
+DELETE /api/teams/<teamId>                                         Dissolve a team
+     !! DESTRUCTIVE: cannot be undone. Confirm with the user in plain language before running this.
+     !! If the user meant something smaller, use DELETE /api/teams/<teamId>/members/<appId> instead.
+     curl -sX DELETE "$HALO_API_URL/api/teams/<teamId>" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true}
+     # note: Also deletes the digital humans Halo created for this team (its lead and AI-sourced members) and their spaces; digital humans the user added stay. Run history goes with the team. Confirm with the user first.
+
+GET    /api/teams/<teamId>/artifacts                               List files each member produced in the current or latest run
+     curl -s "$HALO_API_URL/api/teams/<teamId>/artifacts" -H "Authorization: Bearer $HALO_API_TOKEN" | head -c 4000
+     # out: {success:true,data:[{appId,memberName,spaceId,epochId,artifacts:[{name,type:"file"|"folder",path,relativePath,size?,createdAt}]}]}
+     # note: For a specific past run use GET /api/teams/:teamId/epochs/:epochId/artifacts. Read a file with your own file tools at its path.
+
+GET    /api/teams/<teamId>/chat-messages                           Read one member's transcript within a team
+     curl -s "$HALO_API_URL/api/teams/<teamId>/chat-messages?appId=<appId — a member appId from GET /api/teams/:teamId/detail>" -H "Authorization: Bearer $HALO_API_TOKEN" | head -c 4000
+     # out: {success:true,data:[messages],stale?:true}
+     # note: Optional query: &epochId= (a run or conversation id from GET /api/teams/:teamId/epochs; default: the open run, else the member's own chat, else the latest), &sinceSeq= for incremental reads.
+     # note: A member on another computer is fetched from its owner; stale:true means a cached copy because the owner is offline, and a 502 means it is unavailable right now.
+
+DELETE /api/teams/<teamId>/checks/<checkId>                        Stop one periodic check a member set inside a team
+     !! DESTRUCTIVE: cannot be undone. Confirm with the user in plain language before running this.
+     curl -sX DELETE "$HALO_API_URL/api/teams/<teamId>/checks/<checkId>" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true}
+     # note: checkId comes from checks[] in GET /api/teams/:teamId/detail.
+
+GET    /api/teams/<teamId>/conversations                           List a team's open conversations, newest first
+     curl -s "$HALO_API_URL/api/teams/<teamId>/conversations" -H "Authorization: Bearer $HALO_API_TOKEN" | head -c 4000
+     # out: {success:true,data:[{epochId,teamId,kind:"native"|"im"|"member"|"run"|"collab",label,readonly,memberAppId?,channel?,startedAt,lastActivityAt,active?,waitingUser?}]}
+
+POST   /api/teams/<teamId>/conversations                           Open a new team conversation
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/teams/<teamId>/conversations" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"title":"optional title"}'
+     # body: {"title": "optional title"}
+     # out: {success:true,data:{epochId}}
+     # note: Optional body: "memberAppId" to open it as a one-to-one thread with that member.
+
+PATCH  /api/teams/<teamId>/conversations/<epochId>                 Rename a team conversation
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX PATCH "$HALO_API_URL/api/teams/<teamId>/conversations/<epochId>" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"title":"New title"}'
+     # body: {"title": "New title"}
+     # out: {success:true}
+     # note: Send "title": null to go back to the derived label.
+
+DELETE /api/teams/<teamId>/conversations/<epochId>                 Archive (close) a team conversation
+     !! DESTRUCTIVE: cannot be undone. Confirm with the user in plain language before running this.
+     curl -sX DELETE "$HALO_API_URL/api/teams/<teamId>/conversations/<epochId>" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true}
+     # note: The conversation stays in run history (GET /api/teams/:teamId/epochs) but can no longer take messages.
+
+GET    /api/teams/<teamId>/detail                                  Get a team with members, edges, roster status, board and decisions
+     curl -s "$HALO_API_URL/api/teams/<teamId>/detail" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:{team,members:[{appId,memberName,role,duty,isLead,origin,ownerDisplayName,...}],edges:[{fromAppId,toAppId,sync}],roster:[{appId,memberName,role,status:"working"|"idle"|"error"|"waiting_user",currentTaskTitle?}],tasks:[{id,title,assigneeAppId,status,resultRef,note}],findings:[...],activities?,pendingEscalations?:[{appId,memberName,entryId,question}],checks?:[{id,targetMemberName,instruction,schedule,runCount}],boardEpochId,crossesMachines?} | null}
+     # note: The richest single read of a team; start here when the user asks how a team is doing. A pending escalation is answered by the user in Halo, not over this API.
+
+PUT    /api/teams/<teamId>/edges                                   Replace who hands work to whom in a structured team
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX PUT "$HALO_API_URL/api/teams/<teamId>/edges" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"edges":[{"fromAppId":"<appId — a member appId from GET /api/teams/:teamId/detail>","toAppId":"<appId — a member appId from GET /api/teams/:teamId/detail>","sync":false}]}'
+     # body: {"edges": [{"fromAppId": "<appId — a member appId from GET /api/teams/:teamId/detail>", "toAppId": "<appId — a member appId from GET /api/teams/:teamId/detail>", "sync": false}]}
+     # out: {success:true}
+     # note: Replaces the whole list — read the current edges from GET /api/teams/:teamId/detail and send them back with your change. Only meaningful when collabMode is "structured".
+
+GET    /api/teams/<teamId>/epochs                                  List a team's runs and conversations (history), newest first
+     curl -s "$HALO_API_URL/api/teams/<teamId>/epochs" -H "Authorization: Bearer $HALO_API_TOKEN" | head -c 4000
+     # out: {success:true,data:[{id,startedAt,lastActivityAt,endedAt,endReason,summary,taskCount,doneCount,lifecycle:"run"|"conversation",label?,outcome?:"output"|"no_action"|"escalation"|"failed",triggerType?,artifactCount?}]}
+
+GET    /api/teams/<teamId>/epochs/<epochId>/artifacts              List files produced during one run
+     curl -s "$HALO_API_URL/api/teams/<teamId>/epochs/<epochId>/artifacts" -H "Authorization: Bearer $HALO_API_TOKEN" | head -c 4000
+     # out: {success:true,data:[{appId,memberName,spaceId,epochId,artifacts:[...]}]}
+
+GET    /api/teams/<teamId>/epochs/<epochId>/board                  Get the tasks, findings and members of one run
+     curl -s "$HALO_API_URL/api/teams/<teamId>/epochs/<epochId>/board" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:{epoch,tasks:[...],findings:[...],members:[...],activities?} | null}
+
+GET    /api/teams/<teamId>/federation/presence                     See which computers of a shared team are online
+     curl -s "$HALO_API_URL/api/teams/<teamId>/federation/presence" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:{officeId,role:"host"|"joined",nodes:[{nodeId,displayName,status,lastSeen}],authority} | null}
+     # note: null means the team is not shared with other computers.
+
+POST   /api/teams/<teamId>/leave                                   Leave a team hosted on someone else's computer
+     !! DESTRUCTIVE: cannot be undone. Confirm with the user in plain language before running this.
+     curl -sX POST "$HALO_API_URL/api/teams/<teamId>/leave" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{}'
+     # body: {}
+     # out: {success:true} | {success:false,error}
+     # note: Only for a joined team (hostNodeId set in GET /api/teams). The members this computer brought leave with it; coming back needs a new invite from the host. Confirm with the user first.
+
+POST   /api/teams/<teamId>/members                                 Add an existing digital human to a team
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/teams/<teamId>/members" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"appId":"<appId — a digital human from GET /api/apps>","memberName":"Reviewer","role":"Review","duty":"Checks every draft before it is filed"}'
+     # body: {"appId": "<appId — a digital human from GET /api/apps>", "memberName": "Reviewer", "role": "Review", "duty": "Checks every draft before it is filed"}
+     # out: {success:true,data:{teamId,appId,memberName,role,duty,isLead,addedAt,...}}
+     # note: To have Halo create a new digital human for a role, create one first (digital-human group) and add it here. Delegated permissions are set in the Halo app — see this page's withheld list.
+
+PATCH  /api/teams/<teamId>/members/<appId>                         Rewrite what a member is responsible for in this team
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX PATCH "$HALO_API_URL/api/teams/<teamId>/members/<appId>" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"duty":"Owns the pricing section"}'
+     # body: {"duty": "Owns the pricing section"}
+     # out: {success:true,data:{teamId,appId,memberName,role,duty,...}}
+     # note: Only members that run on this computer can be changed; a member someone else brought is refused. Delegated permissions are set in the Halo app — see this page's withheld list.
+
+DELETE /api/teams/<teamId>/members/<appId>                         Remove a member from a team
+     !! DESTRUCTIVE: cannot be undone. Confirm with the user in plain language before running this.
+     curl -sX DELETE "$HALO_API_URL/api/teams/<teamId>/members/<appId>" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true}
+     # note: The digital human itself stays installed unless Halo created it only for this team.
+
+POST   /api/teams/<teamId>/members/<appId>/send                    Send a message to one team member and wait for its reply
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/teams/<teamId>/members/<appId>/send" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"message":"Please re-check the pricing section"}'
+     # body: {"message": "Please re-check the pricing section"}
+     # out: {success:true,data:{ok,finalMessage,reason?,delivery?:"queued"|"mid_turn"}}
+     # note: Blocks until the member finishes its turn (can take minutes) and returns its final message. delivery "queued"/"mid_turn" means the member was busy: the message was accepted but no reply exists yet — read it later with GET /api/teams/:teamId/chat-messages.
+     # note: Optional body: "epochId" to address a specific run or conversation. Works for members on other computers too.
+
+POST   /api/teams/<teamId>/members/<appId>/stop                    Stop the turn one team member is running
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/teams/<teamId>/members/<appId>/stop" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{}'
+     # body: {}
+     # out: {success:true,data:{ok,stopped,reason?}}  — stopped:false means nothing was running
+     # note: Optional body: "epochId". To stop the whole team run instead, POST /api/teams/:teamId/pause.
+
+POST   /api/teams/<teamId>/pause                                   Stop the team's current run
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/teams/<teamId>/pause" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{}'
+     # body: {}
+     # out: {success:true}
+     # note: Seals the run as stopped; members mid-turn are stopped with it. Start again with POST /api/teams/:teamId/run.
+
+POST   /api/teams/<teamId>/run                                     Start a team run on its goal
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/teams/<teamId>/run" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{}'
+     # body: {}
+     # out: {success:true}  — returns once the run has started; it continues in the background
+     # note: This route carries no brief: the lead works from the team goal. If you hold the team_run tool, use it to hand over a concrete brief.
+     # note: Fails for a temporary collaboration (save it first) and for a team hosted on another computer. Follow progress with GET /api/teams/:teamId/detail.
+
+POST   /api/teams/<teamId>/save-collab                             Keep a temporary collaboration as a persistent team
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/teams/<teamId>/save-collab" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"name":"optional new team name"}'
+     # body: {"name": "optional new team name"}
+     # out: {success:true,data:{id,name,owningSpaceId,goal,leadAppId,status,...}}
+     # note: Only when the user asked to keep it. If you hold the collab_save tool and the collaboration is the one in this conversation, use the tool.
+
+GET    /api/teams/<teamId>/triggers                                List a team's schedules and other triggers
+     curl -s "$HALO_API_URL/api/teams/<teamId>/triggers" -H "Authorization: Bearer $HALO_API_TOKEN" | head -c 4000
+     # out: {success:true,data:[{id,teamId,sourceType:"schedule"|"webhook"|"file"|"wecom",config,enabled,createdAt}]}  — a webhook secret is redacted
+
+POST   /api/teams/<teamId>/triggers                                Add a schedule, file or WeCom trigger to a team, or change one
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/teams/<teamId>/triggers" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"trigger":{"sourceType":"schedule","config":{"cron":"0 9 * * 1"},"enabled":true}}'
+     # body: {"trigger": {"sourceType": "schedule", "config": {"cron": "0 9 * * 1"}, "enabled": true}}
+     # out: {success:true,data:{id,teamId,sourceType,config,enabled,createdAt}}
+     # note: config by sourceType — schedule: {"every": "30m"} or {"cron": "0 9 * * 1"}; file: {"pattern": "*.csv", "path": "<directory substring>"}; wecom: {"chatId": "<optional>"}.
+     # note: Ask the user for the schedule; never assume one. Send "triggerId" beside "trigger" to change an existing trigger instead of adding one; "sourceType" must stay the type it already has.
+     # note: Webhook triggers are refused here — see this page's withheld list.
+
+DELETE /api/teams/<teamId>/triggers/<triggerId>                    Remove a schedule or other trigger from a team
+     !! DESTRUCTIVE: cannot be undone. Confirm with the user in plain language before running this.
+     !! If the user meant something smaller, use POST /api/teams/<teamId>/triggers instead.
+     curl -sX DELETE "$HALO_API_URL/api/teams/<teamId>/triggers/<triggerId>" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true}
+     # note: To pause one without losing it, POST /api/teams/:teamId/triggers with its triggerId and "enabled": false (not a webhook trigger — see this page's withheld list).
+
+GET    /api/teams/collab-for-conversation/<conversationId>         Get the temporary collaboration started from one conversation
+     curl -s "$HALO_API_URL/api/teams/collab-for-conversation/<conversationId>" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:{teamId,name,goal,epochId,active,saved,members:[...]} | null}
+     # note: conversationId is a space conversation id (GET /api/spaces/:spaceId/conversations). null means that conversation never started a collaboration.
+
+POST   /api/teams/propose-members                                  Draft AI member roles for a team goal (creates nothing)
+     curl -sX POST "$HALO_API_URL/api/teams/propose-members" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"goal":"Every Monday, summarise competitor moves into brief.md","owningSpaceId":"<spaceId — a uuid from GET /api/spaces>"}'
+     # body: {"goal": "Every Monday, summarise competitor moves into brief.md", "owningSpaceId": "<spaceId — a uuid from GET /api/spaces>"}
+     # out: {success:true,data:[{memberName,role,responsibility}]}  — at most 5
+     # note: Runs a model call, so it takes a few seconds. Show the draft to the user, then pass it as confirmedProposal to POST /api/teams with memberSourcing "ai".
+
+Halo does all of these; you do not. Say so, and say where:
+  - Invite people from other computers into a team, revoke an invite, or join a team hosted on someone else's computer — each one decides who can reach this machine, so the user does it from the team's settings in the Halo app.
+  - Set what teammates on other computers may make a member do (its delegated permissions) — that is the owner's consent for their own machine, set from the member's settings in the Halo app. Member and team writes refuse the delegatedPolicy field for that reason.
+  - Add, change, pause or resume a webhook trigger — it lets anyone who can reach this computer start the team with the owner's permissions, so the trigger write refuses sourceType webhook. Tell the user this is something you cannot set up for them, and offer a schedule or file trigger if one fits.
+That list is complete for this area and the search has already been done for
+  you: do not grep the index for these, and do not guess a path — it will 403.
+For anything NOT on that list the normal rule still applies: grep the index
+  before you tell the user something is impossible.
+After saying where, tell the user which nearby parts you CAN do for them —
+  a hand-off reads very differently from a refusal.
+
+-----------------------------------------------------------------------
+$HALO_API_URL, $HALO_API_TOKEN and $HALO_SPACE_ID are already set in your Bash
+  environment. Copy commands as-is; never expand or print those variables.
+Replace only <angle-bracket> placeholders. Get real ids from a list call above.
+Read the response body and check "success". HTTP 200 alone does not mean it
+  worked - many failures return 200 with {"success":false}.
+Pipe long responses through `| head -c 4000` so you do not flood your context.
+A POST that timed out may still have taken effect. List before you retry.
+Waiting on something? Back off (2s, then double), give up after 5 tries and
+  tell the user it is still running.
+Large or binary files do not go through this API - use Read / Write / Bash.
+403 = the endpoint exists but is closed to me in this build. Tell the user to
+  do it in the Halo app. Do not tell them Halo cannot do it.
+404 with a "code" field = my path is wrong. 404 without one = the id is wrong.
+Only call paths listed on this page or in the index. Never write one from
+  memory. If this page has left your context, call halo_api_ref again.
+Full index of every endpoint: {{API_REF_INDEX_PATH}}/index.txt
+  grep -i "<keyword>" {{API_REF_INDEX_PATH}}/index.txt
+Not listed here does NOT mean not supported — that is a real, deliverable
+  answer, not a failed search. Grep the index before you say "Halo can't do that".

@@ -1,18 +1,18 @@
 /**
- * How long a digital-human chat's browser pages live.
+ * Who can watch a digital-human chat's browser pages, and how long they live.
  *
- * Native chats (default + local sessions) keep their context between turns so
- * the next message continues on the same page and the user can open the live
- * view; IM/HTTP/team sessions end with the turn. Resident is bounded: idle
- * contexts are reaped, the number holding pages is capped, and nothing is
- * reaped mid-turn or while the user is watching a tab.
+ * Native chats (default + local sessions) get a live view and keep their
+ * context between turns so the next message continues on the same page and the
+ * user can open the live view; IM/HTTP/team sessions run unattended and end
+ * with the turn. Resident is bounded: idle contexts are reaped, the number
+ * holding pages is capped, and nothing is reaped mid-turn or while the user is
+ * watching a tab.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 interface FakeCtx {
-  conversationId: string
-  spaceId: string
+  liveView: { conversationId: string; spaceId: string } | undefined
   ownedViewCount: number
   revealed: boolean
   destroyed: boolean
@@ -22,10 +22,9 @@ interface FakeCtx {
 
 const created: FakeCtx[] = []
 vi.mock('../../../../src/main/services/ai-browser', () => ({
-  createScopedBrowserContext: ({ conversationId, spaceId }: { conversationId: string; spaceId: string }): FakeCtx => {
+  createScopedBrowserContext: ({ liveView }: { liveView?: FakeCtx['liveView'] }): FakeCtx => {
     const ctx: FakeCtx = {
-      conversationId,
-      spaceId,
+      liveView,
       ownedViewCount: 1,
       revealed: false,
       destroyed: false,
@@ -130,11 +129,15 @@ describe('app chat browser contexts', () => {
       expect(ctx.destroyed).toBe(true)
     })
 
-    it('binds the context to its conversation so the renderer can tell whose page it is', () => {
-      acquireChatBrowserContext(LOCAL_KEY, 'dh1', 'space-1')
-      expect(created[0].conversationId).toBe(LOCAL_KEY)
+    it.each([DEFAULT_KEY, LOCAL_KEY])('lets the user watch %s’s pages, under its own key and space', (key) => {
+      acquireChatBrowserContext(key, 'dh1', 'space-1')
       // The tray lists pages per space; without it they would show up nowhere.
-      expect(created[0].spaceId).toBe('space-1')
+      expect(created[0].liveView).toEqual({ conversationId: key, spaceId: 'space-1' })
+    })
+
+    it.each([IM_KEY, HTTP_KEY, TEAM_KEY])('runs %s unattended: no live view, so its pages stay out of the main window', (key) => {
+      acquireChatBrowserContext(key, 'dh1', 'space-1')
+      expect(created[0].liveView).toBeUndefined()
     })
   })
 

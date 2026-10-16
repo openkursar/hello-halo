@@ -420,7 +420,7 @@ describe('executeRun — browser pages', () => {
       store: makeStore(),
       memory: makeMemory(),
     })
-    expect(createScopedBrowserContext).toHaveBeenCalledWith({ conversationId: `app-run:app-1:${result.runId}`, spaceId: 'space-1' })
+    expect(createScopedBrowserContext).toHaveBeenCalledWith({ liveView: { conversationId: `app-run:app-1:${result.runId}`, spaceId: 'space-1' } })
   })
 
   it('keeps the pages of every other run in the hidden host', async () => {

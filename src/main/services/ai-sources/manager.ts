@@ -40,6 +40,7 @@ import {
   type OAuthCompleteResult,
   type ModelOption,
   type ModelRefreshSummary,
+  type ModelCatalogChangedEvent,
   type ProviderId,
   type AuthQuotaSnapshot,
   DEFAULT_MODEL
@@ -65,6 +66,8 @@ import { MASK_SENTINEL } from '../../foundation/config-encryption'
 import { normalizeApiUrl, type RequestCredentials } from '../../openai-compat-router'
 import { analytics } from '../analytics/analytics.service'
 import { AnalyticsEvents } from '../analytics/types'
+import { Emitter, type Event } from '../../platform/event'
+import { CatalogSchedule } from './catalog-schedule'
 
 /**
  * Extended OAuth provider interface for token management
@@ -136,6 +139,13 @@ function sameCredentials(current: AISource | null | undefined, captured: AISourc
     current.refreshToken === captured.refreshToken && current.user?.uid === captured.user?.uid
 }
 
+/** What a catalog refresh can change that people or sessions see; fetch timestamps excluded. */
+function catalogFingerprint(source: AISource): string {
+  return JSON.stringify([
+    source.availableModels, source.model, source.modelOverrides ?? null, source.modelCatalogCache?.entries ?? null
+  ])
+}
+
 /** Multi-account providers list every authorized account; the others authorize exactly one. */
 function loginAccounts(data: OAuthLoginPayload): OAuthLoginAccount[] {
   if (data._accounts?.length) return data._accounts
@@ -166,6 +176,10 @@ class AISourceManager {
   private logins = new Map<ProviderId, ManagedOAuthLogin>()
   private tokenRefreshes = new Map<string, { source: AISource; model: string; promise: Promise<ProviderResult<void>> }>()
   private catalogRefreshes = new Map<string, ManagedCatalogRefresh>()
+  private readonly catalogSchedule = new CatalogSchedule()
+  private readonly catalogChanged = new Emitter<ModelCatalogChangedEvent>()
+  /** Fires after a refresh stored a different model list for a source. */
+  readonly onModelCatalogChanged: Event<ModelCatalogChangedEvent> = this.catalogChanged.event
   /** Keyed by source and model; see resolveRequestCredentials. */
   private requestCredentials = new Map<string, { sourceId: string; credentials: RequestCredentials | null; checkedAt: number }>()
 
@@ -1340,10 +1354,51 @@ class AISourceManager {
     if (pending && sameCredentials(source, pending.source)) return pending.promise
     const refresh: ManagedCatalogRefresh = { source, promise: Promise.resolve({ success: true }) }
     this.catalogRefreshes.set(sourceId, refresh)
-    refresh.promise = this.refreshSourceCatalog(sourceId, refresh).finally(() => {
-      if (this.catalogRefreshes.get(sourceId) === refresh) this.catalogRefreshes.delete(sourceId)
-    })
+    refresh.promise = this.refreshSourceCatalog(sourceId, refresh)
+      .then(result => {
+        this.catalogSchedule.record(sourceId, result.success && !result.data?.degraded)
+        return result
+      }, (error: unknown) => {
+        this.catalogSchedule.record(sourceId, false)
+        throw error
+      })
+      .finally(() => {
+        if (this.catalogRefreshes.get(sourceId) === refresh) this.catalogRefreshes.delete(sourceId)
+      })
     return refresh.promise
+  }
+
+  /**
+   * Refresh the catalogs that are due (see CatalogSchedule). Nearly free when
+   * none is, so any sign the user may be about to look at models can call it.
+   * Changes reach every client through onModelCatalogChanged. Never rejects.
+   */
+  async refreshStaleCatalogs(reason: string): Promise<void> {
+    try {
+      await this.ensureInitialized()
+      const sources = this.getAiSourcesConfig().sources
+      this.catalogSchedule.retain(sources.map(source => source.id))
+      const due = sources.filter(source =>
+        this.providers.get(source.provider)?.refreshConfig && this.catalogSchedule.isDue(source.id))
+      if (due.length === 0) return
+
+      const results = await Promise.all(due.map(async (source): Promise<ProviderResult<{ degraded: boolean }>> => {
+        try {
+          return await this.refreshSourceConfig(source.id)
+        } catch (error) {
+          console.error(`[AISourceManager] Catalog refresh threw for ${source.id} (${source.provider}):`, error)
+          return { success: false, error: (error as Error).message }
+        }
+      }))
+      const failed = due.filter((_, i) => !results[i].success).map(source => source.id)
+      const degraded = due.filter((_, i) => results[i].success && results[i].data?.degraded).map(source => source.id)
+      console.log(
+        `[AISourceManager] Stale catalog refresh (${reason}): due=${due.length}/${sources.length} ` +
+          `failed=[${failed.join(',')}] degraded=[${degraded.join(',')}]`
+      )
+    } catch (error) {
+      console.error(`[AISourceManager] Stale catalog refresh (${reason}) aborted:`, error)
+    }
   }
 
   private async refreshSourceCatalog(sourceId: string, refresh: ManagedCatalogRefresh): Promise<ProviderResult<{ degraded: boolean }>> {
@@ -1436,10 +1491,12 @@ class AISourceManager {
     const now = new Date().toISOString()
 
     const nextOverrides = providerData.modelOverrides as AISource['modelOverrides']
+    const degraded = Boolean(providerData.degraded)
+    let changed = false
 
     const updatedSources = freshAiSources.sources.map(s => {
       if (s.id !== sourceId) return s
-      return {
+      const next: AISource = {
         ...s,
         availableModels: models.length > 0 || providerData.catalogReconciled
           ? models.map(model => providerData.degraded
@@ -1452,7 +1509,13 @@ class AISourceManager {
           ? nextOverrides ?? s.modelOverrides : s.modelOverrides,
         updatedAt: now
       }
+      changed = catalogFingerprint(next) !== catalogFingerprint(s)
+      return next
     })
+
+    if (!changed) {
+      return { success: true, data: { degraded } }
+    }
 
     saveConfig({
       aiSources: {
@@ -1461,8 +1524,9 @@ class AISourceManager {
       }
     } as any)
 
-    console.log(`[AISourceManager] Catalog ${providerData.degraded ? 'reconstructed offline' : 'refreshed'} for ${source.id} (${source.provider}): ${models.length} models`)
-    return { success: true, data: { degraded: Boolean(providerData.degraded) } }
+    console.log(`[AISourceManager] Catalog ${degraded ? 'reconstructed offline' : 'refreshed'} for ${source.id} (${source.provider}): ${models.length} models, changed`)
+    this.catalogChanged.fire({ sourceIds: [sourceId] })
+    return { success: true, data: { degraded } }
   }
 
   async refreshAllConfigs(): Promise<ModelRefreshSummary> {

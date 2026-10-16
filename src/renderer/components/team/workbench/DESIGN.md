@@ -95,7 +95,11 @@ The transcript trigger carries team origin and correlation; display routing uses
 that provenance only, never message text. Invalid timestamps retain their records
 with an unknown-time label and sort after dated records. Activity loads member reports on demand with
 bounded concurrency and refreshes them on history notifications. A missing
-report is shown as unavailable rather than silently treated as empty.
+report is shown as unavailable rather than silently treated as empty: a warning
+names the members when they left a trace in the task or failed while reachable;
+otherwise a quiet line names the offline computers. A message that did not arrive
+is drawn as that message, sender to recipient, with whom it was for, what their
+computer is doing now and what can be done; the record keeps no reason.
 Task grouping prioritizes the human creator over member involvement. Completion
 is a filter/status within that relationship, not a separate destination.
 

@@ -139,8 +139,8 @@ export function useLiveSessions(): LiveSessionsApi {
     if (spaceStore.currentSpace?.id !== target.id) spaceStore.setCurrentSpace(target)
     useAppStore.getState().navigate('space')
 
-    // Settle the Canvas's space identity before adding a tab, so teardown from
-    // a previous space cannot run over the tab opened next.
+    // Settle the Canvas's space identity before adding a tab, so the tab opens
+    // among the target space's tabs instead of being parked with the one left.
     await canvasLifecycle.enterSpace(target.id)
     if (session.kind === 'terminal') {
       return openTerminalInCanvas(session.id, session.title)

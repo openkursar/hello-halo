@@ -92,6 +92,7 @@ export class FederationStore implements IFederationStore {
   private readonly stmtRevokeCredential: Database.Statement
   private readonly stmtIsRevoked: Database.Statement
   private readonly stmtListCredentialsByOffice: Database.Statement
+  private readonly stmtHasCredentialForOffice: Database.Statement
   // joined_office_connections
   private readonly stmtUpsertJoinedConn: Database.Statement
   private readonly stmtListJoinedConns: Database.Statement
@@ -149,6 +150,9 @@ export class FederationStore implements IFederationStore {
     this.stmtIsRevoked = db.prepare(`SELECT revoked FROM office_credentials WHERE jti = ?`)
     this.stmtListCredentialsByOffice = db.prepare(`
       SELECT * FROM office_credentials WHERE office_id = ? ORDER BY issued_at ASC
+    `)
+    this.stmtHasCredentialForOffice = db.prepare(`
+      SELECT 1 FROM office_credentials WHERE office_id = ? LIMIT 1
     `)
 
     // ── joined_office_connections ─────────────────
@@ -246,6 +250,10 @@ export class FederationStore implements IFederationStore {
 
   listCredentialsByOffice(officeId: string): OfficeCredentialRecord[] {
     return (this.stmtListCredentialsByOffice.all(officeId) as OfficeCredentialRow[]).map(rowToCredential)
+  }
+
+  hasCredentialForOffice(officeId: string): boolean {
+    return this.stmtHasCredentialForOffice.get(officeId) !== undefined
   }
 
   // ── joined_office_connections ───────────────────

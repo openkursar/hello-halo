@@ -97,7 +97,7 @@ export function createCoordinatorDelivery(deps: {
     // A sender on another machine, or one no longer in the collaboration, never
     // joins the owner's running turn: its message runs as a turn of its own right
     // after, as every team message did before live delivery.
-    const fromElsewhere = trigger.external === true || (memberSender && (!sender || isRemoteMember(sender)))
+    const fromElsewhere = trigger.origin !== undefined || (memberSender && (!sender || isRemoteMember(sender)))
 
     console.log(
       `${LOG_TAG} deliver: team=${envelope.teamId} epoch=${envelope.epochId} ` +

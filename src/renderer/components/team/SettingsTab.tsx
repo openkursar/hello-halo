@@ -7,6 +7,8 @@ import {
 } from 'lucide-react'
 import type { TeamDetail, TeamTrigger, TeamScheduleConfig, TeamTriggerInput } from '../../../shared/apps/team-types'
 import { leadAppIdSet } from '../../../shared/apps/team-types'
+import { capabilityPolicyFromPreset } from '../../../shared/apps/capability-policy'
+import type { CapabilityPresetId } from '../../../shared/apps/capability-policy'
 import { useTeamStore } from '../../stores/team.store'
 import { useOfficeSkin, useTeamViewPrefsStore } from '../../stores/team-view-prefs.store'
 import { useAppsStore } from '../../stores/apps.store'
@@ -21,6 +23,7 @@ import { Disclosure } from '../ui/Disclosure'
 import { Switch } from '../ui/Switch'
 import { HttpTriggerCard } from '../common/HttpTriggerCard'
 import { AppInstallDialog } from '../apps/AppInstallDialog'
+import { DelegationPresetPicker } from '../capability/DelegationPresetPicker'
 import { TeamMemberSettings } from './TeamMemberSettings'
 
 interface SettingsTabProps {
@@ -330,6 +333,14 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
   const leadAppIds = useMemo(() => leadAppIdSet(teams), [teams])
   const [showAdd, setShowAdd] = useState(false)
   const [showInlineCreate, setShowInlineCreate] = useState(false)
+  // Asked again for every member added to a team that reaches other computers:
+  // the answer the invite gave the first members says nothing about this one.
+  const [preset, setPreset] = useState<CapabilityPresetId>('read_only')
+  const asksForPreset = detail.crossesMachines === true
+  const add = (appId: string) => addMember(
+    detail.team.id,
+    asksForPreset ? { appId, delegatedPolicy: capabilityPolicyFromPreset(preset) } : { appId },
+  )
   const [promote, setPromote] = useState<{ appId: string; name: string } | null>(null)
   // What removal actually does decides what the confirmation may promise, and
   // it differs three ways: a member you added keeps everything; a member AI
@@ -438,6 +449,16 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
 
       {!readOnly && (showAdd ? (
         <div className="mt-3 rounded-lg border border-border bg-secondary/30 p-3">
+          {asksForPreset && (
+            <div className="mb-3 border-b border-border pb-3">
+              <DelegationPresetPicker
+                value={preset}
+                onChange={setPreset}
+                title={t('What people on other computers can have it do')}
+                subtitle={t('This team reaches other computers. Talking to it yourself, and your own digital humans working with it, are unaffected.')}
+              />
+            </div>
+          )}
           <p className="mb-2 text-xs font-medium text-muted-foreground">{t('Add a digital human to the team')}</p>
           {candidates.length === 0 ? (
             <p className="text-xs text-muted-foreground/70">{t('No available digital humans to add.')}</p>
@@ -447,7 +468,7 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
                 <button
                   key={a.id}
                   onClick={async () => {
-                    const ok = await addMember(detail.team.id, { appId: a.id })
+                    const ok = await add(a.id)
                     setShowAdd(false)
                     if (ok) onOpenMember(a.id)
                   }}
@@ -477,7 +498,7 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
         </div>
       ) : (
         <button
-          onClick={() => setShowAdd(true)}
+          onClick={() => { setPreset('read_only'); setShowAdd(true) }}
           className="mt-3 flex items-center gap-1.5 rounded-lg border border-dashed border-border px-3 py-2 text-sm text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
         >
           <Plus className="h-4 w-4" />
@@ -497,7 +518,7 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
           onInstalled={appId => {
             // The install dialog owns its own dismissal (a bundle install stays
             // open on a partial result), so only join the team here.
-            void addMember(detail.team.id, { appId }).then(ok => {
+            void add(appId).then(ok => {
               setShowAdd(false)
               if (ok) onOpenMember(appId)
             })

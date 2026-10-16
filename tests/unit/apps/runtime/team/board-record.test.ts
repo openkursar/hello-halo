@@ -291,6 +291,22 @@ describe('office record + board digest', () => {
       )
     })
 
+    it('tells a sender its message never reached the member, never that the member answered', () => {
+      addWriter(store)
+      const fate = {
+        teamId: TEAM_ID, epochId: EPOCH_ID, kind: 'reply' as const, actorAppId: RESEARCHER_APP,
+        subject: 'The message was not delivered', body: null, refId: null, correlationId: 'c-1',
+        status: 'undelivered' as const, createdAt: Date.now(),
+      }
+      store.insertActivity({ ...fate, id: 'fate-to-lead', targetAppId: LEAD_APP })
+      store.insertActivity({ ...fate, id: 'fate-to-writer', targetAppId: WRITER_APP, correlationId: 'c-2' })
+
+      const text = createBoardDigest({ store }).render({ teamId: TEAM_ID, epochId: EPOCH_ID, viewerAppId: LEAD_APP })
+      expect(text).toContain('researcher did not receive your message: "The message was not delivered"')
+      expect(text).toContain('researcher did not receive a message from writer')
+      expect(text).not.toContain('answered')
+    })
+
     it('folds traffic between two other members into a count, keeping their words off the digest', () => {
       addWriter(store)
       const digest = createBoardDigest({ store })

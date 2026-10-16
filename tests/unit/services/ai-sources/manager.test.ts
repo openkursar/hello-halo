@@ -1372,6 +1372,88 @@ describe('refreshSourceConfig — token freshness and degraded catalogs', () => 
     expect(saved.sources[0].availableModels.map(m => m.id)).toEqual(['fetched'])
     expect(saved.sources[0].modelOverrides).toEqual({ fetched: { contextWindow: 128000 } })
   })
+
+  it('announces a changed catalog and stays silent, without writing, when nothing changed', async () => {
+    seedCatalogSource()
+    const mgr = new AISourceManager()
+    registerProvider(mgr, { refreshConfig: vi.fn().mockResolvedValue({
+      success: true, data: { 'catalog-prov': { availableModels: ['fetched'], modelNames: { fetched: 'Fetched' } } }
+    }) })
+    const changes: string[][] = []
+    mgr.onModelCatalogChanged(event => changes.push(event.sourceIds))
+
+    await mgr.refreshSourceConfig('o1')
+    expect(changes).toEqual([['o1']])
+    expect(saveConfig).toHaveBeenCalledTimes(1)
+
+    await mgr.refreshSourceConfig('o1')
+    expect(changes).toEqual([['o1']])
+    expect(saveConfig).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not announce a fallback catalog that kept the stored list', async () => {
+    seedCatalogSource()
+    const mgr = new AISourceManager()
+    registerProvider(mgr, { refreshConfig: vi.fn().mockResolvedValue({
+      success: true, data: { 'catalog-prov': { availableModels: ['hardcoded'], degraded: true } }
+    }) })
+    const changed = vi.fn()
+    mgr.onModelCatalogChanged(changed)
+    await mgr.refreshSourceConfig('o1')
+    expect(changed).not.toHaveBeenCalled()
+    expect(saveConfig).not.toHaveBeenCalled()
+  })
+
+  describe('refreshStaleCatalogs', () => {
+    it('fetches each source once until it goes stale, whatever asks', async () => {
+      seedCatalogSource()
+      const mgr = new AISourceManager()
+      const provider = registerProvider(mgr, {})
+      await mgr.refreshStaleCatalogs('startup')
+      await mgr.refreshStaleCatalogs('focus')
+      await mgr.refreshStaleCatalogs('picker')
+      expect(provider.refreshConfig).toHaveBeenCalledTimes(1)
+    })
+
+    it('retries a failed or fallback read at the next signal after the retry delay, not at once', async () => {
+      vi.useFakeTimers()
+      try {
+        seedCatalogSource()
+        const mgr = new AISourceManager()
+        const provider = registerProvider(mgr, { refreshConfig: vi.fn().mockResolvedValue({
+          success: true, data: { 'catalog-prov': { availableModels: ['hardcoded'], degraded: true } }
+        }) })
+        await mgr.refreshStaleCatalogs('startup')
+        await mgr.refreshStaleCatalogs('focus')
+        expect(provider.refreshConfig).toHaveBeenCalledTimes(1)
+        vi.advanceTimersByTime(2 * 60_000)
+        await mgr.refreshStaleCatalogs('focus')
+        expect(provider.refreshConfig).toHaveBeenCalledTimes(2)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('a forced refresh also counts, so the next signal does not repeat it', async () => {
+      seedCatalogSource()
+      const mgr = new AISourceManager()
+      const provider = registerProvider(mgr, {})
+      await mgr.refreshAllConfigs()
+      await mgr.refreshStaleCatalogs('focus')
+      expect(provider.refreshConfig).toHaveBeenCalledTimes(1)
+    })
+
+    it('refreshes sources in parallel and never rejects when one throws', async () => {
+      seedCatalogSource()
+      ;(store.value.aiSources as AISourcesConfig).sources.push(oauthSource({ id: 'other', provider: 'catalog-prov' as never }))
+      const mgr = new AISourceManager()
+      const provider = registerProvider(mgr, { refreshConfig: vi.fn()
+        .mockRejectedValueOnce(new Error('boom'))
+        .mockResolvedValue({ success: true, data: { 'catalog-prov': { availableModels: ['m1'] } } }) })
+      await expect(mgr.refreshStaleCatalogs('startup')).resolves.toBeUndefined()
+      expect(provider.refreshConfig).toHaveBeenCalledTimes(2)
+    })
+  })
 })
 
 describe('user-initiated switch telemetry', () => {

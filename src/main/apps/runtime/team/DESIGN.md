@@ -133,10 +133,13 @@ The coupling is inverted through `TeamDeliveryHooks` (see "Integration seam").
   and an older build runs each notice as a turn of its own. Completed tasks are
   checked before handoff and again before a deferred turn starts. Only failed
   handoffs have retry timers.
-  An ending carries the origin of the turn it describes (`external`, resolved
-  the way the turn itself resolved it), and a notice that reports any outside
-  ending wakes the lead as outside work — the lead reads that work's outcome, so
-  the notice is one more hop the origin travels, like a `team_send`.
+  An ending carries the origin of the turn it describes, and only a guest's
+  travels on: a notice reporting what a guest's request produced wakes the lead
+  as the guest's, for that one wake. A colleague's result is the lead's to weigh
+  with the owner's reach, like any other content its own turn reads (see "Where a
+  request came from"). A notice to a lead on another machine also carries its
+  facts (`TeamTriggerContext.turnEnded`), so that machine renders the notice
+  itself and reads it as its own runtime's — never a body written elsewhere.
 - `checks.ts` — periodic checks: one member's standing instruction for another
   ("from now on, every half hour, look at this"). Two rules shape it: the alarm
   is armed only on the machine that OWNS the target (so the setter can shut their
@@ -153,6 +156,11 @@ The coupling is inverted through `TeamDeliveryHooks` (see "Integration seam").
   deleting a job from inside its own due handler pulls it out from under the run
   log written on the way out, so leftovers are swept at `rehydrate()`. Checks
   end with the epoch they were set inside.
+  A check serves whose request its setter served: a remote creator's serves a
+  colleague, and one set by a turn running restricted keeps that turn's origin.
+  Only a row this machine wrote is trusted for its origin and its words; a row
+  written elsewhere serves at least a colleague whatever creator it names, and
+  an update of one written here only advances its rounds.
 - `team-tools.ts` — `createTeamMcpServer(context)` building the `halo-team` MCP
   server with the team tools. Topology/unknown-member violations surface as
   error tool_results so the LLM sees them. A ref reaching `team_post_finding` or
@@ -241,8 +249,8 @@ The coupling is inverted through `TeamDeliveryHooks` (see "Integration seam").
   least one message per page, a single oversized message cut with a note) and carry
   messages only — an assistant line says how many thinking/tool steps it took. The
   tool is registered only for a lead (member servers omit it; the space coordinator,
-  always the lead, has it) and refuses in a turn whose origin is external: a raw
-  record is the owner's reach, not a stranger's.
+  always the lead, has it) and refuses in a turn running restricted for a request
+  from outside: a raw record is the owner's reach, not a stranger's.
 - `artifact-read.ts` — the location-transparent logic behind
   `team_read_artifact`. Resolves the producing member through the published-ref
   SSOT (`apps/team/artifact-refs`: a finding's ref OR a task's resultRef), then
@@ -1035,40 +1043,39 @@ long after the guest has gone, and a guest of a digital human's own chat has no
 such tool either. What decides how far a guest's request may go from there is
 its origin.
 
-- **A guest's message is stamped `external`.** The IM channel is where it
-  crosses into this node, and nobody here vouched for the sender — the same
-  reading "How strictly a borrowed turn reads silence" gives a request from
-  another machine. Without it the restriction would end at the front desk:
-  asking it to have a teammate do the work would hand the request to a member
-  running with the owner's own reach. With it, `team_send` carries the origin, a
-  teammate reads its delegated policy strictly — the same policy that holds a
-  teammate from another machine; the channel's guest policy bounds only the
-  front desk — and the thread stays external across wakes (`external-origin.ts`)
-  until an owner's own message ends it.
-- **A turn woken in the chat keeps the standing of whoever started the work.**
-  It has no sender of its own, so it reads the chat's last sender — once, as it
-  begins, while its hold on the session keeps any newer message from replacing
-  it. While that names a guest it runs under that guest's
-  policy — the same tool set as the guest's own turn, so the session is not
-  rebuilt between them. Otherwise what the wake itself carries decides. Every
-  wake that continues outside work carries its origin: a teammate's
-  `team_send`, a check set during that work, an answered question (persisted
-  with the escalation), and the turn-end notice a teammate's ending sends the
-  lead (`turn-report`, external when any ending it reports was). Such a wake is
-  borrowed (`isBorrowedTeamTurn`) and held strictly to the member's delegated
-  policy even when the chat can no longer name the sender (the permission
-  context and the remembered origins live in memory, so a restart clears them)
-  or an owner spoke last: who spoke last in the chat says nothing about who set
-  the work in motion. A turn woken by work started here is unchanged. So is the
-  person's own message, which only the channel's rules decide.
+- **A guest's message is stamped a guest's** (`origin: 'guest'`). The IM
+  channel is where it crosses into this node, and nobody here vouched for the
+  sender. Without the stamp the restriction would end at the front desk: asking
+  it to have a teammate do the work would hand the request to a member running
+  with the owner's own reach. With it, whatever a turn held to that guest sends
+  — its `team_send`s, a check it sets, a question it asks — carries the guest's
+  origin, and a member it reaches is held to its own delegated policy read
+  strictly AND capped by this chat's current guest settings (`intersectPolicies`,
+  the chat named by the conversation's `chatKey`, read from the same channel
+  config the front desk reads). No setting made for colleagues ever widens what a
+  stranger can reach, and a guest's request never takes the "grants everything"
+  shortcut. A guest's request never leaves its chat's conversation, so one that
+  arrives from another machine has no chat here and is lent nothing but the
+  team's own tools.
+- **A turn woken in the chat keeps the standing of whoever it serves.** It has
+  no sender of its own, so it reads the chat's last sender — once, as it begins,
+  while its hold on the session keeps any newer message from replacing it. While
+  that names a guest it runs under that guest's policy — the same tool set as
+  the guest's own turn, so the session is not rebuilt between them — and what it
+  hands on, and its own ending, are the guest's, whatever woke it. Otherwise the
+  wake's own origin decides: a teammate's reply in the guest's chain carries the
+  guest's origin (its turn served the guest), so it is held strictly even when
+  the chat can no longer name the sender (the permission context lives in
+  memory, so a restart clears it) or an owner spoke last. A wake with no origin
+  is the owner's own work and is unchanged. So is the person's own message,
+  which only the channel's rules decide.
 - **The session is shared with the owner's own Halo window.** Only turns framed
-  for the chat (`imSession`) answer to a chat sender; the owner typing
-  into the same session from Halo is never taken for the chat's last guest, and,
-  being the owner at their own keyboard, ends the external thread.
+  for the chat (`imSession`) answer to a chat sender; the owner typing into the
+  same session from Halo is never taken for the chat's last guest.
 
-One consequence reaches past guests: a teammate on another machine whose reply
-wakes the front desk is now held to the member's delegated policy, as it already
-was for every other member.
+One consequence reaches past guests: a teammate on another machine whose
+message wakes the front desk is held to the member's delegated policy, as it is
+for every other member.
 
 The **reply** side has the same question and must answer it identically:
 `resolveImRoute` decides whether a later, woken turn pushes back to the chat. It
@@ -1190,71 +1197,112 @@ Two facts about a member are per-TEAM and owner-authored, and they live on the
   `buildPromptContext` puts the member's own duty in the Entry and every
   teammate's duty in the roster, in full (deciding who to hand work to is exactly
   what the text is for).
-- **delegated policy** — what someone ELSE may make it do. Enforced in
-  `app-chat` on the OWNER's machine, for every turn the owner did not start
-  (`isBorrowedTeamTurn`). The question is deliberately WHO, not human-vs-model:
-  the limit is about what may happen on the owner's machine, and a colleague
-  reaching in by hand does the same damage as their digital human doing it — so
-  a cross-machine 1:1 from another person is held to it exactly like a
-  teammate's `team_send`. The owner's own chat is the one exemption; it is
-  recognisable because it goes straight to the session and carries no trigger
-  `kind`, a path no office credential can reach (`http/auth/route-scope`). The
-  person in an IM chat a member fronts is held to that chat's owner/guest rules
-  instead; a turn woken there to continue work from outside is borrowed (see
-  "Team as an IM backend"). The policy therefore also bounds what a guest of such
-  a chat can reach through a teammate: the guest's request travels as outside
-  work, and the teammate it reaches answers to its own delegated policy, read
-  strictly — the settings screen says so. The team's own coordination servers
-  (`halo-team`, `halo-report`) are never withheld — they are the channel the
-  turn arrived on, not a capability lent.
+- **delegated policy** — what someone from OUTSIDE the owner's machine may make
+  it do. Enforced in `app-chat` on the owner's machine, for every turn whose own
+  trigger carries an origin (`isBorrowedTeamTurn`). The question is deliberately
+  WHO, not human-vs-model: a colleague reaching in by hand does the same damage
+  as their digital human doing it, so a cross-machine 1:1 from another person is
+  held to it exactly like a teammate's `team_send` from that machine. The owner,
+  their own digital humans on this machine and the runtime waking one of them
+  are not held to it at all. The person in an IM chat a member fronts is held to
+  that chat's owner/guest rules instead (see "Team as an IM backend"). The
+  team's own coordination servers (`halo-team`, `halo-report`,
+  `halo-person-context`) are never withheld — they are the channel the turn
+  arrived on, not a capability lent.
 
-### How strictly a borrowed turn reads silence
+### Where a request came from
 
-A borrowed turn is not one thing, and the difference is which machine asked:
+Every team turn answers one question from its OWN trigger, never from what the
+session did before (`TeamTriggerContext.origin`):
 
-- **started here** (`external` false) — every member in the chain is the
-  owner's own, running with reach the owner already has. Silence grants:
-  the switches only take away, and an unset policy withholds nothing. A lock
-  between two of one person's own rooms buys nothing and costs a first-run
-  experience where nothing works until it is configured.
-- **entered from outside** (`external` true) — nobody here vouched for the
-  sender. Silence refuses: nothing is granted that the owner did not name.
+- **the owner's own** (no origin) — the owner, their digital humans on this
+  machine working for each other, and every wake the runtime authors here (a
+  lead's sweep, a check set in an unrestricted turn, a quiescence nudge, a run
+  start, a turn-end notice of the owner's or a colleague's work). No delegation
+  at all: the owner's options, no gate, no record, and the owner's identity for
+  live delivery — so these messages join the owner's running turn.
+- **a colleague's** (`'colleague'`) — a request that entered this machine from
+  another one: an inbound office wake, a person's 1:1 through the
+  office-credential endpoint, and the checks and questions of a restricted turn
+  serving one. Read against the member's delegated policy
+  (`colleagueReach`): never saved, or saved granting everything
+  (`grantsEverything` — every switch on, commands unrestricted, every skill and
+  installed MCP server this machine has), is FULL reach — the owner's options,
+  never Operate Halo (it is offered on no settings screen and its credential
+  governs all of Halo) — but still a turn of its own (identity `'colleague'`,
+  never joining the owner's running turn) and still recorded. Anything else is
+  read strictly, exactly as before.
+- **a guest's** (`'guest'`) — a guest of an IM chat a member fronts, and
+  everything a restricted turn serving that guest sets in motion. Read strictly
+  and capped by that chat's guest settings; never the "everything" shortcut.
 
-`external` is what makes that distinction hold, and where it is written is the
-whole of its integrity. It is stamped ONLY where a request crosses into this
-node — an inbound office wake (`withExternalOrigin`, beside the space
-correction, and for the same reason: the sender authored every field on the
-frame), the office-credential 1:1 endpoint (`team.routes`, where the
-credential's presence is what separates a teammate from the owner's own remote
+A restricted turn is told so with its request, in one notice just before the
+request in its input, after any context the input opens with (`team-prompt`
+`buildRestrictionNotice`, listing what is off from what the turn actually lost —
+`capability-policy` `describeWithheld`): whose request it is, that this is the
+owner's "What others can ask it to do" setting and not a fault, and to tell the
+requester what is off rather than guess at causes. Per
+turn, so it never enters the system prompt; an unrestricted turn gets nothing
+and computes nothing.
+
+**Where it is written.** Stamped only where a request crosses into this node —
+an inbound office wake (`withExternalOrigin`, beside the space correction, and
+for the same reason: the sender authored every field on the frame), the
+office-credential 1:1 endpoint (`apps/team` `sendToMember`, where the
+credential's presence is what separates a colleague from the owner's own remote
 access), and a guest's message in an IM chat a member fronts
-(`dispatch-inbound`, where the channel's permission control is what separates a
-guest from an owner). A value arriving on the wire is overwritten, never
-trusted.
+(`dispatch-inbound`). A value arriving on the wire is the sender's claim: it is
+honored only where it narrows (a guest's), and otherwise replaced by
+`'colleague'`. A build from before origins had kinds sends no origin but marks
+outside work `external` — a teammate's request and a guest's alike, and much of
+what its members send after serving one. That mark is read by the piece of work
+the frame names, as such records are (below), so a mixed-version office's
+teammates stay colleagues. One arriving kind is not a request: a turn-end
+notice, which only the lead is ever sent, is rendered here from the facts it
+carries and wakes the lead as the owner's own (or a guest's, if it says so); one
+without readable facts, or addressed to any other member, is handled as any
+other message from that machine. Rows that replicate in and later wake a member
+here — periodic checks — follow the same rule (`checks.ts`). An origin such a
+row names that this build does not know, or a code a later build left in the
+check's column (`apps/team` store), is kept as the strictest the column holds —
+the code pre-kinds records carry, read as they are (below) — never as the
+owner's own.
 
-From there it travels two ways, and both were necessary:
+**How far it travels.** Only on what a RESTRICTED turn itself sets in motion:
+the checks it sets (persisted with the row) and the questions it asks
+(persisted with the escalation, restored by `resumeFromEscalation`) — a
+standing instruction and an answered question are still that request — and,
+for a guest's request only, its `team_send`s (`TeamMcpContext.origin` →
+`SendInput.origin` → the next trigger). Without that, routing a stranger's
+request through one of the owner's own members would launder it into a local
+one. A colleague's request stops at the member it reached: what that member
+asks another of the owner's digital humans is the owner's own work, which no
+choice made for colleagues limits (`team-tools` send). A turn with full reach
+hands nothing on. Nothing else carries it — no other runtime wake, no session
+memory: when the turn that served a request is over, the member is the owner's
+again. The one exception is a guest's: a notice reporting what a guest's
+request produced wakes the lead as the guest's, for that one wake.
 
-- **across hops** — `team_send` stamps it onto the messages the turn sends
-  (`TeamMcpContext.external` → `SendInput.external` → the next trigger), exactly
-  as `forwardDepth` travels; a check set in such a turn keeps it, and so does
-  the turn-end notice that reports such a turn to the lead (`turn-report`).
-  Without it, routing a stranger's request through one of the owner's own
-  members launders it into a local one.
-- **across wakes** — `team/external-origin.ts` keeps it per team session until a
-  person types into that session HERE as the owner (at Halo, or in an IM chat
-  whose rules count them as one), or the task is explicitly completed or cleared.
-  Pausing and auto-sealing preserve it. Only external sessions occupy the bounded
-  set: at 2,000 entries a new external session is refused, while accepted sessions
-  retain their authority. An entry is never evicted to admit another request.
-  Permanent closure releases all epoch entries, including removed members.
-  A runtime wake is authored on this
-  machine and so can carry no origin of its own; without stickiness, asking for
-  something that needs a decision and waiting for the owner to answer their own
-  digital human's question would resume the work unrestricted.
+**What it does not cover — a trade the owner accepted.** The origin restricts
+only the turn a request from outside directly drives, and what that restricted
+turn sets in motion as described above. So a colleague can have one of the
+owner's digital humans ask another for work, and that work runs with the
+owner's reach and stays off the owner's record; and what a full-reach turn sets
+in motion runs as the owner's own — Operate Halo included, where the member it
+reaches has it switched on, though the colleague's own turn never gets it.
+What the owner's own turns READ that came from elsewhere — a colleague's result
+in a turn-end notice, the board, findings, published artifacts — is weighed by
+a digital human running with the owner's reach, at its own judgment. A turn
+session's tool servers and hooks are fixed when the session is built, so a turn
+of another standing gets a session of its own: the team server is marked with
+the origin it stamps, and a session that records calls is built with that
+context (`app-chat`).
 
-Checks and decision continuations persist their external origin with their own
-records and restore it when waking after a restart. Quiescence timers and pending
-turn-end notices are process-local; startup seals interrupted hosted runs instead
-of replaying those unstamped wakes.
+Records written before origins had kinds carried `external: true` for any
+outside origin, and such builds still send that mark (above). A guest's request
+never leaves its chat's conversation, so such a record or frame in an IM chat's
+conversation — or in one that cannot be found — is read as a guest's and any
+other as a colleague's (`legacyExternalOrigin`) — never as the owner's own.
 
 ### The three layers, and why none of them holds alone
 
@@ -1312,13 +1360,20 @@ desktop IPC. Written at two points that cannot double-count: the gate files
 refusals, the engine's `PostToolUse` hook files what executed. Rows hold what a
 call was AIMED at (the command, the path, the URL), never the payload.
 
-The record covers ENFORCED turns only. A borrowed turn whose policy withholds
-nothing — a local teammate under permissive silence — is not enforced at all:
-it keeps the engine's fast path, registers no restriction with the gate and no
-`PostToolUse` hook, and so leaves no rows. That is a decision, not a gap: such
-a turn runs with exactly the reach the owner's own turns run with, so auditing
-it would record the owner's own capabilities under a teammate's name. An empty
-audit therefore reads "no restricted turn ran", not "nothing ran".
+The record covers every turn serving a request from outside — a colleague's
+with full reach included, which is not enforced but is still someone else's
+request on the owner's machine. Executed calls reach it only through the
+engine's hooks, so on an engine that runs none (`features.hooks`) such a turn is
+refused, as a restricted one is on an engine that takes no permission rules.
+The owner's own turns, their digital humans working for each other included,
+leave no rows: they keep the engine's fast path, and recording them would file
+the owner's own work under a teammate's name. The hook that files executed
+calls is fixed when a session is built, so a session serving such a request is
+built with it (`app-chat`'s session creation context). Known bound: what a
+colleague's turn, restricted or not, hands to one of the owner's own members
+through `team_send`, and whatever a full-reach turn sets in motion, run as the
+owner's own and are not recorded. An empty audit therefore reads "no request
+from outside ran", not "nothing ran".
 
 The shared vocabulary (which tools exist, what an unstated permission means) is
 `shared/apps/capability-policy.ts`, and the enforcement is
@@ -1393,7 +1448,8 @@ facts it may never see. A person's words stay verbatim, exactly as when they typ
 into the same chat locally.
 
 **Delivery eligibility** is determined only by equal, known permission identities.
-Owner, external and guest-policy identities remain distinct. A human-started
+The owner's identity (the owner, their own digital humans, the runtime), a
+colleague's, a guest's and each chat guest policy's remain distinct. A human-started
 turn is eligible when its identity matches. Existing queued messages of that
 identity join in arrival order. During session startup they wait for the
 ready notification, then join the live turn. If the model has finished tool
@@ -1402,8 +1458,8 @@ use, accepted input runs in the immediately following engine turn.
 A member on another machine receives messages immediately on the durable ctrl
 feed. Internal completion receipts preserve failure visibility without making
 the sending AI wait or holding a sender-side turn reservation. The owner applies
-the same gate, stamping incoming work external regardless of the sender's
-claimed identity.
+the same gate, stamping incoming work a colleague's unless the sender says it is
+a guest's (see "Where a request came from").
 
 **The known cost.** A message handed to a running turn is context, not a queued
 item: if the model reads it and does nothing, nothing records that it was read.
@@ -1430,8 +1486,8 @@ harmless, the SDK just enqueues onto one stdin. The damage is on the way out:
 Two sends that the CLI folds into one turn produce ONE `result`, so one
 consumer returns — possibly holding the other turn's answer — and the other
 waits forever on a completion that will never come. If the two turns also differ
-in tool set (the owner's own turn is unrestricted, a teammate's is filtered by
-the delegated policy — `isBorrowedTeamTurn`), the input fingerprint changes and
+in tool set (the owner's own turn is unrestricted, a request from outside is
+filtered by the delegated policy — `isBorrowedTeamTurn`), the input fingerprint changes and
 `getOrCreateV2Session` tears the subprocess down mid-stream; the three guards
 that would defer that rebuild all read the `consumers` map, which app-chat
 deliberately never populates.
@@ -1440,7 +1496,7 @@ Team and runtime envelopes use the team gate; direct, IM and federated entries
 use app-chat's permission-aware gate. Both share the same authoritative live-turn
 identity and synchronous start hold. A team dispatch adopts its hold instead of
 being admitted a second time by app-chat. Federation resolves timing only on the
-owner, with every arriving message stamped external. Completion-requesting
+owner, with every arriving message stamped as from outside. Completion-requesting
 wakes retain their own callback, including when several messages join one
 physical turn. Asynchronous sends keep internal receipt observers so admission
 failures remain visible in the shared record.
@@ -1539,8 +1595,9 @@ continuations as well as unresolved questions. Stored answers remain audit facts
 ### External work and a space coordinator
 
 A space conversation runs with its owner's capabilities only. Content from
-another machine, or from a sender no longer in the collaboration, is delivered
-with the `external` identity: it never joins the owner's running turn and runs
+outside (a trigger with an origin), from another machine, or from a sender no
+longer in the collaboration, is delivered with the `external` identity: it
+never joins the owner's running turn and runs
 as a turn of its own right after it, which is how every team message reached a
 space coordinator before live delivery. Local member reports keep the live path.
 Such a later turn still runs with owner capabilities, as it always did; scoping

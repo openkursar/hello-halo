@@ -16,11 +16,10 @@
  */
 
 import { z } from 'zod'
-import { randomUUID } from 'node:crypto'
 import { tool } from '../../agent/resolved-sdk'
 import type { BrowserContext } from '../context'
 import { browserViewManager, type DeviceMode } from '../../browser-view.service'
-import { textResult, NAV_TIMEOUT } from './helpers'
+import { textResult, NAV_TIMEOUT, BACKGROUND_PAGE_NOTE } from './helpers'
 
 export function buildNavigationTools(ctx: BrowserContext) {
 
@@ -61,21 +60,14 @@ Use device: "h5" only when the target site is mobile-only or the user explicitly
 
     if (shouldCreatePage) {
       try {
-        const viewId = `ai-browser-${randomUUID()}`
-        // Watchable pages keep one main-host attachment for their whole lifetime.
-        await browserViewManager.create(viewId, args.url, {
-          offscreen: !ctx.hasUi,
-          deviceMode: requestedDevice,
-        })
-        ctx.trackView(viewId)
-        ctx.setActiveViewId(viewId)
+        const { viewId, fellBack } = await ctx.openPage(args.url, requestedDevice)
 
         await ctx.waitForNavigation(timeout)
 
         const finalState = browserViewManager.getState(viewId)
         const modeLabel = requestedDevice === 'h5' ? ' [H5 mobile mode]' : ''
         return textResult(
-          `Created page${modeLabel}: ${finalState?.title || 'Untitled'} - ${finalState?.url || args.url}`
+          `Created page${modeLabel}: ${finalState?.title || 'Untitled'} - ${finalState?.url || args.url}${fellBack ? BACKGROUND_PAGE_NOTE : ''}`
         )
       } catch (error) {
         return textResult(`Failed to create page: ${(error as Error).message}`, true)

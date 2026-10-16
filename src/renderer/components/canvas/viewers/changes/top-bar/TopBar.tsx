@@ -38,8 +38,10 @@ interface TopBarProps {
   totals: ChangeTotals | null
   page: ChangesPage
   onPage: (page: ChangesPage) => void
-  /** Diff controls, shown while diffs are on screen (the changes page or a detail page). */
-  tools: ReactNode | null
+  /** Diff controls. */
+  tools: ReactNode
+  /** Diffs are on screen (the changes page or a detail page). */
+  toolsShown: boolean
   panelToggle: ReactNode
   layout: ChangesLayout
 }
@@ -71,7 +73,7 @@ export function TopBar(props: TopBarProps) {
         <div className="flex h-10 min-w-0 items-center gap-1 px-2">
           {pickers}
           <span className="flex-1" />
-          {props.tools}
+          {props.toolsShown && props.tools}
           {props.panelToggle}
         </div>
         <div className="px-2 pb-2 pt-1">
@@ -89,7 +91,9 @@ export function TopBar(props: TopBarProps) {
       {/* On a narrower canvas the "AI" mark gives way first, so the totals keep their place. */}
       <PageSwitch page={props.page} onPage={props.onPage} showBadge={!layout.hideMinorStats} />
       <span className="min-w-1 flex-1" />
-      {props.tools}
+      {/* Without diffs the controls are hidden but keep their room, so the page switch centered between both sides
+          stays put. On a crowded bar that room shrinks along with the pickers instead of pushing the file list toggle off. */}
+      <div className={`flex ${props.toolsShown ? 'shrink-0' : 'invisible min-w-0 overflow-hidden'}`}>{props.tools}</div>
       <span className="mx-1 h-4 w-px bg-border" aria-hidden />
       {props.panelToggle}
     </div>

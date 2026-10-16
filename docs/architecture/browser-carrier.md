@@ -25,9 +25,12 @@ This page records the decisions that span them.
 - AI contexts keep their tab ownership, per-conversation active pointer, tool
   signatures and silent download routing.
 
-Watchable pages, including digital-human chat pages, live in the main renderer's
-permanent host. Unattended runs and temporary search pages live in one lazy
-hidden host; in server mode every page does. Guests never move between hosts.
+Watchable pages, including native digital-human chat pages, live in the main
+renderer's permanent host. IM, team and HTTP digital-human chats, unattended runs
+and temporary search pages live in one lazy hidden host; in server mode every
+page does. A watchable page the main window cannot attach in time is created in
+the hidden host instead and is never offered for watching. Guests never move
+between hosts once created.
 Unmounting a viewer, switching tabs or folding the canvas only changes
 presentation; canvas budgets and AI context release decide destruction.
 

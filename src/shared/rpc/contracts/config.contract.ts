@@ -37,6 +37,8 @@ export const configRpc = {
   validateApi: rawRpcMethod('config:validate-api'),
   fetchModels: rawRpcMethod('config:fetch-models'),
   refreshAISourcesConfig: rawRpcMethod('config:refresh-ai-sources'),
+  /** Returns at once; changed lists arrive as `ai-sources:catalog-changed`. */
+  refreshStaleModelCatalogs: rawRpcMethod('ai-sources:refresh-stale-catalogs'),
   aiSourcesSwitchSource: rawRpcMethod('ai-sources:switch-source'),
   aiSourcesSetModel: rawRpcMethod('ai-sources:set-model'),
   aiSourcesAddSource: rawRpcMethod('ai-sources:add-source'),

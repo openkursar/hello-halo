@@ -19,13 +19,13 @@ import {
   parseSpaceCoordinatorAppId,
 } from '../../../../shared/apps/team-types'
 import { parseTeamSessionKey } from '../../../../shared/apps/im-keys'
-import { isBorrowedTeamTurn } from '../capability-policy'
 import type { TeamStore } from '../../team'
 import type { PostActivityInput } from './blackboard'
 import type {
   CollabMode,
   TeamActivityStatus,
   TeamEnvelope,
+  TeamRequestOrigin,
   TeamTriggerContext,
   TeamSendAsyncResult,
   TeamSendSyncResult,
@@ -186,12 +186,13 @@ export interface SendInput {
   /** Guards against ping-pong: initial lead wake is 0, each forwarded wake increments. */
   forwardDepth?: number
   /**
-   * The chain this send belongs to was started on another machine. Travels with
-   * the message like `forwardDepth` does, and for the same reason: a chain that
-   * forgets where it came from on the first hop never carries its origin far
-   * enough to matter (see {@link TeamTriggerContext.external}).
+   * Where the message's request came from, when not the owner's own machine: a
+   * person's 1:1 from another machine, or a guest's request a restricted turn
+   * passes on, which stays the guest's through the owner's own digital humans.
+   * Travels with the message like `forwardDepth` does (see
+   * {@link TeamTriggerContext.origin}).
    */
-  external?: boolean
+  origin?: TeamRequestOrigin
   taskRef?: string
 }
 
@@ -334,7 +335,7 @@ interface PendingWait {
 
 /** A person's own words to a member on this machine; anything a teammate, the runtime or another machine sent is not. */
 export function isPersonsOwnDelivery(trigger: TeamTriggerContext): boolean {
-  return trigger.kind === 'human_message' && !trigger.external
+  return trigger.kind === 'human_message' && !trigger.origin
 }
 
 const STOPPED_UNREAD: TurnCompletion = { kind: 'error', message: 'Stopped before it was read' }
@@ -389,10 +390,11 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
         }),
       isBusy: (sessionKey) => hooks.isBusy(sessionKey),
       // Same rule as appChatMessageIdentity for a team session not fronted over
-      // IM: a teammate's local job runs delegated, so it never joins the owner's
-      // own turn. Over IM the bus cannot tell, which only errs toward queueing.
-      getJobIdentity: (job) => job.trigger.external ? 'external'
-        : isBorrowedTeamTurn(job.trigger.kind, false, false) ? 'delegated' : 'owner',
+      // IM: the owner's own digital humans and the runtime share the owner's
+      // identity, so their messages join the owner's running turn; a request
+      // from outside never does. Over IM the bus cannot tell, which only errs
+      // toward queueing.
+      getJobIdentity: (job) => job.trigger.origin ?? 'owner',
       getActiveIdentity: (sessionKey) => hooks.getTurnIdentity?.(sessionKey),
       mergeJobs: (jobs) => ({
         ...jobs[0],
@@ -721,7 +723,7 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
       wait,
       taskId: input.taskRef,
       kind: fromAppId ? 'message' : 'human_message',
-      ...(input.external ? { external: true } : {}),
+      ...(input.origin ? { origin: input.origin } : {}),
     }
     ;(trigger as TeamTriggerContext & { forwardDepth?: number }).forwardDepth = forwardDepth + 1
 

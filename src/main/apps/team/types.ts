@@ -130,7 +130,7 @@ export interface TeamCheckRow {
   target_app_id: string
   created_by_app_id: string
   instruction: string
-  /** Set from an external-origin turn; added in migration v19. */
+  /** The check's origin (see `CHECK_ORIGIN_BY_CODE` in store.ts); added in migration v19. */
   external: number
   schedule_json: string
   run_count: number

@@ -8,7 +8,8 @@
  * full body regardless of this UI state.
  *
  * `inProcess` draws one received while a reply was being written, as a row of
- * that reply's process: the reply's work, not a turn it started.
+ * that reply's process timeline (which supplies the icon and the spacing): the
+ * reply's work, not a turn it started.
  */
 
 import { useEffect, useState } from 'react'
@@ -25,11 +26,9 @@ const FRESH_DELIVERY_MS = 5_000
 interface TeamMemberMessageProps {
   message: Message
   inProcess?: boolean
-  /** Drawn inside the live process timeline, which supplies the icon and the row spacing. */
-  timeline?: boolean
 }
 
-export function TeamMemberMessage({ message, inProcess = false, timeline = false }: TeamMemberMessageProps) {
+export function TeamMemberMessage({ message, inProcess = false }: TeamMemberMessageProps) {
   const { t } = useTranslation()
   const provenance = readTeamProvenance(message)
 
@@ -76,7 +75,7 @@ export function TeamMemberMessage({ message, inProcess = false, timeline = false
 
   if (inProcess) {
     return (
-      <div className={`w-full min-w-0 ${timeline ? '' : 'border-b border-border-faint'}`} data-message-id={message.id}>
+      <div className="w-full min-w-0" data-message-id={message.id}>
         <button
           onClick={() => setIsExpanded(v => !v)}
           aria-expanded={isExpanded}
@@ -86,11 +85,6 @@ export function TeamMemberMessage({ message, inProcess = false, timeline = false
             size={12}
             className={`shrink-0 text-muted-foreground/60 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
           />
-          {!timeline && (
-            <span className="shrink-0 w-4 h-4 rounded-[5px] flex items-center justify-center bg-primary/15 text-primary">
-              <Users size={9} />
-            </span>
-          )}
           <span className="max-w-[55%] truncate text-xs font-medium text-muted-foreground">{label}</span>
           <span className="text-xs text-muted-foreground truncate min-w-0">{summary}</span>
           <span className="hidden sm:inline shrink-0 text-muted-foreground/40 text-[10px]">·</span>

@@ -26,13 +26,17 @@ import {
   fullCapabilityPolicy,
   isRestrictivePolicy,
   resolveBashAccess,
+  grantsEverything,
+  colleagueReach,
+  intersectPolicies,
 } from '../../../../src/shared/apps/capability-policy'
 import {
   applyCapabilityPolicy,
+  describeWithheld,
   filterMcpServersByPolicy,
   isBorrowedTeamTurn,
-  resolveDelegationMode,
 } from '../../../../src/main/apps/runtime/capability-policy'
+import type { TeamTriggerContext } from '../../../../src/shared/apps/team-types'
 
 const ALL_MCP = {
   'web-search': {},
@@ -187,43 +191,45 @@ describe('MCP server injection', () => {
 })
 
 describe('who a delegated policy holds', () => {
-  // The limit is about what may happen on the OWNER's machine, so the question
-  // is who started the turn — not whether a person or a model typed it.
+  // The question is where THIS turn's request came from — read from its own
+  // trigger, never from what the session did before.
   it('does not restrict the owner talking to their own digital human', () => {
-    // The owner's chat is delivered straight to the session and carries no kind.
-    expect(isBorrowedTeamTurn(undefined, false, false)).toBe(false)
+    expect(isBorrowedTeamTurn({ kind: undefined }, false)).toBe(false)
   })
 
-  it('cannot treat omitted or invalid external presentation kinds as the owner', () => {
-    expect(isBorrowedTeamTurn(undefined, false, true)).toBe(true)
-    expect(isBorrowedTeamTurn('invalid' as never, false, true)).toBe(true)
+  it('does not restrict the owner’s own digital humans working for each other', () => {
+    expect(isBorrowedTeamTurn({ kind: 'message' }, false)).toBe(false)
   })
 
-  it('restricts another PERSON reaching it from a different machine', () => {
-    expect(isBorrowedTeamTurn('human_message', false, true)).toBe(true)
+  it('does not restrict the turns the runtime starts here', () => {
+    for (const kind of ['run_start', 'periodic_check', 'member_stopped'] as const) {
+      expect(isBorrowedTeamTurn({ kind }, false)).toBe(false)
+    }
   })
 
-  it('restricts a teammate’s digital human', () => {
-    expect(isBorrowedTeamTurn('message', false, false)).toBe(true)
+  it('restricts a request from another machine, whatever its presentation kind', () => {
+    const kinds: Array<TeamTriggerContext['kind']> = [undefined, 'message', 'human_message', 'periodic_check', 'invalid' as never]
+    for (const kind of kinds) {
+      expect(isBorrowedTeamTurn({ kind, origin: 'colleague' }, false)).toBe(true)
+    }
   })
 
-  it('restricts the turns the runtime starts on the team’s behalf', () => {
-    expect(isBorrowedTeamTurn('run_start', false, false)).toBe(true)
-    expect(isBorrowedTeamTurn('periodic_check', false, false)).toBe(true)
+  it('restricts a guest’s request reaching a member', () => {
+    expect(isBorrowedTeamTurn({ kind: 'message', origin: 'guest' }, false)).toBe(true)
   })
 
   it('leaves the person in an IM chat a member fronts to that chat’s owner/guest rules', () => {
-    expect(isBorrowedTeamTurn('human_message', true, false)).toBe(false)
-    expect(isBorrowedTeamTurn('human_message', true, true)).toBe(false)
+    expect(isBorrowedTeamTurn({ kind: 'human_message' }, true)).toBe(false)
+    expect(isBorrowedTeamTurn({ kind: 'human_message', origin: 'guest' }, true)).toBe(false)
   })
 
-  it('leaves a front-desk turn woken by work started here as it was', () => {
-    expect(isBorrowedTeamTurn('message', true, false)).toBe(false)
+  it('leaves a front-desk turn woken by the owner’s own work as it was', () => {
+    expect(isBorrowedTeamTurn({ kind: 'message' }, true)).toBe(false)
   })
 
-  it('restricts a front-desk turn woken to continue work that entered from outside', () => {
-    expect(isBorrowedTeamTurn('message', true, true)).toBe(true)
-    expect(isBorrowedTeamTurn('periodic_check', true, true)).toBe(true)
+  it('restricts a front-desk turn woken to continue a request from outside', () => {
+    expect(isBorrowedTeamTurn({ kind: 'message', origin: 'colleague' }, true)).toBe(true)
+    expect(isBorrowedTeamTurn({ kind: 'periodic_check', origin: 'guest' }, true)).toBe(true)
   })
 })
 
@@ -339,14 +345,137 @@ describe('a policy never re-opens a tool the session already withholds', () => {
   })
 })
 
-describe('where a request came from decides how silence reads', () => {
-  it('holds a request that entered from another machine to what was granted', () => {
-    expect(resolveDelegationMode({ external: true })).toBe('strict')
+describe('granting everything', () => {
+  const inventory = { skills: ['pdf', 'xlsx'], userMcp: ['my-mcp'] }
+
+  it('the "everything" preset grants everything, with or without an inventory', () => {
+    expect(grantsEverything(fullCapabilityPolicy())).toBe(true)
+    expect(grantsEverything(fullCapabilityPolicy(), inventory)).toBe(true)
+    expect(grantsEverything({ ...fullCapabilityPolicy(), allowChecks: false } as never, inventory)).toBe(true)
   })
 
-  it('does not put a lock between two of the owner’s own digital humans', () => {
-    expect(resolveDelegationMode({ external: false })).toBe('permissive')
-    expect(resolveDelegationMode({})).toBe('permissive')
+  it('a list naming everything this machine has grants everything; one missing a name does not', () => {
+    const listed = { ...fullCapabilityPolicy(), allowedSkills: ['pdf', 'xlsx'], allowedUserMcp: ['my-mcp'] }
+    expect(grantsEverything(listed, inventory)).toBe(true)
+    expect(grantsEverything({ ...listed, allowedSkills: ['pdf'] }, inventory)).toBe(false)
+    expect(grantsEverything({ ...listed, allowedUserMcp: [] }, inventory)).toBe(false)
+    // Without an inventory a written list cannot be shown to cover anything.
+    expect(grantsEverything(listed)).toBe(false)
+  })
+
+  it('anything switched off, or commands narrowed to a list, is not everything', () => {
+    const full = fullCapabilityPolicy()
+    expect(grantsEverything({ ...full, allowedTools: full.allowedTools!.filter(t => t !== 'WebFetch') }, inventory)).toBe(false)
+    expect(grantsEverything({ ...full, allowAiBrowser: false }, inventory)).toBe(false)
+    expect(grantsEverything({ ...full, bashScope: 'listed', bashRules: ['ls'] }, inventory)).toBe(false)
+    // Unset switches read strictly: silence is not "on".
+    expect(grantsEverything({ allowedTools: full.allowedTools, bashScope: 'full' }, inventory)).toBe(false)
+    // The old name of the sub-agent tool grants nothing at run time, so it does not count here either.
+    expect(grantsEverything({ ...full, allowedTools: [...full.allowedTools!.filter(t => t !== 'Agent'), 'Task'] }, inventory)).toBe(false)
+  })
+
+  it('the presets short of everything are read strictly', () => {
+    expect(grantsEverything(capabilityPolicyFromPreset('read_only'), inventory)).toBe(false)
+    expect(grantsEverything(capabilityPolicyFromPreset('workspace'), inventory)).toBe(false)
+    expect(grantsEverything(capabilityPolicyFromPreset('full'), inventory)).toBe(true)
+  })
+
+  it('reads what is installed only when every switch is on, and only for a list actually written', () => {
+    let reads = 0
+    const counted = { get skills() { reads++; return ['pdf', 'xlsx'] }, userMcp: ['my-mcp'] }
+    grantsEverything(capabilityPolicyFromPreset('read_only'), counted)
+    grantsEverything({ ...capabilityPolicyFromPreset('workspace'), allowedSkills: ['pdf'] }, counted)
+    grantsEverything(fullCapabilityPolicy(), counted)
+    expect(reads).toBe(0)
+
+    expect(grantsEverything({ ...fullCapabilityPolicy(), allowedSkills: ['pdf', 'xlsx'] }, counted)).toBe(true)
+    expect(reads).toBe(1)
+  })
+
+  it('a colleague reads an unsaved policy, or one granting everything, as full reach', () => {
+    expect(colleagueReach(null)).toBe('full')
+    expect(colleagueReach(undefined)).toBe('full')
+    expect(colleagueReach(fullCapabilityPolicy(), inventory)).toBe('full')
+    expect(colleagueReach(capabilityPolicyFromPreset('read_only'), inventory)).toBe('strict')
+    expect(colleagueReach({}, inventory)).toBe('strict')
+  })
+})
+
+describe('what two settings both allow', () => {
+  it('keeps only the tools, switches, skills and installed servers both grant', () => {
+    const member = { ...fullCapabilityPolicy(), allowedSkills: ['pdf', 'xlsx'], allowedUserMcp: ['a', 'b'] }
+    const chat = { allowedTools: ['Read', 'Glob', 'Grep', 'Task'], allowAiBrowser: true, allowEmail: false, allowedSkills: ['pdf'], allowedUserMcp: ['b', 'c'] }
+    const both = intersectPolicies(member, chat)
+    expect(both.allowedTools).toEqual(['Read', 'Glob', 'Grep', 'Agent'])
+    expect(both.allowAiBrowser).toBe(true)
+    expect(both.allowEmail).toBe(false)
+    expect(both.allowOcr).toBe(false)
+    expect(both.allowedSkills).toEqual(['pdf'])
+    expect(both.allowedUserMcp).toEqual(['b'])
+    expect(resolveBashAccess(both, 'strict').scope).toBe('none')
+  })
+
+  it('reads silence on either side as a refusal', () => {
+    const both = intersectPolicies(fullCapabilityPolicy(), {})
+    expect(computeDisallowedBuiltins(both, 'strict')).toEqual(ALL_BUILTIN_TOOLS.filter(t => !ALWAYS_AVAILABLE_BUILTIN_TOOLS.includes(t)))
+    expect(filterMcpServersByPolicy(ALL_MCP, DB_MCP, both, 'strict', TEAM_CHANNEL)).toEqual({ 'web-search': {}, 'halo-team': {}, 'halo-report': {} })
+    // The member's saved "everything" never lends a stranger more than nothing.
+    expect(grantsEverything(both, { skills: [], userMcp: [] })).toBe(false)
+  })
+
+  it('takes the narrower command reach, and meets two whitelists rule by rule', () => {
+    const full = { allowedTools: ['Bash'], bashScope: 'full' as const }
+    const listed = (rules: string[]) => ({ allowedTools: ['Bash'], bashScope: 'listed' as const, bashRules: rules })
+    expect(resolveBashAccess(intersectPolicies(full, full), 'strict')).toEqual({ scope: 'full', rules: [] })
+    expect(resolveBashAccess(intersectPolicies(full, listed(['ls'])), 'strict')).toEqual({ scope: 'listed', rules: ['ls'] })
+    expect(resolveBashAccess(intersectPolicies(listed(['git log *', 'ls']), full), 'strict')).toEqual({ scope: 'listed', rules: ['git log *', 'ls'] })
+    expect(resolveBashAccess(intersectPolicies(listed(['ls', 'npm run:*']), listed(['npm run:*', 'pwd'])), 'strict'))
+      .toEqual({ scope: 'listed', rules: ['npm run:*'] })
+    // A command two different rules would each allow is refused rather than guessed at.
+    expect(resolveBashAccess(intersectPolicies(listed(['npm run:*']), listed(['npm run build'])), 'strict'))
+      .toEqual({ scope: 'listed', rules: [] })
+    expect(resolveBashAccess(intersectPolicies(full, { allowedTools: [] }), 'strict').scope).toBe('none')
+    // A terminal needs unrestricted commands on both sides.
+    expect(allowsCapability(intersectPolicies({ ...full, allowTerminal: true }, { ...listed(['ls']), allowTerminal: true }), 'allowTerminal', 'strict')).toBe(false)
+  })
+})
+
+describe('what a restricted turn is told is off', () => {
+  const offered = { ...ALL_MCP }
+  const describe_ = (policy: Parameters<typeof applyCapabilityPolicy>[1]['policy'], fileBoundary = true) => {
+    const options: Record<string, any> = {}
+    const applied = applyCapabilityPolicy(options, { policy, mode: 'strict', mcpServers: offered, dbMcpServers: DB_MCP, alwaysKeep: TEAM_CHANNEL, keepFileTools: fileBoundary })
+    return describeWithheld({ policy, mode: 'strict', applied, offered, dbMcpServers: DB_MCP, fileBoundary })
+  }
+
+  it('names commands, skills, capabilities, installed tools and file reach', () => {
+    const items = describe_(undefined)
+    expect(items).toContain('running commands')
+    expect(items).toContain('skills')
+    expect(items).toContain('AI Browser')
+    expect(items).toContain('Terminal')
+    expect(items).toContain('the installed tool "my-mcp"')
+    expect(items).toContain('reading files, except your memory and the files handed to you')
+    expect(items).toContain('editing files, except your memory')
+    expect(items).not.toContain('files outside this workspace')
+  })
+
+  it('says what a granted tool cannot reach, and what a command whitelist leaves out', () => {
+    const items = describe_({ allowedTools: ['Read', 'Glob', 'Grep', 'Bash'], bashScope: 'listed', bashRules: ['ls'] })
+    expect(items).toContain('running commands other than "ls"')
+    expect(items).toContain('files outside this workspace')
+    expect(items.some(item => item.startsWith('reading the output of a command left running in the background'))).toBe(true)
+    expect(items.some(item => item.startsWith('reading files'))).toBe(false)
+  })
+
+  it('lists no capability the digital human never had', () => {
+    const items = describeWithheld({
+      policy: undefined, mode: 'strict', fileBoundary: false,
+      applied: applyCapabilityPolicy({}, { policy: undefined, mode: 'strict', mcpServers: { 'halo-team': {} }, dbMcpServers: null, alwaysKeep: TEAM_CHANNEL }),
+      offered: { 'halo-team': {} }, dbMcpServers: null,
+    })
+    expect(items).not.toContain('AI Browser')
+    expect(items).not.toContain('Email')
   })
 })
 

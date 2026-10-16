@@ -82,6 +82,12 @@ export function createBoardDigest(deps: BoardDigestDeps): BoardDigest {
         if (act.status === 'undelivered') return `${actor} tried to reach ${target ?? 'someone'} and it did not arrive`
         return `${actor} → ${target}:${quoted}`
       case 'reply':
+        // An undelivered fate is filed under the member the message never reached.
+        if (act.status === 'undelivered') {
+          return toYou
+            ? `${actor} did not receive your message:${quoted}`
+            : `${actor} did not receive a message from ${target ?? 'someone'}`
+        }
         return toYou ? `${actor} answered you:${quoted}` : `${actor} answered ${target}`
       case 'task_post':
         return `${actor} assigned${quoted} to ${target ?? 'someone'}`

@@ -390,6 +390,12 @@ export interface FeedConsumer {
    * consumer was not subscribed.
    */
   unsubscribe(feedKey: string): boolean
+  /**
+   * Stop asking for a feed without telling its author — one this node no longer
+   * exchanges anything with, where a feed-unsubscribe would only go astray. The
+   * cursor stays, as on unsubscribe. Returns false when not subscribed.
+   */
+  forget(feedKey: string): boolean
   /** Handle a received batch: order, dedup, apply, ack, and nack any gap. */
   onEntries(frame: FeedEntriesFrame): void
   /**
@@ -464,10 +470,15 @@ export function createFeedConsumer(deps: FeedConsumerDeps): FeedConsumer {
     return true
   }
 
-  function unsubscribe(feedKey: string): boolean {
+  function forget(feedKey: string): boolean {
     if (!subscribed.delete(feedKey)) return false
     awaitingFirstBatch.delete(feedKey)
     pending.delete(feedKey)
+    return true
+  }
+
+  function unsubscribe(feedKey: string): boolean {
+    if (!forget(feedKey)) return false
     deps.send({ kind: 'feed-unsubscribe', officeId: deps.officeId, feedKey })
     return true
   }
@@ -593,5 +604,5 @@ export function createFeedConsumer(deps: FeedConsumerDeps): FeedConsumer {
     return cursor
   }
 
-  return { subscribe, ensureSubscribed, unsubscribe, onEntries, resubscribeStale }
+  return { subscribe, ensureSubscribed, unsubscribe, forget, onEntries, resubscribeStale }
 }

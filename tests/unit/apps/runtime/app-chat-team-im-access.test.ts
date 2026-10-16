@@ -9,9 +9,9 @@
  *
  *   - the session is shared with the owner's own Halo window, which never reads
  *     the chat's last sender;
- *   - a guest's request travels on to teammates and later turns as work that
- *     entered from outside (team/external-origin.ts), so handing it to a
- *     teammate does not launder it;
+ *   - a guest's request travels on as a guest's (`TeamTriggerContext.origin`)
+ *     on what the restricted turn itself sends, so handing it to a teammate
+ *     does not launder it;
  *   - a turn woken to continue such work stays restricted even when the chat
  *     cannot say who asked (after a restart) or an owner spoke last.
  *
@@ -89,7 +89,8 @@ vi.mock('../../../../src/main/apps/runtime/app-chat-sink', () => ({
   disposeAppChatSink: vi.fn(),
 }))
 
-const { getDelegatedPolicy, createTeamMcpServer, noteMemberTurnEnded } = vi.hoisted(() => ({
+const { getDelegatedPolicy, createTeamMcpServer, noteMemberTurnEnded, promptChat } = vi.hoisted(() => ({
+  promptChat: { key: null as string | null },
   getDelegatedPolicy: vi.fn((): unknown => undefined),
   createTeamMcpServer: vi.fn((_context: Record<string, unknown>) => ({ _isMcpServer: true, name: 'halo-team' })),
   noteMemberTurnEnded: vi.fn((_input: Record<string, unknown>) => {}),
@@ -107,6 +108,7 @@ vi.mock('../../../../src/main/apps/runtime/team', async (importOriginal) => ({
       selfIsLead: true,
       selfIsDisposable: false,
       roster: [],
+      chatKey: promptChat.key,
     }),
     getDelegatedPolicy,
     getTeamName: () => 'Front office',
@@ -132,6 +134,7 @@ vi.mock('../../../../src/main/services/agent/resolved-sdk', async (importOrigina
   getEngineCapabilities,
 }))
 vi.mock('../../../../src/main/services/agent/sdk-config', () => ({
+  markMcpServerSettings: (server: unknown) => server,
   resolveCredentialsForSdk: vi.fn(async () => ({
     displayModel: 'test-model',
     sdkModel: 'test-model',
@@ -316,6 +319,8 @@ import { createTurnReport } from '../../../../src/main/apps/runtime/team/turn-re
 import type { MessageBus } from '../../../../src/main/apps/runtime/team/message-bus'
 import type { TeamStore } from '../../../../src/main/apps/team'
 import { buildTeamSessionKey } from '../../../../src/shared/apps/team-types'
+import { setActiveImChannelManager } from '../../../../src/main/apps/runtime/im-channels'
+import { capabilityPolicyFromPreset, fullCapabilityPolicy } from '../../../../src/shared/apps/capability-policy'
 import type { TeamEnvelope, TeamTriggerContext } from '../../../../src/shared/apps/team-types'
 
 // ============================================
@@ -344,21 +349,21 @@ function trigger(epochId: string, fields: Record<string, unknown>): AppChatReque
   return { teamId: TEAM_ID, epochId, correlationId: `corr-${epochSeq}`, fromAppId: null, wait: false, ...fields }
 }
 
-/** A person's message in the team-fronted chat, as dispatch-inbound hands it over. */
-function imTurn(chat: ReturnType<typeof teamChat>, external = false): AppChatRequest {
+/** A person's message in the team-fronted chat, as dispatch-inbound hands it over (a guest's stamped). */
+function imTurn(chat: ReturnType<typeof teamChat>, stampedGuest = false): AppChatRequest {
   return {
     appId: app.id, spaceId: 'space-1', message: 'hello', conversationId: chat.conversationId,
     imSession: IM_GROUP,
-    teamContext: trigger(chat.epochId, { kind: 'human_message', ...(external ? { external: true } : {}) }),
+    teamContext: trigger(chat.epochId, { kind: 'human_message', ...(stampedGuest ? { origin: 'guest' } : {}) }),
   }
 }
 
 /** A later turn of the same chat, woken by a teammate's reply (team/index.ts resolveImRoute). */
-function wokenTurn(chat: ReturnType<typeof teamChat>, external = false): AppChatRequest {
+function wokenTurn(chat: ReturnType<typeof teamChat>, origin?: 'guest' | 'colleague'): AppChatRequest {
   return {
     appId: app.id, spaceId: 'space-1', message: '[Team message from researcher] done', conversationId: chat.conversationId,
     imSession: IM_GROUP,
-    teamContext: trigger(chat.epochId, { kind: 'message', fromAppId: 'app-researcher', ...(external ? { external: true } : {}) }),
+    teamContext: trigger(chat.epochId, { kind: 'message', fromAppId: 'app-researcher', ...(origin ? { origin } : {}) }),
   }
 }
 
@@ -375,7 +380,7 @@ function ownTurn(chat: ReturnType<typeof teamChat>): AppChatRequest {
  * the turn-end report delivers it: the teammate ran a check the guest's work
  * left behind, with the origin that turn ran under.
  */
-async function turnEndNotice(chat: ReturnType<typeof teamChat>, external: boolean): Promise<AppChatRequest> {
+async function turnEndNotice(chat: ReturnType<typeof teamChat>, origin?: 'guest' | 'colleague'): Promise<AppChatRequest> {
   const delivered: Array<{ envelope: TeamEnvelope; trigger: TeamTriggerContext }> = []
   const report = createTurnReport({
     store: {
@@ -394,7 +399,7 @@ async function turnEndNotice(chat: ReturnType<typeof teamChat>, external: boolea
   })
   report.noteTurnEnded({
     appId: 'app-researcher', teamId: TEAM_ID, epochId: chat.epochId, fate: { kind: 'ended' },
-    triggerKind: 'periodic_check', ...(external ? { external: true } : {}),
+    triggerKind: 'periodic_check', ...(origin ? { origin } : {}),
   })
   await vi.waitFor(() => expect(delivered).toHaveLength(1))
   return {
@@ -425,8 +430,8 @@ function runsCommands(conversationId: string): boolean {
   return decideDelegatedTool(conversationId, 'Bash', { command: 'ls' }).allow
 }
 
-function teamToolsExternal(): boolean {
-  return createTeamMcpServer.mock.calls.at(-1)![0].external === true
+function teamToolsOrigin(): string | undefined {
+  return createTeamMcpServer.mock.calls.at(-1)![0].origin as string | undefined
 }
 
 beforeEach(() => {
@@ -474,7 +479,7 @@ describe('a guest in a team-fronted chat is held exactly like a guest of a digit
     await sendAppChatMessage(imTurn(chat, true))
 
     expect(Object.keys(lastOptions().mcpServers)).toEqual(expect.arrayContaining(['halo-team', 'halo-report']))
-    expect(teamToolsExternal()).toBe(true)
+    expect(teamToolsOrigin()).toBe('guest')
   })
 
   it('is told who the owners are, as the guest of a digital human is', async () => {
@@ -495,7 +500,7 @@ describe('owners of a team-fronted chat keep full access', () => {
 
     expect(lastOptions().disallowedTools).toBeUndefined()
     expect(runsCommands(chat.conversationId)).toBe(true)
-    expect(teamToolsExternal()).toBe(false)
+    expect(teamToolsOrigin()).toBeUndefined()
   })
 
   it('with permission control off everyone is an owner, in either kind of chat', async () => {
@@ -523,8 +528,8 @@ describe('owners of a team-fronted chat keep full access', () => {
 
     expect(lastOptions().disallowedTools).toBeUndefined()
     expect(runsCommands(chat.conversationId)).toBe(true)
-    // The owner at their own keyboard ends the stranger's thread of work.
-    expect(teamToolsExternal()).toBe(false)
+    // The owner at their own keyboard hands on nothing of the guest's.
+    expect(teamToolsOrigin()).toBeUndefined()
   })
 })
 
@@ -535,17 +540,27 @@ describe('work a guest set in motion stays restricted when it comes back', () =>
     await sendAppChatMessage(imTurn(chat, true))
     const guestTurn = lastOptions()
 
-    // The teammate's own message carries no origin: the thread remembers it.
-    await sendAppChatMessage(wokenTurn(chat))
+    // The teammate's reply carries the guest's origin: its own turn served it.
+    await sendAppChatMessage(wokenTurn(chat, 'guest'))
 
     expect(lastOptions().disallowedTools).toEqual(guestTurn.disallowedTools)
     expect(runsCommands(chat.conversationId)).toBe(false)
-    expect(teamToolsExternal()).toBe(true)
+    expect(teamToolsOrigin()).toBe('guest')
+  })
+
+  it('a turn held to a guest\u2019s standing hands on a guest\u2019s request, whatever woke it', async () => {
+    const chat = teamChat()
+    setImPermissionContext(chat.conversationId, guest)
+    await sendAppChatMessage(wokenTurn(chat))
+
+    expect(runsCommands(chat.conversationId)).toBe(false)
+    expect(teamToolsOrigin()).toBe('guest')
+    expect(noteMemberTurnEnded).toHaveBeenLastCalledWith(expect.objectContaining({ origin: 'guest' }))
   })
 
   it('after a restart has forgotten the chat sender, it is held to the delegated policy, strictly', async () => {
     const chat = teamChat()
-    await sendAppChatMessage(wokenTurn(chat, true))
+    await sendAppChatMessage(wokenTurn(chat, 'guest'))
 
     expect(lastOptions().disallowedTools).toEqual(expect.arrayContaining(['Bash', 'WebFetch']))
     expect(runsCommands(chat.conversationId)).toBe(false)
@@ -554,7 +569,7 @@ describe('work a guest set in motion stays restricted when it comes back', () =>
   it('an owner speaking last in the chat does not lend it the owner reach', async () => {
     const chat = teamChat()
     setImPermissionContext(chat.conversationId, listedOwner)
-    await sendAppChatMessage(wokenTurn(chat, true))
+    await sendAppChatMessage(wokenTurn(chat, 'guest'))
 
     expect(runsCommands(chat.conversationId)).toBe(false)
   })
@@ -573,7 +588,7 @@ describe('the turn-end notice of work a guest set in motion', () => {
   it('after a restart has forgotten the chat, it wakes the front desk restricted', async () => {
     // A fresh conversation stands for a restart: no sender on record, no remembered origin.
     const chat = teamChat()
-    await sendAppChatMessage(await turnEndNotice(chat, true))
+    await sendAppChatMessage(await turnEndNotice(chat, 'guest'))
 
     expect(runsCommands(chat.conversationId)).toBe(false)
   })
@@ -586,33 +601,33 @@ describe('the turn-end notice of work a guest set in motion', () => {
     await sendAppChatMessage(imTurn(chat))
     expect(runsCommands(chat.conversationId)).toBe(true)
 
-    await sendAppChatMessage(await turnEndNotice(chat, true))
+    await sendAppChatMessage(await turnEndNotice(chat, 'guest'))
 
     expect(runsCommands(chat.conversationId)).toBe(false)
   })
 
-  it('a notice about work started here leaves the front desk as it was', async () => {
+  it.each([undefined, 'colleague'] as const)('a notice about work that was not a guest\u2019s (%s) leaves the front desk as it was', async (origin) => {
     const chat = teamChat()
     setImPermissionContext(chat.conversationId, listedOwner)
-    await sendAppChatMessage(await turnEndNotice(chat, false))
+    await sendAppChatMessage(await turnEndNotice(chat, origin))
 
     expect(runsCommands(chat.conversationId)).toBe(true)
   })
 })
 
 describe('a member reports its own ending with the origin it ran under', () => {
-  it('a guest turn and a teammate turn on outside work end as outside work', async () => {
+  it('a guest turn and a teammate turn on outside work end with the origin they served', async () => {
     const chat = teamChat()
     setImPermissionContext(chat.conversationId, guest)
     await sendAppChatMessage(imTurn(chat, true))
-    expect(noteMemberTurnEnded).toHaveBeenLastCalledWith(expect.objectContaining({ external: true }))
+    expect(noteMemberTurnEnded).toHaveBeenLastCalledWith(expect.objectContaining({ origin: 'guest' }))
 
     const teammate = teamChat()
     await sendAppChatMessage({
       appId: app.id, spaceId: 'space-1', message: '[Team message from lead] go', conversationId: teammate.conversationId,
-      teamContext: trigger(teammate.epochId, { kind: 'message', fromAppId: 'app-lead', external: true }),
+      teamContext: trigger(teammate.epochId, { kind: 'message', fromAppId: 'app-lead', origin: 'colleague' }),
     })
-    expect(noteMemberTurnEnded).toHaveBeenLastCalledWith(expect.objectContaining({ external: true }))
+    expect(noteMemberTurnEnded).toHaveBeenLastCalledWith(expect.objectContaining({ origin: 'colleague' }))
   })
 
   it('an owner turn ends with no outside origin', async () => {
@@ -620,7 +635,7 @@ describe('a member reports its own ending with the origin it ran under', () => {
     setImPermissionContext(chat.conversationId, listedOwner)
     await sendAppChatMessage(imTurn(chat))
 
-    expect(noteMemberTurnEnded.mock.calls.at(-1)![0]).not.toHaveProperty('external')
+    expect(noteMemberTurnEnded.mock.calls.at(-1)![0]).not.toHaveProperty('origin')
   })
 })
 
@@ -733,5 +748,80 @@ describe('a guest of a digital human\u2019s own IM chat, and its skills', () => 
 
     expect(lastOptions().disallowedTools).not.toContain('Agent')
     expect(lastOptions().disallowedTools).not.toContain('Task')
+  })
+})
+
+describe('a guest\u2019s request reaching a member is capped by that chat\u2019s guest settings', () => {
+  const CHAT_KEY = 'inst-1:group:g1'
+  const channel = { teamId: TEAM_ID, permissionEnabled: true, guestPolicy: { allowedTools: ['Read', 'Glob', 'Grep'] } as Record<string, unknown> }
+  const memberTurn = (): AppChatRequest => {
+    const chat = teamChat()
+    return {
+      appId: app.id, spaceId: 'space-1', message: '[Team message from desk] look into it', conversationId: chat.conversationId,
+      teamContext: trigger(chat.epochId, { kind: 'message', fromAppId: 'app-desk', origin: 'guest' }),
+    }
+  }
+
+  beforeEach(() => {
+    promptChat.key = CHAT_KEY
+    channel.teamId = TEAM_ID
+    channel.permissionEnabled = true
+    channel.guestPolicy = { allowedTools: ['Read', 'Glob', 'Grep'] }
+    setActiveImChannelManager({ getInstanceConfig: (id: string) => (id === 'inst-1' ? channel : undefined) } as never)
+  })
+
+  afterEach(() => {
+    promptChat.key = null
+    setActiveImChannelManager(null)
+  })
+
+  it('a member that grants everything lends a guest only what the chat lends its guests', async () => {
+    getDelegatedPolicy.mockReturnValue(fullCapabilityPolicy())
+    const turn = memberTurn()
+    await sendAppChatMessage(turn)
+
+    expect(lastOptions().allowedTools).toEqual(['TodoWrite', 'Read', 'Glob', 'Grep'])
+    expect(lastOptions().disallowedTools).toEqual(expect.arrayContaining(['Bash', 'WebFetch']))
+    expect(runsCommands(turn.conversationId!)).toBe(false)
+    // Writing stays in the pool only for the member's memory.
+    expect(decideDelegatedTool(turn.conversationId!, 'Write', { file_path: '/tmp/halo-test/space/notes.md', content: 'x' }).allow).toBe(false)
+    expect(teamToolsOrigin()).toBe('guest')
+  })
+
+  it('a chat that lends its guests more does not widen what the member lends', async () => {
+    getDelegatedPolicy.mockReturnValue(capabilityPolicyFromPreset('read_only'))
+    channel.guestPolicy = fullCapabilityPolicy() as Record<string, unknown>
+    await sendAppChatMessage(memberTurn())
+
+    expect(lastOptions().allowedTools).toEqual(['TodoWrite', 'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch'])
+  })
+
+  it.each([
+    ['the member never saved anything', () => getDelegatedPolicy.mockReturnValue(undefined)],
+    ['the chat is not one of this machine\u2019s', () => { getDelegatedPolicy.mockReturnValue(fullCapabilityPolicy()); setActiveImChannelManager(null) }],
+    ['the chat now answers for another team', () => { getDelegatedPolicy.mockReturnValue(fullCapabilityPolicy()); channel.teamId = 'other-team' }],
+    ['the chat has no guest access any more', () => { getDelegatedPolicy.mockReturnValue(fullCapabilityPolicy()); channel.permissionEnabled = false }],
+    ['the work is not an IM chat\u2019s at all', () => { getDelegatedPolicy.mockReturnValue(fullCapabilityPolicy()); promptChat.key = 'native:abc' }],
+  ])('lends nothing beyond the team\u2019s own tools when %s', async (_label, arrange) => {
+    arrange()
+    await sendAppChatMessage(memberTurn())
+
+    expect(lastOptions().allowedTools).toEqual(['TodoWrite'])
+    expect(Object.keys(lastOptions().mcpServers).sort()).toEqual(expect.arrayContaining(['halo-report', 'halo-team']))
+    expect(lastOptions().mcpServers).not.toHaveProperty('ai-browser')
+  })
+
+  it('tells the member whose request it is and that the chat\u2019s settings cap it', async () => {
+    getDelegatedPolicy.mockReturnValue(fullCapabilityPolicy())
+    await sendAppChatMessage(memberTurn())
+    const sent = String(send.mock.calls.at(-1)![0])
+
+    expect(sent).toContain('[Limited permissions for this turn]')
+    expect(sent).toContain('This request comes from a guest in an IM chat your team answers, not from your owner.')
+    expect(sent).toContain('that chat\u2019s guest settings')
+    expect(sent).toContain('- running commands')
+    expect(sent).toContain('This is your owner\u2019s setting, not a fault.')
+    // Per turn: never baked into the session's prompt.
+    expect(lastSystemPrompt()).not.toContain('Limited permissions')
   })
 })

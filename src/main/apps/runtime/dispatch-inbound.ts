@@ -1124,12 +1124,11 @@ export async function dispatchInboundMessage(
       imPermission,
       // Team-backed chat: hand the member its team context (tools + Entry + the
       // long-lived conversation epoch). Absent for single-human chats. A guest
-      // is someone nobody here vouched for, so their request is stamped as
-      // entering from outside: whatever it sets in motion — a teammate it is
-      // handed to, a later turn that continues it — reads silence as a refusal
-      // (team/external-origin.ts).
+      // is someone nobody here vouched for, so their request is stamped as a
+      // guest's: whatever this turn sets in motion — a teammate it is handed to,
+      // a check, a question — stays a guest's request.
       ...(teamBacking
-        ? { teamContext: isOwner ? teamBacking.teamContext : { ...teamBacking.teamContext, external: true } }
+        ? { teamContext: isOwner ? teamBacking.teamContext : { ...teamBacking.teamContext, origin: 'guest' as const } }
         : {}),
 
       // IM has no Deep Thinking toggle, so replies take the same extended

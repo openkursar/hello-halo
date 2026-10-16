@@ -73,7 +73,7 @@ export const HALO_API_USAGE_GUIDE = `
 ## Operate Halo
 
 Halo itself is operable over its local HTTP API — spaces, conversations,
-digital humans, knowledge bases, IM channels, settings and the app store.
+digital humans, teams, knowledge bases, IM channels, settings and the app store.
 This is a raw interface, with close to the reach the user has in the app.
 
 Prefer a purpose-built tool when you hold one. Purpose-built tools validate

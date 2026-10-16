@@ -1,10 +1,10 @@
 /**
  * Applying a capability policy to a digital-human turn.
  *
- * Two callers drive a digital human that is not its owner — an IM guest and a
- * teammate in a team — and both must be held to the same, single set of rules.
- * This module is where those rules turn into SDK options, so the two paths can
- * never quietly drift apart.
+ * Two callers drive a digital human that is not its owner — an IM guest, and a
+ * request from outside reaching a team member — and both must be held to the
+ * same, single set of rules. This module is where those rules turn into SDK
+ * options, so the two paths can never quietly drift apart.
  *
  * The vocabulary (which tools exist, which capabilities can be switched, what an
  * unstated permission means) lives in `shared/apps/capability-policy`, shared
@@ -12,6 +12,7 @@
  */
 
 import {
+  allowsBuiltin,
   allowsCapability,
   allowsUserMcp,
   buildAllowedToolRules,
@@ -20,53 +21,31 @@ import {
   resolveBashAccess,
   CAPABILITY_MCP_TOGGLES,
   CAPABILITY_SAFE_MCP,
+  DELEGABLE_BUILTIN_TOOLS,
+  SKILL_TOOL,
 } from '../../../shared/apps/capability-policy'
 import type { CapabilityMode, CapabilityPolicy } from '../../../shared/apps/capability-policy'
 import type { TeamTriggerContext } from '../../../shared/apps/team-types'
-import { FILE_TOOLS } from './turn-file-access'
+import { FILE_TOOLS, READ_FILE_TOOLS } from './turn-file-access'
+import type { TurnSkillAccess } from './turn-skills'
 
 export { computeDisallowedBuiltins }
 
 /**
- * Whether this team turn is someone OTHER than the owner putting the digital
- * human to work — the only turns an owner's delegated policy is meant to hold.
- * The question is WHO started it, not whether a person or a model typed it: a
- * colleague reaching in by hand does the same damage as their digital human.
- *
- * Local owner chat carries no kind. External origin remains authoritative even
- * when an incoming request omits that presentation hint.
+ * Whether this team turn serves someone OTHER than the owner — the only turns a
+ * member's delegated policy holds. Read from this turn's own trigger: the owner,
+ * their digital humans on this machine and the runtime waking one of them are
+ * the owner's own, whatever came before.
  *
  * In a chat a member fronts over IM, the person's own message answers to that
- * channel's owner/guest rules instead. A turn woken there to continue work
- * that entered from outside is borrowed like any other: who spoke last in the
- * chat says nothing about who set the work in motion.
+ * channel's owner/guest rules instead.
  */
 export function isBorrowedTeamTurn(
-  teamTurnKind: TeamTriggerContext['kind'] | undefined,
-  overImChannel: boolean,
-  external: boolean
+  trigger: Pick<TeamTriggerContext, 'kind' | 'origin'>,
+  overImChannel: boolean
 ): boolean {
-  if (!overImChannel && external) return true
-  if (!teamTurnKind) return false
-  if (!overImChannel) return true
-  return teamTurnKind !== 'human_message' && external
-}
-
-/**
- * How an unstated permission reads for a borrowed team turn.
- *
- * A request that entered this machine from outside is held to 'strict': nothing
- * is granted that the owner did not name, because nobody here vouched for the
- * person who sent it. A turn that started here stays 'permissive' — every
- * member involved is the owner's own, running with reach the owner already has,
- * so demanding a grant would add a lock between two of their own rooms.
- *
- * `external` is stamped at the boundary and travels with the chain (see
- * {@link TeamTriggerContext.external}), so routing a request through a local
- * member does not launder it into a local one.
- */
-export function resolveDelegationMode(teamContext: Pick<TeamTriggerContext, 'external'>): CapabilityMode {
-  return teamContext.external ? 'strict' : 'permissive'
+  if (!trigger.origin) return false
+  return !(overImChannel && trigger.kind === 'human_message')
 }
 
 const SAFE_MCP = new Set(CAPABILITY_SAFE_MCP)
@@ -193,6 +172,82 @@ export function applyCapabilityPolicy(
   sdkOptions.permissionMode = 'default'
 
   return { enforced: true, disallowedTools, mcpServers: filtered }
+}
+
+const BUILTIN_DESCRIPTIONS: Readonly<Record<string, string>> = {
+  Read: 'reading files',
+  Glob: 'finding files by name',
+  Grep: 'searching file contents',
+  Write: 'creating files',
+  Edit: 'editing files',
+  NotebookEdit: 'editing notebooks',
+  WebFetch: 'opening web pages',
+  WebSearch: 'searching the web',
+  Agent: 'sub-agents',
+}
+
+export interface WithheldInput {
+  policy: CapabilityPolicy | undefined
+  mode: CapabilityMode
+  applied: AppliedCapabilityPolicy
+  /** The servers the turn had before the policy narrowed it. */
+  offered: Record<string, unknown>
+  dbMcpServers: Record<string, unknown> | null
+  /** The skills of the turn, when the policy grants any. */
+  skills?: TurnSkillAccess
+  /** The turn's file tools are held to its file boundary (turn-file-access). */
+  fileBoundary: boolean
+}
+
+/**
+ * What a restricted turn cannot use, one item per thing, in the words a
+ * settings screen uses — so the digital human can tell whoever asked exactly
+ * what is off. Read from what this turn actually lost: a capability the digital
+ * human never had is not listed as switched off.
+ */
+export function describeWithheld(input: WithheldInput): string[] {
+  const { policy, mode, applied, offered, dbMcpServers, skills, fileBoundary } = input
+  const items: string[] = []
+
+  const bash = resolveBashAccess(policy, mode)
+  if (bash.scope === 'none') items.push('running commands')
+  else if (bash.scope === 'listed') {
+    items.push(bash.rules.length > 0
+      ? `running commands other than ${bash.rules.map((rule) => `"${rule}"`).join(', ')}`
+      : 'running commands')
+  }
+  if (bash.scope !== 'none' && applied.disallowedTools.includes('TaskOutput')) {
+    items.push('reading the output of a command left running in the background (run commands in the foreground)')
+  }
+
+  const fileTools = new Set(FILE_TOOLS)
+  for (const { name } of DELEGABLE_BUILTIN_TOOLS) {
+    if (name === 'Bash' || allowsBuiltin(policy, name, mode)) continue
+    const description = BUILTIN_DESCRIPTIONS[name] ?? name
+    items.push(fileBoundary && fileTools.has(name)
+      ? `${description}, except your memory${READ_FILE_TOOLS.includes(name) ? ' and the files handed to you' : ''}`
+      : description)
+  }
+  if (fileBoundary && FILE_TOOLS.some((name) => allowsBuiltin(policy, name, mode))) {
+    items.push('files outside this workspace')
+  }
+
+  if (!allowsBuiltin(policy, SKILL_TOOL, mode)) {
+    items.push('skills')
+  } else if (skills) {
+    const usable = skills.skills.filter((skill) => skill.granted && !skill.refusal).map((skill) => skill.dirName)
+    if (usable.length < skills.skills.length) {
+      items.push(usable.length > 0 ? `skills other than ${[...new Set(usable)].join(', ')}` : 'skills')
+    }
+  }
+
+  for (const toggle of CAPABILITY_MCP_TOGGLES) {
+    if (toggle.server in offered && !(toggle.server in applied.mcpServers)) items.push(toggle.label)
+  }
+  for (const name of Object.keys(dbMcpServers ?? {})) {
+    if (name in offered && !(name in applied.mcpServers)) items.push(`the installed tool "${name}"`)
+  }
+  return items
 }
 
 /** One line for the log: what this turn was narrowed to. */

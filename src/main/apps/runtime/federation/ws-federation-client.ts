@@ -12,8 +12,9 @@
  * direction holds: the joiner never imports websocket.ts.
  *
  * Reconnect uses exponential backoff (1s→…→30s cap), mirroring the renderer
- * transport. Timers are unref'd so a pending reconnect never keeps the process
- * (or a test runner) alive.
+ * transport, except after a refusal the consumer reports (markRefused): the
+ * consumer's retry delay then replaces it. Timers are unref'd so a pending
+ * reconnect never keeps the process (or a test runner) alive.
  */
 
 import WebSocket from 'ws'
@@ -102,12 +103,35 @@ const UNREACHABLE_AFTER_ATTEMPTS = 5
 /** Minimum gap between shed-frame warnings per plane, so a dead link cannot flood the log. */
 const DROP_LOG_INTERVAL_MS = 30_000
 
+/**
+ * How soon after a refusal a close by the far side still belongs to it. A relay
+ * ends a refused member's session within its close grace (100 ms). A host that
+ * keeps a refused session and drops it later is going away — most likely
+ * restarting, after which it may admit us — so that close reconnects as usual.
+ */
+const REFUSED_CLOSE_WINDOW_MS = 10_000
+
+/**
+ * How often a refused session the far side keeps open is pinged. Nothing else
+ * writes to it, and a connection that died without a FIN surfaces only on a
+ * write. The first ping comes long after REFUSED_CLOSE_WINDOW_MS, so a close it
+ * causes reconnects as usual.
+ */
+const REFUSED_PING_INTERVAL_MS = 30_000
+
 /** What a link can report about itself, for the office-level health line. */
 export interface WsLinkHealth {
   url: string
   connected: boolean
   /** Consecutive failed connect attempts; 0 once connected. */
   failedAttempts: number
+  /**
+   * Set while the far side has refused this node: `retryInMs` is 0 while the
+   * refused session is still open, and counts down once a reconnect is parked.
+   */
+  refused: { retryInMs: number } | null
+  /** Frames not sent since this client was created because the far side had refused this node. */
+  withheld: number
   /** Frames shed by queue overflow since this client was created, by plane. */
   dropped: Record<FramePlane, number>
   /** Federation frames and bytes received since this client was created, by plane. */
@@ -136,6 +160,11 @@ export class WsFederationClient {
   get isGatewaySession(): boolean {
     return this.gatewaySession
   }
+
+  /** A refusal stands: the session was marked refused, or the reconnect after it is parked. */
+  get isRefused(): boolean {
+    return this.refusal !== null || this.parkedUntil !== 0
+  }
   private stopped = false
   private reconnectAttempt = 0
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -149,6 +178,14 @@ export class WsFederationClient {
   private readonly dropped: Record<FramePlane, number> = { control: 0, stream: 0, feed: 0, artifact: 0 }
   private readonly lastDropLogAt: Record<FramePlane, number> = { control: 0, stream: 0, feed: 0, artifact: 0 }
   private unreachableReported = false
+  // The current session was refused (see markRefused); cleared by the next connect.
+  private refusal: { at: number; retryAfterMs: number } | null = null
+  // When a reconnect parked after a refused session ended is due; 0 when not parked.
+  private parkedUntil = 0
+  private withheld = 0
+  // Pings a refused session while the far side keeps it open (see watchRefusedSession).
+  private refusedPing: ReturnType<typeof setInterval> | null = null
+  private refusedPingUnanswered = false
   // Inbound volume, the number a joiner's cost is judged by (health line).
   private readonly received: Record<FramePlane, { frames: number; bytes: number }> = {
     control: { frames: 0, bytes: 0 },
@@ -174,6 +211,13 @@ export class WsFederationClient {
    * fanning it out roomwide.
    */
   send(frame: FederationMessage, to?: NodeId | null): void {
+    // After a refusal nothing is sent until the next connect: the far side drops
+    // it, and a backlog flushed into the next session meets the same refusal —
+    // or trips a relay's per-session frame limit before the join gets through.
+    if (this.refusal || this.parkedUntil) {
+      this.withheld += 1
+      return
+    }
     if (this.authed && this.socket?.readyState === WebSocket.OPEN) {
       this.socket.send(envelope(frame, to ?? null))
       return
@@ -213,6 +257,10 @@ export class WsFederationClient {
       url: this.wsUrl,
       connected: this.authed && this.socket?.readyState === WebSocket.OPEN,
       failedAttempts: this.authed ? 0 : this.reconnectAttempt,
+      refused: this.parkedUntil
+        ? { retryInMs: Math.max(0, this.parkedUntil - Date.now()) }
+        : this.refusal ? { retryInMs: 0 } : null,
+      withheld: this.withheld,
       dropped: { ...this.dropped },
       received: {
         control: { ...this.received.control },
@@ -224,10 +272,56 @@ export class WsFederationClient {
     }
   }
 
+  /**
+   * The far side refused this node on the current session — the consumer judges
+   * what counts, e.g. a refused join. The session carries nothing more. If the
+   * far side ends it right away (a relay closes a refused member at once), the
+   * next connect waits `retryAfterMs` instead of the reconnect backoff; a session
+   * it keeps open stays open and is pinged, so its later drop reconnects as usual
+   * even when no FIN arrives.
+   */
+  markRefused(retryAfterMs: number): void {
+    if (this.stopped) return
+    this.refusal = { at: Date.now(), retryAfterMs }
+    this.watchRefusedSession()
+  }
+
+  /**
+   * Ask again now rather than when the refusal said: a parked reconnect is moved
+   * to the next tick, and a refused session the far side kept open carries
+   * frames again — returning true, since only then must the consumer re-send
+   * what was refused (a reconnect re-authenticates and fires onReauth). Nothing
+   * happens while no refusal stands; an attempt is already on its way then.
+   */
+  retryRefused(): boolean {
+    if (this.stopped) return false
+    if (this.parkedUntil) {
+      this.scheduleConnect(0)
+      return false
+    }
+    if (!this.refusal) return false
+    this.refusal = null
+    this.stopRefusedPing()
+    return true
+  }
+
+  /**
+   * The far side admitted this node on the current session after refusing it
+   * there (a second join was in flight): the session carries frames again. What
+   * was withheld meanwhile stays dropped. A parked client has no session to be
+   * admitted on, so its park is left alone.
+   */
+  markAdmitted(): void {
+    if (!this.refusal) return
+    this.refusal = null
+    this.stopRefusedPing()
+  }
+
   /** Stop reconnecting and close the socket. Idempotent. */
   close(): void {
     this.stopped = true
     this.authed = false
+    this.stopRefusedPing()
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
@@ -259,6 +353,9 @@ export class WsFederationClient {
   private connect(): void {
     if (this.stopped) return
     this.authed = false
+    this.refusal = null
+    this.parkedUntil = 0
+    this.stopRefusedPing()
     this.setState('connecting')
     console.log(`${LOG_TAG} connecting url=${this.wsUrl} attempt=${this.reconnectAttempt}`)
 
@@ -285,12 +382,23 @@ export class WsFederationClient {
       this.handleMessage(data)
     })
 
+    socket.on('pong', () => {
+      this.refusedPingUnanswered = false
+    })
+
     socket.on('close', (code: number, reason: Buffer) => {
       this.authed = false
+      this.stopRefusedPing()
       this.setState('closed')
       const why = reason?.length ? reason.toString() : ''
       console.log(`${LOG_TAG} socket closed url=${this.wsUrl} code=${code}${why ? ` reason=${why}` : ''}`)
       if (this.stopped) return
+      const refusal = this.refusal
+      this.refusal = null
+      if (refusal && Date.now() - refusal.at <= REFUSED_CLOSE_WINDOW_MS) {
+        this.park(refusal.retryAfterMs)
+        return
+      }
       this.scheduleReconnect()
     })
 
@@ -394,6 +502,57 @@ export class WsFederationClient {
     this.outbound.drain(({ frame, to }) => socket.send(envelope(frame, to)))
   }
 
+  /**
+   * A refused session the far side keeps open carries no frames, so a connection
+   * that died silently would hold the refusal for good. Each ping writes to it (a
+   * peer that forgot the connection answers with a reset), and a ping still
+   * unanswered at the next one ends it; either close reconnects as usual.
+   * Restarted by every refusal, so the first ping is a full interval away.
+   */
+  private watchRefusedSession(): void {
+    this.stopRefusedPing()
+    this.refusedPingUnanswered = false
+    this.refusedPing = setInterval(() => {
+      const socket = this.socket
+      // `ws` throws on a ping before the socket opens.
+      if (!socket || socket.readyState !== WebSocket.OPEN) return
+      if (this.refusedPingUnanswered) {
+        console.warn(
+          `${LOG_TAG} refused session did not answer a ping within ${REFUSED_PING_INTERVAL_MS}ms; ` +
+            `ending it to reconnect url=${this.wsUrl}`
+        )
+        this.stopRefusedPing()
+        socket.terminate()
+        return
+      }
+      this.refusedPingUnanswered = true
+      socket.ping()
+    }, REFUSED_PING_INTERVAL_MS)
+    if (typeof this.refusedPing.unref === 'function') this.refusedPing.unref()
+  }
+
+  private stopRefusedPing(): void {
+    if (!this.refusedPing) return
+    clearInterval(this.refusedPing)
+    this.refusedPing = null
+  }
+
+  /** The far side ended a session it had just refused: stay away for `ms`, then connect once. */
+  private park(ms: number): void {
+    this.parkedUntil = Date.now() + ms
+    console.log(`${LOG_TAG} refused session ended; next connect in ${ms}ms url=${this.wsUrl}`)
+    this.scheduleConnect(ms)
+  }
+
+  private scheduleConnect(ms: number): void {
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null
+      this.connect()
+    }, ms)
+    if (typeof this.reconnectTimer.unref === 'function') this.reconnectTimer.unref()
+  }
+
   private scheduleReconnect(): void {
     if (this.stopped || this.reconnectTimer) return
     this.reconnectAttempt += 1
@@ -413,10 +572,6 @@ export class WsFederationClient {
       )
       this.deps.onUnreachable?.(this.reconnectAttempt)
     }
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = null
-      this.connect()
-    }, delay)
-    if (typeof this.reconnectTimer.unref === 'function') this.reconnectTimer.unref()
+    this.scheduleConnect(delay)
   }
 }

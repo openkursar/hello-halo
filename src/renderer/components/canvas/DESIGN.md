@@ -9,7 +9,7 @@ attachment); React renders what it says.
 
 | Part | File | Owns |
 |---|---|---|
-| Lifecycle manager | `services/canvas-lifecycle.ts` | tabs (`TabState`), active tab, open state, browser page create/show/hide/destroy requests, file reads, disk-change handling, budgets |
+| Lifecycle manager | `services/canvas-lifecycle.ts` | tabs (`TabState`), active tab, open state, each other space's parked tabs, browser page create/show/hide/destroy requests, file reads, disk-change handling, budgets |
 | Browser host | `browser-host/index.ts` | permanent guest DOM attachment, CSS presentation, and the visible viewer's borrowed surface; mounted outside routes by `App` |
 | Budget planner | `services/canvas-budget.ts` + `shared/constants/canvas-budget.ts` | which hidden tabs give up content, views, or close |
 | React bindings | `hooks/useCanvasLifecycle.ts` | `useTabList`, `useActiveTab`, `useActiveTabId`, `useCanvasIsOpen`, `useTabCount`, `useBrowserState`, `useCanvasActions` |
@@ -238,9 +238,10 @@ Address-bar and Home navigation belong to the tab lifecycle. A request made
 before guest attachment waits for that tab's creation, survives switching away,
 and is cancelled if the tab closes before the guest becomes ready.
 
-Canvas-owned pages are destroyed on tab close and released by the existing
-budgets. AI-owned pages only lose their presentation on tab close or a space
-switch: their owner keeps them alive and eventually sends the remove command.
+Canvas-owned pages are destroyed on tab close, released by the existing
+budgets, and released (url kept) while their space is parked. AI-owned pages
+only lose their presentation on tab close or a space switch: their owner keeps
+them alive and eventually sends the remove command.
 Possible-to-show AI pages live in the main host from creation; they never move
 from a hidden window to the main window. Renderer reload destroys that host's
 guests, and main reports the lost pages through the existing lifecycle events.
@@ -271,6 +272,33 @@ session outlives the tab), and content that cannot be re-read (no path).
 Memory pressure (`app:memory-pressure`, from the main process health sampler)
 at `critical` applies the budgets with zero allowance for hidden content and
 hidden views. Tabs themselves stay; everything reloads on activation.
+
+## Spaces
+
+Each space keeps its own tabs. `enterSpace` (SpacePage, tray reveal) parks the
+tabs on screen under the space being left and shows the entered space's tabs as
+they were left: tabs, active tab, open state. The swap is synchronous, so no
+tab can land in the wrong space; a close-all still asking or releasing when it
+happens stops there (`parkGeneration`), so it never touches the entered space.
+Maximizing is not kept per space: SpacePage un-maximizes when another space is
+entered. A parked space holds:
+
+| Kept | Released while away |
+|---|---|
+| unsaved edits (`content`, `savedContent`) | a clean file tab's text (`contentUnloaded`; read again when shown) |
+| running terminals (the pty is not touched) | owned browser pages (url kept, made again when shown) |
+| AI-attached pages (hidden; pruned by `closeTabsOfGoneView` if the page ends) | file watching (no `holdArtifactSpace`) |
+| content with no file, view memory, edit mode | |
+
+On return, unsaved edits are compared with the disk as for a file change
+(`diskConflict`), since nothing watched the files meanwhile. A save that
+finishes, a terminal title, or an AI page's navigation arriving while the tab
+is parked is applied to it silently.
+
+Only removing a space closes its tabs: `space.store` calls `forgetSpace` on
+delete and on remove-from-list, shown or parked, with close-all semantics and
+no prompt. The terminal close policy lives on SpacePage, which is not mounted
+on the spaces list, so a removed space's terminals wait for the next policy.
 
 ## Canvas Viewer rules
 

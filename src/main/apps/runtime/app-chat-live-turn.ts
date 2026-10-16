@@ -23,7 +23,7 @@ import type { TranscriptMessage, TranscriptProvenance } from '../../../shared/ty
 import type { ContentReference } from '../../../shared/types/content-reference'
 import type { ImageAttachment } from '../../../shared/types/image-attachment'
 import type { ImPermissionContext } from './im-permission-registry'
-import type { TeamTriggerContext } from '../../../shared/apps/team-types'
+import type { TeamRequestOrigin, TeamTriggerContext } from '../../../shared/apps/team-types'
 import { createTurnGate } from '../../platform/turn-gate'
 import { hasActiveAppChatRound, onAppChatRoundChange, peekAppChatSink, type PreparedAppChatInput } from './app-chat-sink'
 
@@ -221,11 +221,11 @@ export function getAppChatTurnIdentity(conversationId: string): string | undefin
 
 /**
  * Who a turn's input answers to. Inputs merge into one turn only when this
- * matches. A borrowed team turn (a teammate putting this digital human to work,
- * held to the owner's delegated policy) is 'delegated', never 'owner': both
- * start here, but they run under different permissions.
+ * matches. The owner's own digital humans and the runtime are 'owner', so their
+ * messages join the owner's running turn; a request from outside (`origin`, for
+ * a team turn that serves one) never does, whatever it may use.
  */
-export function appChatMessageIdentity(permission?: ImPermissionContext, external = false, borrowed = false): string {
+export function appChatMessageIdentity(permission?: ImPermissionContext, origin?: TeamRequestOrigin): string {
   if (permission?.isOwner === false) {
     const canonical = (value: unknown): unknown => {
       if (Array.isArray(value)) return value.every(item => typeof item === 'string') ? [...value].sort() : value.map(canonical)
@@ -236,7 +236,7 @@ export function appChatMessageIdentity(permission?: ImPermissionContext, externa
     }
     return `guest:${createHash('sha256').update(JSON.stringify(canonical(permission.guestPolicy ?? {}))).digest('hex')}`
   }
-  return external ? 'external' : borrowed ? 'delegated' : 'owner'
+  return origin ?? 'owner'
 }
 
 export interface AppChatLiveMessage {

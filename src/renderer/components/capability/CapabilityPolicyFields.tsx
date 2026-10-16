@@ -49,13 +49,15 @@ interface CapabilityPolicyFieldsProps {
   mode: CapabilityMode
   /** Who the caller is — decides the wording, never what a switch does. */
   audience: 'guest' | 'teammate'
-  /** Extra rows rendered with the Halo capabilities (e.g. periodic checks). */
-  extraToggles?: { key: string; label: string; checked: boolean; onToggle: () => void }[]
   /**
    * The skills the digital human can load, one switch each. Absent: the screen
    * has no list to offer, and shows no skills group.
    */
   skills?: { dirName: string; name: string; description: string }[]
+  /** The installed MCP servers to offer, one switch each. Absent: every installed one. */
+  userMcp?: { specId: string; name: string }[]
+  /** Replaces the line under the summary that says where the caller's reach ends. */
+  note?: string
 }
 
 /**
@@ -137,7 +139,7 @@ function CommandAccessFields({
           <p className="text-xs text-destructive">
             {audience === 'guest'
               ? t('Guests can run any command on your computer, including reading, changing or deleting any file — not limited to this workspace.')
-              : t('Teammates can run any command on your computer, including reading, changing or deleting any file — not limited to this workspace.')}
+              : t('People on other computers can run any command on your computer, including reading, changing or deleting any file — not limited to this workspace.')}
           </p>
         </div>
       )}
@@ -147,7 +149,7 @@ function CommandAccessFields({
           title={t('Allow any command?')}
           message={audience === 'guest'
             ? t('Guests will be able to run any command on your computer, including reading, changing or deleting any file, without the workspace limit.')
-            : t('Teammates will be able to run any command on your computer, including reading, changing or deleting any file, without the workspace limit.')}
+            : t('People on other computers will be able to run any command on your computer, including reading, changing or deleting any file, without the workspace limit.')}
           confirmLabel={t('Allow any command')}
           cancelLabel={t('Cancel')}
           variant="danger"
@@ -226,11 +228,13 @@ export function CapabilityPolicyFields({
   onChange,
   mode,
   audience,
-  extraToggles,
   skills,
+  userMcp,
+  note,
 }: CapabilityPolicyFieldsProps) {
   const { t } = useTranslation()
-  const mcpApps = useAppsStore(s => s.apps).filter(a => a.spec.type === 'mcp')
+  const installedMcp = useAppsStore(s => s.apps).filter(a => a.spec.type === 'mcp')
+  const mcpServers = userMcp ?? installedMcp.map(a => ({ specId: a.specId, name: a.spec.name }))
 
   const rows: ToolRow[] = [
     { tools: ['Read'], group: 'file', name: t('Read files'), description: t('See the contents of files in this workspace (Read)') },
@@ -255,17 +259,17 @@ export function CapabilityPolicyFields({
     other: t('Other'),
     advanced: t('Change files and run commands'),
   }
-  // A guest is always held to the workspace; a teammate only when the request
-  // came from another computer (see apps/runtime turn-file-access).
+  // A guest is always held to the workspace; a request from another computer
+  // only while something is switched off (see apps/runtime turn-file-access).
   const groupHelp: Record<CapabilityToolGroup, string> = {
     file: audience === 'guest'
       ? t('Only inside this workspace. The workspace\'s internal data — every conversation\'s record — stays closed; memory stays open.')
-      : t('For requests from another computer, only inside this workspace, with its internal data closed and memory open. Teammates on this computer are not limited to it.'),
+      : t('For a request from another computer: only inside this workspace, with its internal data closed and memory open — unless everything here is on.'),
     network: t('Reaches the internet, not files on your computer.'),
     other: t('Sub-agents are held to exactly the same limits as the task that started them.'),
     advanced: audience === 'guest'
       ? t('Writing is limited to this workspace. Commands are not: they run on your computer with your permissions.')
-      : t('For requests from another computer, writing is limited to this workspace. Commands never are: they run on your computer with your permissions.'),
+      : t('For a request from another computer, writing stays inside this workspace unless everything here is on. Commands never do: they run on your computer with your permissions.'),
   }
 
   // Both writes below settle the policy into an EXPLICIT list first. Otherwise
@@ -286,7 +290,7 @@ export function CapabilityPolicyFields({
 
   const toggleUserMcp = (specId: string) => {
     const current = new Set(
-      policy?.allowedUserMcp ?? (mode === 'permissive' ? mcpApps.map(a => a.specId) : [])
+      policy?.allowedUserMcp ?? (mode === 'permissive' ? mcpServers.map(server => server.specId) : [])
     )
     if (current.has(specId)) current.delete(specId)
     else current.add(specId)
@@ -344,20 +348,19 @@ export function CapabilityPolicyFields({
   ]
   const granted = abilities.filter(a => a.on).map(a => a.label)
   const summary = granted.length === 0
-    ? (audience === 'guest' ? t('Guests can currently only chat and use memory.') : t('Teammates can currently only chat and use memory.'))
+    ? (audience === 'guest' ? t('Guests can currently only chat and use memory.') : t('People on other computers can currently only chat and use memory.'))
     : (audience === 'guest'
       ? t('Guests can currently: {{list}}', { list: granted.join(t(', ')) })
-      : t('Teammates can currently: {{list}}', { list: granted.join(t(', ')) }))
+      : t('People on other computers can currently: {{list}}', { list: granted.join(t(', ')) }))
+  const reachNote = note ?? (audience === 'guest'
+    ? t('Memory is always available and not affected by these settings. File access is limited to this workspace.')
+    : undefined)
 
   return (
     <div className="space-y-3">
       <div className="space-y-1 rounded-lg bg-secondary/60 px-3 py-2">
         <p className="text-sm text-foreground">{summary}</p>
-        <p className="text-xs text-muted-foreground">
-          {audience === 'guest'
-            ? t('Memory is always available and not affected by these settings. File access is limited to this workspace.')
-            : t('Requests from another computer can always use memory, and their file access is limited to this workspace. Teammates on this computer are held to these switches only.')}
-        </p>
+        {reachNote && <p className="text-xs text-muted-foreground">{reachNote}</p>}
       </div>
 
       {CAPABILITY_TOOL_GROUPS.map(group => {
@@ -453,24 +456,18 @@ export function CapabilityPolicyFields({
             </label>
           )
         })}
-        {extraToggles?.map(row => (
-          <label key={row.key} className={`${TOGGLE_ROW} cursor-pointer`}>
-            <span className={TOGGLE_TITLE}>{row.label}</span>
-            <Switch size="sm" checked={row.checked} onCheckedChange={row.onToggle} />
-          </label>
-        ))}
       </div>
 
-      {mcpApps.length > 0 && (
+      {mcpServers.length > 0 && (
         <div className="space-y-0.5 border-t border-border/40 pt-3">
           <p className="text-xs text-muted-foreground">{t('MCP servers you installed')}</p>
-          {mcpApps.map(app => (
-            <label key={app.specId} className={`${TOGGLE_ROW} cursor-pointer`}>
-              <span className={`truncate ${TOGGLE_TITLE}`}>{app.spec.name}</span>
+          {mcpServers.map(server => (
+            <label key={server.specId} className={`${TOGGLE_ROW} cursor-pointer`}>
+              <span className={`truncate ${TOGGLE_TITLE}`}>{server.name}</span>
               <Switch
                 size="sm"
-                checked={allowsUserMcp(policy, app.specId, mode)}
-                onCheckedChange={() => toggleUserMcp(app.specId)}
+                checked={allowsUserMcp(policy, server.specId, mode)}
+                onCheckedChange={() => toggleUserMcp(server.specId)}
               />
             </label>
           ))}

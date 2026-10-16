@@ -40,7 +40,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.useRealTimers()
-  await canvasLifecycle.closeAll()
+  await canvasLifecycle.forgetSpace('space-a')
+  await canvasLifecycle.forgetSpace('space-b')
 })
 
 describe('canvas space hold', () => {
@@ -70,5 +71,15 @@ describe('canvas space hold', () => {
 
     await canvasLifecycle.openFile('/w/c.ts')
     expect(retainedSpaces()).toEqual(['space-a', 'space-b'])
+  })
+
+  it('watches a space again when its parked file tabs come back', async () => {
+    await canvasLifecycle.openFile('/w/a.ts')
+    await canvasLifecycle.enterSpace('space-b')
+    vi.advanceTimersByTime(10_000)
+    expect(releasedSpaces()).toEqual(['space-a'])
+
+    await canvasLifecycle.enterSpace('space-a')
+    expect(retainedSpaces()).toEqual(['space-a', 'space-a'])
   })
 })

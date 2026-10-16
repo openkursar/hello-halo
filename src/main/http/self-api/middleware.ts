@@ -87,7 +87,7 @@ function unknownEndpointBody() {
       "No endpoint is routed at this path in this build. The path itself is wrong - this is not an 'id not found'. Do not " +
       `retry it. You may be recalling a path from a different product. Find the real one: grep -i 'KEYWORD' ${indexPath}` +
       // Spelled out in full rather than as a `<group>` template: an unfilled
-      // placeholder is a worse failure than the tokens the eight names cost.
+      // placeholder is a worse failure than the tokens the full list of names costs.
       `   - or call halo_api_ref with one of: ${API_REF_GROUP_IDS.join(', ')}.`,
   }
 }

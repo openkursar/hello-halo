@@ -387,8 +387,10 @@ function installNativeCompanions() {
       }
       mkdirSync(dest, { recursive: true })
       // GNU tar reads `D:` in an archive path as a remote host, so it is given the
-      // bare file name from its own directory.
-      execFileSync('tar', ['-xzf', path.basename(tarball), '-C', dest, '--strip-components=1'], { cwd: path.dirname(tarball) })
+      // bare file name from its own directory; and it unescapes the -C directory,
+      // turning `\r` and `\n` in a Windows path into control characters, so that
+      // path goes over with forward slashes.
+      execFileSync('tar', ['-xzf', path.basename(tarball), '-C', dest.split(path.sep).join('/'), '--strip-components=1'], { cwd: path.dirname(tarball) })
       count++
     }
   }

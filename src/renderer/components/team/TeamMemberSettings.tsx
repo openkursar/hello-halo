@@ -1,5 +1,6 @@
 /**
- * What one digital human does in THIS team, and how far a teammate may borrow it.
+ * What one digital human does in THIS team, and how far someone on another
+ * computer may borrow it.
  *
  * The duty sits on top and takes the room: it is read and rewritten constantly,
  * and it is the thing that makes a member able to carry its part of a flow
@@ -18,11 +19,11 @@ import { useEffect, useState } from 'react'
 import { ArrowLeft, ChevronRight, ExternalLink, Timer } from 'lucide-react'
 import type { TeamCheckView, TeamDetail, TeamMember, TeamDelegatedPolicy, TeamToolAudit } from '../../../shared/apps/team-types'
 import { checksForMember, isRemoteMember } from '../../../shared/apps/team-types'
-import { fullCapabilityPolicy } from '../../../shared/apps/capability-policy'
 import { CapabilityPolicyFields } from '../capability/CapabilityPolicyFields'
 import { api } from '../../api'
 import { SystemPromptEditor } from '../apps/SystemPromptEditor'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
+import { Switch, switchRowHover } from '../ui/Switch'
 import { useTeamStore, useTeamView, detailOf } from '../../stores/team.store'
 import { useAppsStore } from '../../stores/apps.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
@@ -30,6 +31,9 @@ import { useTranslation } from '../../i18n'
 import { useAutosaveDraft } from '../../hooks/useAutosaveDraft'
 import { describeRhythm } from './check-format'
 import { epochWorkLabel } from './run-history'
+import { delegatedPolicyToSave, delegatedPolicyView } from './delegated-policy'
+import { inventoryOf, loadLendableItems } from './lendable-items'
+import type { LendableItems } from './lendable-items'
 
 interface TeamMemberSettingsProps {
   detail: TeamDetail
@@ -321,7 +325,7 @@ function BorrowedWorkRecord({ teamId, member }: { teamId: string; member: TeamMe
       {open && (
         <div className="space-y-2 border-t border-border px-3 py-3">
           <p className="text-xs text-muted-foreground/70">
-            {t('Every tool it reached for while a teammate — or a person on another machine — was driving it. Your own conversations with it are not listed.')}
+            {t('Every tool it reached for while a request from another computer — or from a guest your team answers in IM — was driving it. Your own conversations with it, and your own digital humans’ work with it, are not listed.')}
           </p>
           {entries === null ? (
             <p className="text-sm text-muted-foreground">{t('Loading…')}</p>
@@ -365,9 +369,15 @@ function BorrowedWorkRecord({ teamId, member }: { teamId: string; member: TeamMe
   )
 }
 
+/**
+ * What a request from another computer may make this member do, shown the way
+ * the owner's machine reads it for such a request — so a switch that shows on
+ * is on for them, and one that shows off is off.
+ */
 function DelegatedCapabilities({ teamId, member }: { teamId: string; member: TeamMember }) {
   const { t } = useTranslation()
   const updateMember = useTeamStore(s => s.updateMember)
+  const app = useAppsStore(s => s.apps.find(a => a.id === member.appId))
   const [open, setOpen] = useState(false)
   // The switches read from a local draft, not from the member row: a save is a
   // round-trip through main and a full detail reload, and two switches flipped
@@ -375,13 +385,36 @@ function DelegatedCapabilities({ teamId, member }: { teamId: string; member: Tea
   // save would silently hand back the permission the first one took away. The
   // draft is only re-seeded when the screen moves to another member; nobody
   // else authors this policy, so there is nothing to lose by ignoring refreshes.
-  const [policy, setPolicy] = useState<TeamDelegatedPolicy | undefined>(member.delegatedPolicy ?? undefined)
+  const [saved, setSaved] = useState<TeamDelegatedPolicy | null>(member.delegatedPolicy ?? null)
   const appId = member.appId
-  useEffect(() => { setPolicy(member.delegatedPolicy ?? undefined) }, [appId])
+  useEffect(() => { setSaved(member.delegatedPolicy ?? null) }, [appId])
 
+  // Whether "everything" is granted depends on which skills and servers exist,
+  // so the switches wait for that list rather than guess it.
+  const [items, setItems] = useState<LendableItems | null | undefined>(undefined)
+  const [attempt, setAttempt] = useState(0)
+  const spaceId = app?.spaceId
+  useEffect(() => {
+    const current = useAppsStore.getState().apps.find(a => a.id === appId)
+    if (!open || !current) return
+    let cancelled = false
+    setItems(undefined)
+    void loadLendableItems(current)
+      .catch(() => null)
+      .then(result => { if (!cancelled) setItems(result) })
+    return () => { cancelled = true }
+  }, [open, appId, spaceId, attempt])
+
+  // No digital human of its own to lend (the space-conversation coordinator).
+  if (!app) return null
+
+  const inventory = items ? inventoryOf(items) : null
+  const view = inventory ? delegatedPolicyView(saved, inventory) : null
   const save = (next: TeamDelegatedPolicy) => {
-    setPolicy(next)
-    void updateMember(teamId, appId, { delegatedPolicy: next })
+    if (!inventory) return
+    const toSave = delegatedPolicyToSave(next, inventory)
+    setSaved(toSave)
+    void updateMember(teamId, appId, { delegatedPolicy: toSave })
   }
 
   return (
@@ -395,24 +428,63 @@ function DelegatedCapabilities({ teamId, member }: { teamId: string; member: Tea
       </button>
       {open && (
         <div className="space-y-3 border-t border-border px-3 py-3">
-          <p className="text-xs text-muted-foreground/70">
-            {t('The tools it has in hand when anyone else puts it to work — a teammate’s digital human, a person on another machine, or a guest in an IM chat your team answers whose request reaches it. Talking to it yourself is unaffected.')}
-          </p>
-          <CapabilityPolicyFields
-            policy={policy}
-            mode="permissive"
-            audience="teammate"
-            onChange={next => save({ ...policy, ...next })}
-            extraToggles={[
-              {
-                key: 'allowChecks',
-                label: t('Let teammates set a periodic check on it'),
-                checked: policy?.allowChecks !== false,
-                onToggle: () =>
-                  save({ ...(policy ?? fullCapabilityPolicy()), allowChecks: policy?.allowChecks === false }),
-              },
-            ]}
-          />
+          <div className="space-y-1">
+            <p className="text-xs text-muted-foreground/70">
+              {t('What people on other computers in this team can have it do. Your own requests, and your own digital humans working with it, are never limited by these switches.')}
+            </p>
+            <p className="text-xs text-muted-foreground/70">
+              {t('Guests in an IM chat your team answers can use at most what you opened to guests in that chat.')}
+            </p>
+          </div>
+          {items === undefined ? (
+            <p className="text-sm text-muted-foreground">{t('Loading…')}</p>
+          ) : items === null || !view ? (
+            <div className="space-y-2">
+              <p className="text-sm text-muted-foreground">
+                {t('Could not read its skills and MCP servers, so what it lends cannot be shown right now.')}
+              </p>
+              <button
+                onClick={() => setAttempt(n => n + 1)}
+                className="rounded-lg border border-border px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-secondary"
+              >
+                {t('Try again')}
+              </button>
+            </div>
+          ) : (
+            <>
+              {view.unset && (
+                <p className="rounded-lg border border-border bg-secondary/40 px-3 py-2 text-xs text-foreground">
+                  {t('Not set separately yet: people on other computers can use everything it can do.')}
+                </p>
+              )}
+              <CapabilityPolicyFields
+                policy={view.policy}
+                mode={view.mode}
+                audience="teammate"
+                skills={items.skills.map(s => ({ dirName: s.dirName, name: s.name, description: s.description }))}
+                userMcp={items.userMcp.map(server => ({ specId: server.specId, name: server.spec.name }))}
+                note={view.mode === 'permissive'
+                  ? t('With everything on, a request from another computer can use all of the above the way you do — files outside this workspace included.')
+                  : t('A request from another computer can always use memory, and its file access is limited to this workspace.')}
+                onChange={next => save({ ...view.policy, ...next })}
+              />
+              {/* Not a capability, and not only for other computers: it answers
+                  every teammate, the owner's own digital humans included. */}
+              <div className="border-t border-border-faint pt-3">
+                <label className={`flex cursor-pointer items-center justify-between gap-3 py-1.5 ${switchRowHover}`}>
+                  <span className="min-w-0">
+                    <span className="block text-sm text-foreground">{t('Let teammates set a periodic check on it')}</span>
+                    <span className="block text-xs text-muted-foreground">{t('Any teammate, your own digital humans included.')}</span>
+                  </span>
+                  <Switch
+                    size="sm"
+                    checked={view.policy.allowChecks !== false}
+                    onCheckedChange={next => save({ ...view.policy, allowChecks: next })}
+                  />
+                </label>
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>

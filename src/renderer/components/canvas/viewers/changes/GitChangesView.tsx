@@ -728,7 +728,8 @@ export function GitChangesView({ tab, source }: { tab: TabState; source: GitSour
           totals={totals}
           page={memory.page}
           onPage={(next) => update({ page: next, detail: null, ...(next === 'graph' ? { graphOpened: true } : {}) })}
-          tools={memory.page === 'changes' || detail ? tools : null}
+          tools={tools}
+          toolsShown={memory.page === 'changes' || !!detail}
           panelToggle={panelToggle}
           layout={layout}
         />

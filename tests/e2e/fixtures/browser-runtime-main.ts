@@ -28,7 +28,7 @@ async function getSession(kind: ContextKind): Promise<ContextSession> {
   if (existing) return existing
   const context = kind === 'main'
     ? getInteractiveBrowserContext('carrier-main', 'halo-temp')
-    : createScopedBrowserContext(kind === 'human' ? { conversationId: 'app-chat:carrier-human', spaceId: 'halo-temp' } : undefined)
+    : createScopedBrowserContext(kind === 'human' ? { liveView: { conversationId: 'app-chat:carrier-human', spaceId: 'halo-temp' } } : undefined)
   const server = createAIBrowserMcpServer(context, process.env.HALO_DATA_DIR)
   let callTool: ContextSession['callTool']
   if (typeof server.instance.callTool === 'function') {

@@ -120,6 +120,14 @@ export const configApi = {
     return httpRequest('POST', '/api/config/refresh-ai-sources')
   },
 
+  /** Ask main to refresh out-of-date model lists; changes arrive through onModelCatalogChanged. */
+  refreshStaleModelCatalogs: async (): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.refreshStaleModelCatalogs()
+    }
+    return httpRequest('POST', '/api/ai-sources/refresh-stale-catalogs')
+  },
+
   // ===== AI Sources CRUD (atomic - backend reads from disk, never overwrites rotating tokens) =====
   aiSourcesSwitchSource: async (sourceId: string): Promise<ApiResponse> => {
     if (isElectron()) {

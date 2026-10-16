@@ -511,6 +511,39 @@ describe('TeamStore', () => {
   // team_epochs
   // ===========================================================================
 
+  describe('team_checks', () => {
+    it('keeps a check\u2019s origin in its existing column, where older builds read 1 as "from outside"', () => {
+      store.insertEpoch(makeEpoch())
+      const base = {
+        teamId: 'team-1', epochId: 'epoch-1', targetAppId: 'app-a', createdByAppId: 'app-b',
+        instruction: 'look', schedule: { kind: 'every' as const, every: '1h' },
+        runCount: 0, createdAt: 1, updatedAt: 1, lastRunAt: null,
+      }
+      store.upsertCheck({ ...base, id: 'c-none' })
+      store.upsertCheck({ ...base, id: 'c-guest', origin: 'guest' })
+      store.upsertCheck({ ...base, id: 'c-colleague', origin: 'colleague' })
+
+      expect(store.getCheckById('c-none')!.origin).toBeUndefined()
+      expect(store.getCheckById('c-guest')!.origin).toBe('guest')
+      expect(store.getCheckById('c-colleague')!.origin).toBe('colleague')
+      const raw = (id: string) => (dbManager.getAppDatabase().prepare('SELECT external FROM team_checks WHERE id = ?').get(id) as { external: number }).external
+      expect([raw('c-none'), raw('c-guest'), raw('c-colleague')]).toEqual([0, 1, 2])
+    })
+
+    it('reads a code a later build wrote as the strictest origin, never as the owner\u2019s own', () => {
+      store.insertEpoch(makeEpoch())
+      const base = {
+        teamId: 'team-1', epochId: 'epoch-1', targetAppId: 'app-a', createdByAppId: 'app-b',
+        instruction: 'look', schedule: { kind: 'every' as const, every: '1h' },
+        runCount: 0, createdAt: 1, updatedAt: 1, lastRunAt: null,
+      }
+      store.upsertCheck({ ...base, id: 'c-later' })
+      dbManager.getAppDatabase().prepare('UPDATE team_checks SET external = 3 WHERE id = ?').run('c-later')
+
+      expect(store.getCheckById('c-later')!.origin).toBe('guest')
+    })
+  })
+
   describe('team_epochs', () => {
     it('round-trips an epoch and ends it', () => {
       const epoch = makeEpoch()

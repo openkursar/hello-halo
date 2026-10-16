@@ -10,7 +10,7 @@
  *   - a member-leave from a gateway node drives gw:evict.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createDatabaseManager } from '../../../../../src/main/platform/store/database-manager'
 import type { DatabaseManager } from '../../../../../src/main/platform/store/types'
 import { FederationStore } from '../../../../../src/main/apps/federation/store'
@@ -33,12 +33,15 @@ import type {
 } from '../../../../../src/main/apps/runtime/federation/types'
 import { startFakeGateway, waitFor, type FakeGateway } from './_fake-gateway'
 import { DEFAULT_OFFICE_SCOPE } from '../../../../../src/main/apps/federation/types'
+import { FeedStore } from '../../../../../src/main/apps/federation/feed-store'
 import { buildTeamSessionKey } from '../../../../../src/shared/apps/im-keys'
+import { FEDERATION_PROTOCOL_VERSION } from '../../../../../src/shared/federation/protocol-version'
 
 const OFFICE = 'office-gwm-1'
 const NODE_A = 'node-a-host'
 const NODE_B = 'node-b-relayed'
 const NODE_C = 'node-c-lan'
+const NODE_D = 'node-d-relayed'
 const C_CLIENT_ID = 'ws-client-c'
 const VALID_TOKEN = 'valid-token'
 
@@ -238,6 +241,121 @@ describe('FederationManager gateway routing (fake gateway over real ws)', () => 
 
     await waitFor(() => gateway.evictions.length >= 1)
     expect(gateway.evictions[0]).toBe(NODE_B)
+  })
+
+  describe('a node the office refused, over the relay', () => {
+    // The relay drops a member as it relays the refusal, so anything still
+    // addressed to it after that comes back as "member unreachable" — once per
+    // retry, from every office it tries. The ctrl feed re-asks an unanswered
+    // subscription on its retransmit tick, so the ticks run fast here.
+    beforeEach(async () => {
+      manager.stopAll()
+      manager = createFederationManager({
+        hostSend: () => false,
+        hostListOfficeClients: () => [],
+        federationStore,
+        teamStore,
+        feedStore: new FeedStore(dbManager.getAppDatabase()),
+        ctrlRetransmitMs: 40,
+        verifyCredential: (token) => (token === VALID_TOKEN ? { officeId: OFFICE, scope: DEFAULT_OFFICE_SCOPE } : null),
+        getLocalNodeId: () => NODE_A,
+        getGatewayUrl: () => gateway.url,
+        makeAuthProof: (nonce) => ({ method: 'device-key', identityId: NODE_A, challenge: nonce }),
+      })
+      manager.hostOffice(OFFICE)
+      await waitFor(() => gateway.attachCount() >= 2)
+    })
+
+    const framesTo = (node: string) => gateway.hostFrames.filter((f) => f.to === node)
+    const kindsTo = (node: string) => framesTo(node).map((f) => (f.payload as { kind?: string }).kind)
+    const relayJoin = (node: string, pv: number, token = VALID_TOKEN) =>
+      gateway.relayToHost({
+        kind: 'join-request', officeId: OFFICE, fromNode: node, identityId: node, displayName: node,
+        credentialToken: token, bringMembers: [{ appId: `app-${node}`, memberName: node, role: 'Writer' }], pv,
+      })
+    const relayHeartbeat = (node: string) => gateway.relayToHost(heartbeat(node) as unknown as Record<string, unknown>, node)
+    /** Kinds addressed to `node` after the refusal it was sent. */
+    const kindsAfterRefusal = (node: string) => kindsTo(node).slice(kindsTo(node).indexOf('join-reject') + 1)
+    const severalTicks = () => new Promise((resolve) => setTimeout(resolve, 300))
+
+    it('leaves a node whose join is not decided yet wired in as before', async () => {
+      relayHeartbeat(NODE_D)
+
+      await waitFor(() => kindsTo(NODE_D).includes('feed-subscribe'))
+      expect(kindsTo(NODE_D)).toContain('feed-subscribe')
+    })
+
+    it('addresses nothing more to a node refused for its version, not even what its earlier frames set up', async () => {
+      // Its first frame arrived before its join, while undecided: it was wired in.
+      relayHeartbeat(NODE_B)
+      await waitFor(() => kindsTo(NODE_B).includes('feed-subscribe'))
+
+      relayJoin(NODE_B, FEDERATION_PROTOCOL_VERSION - 1)
+      await waitFor(() => kindsTo(NODE_B).includes('join-reject'))
+      relayHeartbeat(NODE_B)
+      await severalTicks()
+
+      expect(kindsAfterRefusal(NODE_B)).toEqual([])
+      expect(federationStore.getNode(OFFICE, NODE_B)).toBeNull()
+    })
+
+    it('treats a node refused for another reason the same way', async () => {
+      relayJoin(NODE_B, FEDERATION_PROTOCOL_VERSION, 'not-an-invite')
+      await waitFor(() => kindsTo(NODE_B).includes('join-reject'))
+      await severalTicks()
+
+      expect(kindsAfterRefusal(NODE_B)).toEqual([])
+    })
+
+    it('wires a refused node in once it is admitted on the matching version, and hears it again', async () => {
+      relayJoin(NODE_B, FEDERATION_PROTOCOL_VERSION - 1)
+      await waitFor(() => kindsTo(NODE_B).includes('join-reject'))
+
+      relayJoin(NODE_B, FEDERATION_PROTOCOL_VERSION)
+      await waitFor(() => kindsAfterRefusal(NODE_B).includes('join-grant'))
+      expect(kindsAfterRefusal(NODE_B)).toContain('feed-subscribe')
+
+      // Its frames count again: a heartbeat brings a suspect node back online.
+      federationStore.setNodeStatus(OFFICE, NODE_B, 'suspect', Date.now())
+      relayHeartbeat(NODE_B)
+      await waitFor(() => federationStore.getNode(OFFICE, NODE_B)?.status === 'online')
+      expect(federationStore.getNode(OFFICE, NODE_B)?.status).toBe('online')
+    })
+
+    it('counts what a refused node keeps sending, over either path, on the host health line', async () => {
+      // The refusal is logged once; what keeps arriving after it is a number.
+      manager.stopAll()
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+      try {
+        manager = createFederationManager({
+          hostSend: () => false,
+          hostListOfficeClients: () => [],
+          federationStore,
+          teamStore,
+          verifyCredential: (token) => (token === VALID_TOKEN ? { officeId: OFFICE, scope: DEFAULT_OFFICE_SCOPE } : null),
+          getLocalNodeId: () => NODE_A,
+          getGatewayUrl: () => gateway.url,
+          makeAuthProof: (nonce) => ({ method: 'device-key', identityId: NODE_A, challenge: nonce }),
+        })
+        manager.hostOffice(OFFICE)
+        await waitFor(() => gateway.attachCount() >= 3)
+        relayJoin(NODE_B, FEDERATION_PROTOCOL_VERSION - 1)
+        await waitFor(() => kindsTo(NODE_B).includes('join-reject'))
+
+        relayHeartbeat(NODE_B)
+        relayHeartbeat(NODE_B)
+        manager.handleHostInbound({ clientId: 'lan-b', officeId: OFFICE, frame: heartbeat(NODE_B) })
+        await new Promise((resolve) => setTimeout(resolve, 150))
+        const log = vi.spyOn(console, 'log')
+        vi.advanceTimersByTime(60_000)
+
+        const health = log.mock.calls.map((c) => String(c[0])).find((l) => l.includes(`health office=${OFFICE} role=host`))
+        expect(health).toContain(' refusedDropped=3 ')
+      } finally {
+        vi.useRealTimers()
+        vi.restoreAllMocks()
+      }
+    })
   })
 
   it('an office hosted BEFORE the gateway URL was configured attaches on the next hostOffice call', async () => {

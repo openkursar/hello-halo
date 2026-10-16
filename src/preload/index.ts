@@ -19,6 +19,7 @@ import type { ArtifactChangeBatchEvent, FileQueryResult, ResolvedArtifactPath } 
 import type { MemoryPressureEvent } from '../shared/types/memory-pressure'
 import type { AIBrowserActiveView, AIBrowserConversationReleased, AIBrowserLivePage, AIBrowserStopResult, AIBrowserViewGone } from '../shared/types/ai-browser'
 import type { MemorySettings, MemoryStatus } from '../shared/types/memory'
+import type { ModelCatalogChangedEvent } from '../shared/types/ai-sources'
 import type { PickedLocalEntry } from '../shared/attached-paths'
 import { modelCapabilitiesRpc } from '../shared/rpc/contracts/model-capabilities.contract'
 import { onboardingRpc } from '../shared/rpc/contracts/onboarding.contract'
@@ -121,6 +122,8 @@ export interface HaloAPI extends BrowserHostBridge {
   validateApi: (apiKey: string, apiUrl: string, provider: string, model?: string) => Promise<IpcResponse>
   fetchModels: (apiKey: string, apiUrl: string) => Promise<IpcResponse>
   refreshAISourcesConfig: () => Promise<IpcResponse>
+  refreshStaleModelCatalogs: () => Promise<IpcResponse>
+  onModelCatalogChanged: (callback: (data: ModelCatalogChangedEvent) => void) => () => void
 
   // CLI Config (Skills + MCP migration, config dir mode)
   cliConfigGetPaths: () => Promise<IpcResponse>
@@ -869,6 +872,7 @@ const api: HaloAPI = {
   // Config + AI Sources CRUD (derived from configRpc contract)
   ...bindRpc(configRpc),
   onCredentialDecryptFailed: (callback) => createEventListener('credential:decrypt-failed', callback),
+  onModelCatalogChanged: (callback) => createEventListener('ai-sources:catalog-changed', callback),
 
   // CLI Config
   ...bindRpc(cliConfigRpc),

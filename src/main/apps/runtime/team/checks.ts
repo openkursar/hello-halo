@@ -22,12 +22,13 @@
  */
 
 import { randomUUID } from 'crypto'
-import { isRemoteMember } from '../../../../shared/apps/team-types'
+import { isRemoteMember, legacyExternalOrigin } from '../../../../shared/apps/team-types'
 import type {
   TeamCheck,
   TeamCheckSchedule,
   TeamCheckView,
   TeamEpoch,
+  TeamRequestOrigin,
 } from '../../../../shared/apps/team-types'
 import type { TeamStore } from '../../team'
 import type { BusyDisposition, WakeDisposition } from './message-bus'
@@ -53,6 +54,11 @@ function epochIsDead(epoch: TeamEpoch | null): boolean {
   return !epoch || (epoch.endedAt !== null && epoch.endReason !== 'stopped')
 }
 
+/** The origin that lends less: a guest's, then a colleague's, then none. */
+function narrowest(a: TeamRequestOrigin | undefined, b: TeamRequestOrigin | undefined): TeamRequestOrigin | undefined {
+  return a === 'guest' || b === 'guest' ? 'guest' : a ?? b
+}
+
 /** Thrown for a refusal the calling agent is meant to read and act on. */
 export class TeamCheckError extends Error {
   constructor(message: string) {
@@ -68,8 +74,8 @@ export interface ScheduleCheckInput {
   createdByAppId: string
   targetAppId: string
   instruction: string
-  /** The turn setting this check was driven from another machine (see TeamCheck.external). */
-  external?: boolean
+  /** The restricted turn setting this check served a request from outside (see TeamCheck.origin). */
+  origin?: TeamRequestOrigin
   schedule: TeamCheckSchedule
 }
 
@@ -85,8 +91,8 @@ export interface TeamChecksDeps {
     body: string
     onBusy: BusyDisposition
     coalescingKey?: string
-    /** The check was set by a member somebody else owns. */
-    external?: boolean
+    /** The request the instruction serves, when it came from outside (see `originOf`). */
+    origin?: TeamRequestOrigin
   }) => Promise<WakeDisposition>
   /**
    * Share a change office-wide. Injected by bootstrap onto the federation
@@ -234,7 +240,7 @@ export function createTeamChecks(deps: TeamChecksDeps): TeamChecks {
       targetAppId: input.targetAppId,
       createdByAppId: input.createdByAppId,
       instruction,
-      external: input.external ?? false,
+      ...(input.origin ? { origin: input.origin } : {}),
       schedule: input.schedule,
       runCount: 0,
       createdAt: ts,
@@ -293,7 +299,26 @@ export function createTeamChecks(deps: TeamChecksDeps): TeamChecks {
 
   // ── Replicated writes (authored on another node) ──
 
-  function applyReplicated(check: TeamCheck): void {
+  function applyReplicated(incoming: TeamCheck): void {
+    // Every field of a row arriving here was written by another machine. What a
+    // check says and whose request it serves are fixed when it is set, on the
+    // creator's machine, so a row this machine wrote takes only its rounds from
+    // an update; any other row serves at least a colleague, whatever creator it
+    // names — a claim only ever narrows that (a guest's, `external` from a
+    // build before origins had kinds, or a kind this build does not know).
+    const known = store.getCheckById(incoming.id)
+    const claimed: TeamRequestOrigin | undefined = incoming.origin == null
+      ? ((incoming as { external?: unknown }).external === true ? 'guest' : undefined)
+      : incoming.origin === 'colleague' ? 'colleague' : 'guest'
+    const check: TeamCheck = known
+      ? {
+          ...known,
+          runCount: incoming.runCount,
+          lastRunAt: incoming.lastRunAt,
+          updatedAt: incoming.updatedAt,
+          origin: narrowest(known.origin, claimed),
+        }
+      : { ...incoming, origin: narrowest(claimed, 'colleague') }
     const epoch = store.getEpochById(check.epochId)
     if (epoch?.endReason === 'cleared' || epoch?.workItem?.status === 'completed') {
       store.deleteCheck(check.id)
@@ -394,13 +419,7 @@ export function createTeamChecks(deps: TeamChecksDeps): TeamChecks {
       body: renderCheckWake(attempt, memberName(check.teamId, check.createdByAppId)),
       onBusy: 'buffer',
       coalescingKey: `check:${check.id}`,
-      // A check is a standing instruction from whoever set it, and it rings long
-      // after they set it. What the target may do while carrying it out is
-      // decided by whose instruction it is, not by who happens to own the clock:
-      // a remote creator, or a local one whose own turn was externally driven.
-      external:
-        !!check.external ||
-        isRemoteMember(deps.store.getMember(check.teamId, check.createdByAppId) ?? { origin: 'local' }),
+      ...originOf(check, epoch),
     })
     if (disposition === 'skipped') {
       console.log(`${LOG_TAG} wake skipped, round not counted: id=${check.id}`)
@@ -415,6 +434,21 @@ export function createTeamChecks(deps: TeamChecksDeps): TeamChecks {
     store.upsertCheck(attempt)
     publish('upsert', attempt)
     return 'useful'
+  }
+
+  /**
+   * Whose request a due check serves. A standing instruction rings long after it
+   * was set, so it is decided by whose instruction it is, not by who owns the
+   * clock: one set from another machine serves a colleague, one set while
+   * serving an outside request keeps serving it. A guest's never leaves its
+   * chat's conversation, so 'guest' anywhere else can only be a row from before
+   * origins had kinds (which wrote every outside origin that way).
+   */
+  function originOf(check: TeamCheck, epoch: TeamEpoch | null): { origin?: TeamRequestOrigin } {
+    if (check.origin === 'guest') return { origin: legacyExternalOrigin(epoch) }
+    if (check.origin) return { origin: check.origin }
+    const creator = deps.store.getMember(check.teamId, check.createdByAppId)
+    return isRemoteMember(creator ?? { origin: 'local' }) ? { origin: 'colleague' } : {}
   }
 
   /**

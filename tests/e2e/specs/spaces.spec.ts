@@ -1,7 +1,10 @@
 import type { Page } from '@playwright/test'
+import fs from 'node:fs'
+import path from 'node:path'
 import type { HaloAPI } from '../../../src/preload'
 import { test, expect } from '../fixtures/electron'
 import { navigateToChat, navigateToWorkspaces } from '../fixtures/helpers'
+import { clickArtifactByName, openFromHeaderMenu } from '../../perf/lib/open-artifact'
 
 async function createWorkspace(window: Page, name: string) {
   await navigateToWorkspaces(window)
@@ -14,6 +17,12 @@ async function createWorkspace(window: Page, name: string) {
   await expect(heading).toHaveCount(0)
   await expect(window.locator('textarea')).toBeVisible()
   await expect(window.getByTitle(`Current workspace: ${name} — click to switch`, { exact: true })).toBeVisible()
+}
+
+async function switchWorkspace(window: Page, from: string, to: string) {
+  await window.getByTitle(`Current workspace: ${from} — click to switch`, { exact: true }).click()
+  await window.locator('[role="button"]').filter({ has: window.getByText(to, { exact: true }) }).first().click()
+  await expect(window.getByTitle(`Current workspace: ${to} — click to switch`, { exact: true })).toBeVisible()
 }
 
 async function conversationIds(window: Page) {
@@ -48,6 +57,63 @@ test.describe('Workspace Management', () => {
     await expect(window.locator('textarea')).toBeVisible()
     await expect(window.getByTitle('Current workspace: E2E Enter Space — click to switch', { exact: true })).toBeVisible()
     await window.screenshot({ path: 'tests/e2e/results/spaces-entered.png' })
+  })
+
+  test('a workspace keeps its open files and unsaved edits while another one is in use', async ({ electronApp, window }) => {
+    const dataDirectory = await electronApp.evaluate(() => process.env.HALO_DATA_DIR!)
+    const file = path.join(dataDirectory, 'temp', 'artifacts', 'kept-across-switch.ts')
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, 'export const kept = 1\n')
+
+    await navigateToChat(window)
+    await clickArtifactByName(window, path.basename(file))
+    const tab = window.locator('.canvas-tab', { hasText: path.basename(file) })
+    await expect(tab).toBeVisible()
+    await window.getByTitle('Edit file', { exact: true }).click()
+    await window.locator('.cm-content').first().click()
+    await window.keyboard.type('// unsaved edit ')
+    await expect(tab.locator('.canvas-tab-dirty')).toBeVisible()
+
+    await createWorkspace(window, 'E2E Second Space')
+    await expect(window.locator('.canvas-tab')).toHaveCount(0)
+
+    await switchWorkspace(window, 'E2E Second Space', 'Halo Workspace')
+    await expect(tab).toBeVisible()
+    await expect(tab.locator('.canvas-tab-dirty')).toBeVisible()
+    await expect(window.locator('.cm-content').first()).toContainText('// unsaved edit')
+    await window.screenshot({ path: 'tests/e2e/results/spaces-tabs-kept.png' })
+    expect(fs.readFileSync(file, 'utf8')).toBe('export const kept = 1\n')
+
+    await switchWorkspace(window, 'Halo Workspace', 'E2E Second Space')
+    await expect(window.locator('.canvas-tab')).toHaveCount(0)
+  })
+
+  test('a workspace\'s own terminal keeps running while another one is in use', async ({ window }) => {
+    test.skip(process.platform === 'linux', 'terminals are not available on Linux')
+    const terminals = () => window.evaluate(async () => {
+      const result = await (globalThis.window as unknown as { halo: HaloAPI }).halo.listTerminals()
+      return result.data as Array<{ id: string; state: string }>
+    })
+
+    await navigateToChat(window)
+    await openFromHeaderMenu(window, 'Open terminal')
+    await expect(window.locator('.xterm')).toBeVisible()
+    await expect.poll(async () => (await terminals()).length).toBe(1)
+    const [{ id }] = await terminals()
+
+    await createWorkspace(window, 'E2E Terminal Space')
+    await expect(window.locator('.canvas-tab')).toHaveCount(0)
+    expect(await terminals()).toEqual([expect.objectContaining({ id, state: 'running' })])
+
+    await switchWorkspace(window, 'E2E Terminal Space', 'Halo Workspace')
+    await expect(window.locator('.canvas-tab')).toHaveCount(1)
+    await expect(window.locator('.xterm')).toBeVisible()
+    await window.evaluate(sessionId => (globalThis.window as unknown as { halo: HaloAPI }).halo.terminalInput({ sessionId, data: "printf 'STILL_RUNNING_%s\\n' ok\r" }), id)
+    await expect.poll(() => window.evaluate(async sessionId => {
+      const result = await (globalThis.window as unknown as { halo: HaloAPI }).halo.getTerminalReplay({ sessionId })
+      return JSON.stringify(result.data)
+    }, id)).toContain('STILL_RUNNING_ok')
+    await window.evaluate(sessionId => (globalThis.window as unknown as { halo: HaloAPI }).halo.killTerminal({ sessionId }), id)
   })
 
   test('can create a new persisted conversation in the Halo workspace', async ({ window }) => {

@@ -17,6 +17,7 @@ import { useTranslation } from '../../i18n'
 import { canvasLifecycle, type TabState } from '../../services/canvas-lifecycle'
 import { useChatStore } from '../../stores/chat.store'
 import { useConversationGoal, useGoalStore, useGoalSupported, type Goal } from '../../stores/goal.store'
+import { fitTextareaHeight } from '../../utils/textarea-height'
 import { GoalStatusIcon, goalStatusLabel } from './GoalStatus'
 import { saveGoal } from './goal-actions'
 import { useClearGoal } from './useClearGoal'
@@ -204,9 +205,7 @@ function GoalEditorForm({ tab, spaceId, conversationId }: { tab: TabState; space
     const resize = () => {
       const fields = [objectiveRef.current, ...rowRefs.current.values()]
       for (const field of fields) {
-        if (!field) continue
-        field.style.height = 'auto'
-        field.style.height = `${field.scrollHeight + field.offsetHeight - field.clientHeight}px`
+        if (field) fitTextareaHeight(field)
       }
     }
     resize()

@@ -13,11 +13,11 @@
  *
  * It registers the terminal close policy on canvasLifecycle so every path
  * funnels through one place: single-tab close (tab X, middle-click, ⌘W, context
- * menu) prompts; bulk teardown (closeAll, space switch) disposes silently —
+ * menu) prompts; bulk teardown (closeAll, a removed space) disposes silently —
  * terminate the user's own terminals, keep AI-operated ones alive in the tray.
+ * Switching spaces closes nothing: each space's tabs wait for its return.
  * Mounted once at the space level (SpacePage), not inside the canvas, so the
- * policy stays registered for space-switch teardown even when the canvas is
- * collapsed.
+ * policy stays registered even when the canvas is collapsed.
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -69,7 +69,7 @@ export function TerminalCloseGuard() {
         })
       },
 
-      // Bulk teardown (closeAll / space switch): no prompt. Terminate the user's
+      // Bulk teardown (closeAll / a removed space): no prompt. Terminate the user's
       // own terminals (their tab was the only handle); keep AI-operated ones
       // running — they stay reachable in the live-sessions tray.
       disposeOnBulkClose: async (sessionId) => {

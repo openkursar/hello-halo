@@ -4,6 +4,7 @@
  */
 
 import type { CapabilityPolicy } from './capability-policy'
+import { parseTeamChatKey } from './im-keys'
 
 // ── Enumerations ──
 
@@ -274,7 +275,12 @@ export interface TeamToolAudit {
   appId: string
   /** The teammate that drove this turn; null when a person was driving. */
   actorAppId: string | null
-  /** Whether the driver was on another machine. */
+  /**
+   * Whether the request came from outside the owner's own people — a teammate
+   * on another machine, or a guest of an IM chat the team answers. Always true
+   * for rows written since the owner's own digital humans stopped being held to
+   * a policy; false only on older rows.
+   */
   external: boolean
   /** Tool name as the engine reports it (`Bash`, `mcp__ai-browser__…`). */
   toolName: string
@@ -374,12 +380,12 @@ export interface TeamCheck {
   /** Verbatim standing instruction, delivered on every wake. */
   instruction: string
   /**
-   * The turn that set this check was itself driven from another machine, so the
-   * wakes it causes must run under what the owner granted teammates — a local
-   * creator does not launder a stranger's standing instruction. Absent on rows
-   * written before the field existed → false.
+   * The restricted turn that set this check served a request from outside, so
+   * the wakes it causes serve that request too — a local creator does not
+   * launder it into the owner's. A replicated row's value is a claim by the
+   * machine that wrote it and only ever narrows (see `checks.ts`).
    */
-  external?: boolean
+  origin?: TeamRequestOrigin
   schedule: TeamCheckSchedule
   runCount: number
   createdAt: number
@@ -491,6 +497,34 @@ export interface TeamPendingEscalation {
   taskId?: string
 }
 
+// ── Where a request came from ──
+
+/**
+ * Who set a team turn in motion, when it was not the owner's own machine.
+ * Absent = the owner's own: the owner, their digital humans on this machine, or
+ * the runtime waking one of them.
+ *
+ *   'colleague' — it entered this machine from another one (an office wake, a
+ *                 person's 1:1 from another machine). Held to the member's
+ *                 delegated policy, where an unsaved one, or one granting
+ *                 everything, withholds nothing.
+ *   'guest'     — a guest of an IM chat a team member fronts. Held to the
+ *                 member's delegated policy, where silence refuses.
+ */
+export type TeamRequestOrigin = 'colleague' | 'guest'
+
+/**
+ * What a record written before origins had kinds stands for, given the piece of
+ * work it belongs to. Its `external: true` covered both kinds, and a guest's
+ * request never leaves the conversation of the IM chat it came from, so one in
+ * such a conversation — or in one that cannot be found — is a guest's, and any
+ * other a colleague's.
+ */
+export function legacyExternalOrigin(epoch: Pick<TeamEpoch, 'chatKey'> | null | undefined): TeamRequestOrigin {
+  if (!epoch) return 'guest'
+  return epoch.chatKey && parseTeamChatKey(epoch.chatKey) ? 'guest' : 'colleague'
+}
+
 // ── Runtime-only structures (not persisted) ──
 
 /** In-memory message envelope used by the Message Bus. */
@@ -539,22 +573,32 @@ export interface TeamTriggerContext {
    */
   forwardDepth?: number
   /**
-   * This turn was set in motion by someone nobody here vouched for — from a
-   * machine that is not this one, or by a guest of an IM chat a member fronts —
-   * so it runs under what the owner granted others (teammates, or that chat's
-   * guests) rather than under the owner's own reach
-   * (`shared/apps/capability-policy`).
+   * Who set THIS turn in motion, when it was not the owner's own machine — read
+   * per turn, never remembered for the next one. It decides what the turn may
+   * do (`app-chat`) and is the only thing that does.
    *
-   * Stamped ONLY where a request crosses into this node — an inbound office
-   * wake, the office-credential 1:1 endpoint, and a guest's IM message — and
-   * then carried along every hop it causes here, because a stranger's request
-   * does not become the owner's by passing through one of the owner's own
-   * digital humans on the way.
+   * Stamped where a request crosses into this node — an inbound office wake, the
+   * office-credential 1:1 endpoint, a guest's IM message. From there it travels
+   * only on what a RESTRICTED turn itself sets in motion: the checks it sets,
+   * the question it asks, and — a guest's only — its `team_send`s. A turn
+   * running with the owner's full reach hands nothing on, and neither does any
+   * other runtime wake — except the notice reporting a guest's turn, for that
+   * one wake.
    *
-   * A value arriving on the wire is authored by the sender and is therefore
-   * overwritten on arrival, never trusted.
+   * A value arriving on the wire is the sender's claim: it is honored only when
+   * it narrows ('guest'), and otherwise replaced by 'colleague'. An older
+   * build's `external` mark is read through {@link legacyExternalOrigin}.
    */
-  external?: boolean
+  origin?: TeamRequestOrigin
+  /**
+   * The facts a turn-end notice reports, sent with the notice to a lead on
+   * another machine so that machine renders the notice itself. A notice is the
+   * runtime's own report, not anyone's request, so it carries no colleague's
+   * standing — which only holds while its words are the runtime's: a notice
+   * arriving without readable facts is handled as any other message from that
+   * machine.
+   */
+  turnEnded?: TeamTurnEndReport
   /**
    * A person's own 1:1 chat that crossed from another machine. Its `kind` is
    * normalized to 'message' on arrival (the peer wrote it, so it buys no
@@ -564,15 +608,56 @@ export interface TeamTriggerContext {
   personalChat?: boolean
 }
 
+/**
+ * How a member's turn ended, in the only vocabulary the system can prove. There
+ * is deliberately no `completed`: nothing here can see whether the work is done.
+ */
+export type MemberTurnFate =
+  | { kind: 'ended' }
+  | { kind: 'error'; message: string }
+  | { kind: 'timeout' }
+  /** The wake never became a turn — so nothing about the member was observed. */
+  | { kind: 'never_ran'; reason: string }
+  /**
+   * A person stopped it by hand (the renderer/HTTP stop action) — never a
+   * failure to chase. Distinct from `error`: a hard stop lands in the same
+   * unconditional-reject path a crash does, so without this the lead would
+   * be sent after a teammate that was deliberately interrupted.
+   */
+  | { kind: 'stopped' }
+
+/** One member's ending, as a turn-end notice reports it (see `team/turn-report.ts`). */
+export interface TeamTurnEnding {
+  memberName: string
+  fate: MemberTurnFate
+  /**
+   * What the member filed during the turn; null when the turn was not watched
+   * end to end — "recorded nothing" and "not observed" are different claims.
+   */
+  did: string[] | null
+  requestSummary?: string
+  finalReply?: string
+}
+
+export interface TeamTurnEndReport {
+  endings: TeamTurnEnding[]
+  /** Endings dropped from a notice that grew too long, counted rather than lost. */
+  dropped: number
+}
+
 export interface TeamContext {
   teamId: string
   epochId: string
   taskId?: string
   /**
-   * The turn this context was captured in ran with external origin. Persisted
-   * with an escalation entry so the resumed turn — possibly after a process
-   * restart that emptied the in-memory origin stickiness — runs under the same
-   * grants as the turn that asked the question.
+   * The restricted turn that asked the question served a request from outside.
+   * Persisted with the question so the turn its answer resumes — possibly after
+   * a restart — serves that request too.
+   */
+  origin?: TeamRequestOrigin
+  /**
+   * Written by builds before origins had kinds; read through
+   * {@link legacyExternalOrigin}.
    */
   external?: boolean
 }
@@ -876,6 +961,12 @@ export interface TeamMemberInput {
   memberName?: string
   role?: string
   duty?: string
+  /**
+   * What people on other computers may make it do here, chosen as it is added.
+   * Omitted: read-only once the team reaches another computer, unset before
+   * then (the first invite sets every member at once).
+   */
+  delegatedPolicy?: TeamDelegatedPolicy
 }
 
 /**
@@ -982,6 +1073,13 @@ export interface TeamDetail {
    * is open. A board event for any other epoch does not belong to this view.
    */
   boardEpochId?: string | null
+  /**
+   * Whether this team reaches another computer: it was joined from one, has a
+   * member from one, or an invite to it was ever created. Until then an unset
+   * delegated policy is nobody's concern; from then on each member of yours
+   * holds one you chose.
+   */
+  crossesMachines?: boolean
 }
 
 export interface TeamEpochSummary {
@@ -1227,6 +1325,12 @@ export const TEAM_MCP_SERVER_NAME = 'halo-team'
 
 /** Sentinel owner-node id for a locally-owned team member (not federated). */
 export const SELF_NODE_ID = 'SELF'
+
+/**
+ * Undelivered reason for a remote turn this node stopped waiting on because it
+ * is shutting its federation down: the far side may still be running it.
+ */
+export const REMOTE_WAIT_ABANDONED_REASON = 'federation-stopped'
 
 // ── Space coordinator (ephemeral collaboration) ──
 

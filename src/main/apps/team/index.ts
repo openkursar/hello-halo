@@ -124,6 +124,8 @@ interface InitTeamServiceDeps {
   onRunStateChanged?: TeamServiceDeps['onRunStateChanged']
   onMemberRemoved?: TeamServiceDeps['onMemberRemoved']
   onOfficeDissolved?: TeamServiceDeps['onOfficeDissolved']
+  hasIssuedInvite?: TeamServiceDeps['hasIssuedInvite']
+  onOfficeViewed?: TeamServiceDeps['onOfficeViewed']
   getPendingEscalations?: TeamServiceDeps['getPendingEscalations']
   describeChatKey?: TeamServiceDeps['describeChatKey']
   getViewerIdentity?: TeamServiceDeps['getViewerIdentity']
@@ -148,6 +150,8 @@ export function initTeamService(deps: InitTeamServiceDeps): TeamService {
     onRunStateChanged: deps.onRunStateChanged,
     onMemberRemoved: deps.onMemberRemoved,
     onOfficeDissolved: deps.onOfficeDissolved,
+    hasIssuedInvite: deps.hasIssuedInvite,
+    onOfficeViewed: deps.onOfficeViewed,
     getPendingEscalations: deps.getPendingEscalations,
     describeChatKey: deps.describeChatKey,
     getViewerIdentity: deps.getViewerIdentity,

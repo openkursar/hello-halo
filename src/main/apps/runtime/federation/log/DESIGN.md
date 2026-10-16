@@ -83,7 +83,10 @@ Persistence lives one tier down in `apps/federation` (`FeedStore` +
   peer cursor; (2) **consumer-side, secondary** — `FeedConsumer.resubscribeStale`
   re-drives a subscribe that has yielded no batch, bounded per feed so an
   empty feed is not re-asked forever. Both are idempotent and observable (a
-  one-shot log per peer/feed).
+  one-shot log per peer/feed). A peer the office refused admission must not be
+  healed back in: `FeedConsumer.forget` drops a subscription without telling its
+  author (it is no longer reachable — a relay has dropped it), and
+  `ctrl-feed.forgetPeer` applies that and the producer-side drop together.
 - **Give-up (ctrl plane)**: a directed wake that its target never acks is not
   retransmitted forever silently. `ctrl-feed` tracks each published wake and
   resolves it either *delivered* (target acked past its seq) or *undeliverable*

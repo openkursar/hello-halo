@@ -5,9 +5,17 @@ import type { Message } from '../../../types'
 import { api } from '../../../api'
 import { taskReportMessages, type TaskMemberReport } from './model'
 
+function sameMembers(current: string[], failures: Set<string>): boolean {
+  return current.length === failures.size && current.every(id => failures.has(id))
+}
+
+/**
+ * `unavailable` lists the members whose latest read failed, or came only from
+ * the copy kept here while their owner was unreachable.
+ */
 export function useTaskReports(teamId: string, epochId: string, roster: RosterMember[], reload: number) {
   const [reports, setReports] = useState<TaskMemberReport[]>([])
-  const [failed, setFailed] = useState(false)
+  const [unavailable, setUnavailable] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const historiesRef = useRef(new Map<string, TaskMemberReport[]>())
   const scopeRef = useRef(`${teamId}:${epochId}`)
@@ -27,7 +35,7 @@ export function useTaskReports(teamId: string, epochId: string, roster: RosterMe
     }
     const histories = historiesRef.current
     const failures = new Set<string>()
-    setFailed(false)
+    setUnavailable(current => current.length ? [] : current)
     setLoading(true)
     const pump = () => {
       if (disposed) return
@@ -56,7 +64,11 @@ export function useTaskReports(teamId: string, epochId: string, roster: RosterMe
           } finally {
             active--
             running.delete(id)
-            if (!disposed) { setFailed(failures.size > 0); setLoading(active > 0 || queue.size > 0); pump() }
+            if (!disposed) {
+              setUnavailable(current => sameMembers(current, failures) ? current : [...failures])
+              setLoading(active > 0 || queue.size > 0)
+              pump()
+            }
           }
         })()
       }
@@ -75,5 +87,5 @@ export function useTaskReports(teamId: string, epochId: string, roster: RosterMe
     if (!members.length) setLoading(false)
     return () => { disposed = true; unsubscribe(); releases.forEach(release => release()) }
   }, [teamId, epochId, membersKey, reload])
-  return { reports, failed, loading }
+  return { reports, unavailable, loading }
 }

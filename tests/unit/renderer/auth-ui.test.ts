@@ -100,6 +100,7 @@ beforeEach(() => {
     aiSourcesUpdateSource: vi.fn().mockResolvedValue({ success: true }),
     getConfig: vi.fn().mockResolvedValue({ success: true, data: config() }),
     setConfig: vi.fn().mockResolvedValue({ success: true }),
+    refreshStaleModelCatalogs: vi.fn().mockResolvedValue({ success: true }),
     onAuthLoginProgress: vi.fn(),
   })
   env.app = { config: { isFirstLaunch: false }, setConfig: vi.fn(), enterApp: vi.fn().mockResolvedValue(undefined) }

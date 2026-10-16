@@ -83,6 +83,7 @@ vi.mock('../../../../src/main/services/agent/helpers', () => ({
 }))
 const levels = vi.hoisted(() => ({ overrides: {} as Record<string, unknown> }))
 vi.mock('../../../../src/main/services/agent/sdk-config', () => ({
+  markMcpServerSettings: (server: unknown) => server,
   resolveCredentialsForSdk: vi.fn(async () => { throw new Error('stopped after the level was picked') }),
   buildUserSessionSdkOptions: vi.fn(),
 }))

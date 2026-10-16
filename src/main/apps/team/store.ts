@@ -43,7 +43,7 @@ import type {
   TaskPatch,
   TeamStore as ITeamStore,
 } from './types'
-import type { TeamActivity, TeamCheck, TeamDelegatedPolicy, TeamToolAudit } from '../../../shared/apps/team-types'
+import type { TeamActivity, TeamCheck, TeamDelegatedPolicy, TeamRequestOrigin, TeamToolAudit } from '../../../shared/apps/team-types'
 import type {
   TeamTrigger,
   TeamRunTriggerType,
@@ -52,6 +52,15 @@ import type {
   RosterBusyEntry,
 } from '../../../shared/apps/team-types'
 import { SELF_NODE_ID } from '../../../shared/apps/team-types'
+import { capabilityPolicyFromPreset } from '../../../shared/apps/capability-policy'
+
+/**
+ * What a member of this node holds when it first appears in an office hosted
+ * elsewhere, until its owner's answer from the join screen is written: the
+ * read-only answer any member added to a team reaching another computer starts
+ * from. Unset would grant a request from another computer everything.
+ */
+const JOINED_MEMBER_POLICY_JSON = JSON.stringify(capabilityPolicyFromPreset('read_only'))
 
 // ── Row <-> Domain Mapping ──
 
@@ -123,7 +132,17 @@ function parsePolicy(json: string | null): TeamDelegatedPolicy | null {
   }
 }
 
+/**
+ * `team_checks.external` holds a check's origin without a column of its own:
+ * 1 stays what every older build reads as "from outside" (and is what they
+ * wrote for any outside origin), so it carries the strictest kind — as does any
+ * code a later build wrote that this one does not know.
+ */
+const CHECK_ORIGIN_BY_CODE: Readonly<Record<number, TeamRequestOrigin>> = { 1: 'guest', 2: 'colleague' }
+const CHECK_ORIGIN_CODE: Readonly<Record<TeamRequestOrigin, number>> = { guest: 1, colleague: 2 }
+
 function rowToCheck(row: TeamCheckRow): TeamCheck {
+  const origin = row.external ? CHECK_ORIGIN_BY_CODE[row.external] ?? 'guest' : undefined
   return {
     id: row.id,
     teamId: row.team_id,
@@ -131,7 +150,7 @@ function rowToCheck(row: TeamCheckRow): TeamCheck {
     targetAppId: row.target_app_id,
     createdByAppId: row.created_by_app_id,
     instruction: row.instruction,
-    external: row.external === 1,
+    ...(origin ? { origin } : {}),
     schedule: JSON.parse(row.schedule_json) as TeamCheck['schedule'],
     runCount: row.run_count,
     createdAt: row.created_at,
@@ -971,7 +990,7 @@ export class TeamStore implements ITeamStore {
           scope_json: null,
           owner_display_name: ownedHere ? null : m.ownerDisplayName ?? null,
           duty: mine ? mine.duty : m.duty ?? null,
-          delegated_policy_json: mine ? mine.delegated_policy_json : null,
+          delegated_policy_json: mine ? mine.delegated_policy_json : ownedHere ? JOINED_MEMBER_POLICY_JSON : null,
           accepts_checks: mine ? mine.accepts_checks : m.acceptsChecks === false ? 0 : 1,
           // Only this machine can answer its own members, so its own bit is the
           // truth; for everyone else's members the live status in the roster
@@ -1468,8 +1487,7 @@ export class TeamStore implements ITeamStore {
       target_app_id: check.targetAppId,
       created_by_app_id: check.createdByAppId,
       instruction: check.instruction,
-      // Replicated rows from nodes without the field arrive undefined → 0.
-      external: check.external ? 1 : 0,
+      external: check.origin ? CHECK_ORIGIN_CODE[check.origin] : 0,
       schedule_json: JSON.stringify(check.schedule),
       run_count: check.runCount,
       created_at: check.createdAt,

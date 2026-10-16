@@ -1104,6 +1104,10 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       return { officeLiveness }
     })
 
+    // Live again means the versions match now: the sticky update notice was
+    // promised to clear by itself once they do.
+    if (kind === 'resumed') useNotificationStore.getState().dismiss(`team-update-required-${teamId}`)
+
     // Only notify when we were actually resting, so a routine authority handover
     // on an already-live office stays silent.
     if (kind !== 'paused' && wasPaused) {

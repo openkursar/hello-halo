@@ -81,9 +81,9 @@ AI turn so the very first `active-view` event reaches the renderer.
 
 | Path | File | Context |
 |------|------|---------|
-| Main chat | `services/agent/send-message.ts` | Global singleton (no scoped ctx) |
-| App chat | `apps/runtime/app-chat.ts` | Scoped context bound to the chat's conversationId (`apps/runtime/app-chat-browser.ts`) |
-| Automation | `apps/runtime/execute.ts` | Scoped context |
+| Main chat | `services/agent/send-message.ts` (via the toolset broker, `services/agent/toolsets/registry.ts`) | Interactive context per conversation (`getInteractiveBrowserContext`), released with the agent session |
+| App chat | `apps/runtime/app-chat.ts` | Scoped context from `apps/runtime/app-chat-browser.ts`: a native chat's has a live view under its conversationId; an IM, team or HTTP chat's is unattended |
+| Automation | `apps/runtime/execute.ts` | Scoped context; a desktop Run once has a live view under its run key, every other run is unattended |
 
 ### Adding new session-level side effects
 
@@ -96,17 +96,46 @@ of which caller path is used.
 ## Context Model
 
 ```
-BrowserContext (singleton)            — the user's own browsing (Content Canvas / IPC)
-BrowserContext (interactive, per-conv) — used by main chat, one per conversation
-BrowserContext (scoped, per-chat)      — digital-human chat: hidden pages, announced under its conversationId
-BrowserContext (scoped, per-run)       — automation: hidden pages, no conversation, silent;
-                                         a run started with the desktop's Run once is announced under its run key
+BrowserContext (singleton)              — the user's own browsing (Content Canvas / IPC)
+BrowserContext (interactive, per-conv)  — used by main chat, one per conversation
+BrowserContext (scoped, with liveView)  — someone can watch it: a native digital-human chat (under its
+                                          conversationId) or a desktop Run once (under its run key);
+                                          main-window pages, announced
+BrowserContext (scoped, unattended)     — IM, team and HTTP digital-human chats and every other run:
+                                          hidden-host pages, silent
 ```
 
 Scoped contexts are created via `createScopedBrowserContext()` and passed to
 `createAIBrowserMcpServer(scopedCtx, workDir)`. Interactive ones come from
 `getInteractiveBrowserContext(conversationId)` and are dropped by
 `releaseInteractiveBrowserContext` when the agent session is cleaned up.
+
+A scoped context is watchable only when created with
+`createScopedBrowserContext({ liveView: { conversationId, spaceId } })`; that
+one option decides both where its pages are hosted and whether the renderer
+hears of them. Nothing infers it from the caller having a conversation: IM,
+team and HTTP chats have one but nobody can watch them, and they mostly run
+while nobody is at the computer, which is when the main window has been seen
+to fail every new page attachment on Windows (see the browser-host design).
+Such a page announced to the renderer would offer a live view that cannot open.
+
+**A watchable page the main window cannot attach.** Both tools open pages
+through `ctx.openPage()`. When the main window fails to attach a watchable
+page (`MainHostAttachError`: timed out, restarting, or lost its renderer
+meanwhile), the same call opens the page in the hidden host instead and the
+tool result tells the model the user cannot watch it live — a native chat woken
+by a reminder while nobody is there still gets its page, as when every
+digital-human page lived in the hidden window. Such a page joins the
+process-wide `backgroundOnlyViewIds`: `isWatchable(viewId)` is false for every
+context, so selecting it announces nothing, it is never listed, the tray cannot
+stop it, and its destruction is not announced. Like every other hidden-host
+page, it is muted, its autoplay blocked and its visibility reported as visible
+(`trackView`), in a space chat too. The context's other pages stay
+watchable. While the browser host reports the main window stalled
+(`isMainHostStalled()`), watchable pages skip it outright, so the timeout is
+paid once rather than per page. A conversation's pages normally outlive
+`release()` as the user's; a background-only one is closed with it, since
+nothing could ever show it. Any other creation failure is not retried.
 
 ### Who may see and touch which tab
 
@@ -142,10 +171,11 @@ The context holds **no BrowserWindow reference**. UI notifications go through a
 process-global event bus (see "View Lifecycle Events"), so delivery is owned by
 the transport layer, not the context. A context emits iff it has a UI
 (`ctx.hasUi`): the singleton, every interactive per-conversation context, and
-every scoped context created with a `conversationId` (digital-human chat, and a
-run started with the desktop's Run once, under its run key
-`app-run:{appId}:{runId}`). Every other automation run (scoped, no
-conversation) stays silent.
+every scoped context created with a `liveView` (a native digital-human chat,
+and a run started with the desktop's Run once, under its run key
+`app-run:{appId}:{runId}`). Every other scoped context — IM, team and HTTP
+chats and every other run — stays silent: no event, no `listLivePages` entry,
+nothing `stopLivePage` accepts.
 
 ## View Lifecycle Events
 
@@ -169,8 +199,8 @@ UI context, `active` marking the one it acts on).
 
 **Live-session tray.** Lists every live AI page of the CURRENT space that a
 conversation OPENED ITSELF (`owned` in the event/snapshot), one row each,
-labelled "owner · page" (digital human name — for its chats and for a run
-started from the desktop — or the space conversation's title)
+labelled "owner · page" (digital human name — for its native chats and for a
+run started from the desktop — or the space conversation's title)
 with its own stop — not only the on-screen conversation's page. Never listed: a
 page the conversation only selected (the user's own tab, another conversation's
 page), and a page another conversation is currently on (`isPageInUseByOthers`,
@@ -183,8 +213,8 @@ refuses `not-owned` unless that conversation's context opened the page and
 path and can be one event behind. Closing a canvas tab is the user's own action
 and still goes through `browser:destroy` unchecked. The space
 comes from the context (`spaceId`: `getInteractiveBrowserContext(conversationId,
-spaceId)` for space chat, `acquireChatBrowserContext(…, spaceId)` for
-digital-human chat); a page with no space is never listed. Rows are built by
+spaceId)` for space chat, the `liveView` for a native digital-human chat or a
+Run once); a page with no space is never listed. Rows are built by
 `renderer/hooks/browser-live-sessions.ts`.
 `gone` is emitted from `notifyViewDestroyed(viewId)`, which reconciles EVERY live
 context and announces once — whenever a context with a UI owned the view or was
@@ -206,18 +236,24 @@ the AI drives (shared `persist:browser` session across all views).
 - **Cleanup (scoped)**: Caller calls `ctx.destroy()` when the agent session ends — closes its tabs.
   Digital-human chat contexts are owned by `apps/runtime/app-chat-browser.ts`,
   which keeps native chats' contexts resident between turns (idle/cap reaping)
+  and ends IM, team and HTTP chats' contexts with the turn — silently, since
+  nothing about their pages was ever announced
 - **Cleanup (interactive)**: `releaseInteractiveBrowserContext(conversationId)` from the
-  toolset broker's per-conversation teardown — leaves the user's tabs open
+  toolset broker's per-conversation teardown — leaves the user's tabs open, except
+  a background-only page, which nothing could show
 - **Cleanup (singleton)**: `cleanupAIBrowser()` called by `bootstrap/extended.ts` on app shutdown
 
 ## Live View and Guest Ownership
 
 Pages that a user can watch are created in a permanent main-renderer webview
-host, including digital-human chat pages and the pages of a run the user
-started with the desktop's Run once. Pure unattended runs and temporary
-search pages use the lazy hidden renderer host (`offscreen: !ctx.hasUi`).
-In explicit server mode every page uses that hidden host, including remote
-conversations, because a chat UI does not imply a local main renderer exists.
+host: the user's own, a space chat's, a native digital-human chat's and those of
+a run the user started with the desktop's Run once. Everything nobody can watch
+— IM, team and HTTP chats, every other run, temporary search pages — uses the
+lazy hidden renderer host, so it neither depends on nor borrows frames from the
+main window; so does a watchable page the main window could not attach (see
+"Context Model"). In explicit server mode every page uses that hidden host,
+including remote conversations, because a chat UI does not imply a local main
+renderer exists; that is not a fallback, and those pages stay announced.
 A guest never moves between hosts. Showing, hiding, switching tabs and leaving
 Canvas change presentation only, preserving the same WebContents, DOM, form
 state, CDP target and download route. `ctx.hasRevealedView()` still protects a

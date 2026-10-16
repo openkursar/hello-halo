@@ -386,6 +386,14 @@ export function createFederationCoordinator(
   // until a join-request from it is admitted (it presents something new).
   const rejectedJoinNodes = new Set<NodeId>()
 
+  // What the log last said about each node's refused joins. A node refused over
+  // a relay asks again every second or so (the relay ends the refused session and
+  // the node reconnects), so a refusal is logged in full once and its repeats as
+  // one count per window. Bounded: any identity a relay admits can be refused.
+  const refusalLog = new Map<NodeId, { reason: JoinReject['reason']; loggedAt: number; repeats: number }>()
+  const REFUSAL_LOG_WINDOW_MS = 10 * 60_000
+  const REFUSAL_LOG_MAX_NODES = 1024
+
   function markSeen(nodeId: NodeId): void {
     monotonicLastSeen.set(nodeId, monotonicNow())
   }
@@ -434,8 +442,28 @@ export function createFederationCoordinator(
 
   // ── Host side: handle a join-request ──
 
-  function rejectJoin(to: NodeId, reason: JoinReject['reason']): void {
-    console.warn(`${LOG_TAG} join rejected node=${to} reason=${reason} ts=${now()}`)
+  function logRefusal(node: NodeId, reason: JoinReject['reason'], detail?: string): void {
+    const ts = now()
+    const last = refusalLog.get(node)
+    if (last?.reason === reason) {
+      last.repeats += 1
+      if (ts - last.loggedAt < REFUSAL_LOG_WINDOW_MS) return
+      console.warn(
+        `${LOG_TAG} join rejected node=${node} reason=${reason} repeats=${last.repeats} over=${Math.round((ts - last.loggedAt) / 60_000)}m`
+      )
+      last.loggedAt = ts
+      last.repeats = 0
+      return
+    }
+    refusalLog.delete(node)
+    const oldest = refusalLog.size >= REFUSAL_LOG_MAX_NODES ? refusalLog.keys().next().value : undefined
+    if (oldest !== undefined) refusalLog.delete(oldest)
+    refusalLog.set(node, { reason, loggedAt: ts, repeats: 0 })
+    console.warn(`${LOG_TAG} join rejected node=${node} reason=${reason}${detail ? ` ${detail}` : ''} ts=${ts}`)
+  }
+
+  function rejectJoin(to: NodeId, reason: JoinReject['reason'], detail?: string): void {
+    logRefusal(to, reason, detail)
     rejectedJoinNodes.add(to)
     link.send(to, {
       kind: 'join-reject',
@@ -686,8 +714,7 @@ export function createFederationCoordinator(
     // One protocol: a node on another version is refused (it, or this node,
     // must update — the joiner's UI says so).
     if (!isSameProtocol(req.pv)) {
-      console.warn(`${LOG_TAG} join refused: protocol ${req.pv} ≠ ${FEDERATION_PROTOCOL_VERSION} node=${req.fromNode}`)
-      rejectJoin(req.fromNode, 'VERSION_INCOMPATIBLE')
+      rejectJoin(req.fromNode, 'VERSION_INCOMPATIBLE', `peerPv=${req.pv} selfPv=${FEDERATION_PROTOCOL_VERSION}`)
       return
     }
     // Persisted identity for this node's bindings. In production a node's wire id
@@ -733,6 +760,7 @@ export function createFederationCoordinator(
     confirmedNodes.delete(req.fromNode)
     lastRejoinNudge.delete(req.fromNode)
     rejectedJoinNodes.delete(req.fromNode)
+    refusalLog.delete(req.fromNode)
     markSeen(req.fromNode)
 
     // Persist brought members as remote team_members. An appId already present

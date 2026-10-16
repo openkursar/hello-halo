@@ -16,7 +16,7 @@ import {
 } from '../fixtures/electron'
 import { seedLongConversation } from '../fixtures/seed-conversation'
 import { seedDigitalHumanChat } from '../fixtures/seed-digital-human-chat'
-import { navigateToChat } from '../fixtures/helpers'
+import { navigateToChat, openDigitalHumanConversation } from '../fixtures/helpers'
 
 const MESSAGE_COUNT = 300
 
@@ -305,7 +305,7 @@ test('transcript scrolling — digital-human conversation, paged', async () => {
     await navigateToChat(window)
     const cdp = await window.context().newCDPSession(window)
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false })
-    await window.getByText(seeded.turns[TURNS - 1].reply.slice(0, 24)).first().click()
+    await openDigitalHumanConversation(window, seeded.name, seeded.turns[TURNS - 1].reply.slice(0, 24))
 
     const scroller = window.locator('[data-testid="transcript-scroller"]')
     await scroller.waitFor({ state: 'visible', timeout: 15000 })
@@ -354,7 +354,7 @@ test('transcript scrolling — digital-human conversation, paged', async () => {
     // A search hit far back is loaded and centered, from a reloaded page that
     // has only the newest page again.
     await window.reload()
-    await window.getByText(seeded.turns[TURNS - 1].reply.slice(0, 24)).first().click()
+    await openDigitalHumanConversation(window, seeded.name, seeded.turns[TURNS - 1].reply.slice(0, 24))
     await scroller.waitFor({ state: 'visible', timeout: 15000 })
     await settle(window, 1200)
     expect(await mountedRows(scroller)).toBeLessThanOrEqual(50)
@@ -379,3 +379,82 @@ test('transcript scrolling — digital-human conversation, paged', async () => {
     cleanupTestConfigDir(testConfigDir)
   }
 })
+
+// The composer grows with what is typed into it. At the end, the newest
+// content stays in view through every key — growing, at its height cap, and
+// shrinking back. A reader just above the end keeps their place while typing.
+for (const viewport of [VIEWPORTS[0], VIEWPORTS[2]]) {
+  test(`transcript scrolling — typing in a growing composer — ${viewport.name}`, async () => {
+    test.setTimeout(180000)
+    const appEntryPath = getAppEntryPath()
+    const testConfigDir = createTestConfigDir(appEntryPath)
+    seedLongConversation(testConfigDir, { messageCount: 40, title: 'Composer growth', variety: 'mixed' })
+    const app = await launchElectronApp(appEntryPath, testConfigDir)
+
+    try {
+      const window = await app.firstWindow()
+      await window.waitForLoadState('domcontentloaded')
+      await navigateToChat(window)
+      const cdp = await window.context().newCDPSession(window)
+      await cdp.send('Emulation.setDeviceMetricsOverride', {
+        width: viewport.width,
+        height: viewport.height,
+        deviceScaleFactor: viewport.deviceScaleFactor,
+        mobile: false,
+      })
+      const scroller = window.locator('[data-testid="transcript-scroller"]')
+      await scroller.waitFor({ state: 'visible', timeout: 15000 })
+      await settle(window, 1500)
+      expect(await distanceToEnd(scroller)).toBeLessThanOrEqual(1)
+
+      // The only text box on the page: the copy it is measured on stays out of reach.
+      const composer = window.locator('textarea')
+      const composerHeight = () => composer.evaluate(el => el.getBoundingClientRect().height)
+      const oneLine = await composerHeight()
+      await composer.click()
+
+      const pressAndCheck = async (key: string) => {
+        await window.keyboard.press(key)
+        await settle(window, 0)
+        expect(await distanceToEnd(scroller), `after ${key} at ${await composerHeight()}px`).toBeLessThanOrEqual(1)
+      }
+      for (let line = 0; line < 10; line++) {
+        for (const key of `line ${line}`) await pressAndCheck(key)
+        await pressAndCheck('Shift+Enter')
+      }
+      expect(await composerHeight()).toBeGreaterThan(oneLine)
+      expect(await composerHeight()).toBeLessThanOrEqual(180)
+      for (const key of ['a', 'b', 'c', 'Backspace', 'Backspace', 'Backspace']) await pressAndCheck(key)
+      const jumpButton = window.locator('button:has(svg.lucide-chevron-down).rounded-full.absolute')
+      await expect(jumpButton).not.toHaveClass(/pointer-events-auto/)
+
+      // A reader a little above the end keeps their place while the box is tall.
+      await composer.press(`${process.platform === 'darwin' ? 'Meta' : 'Control'}+a`)
+      await composer.press('Backspace')
+      for (const key of ['1', 'Shift+Enter', '2', 'Shift+Enter', '3', 'Shift+Enter', '4']) await window.keyboard.press(key)
+      await settle(window)
+      const extra = (await composerHeight()) - oneLine
+      expect(extra).toBeGreaterThan(40)
+      await scroller.evaluate((el, by) => { el.scrollTop -= by }, Math.round(extra / 2))
+      await settle(window)
+      const readingTop = await scroller.evaluate(el => el.scrollTop)
+      for (const key of ['x', 'y', 'z', 'Backspace']) {
+        await window.keyboard.press(key)
+        await settle(window, 0)
+        expect(Math.abs(await scroller.evaluate(el => el.scrollTop) - readingTop), `reader moved after ${key}`).toBeLessThanOrEqual(1)
+      }
+
+      // Back at the end, clearing the box shrinks it and the end stays in view.
+      await scroller.evaluate(el => { el.scrollTop = el.scrollHeight })
+      await settle(window)
+      await composer.press(`${process.platform === 'darwin' ? 'Meta' : 'Control'}+a`)
+      await composer.press('Backspace')
+      await settle(window)
+      expect(Math.abs((await composerHeight()) - oneLine)).toBeLessThanOrEqual(1)
+      expect(await distanceToEnd(scroller)).toBeLessThanOrEqual(1)
+    } finally {
+      await app.close()
+      cleanupTestConfigDir(testConfigDir)
+    }
+  })
+}

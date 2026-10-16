@@ -7,6 +7,7 @@ not here:
   files a digital human produced -> workspace
   installing from the app store -> store
   knowledge a digital human reads -> knowledge-base
+  several digital humans working together -> team
 
 operations on this page:
   GET    /api/apps                                                   List digital humans (and other installed apps) in a space

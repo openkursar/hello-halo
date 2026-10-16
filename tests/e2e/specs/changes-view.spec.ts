@@ -502,6 +502,42 @@ test.describe('changes view', () => {
     await expect(window.getByRole('tab', { name: /Overview & review/ })).toBeVisible()
   })
 
+  test('keeps the page switch in place across pages, and the file list toggle on screen when narrow', async ({ window }) => {
+    await openChangesWithShortcut(window)
+    // The totals beside the pickers arrive with the list; measure once they are in.
+    await expect(window.locator('section[data-file-key]').first()).toBeVisible()
+    const pageSwitch = window.getByRole('tablist', { name: 'Changes' })
+    const left = () => pageSwitch.evaluate((element) => element.getBoundingClientRect().left)
+    const start = await left()
+    const nextChange = window.getByRole('button', { name: 'Next change (F7)', exact: true })
+    const changes = window.getByRole('tab', { name: 'Changes', exact: true })
+    const overview = window.getByRole('tab', { name: /Overview & review/ })
+    const graph = window.getByRole('tab', { name: 'Graph', exact: true })
+
+    for (const [tab, diffsShown] of [[overview, false], [graph, false], [changes, true]] as const) {
+      await tab.click()
+      await expect(tab).toHaveAttribute('aria-selected', 'true')
+      await expect.poll(left).toBe(start)
+      // Without diffs the controls only keep their room: none of them can be reached.
+      await expect(nextChange).toHaveCount(diffsShown ? 1 : 0)
+    }
+
+    await overview.click()
+    await window.locator('button[data-dir]').first().click()
+    await expect(window.getByText(/\d+ of \d+ · by lines changed/)).toBeVisible()
+    await expect(nextChange).toBeVisible()
+    await expect.poll(left).toBe(start)
+
+    // On a canvas too narrow for every control the kept room shrinks rather than push the file list toggle off.
+    await window.setViewportSize({ width: 1140, height: 1000 })
+    await expect.poll(() => pageSwitch.evaluate((element) => element.parentElement!.clientWidth)).toBeLessThan(640)
+    for (const tab of [overview, graph]) {
+      await tab.click()
+      await expect(tab).toHaveAttribute('aria-selected', 'true')
+      await expect(window.getByRole('button', { name: 'File list', exact: true })).toBeInViewport()
+    }
+  })
+
   test.describe('many reply edits', () => {
     test.use({ replyEditCount: 25 })
 

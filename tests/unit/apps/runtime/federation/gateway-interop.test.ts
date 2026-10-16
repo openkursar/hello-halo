@@ -416,4 +416,66 @@ describe.skipIf(!hasGo())('gateway interop (real Go binary)', () => {
       memberNode.dbm.closeAll()
     }
   }, 60_000)
+
+  it('a joiner refused by an older host is not reconnected in a loop (field incident replay)', async () => {
+    // The gateway ends a member's session as it relays a join-reject. With the
+    // reconnect re-auth re-driving the join, that was one refusal a second, all day.
+    const officeId = 'office-version-refusal'
+    const oldHostId = makeIdentity()
+    const memberId = makeIdentity()
+
+    let joinRequests = 0
+    const oldHost: { client?: GatewayAttachClient } = {}
+    oldHost.client = new GatewayAttachClient({
+      gatewayUrl: baseUrl,
+      officeId,
+      makeAuthProof: (nonce) => makeProof(oldHostId, nonce),
+      onFrame: (frame) => {
+        if (frame.kind !== 'join-request') return
+        joinRequests += 1
+        // A host from before the reject carried its own version.
+        oldHost.client?.send(frame.fromNode, { kind: 'join-reject', officeId, reason: 'VERSION_INCOMPATIBLE' })
+      },
+      getIdentityId: () => oldHostId.id,
+      getEndpoints: () => [],
+    })
+    await waitFor(() => oldHost.client?.isAttached() ?? false)
+
+    const dbm = createDatabaseManager(':memory:')
+    const db = dbm.getAppDatabase()
+    dbm.runMigrations(db, FED_NS, fedMigrations)
+    dbm.runMigrations(db, TEAM_NS, teamMigrations)
+    const manager = createFederationManager({
+      hostSend: () => false,
+      hostListOfficeClients: () => [],
+      federationStore: new FederationStore(db),
+      teamStore: new TeamStore(db),
+      verifyCredential: () => null,
+      getLocalNodeId: () => memberId.id,
+      makeAuthProof: (nonce) => makeProof(memberId, nonce),
+      refusedJoinRetryMs: { version: 3000, max: 3000 },
+    })
+
+    try {
+      const result = await manager.joinOffice({
+        officeId,
+        serverUrl: baseUrl,
+        credentialToken: 'opaque-invite-token',
+        selfContext: { officeId, selfNodeId: memberId.id },
+        bringMembers: [{ appId: 'app-m-1', memberName: 'refused-writer' }],
+      })
+      expect(result).toMatchObject({ ok: false, reason: 'VERSION_INCOMPATIBLE', detail: { direction: 'peer' } })
+
+      // The loop re-joined within ~1.5 s of every refusal.
+      await new Promise((r) => setTimeout(r, 2500))
+      expect(joinRequests).toBe(1)
+
+      // Asked again once the retry delay has passed.
+      await waitFor(() => joinRequests === 2, 3000)
+    } finally {
+      manager.stopAll()
+      oldHost.client?.close()
+      dbm.closeAll()
+    }
+  }, 30_000)
 })

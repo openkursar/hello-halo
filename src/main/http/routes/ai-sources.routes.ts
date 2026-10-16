@@ -81,6 +81,11 @@ export function registerAiSourcesRoutes(app: Express): void {
     }
   })
 
+  app.post('/api/ai-sources/refresh-stale-catalogs', (_req: Request, res: Response) => {
+    void getAISourceManager().refreshStaleCatalogs('picker')
+    res.json({ success: true })
+  })
+
 
   // ===== Model Capabilities Routes =====
 

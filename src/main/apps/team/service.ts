@@ -60,8 +60,10 @@ import type {
   TeamCheckView,
   TeamStatus,
   TeamToolAudit,
+  TeamDelegatedPolicy,
 } from '../../../shared/apps/team-types'
 import { isRemoteMember, toLocalMembers } from '../../../shared/apps/team-types'
+import { capabilityPolicyFromPreset } from '../../../shared/apps/capability-policy'
 
 const LOG_TAG = '[TeamService]'
 
@@ -117,6 +119,17 @@ export interface TeamServiceDeps {
   onMemberRemoved?: (teamId: string, appId: string) => void
   /** The office was dissolved → project an `office-dissolved` frame. */
   onOfficeDissolved?: (teamId: string) => void
+  /**
+   * Whether an invite to this office was ever created, revoked or expired ones
+   * included: a link already handed out may have been used. Absent → no invite
+   * can exist (not federated).
+   */
+  hasIssuedInvite?: (teamId: string) => boolean
+  /**
+   * Someone read a joined office's detail (its page, or a status question).
+   * Federation may use it to ask an office that refused this machine again.
+   */
+  onOfficeViewed?: (teamId: string) => void
 
   /**
    * Unanswered escalations across all apps (activity-store truth that survives a
@@ -392,6 +405,27 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     return `${base}-${randomUUID().slice(0, 8)}`
   }
 
+  // ── Reach beyond this computer ──
+
+  /**
+   * Whether anyone on another computer can reach this team's members: it was
+   * joined from one, has a member from one, or an invite to it was ever created.
+   */
+  function crossesMachines(team: Team, members: TeamMember[]): boolean {
+    return team.hostNodeId != null || members.some(isRemoteMember) || deps.hasIssuedInvite?.(team.id) === true
+  }
+
+  /**
+   * What a member of yours holds when it joins without a choice being made. In
+   * a team that already reaches another computer that is read-only, the answer
+   * the invite and join screens start from; before then nothing, because the
+   * first invite asks once for every member and an unset policy grants a
+   * stranger nothing.
+   */
+  function startingDelegatedPolicy(team: Team): TeamDelegatedPolicy | null {
+    return crossesMachines(team, store.listMembersByTeam(team.id)) ? capabilityPolicyFromPreset('read_only') : null
+  }
+
   // ── Member-app provisioning ──
 
   /**
@@ -460,12 +494,15 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     const app = appManager.getApp(input.appId)
     if (!app) throw new Error(`App not found for member: ${input.appId}`)
     const memberName = uniqueMemberName(team.id, input.memberName || app.spec.name || 'member')
+    const delegatedPolicy = input.delegatedPolicy ?? startingDelegatedPolicy(team)
     const member: TeamMember = {
       teamId: team.id,
       appId: input.appId,
       memberName,
       role: input.role ?? '',
       duty: input.duty?.trim() || null,
+      delegatedPolicy,
+      acceptsChecks: delegatedPolicy?.allowChecks !== false,
       isLead: false,
       aiProvisioned: false,
       addedAt: Date.now(),
@@ -491,6 +528,8 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     // gets no Team Entry and no halo-team tools, so a run does nothing. The lead
     // app is system-created, so aiProvisioned:true makes dissolve clean it up as
     // an orphan (no separate lead-cleanup path needed).
+    // A saved collaboration gets its lead on its first run, possibly after it
+    // was shared, so the lead is held like any member added late.
     store.addMember({
       teamId: team.id,
       appId: leadAppId,
@@ -500,6 +539,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       aiProvisioned: true,
       isSystemCoordinator: true,
       addedAt: Date.now(),
+      delegatedPolicy: startingDelegatedPolicy(team),
     })
     return leadAppId
   }
@@ -872,6 +912,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
   function getTeamDetail(teamId: string): TeamDetail | null {
     const team = store.getTeamById(teamId)
     if (!team) return null
+    if (team.hostNodeId != null) deps.onOfficeViewed?.(teamId)
 
     const members = store.listMembersByTeam(teamId)
     const edges = store.listEdgesByTeam(teamId)
@@ -880,6 +921,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     // Periodic checks are office-shared rows, so a joined office lists them from
     // its own replica exactly like the host does.
     const checks: TeamCheckView[] = getRuntime()?.checks.viewForTeam(teamId) ?? []
+    const reach = crossesMachines(team, members)
 
     // A JOINED shadow office mirrors a remote authority and has no local
     // team_epochs row, so getCurrentEpochForTeam never resolves the host's run
@@ -937,6 +979,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         pendingEscalations,
         checks,
         boardEpochId: epochId,
+        crossesMachines: reach,
       }
     }
 
@@ -958,6 +1001,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         pendingEscalations,
         checks,
         boardEpochId: epoch.id,
+        crossesMachines: reach,
       }
     }
 
@@ -986,6 +1030,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       pendingEscalations,
       checks,
       boardEpochId: null,
+      crossesMachines: reach,
     }
   }
 
@@ -1043,7 +1088,8 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     if (team.collabMode === 'structured') {
       regenerateStructuredEdges(team)
     }
-    console.log(`${LOG_TAG} addMember: team=${teamId} app=${input.appId} name=${member.memberName}`)
+    const policy = input.delegatedPolicy ? 'chosen' : member.delegatedPolicy ? 'read-only default' : 'unset'
+    console.log(`${LOG_TAG} addMember: team=${teamId} app=${input.appId} name=${member.memberName} policy=${policy}`)
     emitUpdated(teamId, { team: requireTeam(teamId) })
     deps.onRosterMutated?.(teamId)
     return member
@@ -1435,6 +1481,14 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       if (!existing || existing.teamId !== teamId) {
         throw new Error(`Trigger not found for team ${teamId}: ${triggerId}`)
       }
+      // An update keeps the stored type, so the request must state it: what a
+      // caller is allowed to send is judged by the type it names.
+      if (input.sourceType !== existing.sourceType) {
+        throw new Error(
+          `Trigger ${triggerId} is a ${existing.sourceType} trigger and its type cannot be changed. ` +
+          'Remove it and add a new one instead.'
+        )
+      }
       store.updateTrigger(triggerId, { config: input.config, enabled })
     } else {
       const trigger: TeamTrigger = {
@@ -1532,7 +1586,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       to: target.memberName,
       message: params.message,
       wait: true,
-      ...(params.external ? { external: true } : {}),
+      ...(params.external ? { origin: 'colleague' as const } : {}),
     })
 
     if ('messageId' in result) return { ok: true, finalMessage: null }

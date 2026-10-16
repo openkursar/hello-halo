@@ -226,7 +226,7 @@ describe('createCoordinatorDelivery', () => {
     expect(request.persist.metadata.teamName).toBe('Research crew')
   })
 
-  it.each(['external', 'remote'])('delivers %s member content as its own turn, never into the owner\'s running turn', async source => {
+  it.each(['outside', 'remote'])('delivers %s member content as its own turn, never into the owner\'s running turn', async source => {
     if (source === 'remote') {
       store.removeMember(TEAM_ID, RESEARCHER_APP)
       store.addMember({ teamId: TEAM_ID, appId: RESEARCHER_APP, memberName: 'researcher', role: 'Research',
@@ -238,7 +238,7 @@ describe('createCoordinatorDelivery', () => {
     } })
     await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: RESEARCHER_APP,
       to: SPACE_COORDINATOR_MEMBER_NAME, message: 'Update from another machine',
-      external: source === 'external' })
+      ...(source === 'outside' ? { origin: 'colleague' as const } : {}) })
     expect(delivered).toHaveLength(1)
     expect(delivered[0].permissionIdentity).toBe('external')
   })
@@ -247,7 +247,7 @@ describe('createCoordinatorDelivery', () => {
     const { delivered, hook } = makeDelivery()
     await hook({ envelope: { ...envelope('external summary'), fromAppId: COORD_APP },
       trigger: { teamId: TEAM_ID, epochId: EPOCH_ID, correlationId: 'external-ending',
-        fromAppId: null, wait: false, kind: 'member_stopped', external: true },
+        fromAppId: null, wait: false, kind: 'member_stopped', origin: 'guest' },
     })
     await hook({ envelope: { ...envelope('left already'), fromAppId: 'app-gone' },
       trigger: { teamId: TEAM_ID, epochId: EPOCH_ID, correlationId: 'gone', fromAppId: 'app-gone', wait: false, kind: 'message' },

@@ -47,6 +47,22 @@ export async function navigateToChat(window: Page) {
   await window.waitForSelector('textarea', { timeout: 15000 })
 }
 
+/**
+ * Open a digital human's conversation from the sidebar's conversation list
+ * (desktop layouts; at phone width they are in the history sheet). The Digital
+ * Humans section starts folded, and so does each digital human's group unless
+ * one of its conversations is open, so each is unfolded only while folded.
+ */
+export async function openDigitalHumanConversation(window: Page, name: string, rowText: string) {
+  const section = window.getByTitle('Conversations with digital humans available in this workspace', { exact: true })
+  await section.waitFor({ state: 'visible', timeout: 15000 })
+  if (await section.getAttribute('aria-expanded') !== 'true') await section.click()
+  const group = window.getByRole('button', { name, exact: true }).first()
+  await group.waitFor({ state: 'visible' })
+  if (await group.getAttribute('aria-expanded') !== 'true') await group.click()
+  await window.getByText(rowText).first().click()
+}
+
 /** Navigate through the persistent rail and wait for the settings content. */
 export async function navigateToSettings(window: Page) {
   await waitForHomePage(window)

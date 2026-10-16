@@ -37,9 +37,8 @@ import { createOrchestration } from '../../../../../src/main/apps/runtime/team/o
 import type { OrchestrationSessionDeps } from '../../../../../src/main/apps/runtime/team/orchestration'
 import type { NoteTurnEndedInput } from '../../../../../src/main/apps/runtime/team/turn-report'
 import { buildTeamEntry } from '../../../../../src/main/apps/runtime/team/team-prompt'
-import { buildTeamSessionKey } from '../../../../../src/shared/apps/team-types'
+import { buildTeamSessionKey, REMOTE_WAIT_ABANDONED_REASON } from '../../../../../src/shared/apps/team-types'
 import type { TeamTriggerContext } from '../../../../../src/shared/apps/team-types'
-import { forgetTurnOrigin, peekTurnOrigin, resolveTurnOrigin } from '../../../../../src/main/apps/runtime/team/external-origin'
 import type { Team, TeamMember, TeamEpoch, TeamEdge } from '../../../../../src/main/apps/team/types'
 
 // ============================================
@@ -144,8 +143,9 @@ function makeSession(options: { acceptMidTurn?: boolean } = {}) {
         })
       })
     }),
-    // A turn a teammate woke runs delegated; see appChatMessageIdentity.
-    getTurnIdentity: () => 'delegated',
+    // A turn the owner's own digital humans woke runs as the owner; see
+    // appChatMessageIdentity.
+    getTurnIdentity: () => 'owner',
     isSessionActive: (key) => active.has(key),
     // Off unless a test asks for it: without a live session there is nothing to
     // hand a message to, which is also how a remote member answers — so the
@@ -468,62 +468,34 @@ describe('TeamOrchestration', () => {
   // team_complete deferred seal
   // ===========================================================================
 
-  describe('external authority lifecycle', () => {
-    const markedSessions = new Set<string>()
+  describe('where a turn\u2019s request came from', () => {
+    it('is read from each trigger, so an outside request leaves nothing behind for the next wake', async () => {
+      seedTeam(store, { collabMode: 'free' })
+      const epoch = makeEpoch(store)
+      const { deps, pendings } = makeSession()
+      const orch = build(deps)
 
-    function markExternal(epochId: string, appId: string): { sessionKey: string; wake: TeamTriggerContext } {
-      const sessionKey = buildTeamSessionKey(appId, TEAM_ID, epochId)
-      const wake: TeamTriggerContext = {
-        teamId: TEAM_ID, epochId, correlationId: 'origin-wake', fromAppId: null,
-        wait: false, kind: 'periodic_check',
-      }
-      resolveTurnOrigin(sessionKey, { ...wake, external: true })
-      markedSessions.add(sessionKey)
-      return { sessionKey, wake }
-    }
+      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, to: 'researcher', message: 'go', wait: false, origin: 'colleague' })
+      await flush()
+      expect(pendings[0].teamContext.origin).toBe('colleague')
+      pendings[0].resolve('done')
+      await flush()
 
-    afterEach(() => {
-      for (const sessionKey of markedSessions) forgetTurnOrigin(sessionKey)
-      markedSessions.clear()
+      await orch.wakeForCheck({ teamId: TEAM_ID, epochId: epoch.id, appId: RESEARCHER_APP, body: '[Periodic check] look', onBusy: 'buffer' })
+      await flush()
+      expect(pendings[1].teamContext.kind).toBe('periodic_check')
+      expect(pendings[1].teamContext.origin).toBeUndefined()
     })
 
-    it.each(['run', 'conversation'] as const)('retains external authority while a %s epoch is resting', async lifecycle => {
-      seedTeam(store)
-      const { deps } = makeSession()
+    it('a check that serves an outside request wakes with that request\u2019s origin', async () => {
+      seedTeam(store, { collabMode: 'free' })
+      const epoch = makeEpoch(store)
+      const { deps, pendings } = makeSession()
       const orch = build(deps)
-      const epoch = lifecycle === 'run'
-        ? await orch.startEpoch(TEAM_ID)
-        : orch.ensureConversationEpoch(TEAM_ID, 'native:resting')
-      const { sessionKey, wake } = markExternal(epoch.id, RESEARCHER_APP)
 
-      if (lifecycle === 'run') await orch.sealEpoch(TEAM_ID, 'completed', 'resting')
-      else await orch.sealConversationEpoch(TEAM_ID, epoch.id)
-
-      expect(store.getEpochById(epoch.id)?.endedAt).not.toBeNull()
-      expect(store.getEpochById(epoch.id)?.workItem?.status).toBe('open')
-      expect(peekTurnOrigin(sessionKey, wake)).toBe(true)
-      expect(orch.noteEpochTurn(TEAM_ID, epoch.id)).toBe(true)
-      expect(resolveTurnOrigin(sessionKey, wake)).toBe(true)
-    })
-
-    it.each(['completed', 'cleared'] as const)('releases every external session only when a task is %s', async status => {
-      seedTeam(store)
-      const { deps } = makeSession()
-      const orch = build(deps)
-      const epoch = orch.ensureConversationEpoch(TEAM_ID, 'native:closed-origin')
-      const other = orch.ensureConversationEpoch(TEAM_ID, 'native:retained-origin')
-      const current = markExternal(epoch.id, RESEARCHER_APP)
-      const removed = markExternal(epoch.id, TESTER_APP)
-      const retained = markExternal(other.id, RESEARCHER_APP)
-      store.removeMember(TEAM_ID, TESTER_APP)
-
-      if (status === 'completed') store.updateWorkItem(epoch.id, { status: 'completed' })
-      else store.endEpoch(epoch.id, Date.now(), 'cleared', null)
-      await orch.closeEpochResources(TEAM_ID, epoch.id)
-
-      expect(peekTurnOrigin(current.sessionKey, current.wake)).toBe(false)
-      expect(peekTurnOrigin(removed.sessionKey, removed.wake)).toBe(false)
-      expect(peekTurnOrigin(retained.sessionKey, retained.wake)).toBe(true)
+      await orch.wakeForCheck({ teamId: TEAM_ID, epochId: epoch.id, appId: RESEARCHER_APP, body: '[Periodic check] look', onBusy: 'buffer', origin: 'guest' })
+      await flush()
+      expect(pendings[0].teamContext.origin).toBe('guest')
     })
   })
 
@@ -1112,7 +1084,7 @@ describe('TeamOrchestration', () => {
         kind: 'human_message' as const,
       }
       const sessionKey = buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, epoch.id)
-      orch.deliverMidTurn({ sessionKey, appId: RESEARCHER_APP, teamId: TEAM_ID, epochId: epoch.id, envelope, trigger: { ...trigger, external: true } })
+      orch.deliverMidTurn({ sessionKey, appId: RESEARCHER_APP, teamId: TEAM_ID, epochId: epoch.id, envelope, trigger: { ...trigger, origin: 'colleague' } })
       orch.deliverMidTurn({ sessionKey, appId: RESEARCHER_APP, teamId: TEAM_ID, epochId: epoch.id, envelope, trigger })
 
       expect(injected.map(i => i.message)).toEqual([
@@ -1240,7 +1212,7 @@ describe('TeamOrchestration', () => {
       }
     })
 
-    it.each([true, false])('a turn cut off at the time limit is reported with its origin (external=%s)', async (external) => {
+    it.each(['guest', 'colleague', undefined] as const)('a turn cut off at the time limit is reported with its own origin (%s)', async (origin) => {
       vi.useFakeTimers()
       try {
         seedTeam(store, { collabMode: 'free' })
@@ -1251,14 +1223,88 @@ describe('TeamOrchestration', () => {
 
         await bus.send({
           teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, to: 'researcher', message: 'go', wait: false,
-          ...(external ? { external: true } : {}),
+          ...(origin ? { origin } : {}),
         })
         await vi.advanceTimersByTimeAsync(1001)
 
-        expect(noteTurnEnded).toHaveBeenCalledWith(expect.objectContaining({ fate: { kind: 'timeout' }, external }))
+        expect(noteTurnEnded).toHaveBeenCalledWith(expect.objectContaining({ fate: { kind: 'timeout' } }))
+        expect(noteTurnEnded.mock.calls[0][0].origin).toBe(origin)
       } finally {
         vi.useRealTimers()
       }
+    })
+  })
+
+  // ===========================================================================
+  // A member on another machine: its owner runs the turn, this side only waits.
+  // ===========================================================================
+
+  describe('a member on another machine', () => {
+    const REMOTE_APP = 'app-remote'
+
+    function buildRemote(noteTurnEnded: (input: NoteTurnEndedInput) => void) {
+      seedTeam(store, { collabMode: 'free' })
+      store.addMember({
+        teamId: TEAM_ID, appId: REMOTE_APP, memberName: 'remote-analyst', role: 'Analyst',
+        isLead: false, aiProvisioned: false, addedAt: Date.now(), ownerNodeId: 'node-b', origin: 'remote',
+      })
+      const epoch = makeEpoch(store)
+      const { deps } = makeSession()
+      const completions: Array<(outcome: TurnCompletion) => void> = []
+      deps.deliverRemoteMessage = vi.fn((request) => { completions.push(request.onCompletion); return true })
+      const acts: unknown[] = []
+      bus = createMessageBus({
+        store,
+        recordActivity: (input) => { acts.push(input) },
+        hooks: {
+          wakeTarget: (p) => orchestration.wakeTarget(p),
+          isBusy: (k) => orchestration.isBusy(k),
+          deliverRemote: (p) => orchestration.deliverRemote(p),
+        },
+      })
+      const orchestration = createOrchestration({ store, bus, session: deps, hasPendingEscalation: () => false, noteTurnEnded })
+      return { epoch, deps, completions, acts }
+    }
+
+    it('reports a message that never became a turn there to the lead, with the reason, and still records it', async () => {
+      const noteTurnEnded = vi.fn()
+      const { epoch, deps, completions, acts } = buildRemote(noteTurnEnded)
+
+      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: RESEARCHER_APP, to: 'remote-analyst', message: 'Start the design', wait: false })
+      expect(deps.deliverRemoteMessage).toHaveBeenCalledTimes(1)
+      const correlationId = (deps.deliverRemoteMessage as ReturnType<typeof vi.fn>).mock.calls[0][0].teamContext.correlationId
+      completions[0]({ kind: 'undelivered', reason: 'owner-unreachable' })
+
+      expect(noteTurnEnded).toHaveBeenCalledTimes(1)
+      expect(noteTurnEnded).toHaveBeenCalledWith(expect.objectContaining({
+        appId: REMOTE_APP, teamId: TEAM_ID, epochId: epoch.id,
+        fate: { kind: 'never_ran', reason: 'owner-unreachable' },
+        correlationId, triggerKind: 'message', requestSummary: 'Start the design', requestFromAppId: RESEARCHER_APP,
+      }))
+      expect(noteTurnEnded.mock.calls[0][0].origin).toBeUndefined()
+      expect(acts).toContainEqual(expect.objectContaining({ kind: 'reply', status: 'undelivered', actorAppId: REMOTE_APP }))
+    })
+
+    it('tells the lead nothing about a wait this machine dropped while shutting down', async () => {
+      const noteTurnEnded = vi.fn()
+      const { epoch, completions } = buildRemote(noteTurnEnded)
+
+      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: RESEARCHER_APP, to: 'remote-analyst', message: 'Start the design', wait: false })
+      completions[0]({ kind: 'undelivered', reason: REMOTE_WAIT_ABANDONED_REASON })
+
+      expect(noteTurnEnded).not.toHaveBeenCalled()
+    })
+
+    it('leaves a turn that did run there to the owner, which describes its own endings', async () => {
+      const noteTurnEnded = vi.fn()
+      const { epoch, completions } = buildRemote(noteTurnEnded)
+
+      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: RESEARCHER_APP, to: 'remote-analyst', message: 'one', wait: false })
+      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: RESEARCHER_APP, to: 'remote-analyst', message: 'two', wait: false })
+      completions[0]({ kind: 'result', content: 'done' })
+      completions[1]({ kind: 'error', message: 'model refused' })
+
+      expect(noteTurnEnded).not.toHaveBeenCalled()
     })
   })
 
@@ -1635,10 +1681,10 @@ describe('TeamOrchestration', () => {
       expect(orch.getMemberStatus(RESEARCHER_APP)).toBe('working')
     })
 
-    it('restores the escalating turn\u2019s external origin on the resume wake', async () => {
-      // The sticky origin map does not survive a restart; the resume trigger is
-      // rebuilt from the persisted escalation record, so the flag must travel
-      // through resumeFromEscalation or the resumed turn runs permissive.
+    it('restores the asking turn\u2019s origin on the resume wake', async () => {
+      // The resume trigger is rebuilt from the persisted question, so the origin
+      // must travel through resumeFromEscalation or the resumed turn would serve
+      // an outside request with the owner's own reach.
       seedTeam(store, { collabMode: 'free', escalationRouting: 'user' })
       const epoch = makeEpoch(store)
       const { deps, pendings } = makeSession()
@@ -1651,14 +1697,32 @@ describe('TeamOrchestration', () => {
 
       const before = pendings.length
       const ok = await orch.resumeFromEscalation({
-        teamId: TEAM_ID, epochId: epoch.id, appId: RESEARCHER_APP, response: 'skip it', external: true,
+        teamId: TEAM_ID, epochId: epoch.id, appId: RESEARCHER_APP, response: 'skip it', origin: 'guest',
       })
       expect(ok).toBe(true)
       await flush()
 
       const resumeWake = pendings.slice(before).find((p) => p.conversationId === buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, epoch.id))
       expect(resumeWake).toBeTruthy()
-      expect(resumeWake!.teamContext.external).toBe(true)
+      expect(resumeWake!.teamContext.origin).toBe('guest')
+    })
+
+    it.each([
+      ['a run', null, 'colleague'],
+      ['an IM chat\u2019s conversation', 'inst-1:group:chat-9', 'guest'],
+    ] as const)('reads a question persisted before origins had kinds in %s', async (_label, chatKey, expected) => {
+      seedTeam(store, { collabMode: 'free', escalationRouting: 'user' })
+      const { deps, pendings } = makeSession()
+      const orch = build(deps)
+      const epoch = chatKey ? orch.ensureConversationEpoch(TEAM_ID, chatKey) : makeEpoch(store)
+
+      expect(await orch.resumeFromEscalation({
+        teamId: TEAM_ID, epochId: epoch.id, appId: RESEARCHER_APP, response: 'skip it', external: true,
+      })).toBe(true)
+      await flush()
+
+      const resumeWake = pendings.find((p) => p.conversationId === buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, epoch.id))
+      expect(resumeWake!.teamContext.origin).toBe(expected)
     })
 
     it('leaves a local escalation\u2019s resume wake unstamped', async () => {
@@ -1679,7 +1743,7 @@ describe('TeamOrchestration', () => {
       await flush()
 
       const resumeWake = pendings.slice(before).find((p) => p.conversationId === buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, epoch.id))
-      expect(resumeWake!.teamContext.external).toBeUndefined()
+      expect(resumeWake!.teamContext.origin).toBeUndefined()
     })
 
     it('the resume wake quotes the question it answers', async () => {
@@ -1877,6 +1941,19 @@ describe('TeamOrchestration', () => {
       const leadCtx = orch.buildPromptContext(TEAM_ID, LEAD_APP, EPOCH_ID)!
       const contactable = leadCtx.roster.filter((m) => m.contactable).map((m) => m.memberName).sort()
       expect(contactable).toEqual(['researcher', 'tester'])
+      // Ids name a request's sender; they are never rendered.
+      expect(leadCtx.roster.map((m) => m.appId).sort()).toEqual([RESEARCHER_APP, TESTER_APP].sort())
+      expect(buildTeamEntry(leadCtx)).not.toContain(RESEARCHER_APP)
+    })
+
+    it('names the IM chat a conversation serves, and nothing for any other piece of work', () => {
+      seedTeam(store)
+      const orch = build(makeSession().deps)
+      const chat = orch.ensureConversationEpoch(TEAM_ID, 'inst-1:direct:user-7')
+      const native = orch.ensureConversationEpoch(TEAM_ID, 'native:abc')
+      expect(orch.buildPromptContext(TEAM_ID, RESEARCHER_APP, chat.id)!.chatKey).toBe('inst-1:direct:user-7')
+      expect(orch.buildPromptContext(TEAM_ID, RESEARCHER_APP, native.id)!.chatKey).toBe('native:abc')
+      expect(orch.buildPromptContext(TEAM_ID, RESEARCHER_APP, 'missing')!.chatKey).toBeNull()
     })
 
     it('gives the member its team folder for the epoch its session serves', () => {

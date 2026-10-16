@@ -11,18 +11,17 @@ import { CrossConversationMessage } from './cross-conversation'
 
 interface ArrivalCardProps {
   message: Message
+  /** Row of the process timeline, which already draws the kind icon and the spacing. */
   inProcess?: boolean
-  /** Row of the live process timeline, which already draws the kind icon and the spacing. */
-  timeline?: boolean
 }
 
-export function ArrivalCard({ message, inProcess = false, timeline = false }: ArrivalCardProps) {
+export function ArrivalCard({ message, inProcess = false }: ArrivalCardProps) {
   return isTeamMessage(message)
-    ? <TeamMemberMessage message={message} inProcess={inProcess} timeline={timeline} />
-    : <CrossConversationMessage message={message} inProcess={inProcess} timeline={timeline} />
+    ? <TeamMemberMessage message={message} inProcess={inProcess} />
+    : <CrossConversationMessage message={message} inProcess={inProcess} />
 }
 
-/** Icon the live process timeline shows for an arrival of this kind. */
+/** Icon the process timeline shows for an arrival of this kind. */
 export function arrivalIcon(message: Message): typeof Users {
   return isTeamMessage(message) ? Users : Send
 }

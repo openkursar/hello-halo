@@ -15,7 +15,6 @@ import {
 import { getImPermissionContext } from './im-permission-registry'
 import { getAppChatConversationId } from '../../../shared/apps/im-keys'
 import { peekAppChatSink, type AppChatRoundHandle } from './app-chat-sink'
-import { peekTurnOrigin } from './team/external-origin'
 import { isBorrowedTeamTurn } from './capability-policy'
 
 interface PendingChatMessage {
@@ -35,7 +34,7 @@ const STOPPED_UNREAD = 'stopped before it was read'
 /** The owner's own words to this chat; anything a teammate, a reminder, a guest or another machine sent is not. */
 export function isPersonRequest(request: AppChatRequest): boolean {
   const team = request.teamContext
-  return (!team || (team.kind === 'human_message' && !team.external)) && !request.refreshBeforeDelivery
+  return (!team || (team.kind === 'human_message' && !team.origin)) && !request.refreshBeforeDelivery
     && !request.recorded?.provenance && request.imPermission?.isOwner !== false
 }
 
@@ -81,10 +80,8 @@ export function createAppChatDelivery(run: (request: AppChatRequest) => Promise<
     if (!disposed) gate.drain(conversationId)
   }
   const authorityOf = (request: AppChatRequest): string => {
-    const conversationId = request.conversationId ?? getAppChatConversationId(request.appId)
-    const external = request.teamContext ? peekTurnOrigin(conversationId, request.teamContext) : false
-    const borrowed = !!request.teamContext && isBorrowedTeamTurn(request.teamContext.kind, !!request.imSession, external)
-    return appChatMessageIdentity(request.imPermission, external, borrowed)
+    const team = request.teamContext
+    return appChatMessageIdentity(request.imPermission, team && isBorrowedTeamTurn(team, !!request.imSession) ? team.origin : undefined)
   }
   const stillRelevant = (message: PendingChatMessage): boolean => {
     if (message.cancelled) return false

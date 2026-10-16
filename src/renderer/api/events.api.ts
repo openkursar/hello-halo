@@ -22,6 +22,7 @@ import { enqueueReport } from './analytics-batch'
 import { isConversationDetailRetained, retainConversationDetail } from './conversation-visibility'
 import type { GoalUpdatedEvent } from '../../shared/types/goal'
 import type { ApiRetryEvent } from '../../shared/types/api-retry'
+import type { ModelCatalogChangedEvent } from '../../shared/types/ai-sources'
 import { isAgentInputArrivedEvent, isAgentInputStoppedEvent, type AgentInputArrivedEvent, type AgentInputStoppedEvent } from '../../shared/types/agent-input'
 
 export const eventsApi = {
@@ -82,6 +83,8 @@ export const eventsApi = {
     onEvent('remote:status-change', callback),
   onCredentialDecryptFailed: (callback: (data: unknown) => void) =>
     onEvent('credential:decrypt-failed', callback),
+  onModelCatalogChanged: (callback: (data: ModelCatalogChangedEvent) => void) =>
+    onEvent<ModelCatalogChangedEvent>('ai-sources:catalog-changed', callback),
 
   // ===== Server URL Management (Capacitor) =====
   setServerUrl,

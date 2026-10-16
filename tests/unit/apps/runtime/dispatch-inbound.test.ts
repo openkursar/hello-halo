@@ -736,8 +736,8 @@ describe('dispatchInboundMessage — team-backed binding', () => {
 //
 // The member fronting a chat answers to the same rules as a digital human's own
 // IM chat: the channel's permission control decides who is an owner, and its
-// guest policy holds everyone else. A guest's message is also stamped as coming
-// from outside, which is what carries the restriction on to teammates.
+// guest policy holds everyone else. A guest's message is also stamped as a
+// guest's, which is what carries the restriction on to teammates.
 // ============================================
 
 const TEAM_SESSION = 'app-chat:member-1:team:team-1:epoch-1'
@@ -745,8 +745,8 @@ const TEAM_SESSION = 'app-chat:member-1:team:team-1:epoch-1'
 describe('dispatchInboundMessage — owner/guest rules of a team-fronted chat', () => {
   const GUEST_POLICY = { allowedTools: ['Read'] }
 
-  function sentTeamContext(): { external?: boolean } | undefined {
-    return (sendAppChatMessageMock.mock.calls[0][0] as { teamContext?: { external?: boolean } }).teamContext
+  function sentTeamContext(): { origin?: string } | undefined {
+    return (sendAppChatMessageMock.mock.calls[0][0] as { teamContext?: { origin?: string } }).teamContext
   }
 
   beforeEach(() => {
@@ -762,7 +762,7 @@ describe('dispatchInboundMessage — owner/guest rules of a team-fronted chat', 
     expect(setImPermissionContext).toHaveBeenCalledWith(TEAM_SESSION, expect.objectContaining({
       senderId: 'u1', isOwner: false, guestPolicy: GUEST_POLICY, ownerIds: ['boss'],
     }))
-    expect(sentTeamContext()).toMatchObject({ kind: 'human_message', external: true })
+    expect(sentTeamContext()).toMatchObject({ kind: 'human_message', origin: 'guest' })
   })
 
   it('gives a listed owner full access, unstamped', async () => {
@@ -773,7 +773,7 @@ describe('dispatchInboundMessage — owner/guest rules of a team-fronted chat', 
     expect(setImPermissionContext).toHaveBeenCalledWith(TEAM_SESSION, expect.objectContaining({
       senderId: 'boss', isOwner: true, ownerIds: ['boss'],
     }))
-    expect(sentTeamContext()?.external).toBeUndefined()
+    expect(sentTeamContext()?.origin).toBeUndefined()
   })
 
   it('treats everyone as an owner when permission control is off, as a digital human chat does', async () => {
@@ -784,7 +784,7 @@ describe('dispatchInboundMessage — owner/guest rules of a team-fronted chat', 
     expect(setImPermissionContext).toHaveBeenCalledWith(TEAM_SESSION, expect.objectContaining({
       isOwner: true, guestPolicy: undefined, ownerIds: undefined,
     }))
-    expect(sentTeamContext()?.external).toBeUndefined()
+    expect(sentTeamContext()?.origin).toBeUndefined()
   })
 
   it('asks for an owner before serving a group when none is bound', async () => {

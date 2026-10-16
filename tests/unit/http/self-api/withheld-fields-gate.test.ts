@@ -30,6 +30,7 @@ import { resetScopeCache } from '../../../../src/main/http/self-api/scope'
 
 const ROUTES = ['/api/agent/message', '/api/apps/:appId/chat/send', '/api/apps/:appId/runs/:runId/inject']
 const REQUESTS = ['/api/agent/message', '/api/apps/app-1/chat/send', '/api/apps/app-1/runs/run-1/inject']
+const TRIGGERS_ROUTE = '/api/teams/:teamId/triggers'
 const references = [{ id: 'r', source: { kind: 'path', path: '/tmp/a', isDirectory: false } }]
 
 let server: Server
@@ -47,7 +48,7 @@ beforeAll(async () => {
   app.use(rejectNonApi)
   app.use('/api', selfApiAuthMiddleware)
   app.use('/api', rejectWithheldFields)
-  for (const route of ROUTES) {
+  for (const route of [...ROUTES, TRIGGERS_ROUTE]) {
     app.post(route, (req, res) => {
       reached.push(req.originalUrl)
       res.json({ success: true })
@@ -103,5 +104,19 @@ describe('withheld fields behind the scope gate', () => {
       expect([400, 404], path).toContain(status)
     }
     expect(reached).toEqual([])
+  })
+
+  it('refuses a team webhook trigger under every spelling, where a schedule passes', async () => {
+    reached.length = 0
+    const path = '/api/teams/team-1/triggers'
+    expect((await post(path, { trigger: { sourceType: 'schedule', config: { every: '1h' } } })).status).toBe(200)
+    const webhook = { trigger: { sourceType: 'webhook', config: { path: 'deploys', secret: 's3cret' } } }
+    const refused = await post(path, webhook)
+    expect(refused.status).toBe(400)
+    expect(refused.body).toMatchObject({ code: 'halo.self_api.field_not_accepted', field: 'trigger.sourceType', value: 'webhook' })
+    for (const spelling of otherSpellings(path)) {
+      expect([400, 404], spelling).toContain((await post(spelling, webhook)).status)
+    }
+    expect(reached).toEqual([path])
   })
 })

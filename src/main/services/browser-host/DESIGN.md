@@ -8,7 +8,10 @@ page state; AI contexts continue to own their page permissions and CDP sessions.
 
 Pages that a user can watch or take over are attached to the main renderer from
 creation. Pages that can never be displayed use one lazily created hidden host.
-A page never moves between hosts, and its webview DOM node is never reparented.
+The caller picks the host from whether anyone can watch the page (see the
+ai-browser design, "Context Model"); this module never infers it, and never
+moves a page to the other host on its own. A page never moves between hosts
+after creation, and its webview DOM node is never reparented.
 Parking changes its geometry and input visibility without removing the element.
 React viewers may unmount: they borrow a presentation surface, not the guest.
 Existing canvas budgets and AI session release rules determine actual destruction.
@@ -33,6 +36,28 @@ loading external content. Attachment has a bounded timeout; close, host reload
 and shutdown reject pending creation and release records exactly once. A guest
 renderer crash retains its WebContents so an ordinary reload can recover it.
 
+Main-host attachment is the step that depends on the main window. On Windows it
+has been seen to time out for every new page for over an hour while nobody was
+at the computer, then recover by itself; one guest attached and never produced
+its initial document, so the stall can lie on the guest side, not only in the
+host renderer. Work nobody watches therefore never uses the main host. The
+hidden host and its guests run with background throttling off, so they are
+never marked hidden, whatever the main window's state.
+
+A main-window attachment that times out, is refused while that renderer
+restarts, or is released by its reload or crash rejects with
+`MainHostAttachError`; nothing was wrong with the page, so a caller that need
+not display it may create it again in the hidden host (closing a page, or the
+window closing for good, rejects with a plain error). After a main-window
+timeout `isMainHostStalled()` stays true until a page attaches there, its
+renderer reports ready again, or the window is shown, restored or focused —
+callers able to open a page elsewhere skip it meanwhile instead of waiting out
+another timeout. Entering and leaving that state logs once each, the periodic
+state line carries it, and the timeout warning records how far the attachment
+got (`queued` before the host renderer received it, `sent`, `will-attach`,
+`did-attach` with the guest's process id and whether it is alive) and whether
+its window was visible or minimized.
+
 ## Transport and recovery
 
 BrowserHostBridge is desktop-only. The hidden host has a dedicated minimal preload
@@ -53,13 +78,16 @@ with `browserHostManager` (`manager.ts`). Each caller has an independent
 preparation timeout and may supply an abort signal and an absolute deadline
 covering preparation plus work. Callers sharing a guest share its preparation and
 original throttling policy; different guests sharing a host share the host's
-throttling lease. A caller that joins after a shared preparation failed starts a
-new preparation instead of inheriting that failure.
+throttling lease, so a hidden-host page never touches the main window's. A
+caller that joins after a shared preparation failed starts a new preparation
+instead of inheriting that failure.
 
 The last caller releases both policies even when the renderer has not acknowledged
 frame readiness. Cancelling one caller never releases another caller's frames.
 Host preparation has its own five-second fallback, and its release cancels the
-readiness timer and signal listener. The caller still guards commands after any
+readiness timer and signal listener. That fallback expiring is the one frame
+failure logged (page, host, window visibility, whether the page was displayed);
+an acknowledged, cancelled or released preparation logs nothing. The caller still guards commands after any
 await: cancelling a returned promise cannot cancel an already-issued native
 operation or page script.
 

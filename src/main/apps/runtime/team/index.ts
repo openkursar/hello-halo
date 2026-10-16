@@ -35,6 +35,7 @@ import type {
   RosterBusyEntry,
   TeamCheck,
   TeamDelegatedPolicy,
+  TeamRequestOrigin,
   TeamToolAudit,
   TeamTriggerContext,
 } from '../../../../shared/apps/team-types'
@@ -288,7 +289,9 @@ export interface TeamRuntime {
     response: string
     /** Several may be open at once; without it an answer binds to the wrong one. */
     question?: string
-    /** The escalating turn ran with external origin (persisted with the escalation). */
+    /** The request the asking turn served, persisted with the question. */
+    origin?: TeamRequestOrigin
+    /** A question persisted before origins had kinds (see `legacyExternalOrigin`). */
     external?: boolean
   }): Promise<boolean>
 }
@@ -773,6 +776,6 @@ export { createBoardDigest } from './board-digest'
 export type { BoardDigest } from './board-digest'
 export { createBoardArchive } from './board-archive'
 export type { BoardArchive } from './board-archive'
-export { createTurnReport } from './turn-report'
-export type { TurnReport, MemberTurnFate, NoteTurnEndedInput } from './turn-report'
+export { createTurnReport, readTurnEndReport, renderTurnEndReport } from './turn-report'
+export type { TurnReport, NoteTurnEndedInput } from './turn-report'
 export { renderBoardMarkdown } from './board-render'

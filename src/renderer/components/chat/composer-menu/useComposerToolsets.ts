@@ -11,7 +11,6 @@ import { useEffect } from 'react'
 import { useToolsetsStore, type ToolsetStatus } from '../../../stores/toolsets.store'
 import { useChatStore, selectActiveConversationId } from '../../../stores/chat.store'
 import { useSpaceStore } from '../../../stores/space.store'
-import { DEFAULT_TOOLSETS } from '../../../../shared/constants/toolsets'
 
 const EMPTY: ToolsetStatus[] = []
 const HIGHLIGHT_MS = 2400
@@ -26,8 +25,6 @@ interface Options {
 
 export interface ComposerToolsets {
   list: ToolsetStatus[]
-  /** Enabled beyond the defaults — the only toolset state worth showing at rest. */
-  extraEnabled: ToolsetStatus[]
   requested: ReadonlySet<string>
   toggle: (toolset: ToolsetStatus) => void
 }
@@ -69,7 +66,6 @@ export function useComposerToolsets({ enabled, panelOpen, onRequested }: Options
 
   return {
     list,
-    extraEnabled: list.filter((ts) => ts.open && !DEFAULT_TOOLSETS.includes(ts.id)),
     requested: aiRequested ?? new Set<string>(),
     toggle: (ts) => {
       if (!active) return

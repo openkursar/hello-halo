@@ -5,6 +5,7 @@
 import { useCallback } from 'react'
 import { create } from 'zustand'
 import { api } from '../api'
+import { canvasLifecycle } from '../services/canvas-lifecycle'
 import { useChatStore } from './chat.store'
 import { useConversationListPrefs } from './conversation-list-prefs.store'
 import type { Space, CreateSpaceInput, SpacePreferences } from '../types'
@@ -204,6 +205,9 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
       const response = await api.deleteSpace(spaceId)
 
       if (response.success) {
+        // Before the fallback below is entered, so the deleted space's tabs are not parked.
+        void canvasLifecycle.forgetSpace(spaceId)
+
         // Remove from spaces list
         set((state) => ({
           spaces: state.spaces.filter((s) => s.id !== spaceId)
@@ -241,6 +245,7 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
       const response = await api.forgetSpace(spaceId)
 
       if (response.success) {
+        void canvasLifecycle.forgetSpace(spaceId)
         set((state) => ({
           spaces: state.spaces.filter((s) => s.id !== spaceId)
         }))

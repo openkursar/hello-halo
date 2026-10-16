@@ -96,6 +96,7 @@ vi.mock('../../../../src/main/services/agent/helpers', () => ({
   getDbMcpServers: vi.fn(),
 }))
 vi.mock('../../../../src/main/services/agent/sdk-config', () => ({
+  markMcpServerSettings: (server: unknown) => server,
   resolveCredentialsForSdk: vi.fn(),
   buildUserSessionSdkOptions: vi.fn(),
 }))

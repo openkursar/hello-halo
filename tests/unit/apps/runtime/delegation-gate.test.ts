@@ -1,10 +1,9 @@
 /**
- * The per-call gate, and where a request is judged to have come from.
+ * The per-call gate.
  *
- * Two properties carry the whole design, and both are about a session outliving
- * the turn that built it: a turn must be judged by ITS OWN terms rather than by
- * whoever used the conversation last, and work a stranger set in motion must
- * keep counting as theirs through every hop and wake it causes here.
+ * The property that carries the design is about a session outliving the turn
+ * that built it: a turn must be judged by ITS OWN terms rather than by whoever
+ * used the conversation last.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
@@ -15,21 +14,12 @@ import {
   recordExecutedTool,
   summarizeToolInput,
 } from '../../../../src/main/apps/runtime/delegation-gate'
-import {
-  forgetTurnOrigin,
-  resolveTurnOrigin,
-} from '../../../../src/main/apps/runtime/team/external-origin'
-import type { TeamToolAudit, TeamTriggerContext } from '../../../../src/shared/apps/team-types'
+import type { TeamToolAudit } from '../../../../src/shared/apps/team-types'
 
 const CONV = 'app-chat:worker:team:t1:e1'
 
-function trigger(over: Partial<TeamTriggerContext> = {}): TeamTriggerContext {
-  return { teamId: 't1', epochId: 'e1', correlationId: 'c1', fromAppId: null, wait: false, ...over }
-}
-
 beforeEach(() => {
   clearDelegation(CONV)
-  forgetTurnOrigin(CONV)
 })
 
 describe('a conversation nobody is borrowing', () => {
@@ -181,43 +171,6 @@ describe('the owner’s record of it', () => {
     })
 
     expect(() => decideDelegatedTool(CONV, 'Bash', { command: 'ls' })).not.toThrow()
-  })
-})
-
-describe('where the work was asked for', () => {
-  it('takes a stamped request at its word', () => {
-    expect(resolveTurnOrigin(CONV, trigger({ kind: 'message', external: true }))).toBe(true)
-  })
-
-  it('reads an unstamped message from a person as the owner at their keyboard', () => {
-    // A person on another machine reaches the member through the office
-    // endpoint, which stamps the message before it gets this far.
-    expect(resolveTurnOrigin(CONV, trigger({ kind: 'human_message' }))).toBe(false)
-  })
-
-  it('keeps counting a stranger’s request as theirs when the runtime wakes the member again', () => {
-    // The bypass this closes: ask for something that needs a decision, wait for
-    // the owner to answer their own digital human's question, and the turn that
-    // resumes the work would otherwise run with the owner's own reach.
-    resolveTurnOrigin(CONV, trigger({ kind: 'message', external: true }))
-
-    expect(resolveTurnOrigin(CONV, trigger({ kind: 'message' }))).toBe(true)
-    expect(resolveTurnOrigin(CONV, trigger({ kind: 'periodic_check' }))).toBe(true)
-    expect(resolveTurnOrigin(CONV, trigger({ kind: 'member_stopped' }))).toBe(true)
-  })
-
-  it('hands the thread back once the owner types into it', () => {
-    resolveTurnOrigin(CONV, trigger({ kind: 'message', external: true }))
-    expect(resolveTurnOrigin(CONV, trigger({ kind: 'human_message' }))).toBe(false)
-    expect(resolveTurnOrigin(CONV, trigger({ kind: 'periodic_check' }))).toBe(false)
-  })
-
-  it('keeps threads apart', () => {
-    const other = 'app-chat:worker:team:t1:e2'
-    resolveTurnOrigin(CONV, trigger({ kind: 'message', external: true }))
-
-    expect(resolveTurnOrigin(other, trigger({ kind: 'message' }))).toBe(false)
-    forgetTurnOrigin(other)
   })
 })
 

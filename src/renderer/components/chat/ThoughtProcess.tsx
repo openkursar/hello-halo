@@ -1,38 +1,15 @@
 /**
- * ThoughtProcess - Displays agent reasoning process in real-time
- * Shows thinking, tool usage, and intermediate results as they happen
- *
- * TodoWrite is rendered separately at the bottom (above "processing...")
- * to keep it always visible and avoid duplicate renders
+ * ThoughtProcess - the thought process of a reply while it runs: opens itself
+ * when the work starts, follows the newest step, and names what the agent is
+ * doing. Drawn by ThoughtPanel, the same as the saved process after the turn.
  */
 
-import { useState, useRef, useEffect, useMemo, memo, type RefObject } from 'react'
-import {
-  CheckCircle2,
-  AlertTriangle,
-  ChevronDown,
-  ChevronUp,
-  Loader2,
-  Braces,
-} from 'lucide-react'
+import { useState, useRef, useEffect, useMemo, memo } from 'react'
 import { TodoCard } from '../tool/TodoCard'
 import { describeThoughtActivity, parseTodoInput } from '../../utils/thought-activity'
-import { ToolResultViewer } from './tool-result'
-import { SubAgentTimeline } from './SubAgentTimeline'
-import { ArrivalCard, arrivalIcon } from './ArrivalCard'
-import { isArrivalThought, workSeconds } from './transcript'
-import { ErrorContent } from './ErrorContent'
-import {
-  getThoughtIcon,
-  getThoughtColor,
-  getThoughtLabelKey,
-  getToolFriendlyFormat,
-  nextThoughtPanelModel,
-  NO_CHILD_THOUGHTS,
-  type ThoughtPanelModel,
-} from './thought-utils'
+import { ThoughtPanel, ThoughtSteps } from './ThoughtPanel'
+import { nextThoughtPanelModel, type ThoughtPanelModel } from './thought-utils'
 import { useSmartScroll } from '../../hooks/useSmartScroll'
-import { useLazyVisible } from '../../hooks/useLazyVisible'
 import type { Thought } from '../../types'
 import { useTranslation } from '../../i18n'
 
@@ -45,270 +22,6 @@ interface ThoughtProcessProps {
    */
   embedded?: boolean
 }
-
-// How long the finished reasoning took, measured between its first and last
-// step. Derived from the steps themselves rather than from the clock at render
-// time: a duration read off `Date.now()` keeps growing every time the panel
-// re-renders, so a long-finished turn silently inflates on screen.
-function elapsedSeconds(thoughts: Thought[]): string {
-  return Math.max(0, workSeconds(thoughts)).toFixed(1)
-}
-
-// Individual thought item (for non-special tools)
-const ThoughtItem = memo(function ThoughtItem({ thought, isLast, allThoughts, isThinking }: { thought: Thought; isLast: boolean; allThoughts?: Thought[]; isThinking?: boolean }) {
-  const [showRawJson, setShowRawJson] = useState(false)
-  const [showResult, setShowResult] = useState(true)  // Tool result collapsed by default shows summary
-  const [isContentExpanded, setIsContentExpanded] = useState(false)  // For thinking content expand
-  const { t } = useTranslation()
-  const color = getThoughtColor(thought.type, thought.isError)
-  const Icon = getThoughtIcon(thought.type, thought.toolName)
-
-  if (isArrivalThought(thought)) {
-    const ArrivalIcon = arrivalIcon(thought.arrival)
-    return (
-      <div className="flex gap-3 group animate-fade-in">
-        <div className="flex flex-col items-center">
-          <div className="w-7 h-7 rounded-full flex items-center justify-center bg-primary/10 text-primary">
-            <ArrivalIcon size={14} />
-          </div>
-          {!isLast && <div className="w-0.5 flex-1 bg-border/30 mt-1" />}
-        </div>
-        <div className="flex-1 pb-4 min-w-0">
-          <div className="rounded-lg border border-border-soft bg-muted/15 overflow-hidden">
-            <ArrivalCard message={thought.arrival} inProcess timeline />
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  // Determine content and display mode based on thought type and streaming state
-  const isStreaming = thought.isStreaming ?? false
-  const isToolReady = thought.isReady ?? true  // Default true for backward compatibility
-  const hasToolResult = thought.type === 'tool_use' && thought.toolResult
-
-  // For tool_use: show friendly format when ready, "Generating..." when streaming
-  // For thinking: show content directly with streaming placeholder
-  let displayContent = ''
-  let needsTruncate = false
-  const maxPreviewLength = 150
-
-  if (thought.type === 'tool_use') {
-    if (!isToolReady) {
-      // Tool still streaming - status shown in header, content shows placeholder
-      displayContent = '...'
-    } else {
-      // Tool ready - show friendly format
-      displayContent = getToolFriendlyFormat(thought.toolName || '', thought.toolInput)
-    }
-    needsTruncate = displayContent.length > maxPreviewLength
-  } else if (thought.type === 'thinking') {
-    // Thinking content - show with placeholder if empty
-    displayContent = thought.content || (isStreaming ? '...' : '')
-    needsTruncate = displayContent.length > maxPreviewLength
-  } else if (thought.type === 'tool_result') {
-    displayContent = (thought.toolOutput || '').substring(0, 200)
-    needsTruncate = displayContent.length > maxPreviewLength
-  } else {
-    displayContent = thought.content || ''
-    needsTruncate = displayContent.length > maxPreviewLength
-  }
-
-  // Always truncate content - use JSON button to see full content
-  const truncatedContent = needsTruncate ? displayContent.substring(0, maxPreviewLength) : displayContent
-
-  // Status indicator for tool_use - now includes execution status
-  // Tool errors use warning style instead of error style (red) because
-  // these are internal AI feedback (e.g. "read file first"), not user-facing errors.
-  // The AI will auto-recover from these, so a softer visual treatment avoids misleading users.
-  const getToolStatus = () => {
-    if (thought.type !== 'tool_use') return null
-    // Tokens by default; `theme-dark:` sets the dark hues.
-    if (!isToolReady) return { label: t('Generating'), color: 'text-halo-warning theme-dark:text-amber-400', icon: 'loading' }
-    if (hasToolResult) {
-      return thought.toolResult!.isError
-        ? { label: t('Hint'), color: 'text-halo-warning', icon: 'warning' }
-        : { label: t('Done'), color: 'text-halo-success theme-dark:text-green-400', icon: 'success' }
-    }
-    return { label: t('Running'), color: 'text-primary theme-dark:text-blue-400', icon: 'running' }
-  }
-  const toolStatus = getToolStatus()
-
-
-  return (
-    <div className="flex gap-3 group animate-fade-in">
-      {/* Timeline line */}
-      <div className="flex flex-col items-center">
-        <div className={`w-7 h-7 rounded-full flex items-center justify-center ${
-          thought.isError || thought.toolResult?.isError ? 'bg-halo-warning/20' : isStreaming ? 'bg-primary/20' : 'bg-primary/10'
-        } ${thought.toolResult?.isError ? 'text-amber-500' : color}`}>
-          {hasToolResult ? (
-            thought.toolResult!.isError ? <AlertTriangle size={14} /> : <CheckCircle2 size={14} />
-          ) : (
-            <Icon size={14} />
-          )}
-        </div>
-        {!isLast && (
-          <div className="w-0.5 flex-1 bg-border/30 mt-1" />
-        )}
-      </div>
-
-      {/* Content */}
-      <div className="flex-1 pb-4 min-w-0">
-        {/* Header */}
-        <div className="flex items-center gap-2 mb-1">
-          <span className={`text-xs font-medium ${thought.toolResult?.isError ? 'text-amber-500' : color}`}>
-            {(() => {
-              const label = getThoughtLabelKey(thought.type)
-              return label === 'AI' ? label : t(label)
-            })()}
-            {thought.toolName && ` - ${thought.toolName}`}
-          </span>
-          {toolStatus && (
-            <span className={`text-xs ${toolStatus.color}`}>
-              {toolStatus.label}
-            </span>
-          )}
-          {/* Time - hidden on mobile */}
-          <span className="hidden sm:inline text-xs text-muted-foreground/50">
-            {new Date(thought.timestamp).toLocaleTimeString('zh-CN', {
-              hour: '2-digit',
-              minute: '2-digit',
-              second: '2-digit'
-            })}
-          </span>
-          {/* Duration - hidden on mobile */}
-          {thought.duration && (
-            <span className="hidden sm:inline text-xs text-muted-foreground/40">
-              ({(thought.duration / 1000).toFixed(1)}s)
-            </span>
-          )}
-        </div>
-
-        {/* Content area with actions on the right */}
-        <div className="flex items-end gap-3">
-          {/* Content - takes available space */}
-          <div className="flex-1 min-w-0">
-            {thought.type === 'error' ? (
-              thought.content && <ErrorContent content={thought.content} />
-            ) : (
-              displayContent && (
-                <div
-                  className={`text-sm ${
-                    thought.type === 'thinking' ? 'text-muted-foreground/70 italic' : 'text-foreground/80'
-                  } whitespace-pre-wrap break-words`}
-                >
-                  {isContentExpanded || !needsTruncate ? displayContent : truncatedContent + '...'}
-                  {(thought.type === 'thinking' || thought.type === 'text') && needsTruncate && (
-                    <button
-                      onClick={() => setIsContentExpanded(!isContentExpanded)}
-                      className="ml-1 text-primary hover:underline not-italic"
-                    >
-                      {isContentExpanded ? t('Collapse') : t('Expand')}
-                    </button>
-                  )}
-                </div>
-              )
-            )}
-          </div>
-
-          {/* Actions - right aligned, compact buttons */}
-          {((thought.type === 'tool_use' && isToolReady && thought.toolInput && Object.keys(thought.toolInput).length > 0) || hasToolResult) && (
-            <div className="flex items-center gap-0.5 shrink-0 text-[9px]">
-              {/* Raw JSON button */}
-              {thought.type === 'tool_use' && isToolReady && thought.toolInput && Object.keys(thought.toolInput).length > 0 && (
-                <button
-                  onClick={() => setShowRawJson(!showRawJson)}
-                  className={`
-                    flex items-center gap-0.5 px-1 py-px rounded transition-colors
-                    ${showRawJson
-                      ? 'bg-primary/20 text-primary'
-                      : 'text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50'
-                    }
-                  `}
-                  title={showRawJson ? t('Hide raw JSON') : t('Show raw JSON')}
-                >
-                  <Braces size={10} />
-                </button>
-              )}
-
-              {/* Show/Hide result button */}
-              {hasToolResult && thought.toolResult!.output && (
-                <button
-                  onClick={() => setShowResult(!showResult)}
-                  className="flex items-center gap-0.5 px-1 py-px rounded text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50 transition-colors"
-                  title={showResult ? t('Hide tool result') : t('Show tool result')}
-                >
-                  {showResult ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
-                  {showResult ? 'Hide' : 'Result'}
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Raw JSON display (for tool_use) */}
-        {thought.type === 'tool_use' && showRawJson && thought.toolInput && (
-          <pre className="mt-2 p-2 rounded bg-muted/30 text-xs text-muted-foreground overflow-x-auto">
-            {JSON.stringify(thought.toolInput, null, 2)}
-          </pre>
-        )}
-
-        {/* Tool result display (merged under tool_use) - Smart rendering */}
-        {hasToolResult && showResult && thought.toolResult!.output && (
-          <ToolResultViewer
-            toolName={thought.toolName || ''}
-            toolInput={thought.toolInput}
-            output={thought.toolResult!.output}
-            isError={thought.toolResult!.isError}
-          />
-        )}
-
-        {/* Sub-agent nested timeline for Task/Agent tool calls */}
-        {thought.type === 'tool_use' && (thought.toolName === 'Task' || thought.toolName === 'Agent') && allThoughts && (
-          <SubAgentTimeline
-            thoughts={allThoughts}
-            parentToolUseId={thought.id}
-            taskProgress={thought.taskProgress}
-            isThinking={isThinking ?? false}
-          />
-        )}
-      </div>
-    </div>
-  )
-})
-
-// Lazy wrapper: defers rendering of ThoughtItem until it enters the scroll viewport.
-// Once visible, stays rendered permanently (no unmount on scroll-away).
-// Estimated height placeholder prevents layout jumps.
-const THOUGHT_ITEM_ESTIMATED_HEIGHT = 60
-
-// Memoized so a streamed delta re-renders only the step it changed.
-const LazyThoughtItem = memo(function LazyThoughtItem({
-  thought,
-  isLast,
-  scrollContainerRef,
-  eager = false,
-  allThoughts,
-  isThinking,
-}: {
-  thought: Thought
-  isLast: boolean
-  scrollContainerRef: RefObject<HTMLDivElement | null>
-  eager?: boolean
-  allThoughts?: Thought[]
-  isThinking?: boolean
-}) {
-  const [ref, isVisible] = useLazyVisible('200px', scrollContainerRef, eager)
-
-  if (isVisible) {
-    return <ThoughtItem thought={thought} isLast={isLast} allThoughts={allThoughts} isThinking={isThinking} />
-  }
-
-  return (
-    <div ref={ref} style={{ minHeight: THOUGHT_ITEM_ESTIMATED_HEIGHT }} />
-  )
-})
 
 // Memoized: a text delta changes neither prop, and this panel can hold hundreds of steps.
 export const ThoughtProcess = memo(function ThoughtProcess({ thoughts, isThinking, embedded = false }: ThoughtProcessProps) {
@@ -343,20 +56,18 @@ export const ThoughtProcess = memo(function ThoughtProcess({ thoughts, isThinkin
     [isThinking, thoughts]
   )
 
-  const elapsed = useMemo(() => elapsedSeconds(thoughts), [thoughts])
-
   // Timeline steps, sub-agent groups, the latest todo list and the error count,
   // re-derived only for the steps that changed since the previous render.
   const modelRef = useRef<ThoughtPanelModel | null>(null)
-  const { display: displayThoughts, childGroups, latestTodo, errorCount } = useMemo(() => {
-    const model = nextThoughtPanelModel(modelRef.current, thoughts)
-    modelRef.current = model
-    return model
+  const model = useMemo(() => {
+    const next = nextThoughtPanelModel(modelRef.current, thoughts)
+    modelRef.current = next
+    return next
   }, [thoughts])
 
   // Only one TodoCard, at the bottom, for the latest TodoWrite call.
-  const latestTodoInput = latestTodo?.toolInput
-  const latestTodos = useMemo(() => (latestTodoInput ? parseTodoInput(latestTodoInput) : null), [latestTodoInput])
+  const latestTodoInput = model.latestTodo?.toolInput
+  const todos = useMemo(() => (latestTodoInput ? parseTodoInput(latestTodoInput) : null), [latestTodoInput])
 
   // Smart auto-scroll: only scrolls when user is at bottom
   // Stops auto-scroll when user scrolls up to read history.
@@ -371,161 +82,36 @@ export const ThoughtProcess = memo(function ThoughtProcess({ thoughts, isThinkin
     behavior: 'auto',
   })
 
-  // Don't render if no thoughts and not thinking
   if (thoughts.length === 0 && !isThinking) {
     return null
   }
 
-  // Check if there's content to show in the scrollable area
-  const hasDisplayContent = displayThoughts.length > 0
-  // A turn shows "thinking" before its first step exists, and some turns never
-  // emit one — gate the expand affordance so the header isn't clickable into
-  // an empty body.
-  const hasBodyContent = hasDisplayContent || (latestTodos?.length ?? 0) > 0
-
-  // Built only where shown: a collapsed panel must not pay for hundreds of steps per render.
-  const renderSteps = () => displayThoughts.map((thought, index) => {
-    const isLast = index === displayThoughts.length - 1 && !latestTodos && !isThinking
-    // Last 3 items render eagerly (near the scroll bottom where the
-    // user is watching during streaming). The rest lazy-load via IO.
-    // Using a single component type for all items avoids React
-    // unmount/remount when an item shifts from "recent" to "old"
-    // as new thoughts arrive — which previously caused 1-2 frame flicker.
-    const isRecentItem = index >= displayThoughts.length - 3
-    // Task/Agent thoughts need their sub-agent steps for SubAgentTimeline
-    const isTaskThought = thought.type === 'tool_use' && (thought.toolName === 'Task' || thought.toolName === 'Agent')
-    return (
-      <LazyThoughtItem
-        key={thought.id}
-        thought={thought}
-        isLast={isLast}
-        scrollContainerRef={contentRef}
-        eager={isRecentItem}
-        allThoughts={isTaskThought ? childGroups.get(thought.id) ?? NO_CHILD_THOUGHTS : undefined}
-        isThinking={isTaskThought ? isThinking : undefined}
-      />
-    )
-  })
-  const todoCard = latestTodos && latestTodos.length > 0
-    ? <TodoCard todos={latestTodos} isAgentActive={isThinking} />
-    : null
-
-  // `contentRef` stays unattached here: the host scrolls, so lazy steps observe the viewport.
   if (embedded) {
-    if (!hasBodyContent) return null
+    const hasSteps = model.display.length > 0
+    const hasTodos = (todos?.length ?? 0) > 0
+    if (!hasSteps && !hasTodos) return null
+    // The host scrolls, so lazy steps observe the viewport.
     return (
       <div className="animate-fade-in thought-content">
-        {renderSteps()}
-        {todoCard && <div className={hasDisplayContent ? 'pt-2' : ''}>{todoCard}</div>}
+        <ThoughtSteps steps={model.display} childGroups={model.childGroups} live={isThinking} hasTodos={hasTodos} />
+        {hasTodos && <div className={hasSteps ? 'pt-2' : ''}><TodoCard todos={todos!} isAgentActive={isThinking} /></div>}
       </div>
     )
   }
 
-  const header = (
-    <>
-      {/* Status indicator */}
-      {isThinking ? (
-        <Loader2 size={16} className="text-primary animate-spin" />
-      ) : (
-        <CheckCircle2
-          size={16}
-          className={errorCount > 0 ? 'text-destructive' : 'text-primary'}
-        />
-      )}
-
-      {/* Title: action summary when thinking, "Thought process" when done */}
-      <span className={`text-sm font-medium ${isThinking ? 'text-primary' : 'text-foreground'}`}>
-        {actionSummary ? t(actionSummary.key, actionSummary.params) : t('Already thought')}
-      </span>
-
-      {/* Stats: only show elapsed time when thinking is complete */}
-      {!isThinking && (
-        <div className="flex items-center gap-1.5 text-xs text-muted-foreground/60">
-          <span>{elapsed}s</span>
-        </div>
-      )}
-
-      {/* Spacer */}
-      <div className="flex-1" />
-
-      {/* Expand icon */}
-      {hasBodyContent && (
-        <ChevronDown
-          size={16}
-          className={`text-muted-foreground transition-transform duration-200 ${isExpanded ? '' : '-rotate-90'}`}
-        />
-      )}
-    </>
-  )
-
   return (
-    <div className="animate-fade-in mb-4">
-      {/* `bg-card/80` in every state: fully translucent tints (the old
-          `bg-card/30`) were indistinguishable from `--background` in the
-          light theme, a percent of lightness apart — but fully opaque reads
-          identical to the reply bubble right below it. 80% keeps it visibly
-          lighter than the page while still reading as its own layer, not
-          the reply. State rides on the border. */}
-      <div
-        className={`
-          relative rounded-xl border overflow-hidden transition-all duration-300 bg-card/80
-          ${isThinking
-            ? 'border-primary/40'
-            : errorCount > 0
-              ? 'border-destructive/40'
-              : 'border-border-faint'
-          }
-        `}
-      >
-        {/* Header */}
-        {hasBodyContent ? (
-          <button
-            onClick={() => setIsExpanded(!isExpanded)}
-            className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-secondary/60 transition-colors"
-          >
-            {header}
-          </button>
-        ) : (
-          <div className="w-full flex items-center gap-3 px-4 py-3 text-left">{header}</div>
-        )}
-
-        {/* Content */}
-        {isExpanded && hasBodyContent && (
-          <div className="border-t border-border/30 thought-content">
-            {/* Scrollable thought items */}
-            {hasDisplayContent && (
-              <div
-                ref={contentRef}
-                onScroll={handleScroll}
-                className={`px-4 pt-3 ${isMaximized ? 'max-h-[80vh]' : 'max-h-[300px]'} overflow-auto scrollbar-overlay transition-all duration-200`}
-              >
-                {renderSteps()}
-              </div>
-            )}
-
-            {/* TodoCard - fixed at bottom, only one instance */}
-            {todoCard && (
-              <div className={`px-4 ${hasDisplayContent ? 'pt-2' : 'pt-3'} pb-3`}>
-                {todoCard}
-              </div>
-            )}
-
-            {/* Maximize toggle - bottom right, heuristic: show when likely to overflow */}
-            {(displayThoughts.length > 8 || isMaximized) && (
-              <div className="flex justify-end px-4 pb-2">
-                <button
-                  onClick={() => setIsMaximized(!isMaximized)}
-                  className="flex items-center gap-0.5 px-1 py-px rounded text-xs text-muted-foreground/40 hover:text-muted-foreground hover:bg-muted/50 transition-colors"
-                  title={isMaximized ? t('Compact view') : t('Full view')}
-                >
-                  {isMaximized ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-                  {isMaximized ? 'Compact' : 'Full'}
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
+    <ThoughtPanel
+      className="animate-fade-in mb-4"
+      model={model}
+      todos={todos}
+      isThinking={isThinking}
+      activity={actionSummary ? t(actionSummary.key, actionSummary.params) : undefined}
+      isExpanded={isExpanded}
+      onToggleExpanded={() => setIsExpanded(!isExpanded)}
+      isMaximized={isMaximized}
+      onToggleMaximized={() => setIsMaximized(!isMaximized)}
+      scrollRef={contentRef}
+      onScroll={handleScroll}
+    />
   )
 })

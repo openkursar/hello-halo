@@ -378,3 +378,54 @@ describe('ctrl-feed — an addressee that never subscribed', () => {
     expect(delivery.pendingWakes).toBe(1)
   })
 })
+
+describe('ctrl-feed — forgetting a peer refused admission', () => {
+  let db: DatabaseManager
+  let feed: CtrlFeed
+  let sent: Array<{ to: string; frame: FeedSyncFrame }>
+
+  beforeEach(() => {
+    db = createDatabaseManager(':memory:')
+    db.runMigrations(db.getAppDatabase(), MIGRATION_NAMESPACE, migrations)
+    sent = []
+    feed = createCtrlFeed({
+      officeId: OFFICE,
+      selfNodeId: AUTH,
+      feedStore: new FeedStore(db.getAppDatabase()),
+      sendToPeer: (peer, frame) => sent.push({ to: peer, frame }),
+      onWake: () => {},
+      onTurnComplete: () => {},
+      retransmitIntervalMs: 0,
+    })
+    // Wired both ways, as any frame from a not-yet-decided peer does; the peer
+    // never answers, so the subscription is re-asked on every tick.
+    feed.subscribePeer(OWNER)
+    feed.ensurePeerSubscribed(OWNER)
+  })
+
+  afterEach(() => db.closeAll())
+
+  const ticks = (n: number) => {
+    for (let i = 0; i < n; i++) feed.retransmitTick()
+  }
+
+  it('keeps asking a silent peer for its stream while it is not forgotten', () => {
+    sent = []
+    ticks(3)
+    expect(sent.filter((s) => s.to === OWNER && s.frame.kind === 'feed-subscribe').length).toBeGreaterThan(0)
+  })
+
+  it('sends it nothing once forgotten — not even the goodbye an unsubscribe would send', () => {
+    sent = []
+    feed.forgetPeer(OWNER)
+    ticks(30)
+    expect(sent).toEqual([])
+  })
+
+  it('subscribes afresh when the peer is admitted later', () => {
+    feed.forgetPeer(OWNER)
+    sent = []
+    feed.subscribePeer(OWNER)
+    expect(sent.map((s) => [s.to, s.frame.kind])).toEqual([[OWNER, 'feed-subscribe']])
+  })
+})

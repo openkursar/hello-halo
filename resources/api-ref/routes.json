@@ -61,6 +61,10 @@
   },
   {
     "method": "POST",
+    "path": "/api/ai-sources/refresh-stale-catalogs"
+  },
+  {
+    "method": "POST",
     "path": "/api/model-capabilities/resolve",
     "group": "settings"
   },
@@ -915,119 +919,148 @@
   },
   {
     "method": "GET",
-    "path": "/api/teams"
+    "path": "/api/teams",
+    "group": "team"
   },
   {
     "method": "POST",
-    "path": "/api/teams"
+    "path": "/api/teams",
+    "group": "team"
   },
   {
     "method": "POST",
-    "path": "/api/teams/propose-members"
+    "path": "/api/teams/propose-members",
+    "group": "team"
   },
   {
     "method": "GET",
-    "path": "/api/teams/collab-for-conversation/:conversationId"
+    "path": "/api/teams/collab-for-conversation/:conversationId",
+    "group": "team"
   },
   {
     "method": "POST",
-    "path": "/api/teams/:teamId/save-collab"
+    "path": "/api/teams/:teamId/save-collab",
+    "group": "team"
   },
   {
     "method": "GET",
-    "path": "/api/teams/:teamId"
+    "path": "/api/teams/:teamId",
+    "group": "team"
   },
   {
     "method": "GET",
-    "path": "/api/teams/:teamId/detail"
+    "path": "/api/teams/:teamId/detail",
+    "group": "team"
   },
   {
     "method": "GET",
-    "path": "/api/teams/:teamId/chat-messages"
+    "path": "/api/teams/:teamId/chat-messages",
+    "group": "team"
   },
   {
     "method": "POST",
-    "path": "/api/teams/:teamId/members/:appId/send"
+    "path": "/api/teams/:teamId/members/:appId/send",
+    "group": "team"
   },
   {
     "method": "POST",
-    "path": "/api/teams/:teamId/members/:appId/stop"
+    "path": "/api/teams/:teamId/members/:appId/stop",
+    "group": "team"
   },
   {
     "method": "GET",
-    "path": "/api/teams/:teamId/artifacts"
+    "path": "/api/teams/:teamId/artifacts",
+    "group": "team"
   },
   {
     "method": "GET",
-    "path": "/api/teams/:teamId/conversations"
+    "path": "/api/teams/:teamId/conversations",
+    "group": "team"
   },
   {
     "method": "POST",
-    "path": "/api/teams/:teamId/conversations"
+    "path": "/api/teams/:teamId/conversations",
+    "group": "team"
   },
   {
     "method": "PATCH",
-    "path": "/api/teams/:teamId/conversations/:epochId"
+    "path": "/api/teams/:teamId/conversations/:epochId",
+    "group": "team"
   },
   {
     "method": "DELETE",
-    "path": "/api/teams/:teamId/conversations/:epochId"
+    "path": "/api/teams/:teamId/conversations/:epochId",
+    "group": "team"
   },
   {
     "method": "GET",
-    "path": "/api/teams/:teamId/epochs"
+    "path": "/api/teams/:teamId/epochs",
+    "group": "team"
   },
   {
     "method": "GET",
-    "path": "/api/teams/:teamId/epochs/:epochId/board"
+    "path": "/api/teams/:teamId/epochs/:epochId/board",
+    "group": "team"
   },
   {
     "method": "GET",
-    "path": "/api/teams/:teamId/epochs/:epochId/artifacts"
+    "path": "/api/teams/:teamId/epochs/:epochId/artifacts",
+    "group": "team"
   },
   {
     "method": "PATCH",
-    "path": "/api/teams/:teamId"
+    "path": "/api/teams/:teamId",
+    "group": "team"
   },
   {
     "method": "DELETE",
-    "path": "/api/teams/:teamId"
+    "path": "/api/teams/:teamId",
+    "group": "team"
   },
   {
     "method": "POST",
-    "path": "/api/teams/:teamId/members"
+    "path": "/api/teams/:teamId/members",
+    "group": "team"
   },
   {
     "method": "PATCH",
-    "path": "/api/teams/:teamId/members/:appId"
+    "path": "/api/teams/:teamId/members/:appId",
+    "group": "team"
   },
   {
     "method": "DELETE",
-    "path": "/api/teams/:teamId/checks/:checkId"
+    "path": "/api/teams/:teamId/checks/:checkId",
+    "group": "team"
   },
   {
     "method": "DELETE",
-    "path": "/api/teams/:teamId/members/:appId"
+    "path": "/api/teams/:teamId/members/:appId",
+    "group": "team"
   },
   {
     "method": "PUT",
-    "path": "/api/teams/:teamId/edges"
+    "path": "/api/teams/:teamId/edges",
+    "group": "team"
   },
   {
     "method": "POST",
-    "path": "/api/teams/:teamId/run"
+    "path": "/api/teams/:teamId/run",
+    "group": "team"
   },
   {
     "method": "POST",
-    "path": "/api/teams/:teamId/pause"
+    "path": "/api/teams/:teamId/pause",
+    "group": "team"
   },
   {
     "method": "GET",
-    "path": "/api/teams/:teamId/triggers"
+    "path": "/api/teams/:teamId/triggers",
+    "group": "team"
   },
   {
     "method": "POST",
-    "path": "/api/teams/:teamId/triggers"
+    "path": "/api/teams/:teamId/triggers",
+    "group": "team"
   },
   {
     "method": "POST",
@@ -1043,15 +1076,18 @@
   },
   {
     "method": "POST",
-    "path": "/api/teams/:teamId/leave"
+    "path": "/api/teams/:teamId/leave",
+    "group": "team"
   },
   {
     "method": "GET",
-    "path": "/api/teams/:teamId/federation/presence"
+    "path": "/api/teams/:teamId/federation/presence",
+    "group": "team"
   },
   {
     "method": "DELETE",
-    "path": "/api/teams/:teamId/triggers/:triggerId"
+    "path": "/api/teams/:teamId/triggers/:triggerId",
+    "group": "team"
   },
   {
     "method": "POST",

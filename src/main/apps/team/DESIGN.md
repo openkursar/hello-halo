@@ -61,14 +61,35 @@ else:
   this column and is deliberately kept out of the app spec it provisions, since
   a copy frozen in the system prompt could never be reached by the owner's later
   edits and would leave the member holding two conflicting job descriptions.
-- `delegated_policy_json` — what a teammate may make it do. **Never
-  replicated**: it guards one person's machine, so only that machine needs it.
-  How NULL reads depends on which machine asked — a request that started here
-  is unrestricted by it, one that entered from outside is granted nothing it
-  does not name (see `apps/runtime/team/DESIGN.md` § "How strictly a borrowed
-  turn reads silence"). The invite and join screens write a preset into it at
-  the moment a team first crosses machines, so in practice it is set before any
-  stranger can ask anything.
+- `delegated_policy_json` — what a request from another machine may make it
+  do. **Never replicated**: it guards one person's machine, so only that machine
+  needs it. The owner's own digital humans are never held to it. How it reads is
+  the runtime's (see `apps/runtime/team/DESIGN.md`): NULL, or a policy granting
+  everything (`grantsEverything`), lends a colleague's request the owner's own
+  reach; anything else is read strictly. The settings screen shows exactly that
+  reading.
+
+  A team **crosses machines** once it was joined from elsewhere, holds a member
+  from another machine, or an invite to it was ever created — revoked or
+  expired ones too (`crossesMachines`, projected as `TeamDetail.crossesMachines`;
+  the invite ledger is injected as `hasIssuedInvite`). Every member of this node
+  that becomes reachable from another machine is given a policy someone chose:
+  the first invite saves the screen's answer (read-only by default) for every
+  local member once the call that may create the link returns, unless it
+  answers that it created none (Remote Access off; `first-invite.ts` in the
+  renderer); joining saves it for the brought members, whose rows
+  `materializeJoinedOffice` first writes read-only so the moment between join
+  and that save lends nothing; a member added to a team that already crosses
+  machines carries the answer chosen while adding
+  (`TeamMemberInput.delegatedPolicy`), or read-only when none was given — the
+  lead a saved collaboration provisions on its first run included
+  (`startingDelegatedPolicy`).
+
+  Rows written before these writes existed keep what they hold, NULL included:
+  on a team that already crossed machines that NULL lends a colleague's request
+  everything, which is what the settings screen shows. Nothing rewrites them
+  without the owner — an invite on such a team saves only an answer the owner
+  clicks.
 - `accepts_checks` — the single bit of that policy other nodes do need, so a
   teammate is refused a periodic check early and readably instead of at the far
   end. Derived from the policy on write.

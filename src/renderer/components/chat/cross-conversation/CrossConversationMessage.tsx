@@ -33,13 +33,14 @@ const FRESH_DELIVERY_MS = 5_000
 
 interface CrossConversationMessageProps {
   message: Message
-  /** Received while a reply was being written: drawn as a row of that reply's process. */
+  /**
+   * Received while a reply was being written: drawn as a row of that reply's
+   * process timeline, which supplies the icon and the row spacing.
+   */
   inProcess?: boolean
-  /** Drawn inside the live process timeline, which supplies the icon and the row spacing. */
-  timeline?: boolean
 }
 
-export function CrossConversationMessage({ message, inProcess = false, timeline = false }: CrossConversationMessageProps) {
+export function CrossConversationMessage({ message, inProcess = false }: CrossConversationMessageProps) {
   const { t } = useTranslation()
   const provenance = readProvenance(message)
 
@@ -122,7 +123,7 @@ export function CrossConversationMessage({ message, inProcess = false, timeline 
 
   if (inProcess) {
     return (
-      <div className={`w-full min-w-0 ${timeline ? '' : 'border-b border-border-faint'}`} data-message-id={message.id}>
+      <div className="w-full min-w-0" data-message-id={message.id}>
         <button
           onClick={() => setIsExpanded(v => !v)}
           aria-expanded={isExpanded}
@@ -132,11 +133,6 @@ export function CrossConversationMessage({ message, inProcess = false, timeline 
             size={12}
             className={`shrink-0 text-muted-foreground/60 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
           />
-          {!timeline && (
-            <span className="shrink-0 w-4 h-4 rounded-[5px] flex items-center justify-center bg-primary/15 text-primary">
-              <Send size={9} />
-            </span>
-          )}
           <span className="max-w-[55%] truncate text-xs font-medium text-muted-foreground">
             {t('From @{{title}}:', { title: displayTitle })}
           </span>

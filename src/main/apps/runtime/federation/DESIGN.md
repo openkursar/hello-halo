@@ -54,7 +54,11 @@ office it joined; both wrap a `Federation` (coordinator + link).
   feeds inbound frames to the coordinator.
 - `ws-federation-client.ts` — joiner-side outbound WS client. Thin transport
   (no join/presence semantics), exponential backoff, per-plane bounded queues
-  (`plane-queue.ts`; control → stream → feed → artifact priority drain).
+  (`plane-queue.ts`; control → stream → feed → artifact priority drain). A
+  session the consumer marks refused (`markRefused`) sends nothing more, and if
+  the far side ends it at once, the next connect waits the consumer's delay
+  (`retryRefused` brings that forward). One the far side keeps open is pinged
+  every 30 s; a ping still unanswered at the next one ends it.
 - `plane-queue.ts` — the outbound queue both the joiner client and the gateway
   attachment use. Planes and their bounds come from ONE source,
   `src/shared/federation/planes.json`; the Go gateway's
@@ -289,10 +293,13 @@ speaks exactly `FEDERATION_PROTOCOL_VERSION`
 join that carries no version at all is admitted: every socket-borne join sets
 one, so only an in-process link omits it. `isSameProtocol` in `protocol-m2.ts`
 is the single place where this gate decision is made. Keep the gate there, and
-keep it small. A refused node that keeps its socket open is not in the office
-until a join of its is admitted: the host drops its other frames (heartbeats
-included, so it goes suspect → offline as usual) and never wires its ctrl
-feed, so no wake is pushed to a node that cannot answer it.
+keep it small. A refused node is not in the office until a join of its is
+admitted, on a LAN session and over the relay alike: the host drops its other
+frames (heartbeats included, so it goes suspect → offline as usual; the health
+line counts them as `refusedDropped`) and, once
+`handleJoinOnHost` sees the refusal, forgets it on the ctrl feed both ways
+(`CtrlFeed.forgetPeer`). No wake is pushed to a node that cannot answer it, and
+nothing an earlier frame of its subscribed keeps being re-asked of it.
 
 Both `join-reject` and `join-grant` always carry the sender's own `pv`
 (`types.ts`), so whichever side is refused can tell which one is actually
@@ -314,6 +321,47 @@ IPC/HTTP response already carries `detail` structurally (both routes pass the
 controller's result through unchanged), but the one-time manual "join a team"
 dialog (`TeamJoinDialog.tsx`) does not read it yet and still shows the plain
 generic message on `VERSION_INCOMPATIBLE`.
+
+**Refused joins.** A joiner whose join is refused, for any reason, is outside
+the office until a grant (`JoinedOffice.refusal`). Its presence FSM judges
+nobody meanwhile — an office that refuses us goes silent, and that silence must
+not start an election. The log says it once (one `join refused` line; the
+health line counts the rest) and the user hears it once: from the join's caller
+when the join was still pending (startup recovery, the join dialog), otherwise
+through `onOfficeAccessLost`. The refused session sends nothing further
+(`WsFederationClient.markRefused`). The gateway ends a member's session as it
+relays any join-reject (`gateway/internal/room/room.go`); under the 1–30 s
+reconnect backoff, which every re-auth reset, each reconnect re-drove the join
+and a refusal came back about once a second, all day. The next connect waits
+`REFUSED_JOIN_RETRY_MS` instead, doubling per refusal up to 10 minutes: from 5
+minutes for a version gap (only an update and restart closes it), from 30
+seconds otherwise (a refused credential can clear on the far side, e.g. once an
+elected authority holds the replicated roster). A credential refused at the
+socket (`auth:failed`) still stops the client for good.
+
+Three things ask sooner, because they say the answer may have changed. A LAN
+host keeps a refused session open, so its restart — most likely onto the
+matching version — drops it and the client reconnects at once. An authority
+whose grant this node refused for its version keeps the session too, believing
+us admitted. Such a session carries nothing, so the client pings it every 30 s; a
+drop whose FIN never arrived (the host lost power, or ended the connection while
+this machine slept) surfaces as a reset on the next ping or as a ping still
+unanswered at the one after, and the close reconnects as usual. Someone reading
+the office (`noteOfficeViewed`, from `TeamService.getTeamDetail`: the team page
+and status questions) asks again if the latest try is over a minute old. The
+refusing node seen on our protocol version — admitted to an office hosted here,
+or granting us another office — makes its version-refused offices ask at once.
+The gateway sends members nothing when a host returns, and a refused member has
+no session there to hear it anyway. An early try only moves a parked reconnect
+forward or re-sends the join on a held session, after its caller returns; a try
+met by the same refusal emits no event, so a page that reloads on events cannot
+turn it into a loop. A grant ends the period (`onOfficeAccessRestored` → office
+status `resumed`, which retires the sticky "needs an update" notice), and the
+session it arrived on carries frames again (`markAdmitted`; a second join in
+flight can be granted on the session that refused the first). A new
+version here means a restart, and a manual join builds a fresh client; either
+tries immediately. On the host, a node's refusals are logged in full once and
+then as one count per 10 minutes.
 
 The exact gate (2026-10-03) replaced a negotiated range (current 3, minimum 3)
 with 4, so builds from before it (2.1.16-dev.0-rc.35 and earlier) and builds
@@ -384,16 +432,24 @@ Shared per-node state (all keyed by officeId): `hosted`, `joined`,
   forwarding to another owner allocates its own correlation id, then returns the
   original receipt to the original peer. Each outgoing receipt waiter binds its
   office and expected peer before dispatch, so another peer cannot resolve it.
-  **The permission-aware gate is on the OWNER.** `runLocalTurn` stamps every
-  arriving request as external and resolves the member's local workspace, then
-  calls app-chat's common mailbox. Equal-authority work joins a running turn;
+  **The permission-aware gate is on the OWNER.** `runLocalTurn` marks where each
+  arriving request came from (`withExternalOrigin`: a colleague's, or a guest's
+  where the frame narrows to one; a turn-end notice with readable facts to the
+  lead is the runtime's own — team DESIGN "Where a request came from"), reading
+  the team's lead and the piece of work from this node's records, and resolves
+  the member's local workspace, then calls app-chat's common mailbox. Equal-authority work joins a running turn;
   other work waits as a merged following turn. Sender-side roster state is never
-  a lock or a permission source.
+  a lock or a permission source. A paused digital human is not refused: pausing
+  stops only its own scheduled and event runs, the same rule as on its own machine.
   Asynchronous messages bypass the sender's turn reservation and concurrency
   semaphore, so every message reaches the owner immediately. They retain internal
   per-correlation completion observers over the durable control feed: successful
   delivery clears the observer and busy overlay; admission errors and failures
-  reach the sender and become failure records. The sending AI need not wait for
+  reach the sender and become failure records, and a wake that never ran is
+  reported to the lead from the sending side, as for a local member (team DESIGN
+  "Output is not delivery"). Waits still open when this node stops its federation
+  are settled with `REMOTE_WAIT_ABANDONED_REASON`; their outcome is unknown, so
+  they are not reported to the lead. The sending AI need not wait for
   that receipt. Relaying through an authority preserves failures instead of
   converting them into an empty successful answer.
   Live delivery keeps protocol version 4. Coalescing keys and original transcript

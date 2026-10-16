@@ -458,7 +458,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     //    pages open in the main window and the live-session tray names them
     //    after the digital human; every other run stays in the hidden host.
     scopedBrowserCtx = usesAIBrowser
-      ? createScopedBrowserContext(trigger.watchable ? { conversationId: runSender, spaceId: app.spaceId! } : undefined)
+      ? createScopedBrowserContext(trigger.watchable ? { liveView: { conversationId: runSender, spaceId: app.spaceId! } } : undefined)
       : undefined
 
     // ── 4. Create MCP servers ──────────────────────────────

@@ -7,6 +7,9 @@ import {
   REQUEST_SUMMARY_LIMIT,
   REMOTE_FLUSH_WINDOW_MS,
   MAX_TIMED_RETRIES,
+  FACTS_PER_NOTICE,
+  readTurnEndReport,
+  renderTurnEndReport,
 } from '../../../../../src/main/apps/runtime/team/turn-report'
 import type { TurnReport } from '../../../../../src/main/apps/runtime/team/turn-report'
 import type { MessageBus } from '../../../../../src/main/apps/runtime/team/message-bus'
@@ -37,7 +40,7 @@ function makeStore(members: FakeMember[], opts?: { sealed?: boolean }) {
 }
 
 function makeBus() {
-  const wakes: { toAppId: string; body: string; kind?: string; external?: boolean }[] = []
+  const wakes: { toAppId: string; body: string; kind?: string; origin?: string; turnEnded?: unknown }[] = []
   const tripExternal = vi.fn()
   const bus = {
     deliverRuntimeWake: vi.fn(async (params: any) => {
@@ -45,7 +48,8 @@ function makeBus() {
         toAppId: params.envelope.toAppId,
         body: params.envelope.body,
         kind: params.trigger.kind,
-        external: params.trigger.external,
+        origin: params.trigger.origin,
+        turnEnded: params.trigger.turnEnded,
       })
       return 'dispatched'
     }),
@@ -108,7 +112,7 @@ const LOCAL_TEAM: FakeMember[] = [
 
 describe('turn-end report', () => {
   let bus: MessageBus
-  let wakes: { toAppId: string; body: string; kind?: string; external?: boolean }[]
+  let wakes: { toAppId: string; body: string; kind?: string; origin?: string; turnEnded?: unknown }[]
   let tripExternal: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
@@ -210,32 +214,47 @@ describe('turn-end report', () => {
     expect(wakes[0].body).toContain('moved "draft outline"')
   })
 
-  it('a notice about work that entered from outside wakes the lead as outside work', async () => {
+  it('a notice about what a guest\u2019s request produced wakes the lead as the guest\u2019s, for that wake only', async () => {
     const report = makeReport(LOCAL_TEAM, bus)
     runTurn(report, 'app-writer', [], {
-      appId: 'app-writer', teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' }, external: true,
+      appId: 'app-writer', teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' }, origin: 'guest',
     })
     await vi.waitFor(() => expect(wakes).toHaveLength(1))
     expect(wakes[0].kind).toBe('member_stopped')
-    expect(wakes[0].external).toBe(true)
+    expect(wakes[0].origin).toBe('guest')
+
+    runTurn(report, 'app-writer', [])
+    await vi.waitFor(() => expect(wakes).toHaveLength(2))
+    expect(wakes[1].origin).toBeUndefined()
+  })
+
+  it('a notice about a colleague\u2019s request is the lead\u2019s to weigh with the owner\u2019s reach', async () => {
+    const report = makeReport(LOCAL_TEAM, bus)
+    runTurn(report, 'app-writer', [], {
+      appId: 'app-writer', teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' }, origin: 'colleague',
+    })
+    await vi.waitFor(() => expect(wakes).toHaveLength(1))
+    expect(wakes[0].origin).toBeUndefined()
   })
 
   it('a notice about work started here carries no outside origin', async () => {
     const report = makeReport(LOCAL_TEAM, bus)
     runTurn(report, 'app-writer', [])
     await vi.waitFor(() => expect(wakes).toHaveLength(1))
-    expect(wakes[0].external).toBeUndefined()
+    expect(wakes[0].origin).toBeUndefined()
+    // A lead on this machine reads the notice it is handed; nothing to render elsewhere.
+    expect(wakes[0].turnEnded).toBeUndefined()
   })
 
-  it('keeps owner and external endings separate for permission-aware delivery', async () => {
+  it('keeps a guest\u2019s endings apart from the rest for permission-aware delivery', async () => {
     const report = makeReport(LOCAL_TEAM, bus)
-    runTurn(report, 'app-writer', [])
+    runTurn(report, 'app-writer', [], { appId: 'app-writer', teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' }, origin: 'colleague' })
     runTurn(report, 'app-editor', [], {
-      appId: 'app-editor', teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' }, external: true,
+      appId: 'app-editor', teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' }, origin: 'guest',
     })
     await vi.waitFor(() => expect(wakes).toHaveLength(2))
-    expect(wakes[0].external).toBeUndefined()
-    expect(wakes[1].external).toBe(true)
+    expect(wakes[0].origin).toBeUndefined()
+    expect(wakes[1].origin).toBe('guest')
     expect(wakes[0].body).not.toContain('editor —')
     expect(wakes[1].body).not.toContain('writer —')
   })
@@ -512,6 +531,64 @@ describe('turn-end notices to a lead on another machine', () => {
     expect(lineFor(wakes[1].body, 'editor')).toContain('stopped with no error reported')
     expect(lineFor(wakes[1].body, 'writer')).toContain('cut off for running past the turn time limit')
     report.clearEpoch(EPOCH)
+  })
+
+  it('sends the facts with the notice, so the lead\u2019s machine renders it in its own words', async () => {
+    const { bus } = makeBus()
+    const triggers: any[] = []
+    vi.mocked(bus.deliverRuntimeWake).mockImplementation(async (params: any) => {
+      triggers.push(params.trigger)
+      expect(params.envelope.body).toBe(renderTurnEndReport(params.trigger.turnEnded))
+      return 'remote_accepted'
+    })
+    const report = makeReport(REMOTE_LEAD_TEAM, bus)
+    runTurn(report, 'app-writer', [], {
+      appId: 'app-writer', teamId: TEAM, epochId: EPOCH, fate: { kind: 'error', message: 'boom' },
+      triggerKind: 'message', requestSummary: 'do it', finalReply: 'partly', requestFromAppId: 'app-editor',
+    })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(triggers).toHaveLength(1)
+    expect(readTurnEndReport(triggers[0].turnEnded)).toEqual(triggers[0].turnEnded)
+    expect(triggers[0].turnEnded.endings[0]).toEqual(expect.objectContaining({ memberName: 'writer', fate: { kind: 'error', message: 'boom' } }))
+    // Who asked stays on this machine: the facts describe the ending only.
+    expect(JSON.stringify(triggers[0].turnEnded)).not.toContain('app-editor')
+    report.clearEpoch(EPOCH)
+  })
+})
+
+describe('a turn-end report that arrived from another machine', () => {
+  const ending = { memberName: 'writer', fate: { kind: 'ended' }, did: [] as string[] }
+
+  it('is read only in the shape this machine writes', () => {
+    expect(readTurnEndReport({ endings: [ending], dropped: 0 })).toEqual({ endings: [ending], dropped: 0 })
+    for (const bad of [
+      null, 'text', { endings: [], dropped: 0 }, { endings: [ending] }, { endings: [ending], dropped: -1 },
+      { endings: [{ ...ending, fate: { kind: 'completed' } }], dropped: 0 },
+      { endings: [{ ...ending, fate: { kind: 'error' } }], dropped: 0 },
+      { endings: [{ ...ending, memberName: '' }], dropped: 0 },
+      { endings: [{ ...ending, did: 'everything' }], dropped: 0 },
+      { endings: [{ ...ending, did: ['a', 'b', 'c', 'd', 'e', 'f'] }], dropped: 0 },
+      { endings: Array.from({ length: FACTS_PER_NOTICE + 1 }, () => ending), dropped: 0 },
+    ]) {
+      expect(readTurnEndReport(bad)).toBeNull()
+    }
+  })
+
+  it('cuts every free-text field to this machine\u2019s own bounds, whatever the sender cut', () => {
+    const long = 'x'.repeat(5000)
+    const read = readTurnEndReport({
+      endings: [{
+        memberName: long, fate: { kind: 'error', message: long }, did: [long],
+        requestSummary: long, finalReply: long,
+      }],
+      dropped: 0,
+    })!
+    const [only] = read.endings
+    expect(Array.from(only.requestSummary!)).toHaveLength(REQUEST_SUMMARY_LIMIT)
+    expect(Array.from(only.finalReply!)).toHaveLength(FINAL_REPLY_LIMIT)
+    expect(only.memberName.length).toBeLessThanOrEqual(120)
+    expect(only.did![0].length).toBeLessThanOrEqual(160)
+    expect(only.fate.kind === 'error' && only.fate.message.length).toBeLessThanOrEqual(501)
   })
 })
 

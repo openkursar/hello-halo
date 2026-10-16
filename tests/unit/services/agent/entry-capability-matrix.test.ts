@@ -512,7 +512,7 @@ const ROW_DRIVERS = {
       imSession: { channel: 'wecom-bot', chatType: 'group', displayName: 'Ops', sessionId: 'inst:ops' },
       teamContext: {
         teamId: 'team-1', epochId: 'epoch-im', kind: 'human_message', fromAppId: null, wait: false,
-        correlationId: 'c-im', external: true,
+        correlationId: 'c-im', origin: 'guest',
       },
     })).finally(() => clearImPermissionContext(FRONTED_KEY()))
   }),

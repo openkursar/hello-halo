@@ -184,6 +184,11 @@ export function registerConfigHandlers(): void {
       }
     },
 
+    refreshStaleModelCatalogs: async () => {
+      void getAISourceManager().refreshStaleCatalogs('picker')
+      return { success: true }
+    },
+
     // ===== AI Sources CRUD (atomic operations) =====
     // These handlers read from disk before writing, ensuring rotating tokens are never overwritten.
 

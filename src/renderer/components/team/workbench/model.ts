@@ -2,7 +2,7 @@ import { compareTaskTimes, taskTime } from './time'
 import { inputsByReply } from '../../chat/transcript'
 import type { Message, Thought } from '../../../types'
 import type { ActivityEntry } from '../../../../shared/apps/app-types'
-import type { TeamActivity, TeamConversation } from '../../../../shared/apps/team-types'
+import type { BlackboardFinding, BlackboardTask, RosterMember, TeamActivity, TeamConversation } from '../../../../shared/apps/team-types'
 
 export type TaskGroup = 'attention' | 'involved' | 'mine' | 'other' | 'reception' | 'automatic'
 export const taskGroups: TaskGroup[] = ['attention', 'mine', 'involved', 'other', 'reception', 'automatic']
@@ -20,6 +20,17 @@ export function visibleTasks(tasks: TeamConversation[]): TeamConversation[] {
   return tasks.filter(task => task.kind !== 'member').sort((a, b) => compareTaskTimes(a.lastActivityAt, b.lastActivityAt, true) || a.epochId.localeCompare(b.epochId))
 }
 
+/**
+ * Sender and intended recipient of a message that did not arrive. A failed
+ * fate (`reply`) is filed under the member the message never reached.
+ */
+export function undeliveredParties(activity: TeamActivity): { senderAppId: string | null; recipientAppId: string | null } | null {
+  if (activity.status !== 'undelivered') return null
+  return activity.kind === 'reply'
+    ? { senderAppId: activity.targetAppId, recipientAppId: activity.actorAppId }
+    : { senderAppId: activity.actorAppId, recipientAppId: activity.targetAppId }
+}
+
 export function activityLevel(activity: TeamActivity): 'attention' | 'result' | 'process' | 'message' {
   if (['undelivered', 'timeout', 'error', 'escalation'].includes(activity.status ?? '')) return 'attention'
   if (activity.kind === 'message' || activity.kind === 'reply') return 'process'
@@ -30,6 +41,65 @@ export function activityLevel(activity: TeamActivity): 'attention' | 'result' | 
 export interface TaskMemberReport {
   appId: string
   message: Message
+}
+
+/**
+ * Members with a trace in this task: a record naming them, work assigned to or
+ * filed by them, a report of theirs already read, a decision of theirs, or work
+ * running for it now. No trace proves nothing, so it only lowers how loudly an
+ * unreadable member is mentioned (see `reportGaps`).
+ */
+export function taskParticipants(input: {
+  epochId: string
+  activities: readonly TeamActivity[]
+  tasks: readonly BlackboardTask[]
+  findings: readonly BlackboardFinding[]
+  roster: readonly RosterMember[]
+  reports: readonly TaskMemberReport[]
+  memberAppIds: readonly string[]
+}): Set<string> {
+  const ids = new Set(input.memberAppIds)
+  for (const act of input.activities) {
+    ids.add(act.actorAppId)
+    if (act.targetAppId) ids.add(act.targetAppId)
+  }
+  for (const task of input.tasks) {
+    ids.add(task.createdByAppId)
+    if (task.assigneeAppId) ids.add(task.assigneeAppId)
+  }
+  for (const finding of input.findings) ids.add(finding.authorAppId)
+  for (const report of input.reports) ids.add(report.appId)
+  for (const member of input.roster) if (member.busy?.some(row => row.epochId === input.epochId)) ids.add(member.appId)
+  return ids
+}
+
+export interface ReportGaps {
+  /** Members of this task whose owner's computer is offline, grouped by owner. */
+  offline: Array<{ owner: string | null; members: string[] }>
+  /** Members whose reports could not be read although their computer is reachable. */
+  failed: string[]
+  /** Owners of members with no trace in this task whose computers are offline. */
+  elsewhere: Array<string | null>
+}
+
+/**
+ * Whose reports cannot be shown, and how loudly to say so. A member that took
+ * part, or that failed while reachable, is a warning; an offline member with no
+ * trace in this task is only named, never left to read as having said nothing.
+ */
+export function reportGaps(unavailable: readonly string[], roster: readonly RosterMember[], participants: ReadonlySet<string>): ReportGaps {
+  const missing = new Set(unavailable)
+  const offline = new Map<string | null, string[]>()
+  const failed: string[] = []
+  const elsewhere = new Set<string | null>()
+  for (const member of roster) {
+    if (!missing.has(member.appId)) continue
+    const owner = member.owner?.trim() || null
+    if (member.sameMachine !== false || member.presence !== 'offline') failed.push(member.memberName)
+    else if (participants.has(member.appId)) offline.set(owner, [...(offline.get(owner) ?? []), member.memberName])
+    else elsewhere.add(owner)
+  }
+  return { offline: [...offline].map(([owner, members]) => ({ owner, members })), failed, elsewhere: [...elsewhere] }
 }
 
 export interface ExecutionTurn {

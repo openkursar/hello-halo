@@ -30,6 +30,22 @@ beforeAll(async () => {
     received.push(req.body)
     res.json({ success: true })
   })
+  app.post('/api/teams', (req, res) => {
+    received.push(req.body)
+    res.json({ success: true })
+  })
+  app.post('/api/teams/:teamId/members', (req, res) => {
+    received.push(req.body)
+    res.json({ success: true })
+  })
+  app.patch('/api/teams/:teamId/members/:appId', (req, res) => {
+    received.push(req.body)
+    res.json({ success: true })
+  })
+  app.post('/api/teams/:teamId/triggers', (req, res) => {
+    received.push(req.body)
+    res.json({ success: true })
+  })
   await new Promise<void>((resolve) => {
     server = app.listen(0, '127.0.0.1', () => resolve())
   })
@@ -104,6 +120,69 @@ describe('self-API withheld body fields', () => {
     }
     expect(received).toHaveLength(spellings.length)
   })
+
+  it('refuses a member\'s delegated policy on every team write that carries one', async () => {
+    received.length = 0
+    const policy = { allowedTools: ['Bash'] }
+    const create = await post('/api/teams', {
+      input: { name: 't', members: [{ appId: 'a' }, { appId: 'b', delegatedPolicy: policy }] },
+    })
+    expect(create.status).toBe(400)
+    expect(create.body).toMatchObject({ field: 'input.members[].delegatedPolicy' })
+    const add = await post('/api/teams/t1/members', { appId: 'a', delegatedPolicy: policy })
+    expect(add.status).toBe(400)
+    expect(add.body).toMatchObject({ field: 'delegatedPolicy' })
+    // null would clear the owner's choice, which is just as much theirs to make.
+    const res = await fetch(`${base}/api/teams/t1/members/a`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ duty: 'x', delegatedPolicy: null }),
+    })
+    expect(res.status).toBe(400)
+    expect(received).toHaveLength(0)
+
+    expect((await post('/api/teams', { input: { name: 't', members: [{ appId: 'a' }] } })).status).toBe(200)
+    expect((await post('/api/teams/t1/members', { appId: 'a', duty: 'x' })).status).toBe(200)
+    expect(received).toHaveLength(2)
+  })
+
+  describe('a team trigger', () => {
+    const webhook = { sourceType: 'webhook', config: { path: 'deploys', secret: 's3cret' }, enabled: true }
+
+    it('refuses a webhook, added or changed, naming the value rather than the field', async () => {
+      received.length = 0
+      for (const body of [
+        { trigger: webhook },
+        { trigger: { ...webhook, config: { path: 'deploys' } }, triggerId: 'trg-1' },
+        { trigger: { ...webhook, enabled: false }, triggerId: 'trg-1' },
+      ]) {
+        const { status, body: reply } = await post('/api/teams/t1/triggers', body)
+        expect(status).toBe(400)
+        expect(reply).toMatchObject({
+          success: false, code: 'halo.self_api.field_not_accepted', field: 'trigger.sourceType', value: 'webhook',
+        })
+        expect(String(reply.error)).toContain('The value "webhook" for "trigger.sourceType" is not accepted')
+        expect(String(reply.error)).toContain('schedule or file trigger')
+        expect(String(reply.error)).not.toMatch(/Halo app/)
+      }
+      for (const path of ['/api/teams/t1/triggers/', '/api/Teams/t1/TRIGGERS']) {
+        expect((await post(path, { trigger: webhook })).status, path).toBe(400)
+      }
+      expect(received).toHaveLength(0)
+    })
+
+    it('lets every other kind through, a change of one included', async () => {
+      received.length = 0
+      const others = [
+        { trigger: { sourceType: 'schedule', config: { cron: '0 9 * * 1' }, enabled: true } },
+        { trigger: { sourceType: 'schedule', config: { every: '30m' }, enabled: false }, triggerId: 'trg-2' },
+        { trigger: { sourceType: 'file', config: { pattern: '*.csv' } } },
+        { trigger: { sourceType: 'wecom', config: {} } },
+      ]
+      for (const body of others) expect((await post('/api/teams/t1/triggers', body)).status).toBe(200)
+      expect(received).toEqual(others)
+    })
+  })
 })
 
 describe('withheld fields against the manual', () => {
@@ -124,7 +203,13 @@ describe('withheld fields against the manual', () => {
       expect(routes[route], route).toBeDefined()
       expect(routes[route].expose, route).toBe('ai')
       const manual = `${routes[route].body ?? ''}\n${routes[route].notes ?? ''}`
-      for (const { field } of fields) {
+      for (const { field, value } of fields) {
+        // A withheld value leaves its field open; the manual may name the field but never offer the value.
+        if (value !== undefined) {
+          expect(manual, `${route} offers "${value}"`).not.toContain(`"${value}"`)
+          expect(manual, `${route} offers "${value}"`).not.toMatch(new RegExp(`\\b${value}:`))
+          continue
+        }
         expect(manual, `${route} advertises "${field}"`).not.toMatch(new RegExp(`\\b${field}\\b`))
       }
     }

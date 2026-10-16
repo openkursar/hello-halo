@@ -232,6 +232,11 @@ export interface ModelRefreshSummary {
   failedSourceIds: string[]
 }
 
+/** Payload of `ai-sources:catalog-changed`: sources whose stored model list changed. */
+export interface ModelCatalogChangedEvent {
+  sourceIds: string[]
+}
+
 /**
  * AI Source - Unified configuration for all sources
  * Both API Key and OAuth sources use this same structure

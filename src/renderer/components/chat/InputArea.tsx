@@ -29,7 +29,6 @@ import { LiveSessionsHeader } from './LiveSessionsHeader'
 import { ComposerMenu, type ComposerMenuSection } from './composer-menu/ComposerMenu'
 import { useComposerToolsets } from './composer-menu/useComposerToolsets'
 import { sortToolsets, toolsetDescription, toolsetIcon, toolsetLabel } from './composer-menu/toolset-display'
-import type { ToolsetStatus } from '../../stores/toolsets.store'
 import { canAttachPath, type AttachedPath, type PickedLocalEntry } from '../../../shared/attached-paths'
 import { MAX_UPLOAD_FILE_SIZE } from '../../../shared/constants/artifact-upload'
 import type { ContentReference } from '../../../shared/types/content-reference'
@@ -46,6 +45,7 @@ import type { ImageAttachment } from '../../types'
 import type { FileQueryItem } from '../../../shared/types/artifact'
 import { normalizePathLike } from '../../../shared/file-path-match'
 import { useFileMentionQuery } from '../../hooks/useFileMentionQuery'
+import { useAutoResize } from '../../hooks/useAutoResize'
 import { getCurrentSource, resolveModelVision } from '../../types'
 import { useTranslation } from '../../i18n'
 import { SlashCommandMenu, filterSlashCommands } from './SlashCommandMenu'
@@ -246,6 +246,8 @@ let composerInstanceSeq = 0
 const MAX_IMAGE_SIZE = 20 * 1024 * 1024  // 20MB max per image (before compression)
 const MAX_IMAGES = 10  // Max images per message
 
+const COMPOSER_MAX_HEIGHT = 180
+
 function base64ToFile(data: string, name: string, mediaType: string): File {
   const binary = atob(data)
   const bytes = new Uint8Array(binary.length)
@@ -436,8 +438,6 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
       if (!ta) return
       ta.focus()
       ta.setSelectionRange(ta.value.length, ta.value.length)
-      ta.style.height = 'auto'
-      ta.style.height = `${Math.min(ta.scrollHeight, 180)}px`
     })
   }, [pendingComposerInput, currentSpaceId])
 
@@ -793,14 +793,8 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
     })
   }
 
-  // Auto-resize textarea
-  useEffect(() => {
-    const textarea = textareaRef.current
-    if (textarea) {
-      textarea.style.height = 'auto'
-      textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`
-    }
-  }, [displayContent])
+  // The only writer of the box's height: every change of its text lands here.
+  useAutoResize(textareaRef, displayContent, COMPOSER_MAX_HEIGHT)
 
   // Focus on mount
   useEffect(() => {
@@ -1007,11 +1001,9 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
     setContent(newContent)
     setSlashMenuOpen(false)
     setSlashSelectedIndex(0)
-    // Resize textarea to fit the new (short) content and restore focus
+    // Restore focus
     requestAnimationFrame(() => {
       if (textareaRef.current) {
-        textareaRef.current.style.height = 'auto'
-        textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 180)}px`
         textareaRef.current.focus()
         // Place cursor at the end
         const len = textareaRef.current.value.length
@@ -1081,7 +1073,6 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
         if (draftKey) useChatStore.getState().clearComposerDraft(draftKey)
         handleMentionClose()
         handleSlashClose()
-        if (textareaRef.current) textareaRef.current.style.height = 'auto'
       }
       return
     }
@@ -1111,10 +1102,6 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
         if (!keepImages) setImages([])
         handleMentionClose()
         handleSlashClose()
-        // Reset height
-        if (textareaRef.current) {
-          textareaRef.current.style.height = 'auto'
-        }
       }
     }
   }
@@ -1593,7 +1580,7 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
                 focus:outline-none text-foreground placeholder:text-subtle-foreground
                 disabled:cursor-not-allowed min-h-[26px]
                 ${isOnboardingSendStep ? 'cursor-default' : ''}`}
-              style={{ maxHeight: '180px' }}
+              style={{ maxHeight: COMPOSER_MAX_HEIGHT }}
             />
           </div>
 
@@ -1605,7 +1592,6 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
             showAttachMenu={showAttachMenu}
             onAttachMenuToggle={handleAttachMenuToggle}
             plusTriggerRef={plusTriggerRef}
-            extraToolsets={toolsets.extraEnabled}
             canSend={canSend}
             onSend={handleSend}
             onStop={onStop}
@@ -1625,7 +1611,7 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
 /**
  * Input Toolbar - Bottom action bar
  *
- * Layout: [recipient] [+] [extra capabilities] [thinking] [knowledge] ──── [send]
+ * Layout: [recipient] [+] [thinking] [knowledge] ──── [send]
  */
 interface InputToolbarProps {
   toolbarSlot?: React.ReactNode
@@ -1637,8 +1623,6 @@ interface InputToolbarProps {
   showAttachMenu: boolean
   onAttachMenuToggle: () => void
   plusTriggerRef: React.RefObject<HTMLButtonElement>
-  /** Capabilities on beyond the defaults — the only toolset state shown at rest. */
-  extraToolsets: ToolsetStatus[]
   canSend: boolean
   onSend: () => void
   onStop?: () => void
@@ -1658,7 +1642,6 @@ function InputToolbar({
   showAttachMenu,
   onAttachMenuToggle,
   plusTriggerRef,
-  extraToolsets,
   canSend,
   onSend,
   onStop,
@@ -1671,7 +1654,7 @@ function InputToolbar({
   return (
     <div className="flex flex-nowrap items-center justify-between gap-1 px-4 pb-2.5 mt-2">
       {/* Left section, ordered by how often a control is reached for:
-          the "+" menu and the per-turn toggles sit inboard, and knowledge —
+          the "+" menu (capabilities live only there) and the per-turn toggles sit inboard, and knowledge —
           a one-off binding, not a per-message decision — sits outermost.
           Scrolls horizontally on narrow widths so the fixed Send/Stop group
           is never pushed off. */}
@@ -1697,22 +1680,6 @@ function InputToolbar({
               }`}
           >
             <Plus size={18} className={`transition-transform duration-200 ease-halo ${showAttachMenu ? 'rotate-45' : ''}`} />
-          </button>
-        )}
-
-        {/* Quiet reminder of capabilities turned on beyond the defaults; opens the panel. */}
-        {!isGenerating && !isOnboarding && extraToolsets.length > 0 && (
-          <button
-            type="button"
-            onClick={onAttachMenuToggle}
-            title={extraToolsets.map(ts => toolsetLabel(t, ts)).join(', ')}
-            aria-label={t('Capabilities on: {{names}}', { names: extraToolsets.map(ts => toolsetLabel(t, ts)).join(', ') })}
-            className="h-8 shrink-0 flex items-center gap-1.5 px-2 rounded-full text-muted-foreground
-              hover:text-foreground hover:bg-secondary transition-colors duration-150"
-          >
-            {extraToolsets.map(ts => (
-              <span key={ts.id} className="inline-flex">{toolsetIcon(ts.id, 15)}</span>
-            ))}
           </button>
         )}
 

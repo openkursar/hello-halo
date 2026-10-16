@@ -465,6 +465,7 @@ export function onEvent<T = unknown>(channel: string, callback: (data: T) => voi
       'terminal:lifecycle': 'onTerminalLifecycle',
       'remote:status-change': 'onRemoteStatusChange',
       'credential:decrypt-failed': 'onCredentialDecryptFailed',
+      'ai-sources:catalog-changed': 'onModelCatalogChanged',
       'browser:state-change': 'onBrowserStateChange',
       'browser:page-gone': 'onBrowserPageGone',
       'browser:zoom-changed': 'onBrowserZoomChanged',

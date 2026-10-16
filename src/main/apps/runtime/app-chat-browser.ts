@@ -1,20 +1,24 @@
 /**
  * The AI browser context each digital-human chat drives.
  *
- * A chat's pages are hosted on the hidden offscreen window and belong to the
- * chat, not the user (see services/ai-browser DESIGN). What matters here is how
- * long they live:
+ * A chat's pages belong to the chat, not the user (see services/ai-browser
+ * DESIGN). What matters here is who can watch them and how long they live:
  *
  *  - Native chats (the default session and the user's own local sessions) are
- *    RESIDENT: the context and its tabs outlive the turn so the next message
- *    continues on the same page and the user can open the live view between
- *    turns. Resident is not forever — idle contexts are reaped after
+ *    RESIDENT and watchable: their pages open in the main window under the
+ *    chat's key (one that window cannot attach in time opens unwatchable in the
+ *    hidden host instead), the context and its tabs outlive the turn so the next
+ *    message continues on the same page, and the user can open the live view
+ *    between turns. Resident is not forever — idle contexts are reaped after
  *    {@link RESIDENT_BROWSER_IDLE_MS}, and at most
  *    {@link MAX_RESIDENT_BROWSER_CONTEXTS} contexts may hold pages at once
  *    (least recently used idle one goes first), because every page is a
  *    Chromium renderer and local sessions are unbounded.
- *  - IM, HTTP and team sessions are PER-TURN: nobody can watch them, and they
- *    can be minted without limit, so the context ends with the turn.
+ *  - IM, HTTP and team sessions are PER-TURN and unattended, like an automation
+ *    run: nobody can watch them, so their pages stay in the hidden host and the
+ *    renderer never hears of them. They mostly run while nobody is at the
+ *    computer, which is when the main window has failed to attach new pages.
+ *    They can be minted without limit, so the context ends with the turn.
  *
  * A context is never reaped mid-turn, while a turn is starting, or while the
  * user is watching one of its tabs. "Mid-turn" is the live-turn module's answer;
@@ -57,7 +61,7 @@ const entries = new Map<string, Entry>()
 let sweeper: ReturnType<typeof setInterval> | null = null
 let sweepsSinceStateLog = 0
 
-/** Whether a chat keeps its browser context between turns. */
+/** Whether a chat keeps its browser context between turns and the user can watch its pages. */
 export function isResidentChatKey(conversationId: string, appId: string): boolean {
   return parseNativeChatKey(conversationId)?.appId === appId
 }
@@ -77,7 +81,7 @@ export function acquireChatBrowserContext(conversationId: string, appId: string,
 
   const resident = isResidentChatKey(conversationId, appId)
   evictOverCap(conversationId)
-  const ctx = createScopedBrowserContext({ conversationId, spaceId })
+  const ctx = createScopedBrowserContext(resident ? { liveView: { conversationId, spaceId } } : {})
   entries.set(conversationId, { ctx, appId, resident, lastUsedAt: Date.now(), turns: 1 })
   ensureSweeper()
   console.log(`${LOG_TAG}[${appId}] Context created: ${conversationId} (${resident ? 'resident' : 'per-turn'})`)

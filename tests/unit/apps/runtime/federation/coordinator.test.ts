@@ -277,6 +277,41 @@ describe('FederationCoordinator', () => {
       expect(teamStore.listMembersByTeam(OFFICE)).toHaveLength(0)
     })
 
+    it('logs a node\'s repeated refusals in full once, then as one count per window, answering every one', () => {
+      // Over a relay a refused node asks again every second or so: the relay ends
+      // its session on each refusal and it reconnects.
+      makeHost()
+      const bob = recordingPeer(hub, BOB)
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const refusalLines = () => warn.mock.calls.map((c) => String(c[0])).filter((line) => line.includes('join rejected'))
+      const older = FEDERATION_PROTOCOL_VERSION - 1
+      try {
+        for (let i = 0; i < 6; i++) {
+          bob.link.send(HOST, makeJoinRequest({ pv: older }))
+          clock += 1_400
+        }
+        expect(bob.received.filter((r) => r.msg.kind === 'join-reject')).toHaveLength(6)
+        expect(refusalLines()).toHaveLength(1)
+        expect(refusalLines()[0]).toContain(
+          `node=${BOB} reason=VERSION_INCOMPATIBLE peerPv=${older} selfPv=${FEDERATION_PROTOCOL_VERSION}`
+        )
+
+        clock += 10 * 60_000
+        bob.link.send(HOST, makeJoinRequest({ pv: older }))
+        expect(refusalLines()).toHaveLength(2)
+        expect(refusalLines()[1]).toContain(`node=${BOB} reason=VERSION_INCOMPATIBLE repeats=6 over=10m`)
+
+        // Admitted once it matches; a refusal after that is new and logged in full.
+        bob.link.send(HOST, makeJoinRequest({ pv: FEDERATION_PROTOCOL_VERSION }))
+        expect(federationStore.getNode(OFFICE, BOB)).toBeTruthy()
+        bob.link.send(HOST, makeJoinRequest({ pv: older }))
+        expect(refusalLines()).toHaveLength(3)
+        expect(refusalLines()[2]).toContain(`peerPv=${older}`)
+      } finally {
+        warn.mockRestore()
+      }
+    })
+
     it('a reject always carries the rejecting side\'s own pv, whatever the reason', () => {
       makeHost()
       const bob = recordingPeer(hub, BOB)

@@ -17,6 +17,9 @@ export const TOOL_TIMEOUT = 60_000
 /** Default navigation wait timeout (ms). */
 export const NAV_TIMEOUT = 30_000
 
+/** Appended to a new page's result when it could not open where the user can watch it. */
+export const BACKGROUND_PAGE_NOTE = '\nNote: the Halo window could not show this page in time, so it opened in the background. It works normally, but the user cannot watch it live.'
+
 /**
  * Hard cap for a single image in base64 characters (~375KB raw).
  * Acts as Layer 2 safety net after context.ts Layer 1 compression.

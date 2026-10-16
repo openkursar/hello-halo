@@ -88,6 +88,8 @@ export interface FeedService {
   handleInbound(fromNode: NodeId, frame: FeedSyncFrame): void
   /** Forget a disconnected peer's producer subscriptions. */
   dropPeer(peer: NodeId): void
+  /** Stop consuming `author`'s feed of `kind` without telling it (FeedConsumer.forget). */
+  forgetRemote(author: NodeId, kind: FeedKind): boolean
   /** Resend to any peer still behind (called by the timer, or manually in tests). */
   retransmitTick(): void
   /** Begin the retransmit-backstop timer. Idempotent. */
@@ -183,6 +185,10 @@ export function createFeedService(deps: FeedServiceDeps): FeedService {
     producer.dropPeer(peer)
   }
 
+  function forgetRemote(author: NodeId, kind: FeedKind): boolean {
+    return consumer.forget(feedIdKey({ officeId, author, kind }))
+  }
+
   function retransmitTick(): void {
     producer.retransmitTick()
     // Consumer-side self-heal: re-drive any subscribe that has not yet yielded a
@@ -230,6 +236,7 @@ export function createFeedService(deps: FeedServiceDeps): FeedService {
     ensurePeerSubscribed,
     handleInbound,
     dropPeer,
+    forgetRemote,
     retransmitTick,
     start,
     stop,

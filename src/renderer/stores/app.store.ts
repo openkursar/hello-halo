@@ -65,6 +65,8 @@ interface AppState {
   setConfig: (config: HaloConfig) => void
   /** Re-read config from main after a write that bypassed setConfig. */
   refreshConfig: () => Promise<void>
+  /** Re-read only the AI sources, after main reported a changed model list. */
+  reloadAiSources: () => Promise<void>
   updateConfig: (updates: Partial<HaloConfig>) => void
   setMcpStatus: (status: McpServerStatus[], timestamp: number) => void
 
@@ -79,6 +81,9 @@ interface AppState {
   // Initialization
   initialize: () => Promise<void>
 }
+
+let aiSourcesReload: Promise<void> | null = null
+let aiSourcesReloadAgain = false
 
 export const useAppStore = create<AppState>((set, get) => ({
   // Initial state
@@ -147,6 +152,30 @@ export const useAppStore = create<AppState>((set, get) => ({
   refreshConfig: async () => {
     const response = await api.getConfig({ snapshot: true })
     if (response.success && response.data) set({ config: response.data as HaloConfig })
+  },
+
+  // Several sources can change in one refresh; reads that arrive while one is
+  // running collapse into a single follow-up read.
+  reloadAiSources: () => {
+    if (aiSourcesReload) {
+      aiSourcesReloadAgain = true
+      return aiSourcesReload
+    }
+    aiSourcesReload = (async () => {
+      do {
+        aiSourcesReloadAgain = false
+        try {
+          const response = await api.getConfig()
+          const aiSources = response.success ? (response.data as HaloConfig | undefined)?.aiSources : undefined
+          const current = get().config
+          if (aiSources && current) set({ config: { ...current, aiSources } })
+          else if (!response.success) console.warn('[Store] AI sources reload failed:', response.error)
+        } catch (error) {
+          console.warn('[Store] AI sources reload failed:', error)
+        }
+      } while (aiSourcesReloadAgain)
+    })().finally(() => { aiSourcesReload = null })
+    return aiSourcesReload
   },
 
   updateConfig: (updates) => {
@@ -352,21 +381,6 @@ export const useAppStore = create<AppState>((set, get) => ({
         } else {
           console.log('[Store] Config loaded, entering app')
           await get().enterApp()
-
-          // Silently refresh remote model lists in background (fire-and-forget).
-          // Ensures users see the latest available models without manual refresh,
-          // e.g. after provider adds new models or app is reinstalled.
-          api.refreshAISourcesConfig().then(result => {
-            if (result.success && result.data) {
-              const current = get().config
-              if (current) {
-                set({ config: { ...current, aiSources: (result.data as any).aiSources } })
-                console.log('[Store] Startup model refresh complete')
-              }
-            }
-          }).catch(() => {
-            // Network unavailable — acceptable, user can refresh manually
-          })
         }
       } else {
         console.error('[Store] Failed to load config:', response.error)

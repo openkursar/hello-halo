@@ -148,6 +148,7 @@ vi.mock('../../../../src/main/services/agent/resolved-sdk', async (importOrigina
   getEngineCapabilities: () => ({ features: { permissionRules: true, hooks: true } }),
 }))
 vi.mock('../../../../src/main/services/agent/sdk-config', () => ({
+  markMcpServerSettings: (server: unknown) => server,
   resolveCredentialsForSdk: vi.fn(async () => ({
     displayModel: 'test-model', sdkModel: 'test-model', anthropicApiKey: 'key',
     anthropicBaseUrl: 'https://example.invalid', capabilities: {},

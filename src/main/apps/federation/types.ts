@@ -366,6 +366,8 @@ export interface FederationStore {
   revokeCredential(jti: string): boolean
   isRevoked(jti: string): boolean
   listCredentialsByOffice(officeId: string): OfficeCredentialRecord[]
+  /** Whether an invite to this office was ever issued — revoked or expired ones count. */
+  hasCredentialForOffice(officeId: string): boolean
 
   // ── joined_office_connections ─────────────────
   /** Insert/replace the re-join record for an office (token encoded at rest). */

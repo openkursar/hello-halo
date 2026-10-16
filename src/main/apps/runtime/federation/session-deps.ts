@@ -19,8 +19,15 @@
  * (sendWake/registerTurnComplete/resolveOfficeId) are INJECTED by bootstrap.
  */
 
-import { SELF_NODE_ID, type TeamTriggerContext } from '../../../../shared/apps/team-types'
+import {
+  SELF_NODE_ID,
+  legacyExternalOrigin,
+  type TeamEpoch,
+  type TeamRequestOrigin,
+  type TeamTriggerContext,
+} from '../../../../shared/apps/team-types'
 import { parseTeamSessionKey } from '../../../../shared/apps/im-keys'
+import { readTurnEndReport, renderTurnEndReport } from '../team'
 import type { OrchestrationSessionDeps } from '../team'
 import type { TurnCompletion } from '../team/message-bus'
 import type { SerializedWakeRequest } from './types'
@@ -122,14 +129,38 @@ export function withOwnerResolvedSpace(
  * re-resolved above — the sender authored every field, so a sender that simply
  * omitted this one would have its request run as if the owner had started it.
  * Arriving over the link IS the evidence, and it is evidence only this side has.
+ * The sender's own claim is honored only where it narrows: a request it says
+ * came from one of its chat guests stays a guest's, so a stranger's request
+ * does not widen by crossing machines. A build from before origins had kinds
+ * marked every outside request alike; that mark is read by the piece of work
+ * it names, as such records are here (`legacyExternalOrigin`).
+ *
+ * One kind is not a request: the notice reporting how a member's turn ended,
+ * which only the team's lead is ever sent. This machine renders it from the
+ * facts the frame carries, so the words that reach the lead are its own
+ * runtime's and carry no colleague's standing; a notice without readable
+ * facts, or addressed to anyone else, is handled as any other message.
+ *
+ * `local` is what this machine's own records say about the team, the sender and
+ * the piece of work the frame names; none of it is read from the frame.
  */
 export function withExternalOrigin(
   request: SerializedWakeRequest,
-  source?: { teamName?: string; fromMemberName?: string | null },
+  local?: {
+    teamName?: string
+    fromMemberName?: string | null
+    leadAppId?: string | null
+    epoch?: Pick<TeamEpoch, 'chatKey'> | null
+  },
 ): SerializedWakeRequest {
   const incoming = request.teamContext
   const kind: TeamTriggerContext['kind'] = incoming.kind === 'run_start' || incoming.kind === 'periodic_check' || incoming.kind === 'member_stopped'
     ? incoming.kind : 'message'
+  const legacyMark = incoming.origin == null && (incoming as { external?: unknown }).external === true
+  const claimsGuest = legacyMark ? legacyExternalOrigin(local?.epoch) === 'guest' : incoming.origin === 'guest'
+  const toLead = !!local?.leadAppId && local.leadAppId === request.appId
+  const report = kind === 'member_stopped' && toLead ? readTurnEndReport(incoming.turnEnded) : null
+  const origin: TeamRequestOrigin | undefined = claimsGuest ? 'guest' : report ? undefined : 'colleague'
   const teamContext: TeamTriggerContext = {
     teamId: incoming.teamId,
     epochId: incoming.epochId,
@@ -137,7 +168,7 @@ export function withExternalOrigin(
     fromAppId: typeof incoming.fromAppId === 'string' ? incoming.fromAppId : null,
     wait: incoming.wait === true,
     kind,
-    external: true,
+    ...(origin ? { origin } : {}),
     // Forging this only withholds a turn report; it grants nothing.
     ...(incoming.kind === 'human_message' && incoming.fromAppId == null ? { personalChat: true } : {}),
     ...(typeof incoming.taskId === 'string' ? { taskId: incoming.taskId } : {}),
@@ -146,8 +177,17 @@ export function withExternalOrigin(
   if (incoming.kind === undefined || !['run_start', 'message', 'periodic_check', 'human_message', 'member_stopped'].includes(incoming.kind)) {
     console.warn(`${LOG_TAG} Remote wake kind normalized: team=${teamContext.teamId} app=${request.appId} corr=${teamContext.correlationId}`)
   }
-  const records = Array.isArray(request.recordedMessages) && request.recordedMessages.length > 0
-    ? request.recordedMessages : [{ content: request.message }]
+  if (kind === 'member_stopped' && !report) {
+    console.warn(
+      `${LOG_TAG} Remote turn-end notice ${toLead ? 'without readable facts' : 'not addressed to the lead'}, handled as a message: ` +
+      `team=${teamContext.teamId} app=${request.appId} corr=${teamContext.correlationId}`
+    )
+  }
+  const message = report ? renderTurnEndReport(report) : request.message
+  const records = report
+    ? [{ content: message }]
+    : Array.isArray(request.recordedMessages) && request.recordedMessages.length > 0
+      ? request.recordedMessages : [{ content: request.message }]
   const recordedMessages = records.map(record => {
     if (!record || typeof record.content !== 'string') throw new TypeError('Remote message records must contain text')
     // A person's own words read as theirs, as the same chat on one machine does;
@@ -164,8 +204,8 @@ export function withExternalOrigin(
         source: 'team-message' as const,
         metadata: {
           teamId: teamContext.teamId, epochId: teamContext.epochId, teamTriggerKind: kind,
-          fromMemberName: source?.fromMemberName ?? null,
-          ...(source?.teamName ? { teamName: source.teamName } : {}),
+          fromMemberName: local?.fromMemberName ?? null,
+          ...(local?.teamName ? { teamName: local.teamName } : {}),
           ...(typeof summary === 'string' && summary.trim() ? { summary: oneLineExcerpt(summary, 200) } : {}),
         },
       },
@@ -175,7 +215,7 @@ export function withExternalOrigin(
   return {
     appId: request.appId,
     spaceId: request.spaceId,
-    message: request.message,
+    message,
     conversationId: request.conversationId,
     teamContext,
     recordedMessages,

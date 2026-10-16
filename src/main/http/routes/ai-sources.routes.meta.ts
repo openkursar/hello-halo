@@ -54,6 +54,9 @@ export const MODULE: RouteModuleMeta = {
       notes: 'The stored API key goes with it, and no endpoint here can put one back — only the user can, in Settings > AI Model. Confirm before deleting.',
     },
 
+    // A model picker opening; the result arrives as an event, never in the reply.
+    'POST /api/ai-sources/refresh-stale-catalogs': { expose: 'internal' },
+
     'POST /api/model-capabilities/resolve': {
       expose: 'ai',
       group: 'settings',

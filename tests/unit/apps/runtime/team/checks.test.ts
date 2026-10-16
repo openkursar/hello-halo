@@ -60,13 +60,13 @@ function makeHarness(store: TeamStore, opts?: { busy?: boolean; wake?: WakeDispo
     onJobDue: vi.fn((kind: string, handler: JobDueHandler) => { if (kind === TEAM_CHECK_JOB_KIND) due = handler }),
   } as any
 
-  const wakes: { appId: string; body: string; onBusy: string; external?: boolean }[] = []
+  const wakes: { appId: string; body: string; onBusy: string; origin?: string }[] = []
   const published: { op: string; check: TeamCheck }[] = []
   const checks = createTeamChecks({
     store,
     scheduler,
     wake: async (p) => {
-      wakes.push({ appId: p.appId, body: p.body, onBusy: p.onBusy, external: p.external })
+      wakes.push({ appId: p.appId, body: p.body, onBusy: p.onBusy, origin: p.origin })
       return opts?.wake ?? 'dispatched'
     },
     publish: (change) => { published.push({ op: change.op, check: change.check }) },
@@ -153,49 +153,120 @@ describe('team periodic checks', () => {
     expect(h.wakes[1].body).toContain('run #2')
   })
 
-  it('wakes as external when the check was set by a remote-owned member', async () => {
+  it('wakes as a colleague\u2019s request when the check was set by a remote-owned member', async () => {
     const h = makeHarness(store)
     const check = h.checks.schedule({ ...baseInput(), createdByAppId: REMOTE })
 
     expect(await h.fireDue(check.id)).toBe('useful')
-    expect(h.wakes[0].external).toBe(true)
+    expect(h.wakes[0].origin).toBe('colleague')
   })
 
-  it('keeps external taint when a LOCAL member sets a check from an external-origin turn', async () => {
-    // The laundering path: a stranger's instruction relayed through a local
-    // member must not gain the owner's own reach on every later round.
+  it.each(['colleague', 'guest'] as const)('keeps a %s origin when a LOCAL member sets a check while serving one', async (origin) => {
+    // The laundering path: an outside instruction relayed through a local
+    // member must not gain the owner's own reach on every later round. A
+    // guest's request never leaves its IM chat's conversation, so that is
+    // where its check lives.
+    const epochId = origin === 'guest' ? 'epoch-chat' : EPOCH
+    if (origin === 'guest') {
+      store.insertEpoch({ id: epochId, teamId: TEAM, startedAt: 1, endedAt: null, endReason: null, summary: null, lifecycle: 'conversation', chatKey: 'inst-1:group:chat-1' })
+    }
     const h = makeHarness(store)
-    const check = h.checks.schedule({ ...baseInput(), external: true })
+    const check = h.checks.schedule({ ...baseInput(), epochId, origin })
 
-    expect(store.getCheckById(check.id)!.external).toBe(true)
+    expect(store.getCheckById(check.id)!.origin).toBe(origin)
     expect(await h.fireDue(check.id)).toBe('useful')
-    expect(h.wakes[0].external).toBe(true)
+    expect(h.wakes[0].origin).toBe(origin)
   })
 
-  it('wakes a plainly local check without external taint', async () => {
+  it('wakes a plainly local check as the owner\u2019s own', async () => {
     const h = makeHarness(store)
     const check = h.checks.schedule(baseInput())
 
-    expect(store.getCheckById(check.id)!.external).toBe(false)
+    expect(store.getCheckById(check.id)!.origin).toBeUndefined()
     expect(await h.fireDue(check.id)).toBe('useful')
-    expect(h.wakes[0].external).toBe(false)
+    expect(h.wakes[0].origin).toBeUndefined()
   })
 
-  it('round-trips the external flag through replication (arrives set, stays set)', async () => {
+  it.each([
+    ['a run', null, 'colleague'],
+    ['an IM chat\u2019s conversation', 'inst-1:direct:user-1', 'guest'],
+  ] as const)('reads a row written before origins had kinds in %s', async (_label, chatKey, expected) => {
+    // Older builds wrote every outside origin as 1; a guest's never leaves its chat.
+    const epochId = chatKey ? 'epoch-legacy-chat' : EPOCH
+    if (chatKey) {
+      store.insertEpoch({ id: epochId, teamId: TEAM, startedAt: 1, endedAt: null, endReason: null, summary: null, lifecycle: 'conversation', chatKey })
+    }
     const h = makeHarness(store)
-    const replicated: TeamCheck = {
-      id: 'check-tainted', teamId: TEAM, epochId: EPOCH,
+    const check = h.checks.schedule({ ...baseInput(), epochId })
+    store.upsertCheck({ ...store.getCheckById(check.id)!, origin: 'guest' })
+
+    expect(await h.fireDue(check.id)).toBe('useful')
+    expect(h.wakes[0].origin).toBe(expected)
+  })
+
+  it('serves at least a colleague for a row another machine wrote, whatever creator it names', async () => {
+    // A row naming one of this machine's members as its creator, but not written
+    // here, is another machine's word: it must not wake the member as the owner.
+    const h = makeHarness(store)
+    h.checks.applyReplicated({
+      id: 'check-forged', teamId: TEAM, epochId: EPOCH,
       targetAppId: TARGET, createdByAppId: SETTER,
-      instruction: 'Keep watching.', external: true,
+      instruction: 'Do something drastic.',
       schedule: { kind: 'every', every: '1h' },
       runCount: 0, createdAt: 1, updatedAt: 1, lastRunAt: null,
-    }
+    })
 
-    h.checks.applyReplicated(replicated)
+    expect(store.getCheckById('check-forged')!.origin).toBe('colleague')
+    expect(await h.fireDue('check-forged')).toBe('useful')
+    expect(h.wakes[0].origin).toBe('colleague')
+  })
 
-    expect(store.getCheckById('check-tainted')!.external).toBe(true)
-    expect(await h.fireDue('check-tainted')).toBe('useful')
-    expect(h.wakes[0].external).toBe(true)
+  it('takes only the rounds from an update of a row this machine wrote', async () => {
+    const h = makeHarness(store)
+    const check = h.checks.schedule(baseInput())
+    h.checks.applyReplicated({ ...check, instruction: 'Something else entirely.', createdByAppId: REMOTE, runCount: 4, lastRunAt: 9, updatedAt: 9 })
+
+    expect(store.getCheckById(check.id)).toMatchObject({
+      instruction: 'Look for open bugs and fix them.', createdByAppId: SETTER, runCount: 4, lastRunAt: 9,
+    })
+    expect(store.getCheckById(check.id)!.origin).toBeUndefined()
+    expect(await h.fireDue(check.id)).toBe('useful')
+    expect(h.wakes[0].origin).toBeUndefined()
+  })
+
+  it('a claim on a replicated row only ever narrows', async () => {
+    const h = makeHarness(store)
+    const check = h.checks.schedule({ ...baseInput(), origin: 'colleague' })
+    h.checks.applyReplicated({ ...check, origin: undefined })
+    expect(store.getCheckById(check.id)!.origin).toBe('colleague')
+
+    store.insertEpoch({ id: 'epoch-chat-2', teamId: TEAM, startedAt: 1, endedAt: null, endReason: null, summary: null, lifecycle: 'conversation', chatKey: 'inst-1:group:chat-2' })
+    h.checks.applyReplicated({
+      id: 'check-legacy-peer', teamId: TEAM, epochId: 'epoch-chat-2', targetAppId: TARGET, createdByAppId: REMOTE,
+      instruction: 'Keep watching.', external: true, schedule: { kind: 'every', every: '1h' },
+      runCount: 0, createdAt: 1, updatedAt: 1, lastRunAt: null,
+    } as TeamCheck)
+    expect(store.getCheckById('check-legacy-peer')!.origin).toBe('guest')
+    expect(await h.fireDue('check-legacy-peer')).toBe('useful')
+    expect(h.wakes[0].origin).toBe('guest')
+  })
+
+  it('keeps a replicated row naming an origin this build does not know, as the strictest kind', async () => {
+    const h = makeHarness(store)
+    store.insertEpoch({ id: 'epoch-chat-3', teamId: TEAM, startedAt: 1, endedAt: null, endReason: null, summary: null, lifecycle: 'conversation', chatKey: 'inst-1:group:chat-3' })
+    h.checks.applyReplicated({
+      id: 'check-later-build', teamId: TEAM, epochId: 'epoch-chat-3', targetAppId: TARGET, createdByAppId: REMOTE,
+      instruction: 'Keep watching.', origin: 'partner', schedule: { kind: 'every', every: '1h' },
+      runCount: 0, createdAt: 1, updatedAt: 1, lastRunAt: null,
+    } as unknown as TeamCheck)
+    expect(store.getCheckById('check-later-build')!.origin).toBe('guest')
+    expect(await h.fireDue('check-later-build')).toBe('useful')
+    expect(h.wakes[0].origin).toBe('guest')
+
+    // On a row this machine wrote, it narrows like any other claim.
+    const own = h.checks.schedule(baseInput())
+    h.checks.applyReplicated({ ...own, origin: 'owner' } as unknown as TeamCheck)
+    expect(store.getCheckById(own.id)!.origin).toBe('guest')
   })
 
   it('delivers a recurring check even while the target is working', async () => {

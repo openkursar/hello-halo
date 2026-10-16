@@ -202,11 +202,13 @@ export function SpacePage() {
     }
   }, [isMobile, isCanvasOpen])
 
-  // Space isolation: clear canvas tabs when switching to a different space
+  // Each space keeps its own canvas tabs; entering one shows them as they were left.
   useEffect(() => {
-    if (currentSpace) {
-      void canvasLifecycle.enterSpace(currentSpace.id)
-    }
+    if (!currentSpace) return
+    // A canvas maximized in the space left behind does not cover the one entered.
+    const leftSpaceId = canvasLifecycle.getCurrentSpaceId()
+    if (leftSpaceId && leftSpaceId !== currentSpace.id) setCanvasMaximized(false)
+    void canvasLifecycle.enterSpace(currentSpace.id)
   }, [currentSpace?.id])
 
   // The guest outlives this route; leaving it releases only its presentation.

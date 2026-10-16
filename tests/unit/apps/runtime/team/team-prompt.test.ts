@@ -9,6 +9,7 @@
 
 import { describe, it, expect } from 'vitest'
 import {
+  buildRestrictionNotice,
   buildTeamImBridge,
   buildTeamEntry,
   buildTeamConstraints,
@@ -28,11 +29,13 @@ function makeCtx(overrides: Partial<TeamPromptContext> = {}): TeamPromptContext 
     selfIsDisposable: false,
     roster: [],
     teamFolder: null,
+    chatKey: null,
     ...overrides,
   }
 }
 
 const localMate: TeamPromptRosterEntry = {
+  appId: 'app-researcher',
   memberName: 'researcher',
   role: 'Research',
   isLead: false,
@@ -41,6 +44,7 @@ const localMate: TeamPromptRosterEntry = {
   sameMachine: true,
 }
 const remoteMate: TeamPromptRosterEntry = {
+  appId: 'app-analyst',
   memberName: 'analyst',
   role: 'Analyst',
   isLead: false,
@@ -253,5 +257,34 @@ describe('buildTeamEntry — where files go', () => {
     const out = buildTeamEntry(makeCtx({ teamFolder: null }))
     expect(out).not.toContain('scratch folder')
     expect(out).toContain('"docs/design.md"); a file outside it cannot be shared this way. Publishing')
+  })
+})
+
+describe('buildRestrictionNotice — a restricted turn is told why, not left to guess', () => {
+  const withheld = ['running commands', 'skills', 'AI Browser']
+
+  it('names a colleague and whose digital human it is, and where the owner turns things on', () => {
+    const notice = buildRestrictionNotice({ origin: 'colleague', member: remoteMate }, withheld)
+    expect(notice.startsWith('[Limited permissions for this turn]')).toBe(true)
+    expect(notice).toContain('This request comes from analyst, Bob\u2019s digital human on another machine.')
+    expect(notice).toContain('"What others can ask it to do"')
+    for (const item of withheld) expect(notice).toContain(`- ${item}`)
+    expect(notice).toContain('This is your owner\u2019s setting, not a fault.')
+    expect(notice).toContain('do not ask anyone to change hooks')
+  })
+
+  it('says when a request was passed on by one of the owner\u2019s own members, or came from no named member', () => {
+    expect(buildRestrictionNotice({ origin: 'colleague', member: localMate }, withheld))
+      .toContain('This request comes from researcher, passing on work that came from another machine.')
+    expect(buildRestrictionNotice({ origin: 'colleague' }, withheld))
+      .toContain('This request comes from someone on another machine in this team.')
+    expect(buildRestrictionNotice({ origin: 'colleague', member: { ...remoteMate, owner: null } }, withheld))
+      .toContain('analyst, a teammate\u2019s digital human on another machine')
+  })
+
+  it('tells a guest\u2019s request apart, capped by that chat\u2019s guest settings', () => {
+    const notice = buildRestrictionNotice({ origin: 'guest' }, withheld)
+    expect(notice).toContain('This request comes from a guest in an IM chat your team answers, not from your owner.')
+    expect(notice).toContain('that chat\u2019s guest settings')
   })
 })

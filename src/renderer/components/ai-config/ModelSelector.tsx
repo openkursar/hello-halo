@@ -29,6 +29,7 @@ import {
 import { ThinkingLevelControl } from './ThinkingLevelControl'
 import { useTranslation } from '../../i18n'
 import { useIsMobile } from '../../hooks/useIsMobile'
+import { useFreshModelCatalogs } from '../../hooks/useFreshModelCatalogs'
 import { trackHome } from '../../services/home-telemetry'
 import { isAnthropicProvider } from '../../types'
 
@@ -61,6 +62,7 @@ function ModelList({ onDone }: { onDone: () => void }) {
   const { config, setConfig, navigate } = useAppStore()
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [refreshStatus, setRefreshStatus] = useState<'success' | 'cached' | 'failed' | null>(null)
+  useFreshModelCatalogs(true)
 
   const aiSources = useAiSources()
   const currentSource = getCurrentSource(aiSources)

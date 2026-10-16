@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { createServer } from 'node:http'
+import type { ElectronApplication } from '@playwright/test'
 import type { HaloAPI } from '../../../src/preload'
 import { test, expect, callBrowserTool, toolText, type ContextKind, type BrowserToolOutcome } from '../fixtures/browser-runtime'
 import { showBrowser, hideBrowser, destroyBrowser, executeBrowser, guestIdentity, assertBrowserFrame, browserHtmlFixture } from '../fixtures/browser-site'
@@ -12,6 +13,15 @@ function snapshotUid(text: string, role: string, name: string): string {
   const uid = line?.match(/uid=(\S+)/)?.[1]
   if (!uid) throw new Error(`Snapshot has no ${role} named ${name}:\n${text}`)
   return uid
+}
+
+/** Which host renderer the guest showing `url` is attached to. */
+function guestHost(app: ElectronApplication, url: string, mainUrl: string): Promise<'main' | 'hidden' | 'none'> {
+  return app.evaluate(({ webContents }, { url, mainUrl }) => {
+    const guest = webContents.getAllWebContents().find(contents => contents.getType() === 'webview' && contents.getURL() === url)
+    const main = webContents.getAllWebContents().find(contents => contents.getType() === 'window' && contents.getURL() === mainUrl)
+    return guest ? (guest.hostWebContents?.id === main?.id ? 'main' : 'hidden') : 'none'
+  }, { url, mainUrl })
 }
 
 test.describe('AI tools on persistent webview guests', () => {
@@ -191,6 +201,79 @@ test.describe('AI tools on persistent webview guests', () => {
     expect(screenshot.result.content.some(item => item.type === 'image' && (item.data?.length ?? 0) > 1000)).toBe(true)
     await window.evaluate(async () => (window as unknown as { browserTest: { release: (kind: string) => Promise<unknown> } }).browserTest.release('automation'))
     expect(await electronApp.evaluate(({ webContents }, id) => !!webContents.fromId(id), id)).toBe(false)
+  })
+
+  // Digital humans mostly work while nobody is at the computer, with the window
+  // minimized or closed to the tray: a new page must still open, and an
+  // unattended one must not depend on the main window at all.
+  for (const state of ['minimized', 'hidden'] as const) {
+    test(`new pages open while the main window is ${state}, unattended ones outside it`, async ({ electronApp, window, browserSite }) => {
+      const mainUrl = window.url()
+      await electronApp.evaluate(({ BrowserWindow }, { mainUrl, state }) => {
+        const main = BrowserWindow.getAllWindows().find(candidate => candidate.webContents.getURL() === mainUrl)!
+        if (state === 'minimized') main.minimize()
+        else main.hide()
+      }, { mainUrl, state })
+      await expect.poll(() => electronApp.evaluate(({ BrowserWindow }, mainUrl) => {
+        const main = BrowserWindow.getAllWindows().find(candidate => candidate.webContents.getURL() === mainUrl)!
+        return main.isMinimized() || !main.isVisible()
+      }, mainUrl)).toBe(true)
+
+      const unattendedUrl = browserSite.pageUrl(`unattended-${state}`)
+      const unattended = await callBrowserTool(window, 'automation', 'browser_navigate', { url: unattendedUrl })
+      expect(toolText(unattended)).toContain('Created page')
+      await expect.poll(() => guestHost(electronApp, unattendedUrl, mainUrl)).toBe('hidden')
+      expect(unattended.pages.some(page => page.viewId === unattended.viewId)).toBe(false)
+      expect(toolText(await callBrowserTool(window, 'automation', 'browser_evaluate', { function: '() => typeof carrierNonce' }))).toContain('string')
+
+      const watchedUrl = browserSite.pageUrl(`watched-${state}`)
+      const watched = await callBrowserTool(window, 'human', 'browser_navigate', { url: watchedUrl })
+      expect(toolText(watched)).toContain('Created page')
+      await expect.poll(() => guestHost(electronApp, watchedUrl, mainUrl)).toBe('main')
+      expect(toolText(await callBrowserTool(window, 'human', 'browser_evaluate', { function: '() => typeof carrierNonce' }))).toContain('string')
+    })
+  }
+
+  // The main renderer stops attaching new pages, as the Windows main window did
+  // for an hour while nobody was there: a page the user could have watched
+  // still opens, in the hidden host, and the wait is paid once.
+  test('a watchable context still opens pages when the main window cannot attach them in time', async ({ electronApp, window, browserSite }) => {
+    const mainUrl = window.url()
+    const beforeUrl = browserSite.pageUrl('watched-before-stall')
+    const before = await callBrowserTool(window, 'human', 'browser_navigate', { url: beforeUrl })
+    await expect.poll(() => guestHost(electronApp, beforeUrl, mainUrl)).toBe('main')
+
+    await window.evaluate(() => { (window as unknown as { browserHostTest: { stallNewPages: boolean } }).browserHostTest.stallNewPages = true })
+    const stalledUrl = browserSite.pageUrl('opened-while-stalled')
+    const startedAt = Date.now()
+    const stalled = await callBrowserTool(window, 'human', 'browser_tab', { action: 'new', url: stalledUrl })
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(14000)
+    expect(toolText(stalled)).toContain('cannot watch it live')
+    await expect.poll(() => guestHost(electronApp, stalledUrl, mainUrl)).toBe('hidden')
+    expect(stalled.pages.some(page => page.viewId === stalled.viewId)).toBe(false)
+    expect(stalled.pages.some(page => page.viewId === before.viewId)).toBe(true)
+    expect(toolText(await callBrowserTool(window, 'human', 'browser_evaluate', { function: '() => typeof carrierNonce' }))).toContain('string')
+
+    const nextUrl = browserSite.pageUrl('next-while-stalled')
+    const nextStartedAt = Date.now()
+    const next = await callBrowserTool(window, 'human', 'browser_tab', { action: 'new', url: nextUrl })
+    expect(Date.now() - nextStartedAt).toBeLessThan(10000)
+    expect(toolText(next)).toContain('cannot watch it live')
+    await expect.poll(() => guestHost(electronApp, nextUrl, mainUrl)).toBe('hidden')
+
+    // The user comes back and opens a page of their own, which attaches in the
+    // main window again. Showing the window would also do, but a locked screen
+    // delivers no window events; the unit tests cover those.
+    await window.evaluate(() => { (window as unknown as { browserHostTest: { stallNewPages: boolean } }).browserHostTest.stallNewPages = false })
+    const userUrl = browserSite.pageUrl('user-page-after-stall')
+    const userPage = await window.evaluate(async url => (window as unknown as { halo: HaloAPI }).halo.createBrowserView('user-page-after-stall', url), userUrl)
+    expect(userPage).toMatchObject({ success: true })
+    await expect.poll(() => guestHost(electronApp, userUrl, mainUrl)).toBe('main')
+    const recoveredUrl = browserSite.pageUrl('after-main-recovered')
+    const recovered = await callBrowserTool(window, 'human', 'browser_tab', { action: 'new', url: recoveredUrl })
+    expect(toolText(recovered)).not.toContain('cannot watch it live')
+    await expect.poll(() => guestHost(electronApp, recoveredUrl, mainUrl)).toBe('main')
+    expect(recovered.pages.some(page => page.viewId === recovered.viewId)).toBe(true)
   })
 
   test('the production MCP upload and silent download tools use the same guest and isolated test files', async ({ electronApp, window, browserSite }, testInfo) => {

@@ -55,11 +55,12 @@ import { createCtrlFeed, type CtrlFeed } from './ctrl-feed'
 import { createSessionFeed, historyCacheKey, isSessionFeedFrame, type SessionFeed } from './session-feed'
 import { isFeedSyncFrame, parseFeedIdKey, type FeedSyncFrame } from './log/types'
 import { getFeedStore, type AuthorityStore, type FeedStore } from '../../federation'
-import { SELF_NODE_ID, type TeamMemberRuntimeStatus, type TeamStatus, type TeamVersionMismatch } from '../../../../shared/apps/team-types'
+import { REMOTE_WAIT_ABANDONED_REASON, SELF_NODE_ID, type TeamMemberRuntimeStatus, type TeamStatus, type TeamVersionMismatch } from '../../../../shared/apps/team-types'
 import { parseTeamSessionKey } from '../../../../shared/apps/im-keys'
 import type {
   FederationMessage,
   JoinMember,
+  JoinReject,
   JoinRequest,
   NodeId,
   OfficeContext,
@@ -75,6 +76,25 @@ const LOG_TAG = '[FedManager]'
 
 /** How long joinOffice waits for a grant/reject before resolving failed. */
 const JOIN_TIMEOUT_MS = 15_000
+
+/**
+ * Wait before asking again an office that refused this node's join, doubling
+ * with each further refusal up to `max`. A relay ends every refused session, and
+ * the 1–30 s reconnect backoff — reset by each re-authentication — made that a
+ * refusal a second, all day.
+ *
+ * A version gap closes only when one side updates and restarts, so it starts
+ * where a proven-bad address is next tried (UNREACHABLE_DIRECT_TTL_MS). A
+ * refused credential can clear on the far side with no restart — an elected
+ * authority learns this node's admission from the replicated roster — so other
+ * reasons start at the slowest pace an ordinary drop is retried (the client's
+ * 30 s backoff cap). `max` bounds how long a fixed office waits; whatever says
+ * the answer may have changed asks sooner (see retryRefusedJoin).
+ */
+const REFUSED_JOIN_RETRY_MS = { version: 5 * 60_000, other: 30_000, max: 10 * 60_000 }
+
+/** However often something prompts it, a refused join is asked again early at most this often. */
+const REFUSED_JOIN_EARLY_RETRY_GAP_MS = 60_000
 
 /**
  * Backstop for a host-relayed cross-joiner wake: if the owning joiner never
@@ -334,6 +354,10 @@ export interface FederationManagerDeps {
   onMemberHistoryUpdated?: (info: { officeId: string; appId: string; epochId: string }) => void
   /** Ctrl-feed give-up override (ms); test seam, production uses the default. */
   ctrlGiveUpMs?: number
+  /** Ctrl-feed retransmit-tick override (ms); test seam, production uses the default. */
+  ctrlRetransmitMs?: number
+  /** Refused-join retry overrides (ms); test seam, production uses the defaults. */
+  refusedJoinRetryMs?: Partial<{ version: number; other: number; max: number; earlyGap: number }>
   /** Authority changed → neutral UI signal + re-point. */
   onAuthorityChange?: (officeId: string, authorityNodeId: NodeId, term: number) => void
   /** Office paused/resumed (partition minority) → neutral UI signal. */
@@ -343,9 +367,16 @@ export interface FederationManagerDeps {
    * settled — this node lost office membership (e.g. the authority no longer
    * recognizes it). Fired once per loss (re-armed by a later grant) so
    * bootstrap can tell the user instead of failing silently. `detail` is set
-   * only when `reason` is VERSION_INCOMPATIBLE.
+   * only when `reason` is VERSION_INCOMPATIBLE; a version refusal that first
+   * met a still-pending join is told by that join's caller and not again here.
    */
   onOfficeAccessLost?: (officeId: string, reason: string, detail?: TeamVersionMismatch) => void
+  /**
+   * Joiner role: an office that had refused this node's join admitted it again,
+   * so whatever the user was told about the refusal no longer holds. Once per
+   * refusal.
+   */
+  onOfficeAccessRestored?: (officeId: string) => void
   /**
    * Transport-only re-form seam: resolve a sender to a newly-elected authority
    * after a host loss. See {@link PeerDialer}. Absent → {@link NO_PEER_DIALER}.
@@ -606,6 +637,13 @@ export interface FederationManager {
    */
   reenrollWithAuthority(officeId: string): boolean
   /**
+   * Someone asked how this office stands (its page, or a status question). If it
+   * had refused this node's join and the latest try is over a minute old, it is
+   * asked again: they may have come to see whether it works now. Cheap enough
+   * for every read of the office.
+   */
+  noteOfficeViewed(officeId: string): void
+  /**
    * The conversations local viewers render in detail (renderer declarations and
    * remote clients). Team sessions of joined offices whose member another node
    * owns are subscribed at the authority, so this node receives only the live
@@ -668,6 +706,8 @@ interface HostedOffice {
   lanShed: number
   /** Clients whose first skip has been logged. */
   lanShedLogged: Set<string>
+  /** Frames dropped since start because their node had been refused admission (health line). */
+  refusedDropped: number
 }
 
 interface JoinedOffice {
@@ -712,6 +752,22 @@ interface JoinedOffice {
    *  newly-elected authority (roster re-entry after a host loss). */
   joinRequest?: JoinRequest
   /**
+   * Set from a refused join until a grant. This node is not in the office
+   * meanwhile: its presence FSM judges nobody (silence from an office that
+   * refuses us must not start an election), the user is told once, and the log
+   * says it once. A refusal for another reason starts a new one.
+   */
+  refusal?: {
+    reason: JoinReject['reason']
+    since: number
+    /** Refused sessions so far; each doubles the wait before the next try. */
+    refusals: number
+    /** The latest try, refused or prompted early; early tries are spaced from it. */
+    lastTriedAt: number
+    /** Who refused, when known: that node seen on our version is reason to ask again. */
+    refusedBy: NodeId | null
+  }
+  /**
    * The authority this office last subscribed to and advertised its own feeds to
    * on a roster. Rosters arrive on every board write, so both happen once per
    * authority and again after a reconnect or re-enroll clears this.
@@ -754,6 +810,11 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
   const resolveFeedStore = (): FeedStore | null => deps.feedStore ?? getFeedStore()
   // Transport re-form seam: how a survivor reaches a newly-elected authority.
   const peerDialer: PeerDialer = deps.peerDialer ?? NO_PEER_DIALER
+  const refusedJoinRetry = {
+    ...REFUSED_JOIN_RETRY_MS,
+    earlyGap: REFUSED_JOIN_EARLY_RETRY_GAP_MS,
+    ...deps.refusedJoinRetryMs,
+  }
   // Live dialed-peer connections per office (from redialToAuthority). Disposed
   // when the office re-points again or exits, so an abandoned dial never keeps
   // reconnecting to a peer we no longer target.
@@ -1152,9 +1213,14 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     for (const [officeId, entry] of joined) {
       try {
         const link = entry.client.getHealth()
+        const linkState = link.connected
+          ? link.refused ? 'up(refused)' : 'up'
+          : link.refused ? `parked(${Math.ceil(link.refused.retryInMs / 1000)}s)` : `down(${link.failedAttempts})`
         console.log(
           `${LOG_TAG} health office=${officeId} role=joined via=${dialedPeers.has(officeId) ? 'direct-leg' : 'join-link'}` +
-            ` link=${link.url} ${link.connected ? 'up' : `down(${link.failedAttempts})`}` +
+            ` link=${link.url} ${linkState}` +
+            (entry.refusal ? ` refused=${entry.refusal.reason}x${entry.refusal.refusals}` : '') +
+            (link.withheld > 0 ? ` withheld=${link.withheld}` : '') +
             ` shed=${link.dropped.control}/${link.dropped.stream}/${link.dropped.feed}/${link.dropped.artifact}` +
             ` acked[${describeDelivery(officeId, entry.ctrlFeed)}] nodePendingReceipts=${turnCompleteWaiters.size} pendingAdmission=${entry.federation.coordinator.pendingWakeAdmissions()}` +
             ` rx=${describeReceived(link.received)}` +
@@ -1173,6 +1239,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
         console.log(
           `${LOG_TAG} health office=${officeId} role=host relay=${relay}` +
             ` lanClients=${entry.nodeToClient.size} relayed=${entry.nodeToGateway.size} lanShed=${entry.lanShed}` +
+            (entry.refusedDropped > 0 ? ` refusedDropped=${entry.refusedDropped}` : '') +
             ` acked[${describeDelivery(officeId, entry.ctrlFeed)}] nodePendingReceipts=${turnCompleteWaiters.size} pendingAdmission=${entry.federation.coordinator.pendingWakeAdmissions()}` +
             describeReplicationLog(officeId)
         )
@@ -1344,6 +1411,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
         dispatchTurnComplete(correlationId, { kind: 'undelivered', reason })
       },
       ...(deps.ctrlGiveUpMs !== undefined ? { giveUpMs: deps.ctrlGiveUpMs } : {}),
+      ...(deps.ctrlRetransmitMs !== undefined ? { retransmitIntervalMs: deps.ctrlRetransmitMs } : {}),
     })
     cf.start()
     return cf
@@ -1519,6 +1587,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       streamRecipients: createStreamRecipients(),
       lanShed: 0,
       lanShedLogged: new Set(),
+      refusedDropped: 0,
     }
 
     // Host link: send(nodeId) resolves a clientId then hostSend; broadcast fans
@@ -1700,9 +1769,13 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     const fromNode = resolveFromNode(frame)
     // A node whose join was refused is not in the office until a join of its is
     // admitted: drop everything else it sends, so its traffic neither keeps it
-    // looking online nor (re)subscribes it to this node's ctrl feed.
+    // looking online nor (re)subscribes it to this node's ctrl feed. Counted for
+    // the health line; the refusal itself was logged.
     const sender = fromNode ?? sessionIdentity
-    if (sender && frame.kind !== 'join-request' && entry.federation.coordinator.isAdmissionRefused(sender)) return
+    if (sender && frame.kind !== 'join-request' && entry.federation.coordinator.isAdmissionRefused(sender)) {
+      entry.refusedDropped += 1
+      return
+    }
     if (!fromNode) {
       // Feed-sync frames (subscribe/entries/ack/nack) carry no payload fromNode, so
       // attribute them to the sending peer's NODE id — the ctrl-feed producer keys
@@ -1786,20 +1859,15 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     entry.nodeToClient.set(fromNode, ctx.clientId)
     // A direct client session supersedes any earlier gateway path for this node.
     entry.nodeToGateway.delete(fromNode)
-    // A join on another protocol version will be refused (the coordinator
-    // decides and answers); wiring its ctrl feed first would push our wakes to a
-    // node that cannot run them and never returns their completions.
-    if (frame.kind === 'join-request' && !isSameProtocol(frame.pv)) {
-      entry.ctrlFeed?.dropPeer(fromNode)
-      ;(entry.federation.link as LanMeshLink).deliver(fromNode, frame)
+    if (frame.kind === 'join-request') {
+      handleJoinOnHost(ctx.officeId, entry, fromNode, frame)
       return
     }
     // Reliable ctrl-plane: consume this peer's ctrl feed so its turn-completes
-    // arrive reliably. A (re)join restarts the stream from our cursor; any other
-    // frame only makes sure a subscription exists — re-subscribing on every frame
-    // echoed one feed-subscribe (and a cursor write on the peer) per heartbeat.
-    if (frame.kind === 'join-request') entry.ctrlFeed?.subscribePeer(fromNode)
-    else entry.ctrlFeed?.ensureSubscribedToPeer(fromNode)
+    // arrive reliably. Any frame only makes sure a subscription exists —
+    // re-subscribing on every frame echoed one feed-subscribe (and a cursor write
+    // on the peer) per heartbeat.
+    entry.ctrlFeed?.ensureSubscribedToPeer(fromNode)
     // …and the reverse direction: ensure this peer subscribes to OUR ctrl feed so
     // our wakes reach it even if its one-shot subscribe was lost in transit. Any
     // inbound frame (a heartbeat suffices) heals it — the always-on primary self-heal.
@@ -1807,7 +1875,29 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
 
     // The host link's inbound entrypoint forwards to the coordinator's handler.
     ;(entry.federation.link as LanMeshLink).deliver(fromNode, frame)
-    if (frame.kind === 'join-request') announceFeedsAfterJoin(ctx.officeId, entry.sessionFeed, fromNode)
+  }
+
+  /**
+   * A join-request reaching a hosted office over either path (LAN session or
+   * relay). The coordinator decides; the ctrl feed follows its decision.
+   */
+  function handleJoinOnHost(officeId: string, entry: HostedOffice, node: NodeId, frame: JoinRequest): void {
+    // A (re)join restarts the peer's ctrl stream from our cursor, both ways. Not
+    // for a join on another protocol version: it will be refused.
+    if (isSameProtocol(frame.pv)) {
+      entry.ctrlFeed?.subscribePeer(node)
+      entry.ctrlFeed?.ensurePeerSubscribed(node)
+    }
+    ;(entry.federation.link as LanMeshLink).deliver(node, frame)
+    if (entry.federation.coordinator.isAdmissionRefused(node)) {
+      // Not in the office: nothing more goes to it, including subscriptions an
+      // earlier frame of its (sent before the join was decided) had set up. A
+      // relay has dropped it already, so each would come back "unreachable".
+      entry.ctrlFeed?.forgetPeer(node)
+      return
+    }
+    announceFeedsAfterJoin(officeId, entry.sessionFeed, node)
+    if (frame.pv === FEDERATION_PROTOCOL_VERSION) retryJoinsRefusedBy(node, `admitted to office=${officeId}`)
   }
 
   /**
@@ -1851,14 +1941,23 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       console.warn(`${LOG_TAG} gateway inbound frame without source node office=${officeId}; dropping ${frame.kind}`)
       return
     }
+    // A refused node is not in the office until a join of its is admitted, as on
+    // a LAN session (handleHostInbound).
+    if (frame.kind !== 'join-request' && entry.federation.coordinator.isAdmissionRefused(fromNode)) {
+      entry.refusedDropped += 1
+      return
+    }
     entry.nodeToGateway.add(fromNode)
     entry.nodeToClient.delete(fromNode)
+    if (frame.kind === 'join-request') {
+      handleJoinOnHost(officeId, entry, fromNode, frame)
+      return
+    }
     // Relayed peers get the same feed wiring as direct LAN clients: subscribe to
     // the sender's ctrl feed so its wakes/turn-completes are consumed reliably.
     // Without this, a gateway member's outbox is never served — its replies sit
     // undelivered forever while everything else looks connected.
-    if (frame.kind === 'join-request') entry.ctrlFeed?.subscribePeer(fromNode)
-    else entry.ctrlFeed?.ensureSubscribedToPeer(fromNode)
+    entry.ctrlFeed?.ensureSubscribedToPeer(fromNode)
     // Reverse direction: ensure this relayed peer subscribes to OUR ctrl feed so our
     // wakes reach it even if its subscribe was lost — heartbeat-driven primary heal.
     entry.ctrlFeed?.ensurePeerSubscribed(fromNode)
@@ -1869,7 +1968,6 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       return
     }
     ;(entry.federation.link as LanMeshLink).deliver(fromNode, frame)
-    if (frame.kind === 'join-request') announceFeedsAfterJoin(officeId, entry.sessionFeed, fromNode)
   }
 
   /**
@@ -2243,6 +2341,46 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       }, JOIN_TIMEOUT_MS)
       if (typeof timer.unref === 'function') timer.unref()
 
+      // A refused join opens a period that lasts until a grant (JoinedOffice.refusal).
+      // Within it each refused session counts once and doubles the wait, the log
+      // says it once, and the user hears it once: here only when the join had
+      // settled, since a pending join's caller reports its own refusal.
+      const noteRefusal = (
+        reason: JoinReject['reason'],
+        peerPv: number | undefined,
+        detail: TeamVersionMismatch | undefined
+      ): void => {
+        const live = joined.get(officeId)
+        if (!live || client.isRefused) return
+        const now = Date.now()
+        const ongoing = live.refusal?.reason === reason ? live.refusal : undefined
+        const refusal = ongoing ?? { reason, since: now, refusals: 0, lastTriedAt: now, refusedBy: null }
+        refusal.refusals += 1
+        refusal.lastTriedAt = now
+        refusal.refusedBy = believedAuthorityNode(officeId) ?? refusal.refusedBy
+        live.refusal = refusal
+        const base = reason === 'VERSION_INCOMPATIBLE' ? refusedJoinRetry.version : refusedJoinRetry.other
+        const retryAfterMs = Math.min(base * 2 ** (refusal.refusals - 1), refusedJoinRetry.max)
+        // A refusal over a dialed leg came through another client; the join
+        // client is only held while it is the office's way in.
+        if (!dialedPeers.has(officeId)) client.markRefused(retryAfterMs)
+        if (ongoing) return
+        const versions = reason === 'VERSION_INCOMPATIBLE'
+          ? ` behind=${detail?.direction ?? 'unknown'} peerPv=${peerPv ?? 'unreported'} selfPv=${FEDERATION_PROTOCOL_VERSION}`
+          : ''
+        console.warn(
+          `${LOG_TAG} join refused office=${officeId} reason=${reason}${versions}; not in the office until a grant, ` +
+            `a session the office ends is retried after ${retryAfterMs}ms, doubling to ${refusedJoinRetry.max}ms`
+        )
+        if (!settled) return
+        if (reason === 'VERSION_INCOMPATIBLE') {
+          deps.onOfficeAccessLost?.(officeId, reason, detail)
+        } else if (!accessLostNotified) {
+          accessLostNotified = true
+          deps.onOfficeAccessLost?.(officeId, reason)
+        }
+      }
+
       // Set after createFederation; referenced by the link's ctrl shim + onFeedFrame.
       let ctrlFeed: CtrlFeed | undefined
       let sessionFeed: SessionFeed | undefined
@@ -2428,6 +2566,8 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
         // its first failed send, which would un-track it right before the FSM
         // could confirm it. Followers still track only their upstream.
         isPresenceTracked: (nodeId) => {
+          // Refused, this node is outside the office: no silence counts.
+          if (joined.get(officeId)?.refusal) return false
           const believedAuthority = believedAuthorityNode(officeId)
           return nodeId === believedAuthority || believedAuthority === deps.getLocalNodeId()
         },
@@ -2436,7 +2576,24 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
           ? (snap) => deps.onPresenceChange!(officeId, snap)
           : undefined,
         onJoinGrant: (assignedNodeId) => {
-          console.log(`${LOG_TAG} joined office=${officeId}`)
+          const live = joined.get(officeId)
+          const refusal = live?.refusal
+          if (live) live.refusal = undefined
+          // The join client is held by a refusal only while it is the way in
+          // (noteRefusal), so this grant came over it; it must carry the frames
+          // sent below, and everything after.
+          if (!dialedPeers.has(officeId)) client.markAdmitted()
+          console.log(
+            `${LOG_TAG} joined office=${officeId}` +
+              (refusal
+                ? ` after refusal=${refusal.reason}x${refusal.refusals} since=${new Date(refusal.since).toISOString()}`
+                : '')
+          )
+          if (refusal) deps.onOfficeAccessRestored?.(officeId)
+          // The authority answered on our protocol version: an office it refused
+          // for the version may admit us now too.
+          const grantedBy = believedAuthorityNode(officeId)
+          if (grantedBy) retryJoinsRefusedBy(grantedBy, `granted office=${officeId}`)
           // Subscriptions are soft state at the authority: every grant (first
           // join, reconnect, a new authority after an election) re-declares them.
           joined.get(officeId)?.streamWatch.resend()
@@ -2465,15 +2622,11 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
           finish({ ok: true })
         },
         onJoinReject: (reason, peerPv) => {
-          console.warn(`${LOG_TAG} join rejected office=${officeId} reason=${reason}`)
           const detail = reason === 'VERSION_INCOMPATIBLE' ? resolveVersionMismatchDetail(deps.teamStore, officeId, peerPv) : undefined
           // A reject after the join settled is a lost membership (the authority
-          // no longer recognizes this node) — surface it instead of leaving the
-          // user with a silently wrong presence view.
-          if (settled && !accessLostNotified) {
-            accessLostNotified = true
-            deps.onOfficeAccessLost?.(officeId, reason, detail)
-          }
+          // no longer recognizes this node) — noteRefusal surfaces it instead of
+          // leaving the user with a silently wrong presence view.
+          noteRefusal(reason, peerPv, detail)
           finish({ ok: false, reason, detail })
         },
         getWakeAuthority: () => believedAuthorityNode(officeId),
@@ -3010,6 +3163,51 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
   }
 
   /**
+   * Ask an office that refused this node again now, rather than when the wait
+   * runs out, because something says the answer may have changed. Early tries
+   * are spaced `minGapMs` from the latest try, and a try already on its way is
+   * left to be answered. Deciding is a few reads; the try itself runs after the
+   * caller returns (moving a parked reconnect forward, or re-sending the join on
+   * a refused session the office kept open), so a caller on a read path pays
+   * nothing for it, and a refusal it meets again emits no event.
+   */
+  function retryRefusedJoin(officeId: string, trigger: string, minGapMs: number): void {
+    const live = joined.get(officeId)
+    const refusal = live?.refusal
+    if (!live || !refusal) return
+    const viaDialedLeg = dialedPeers.has(officeId)
+    if (!viaDialedLeg && !live.client.isRefused) return
+    const now = Date.now()
+    if (now - refusal.lastTriedAt < minGapMs) return
+    refusal.lastTriedAt = now
+    console.log(`${LOG_TAG} asking again office=${officeId} refused=${refusal.reason}x${refusal.refusals} trigger=${trigger}`)
+    setImmediate(() => {
+      if (joined.get(officeId) !== live) return
+      try {
+        if (viaDialedLeg || live.client.retryRefused()) reenrollWithAuthority(officeId)
+      } catch (err) {
+        console.warn(`${LOG_TAG} asking again failed office=${officeId}: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    })
+  }
+
+  /**
+   * `node` just showed it speaks our protocol version (it was admitted here, or
+   * granted us elsewhere). An office it refused for the version is asked again
+   * at once: a node that updated has restarted, and nothing else tells us.
+   */
+  function retryJoinsRefusedBy(node: NodeId, evidence: string): void {
+    for (const [officeId, entry] of joined) {
+      if (entry.refusal?.reason !== 'VERSION_INCOMPATIBLE' || entry.refusal.refusedBy !== node) continue
+      retryRefusedJoin(officeId, `node=${node} on our version, ${evidence}`, 0)
+    }
+  }
+
+  function noteOfficeViewed(officeId: string): void {
+    retryRefusedJoin(officeId, 'viewed', refusedJoinRetry.earlyGap)
+  }
+
+  /**
    * A peer node's dialable base URL: the joined office's in-memory address book
    * first (host-projected), then the persisted office_nodes row (host side / own
    * ledger). Null when unknown — the peer cannot be dialed.
@@ -3488,7 +3686,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     }
     const pendingCompletions = [...turnCompleteWaiters.entries()]
     for (const [correlationId] of pendingCompletions) {
-      try { dispatchTurnComplete(correlationId, { kind: 'undelivered', reason: 'federation-stopped' }) } catch (error) {
+      try { dispatchTurnComplete(correlationId, { kind: 'undelivered', reason: REMOTE_WAIT_ABANDONED_REASON }) } catch (error) {
         console.error(`${LOG_TAG} completion cleanup failed corr=${correlationId}`, error)
       }
     }
@@ -3528,6 +3726,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     redialToAuthority,
     abandonDirectLeg,
     reenrollWithAuthority,
+    noteOfficeViewed,
     setWatchedSessions,
     getNodeAddress,
     deliverInbound,

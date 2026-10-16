@@ -1,58 +1,299 @@
 import type { RouteModuleMeta } from './_meta-types'
 
+const APP_ID = '<appId — a member appId from GET /api/teams/:teamId/detail>'
+
 /**
- * The team surface is renderer- and federation-facing only: none of it is
- * offered to the assistant, so no group page exists for it. Two different
- * reasons are folded into the same label here.
- *
- * The control-plane routes (invite, join, leave, federation/presence) are
- * internal by design and stay that way — invite mints a credential, join and
- * leave move this node in and out of someone else's office, and the middleware
- * already refuses them to an office credential. Handing any of them to the
- * assistant would let it widen its own reach.
- *
- * The rest are internal for now rather than forever: they are a real capability
- * an agent could use, but the shapes they return are still moving, and a manual
- * page pinned to them would document an interface that no longer exists.
- * Exposing them is a separate decision that needs a group of its own.
+ * Only the routes that decide who may reach this machine stay internal:
+ * minting or revoking an office invite, and joining an office hosted elsewhere.
+ * A member's `delegatedPolicy` — what teammates on other computers may make it
+ * do — is the owner's consent for their own machine, so the member and team
+ * writes are open but refuse that field; for the same reason the trigger write
+ * is open but refuses a webhook, an entry anyone who can reach this computer
+ * may call (see self-api/withheld-fields.ts).
  */
 export const MODULE: RouteModuleMeta = {
   file: 'team',
   routes: {
-    'GET /api/teams': { expose: 'internal' },
-    'POST /api/teams': { expose: 'internal' },
-    'POST /api/teams/propose-members': { expose: 'internal' },
-    'GET /api/teams/collab-for-conversation/:conversationId': { expose: 'internal' },
-    'POST /api/teams/:teamId/save-collab': { expose: 'internal' },
-    'GET /api/teams/:teamId': { expose: 'internal' },
-    'GET /api/teams/:teamId/detail': { expose: 'internal' },
-    'GET /api/teams/:teamId/chat-messages': { expose: 'internal' },
-    'POST /api/teams/:teamId/members/:appId/send': { expose: 'internal' },
-    'POST /api/teams/:teamId/members/:appId/stop': { expose: 'internal' },
-    'GET /api/teams/:teamId/artifacts': { expose: 'internal' },
-    'GET /api/teams/:teamId/conversations': { expose: 'internal' },
-    'POST /api/teams/:teamId/conversations': { expose: 'internal' },
-    'PATCH /api/teams/:teamId/conversations/:epochId': { expose: 'internal' },
-    'DELETE /api/teams/:teamId/conversations/:epochId': { expose: 'internal' },
-    'GET /api/teams/:teamId/epochs': { expose: 'internal' },
-    'GET /api/teams/:teamId/epochs/:epochId/board': { expose: 'internal' },
-    'GET /api/teams/:teamId/epochs/:epochId/artifacts': { expose: 'internal' },
-    'PATCH /api/teams/:teamId': { expose: 'internal' },
-    'DELETE /api/teams/:teamId': { expose: 'internal' },
-    'POST /api/teams/:teamId/members': { expose: 'internal' },
-    'PATCH /api/teams/:teamId/members/:appId': { expose: 'internal' },
-    'DELETE /api/teams/:teamId/checks/:checkId': { expose: 'internal' },
-    'DELETE /api/teams/:teamId/members/:appId': { expose: 'internal' },
-    'PUT /api/teams/:teamId/edges': { expose: 'internal' },
-    'POST /api/teams/:teamId/run': { expose: 'internal' },
-    'POST /api/teams/:teamId/pause': { expose: 'internal' },
-    'GET /api/teams/:teamId/triggers': { expose: 'internal' },
-    'POST /api/teams/:teamId/triggers': { expose: 'internal' },
+    'GET /api/teams': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'List teams, optionally only those owned by one space',
+      returns: '{success:true,data:[{id,name,status:"idle"|"running"|"waiting_user"|"error",memberCount,hasWaitingUser,waitingCount?,leadAppId,localMembers:[{appId,memberName,isLead}],hostNodeId?,ephemeral?,updatedAt}]}',
+      notes: [
+        'Optional query: ?spaceId=. Omitting it lists every space, which is what the Halo app shows; pass $HALO_SPACE_ID to narrow it, and say which of the two you did.',
+        'ephemeral:true is a temporary collaboration started from a conversation; it is hidden from the Teams page until saved (POST /api/teams/:teamId/save-collab).',
+        'hostNodeId set means the team is hosted on someone else\'s computer and was joined from here — it can be read and its members messaged, but not edited or run.',
+      ].join('\n'),
+    },
+    'POST /api/teams': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'Create a persistent team, with a lead provisioned for it',
+      body: '{"input": {"name": "Weekly market brief", "goal": "Every Monday, summarise competitor moves into brief.md", "owningSpaceId": "<spaceId — a uuid from GET /api/spaces>", "memberSourcing": "manual", "collabMode": "free", "escalationRouting": "user", "members": [{"appId": "<appId — a digital human from GET /api/apps>", "memberName": "Researcher", "role": "Research", "duty": "Collects competitor news"}]}}',
+      returns: '{success:true,data:{id,name,owningSpaceId,goal,leadAppId,memberSourcing,collabMode,escalationRouting,status,currentEpochId,createdAt,updatedAt}}',
+      notes: [
+        'memberSourcing "manual": members are existing digital humans (appId from GET /api/apps). memberSourcing "ai": omit members and send "confirmedProposal": [{memberName, role, responsibility}] (up to 5) beside "input" — POST /api/teams/propose-members drafts one; Halo creates a new digital human for each.',
+        'collabMode: "free" (members contact anyone) or "structured" (edges are generated from the lead; edit them with PUT /api/teams/:teamId/edges). escalationRouting: "user" (questions go to the user) or "lead".',
+        'Creates digital humans (the lead, and AI-sourced members) as a side effect; on any failure the whole team is rolled back.',
+        'Create a persistent team only when the user asked for one. Members\' delegated permissions are set in the Halo app — see this page\'s withheld list.',
+      ].join('\n'),
+      impact: 'reversible',
+    },
+    'POST /api/teams/propose-members': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'Draft AI member roles for a team goal (creates nothing)',
+      body: '{"goal": "Every Monday, summarise competitor moves into brief.md", "owningSpaceId": "<spaceId — a uuid from GET /api/spaces>"}',
+      returns: '{success:true,data:[{memberName,role,responsibility}]}  — at most 5',
+      notes: 'Runs a model call, so it takes a few seconds. Show the draft to the user, then pass it as confirmedProposal to POST /api/teams with memberSourcing "ai".',
+    },
+    'GET /api/teams/collab-for-conversation/:conversationId': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'Get the temporary collaboration started from one conversation',
+      returns: '{success:true,data:{teamId,name,goal,epochId,active,saved,members:[...]} | null}',
+      notes: 'conversationId is a space conversation id (GET /api/spaces/:spaceId/conversations). null means that conversation never started a collaboration.',
+    },
+    'POST /api/teams/:teamId/save-collab': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'Keep a temporary collaboration as a persistent team',
+      body: '{"name": "optional new team name"}',
+      returns: '{success:true,data:{id,name,owningSpaceId,goal,leadAppId,status,...}}',
+      notes: 'Only when the user asked to keep it. If you hold the collab_save tool and the collaboration is the one in this conversation, use the tool.',
+      impact: 'reversible',
+    },
+    'GET /api/teams/:teamId': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'Get one team\'s own record',
+      returns: '{success:true,data:{id,name,owningSpaceId,goal,leadAppId,memberSourcing,collabMode,escalationRouting,status,currentEpochId,hostNodeId,ephemeral?,createdAt,updatedAt} | null}',
+      notes: 'For members, edges, live board and waiting decisions use GET /api/teams/:teamId/detail.',
+    },
+    'GET /api/teams/:teamId/detail': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'Get a team with members, edges, roster status, board and decisions',
+      returns: '{success:true,data:{team,members:[{appId,memberName,role,duty,isLead,origin,ownerDisplayName,...}],edges:[{fromAppId,toAppId,sync}],roster:[{appId,memberName,role,status:"working"|"idle"|"error"|"waiting_user",currentTaskTitle?}],tasks:[{id,title,assigneeAppId,status,resultRef,note}],findings:[...],activities?,pendingEscalations?:[{appId,memberName,entryId,question}],checks?:[{id,targetMemberName,instruction,schedule,runCount}],boardEpochId,crossesMachines?} | null}',
+      notes: 'The richest single read of a team; start here when the user asks how a team is doing. A pending escalation is answered by the user in Halo, not over this API.',
+    },
+    'GET /api/teams/:teamId/chat-messages': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'Read one member\'s transcript within a team',
+      query: '?appId=<appId — a member appId from GET /api/teams/:teamId/detail>',
+      returns: '{success:true,data:[messages],stale?:true}',
+      notes: [
+        'Optional query: &epochId= (a run or conversation id from GET /api/teams/:teamId/epochs; default: the open run, else the member\'s own chat, else the latest), &sinceSeq= for incremental reads.',
+        'A member on another computer is fetched from its owner; stale:true means a cached copy because the owner is offline, and a 502 means it is unavailable right now.',
+      ].join('\n'),
+    },
+    'POST /api/teams/:teamId/members/:appId/send': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'Send a message to one team member and wait for its reply',
+      body: '{"message": "Please re-check the pricing section"}',
+      returns: '{success:true,data:{ok,finalMessage,reason?,delivery?:"queued"|"mid_turn"}}',
+      notes: [
+        'Blocks until the member finishes its turn (can take minutes) and returns its final message. delivery "queued"/"mid_turn" means the member was busy: the message was accepted but no reply exists yet — read it later with GET /api/teams/:teamId/chat-messages.',
+        'Optional body: "epochId" to address a specific run or conversation. Works for members on other computers too.',
+      ].join('\n'),
+      impact: 'reversible',
+    },
+    'POST /api/teams/:teamId/members/:appId/stop': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'Stop the turn one team member is running',
+      body: '{}',
+      returns: '{success:true,data:{ok,stopped,reason?}}  — stopped:false means nothing was running',
+      notes: 'Optional body: "epochId". To stop the whole team run instead, POST /api/teams/:teamId/pause.',
+      impact: 'reversible',
+    },
+    'GET /api/teams/:teamId/artifacts': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'List files each member produced in the current or latest run',
+      returns: '{success:true,data:[{appId,memberName,spaceId,epochId,artifacts:[{name,type:"file"|"folder",path,relativePath,size?,createdAt}]}]}',
+      notes: 'For a specific past run use GET /api/teams/:teamId/epochs/:epochId/artifacts. Read a file with your own file tools at its path.',
+    },
+    'GET /api/teams/:teamId/conversations': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'List a team\'s open conversations, newest first',
+      returns: '{success:true,data:[{epochId,teamId,kind:"native"|"im"|"member"|"run"|"collab",label,readonly,memberAppId?,channel?,startedAt,lastActivityAt,active?,waitingUser?}]}',
+    },
+    'POST /api/teams/:teamId/conversations': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'Open a new team conversation',
+      body: '{"title": "optional title"}',
+      returns: '{success:true,data:{epochId}}',
+      notes: 'Optional body: "memberAppId" to open it as a one-to-one thread with that member.',
+      impact: 'reversible',
+    },
+    'PATCH /api/teams/:teamId/conversations/:epochId': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'Rename a team conversation',
+      body: '{"title": "New title"}',
+      returns: '{success:true}',
+      notes: 'Send "title": null to go back to the derived label.',
+      impact: 'reversible',
+    },
+    'DELETE /api/teams/:teamId/conversations/:epochId': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'Archive (close) a team conversation',
+      returns: '{success:true}',
+      notes: 'The conversation stays in run history (GET /api/teams/:teamId/epochs) but can no longer take messages.',
+      impact: 'irreversible',
+    },
+    'GET /api/teams/:teamId/epochs': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'List a team\'s runs and conversations (history), newest first',
+      returns: '{success:true,data:[{id,startedAt,lastActivityAt,endedAt,endReason,summary,taskCount,doneCount,lifecycle:"run"|"conversation",label?,outcome?:"output"|"no_action"|"escalation"|"failed",triggerType?,artifactCount?}]}',
+    },
+    'GET /api/teams/:teamId/epochs/:epochId/board': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'Get the tasks, findings and members of one run',
+      returns: '{success:true,data:{epoch,tasks:[...],findings:[...],members:[...],activities?} | null}',
+    },
+    'GET /api/teams/:teamId/epochs/:epochId/artifacts': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'List files produced during one run',
+      returns: '{success:true,data:[{appId,memberName,spaceId,epochId,artifacts:[...]}]}',
+    },
+    'PATCH /api/teams/:teamId': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'Edit a team\'s name, goal, mode, escalation routing or lead',
+      body: '{"name": "New name", "goal": "New goal"}',
+      returns: '{success:true,data:{id,name,goal,collabMode,escalationRouting,leadAppId,...}}',
+      notes: 'Only the fields sent change. Also accepts "collabMode": "free"|"structured", "escalationRouting": "user"|"lead", "leadAppId".',
+      impact: 'reversible',
+    },
+    'DELETE /api/teams/:teamId': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'Dissolve a team',
+      returns: '{success:true}',
+      notes: 'Also deletes the digital humans Halo created for this team (its lead and AI-sourced members) and their spaces; digital humans the user added stay. Run history goes with the team. Confirm with the user first.',
+      impact: 'irreversible',
+      narrowerAlternative: 'DELETE /api/teams/:teamId/members/:appId',
+    },
+    'POST /api/teams/:teamId/members': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'Add an existing digital human to a team',
+      body: '{"appId": "<appId — a digital human from GET /api/apps>", "memberName": "Reviewer", "role": "Review", "duty": "Checks every draft before it is filed"}',
+      returns: '{success:true,data:{teamId,appId,memberName,role,duty,isLead,addedAt,...}}',
+      notes: 'To have Halo create a new digital human for a role, create one first (digital-human group) and add it here. Delegated permissions are set in the Halo app — see this page\'s withheld list.',
+      impact: 'reversible',
+    },
+    'PATCH /api/teams/:teamId/members/:appId': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'Rewrite what a member is responsible for in this team',
+      body: '{"duty": "Owns the pricing section"}',
+      returns: '{success:true,data:{teamId,appId,memberName,role,duty,...}}',
+      notes: 'Only members that run on this computer can be changed; a member someone else brought is refused. Delegated permissions are set in the Halo app — see this page\'s withheld list.',
+      impact: 'reversible',
+    },
+    'DELETE /api/teams/:teamId/checks/:checkId': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'Stop one periodic check a member set inside a team',
+      returns: '{success:true}',
+      notes: 'checkId comes from checks[] in GET /api/teams/:teamId/detail.',
+      impact: 'irreversible',
+    },
+    'DELETE /api/teams/:teamId/members/:appId': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'Remove a member from a team',
+      returns: '{success:true}',
+      notes: 'The digital human itself stays installed unless Halo created it only for this team.',
+      impact: 'irreversible',
+    },
+    'PUT /api/teams/:teamId/edges': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'Replace who hands work to whom in a structured team',
+      body: `{"edges": [{"fromAppId": "${APP_ID}", "toAppId": "${APP_ID}", "sync": false}]}`,
+      returns: '{success:true}',
+      notes: 'Replaces the whole list — read the current edges from GET /api/teams/:teamId/detail and send them back with your change. Only meaningful when collabMode is "structured".',
+      impact: 'reversible',
+    },
+    'POST /api/teams/:teamId/run': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'Start a team run on its goal',
+      body: '{}',
+      returns: '{success:true}  — returns once the run has started; it continues in the background',
+      notes: [
+        'This route carries no brief: the lead works from the team goal. If you hold the team_run tool, use it to hand over a concrete brief.',
+        'Fails for a temporary collaboration (save it first) and for a team hosted on another computer. Follow progress with GET /api/teams/:teamId/detail.',
+      ].join('\n'),
+      impact: 'reversible',
+    },
+    'POST /api/teams/:teamId/pause': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'Stop the team\'s current run',
+      body: '{}',
+      returns: '{success:true}',
+      notes: 'Seals the run as stopped; members mid-turn are stopped with it. Start again with POST /api/teams/:teamId/run.',
+      impact: 'reversible',
+    },
+    'GET /api/teams/:teamId/triggers': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'List a team\'s schedules and other triggers',
+      returns: '{success:true,data:[{id,teamId,sourceType:"schedule"|"webhook"|"file"|"wecom",config,enabled,createdAt}]}  — a webhook secret is redacted',
+    },
+    'POST /api/teams/:teamId/triggers': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'Add a schedule, file or WeCom trigger to a team, or change one',
+      body: '{"trigger": {"sourceType": "schedule", "config": {"cron": "0 9 * * 1"}, "enabled": true}}',
+      returns: '{success:true,data:{id,teamId,sourceType,config,enabled,createdAt}}',
+      notes: [
+        'config by sourceType — schedule: {"every": "30m"} or {"cron": "0 9 * * 1"}; file: {"pattern": "*.csv", "path": "<directory substring>"}; wecom: {"chatId": "<optional>"}.',
+        'Ask the user for the schedule; never assume one. Send "triggerId" beside "trigger" to change an existing trigger instead of adding one; "sourceType" must stay the type it already has.',
+        'Webhook triggers are refused here — see this page\'s withheld list.',
+      ].join('\n'),
+      impact: 'reversible',
+    },
     'POST /api/teams/:teamId/invite': { expose: 'internal' },
     'DELETE /api/teams/:teamId/invite/:jti': { expose: 'internal' },
     'POST /api/teams/:teamId/join': { expose: 'internal' },
-    'POST /api/teams/:teamId/leave': { expose: 'internal' },
-    'GET /api/teams/:teamId/federation/presence': { expose: 'internal' },
-    'DELETE /api/teams/:teamId/triggers/:triggerId': { expose: 'internal' },
+    'POST /api/teams/:teamId/leave': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'Leave a team hosted on someone else\'s computer',
+      body: '{}',
+      returns: '{success:true} | {success:false,error}',
+      notes: 'Only for a joined team (hostNodeId set in GET /api/teams). The members this computer brought leave with it; coming back needs a new invite from the host. Confirm with the user first.',
+      impact: 'irreversible',
+    },
+    'GET /api/teams/:teamId/federation/presence': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'See which computers of a shared team are online',
+      returns: '{success:true,data:{officeId,role:"host"|"joined",nodes:[{nodeId,displayName,status,lastSeen}],authority} | null}',
+      notes: 'null means the team is not shared with other computers.',
+    },
+    'DELETE /api/teams/:teamId/triggers/:triggerId': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'Remove a schedule or other trigger from a team',
+      returns: '{success:true}',
+      notes: 'To pause one without losing it, POST /api/teams/:teamId/triggers with its triggerId and "enabled": false (not a webhook trigger — see this page\'s withheld list).',
+      impact: 'irreversible',
+      narrowerAlternative: 'POST /api/teams/:teamId/triggers',
+    },
   },
 }

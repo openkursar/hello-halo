@@ -8,13 +8,16 @@
 import { useCallback, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { X, Copy, Check, Loader2, RefreshCw, Link2 } from 'lucide-react'
-import { capabilityPolicyFromPreset } from '../../../shared/apps/capability-policy'
 import type { CapabilityPresetId } from '../../../shared/apps/capability-policy'
 import { isRemoteMember } from '../../../shared/apps/team-types'
 import { DelegationPresetPicker } from '../capability/DelegationPresetPicker'
 import { api } from '../../api'
 import { useTeamStore, detailOf } from '../../stores/team.store'
+import { useAppsStore } from '../../stores/apps.store'
 import { useTranslation } from '../../i18n'
+import { presetOfDelegatedPolicy, withPreset } from './delegated-policy'
+import { firstInviteSaver } from './first-invite'
+import { inventoryOf, loadLendableItems } from './lendable-items'
 
 interface TeamInviteDialogProps {
   teamId: string
@@ -43,22 +46,56 @@ export function TeamInviteDialog({ teamId, onClose }: TeamInviteDialogProps) {
   const detail = useTeamStore(s => detailOf(s, teamId))
   const updateMember = useTeamStore(s => s.updateMember)
   const localMembers = (detail?.team.id === teamId ? detail.members : []).filter(m => !isRemoteMember(m))
-  const [preset, setPreset] = useState<CapabilityPresetId>('read_only')
+  // Read once, as the dialog opens: the link it creates is what makes the team
+  // reach another computer, and that must not change what the dialog does.
+  const [firstLink] = useState(() => detail?.crossesMachines === false)
+  // A team already reached from elsewhere shows what is saved, and saves
+  // nothing until an answer is clicked.
+  const [preset, setPreset] = useState<CapabilityPresetId | null>(firstLink ? 'read_only' : null)
+  const [differs, setDiffers] = useState(false)
+  const [presetKnown, setPresetKnown] = useState(firstLink)
   const [applying, setApplying] = useState(false)
 
   const applyPreset = useCallback(async (next: CapabilityPresetId) => {
     setPreset(next)
-    if (localMembers.length === 0) return
+    setDiffers(false)
+    const members = (detailOf(useTeamStore.getState(), teamId)?.members ?? []).filter(m => !isRemoteMember(m))
+    if (members.length === 0) return
     setApplying(true)
     try {
-      const policy = capabilityPolicyFromPreset(next)
       await Promise.all(
-        localMembers.map(m => updateMember(teamId, m.appId, { delegatedPolicy: policy })),
+        members.map(m => updateMember(teamId, m.appId, { delegatedPolicy: withPreset(m.delegatedPolicy, next) })),
       )
     } finally {
       setApplying(false)
     }
-  }, [localMembers, teamId, updateMember])
+  }, [teamId, updateMember])
+
+  useEffect(() => {
+    if (firstLink) return
+    let cancelled = false
+    const members = (detailOf(useTeamStore.getState(), teamId)?.members ?? []).filter(m => !isRemoteMember(m))
+    const apps = useAppsStore.getState().apps
+    void Promise.all(members.map(async member => {
+      const app = apps.find(a => a.id === member.appId)
+      const items = app ? await loadLendableItems(app).catch(() => null) : null
+      return presetOfDelegatedPolicy(member.delegatedPolicy, items ? inventoryOf(items) : undefined)
+    })).then(presets => {
+      if (cancelled) return
+      const first = presets[0] ?? null
+      const alike = first !== null && presets.every(p => p === first)
+      setPreset(alike ? first : null)
+      setDiffers(!alike)
+      setPresetKnown(true)
+    })
+    return () => { cancelled = true }
+  }, [firstLink, teamId])
+
+  // The first link's answer is saved once a call that may create it returns,
+  // even after the dialog closed (see first-invite.ts).
+  const [settleFirstLink] = useState(() =>
+    firstLink ? firstInviteSaver(() => { void applyPreset('read_only') }) : () => {},
+  )
 
   const generate = useCallback(async () => {
     setLoading(true)
@@ -67,6 +104,7 @@ export function TeamInviteDialog({ teamId, onClose }: TeamInviteDialogProps) {
     setRevokeError(null)
     try {
       const res = await api.teamGenerateInvite(teamId)
+      settleFirstLink(res)
       if (res.success && res.data) {
         const data = res.data as { url: string; jti: string }
         setInvite({ url: data.url, jti: data.jti })
@@ -76,11 +114,12 @@ export function TeamInviteDialog({ teamId, onClose }: TeamInviteDialogProps) {
         setError(t('Could not create an invite. Please try again.'))
       }
     } catch {
+      settleFirstLink(null)
       setError(t('Could not create an invite. Please try again.'))
     } finally {
       setLoading(false)
     }
-  }, [teamId, t])
+  }, [teamId, t, settleFirstLink])
 
   useEffect(() => { void generate() }, [generate])
 
@@ -171,13 +210,16 @@ export function TeamInviteDialog({ teamId, onClose }: TeamInviteDialogProps) {
                 {t('Anyone with this link can bring a digital human into this team.')}
               </p>
 
-              {localMembers.length > 0 && (
+              {localMembers.length > 0 && presetKnown && (
                 <div className="border-t border-border pt-3">
                   <DelegationPresetPicker
                     value={preset}
                     onChange={next => { void applyPreset(next) }}
                     title={t('What the people you invite can have your digital humans do')}
                     subtitle={t('Applies to every digital human of yours in this team. Talking to them yourself is unaffected.')}
+                    notice={differs
+                      ? t('Your digital humans here are set differently right now. Choosing an answer applies it to all of them.')
+                      : undefined}
                   />
                   {applying && (
                     <p className="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">

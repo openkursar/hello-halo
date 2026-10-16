@@ -9,10 +9,13 @@ class FakeContents extends EventEmitter {
   destroyed = false
   url = ''
   throttling = true
+  pid = 0
   preferences: Record<string, unknown> = {}
   send = vi.fn()
   setWindowOpenHandler = vi.fn()
   isDestroyed = () => this.destroyed
+  isCrashed = () => false
+  getOSProcessId = () => this.pid
   getLastWebPreferences = () => this.preferences
   getURL = () => this.url
   getBackgroundThrottling = () => this.throttling
@@ -23,8 +26,12 @@ class FakeContents extends EventEmitter {
 class FakeWindow extends EventEmitter {
   webContents = new FakeContents()
   destroyed = false
+  visible = true
+  minimized = false
   constructor(public options?: Record<string, unknown>) { super(); windows.push(this) }
   isDestroyed = () => this.destroyed
+  isVisible = () => this.visible
+  isMinimized = () => this.minimized
   loadFile = vi.fn().mockResolvedValue(undefined)
   loadURL = vi.fn().mockResolvedValue(undefined)
   destroy = vi.fn(() => { this.destroyed = true; this.emit('closed') })
@@ -32,8 +39,10 @@ class FakeWindow extends EventEmitter {
 
 vi.mock('electron', () => ({ BrowserWindow: FakeWindow }))
 
-type HostManager = typeof import('../../../src/main/services/browser-host')['browserHostManager']
+type HostModule = typeof import('../../../src/main/services/browser-host')
+type HostManager = HostModule['browserHostManager']
 let manager: HostManager
+let MainHostAttachError: HostModule['MainHostAttachError']
 let main: FakeWindow
 
 function attach(window: FakeWindow, page: { src: string }, partition = 'persist:browser') {
@@ -54,7 +63,7 @@ beforeEach(async () => {
   vi.useFakeTimers()
   vi.resetModules()
   windows.length = 0
-  manager = (await import('../../../src/main/services/browser-host')).browserHostManager
+  ;({ browserHostManager: manager, MainHostAttachError } = await import('../../../src/main/services/browser-host'))
   main = new FakeWindow()
   manager.initialize(main as never)
 })
@@ -164,6 +173,34 @@ describe('browser attachment lifecycle', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
+  // A page operation that cannot get frames fails in 5 s with nothing in the log,
+  // so whether that happens while nobody is at the computer could not be told.
+  it('logs a frame preparation that timed out, with its window state, and nothing else', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const frameTimeouts = () => warn.mock.calls.filter(([message]) => message === '[BrowserHost] Frame preparation timed out').map(([, details]) => details)
+    const creation = manager.create('frames-page', false)
+    const [page] = manager.ready(main.webContents as never)
+    const guest = attach(main, page).guest
+    await creation
+
+    const acknowledged = manager.prepareFrames(guest as never)
+    const leased = manager.ready(main.webContents as never)[0]
+    manager.framesReady(main.webContents as never, { id: leased.id, token: leased.token, frameLeaseId: leased.frameLeaseId! })
+    ;(await acknowledged)()
+    const controller = new AbortController()
+    const cancelled = manager.prepareFrames(guest as never, 5000, controller.signal).catch(() => undefined)
+    controller.abort(new Error('caller ended'))
+    await cancelled
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(frameTimeouts()).toEqual([])
+
+    main.minimized = true
+    const timedOut = manager.prepareFrames(guest as never).catch((error: Error) => error)
+    await vi.advanceTimersByTimeAsync(5000)
+    expect((await timedOut as Error).message).toBe('Browser frame preparation timed out')
+    expect(frameTimeouts()).toEqual([{ pageId: 'frames-page', hostId: main.webContents.id, host: 'main', window: { visible: true, minimized: true }, displayed: false }])
+  })
+
   it('aborts preparation before readiness and ignores its ack during a new lease', async () => {
     const creation = manager.create('capture-page', false)
     const [page] = manager.ready(main.webContents as never)
@@ -248,6 +285,23 @@ describe('browser attachment lifecycle', () => {
     expect(main.webContents.setBackgroundThrottling.mock.calls).toEqual([[false], [true]])
   })
 
+  it('lends an unattended page frames from its own host, never from the main window', async () => {
+    manager.ready(main.webContents as never)
+    const sentToMain = main.webContents.send.mock.calls.length
+    const creation = manager.create('unattended-capture', true)
+    const background = windows[1]
+    const [page] = manager.ready(background.webContents as never)
+    const guest = attach(background, page).guest
+    await creation
+    const preparing = manager.prepareFrames(guest as never)
+    const leased = manager.ready(background.webContents as never)[0]
+    manager.framesReady(background.webContents as never, { id: leased.id, token: leased.token, frameLeaseId: leased.frameLeaseId! })
+    const release = await preparing
+    release()
+    expect(main.webContents.setBackgroundThrottling).not.toHaveBeenCalled()
+    expect(main.webContents.send.mock.calls).toHaveLength(sentToMain)
+  })
+
   it('deduplicates pending creation and rejects a close before attachment exactly once', async () => {
     const creation = manager.create('closing', false)
     expect(manager.create('closing', false)).toBe(creation)
@@ -304,5 +358,104 @@ describe('browser attachment lifecycle', () => {
     attach(background, manager.ready(background.webContents as never)[0])
     await backgroundCreation
     expect(manager.present('background-page', bounds, true)).toBe(false)
+  })
+})
+
+// The Windows incident left only "timed out": nothing said how far an
+// attachment got or what the window was doing, so the cause stayed a guess.
+describe('a main window that cannot attach pages', () => {
+  const timeoutReport = (warn: { mock: { calls: unknown[][] } }) =>
+    warn.mock.calls.find(([message]) => message === '[BrowserHost] Guest attachment timed out')?.[1] as Record<string, unknown> | undefined
+
+  async function timeOut(id: string, background = false): Promise<unknown> {
+    const failure = manager.create(id, background).catch((error: unknown) => error)
+    await vi.advanceTimersByTimeAsync(15000)
+    return failure
+  }
+
+  it('reports how far a timed-out attachment got and what its window was doing', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    main.minimized = true
+    await timeOut('never-delivered')
+    expect(timeoutReport(warn)).toMatchObject({ pageId: 'never-delivered', host: 'main', stage: 'queued', guest: null, window: { visible: true, minimized: true } })
+
+    warn.mockClear()
+    manager.ready(main.webContents as never)
+    await timeOut('never-attached')
+    expect(timeoutReport(warn)).toMatchObject({ stage: 'sent', guest: null })
+
+    warn.mockClear()
+    main.visible = false
+    const failure = manager.create('no-document', false).catch((error: unknown) => error)
+    const page = manager.ready(main.webContents as never).find(candidate => candidate.id === 'no-document')!
+    const event = { preventDefault: vi.fn() }
+    main.webContents.emit('will-attach-webview', event, {}, { src: page.src, partition: 'persist:browser' })
+    const guest = new FakeContents()
+    main.webContents.emit('did-attach-webview', {}, guest)
+    await vi.advanceTimersByTimeAsync(15000)
+    await failure
+    expect(timeoutReport(warn)).toMatchObject({ stage: 'did-attach', guest: { id: guest.id, pid: 0, alive: true }, window: { visible: false, minimized: true } })
+  })
+
+  it('fails with an error that lets the caller open the page elsewhere, only when the main window failed', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    manager.ready(main.webContents as never)
+    expect(await timeOut('main-timeout')).toBeInstanceOf(MainHostAttachError)
+
+    const failed = manager.create('renderer-failed', false).catch((error: unknown) => error)
+    const page = manager.ready(main.webContents as never).find(candidate => candidate.id === 'renderer-failed')!
+    manager.failed(main.webContents as never, { id: page.id, token: page.token, error: 'append failed' })
+    expect(await failed).toBeInstanceOf(MainHostAttachError)
+
+    const reloaded = manager.create('host-reloaded', false).catch((error: unknown) => error)
+    main.webContents.emit('did-start-navigation', {}, 'file:///host.html', false, true)
+    expect(await reloaded).toBeInstanceOf(MainHostAttachError)
+    expect(await manager.create('during-recovery', false).catch((error: unknown) => error)).toBeInstanceOf(MainHostAttachError)
+    manager.ready(main.webContents as never)
+
+    // Closed by its owner, or the app quitting: not something another host should take over.
+    const closed = manager.create('closed-by-owner', false).catch((error: unknown) => error)
+    manager.destroy('closed-by-owner')
+    expect(await closed).not.toBeInstanceOf(MainHostAttachError)
+    const quitting = manager.create('window-closed', false).catch((error: unknown) => error)
+    main.emit('closed')
+    expect(await quitting).not.toBeInstanceOf(MainHostAttachError)
+  })
+
+  it('a hidden host timing out is not the main window failing', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const failure = await timeOut('background-timeout', true)
+    expect(failure).toBeInstanceOf(Error)
+    expect(failure).not.toBeInstanceOf(MainHostAttachError)
+    expect(manager.isMainHostStalled()).toBe(false)
+  })
+
+  it.each(['show', 'restore', 'focus'])('remembers a main-window timeout until the window is %s', async (event) => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    manager.ready(main.webContents as never)
+    await timeOut('stalled')
+    expect(manager.isMainHostStalled()).toBe(true)
+    await timeOut('still-stalled')
+    expect(manager.isMainHostStalled()).toBe(true)
+    main.emit(event)
+    expect(manager.isMainHostStalled()).toBe(false)
+  })
+
+  it('stops remembering it once a page attaches there or its renderer starts over', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    manager.ready(main.webContents as never)
+    await timeOut('stalled')
+    const creation = manager.create('user-page', false)
+    attach(main, manager.ready(main.webContents as never).find(page => page.id === 'user-page')!)
+    await creation
+    expect(manager.isMainHostStalled()).toBe(false)
+
+    await timeOut('stalled-again')
+    expect(manager.isMainHostStalled()).toBe(true)
+    main.webContents.emit('did-start-navigation', {}, 'file:///host.html', false, true)
+    manager.ready(main.webContents as never)
+    expect(manager.isMainHostStalled()).toBe(false)
   })
 })

@@ -7,6 +7,13 @@ import type { BrowserHostBounds, BrowserHostCommand, BrowserHostFailure, Browser
 const ATTACH_TIMEOUT_MS = 15000
 const DEFAULT_BOUNDS: BrowserHostBounds = { x: 0, y: 0, width: 1280, height: 720 }
 
+/**
+ * The main window could not attach the page: it timed out, was restarting, or
+ * lost its renderer meanwhile. Nothing was wrong with the page itself, so a
+ * caller that need not display it may create it in the hidden host instead.
+ */
+export class MainHostAttachError extends Error {}
+
 interface PageRecord {
   page: BrowserHostPage
   host: BrowserWindow
@@ -15,7 +22,11 @@ interface PageRecord {
   resolve: (contents: WebContents) => void
   reject: (error: Error) => void
   timer: NodeJS.Timeout
+  /** The host renderer received the page; without it nothing could start attaching. */
+  delivered: boolean
   attached: boolean
+  /** Attached guest still waiting for its first document; diagnostics only, never trusted. */
+  guest?: { contents: WebContents; id: number }
   frameLease?: { resolve: () => void; reject: (error: Error) => void; timer: NodeJS.Timeout; release: () => void; acknowledged: boolean }
 }
 
@@ -25,6 +36,8 @@ interface HostRecord {
   recovering: boolean
   leases: number
   throttling?: boolean
+  /** Electron attaches synchronously after accepting will-attach-webview, so the next did-attach-webview is this page's. */
+  accepted?: PageRecord
 }
 
 /** Owns guest attachment; navigation and business state belong to the browser manager. */
@@ -36,18 +49,36 @@ class BrowserHostManager {
   private tokens = new Map<string, PageRecord>()
   private attachingGuests = new Map<number, { contents: WebContents; host: BrowserWindow; timer: NodeJS.Timeout }>()
   private stateTimer: NodeJS.Timeout | null = null
+  /**
+   * A main-window attachment timed out and nothing since suggests the window
+   * can attach again: no page attached there, its renderer did not restart,
+   * and it was not shown, restored or focused.
+   */
+  private mainStalled = false
 
   initialize(window: BrowserWindow): void {
+    if (this.mainWindow === window) return
     this.mainWindow = window
+    this.mainStalled = false
     this.registerHost(window)
+    window.on('show', () => this.clearMainStall(window, 'show'))
+    window.on('restore', () => this.clearMainStall(window, 'restore'))
+    window.on('focus', () => this.clearMainStall(window, 'focus'))
+  }
+
+  /** Whether the main window recently failed to attach a page in time and has shown no sign of recovering. */
+  isMainHostStalled(): boolean {
+    return this.mainStalled
   }
 
   private registerHost(window: BrowserWindow): void {
     const contents = window.webContents
     if (this.hosts.has(contents.id)) return
-    this.hosts.set(contents.id, { window, ready: false, recovering: false, leases: 0 })
+    const hostRecord: HostRecord = { window, ready: false, recovering: false, leases: 0 }
+    this.hosts.set(contents.id, hostRecord)
 
     contents.on('will-attach-webview', (event, preferences, params) => {
+      hostRecord.accepted = undefined
       const token = this.tokenFromSource(params.src)
       const record = token ? this.tokens.get(token) : undefined
       if (!record || record.host !== window || record.attached || params.partition !== 'persist:browser') {
@@ -56,10 +87,14 @@ class BrowserHostManager {
         return
       }
       record.attached = true
+      hostRecord.accepted = record
       this.securePreferences(preferences, record)
     })
 
     contents.on('did-attach-webview', (_event, guest) => {
+      const accepted = hostRecord.accepted
+      hostRecord.accepted = undefined
+      if (accepted && this.pages.get(accepted.page.id) === accepted && !accepted.contents) accepted.guest = { contents: guest, id: guest.id }
       const timer = setTimeout(() => {
         this.attachingGuests.delete(guest.id)
         if (!guest.isDestroyed()) {
@@ -79,12 +114,14 @@ class BrowserHostManager {
           return
         }
         record.contents = guest
+        record.guest = undefined
         guest.once('destroyed', () => this.releaseRecord(record, new Error('Browser guest was destroyed')))
         guest.on('render-process-gone', (_event, details) => {
           if (this.pages.get(record.page.id) !== record) return
           console.warn('[BrowserHost] Guest process lost', { pageId: record.page.id, reason: details.reason })
         })
         clearTimeout(record.timer)
+        if (window === this.mainWindow) this.clearMainStall(window, 'attached')
         record.resolve(guest)
       }
       guest.once('dom-ready', accept)
@@ -100,7 +137,7 @@ class BrowserHostManager {
     })
     contents.on('render-process-gone', (_event, details) => this.resetHost(contents, `Host process lost: ${details.reason}`))
     window.once('closed', () => {
-      this.resetHost(contents, 'Host closed')
+      this.resetHost(contents, 'Host closed', true)
       this.hosts.delete(contents.id)
       if (this.hiddenWindow === window) this.hiddenWindow = null
       if (this.mainWindow === window) this.mainWindow = null
@@ -174,7 +211,7 @@ class BrowserHostManager {
     }
     if (this.hosts.get(host.webContents.id)?.recovering) {
       console.warn('[BrowserHost] Page creation refused during host recovery', { pageId: id, background: backgroundHost })
-      return Promise.reject(new Error('Browser host is restarting'))
+      return Promise.reject(this.attachError(host, 'Browser host is restarting'))
     }
     const token = randomUUID()
     let resolve!: (contents: WebContents) => void
@@ -187,16 +224,21 @@ class BrowserHostManager {
       promise,
       resolve,
       reject,
+      delivered: false,
       attached: false,
       timer: setTimeout(() => {
-        console.warn('[BrowserHost] Guest attachment timed out', { pageId: id, hostId: host.webContents.id })
-        this.releaseRecord(record, new Error('Browser guest attachment timed out'))
+        console.warn('[BrowserHost] Guest attachment timed out', this.attachProgress(record))
+        if (host === this.mainWindow && !this.mainStalled) {
+          this.mainStalled = true
+          console.warn('[BrowserHost] Main host stalled: pages that can open elsewhere skip it until it recovers')
+        }
+        this.releaseRecord(record, this.attachError(host, 'Browser guest attachment timed out'))
       }, ATTACH_TIMEOUT_MS),
     }
     this.pages.set(id, record)
     this.tokens.set(token, record)
     this.startStateReporting()
-    this.send(record, { type: 'upsert', page: this.snapshot(record) })
+    record.delivered = this.send(record, { type: 'upsert', page: this.snapshot(record) })
     return promise
   }
 
@@ -208,14 +250,18 @@ class BrowserHostManager {
     }
     host.ready = true
     host.recovering = false
-    return [...this.pages.values()].filter(record => record.host === host.window).map(record => this.snapshot(record))
+    if (host.window === this.mainWindow) this.clearMainStall(host.window, 'host-ready')
+    return [...this.pages.values()].filter(record => record.host === host.window).map(record => {
+      record.delivered = true
+      return this.snapshot(record)
+    })
   }
 
   failed(sender: WebContents, failure: BrowserHostFailure): void {
     const record = this.pages.get(failure.id)
     if (!record || record.host.isDestroyed() || record.host.webContents !== sender || record.page.token !== failure.token) return
     console.warn('[BrowserHost] Renderer failed to attach guest', { pageId: failure.id, error: failure.error.slice(0, 500) })
-    this.releaseRecord(record, new Error('Browser renderer failed to attach guest'))
+    this.releaseRecord(record, this.attachError(record.host, 'Browser renderer failed to attach guest'))
   }
 
   present(id: string, bounds: BrowserHostBounds, visible: boolean, viewportWidth?: number): boolean {
@@ -293,7 +339,10 @@ class BrowserHostManager {
           reject,
           release,
           acknowledged: false,
-          timer: setTimeout(() => reject(new Error('Browser frame preparation timed out')), timeoutMs),
+          timer: setTimeout(() => {
+            console.warn('[BrowserHost] Frame preparation timed out', { ...this.pageLocation(page), displayed: page.page.visible })
+            reject(new Error('Browser frame preparation timed out'))
+          }, timeoutMs),
         }
         signal?.addEventListener('abort', onAbort, { once: true })
         if (signal?.aborted) {
@@ -331,14 +380,17 @@ class BrowserHostManager {
     this.hiddenWindow = null
   }
 
-  private resetHost(sender: WebContents, reason: string): void {
+  /** `closed`: the window itself is gone (app quitting), so no page should be moved elsewhere. */
+  private resetHost(sender: WebContents, reason: string, closed = false): void {
     const host = this.hosts.get(sender.id)
     if (!host) return
     host.ready = false
     host.recovering = true
+    host.accepted = undefined
     const records = [...this.pages.values()].filter(record => record.host === host.window)
     if (records.length) console.warn('[BrowserHost] Releasing host pages', { hostId: sender.id, pages: records.length, reason })
-    for (const record of records) this.releaseRecord(record, new Error(reason))
+    const error = closed ? new Error(reason) : this.attachError(host.window, reason)
+    for (const record of records) this.releaseRecord(record, error)
     for (const [id, attaching] of this.attachingGuests) {
       if (attaching.host !== host.window) continue
       clearTimeout(attaching.timer)
@@ -366,11 +418,48 @@ class BrowserHostManager {
     return { ...record.page, bounds: { ...record.page.bounds } }
   }
 
-  private send(record: PageRecord, command: BrowserHostCommand): void {
-    if (record.host.isDestroyed()) return
+  /** Returns whether the host renderer was ready to receive it. */
+  private send(record: PageRecord, command: BrowserHostCommand): boolean {
+    if (record.host.isDestroyed()) return false
     const contents = record.host.webContents
-    if (contents.isDestroyed() || !this.hosts.get(contents.id)?.ready) return
+    if (contents.isDestroyed() || !this.hosts.get(contents.id)?.ready) return false
     contents.send('browser:host-command', command)
+    return true
+  }
+
+  private attachError(host: BrowserWindow, message: string): Error {
+    return host === this.mainWindow ? new MainHostAttachError(message) : new Error(message)
+  }
+
+  private clearMainStall(window: BrowserWindow, reason: string): void {
+    if (!this.mainStalled || window !== this.mainWindow) return
+    this.mainStalled = false
+    console.log('[BrowserHost] Main host may attach again', { reason })
+  }
+
+  /** A page's host and the state of its window, for a timeout that cannot be reproduced later. */
+  private pageLocation(record: PageRecord): Record<string, unknown> {
+    const host = record.host
+    return {
+      pageId: record.page.id,
+      hostId: host.isDestroyed() ? null : host.webContents.id,
+      host: host === this.mainWindow ? 'main' : 'hidden',
+      window: host.isDestroyed() ? null : { visible: host.isVisible(), minimized: host.isMinimized() },
+    }
+  }
+
+  /** How far an attachment got. */
+  private attachProgress(record: PageRecord): Record<string, unknown> {
+    const guest = record.guest
+    return {
+      ...this.pageLocation(record),
+      stage: guest ? 'did-attach' : record.attached ? 'will-attach' : record.delivered ? 'sent' : 'queued',
+      guest: guest ? {
+        id: guest.id,
+        pid: guest.contents.isDestroyed() ? 0 : guest.contents.getOSProcessId(),
+        alive: !guest.contents.isDestroyed() && !guest.contents.isCrashed(),
+      } : null,
+    }
   }
 
   private startStateReporting(): void {
@@ -384,6 +473,7 @@ class BrowserHostManager {
         attaching: this.attachingGuests.size,
         frameLeases: [...this.hosts.values()].reduce((count, host) => count + host.leases, 0),
         waitingFrames: [...this.pages.values()].filter(record => record.frameLease && !record.frameLease.acknowledged).length,
+        mainStalled: this.mainStalled,
       })
     }, 300000)
     this.stateTimer.unref()

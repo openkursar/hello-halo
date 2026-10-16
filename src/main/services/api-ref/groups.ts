@@ -25,6 +25,7 @@ export const API_REF_GROUP_IDS = [
   'conversation',
   'workspace',
   'digital-human',
+  'team',
   'knowledge-base',
   'channels',
   'settings',
@@ -67,6 +68,11 @@ export const API_REF_GROUPS: Record<ApiRefGroupId, ApiRefGroupDescription> = {
       'digital-human — digital humans: scheduled or event-triggered automations, and the chat threads users hold with them',
     covers:
       'install and uninstall, pause and resume, manual trigger, schedule and user config, run history and activity, list its chat threads, chat with it in any of them and read the transcript',
+  },
+  team: {
+    title: 'team — teams of digital humans that work toward one goal together',
+    covers:
+      'list, create and dissolve teams, edit name and goal, add, remove and re-brief members, collaboration topology, start and stop a run, schedules and other triggers, message or stop one member, run history, boards, conversations and produced files, save a temporary collaboration as a team',
   },
   'knowledge-base': {
     title: 'knowledge-base — document collections agents can search',

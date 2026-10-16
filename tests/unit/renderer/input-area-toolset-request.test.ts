@@ -36,7 +36,7 @@ vi.mock('../../../src/renderer/components/onboarding/onboardingData', () => ({ g
 vi.mock('../../../src/renderer/components/chat/composer-menu/useComposerToolsets', () => ({
   useComposerToolsets: (options: { onRequested: () => void }) => {
     env.onRequested = options.onRequested
-    return { list: env.toolsets.list, extraEnabled: [], requested: env.toolsets.requested, toggle: env.toggle }
+    return { list: env.toolsets.list, requested: env.toolsets.requested, toggle: env.toggle }
   },
 }))
 vi.mock('../../../src/renderer/components/chat/LiveSessionsHeader', () => ({ LiveSessionsHeader: () => null }))

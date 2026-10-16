@@ -11,13 +11,15 @@ import { InjectionAnnotation } from '../../chat/InjectionAnnotation'
 import { inputsByReply } from '../../chat/transcript'
 import { TaskTimestamp } from './TaskTimestamp'
 import { taskTime } from './time'
-import { activityLevel, conversationMessages, decisionMessageId, COLLABORATION_PREVIEW_LIMIT, taskConversationRows, type SharedTaskDecision } from './model'
+import { activityLevel, conversationMessages, decisionMessageId, COLLABORATION_PREVIEW_LIMIT, taskConversationRows, undeliveredParties, type SharedTaskDecision } from './model'
+import { UndeliveredNote } from './UndeliveredNote'
 
-export function TaskConversation({ messages, activities, epochId, appId, detail, showEmpty, onActivity, decisions = [], onAnswered, focusDecision, onDecisionFocused, emptyActions, onHumanConversation }: {
+export function TaskConversation({ messages, activities, epochId, appId, detail, showEmpty, onActivity, decisions = [], onAnswered, focusDecision, onDecisionFocused, emptyActions, onHumanConversation, taskCompleted = false }: {
   messages: Message[]; activities: TeamActivity[]; epochId: string | null; appId?: string; detail: TeamDetail; showEmpty: boolean; onActivity: (id?: string) => void
   decisions?: ActivityEntry[]; onAnswered?: (entry: ActivityEntry) => void
   focusDecision?: string | null; onDecisionFocused?: () => void
   emptyActions?: ReactNode; onHumanConversation?: (appId: string) => void
+  taskCompleted?: boolean
 }) {
   const { t } = useTranslation()
   const hasHumanConversation = conversationMessages(messages).some(message => message.role === 'user')
@@ -94,11 +96,15 @@ export function TaskConversation({ messages, activities, epochId, appId, detail,
       }
       const updates = row.activities
       const latest = updates[updates.length - 1]
-      if (activityLevel(latest) === 'attention') return <article key={row.id} className="rounded-lg border border-halo-warning/30 bg-halo-warning/10 p-3 text-xs">
-        <p className="font-medium text-halo-warning">{name(latest.actorAppId)} → {name(latest.targetAppId)}</p>
-        <p className="mt-1 whitespace-pre-wrap break-words">{latest.subject || latest.body}</p>
-        <button onClick={() => onActivity(latest.id)} className="mt-2 rounded px-1 py-1 text-primary hover:bg-secondary">{t('View more in task activity')}</button>
-      </article>
+      if (activityLevel(latest) === 'attention') {
+        const undelivered = undeliveredParties(latest)
+        return <article key={row.id} className="rounded-lg border border-halo-warning/30 bg-halo-warning/10 p-3 text-xs">
+          <p className="font-medium text-halo-warning">{name(undelivered ? undelivered.senderAppId : latest.actorAppId)} → {name(undelivered ? undelivered.recipientAppId : latest.targetAppId)}</p>
+          {(!undelivered || latest.kind === 'message') && <p className="mt-1 whitespace-pre-wrap break-words">{latest.subject || latest.body}</p>}
+          {undelivered && <UndeliveredNote recipient={detail.roster.find(member => member.appId === undelivered.recipientAppId)} taskCompleted={taskCompleted} className="mt-1 break-words" />}
+          <button onClick={() => onActivity(latest.id)} className="mt-2 rounded px-1 py-1 text-primary hover:bg-secondary">{t('View more in task activity')}</button>
+        </article>
+      }
       const preview = updates.slice(-COLLABORATION_PREVIEW_LIMIT)
       return <details key={row.id} className="group min-w-0 overflow-hidden rounded-xl border border-dashed border-border text-xs text-muted-foreground open:border-solid">
         <summary className="flex cursor-pointer list-none items-start gap-2.5 px-3 py-3 transition-colors hover:bg-secondary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary sm:px-4">

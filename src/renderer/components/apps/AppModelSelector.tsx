@@ -24,6 +24,7 @@ import {
 } from '../../types'
 import { isAnthropicProvider } from '../../types'
 import { useTranslation } from '../../i18n'
+import { useFreshModelCatalogs } from '../../hooks/useFreshModelCatalogs'
 
 // ============================================
 // Types
@@ -105,6 +106,7 @@ export function AppModelSelector({
   const [isOpen, setIsOpen] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
   const [expandedSection, setExpandedSection] = useState<string | null>(null)
+  useFreshModelCatalogs(isOpen)
 
   // Get aiSources config
   const aiSources: AISourcesConfig = config?.aiSources?.version === 2

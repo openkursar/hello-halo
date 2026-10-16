@@ -6,7 +6,8 @@ import { AutomationAvatar } from '../../apps/AutomationAvatar'
 import { MarkdownRenderer } from '../../chat/MarkdownRenderer'
 import { TaskTimestamp } from './TaskTimestamp'
 import { taskTime } from './time'
-import { activityLevel, taskActivityRows, type TaskActivityRow, type TaskMemberReport } from './model'
+import { activityLevel, taskActivityRows, undeliveredParties, type TaskActivityRow, type TaskMemberReport } from './model'
+import { UndeliveredNote } from './UndeliveredNote'
 
 function recordIds(rows: TaskActivityRow[]): string[] {
   return rows.flatMap(row => row.notifications ? row.notifications.map(item => `message:${item.appId}:${item.message.id}`)
@@ -29,8 +30,8 @@ function ActivityContent({ content, attention = false }: { content: string; atte
   </details>
 }
 
-export function TaskActivityTimeline({ messages, activities, detail, showEmpty = true, canOpenArtifact, openArtifact, focusActivityId }: {
-  messages: TaskMemberReport[]; activities: TeamActivity[]; detail: TeamDetail; showEmpty?: boolean; focusActivityId?: string; canOpenArtifact?: (ref: string) => boolean; openArtifact: (ref: string) => void
+export function TaskActivityTimeline({ messages, activities, detail, showEmpty = true, canOpenArtifact, openArtifact, focusActivityId, taskCompleted = false }: {
+  messages: TaskMemberReport[]; activities: TeamActivity[]; detail: TeamDetail; showEmpty?: boolean; focusActivityId?: string; canOpenArtifact?: (ref: string) => boolean; openArtifact: (ref: string) => void; taskCompleted?: boolean
 }) {
   const { t } = useTranslation()
   const liveRows = useMemo(() => taskActivityRows(messages, activities), [messages, activities])
@@ -81,16 +82,22 @@ export function TaskActivityTimeline({ messages, activities, detail, showEmpty =
   const activityCard = (act: TeamActivity) => {
     const attention = activityLevel(act) === 'attention'
     const actor = members.get(act.actorAppId)
+    const undelivered = undeliveredParties(act)
     const attentionLabel = act.status === 'undelivered' ? t('Not delivered')
       : act.status === 'timeout' ? t('Timed out')
         : act.status === 'escalation' ? actor?.sameMachine === false
           ? actor.owner ? t('Waiting for {{owner}}’s decision', { owner: actor.owner }) : t('Waiting for its owner’s decision')
           : t('Needs your decision')
         : t('Failed')
+    // A message that did not arrive reads as that message: sender to recipient.
+    const from = undelivered?.senderAppId ?? act.actorAppId
+    const to = undelivered ? (undelivered.senderAppId ? undelivered.recipientAppId : null) : act.targetAppId
+    const label = undelivered ? kinds.message : act.kind === 'decision' && act.status === 'escalation' ? t('Decision requested') : kinds[act.kind]
     return <article key={act.id} data-activity-id={act.id} tabIndex={-1} className={`min-w-0 rounded-xl border p-3 transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-background ${attention ? 'border-halo-warning/40 bg-halo-warning/5' : 'border-border bg-background'}`}>
-      {header(act.actorAppId, taskTime(act.createdAt), act.kind === 'decision' && act.status === 'escalation' ? t('Decision requested') : kinds[act.kind], act.id, act.targetAppId)}
+      {header(from, taskTime(act.createdAt), label, act.id, to)}
       {attention && <p className="mt-2 flex items-center gap-1.5 text-xs font-medium text-halo-warning"><AlertTriangle size={13} />{attentionLabel}</p>}
-      <ActivityContent content={act.body || act.subject} attention={attention} />
+      {undelivered && <UndeliveredNote recipient={undelivered.recipientAppId ? members.get(undelivered.recipientAppId) : undefined} taskCompleted={taskCompleted} className="mt-1.5 break-words text-xs leading-5 text-foreground/80" />}
+      {(!undelivered || act.kind === 'message') && <ActivityContent content={act.body || act.subject} attention={attention} />}
       {act.kind === 'finding' && act.refId && canOpenArtifact?.(act.refId) && <button onClick={() => openArtifact(act.refId!)} className="mt-2 inline-flex min-h-8 items-center gap-1.5 rounded-lg bg-primary/5 px-2.5 py-1 text-xs font-medium text-primary hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"><FileText size={13} />{t('View output')}</button>}
     </article>
   }

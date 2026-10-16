@@ -7,6 +7,7 @@ import { resolveOfficeMemberAppIds } from '../identity/office-membership'
 import { createScopeGate } from '../../apps/runtime/federation/authority/scope-gate'
 import { getFederationManager } from '../../apps/runtime/federation/manager'
 import { memberChatKey } from '../../../shared/apps/team-types'
+import { CAPABILITY_MCP_TOGGLES } from '../../../shared/apps/capability-policy'
 import {
   generateTeamInvite,
   revokeTeamInvite,
@@ -650,6 +651,10 @@ export function registerTeamRoutes(app: Express): void {
         res.status(400).json({ success: false, error: 'Missing required field: appId' })
         return
       }
+      if (member.delegatedPolicy !== undefined && !isDelegatedPolicyShape(member.delegatedPolicy)) {
+        res.status(400).json({ success: false, error: 'Invalid field: delegatedPolicy' })
+        return
+      }
       const added = await service.addMember(req.params.teamId, member)
       res.json({ success: true, data: added })
     } catch (error) {
@@ -664,11 +669,13 @@ export function registerTeamRoutes(app: Express): void {
     try {
       const service = getServiceOrFail(res)
       if (!service) return
-      const updated = service.updateMember(
-        req.params.teamId,
-        req.params.appId,
-        req.body as UpdateTeamMemberInput
-      )
+      const input = req.body as UpdateTeamMemberInput
+      // null clears the policy; anything else must be one.
+      if (input?.delegatedPolicy != null && !isDelegatedPolicyShape(input.delegatedPolicy)) {
+        res.status(400).json({ success: false, error: 'Invalid field: delegatedPolicy' })
+        return
+      }
+      const updated = service.updateMember(req.params.teamId, req.params.appId, input)
       res.json({ success: true, data: updated })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
@@ -852,5 +859,22 @@ export function registerTeamRoutes(app: Express): void {
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }
+  })
+}
+
+const POLICY_LIST_KEYS = new Set(['allowedTools', 'allowedSkills', 'bashRules', 'allowedUserMcp'])
+const POLICY_FLAG_KEYS = new Set<string>([...CAPABILITY_MCP_TOGGLES.map((toggle) => toggle.key), 'allowChecks'])
+
+/**
+ * A delegated policy is persisted as sent and later read as permissions, so a
+ * field the readers do not know, or one of the wrong type, is refused here
+ * rather than stored.
+ */
+function isDelegatedPolicyShape(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  return Object.entries(value).every(([key, field]) => {
+    if (POLICY_LIST_KEYS.has(key)) return Array.isArray(field) && field.every((item) => typeof item === 'string')
+    if (POLICY_FLAG_KEYS.has(key)) return typeof field === 'boolean'
+    return key === 'bashScope' && (field === 'full' || field === 'listed')
   })
 }

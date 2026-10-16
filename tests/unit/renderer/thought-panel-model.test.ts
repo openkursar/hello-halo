@@ -70,6 +70,12 @@ describe('thought panel model', () => {
     expect(next.errorCount).toBe(1)
   })
 
+  it('keeps a tool result that found no call on the timeline, as saved replies show it', () => {
+    const orphan = step({ type: 'tool_result', toolOutput: 'output' })
+    const nested = step({ type: 'tool_result', parentToolUseId: 'task' })
+    expect(fresh([orphan, nested, step({ type: 'result' })]).display).toEqual([orphan])
+  })
+
   it('rebuilds when a step changes kind or the list shrinks', () => {
     const plain = step({ type: 'tool_use', toolName: 'Bash' })
     const first = fresh([plain, step({})])

@@ -1,7 +1,8 @@
 /**
- * Where a strict turn's file tools may reach — an IM guest's, or a teammate's
- * from another machine. (A teammate from this machine is the owner's own and
- * is held to the tool switches only, as it always was.)
+ * Where a restricted turn's file tools may reach — an IM guest's, or one serving
+ * a request from outside the owner's machine (a colleague's held to a saved
+ * policy, a chat guest's reaching a team member). The owner's own digital humans
+ * working for each other are not restricted at all.
  *
  * A capability policy only names tools; granting Read would otherwise grant the
  * whole computer. So every file tool call of such a turn is judged by path, in
@@ -258,7 +259,7 @@ function judgeTargets(
     if (!granted) {
       return {
         allow: false,
-        reason: `"${toolName}" is available here only for your memory files. Give a path inside your memory.`,
+        reason: `"${toolName}" was not granted for this request, so here it works only on your memory files.`,
       }
     }
     if (!withinAny(target, c.workspace)) {

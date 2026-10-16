@@ -59,14 +59,18 @@ export function groupChildThoughts(
 }
 
 // ============================================
-// Live panel model
+// Thought panel model
 // ============================================
 
-/** What the live thought panel draws, derived from a turn's steps. */
+/** What the thought panel draws, live or saved, derived from a turn's steps. */
 export interface ThoughtPanelModel {
   /** The steps it was derived from. */
   readonly thoughts: readonly Thought[]
-  /** Timeline steps: no results, no sub-agent steps (nested under their Task), no TodoWrite (one card below). */
+  /**
+   * Timeline steps: no final result, no sub-agent steps (nested under their
+   * Task), no TodoWrite (one card below). A tool result stays only when it
+   * found no call to merge into.
+   */
   readonly display: readonly Thought[]
   /** Sub-agent steps by parent step id (see `groupChildThoughts`). */
   readonly childGroups: ReadonlyMap<string, Thought[]>
@@ -77,7 +81,7 @@ export interface ThoughtPanelModel {
 }
 
 function isTimelineStep(thought: Thought): boolean {
-  return thought.type !== 'result' && thought.type !== 'tool_result' && !thought.parentToolUseId && thought.toolName !== 'TodoWrite'
+  return thought.type !== 'result' && !thought.parentToolUseId && thought.toolName !== 'TodoWrite'
 }
 
 function isTodoCall(thought: Thought): boolean {

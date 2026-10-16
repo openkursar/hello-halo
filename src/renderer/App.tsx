@@ -42,6 +42,7 @@ import { api } from './api'
 import { syncStatusBarStyle } from './api/safe-area'
 import { isCapacitor, isElectron, onEvent } from './api/transport'
 import { useTelemetry } from './hooks/useTelemetry'
+import { useWsRecovery } from './hooks/useWsRecovery'
 import type { WsConnectionState } from './api/transport'
 import { useTranslation } from './i18n'
 import type { AgentEventBase, Thought, ToolCall, AgentErrorType, WorkDirIssue, Question, McpServerStatus, AppView } from './types'
@@ -328,6 +329,18 @@ export default function App() {
     })
     return unsub
   }, [])
+
+  // Main refreshes model lists on its own (startup, focus, wake, a picker
+  // opening); every window and remote client picks up the change here. A
+  // remote client re-reads after a reconnect, for changes sent while it was away.
+  useEffect(() => {
+    return api.onModelCatalogChanged(() => {
+      void useAppStore.getState().reloadAiSources()
+    })
+  }, [])
+  useWsRecovery(() => {
+    void useAppStore.getState().reloadAiSources()
+  })
 
   // (Capacitor auto-connect logic is merged into the main init useEffect above)
 
