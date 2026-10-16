@@ -9,6 +9,7 @@ import { useState, useMemo, useCallback, useEffect } from 'react'
 import { api } from '../../api'
 import { ArrowLeft, ChevronDown, ChevronUp, Loader2, Check, Download, AlertCircle, RotateCcw, Globe, User } from 'lucide-react'
 import { useAppsPageStore } from '../../stores/apps-page.store'
+import { useAppStore } from '../../stores/app.store'
 import { useAppsStore } from '../../stores/apps.store'
 import { useStoreCategories, categoryDisplay } from '../../hooks/useStoreCategories'
 import { getEntryVersions, getEntryInstalls } from '../../../shared/store/store-meta'
@@ -76,6 +77,7 @@ export function StoreDetail() {
   const setCurrentTab = useAppsPageStore(state => state.setCurrentTab)
   const consumeStoreAutoInstall = useAppsPageStore(state => state.consumeStoreAutoInstall)
   const checkUpdates = useAppsPageStore(state => state.checkUpdates)
+  const navigate = useAppStore(state => state.navigate)
 
   const [showSystemPrompt, setShowSystemPrompt] = useState(false)
   const [showVersions, setShowVersions] = useState(false)
@@ -185,12 +187,15 @@ export function StoreDetail() {
     clearStoreSelection()
     setCurrentTab('my-digital-humans')
     selectApp(installedApp.id, 'automation')
+    // The store is its own page, so selecting the app alone leaves the user here.
+    navigate('apps')
   }, [
     installedApp,
     entry,
     clearStoreSelection,
     setCurrentTab,
     selectApp,
+    navigate,
   ])
 
   // Upgrade in place via updateSpec — reinstalling would throw AppAlreadyInstalledError.
